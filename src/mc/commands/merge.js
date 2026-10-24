@@ -6,12 +6,22 @@
  * documentation-only pull request once the tests that read documents are green — see docs-merge.js — and
  * a pull request GitHub lists as documents only is routed there without the
  * flag, landing in the call instead of queueing.
+ *
+ * `--admin` is Martin's alone: it lands one pull request past the gate, with
+ * GitHub's admin override and no round, and books it (`runAdmin`).
  */
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+
+import { writeJsonAtomic } from '../atomic-write.js';
+import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { criteriaDoor } from '../merge-boundary.js';
+import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
 import { landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
-import { listEntries, readEntry, updateStep } from '../register.js';
+import { dropPr } from '../page-cache.js';
+import { listEntries, readEntry, realLock, updateStep } from '../register.js';
 import { WATCH_TIMEOUT_MIN, followMerge } from '../merge-watch.js';
 import { recordRound } from '../repo-round-log.js';
 import { currentHolder } from '../work-identity.js';
@@ -23,12 +33,14 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   // No repository can be called `watch` in `mc repo status`, so the word is free.
   if (argv[0] === 'watch') return runWatch(argv.slice(1), { stdout, stderr, ...deps });
-  const opts = parseMergeArgs(argv, { docs: true, watch: true });
+  const opts = parseMergeArgs(argv, { docs: true, watch: true, admin: true });
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write(usage());
     return 2;
   }
+  // Before every other door: no criteria, no docs routing, no queue.
+  if (opts.admin) return runAdmin(opts, { stdout, stderr, ...deps });
   // `--check` was the measurement wearing the merge verb's clothes. It still
   // works, and it says where the measurement lives now: a person asking "is
   // this red?" should not have to find it under the verb for landing things.
@@ -103,6 +115,121 @@ function bookDocsLanding(report, body, deps) {
   }
 }
 
+/**
+ * `mc merge <repo> <pr> --admin` — Martin's landing past the gate. A session
+ * runs it only on his word. GitHub's admin override squashes the pull request
+ * pinned to the head read here, and no round is formed. A round in flight on
+ * it is the merger's to stop: its watch (`watchSubject`, merger.js) answers a
+ * `landing` entry within a minute, so this never touches a round itself.
+ *
+ * Booked as the merger books a landing: the queue entry goes (a `landing` one
+ * stays for that watch), the step is `done` with its landing, the page drops
+ * the row, and the round log says `admin`.
+ */
+async function runAdmin(opts, { stdout, stderr, ...deps }) {
+  const repoPath = await (deps.resolveRepoPath || resolveRepoPath)(opts.repo);
+  if (!repoPath) {
+    stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
+    return 1;
+  }
+  const gh = deps.gh || ((args) => runTool('gh', args, { cwd: repoPath }));
+  const number = String(opts.pr);
+  const view = ghJson(await gh(['pr', 'view', number, '--json', 'number,title,state,headRefOid,headRefName,baseRefName,body,mergeCommit']));
+  if (!view) {
+    stderr.write(`mc: gh could not read #${opts.pr}\n`);
+    return 1;
+  }
+  if (view.state !== 'OPEN' && view.state !== 'MERGED') {
+    stderr.write(`mc: #${opts.pr} is closed, not merged — nothing to land\n`);
+    return 1;
+  }
+  let sha = view.mergeCommit?.oid || null;
+  if (view.state === 'MERGED') {
+    stderr.write(`mc: #${opts.pr} was already merged as ${sha7(sha)} — booking it\n`);
+  } else {
+    // Pinned to the head read above: the squash lands that head and no other.
+    if (!view.headRefOid) {
+      stderr.write(`mc: gh could not read the head of #${opts.pr} — nothing merged\n`);
+      return 1;
+    }
+    const merged = await gh(['pr', 'merge', number, '--squash', '--admin', '--subject', `${view.title} (#${view.number ?? opts.pr})`, '--match-head-commit', view.headRefOid]);
+    const after = ghJson(await gh(['pr', 'view', number, '--json', 'state,mergeCommit']));
+    // A read-back that failed is no answer either way: nothing is claimed.
+    if (!after) {
+      stderr.write(`mc: whether #${opts.pr} merged is UNKNOWN — gh could not read it back; check with gh pr view ${opts.pr}\n`);
+      return 1;
+    }
+    if (after.state !== 'MERGED') {
+      const last = String(merged?.stderr || '').trim().split('\n').pop();
+      stderr.write(`mc: NOT merged — ${last || `gh could not merge #${opts.pr}`}\n`);
+      return 1;
+    }
+    sha = after.mergeCommit?.oid || null;
+  }
+
+  // The queue, under the register's lock, as the merger writes it. The entry
+  // is this pull request in this repository; `landing` is the merger's to answer.
+  const root = deps.root || workRoot(deps.env || process.env);
+  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
+  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+  const queuePath = mergesPath(root);
+  const readText = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const writeQueue = io.write || ((path, value) => writeJsonAtomic(path, value, { mode: 0o644 }));
+  let entry = null;
+  let queue = 'none';
+  (io.lock || realLock)(root, () => {
+    const entries = parseQueue((io.read || readText)(queuePath));
+    entry = entries.find((item) => item.pr === opts.pr && (item.repo_path === repoPath || item.repo === basename(repoPath))) || null;
+    if (!entry) return;
+    if (entry.state === 'landing') { queue = 'landing'; return; }
+    writeQueue(queuePath, dequeue(entries, { repo: entry.repo, pr: opts.pr }));
+    queue = 'removed';
+  });
+
+  // The step, unless the merger has the entry: the entry's own, else the one
+  // the pull request's branch stands on. Done or blocked is left as it is.
+  let booked = null;
+  if (queue !== 'landing') {
+    try {
+      const step = entry?.step || stepForMerge({ env: deps.env || process.env, head: view.headRefName, entries: listEntries(root, io) });
+      const standing = step ? readEntry(root, step.project, io)?.steps?.[step.index] : null;
+      if (standing && standing.status !== 'done' && standing.status !== 'blocked') {
+        const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+        updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report: { merge_commit: sha, merged_into: view.baseRefName }, now: stamp, body: view.body }), now: stamp, ...io });
+        booked = step;
+      }
+    } catch (error) {
+      // The merge stands; only its booking failed, and the line says how to book it by hand.
+      stderr.write(`mc: the landing is not booked on its step (${error?.message || error}) — mc step done <project> <n> --pr ${opts.pr}\n`);
+    }
+  }
+
+  // The page drops the row at once; a page that cannot be written costs nothing.
+  try { dropPr({ root, repo: basename(repoPath), number: opts.pr }); } catch { /* the page catches up on its own */ }
+
+  const now = deps.now ? deps.now() : new Date();
+  recordRound({ repo: repoPath, pr: { number: opts.pr }, ok: true, merged: true, merge_commit: sha, stopped_at: null, reason: null, holder: currentHolder(), started_at: now.toISOString() }, { mode: 'admin' });
+
+  const step = booked ? { project: booked.project, index: booked.index } : null;
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ ok: true, merged: true, merge_commit: sha, merged_into: view.baseRefName, step, queue }, null, 2)}\n`);
+    return 0;
+  }
+  stdout.write(`mc: merged #${opts.pr} into ${view.baseRefName} as ${sha7(sha)} (squash, --admin: no gate round)\n`);
+  if (booked) stdout.write(`mc: ${booked.project} step ${booked.index + 1} is done\n`);
+  if (queue === 'landing') stdout.write(`mc: #${opts.pr} is landing in the merger's queue — the merger's round for it stops within a minute and books it\n`);
+  return 0;
+}
+
+/** The JSON of a `gh` answer that succeeded, or null: an answer that failed is no answer. */
+function ghJson(answer) {
+  if (!answer || answer.status !== 0) return null;
+  try { return JSON.parse(answer.stdout); } catch { return null; }
+}
+
+/** The short commit a line names, or nothing when there is none. */
+const sha7 = (sha) => String(sha || '').slice(0, 7);
+
 /** `mc merge watch <repo> <pr> [--timeout <min>] [--json]` — the arguments. */
 export function parseWatchArgs(argv) {
   const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--timeout'] });
@@ -143,6 +270,7 @@ export function usage() {
     '        mc merge <repo> <pr> --watch [--json]                queue it, then follow it until it lands or goes red\n',
     '        mc merge <repo> <pr> --docs [--json]                 docs-only: the tests that read documents, then squash, in this call\n',
     '                                                             (a pull request of documents only under docs/ lands this way without --docs)\n',
+    '        mc merge <repo> <pr> --admin [--json]                Martin\'s: squash with GitHub\'s admin override, no gate round, booked as landed\n',
     '        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n',
   ].join('');
 }

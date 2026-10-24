@@ -900,12 +900,12 @@ export function parseArgs(argv) {
 }
 
 /**
- * `mc merge <repo> <pr> [<pr>...] [--check] [--json] [--docs]` — the
- * arguments of the landing verb, in one place for both of its forms.
+ * `mc merge <repo> <pr> [<pr>...] [--check] [--json] [--docs] [--admin]` — the
+ * arguments of the landing verb, in one place for its forms.
  */
-export function parseMergeArgs(argv, { docs = false, full = false, watch = false } = {}) {
-  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : []), ...(full ? ['--full'] : []), ...(watch ? ['--watch'] : [])] });
-  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs), full: Boolean(scanned.flags.full), watch: Boolean(scanned.flags.watch) };
+export function parseMergeArgs(argv, { docs = false, full = false, watch = false, admin = false } = {}) {
+  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : []), ...(full ? ['--full'] : []), ...(watch ? ['--watch'] : []), ...(admin ? ['--admin'] : [])] });
+  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs), full: Boolean(scanned.flags.full), watch: Boolean(scanned.flags.watch), admin: Boolean(scanned.flags.admin) };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   opts.repo = positional.shift() || null;
@@ -930,6 +930,12 @@ export function parseMergeArgs(argv, { docs = false, full = false, watch = false
   if (opts.watch && opts.docs) return { ...opts, error: '--docs lands in the call — there is nothing to watch' };
   if (opts.watch && opts.check) return { ...opts, error: '--check lands nothing — there is nothing to watch' };
   if (opts.watch && opts.prs) return { ...opts, error: '--watch follows one pull request — one mc merge watch per pull request' };
+  // `--admin` is Martin's: one pull request, landed in the call, past the gate.
+  // It measures nothing, so it cannot be a check, a docs merge or a watch.
+  if (opts.admin && opts.prs) return { ...opts, error: '--admin lands one pull request at a time' };
+  if (opts.admin && opts.check) return { ...opts, error: '--admin lands; --check only measures' };
+  if (opts.admin && opts.docs) return { ...opts, error: '--admin or --docs, not both' };
+  if (opts.admin && opts.watch) return { ...opts, error: '--admin lands in the call — there is nothing to watch' };
   // `--check` runs the gate and stops there; without it the same round also
   // lands the change. There is no third mode, and in particular nothing that
   // merges a red gate: overruling one is the human's call and should cost a

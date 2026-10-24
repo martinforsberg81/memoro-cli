@@ -39,7 +39,7 @@ The practical route to `main` is yours to settle: one branch, one PR,
 (`mc merge <repo> <pr>` in the same call). The merger decides green and lands
 nothing red. A PR whose every file is a document under `docs/` (no script) runs the
 tests that read documents, and lands in the call when they are green. Never
-`gh pr merge`. Tell Martin the outcome, not the bookkeeping. His, in one line
+`gh pr merge`; when Martin says to land something past the gate, `mc merge <repo> <pr> --admin` — his verb, run only on his word. Tell Martin the outcome, not the bookkeeping. His, in one line
 with your recommendation: a merge that needed your judgement to go green,
 anything the gate refused, anything that changes what is deployed.
 
