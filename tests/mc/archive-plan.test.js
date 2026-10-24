@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import {
   NO_DOC, UNDOCUMENTED_HEADER, appendRow, duplicateRow, formatRow, isUndocumented, keptFiles, keptParagraph,
-  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, relinkRemoved, remoteSlug, rowFor, undocumentedRow,
 } from '../../src/mc/archive-plan.js';
 
 const LOG = `# Project log
@@ -189,4 +189,34 @@ test('a directory named literally keeps what is under it; a file that is not the
   assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q/gone.md'" }]), []);
   assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q-two/skills/a.md'" }]), [],
     'q-two is not q');
+});
+
+test('a link to a removed file points at it on GitHub at the archive\'s commit; the rest are left alone', () => {
+  const gone = new Set(['docs/project/p/claims.md', 'docs/project/p/closeout/a.json']);
+  const isGone = (path) => (gone.has(path) ? 'blob' : (path === 'docs/project/p/closeout' ? 'tree' : null));
+  const text = [
+    'See [claims](../project/p/claims.md#ruling-71) and [kept](../project/p/rulings.md).',
+    '[web](https://x.test/a.md), [here](#top), `[code](../project/p/claims.md)`',
+    '[dir](../project/p/closeout/)',
+  ].join('\n');
+  const { text: out, count } = relinkRemoved(text, 'docs/architecture/x.md', { isGone, slug: 'o/r', sha: 'abc' });
+  assert.equal(count, 2);
+  assert.match(out, /\[claims\]\(https:\/\/github\.com\/o\/r\/blob\/abc\/docs\/project\/p\/claims\.md#ruling-71\)/u);
+  assert.match(out, /\[kept\]\(\.\.\/project\/p\/rulings\.md\)/u);
+  assert.match(out, /`\[code\]\(\.\.\/project\/p\/claims\.md\)`/u, 'a code span is not a link');
+  assert.match(out, /\[dir\]\(https:\/\/github\.com\/o\/r\/tree\/abc\/docs\/project\/p\/closeout\)/u);
+  assert.deepEqual(relinkRemoved('[a](b.md)', 'docs/x.md', { isGone: () => null, slug: 'o/r', sha: 'abc' }), { text: '[a](b.md)', count: 0 });
+});
+
+test('a path a comment wraps at its slash names the file on the next line, not the directory', () => {
+  const kept = namedFiles(Q, Q_FILES, [
+    { path: 'src/a.js', text: '  // (ruling 10, docs/project/p/q/\n  // notes/c.md) same as before' },
+  ]);
+  assert.deepEqual(kept, [{ file: `${Q}/notes/c.md`, by: 'src/a.js:1' }]);
+  assert.deepEqual(namedFiles(Q, Q_FILES, [
+    { path: 'src/b.js', text: '// docs/project/p/q/\n// gone/PLAN.json, step "x"' },
+  ]), [], 'a wrapped path to a file that is not there keeps nothing');
+  assert.deepEqual(namedFiles(Q, Q_FILES, [
+    { path: 'src/c.js', text: ' * see docs/project/p/q/\n * skills/a.md' },
+  ]).map((k) => k.file), [`${Q}/skills/a.md`], 'block comments wrap too');
 });
