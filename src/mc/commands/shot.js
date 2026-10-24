@@ -5,7 +5,8 @@
  *           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
  *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
- *           [--click <selector>]… [--account <name>] [--onboarding] [--me] [--here]
+ *           [--click <selector>]… [--context-click <css>]… [--long-press <css>[@ms]]…
+ *           [--fill <css>=<text>]… [--account <name>] [--onboarding] [--me] [--here]
  *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
@@ -32,8 +33,8 @@ import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
-  SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, buildLoginRequest, buildRequest, clickGap, outPath,
-  parseSafeArea, parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
+  SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, actionGap, buildLoginRequest, buildRequest, outPath,
+  parseActions, parseSafeArea, parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
   ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
@@ -55,7 +56,7 @@ export async function run(argv, deps = {}) {
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare',
     ],
-    repeatable: ['--click'],
+    repeatable: ['--click', '--context-click', '--long-press', '--fill'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -89,6 +90,13 @@ export async function run(argv, deps = {}) {
   if (!safeArea.ok) { stderr.write(`mc: ${safeArea.error}\n`); return 2; }
   const scroll = parseScroll(flags.scroll);
   if (!scroll.ok) { stderr.write(`mc: ${scroll.error}\n`); return 2; }
+  // The acting flags in the order given; --click's count must agree with scanArgs'.
+  const acting = parseActions(argv);
+  if (!acting.ok) { stderr.write(`mc: ${acting.error}\n`); return 2; }
+  if (acting.actions.filter((action) => action.kind === 'click').length !== flags.click.length) {
+    stderr.write('mc: --click was read two ways — report it\n');
+    return 2;
+  }
   if (flags.shell && !SHELLS.includes(flags.shell)) {
     stderr.write(`mc: --shell is ${SHELLS.join(', ')}, not ${flags.shell}\n`);
     return 2;
@@ -198,7 +206,7 @@ export async function run(argv, deps = {}) {
     scroll: scroll.scroll,
     measure: flags.measure,
     onboarding: resolved?.state === 'fresh',
-    click: flags.click,
+    actions: acting.actions,
   });
   const scrub = scrubber(secrets);
   if (flags.compare) {
@@ -232,8 +240,8 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: the capture script said ok and named no file\n');
     return 1;
   }
-  // A picture asked with clicks is one only if the script says it clicked.
-  const gap = clickGap(request, result);
+  // A picture asked with actions is one only if the script says it did them.
+  const gap = actionGap(request, result);
   if (gap) { stderr.write(`mc: ${scrub(gap)}\n`); return 1; }
   // A gated target's verdict: the picture is taken either way, and a gate
   // that did not hold makes the exit 1.
@@ -399,6 +407,10 @@ export function usage() {
     '          [--click <selector>]        press it after the page and its window are open and before\n',
     '                                      --wait-for/--scroll/--el; repeatable, in order; a CSS selector\n',
     '                                      or text=<words>, as memoro\'s capture script reads locators\n',
+    '          [--context-click <css>]     right-click it\n',
+    '          [--long-press <css>[@ms]]   press and hold it (600 ms unless said)\n',
+    '          [--fill <css>=<text>]       type text into it\n',
+    '                                      the four act in the order they are given\n',
     '          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n',
     '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',

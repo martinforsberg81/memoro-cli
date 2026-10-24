@@ -108,9 +108,16 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   not answer `clicked` with one entry per click is refused (exit 1, no path), so
   until memoro's capture script honours `click` every `--click` is refused. With
   `--compare`, both sides are pressed and either side's refusal refuses the pair.
+- `--context-click <css>` (right-click), `--long-press <css>[@ms]` (press and
+  hold, 600 ms unless said) and `--fill <css>=<text>` (type into it), all
+  repeatable. They join `--click` in one list, and the four act in the order
+  they are given. `--fill` splits at its first `=`, so a selector holds none.
+  The text is read from the command line like any flag's value: type no secret
+  into it. A result that does not answer `acted` with one entry per action is
+  refused (exit 1, no path), as `clicked` does for clicks alone.
 
-The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding` and
-`click`, after `out`; a capture result gains `safe_area` and, when asked,
+The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding`,
+`click` and `actions`, after `out`; a capture result gains `safe_area` and, when asked,
 `measure`.
 
 ## mc dev open and mc dev surfaces
@@ -207,6 +214,15 @@ script only through the request file. Capture mode sends `mode`, `base_url`,
 `theme`, `locale` and `out`. Login mode sends `mode`, `base_url`, `account` and
 `profile_dir`. The shape is fixed in the project's contract
 ([`PLAN.json`](../project/mc/mc-shot/PLAN.json)).
+
+Capture mode also sends `click` and `actions`. `actions` is every acting flag in
+the order given, one object each: `{ kind, selector }`, with `text` on a `fill`
+and `ms` on a `long-press`; `kind` is `click`, `context-click`, `long-press` or
+`fill`. `click` is the same selectors when every action is a plain click, and
+`null` when one is not, so a script that knows only `click` takes the picture
+without its actions and mc says so. A result answers `clicked`, one entry per
+click, when every action is a click, and `acted`, one entry per action,
+otherwise.
 
 The script's stderr goes straight to your terminal, so you see its progress.
 mc reads stdout, and the last non-empty line there must be the one result
