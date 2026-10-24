@@ -1861,6 +1861,26 @@ describe('a repository that selects by diff', () => {
       assert.equal(testLanes({ cores: 8, load: 40, env: { MC_TEST_LANES: '5' } }), 5);
     });
 
+    it('testLanes: a merge, check or full round takes at least four, never more than cores - 1; MC_TEST_LANES still wins', () => {
+      assert.equal(testLanes({ cores: 8, load: 12, env: {}, mode: 'merge' }), 4);
+      assert.equal(testLanes({ cores: 8, load: 12, env: {}, mode: 'check' }), 4);
+      assert.equal(testLanes({ cores: 8, load: 12, env: {}, mode: 'full' }), 4);
+      assert.equal(testLanes({ cores: 8, load: 0, env: {}, mode: 'merge' }), 7);
+      assert.equal(testLanes({ cores: 4, load: 12, env: {}, mode: 'merge' }), 3);
+      assert.equal(testLanes({ cores: 8, load: 12, env: { MC_TEST_LANES: '2' }, mode: 'merge' }), 2);
+      assert.equal(testLanes({ cores: 8, load: 12, env: {}, mode: 'session-gate' }), 2);
+    });
+
+    it('a round names the lanes its tests run at and the load they were answered at', async () => {
+      const { gitAlso, tests } = onMain({ redAt: {} });
+      const fx = selecting({ files: [own], gitAlso });
+      try {
+        const report = await fx.report({ tests });
+        assert.equal(typeof report.load, 'number');
+        assert.equal(report.lanes, testLanes({ load: report.load, mode: 'merge' }));
+      } finally { fx.cleanup(); }
+    });
+
     it('red alone on the candidate too: today\'s red, and the line says the change broke them', async () => {
       const { gitAlso, tests } = onMain({ redAt: { candidate: [own] } });
       const fx = selecting({ files: [own, scanner], gitAlso });
