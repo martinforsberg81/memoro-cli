@@ -1895,3 +1895,45 @@ the `sqlite` class run one file at a time, and selections of 300 files or
 more in half the rounds — is two proposals
 (`2026-10-24-memoro-sqlite-test-class-parallel`,
 `2026-10-24-memoro-selection-reach`). The deploy's hold of the lane is open.
+
+## 56 · The merger hands over at once, a round stops when its pull request is gone, documents are tested, and `--admin` is Martin's
+
+`ruling · 2026-10-24` · raised by Martin
+
+> "jag blir tokig på vår mc merge … Låt oss gå igenom hela processen. Robust,
+> resurssnål, effektiv är ledorden." — "Ja." (to the five projects below, with
+> `--admin` as his verb) — "Just nu är det också bara en merge lane som kör.
+> Det ska vara två heavy + light." (Martin, 2026-10-24)
+
+Measured over `~/.memoro/mc/gate-rounds.jsonl`, `~/mc/runner/log/merger.log`
+and GitHub, memoro, 2026-10-17 → 2026-10-24:
+
+- 220 of 319 landed pull requests landed in one round; no step went `failed`
+  through the merger. Open → merged is 11 min at the median, 41 at p75, 2 h at
+  p90 — and 22 000 of the tail's 27 000 minutes passed before the merger saw
+  the pull request (stacked steps waiting on their parent, sessions still
+  working).
+- The suite is 28 of 42 heavy-lane hours. Selection narrowing was measured
+  in the selection-reach proposal (best edge cut 5 %, area rules 19 %) and is
+  left until the lanes and sqlite projects have landed.
+- **76 handovers stalled the queue 643 minutes**: on new code the merger took
+  no new job in either lane until its round and mends in flight ended (p90
+  24 min, max 72 min). That is the single lane Martin saw.
+- A round ran 13 minutes for memoro #14169 after it had been merged with
+  `--admin`; six admin merges in the week were raw `gh pr merge` calls.
+- Four documents-only landings turned main red (#13980, #13995, #14138,
+  #14188); memoro's selector draws eight files for #14188's paths and
+  `doc-links.test.js` is red on its commit.
+- One hung test held the heavy lane 95 minutes (#14067) and named nothing.
+
+1. **The merger hands over at once** — releases `merger.json`, starts its
+   successor, finishes only the jobs it holds (project `merger-handover`).
+2. **A round stops within a minute when its pull request is merged, closed or
+   pushed** (project `round-abort`).
+3. **`mc merge <repo> <pr> --admin` is Martin's verb**: squash with the admin
+   override pinned to the head, booked as landed; a session runs it only on
+   his word (project `merge-admin`).
+4. **The docs form runs the tests the selector draws for the documents**
+   before it squashes, still in the call (project `docs-reads`).
+5. **A test that never ends is a red by name** after ten minutes (project
+   `hung-test`).
