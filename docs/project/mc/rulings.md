@@ -1855,3 +1855,43 @@ checkouts.
 Carried by project `repos-layout` (programme `mc`); the dependency store,
 `prepare()`, the hook and the test pipeline of the same proposal are planned
 after it lands.
+
+## 55 · The merger lands one pull request per round, and a round's suite keeps at least four lanes
+
+`ruling · 2026-10-24` · raised by Martin
+
+> "Ja, stäng av batchningen. Tiden för merge per runda måste ner dramatiskt!
+> Vi behöver ytterligare åtgärder." (Martin, 2026-10-24)
+
+Measured over `~/.memoro/mc/gate-rounds.jsonl` and `~/mc/runner/log/merger.log`,
+memoro, 2026-10-17 → 2026-10-24:
+
+- **Batches cost more than they save.** 305 single rounds: 349 files selected
+  at the median, suite 154 s, wall 210 s, 80 % green. 37 batch rounds: 874
+  files, suite 406 s, wall 822 s, 54 % green, and a red batch falls back to
+  one round per member. About 430 s per landed pull request against 210 s.
+- **The suite runs at two lanes all day.** Since #1020 (2026-10-19) a round's
+  lanes are the free cores, `cores − 1 − load`, never below 2; with four step
+  sessions the load stands at 10–16 on 8 cores, so every round has run at 2.
+  A 1 206-test selection takes 145–169 s by day; the nightly full suite
+  (25 600 tests, seven lanes) takes 11–14 minutes — five to eight times more
+  tests per second. Of a round's suite, the standard batch is 178 s at the
+  median, the serial `sqlite` batch 99 s, `heavy` 9 s; the rest of the round
+  (fetch, prepare, derived, selection) is about 35 s.
+- **Lane waits behind deploys**: 16 rounds waited more than a minute, 5 h in
+  all over 4.5 days; the longest, 90 min, behind a deploy whose `wrangler
+  deploy` retried for 1 h 45 and failed.
+
+1. **One job per round.** `MERGE_BATCH_MAX` is 1; the batch code stays for a
+   merger resuming a batch it died under. This amends ruling 34.
+2. **A merge, check or full round runs at least four lanes**, never above
+   `cores − 1`; a session's gate keeps the free-cores formula; `MC_TEST_LANES`
+   still wins. The reds-under-load requeue (2026-10-19) stays as the net.
+3. **Every round record names `lanes` and `load`**, so the next measurement
+   can say what a round ran at.
+
+Carried by project `merge-round-time` (programme `mc`). memoro's share —
+the `sqlite` class run one file at a time, and selections of 300 files or
+more in half the rounds — is two proposals
+(`2026-10-24-memoro-sqlite-test-class-parallel`,
+`2026-10-24-memoro-selection-reach`). The deploy's hold of the lane is open.
