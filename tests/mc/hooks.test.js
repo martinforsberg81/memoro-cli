@@ -94,7 +94,11 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['cd memoro && git push', 'push', /mc publish/u],
       ['gh pr edit 12 --body-file x', 'pr-edit', /mc publish/u],
       ['gh pr merge 12 --squash --match-head-commit abc', 'pr-merge', /mc merge <repo> <pr>/u],
-      ['npm run ci -- --base-ref origin/main', 'ci', /mc gate/u],
+      ['npm run ci -- --base-ref origin/main', 'ci', /mc gate <files…>/u],
+      ['npm test', 'npm-test', /the merger's/u],
+      ['cd memoro && npm run test 2>&1 | tail', 'npm-test', /mc gate/u],
+      ['node --test tests/a.test.js 2>&1 | tail -20', 'node-test', /mc gate <files…>/u],
+      ['node --import ./tests/_isolate-home.mjs --test tests/a.test.js', 'node-test', /gate lane/u],
       ['npm run dev:agent -- --restart', 'dev-server', /mc test dev --here --url/u],
       ['npm run dev', 'dev-server', /mc test dev/u],
     ];
@@ -108,7 +112,7 @@ describe('mc hook — shell commands that have an mc verb', () => {
 
   it('leaves alone what has no verb, the admin fallback, and a command that carries the escape', () => {
     for (const command of [
-      'git status', 'npm test', 'npm run css:lint', 'git commit -m "push the thing"', 'gh pr view 3 --json state',
+      'git status', 'npm run test:affected', 'node scripts/x.mjs --test-name-pattern y', 'npm run css:lint', 'git commit -m "push the thing"', 'gh pr view 3 --json state',
       'gh pr merge 12 --squash --admin', `${ALLOW_MARK} git push --force-with-lease`, 'npm run deps:prepare',
       `${ALLOW_MARK} gh pr edit 12 --base main`, 'echo "gh pr edit 12"',
       'npm run ci -- --list --json',

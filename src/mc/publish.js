@@ -101,9 +101,10 @@ export function describedBody({ text, described, commits }) {
 /**
  * The lines a session reads back. Number and URL first — that is what it
  * needs — then the head as GitHub holds it against the head that was
- * pushed, and the one line to run next.
+ * pushed, and the one line to run next — none when `mc publish` queues the
+ * pull request itself, and the merge's own lines follow.
  */
-export function publishLines({ pr, localHead, branch, pushed, created, repo, after = 0, described = null }) {
+export function publishLines({ pr, localHead, branch, pushed, created, repo, after = 0, described = null, queued = false }) {
   const head = String(pr.headRefOid || '');
   const same = head.startsWith(localHead) || localHead.startsWith(head);
   return [
@@ -111,6 +112,6 @@ export function publishLines({ pr, localHead, branch, pushed, created, repo, aft
     `${created ? 'opened' : 'already open'} from ${branch} → ${pr.baseRefName}; ${pushed ? 'pushed' : 'nothing to push'} ${localHead.slice(0, 7)}${same ? '' : ` — GitHub holds ${head.slice(0, 7)}, not the head that was pushed: read gh pr view ${pr.number}`}`,
     ...(after > 0 ? [`description at ${described.slice(0, 7)}; ${after} later commit${after === 1 ? '' : 's'} under "After the description" — --body-file rewrites it`] : []),
     ...(pr.mergeStateStatus && pr.mergeStateStatus !== 'UNKNOWN' ? [`state ${pr.mergeStateStatus.toLowerCase()}${pr.mergeable ? `, ${String(pr.mergeable).toLowerCase()}` : ''}`] : []),
-    `next: mc merge ${repo} ${pr.number}`,
+    ...(queued ? [] : [`next: mc merge ${repo} ${pr.number}`]),
   ];
 }

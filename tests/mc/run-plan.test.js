@@ -485,7 +485,7 @@ test('stepPrompt: an answer without a pull request says so; with one, the answer
   assert.doesNotMatch(none, /still open|No new pull request/u);
   const kept = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, answered: { name: 'x', answer: 'Yes.', pr: 9 } });
   assert.match(kept, /The answer: Yes\.\n#9 is still open, on this branch, with the earlier session's work\./u);
-  assert.match(kept, /`mc merge memoro 9`\. No new pull request\./u);
+  assert.match(kept, /`mc merge memoro 9` would\)\. No new pull request\./u);
   assert.doesNotMatch(kept, /Nothing of the earlier session/u);
 });
 

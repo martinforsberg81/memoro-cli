@@ -66,13 +66,9 @@ ends (the paragraph on command gates that need Docker in
 the runtime takes its lease with `mc docker ensure`, and gives it back with
 `mc docker release`.
 
-A whole `mc gate` whose selection names a command that needs docker, and an
-INCREMENTAL one whose commands do, takes the lease for its detached child's pid
-and exports `MC_DOCKER_HOLDER=$$` in it. It releases nothing: the lease ends
-with that pid, which the next reader removes once the gate has ended, so a gate
-that answers RUNNING and keeps going holds the runtime until it ends. A dirty
-tree or another base does not run the selector, so such a whole gate does not
-ensure, and its Docker gate says `unavailable` as before.
+`mc gate` takes no lease: since ruling 52 it runs named test files only, and
+no command gate, so nothing it runs needs the runtime. The command gates that
+do are the merge round's.
 
 **No `docker` call while OrbStack is down.** On OrbStack a `docker` call starts
 the VM, so asking the CLI whether the runtime is up would make it so. The

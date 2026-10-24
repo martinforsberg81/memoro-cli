@@ -372,10 +372,12 @@ on eight cores, and the whole-tree readers went red only under load. And the
 selector's `resourceClasses` are honoured (`testBatches`): a file classed `sqlite`
 or `heavy` runs after the standard batch, one at a time, in its own `node --test`
 — as memoro's own runner runs it — and the batches' TAP is read as one run. A session's
-`mc gate` also waits while a merge round holds the heavy lane (`MERGE_MODE` in
-`HEAVY_HOLD_MODES`, `await-deploy.js`), as it waits for a deploy: a verdict is
-expensive to repeat, a session's gate is cheap to delay. A gate already running
-is not paused.
+`mc gate` runs in the lane too (ruling 52, [`src/mc/gate-lane-wait.js`](../../src/mc/gate-lane-wait.js)):
+its detached shell takes the lane's lock for its own pid, with `mode:
+'session-gate'`, waiting while a merge round, a deploy, an iOS build or another
+session's gate holds it, and gives it back after the tests. The merger waits
+for a session's run as for any round in its lane. A session's gate is named
+test files only, at most 30, so the wait either side is short.
 
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
@@ -449,87 +451,24 @@ is run exactly as before.
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
 
-**A green `mc gate` on the same tree is not measured again** (ruling 44). A
-session's `mc gate` — the whole gate against `origin/main`, on a tree with
-nothing uncommitted before and after, in a repository whose declaration has
-`select`, with the select command answering — writes one line to
-`gate-greens.jsonl` under mc's home when it is green: `{ repo, tree, selection,
-gate_version, at, session }`, the last 2,000 kept
-([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)). `tree` is `git
-rev-parse HEAD^{tree}`; `selection` is the sha256 of the selection's test files
-and command gates (`packageScript`, `passBaseRef`), each sorted, as the declared
-`select` printed them; `gate_version` is `GATE_MEASUREMENT_VERSION`, one
-constant both sides import and bumped whenever what either side measures
-changes. Both sides make the selection the same bytes: `mc gate` reads the
-declaration of the worktree's primary checkout (the merger's `repo_path`), runs
-its `select` in the worktree with that checkout's `MC_SELECTION_STATE`
-directory and no write, runs the gate itself with the same state, and both
-resolve `origin/main` through the one ref store every worktree shares.
+**A green `mc gate` on the same tree is not measured again** (rulings 44 and
+47) — a rule with nothing left to read. A round looks up its candidate in
+`gate-greens.jsonl` ([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)):
+exactly by tree, selection hash and gate version, or by the pull request's head
+tree and only the delta main moved since. Only a session's whole `mc gate`
+wrote those lines, and since ruling 52 a session runs no whole gate, so the
+lookup misses and the round measures its selection itself, once, in its lane.
+In the last 300 memoro rounds before that it had hit 36 times. The code stays,
+read-only: `reused` in a round's `gate-rounds.jsonl` line still says when a
+recorded green was taken.
 
-A single pull request's round, after prepare, the derived regeneration, the
-previous red files and its own selection, looks up its candidate's `HEAD^{tree}`,
-that selection's hash and the version. All three matching a recorded green for
-the repository, it runs neither the suite nor the selected command gates, says
-`the candidate's tree <short> was measured green by mc gate at <at> with the
-same selection — not measured again`, sets `reused: { mode: 'exact', at,
-session }`, and then
-runs the pull request's own tests and the declared extra gates as always; the
-headline reads `GREEN — the test gate passes (measured by mc gate)`. Any one of
-them different, and the round measures as before. A batch never reuses — its
-candidate is a tree no session stood in — and `--full` never does.
-
-**After main moved, only the delta is measured** (ruling 47). The exact match
-almost never hits — main moves between a session's `mc gate` and the round, and
-the candidate has main merged in — so a green also records `head_tree`, `base`
-(`git merge-base HEAD origin/main` when it was measured), `files` and
-`commands` (the selection by name). When the exact match misses, in a single
-pull request's round of a repository whose declaration says
-`select_changed_path: true` (memoro's shipped entry does), the round reads
-`<pr head>^{tree}` and looks up the last green for it with a `base` and `files`
-(`findGreenForHead`). With one, and `git merge-base --is-ancestor <green.base>
-<report.base.commit>`, the delta paths are `git diff --name-only <green.base>
-<report.base.commit>` plus the files the derived commit regenerated. None: the
-selection does not run again. Otherwise the declared `select` runs once more
-with ` --changed-path <p>` per path (shell-quoted; memoro's `ci.mjs --list`
-takes it in place of the base-ref diff), and the round runs the candidate's
-selected files and command gates the delta also reaches, plus any the green did
-not measure — through the same `measureSelected` and `runSelectedCommands`, with
-the same red handling. It says `#<n>'s head <short> was measured green by mc gate
-at <at>; main moved <n> paths since — running <k> of the <m> selected files and
-<j> of <c> command gates again`, sets `reused: { mode: 'delta', at, session,
-delta_paths, rerun_files, rerun_commands }`, and the headline reads `(the rest
-measured by mc gate)` when anything ran again. Any failure — git, the selector,
-a base main does not descend from, more than 4,000 paths — says `delta reuse
-not taken — <why>; measuring the whole selection` and measures as before. The
-round's `gate-rounds.jsonl` line carries `reused`, so the hit rate is counted.
-An operator override in `repo-gates.json` that omits `select_changed_path`
-turns it off, and the round says so as `DECLARATION SHADOWED`.
-
-**`mc gate`'s fast paths** ([`src/mc/gate-fast.js`](../../src/mc/gate-fast.js)).
-A session's `mc gate` with no files first reads the diff from `git merge-base
-HEAD <base>` to the worktree — committed, staged, unstaged and untracked, renames
-as both sides. Empty, it answers `GREEN — nothing changed against <base>`; every
-path a document under `docs/` and none a script (the `--docs` rule), it answers
-`GREEN — docs only, nothing to run — 0s`. Neither starts a child or records a
-green. Otherwise it takes the worktree's tree (`git add -A` and `git write-tree`
-into a copy of the index, so untracked files count and the real index is
-untouched). A whole gate writes `mc-gate-last.json` beside the lock when it ends
-on the tree it started on: the tree, the merge-base and ref, the exit code, the
-red test files (`redFiles` in [`src/mc/gate-local.js`](../../src/mc/gate-local.js):
-the spec reporter's `test at <file>`, a `not ok` block's TAP `location:`, a stack
-frame under a failing line) and the red command gates. The next `mc gate` on the
-same merge-base answers `GREEN (unchanged since <at>)` when that gate was green on
-this exact tree. When it was red and named red files, it runs only those files,
-what the primary checkout's declared `select` picks with `--changed-path <p>` for
-each path changed since that tree (memoro's `ci.mjs --list` and this
-repository's `affected-tests.js` both take it), and the command gates that
-selection names, as `npm run <script>`. The verdict reads `GREEN INCREMENTAL — …;
-not the whole gate`, it records no ruling-44 green and it leaves
-`mc-gate-last.json` as it was. Any doubt — another merge-base, no `select`, a
-selector that fails, a red with no red file, a red command gate the selection
-does not name — and the whole gate runs. `mc gate --full` always runs it. The
-whole gate's child gets `MC_GATE_FAIL_FAST=1`, which a repository's runner may
-honour; an incremental run and named files do not.
+**`mc gate` runs only test files** (ruling 52, [`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
+Named, at most 30, each a `….test.js`/`.mjs`/`.cjs`/`.ts` file and not a
+directory; with none named, the test files the branch adds or changes against
+`origin/main` (`changedAgainst` in [`src/mc/gate-fast.js`](../../src/mc/gate-fast.js):
+committed, staged, unstaged and untracked), and `NOTHING RUN — …` when there
+are none. `--full` is refused. The fast paths, `mc-gate-last.json`, the
+incremental run after a red and the recorded greens went with the whole gate.
 
 **The command gates the selection names run beside the suite** (merge-throughput,
 ruling 34). Until then they ran after it: 65 s mean on top of every round that
@@ -1054,8 +993,8 @@ register's `red` and the retry preamble. The mend gets it through its prompt.
 Both are given the same three lines: `Red files: …`, `The failures, as the round
 saw them: <path>`, and `Re-run just those: mc gate <files> --test-name-pattern
 '<names>'` (at most five names, regex-escaped). The mend is told to run
-`mc gate <red files>` until they are green, then `mc gate` once, and never a
-bare `npm test`. Until then every mend was told `red files:` with nothing after
+`mc gate <red files>` until they are green, and never the whole suite (ruling
+52). Until then every mend was told `red files:` with nothing after
 it. A merge round keeps the gate's verdict under `gate`, and the mend read only
 the top of the report. Now `runMergeRound` lifts `red_files` and `main_red` up
 to the top when the gate stops.

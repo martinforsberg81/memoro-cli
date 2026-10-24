@@ -6,14 +6,24 @@
  *   mc publish --title "…" --body "…"  named instead
  *   mc publish --body-file <path>      the body from a file
  *   mc publish --branch <name>         a detached HEAD (a mend's worktree) to that branch
- *   mc publish --json                  the snapshot as one object
+ *   mc publish --json                  the snapshot as one object, and nothing queued
+ *   mc publish --no-merge              push and open it, and queue nothing
  *
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
  * (`publish.js` has each rule): refuse on main, refuse a dirty tree, refuse
  * a remote branch that moved (never force), non-force `git push -u`, then
  * one `gh pr create` — or, when the branch already has an open pull request,
  * `gh pr edit` of exactly the fields given (title, body, base) — and one
- * `gh pr view` of the result. Five lines back, the last of them `mc merge <repo> <pr>`.
+ * `gh pr view` of the result.
+ *
+ * Then it queues the pull request for the merger, as `mc merge <repo> <pr>`
+ * does, in the same call (Martin, 2026-10-24: every turn a session spends
+ * after its work is done is a turn for nothing). A session's publish was
+ * always followed by that `mc merge`, one model turn later, to read one line.
+ * Not with `--no-merge`, not with `--json` (a script decides), and not for a
+ * detached HEAD published with `--branch`: that is a mend's, and the merger
+ * that started the mend measures it again. Nor when GitHub does not yet hold
+ * the head that was pushed — `mc merge` would refuse it at the door.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -22,12 +32,13 @@ import { basename } from 'node:path';
 import { tryGit } from '../git.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
+import { run as merge } from './merge.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
+  const scanned = scanArgs(argv, { booleans: ['--json', '--no-merge'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
   const { flags } = scanned;
@@ -116,8 +127,12 @@ export async function run(argv, deps = {}) {
     stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
   }
-  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described })) stdout.write(`${line}\n`);
-  return 0;
+  const head = String(pr.headRefOid || '');
+  const held = head.startsWith(localHead) || localHead.startsWith(head);
+  const queue = !flags['no-merge'] && !detached && held;
+  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
+  if (!queue) return 0;
+  return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
 }
 
 /** The base a new pull request aims at: what origin calls its default branch, else main. */
@@ -184,8 +199,9 @@ export function usage() {
     '        mc publish --body-file <path>       the body from a file\n',
     '        mc publish --base <branch>          the base a new pull request aims at, or the open one is moved to\n',
     '        mc publish --branch <name>          a detached HEAD (a mend\'s worktree) to that branch\n',
-    '        mc publish --json                   the pull request snapshot as one object\n',
+    '        mc publish --json                   the pull request snapshot as one object; queues nothing\n',
+    '        mc publish --no-merge               push and open it, and queue nothing\n',
     '\n',
-    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force); a detached HEAD only with --branch. Ends with the mc merge line to run.\n',
+    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force); a detached HEAD only with --branch.\nThen queues the pull request for the merger, as mc merge <repo> <pr> does — not with --no-merge, --json or --branch.\n',
   ].join('');
 }

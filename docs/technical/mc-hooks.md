@@ -87,7 +87,8 @@ A `Bash` command is matched on its words:
 | `gh pr edit` | `mc publish` (on an open pull request each of `--title`, `--body-file`, `--base` edits only its own field) |
 | `git push` | `mc publish` |
 | `gh pr merge` without `--admin` | `mc merge <repo> <pr>` (the admin merge stays memoro's documented livelock fallback) |
-| `npm run ci` | `mc gate` |
+| `npm run ci`, `npm test`, `npm run test` | `mc gate <files…>` — the whole suite is the merger's (ruling 52) |
+| `node --test …` | `mc gate <files…>`, which runs it in the gate lane |
 | `npm run dev`, `npm run dev:agent` | `mc test dev --here --url`, or `mc shot dev` |
 
 A `Write` whose content imports Playwright, to a path outside every known

@@ -1747,3 +1747,56 @@ archiving a programme would have removed every project in it.
 6. **No `steps/` files**: a step's prose stays in `PLAN.json`.
 
 Replaces § Structure of `mc-project.md`. Carried by project B.
+
+## 52 · A session runs the tests its change reaches, in the lane; the whole measurement is the merger's, queued by `mc publish`
+
+`ruling · 2026-10-24` · raised by Martin
+
+> "Sessionerna tar extremt mycket tid och resurser när de är klara med sitt
+> arbete, de kör `mc gate --wait` sedan `mc publish` och `mc merge`. Allting
+> tar evigheter och deras anrop går vid sidan av konstruktionen av heavy lane /
+> light lane vilket ska förhindra att flera parallella processer tar datorns
+> kapacitet. Dessutom så kostar detta massor med modell-turer. Fullständigt
+> bortkastat. mc gate OM den överhuvudtaget ska köras och det ska i princip
+> inte gå att köra full gate." (Martin, 2026-10-24)
+
+Measured over the 65 step sessions of 2026-10-20..24: 209 bare `mc gate`
+(32 of them `--full`), 116 `mc gate --wait`, 76 `mc gate <files>`, 51
+`mc publish`, 53 `mc merge` — a median of 12 Bash calls from the first gate
+or publish to the session's end. A whole memoro gate is 10–11k tests and
+several minutes; many hit the 600 s tool limit and were polled. None of
+them took the gate lane: a session's gate looked once, at its start, for a
+deploy, an iOS build or a merge round (`await-deploy.js`), and then ran beside
+every other session's gate and the next merge round. And it bought little:
+the merger reused a session's green in 36 of the last 300 memoro rounds
+(20 exact, 16 delta, rulings 44 and 47) and measured the rest again.
+
+1. **`mc gate` runs test files, never the suite.** Named, at most 30, each a
+   test file and not a directory; bare, the test files the branch adds or
+   changes against `origin/main`. `--full` is refused, and so is the whole
+   gate: the fast paths, `mc-gate-last.json`, the incremental run after a
+   red and the recorded greens go with it. The merge round measures the
+   selection once, in its lane — the reuse code of rulings 44 § 3 and 47
+   stays, and finds nothing to reuse.
+2. **Every `mc gate` runs in its repository's gate lane.** The detached
+   shell takes the lane's lock for its own pid (`gate-lane-wait.js`, `mode:
+   'session-gate'`) before the tests and gives it back after them, waiting
+   while anything holds it. The merger, a deploy, an iOS build and `mc test`
+   already wait for that lock, so a session's run is one more round in the
+   lane's queue, never one beside it. This replaces `await-deploy.js`'s
+   look-once for a session's gate.
+3. **`mc publish` queues.** After the push and the PR it runs `mc merge
+   <repo> <pr>` in the same call, and prints its lines; a queued step is told
+   to end the session in that turn. Not with `--no-merge`, `--json`, a
+   detached `--branch` (a mend's: the merger that started it measures the
+   moved branch), or a head GitHub does not hold yet.
+4. **The raw suite goes to `mc gate`.** The pre-tool hook turns `npm test`,
+   `npm run test` and `node --test` to `mc gate <files…>`, as it turns
+   `npm run ci`; `npm run test:<x>` passes. `MC_HOOK_ALLOW=1` is the escape.
+5. **The sessions are told so.** `step.md`, `_common.md`, `_session-work.md`,
+   `mend.md` and the prompts in `run-plan.js` and `mend.js`: test the files
+   the change reaches with `mc gate <files…>`, one call with a 600 s tool
+   timeout; commit; `mc publish`; `queued for the merger` ends the session.
+
+This amends ruling 44 § 6 and the session half of rulings 44 § 3 and 47.
+

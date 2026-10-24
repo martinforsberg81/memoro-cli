@@ -25,20 +25,26 @@ from starting the step again once it is answered.
 
 **Otherwise, build it and hand it to the merger:**
 
-1. Run what `done_when` names and fix what it finds. `mc gate` runs the
-   repository's gate on your tree — use it, not the suite into your context.
-2. Commit, then `mc publish` (pushes, opens the PR, prints its number). A
-   landed PR is a `done` step, so a part you cannot finish is
+1. Test what you changed, and only that: `mc gate <test files…>` — the files
+   you wrote or changed and the ones that test the code you touched, at most
+   30 (bare `mc gate` runs the test files your branch changed). It runs in
+   the gate lane and answers in one call: give the Bash call
+   `timeout: 600000`. Red: fix, then run the same line again — `re-run:` in
+   the answer is it. There is no whole suite to run, and none of it is yours:
+   no `--full`, no `npm test`, no `node --test`. The merger measures the whole
+   selection once, after you.
+2. Commit, then `mc publish --title "…" --body-file <file>` (file in
+   `$MC_SCRATCH`). It pushes, opens the PR and queues it for the merger, in
+   one call. A landed PR is a `done` step, so a part you cannot finish is
    `mc step failed`, never a partial landing.
-3. `mc merge <repo> <pr>`. It checks the plan's criteria, queues the PR for the
-   merger and returns at once.
-   - `queued for the merger` — your work is over; end the session. The merger
-     runs the gate and lands it; a red comes back to this step's next session
-     with the gate's reason, on the same branch and PR.
+   - `queued for the merger` — your work is over. End the session in that
+     turn: no `mc gate`, no `mc merge watch`, no summary, no checking. A red
+     comes back to this step's next session with the gate's reason, on the
+     same branch and PR.
    - `unmet-criteria` — you are the plan's last step and a success criterion is
      not met in the register: run its `check` and `mc project criterion met <n>`
-     for each you measured, then `mc merge` again; one you cannot measure is
-     `mc step failed --reason` naming it. Every check is yours,
+     for each you measured, then `mc merge <repo> <pr>`; one you cannot measure
+     is `mc step failed --reason` naming it. Every check is yours,
      even one whose text names Martin or says a step does not run it: a
      live check on this machine, a build, a wait for the runner's next pass
      is commands you run. Never leave a criterion `false` as somebody else's.
@@ -50,14 +56,16 @@ as it is; its red, if it comes, is that step's.
 **When the prompt says the step came back from the merger:** the PR is open on
 your branch. Fix what the gate named — never lower a threshold or skip/weaken
 a test; `conflicts with origin/main` is merging `origin/main` and keeping both
-intents — push to the same branch, `mc merge` the same PR. A fix that needs a
+intents — run the red files with the `re-run:` line the prompt gives, commit,
+`mc publish` (same branch, same PR, queued again). A fix that needs a
 decision that is not yours: write what the gate said and what you tried into
-the PR and a `mc step note`, push, `mc step failed --reason "<one sentence>"`,
-end.
+the PR and a `mc step note`, `mc publish --no-merge`, `mc step failed --reason
+"<one sentence>"`, end.
 
-Never `gh pr merge`, never a second PR, never `done` by hand. Stay on the
-branch you were given. A worktree handed over mid `git merge origin/main`:
-resolve the named files, commit, then do the step on the same branch and PR.
+Never `gh pr merge`, never a second PR, never `done` by hand, never a
+`git push`. Stay on the branch you were given. A worktree handed over mid
+`git merge origin/main`: resolve the named files, commit, then do the step on
+the same branch and PR.
 
 Nothing in the background: no `run_in_background`, no `&`.
 

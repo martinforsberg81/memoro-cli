@@ -88,14 +88,18 @@ export function runningRounds({ root = mcHome(), alive = isAlive } = {}) {
  * `{ ok: true, took: true }` when this process now holds it. `{ ok: false,
  * running }` when somebody else does — `running` is what to tell the operator,
  * and it is the other round's own words rather than a guess.
+ *
+ * `pid` is the holder, this process unless said otherwise: a session's `mc
+ * gate` takes the lane for the shell that runs its tests (`gate-lane-wait.js`),
+ * and the lock is litter the moment that shell is gone.
  */
 export function takeGateLock({
-  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane = 'heavy',
+  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane = 'heavy', pid = process.pid,
 } = {}) {
   const running = runningRound({ root, alive, lane });
   if (running) return { ok: false, running };
   const mine = {
-    pid: process.pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
+    pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
   };
   try {
     writeJsonAtomic(gateLockPath(root, lane), mine, { mode: 0o600 });
@@ -115,10 +119,10 @@ export function takeGateLock({
  * dying. Deleting the file blindly would then release somebody else's round,
  * which is the one way a lock this simple could do real damage.
  */
-export function releaseGateLock({ root = mcHome(), lane = 'heavy' } = {}) {
+export function releaseGateLock({ root = mcHome(), lane = 'heavy', pid = process.pid } = {}) {
   try {
     const raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8'));
-    if (raw?.pid !== process.pid) return false;
+    if (raw?.pid !== pid) return false;
     rmSync(gateLockPath(root, lane), { force: true });
     return true;
   } catch { return false; }

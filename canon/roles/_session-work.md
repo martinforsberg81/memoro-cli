@@ -29,12 +29,12 @@ nothing in the plan waits for that.
 2. Build in pieces. At each review point stop and show Martin the thing
    itself — the diff, a screenshot (`mc shot`), the running app (`mc dev`) —
    with what you would do next. Build nothing past a point he has not seen.
-3. `mc gate`, commit, `mc publish`, `mc merge <repo> <pr>` — it queues a code PR
-   for the merger and returns (a docs-only PR lands in the call); `mc step` and
-   `merger.log` say what came of it.
-   `mc merge` once: do not call it again or poll — no loop, no `sleep`; the
+3. `mc gate <files…>` (the tests your change reaches), commit, `mc publish` —
+   it pushes, opens the PR and queues it for the merger in one call (a
+   docs-only PR lands in the call); `mc step` and `merger.log` say what came
+   of it. Once: do not poll — no loop, no `sleep`, no `mc merge watch`; the
    merger lands it without you. Fix reds yourself on the same branch, and
-   `mc merge` again.
+   `mc publish` again.
 4. Deploy is Martin's: say what `mc deploy` would ship; run it when he says go.
 5. More than one session: one open PR carries it. Its body says what is done,
    what is next, what is open; the next session starts with `gh pr view <n>`.

@@ -37,9 +37,9 @@ THE PAGE
                                     argument prints the mode and the next session's billing
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc test dev | prod               The app running, measured — locally or live
-  mc gate                          This worktree's own gate, answered in 2 KB
+  mc gate <test files…>            The tests a change reaches, in the gate lane, in 2 KB
   mc shot dev | prod <target>      A PNG of the running app; prints its path
-  mc publish                       Push this branch, open its pull request
+  mc publish                       Push this branch, open its PR, queue it to merge
   mc hook session-start | pre-tool The coding agent's hooks: the worktree's state
                                     at start, shell commands turned to mc verbs
   mc merge <repo> <pr>             The same measurement, then the merge
@@ -286,24 +286,25 @@ IN FULL
                                     Remove the containers and volumes labelled
                                     mc.holder whose pid is gone. Unlabelled
                                     ones are reported and never removed
-  mc gate [--base <ref>] [--json] [--budget <s>] [--wait]
-                                    The repository's own gate on the tree you
-                                    stand in — npm run ci -- --base-ref
-                                    origin/main where there is a ci script,
-                                    npm test otherwise — with the whole output
-                                    in a file and at most 2 KB printed: GREEN
-                                    or RED, the counts, the failing lines and
-                                    their locations, the file's path. A meter
-                                    for a session before it pushes; mc merge
-                                    measures again and decides. Answers within
-                                    --budget s (default 540); past it, RUNNING
-                                    and exit 3 — the gate runs on, and --wait
-                                    prints its verdict from the same log. One
-                                    gate per worktree: a second refuses, exit 2
-  mc gate <test files…> [--test-name-pattern <p>]
-                                    The named test files with this repository's
-                                    node --test flags — the same log, budget and
-                                    summary; a red names the re-run line
+  mc gate <test files…> [--test-name-pattern <p>] [--json] [--budget <s>]
+                                    The named test files (at most 30) with this
+                                    repository's node --test flags, run in its
+                                    gate lane: the shell waits while a merge
+                                    round, a deploy, an iOS build or another
+                                    session's gate holds the lane, so no two
+                                    runs share its cores. The whole output in a
+                                    file and at most 2 KB printed: GREEN or RED,
+                                    the counts, the failing lines and their
+                                    locations, the re-run line, the file's path.
+                                    Answers within --budget s (default 540);
+                                    past it, RUNNING and exit 3 — the tests run
+                                    on, and --wait prints the verdict from the
+                                    same log. One gate per worktree
+  mc gate [--base <ref>]           The test files this branch adds or changes
+                                    against origin/main; none, and it says what
+                                    to name. There is no whole gate: --full is
+                                    refused — the merger measures the pull
+                                    request once, in its lane
   mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
@@ -342,7 +343,8 @@ IN FULL
                                     the repository) and the mc toolbox
   mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read|Edit|MultiEdit: gh pr
                                     create, gh pr edit and git push → mc publish, gh pr
-                                    merge → mc merge, npm run ci → mc gate, npm
+                                    merge → mc merge, npm run ci, npm test and
+                                    node --test → mc gate <files…>, npm
                                     run dev → mc test dev --here --url, a scratch
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
@@ -358,8 +360,11 @@ IN FULL
                                     commit for a new one; on an open one, edits
                                     only the fields given — then one gh pr view.
                                     Refuses on main, a dirty tree, or a remote
-                                    branch that moved. Ends with the mc merge
-                                    line to run
+                                    branch that moved. Then queues it for the
+                                    merger, as mc merge <repo> <pr> does — not
+                                    with --no-merge, --json or a detached
+                                    --branch (a mend's), which end with the
+                                    mc merge line to run
   mc merge <repo> <pr>             Queue it for the merger and return: one
                                     process lands the queue, one at a time,
                                     with that same measurement — only if
