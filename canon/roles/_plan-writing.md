@@ -32,7 +32,11 @@ start to finish, and know when it is done? If not, it is not a step
     The merge door refuses the last step until every criterion is `met` in the
     register, so a check that needs this plan landed first (the runner updated,
     the page redrawn from main) never passes. Measure it from the branch
-    (`node src/mc-cli.js …`), or leave it out.
+    (`node src/mc-cli.js …`), or leave it out. `mc project criterion add` and
+    `mc project send` refuse a check that says "after the deploy", "in
+    production", "not a step's" or names Martin; what must be read from
+    production after a deploy is a later step parked with
+    `mc step blocked --after-deploy`, whose check runs then.
   - **Work outside this plan comes first.** A criterion that needs another
     project's code on main is not written until that code is on main; a
     person's act (a sign-in, a production migration, a store submission) is

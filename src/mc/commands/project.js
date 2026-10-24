@@ -33,7 +33,7 @@ import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
+import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
 import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -399,6 +399,16 @@ function addCriterion(scanned, deps) {
     stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
     return 1;
   }
+  const says = checkWords(check);
+  if (says.length) {
+    stderr.write(`mc: the check says ${says.join(', ')} — a check runs from the step's own branch, before the merge; a wait for a deploy is mc step blocked --after-deploy\n`);
+    return 1;
+  }
+  const named = bannedWords(text);
+  if (named.length) {
+    stderr.write(`mc: the criterion names ${named.join(', ')} — a criterion is measured by its check, never by a person\n`);
+    return 1;
+  }
   if (dependencyWords(text).length || dependencyWords(check).length) {
     stderr.write('mc: a dependency goes in mc project step add … --after <repo>:<project>\n');
     return 1;
@@ -459,6 +469,11 @@ function editCriterion(scanned, deps) {
   const names = bannedWords(check);
   if (names.length) {
     stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
+    return 1;
+  }
+  const says = checkWords(check);
+  if (says.length) {
+    stderr.write(`mc: the check says ${says.join(', ')} — a check runs from the step's own branch, before the merge; a wait for a deploy is mc step blocked --after-deploy\n`);
     return 1;
   }
   if (dependencyWords(check).length) {

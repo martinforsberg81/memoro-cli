@@ -43,6 +43,17 @@ export const MODELS = Object.freeze(['haiku', 'opus']);
 export const BANNED_WORDS = /\b(Martin|by hand|manually|a person)\b/iu;
 
 /**
+ * Words that say a check runs where the last step's own branch cannot reach:
+ * after a deploy, in production, on a person's phone or at a person's terminal.
+ * The merge door refuses the last step until every criterion is `met` in the
+ * register, so such a check never passes from that branch. A check the last
+ * step's own branch cannot reach is not a criterion; the three plans sent on
+ * 2026-10-19 with "Martin's own check after the deploy; not a step's" as their
+ * last criterion are the case.
+ */
+export const CHECK_WORDS = /\b(after the deploy|after deploy|once deployed|in production|not a step's|his (?:phone|iPhone|mobile)|at his terminal)\b/iu;
+
+/**
  * A dependency written in prose instead of through `--after <repo>:<project>`.
  * `--after` is resolved over every project mc knows, archived ones included;
  * prose names a project that the next reader would have to guess at, and
@@ -63,6 +74,16 @@ function matchesOf(pattern, text) {
  */
 export function bannedWords(text) {
   return matchesOf(BANNED_WORDS, text);
+}
+
+/**
+ * The distinct check words `text` names — `after the deploy`, `in production`,
+ * `not a step's` — or an empty array for none, and for a text that is not a
+ * string. The same shape as `bannedWords`, for a check that cannot run from the
+ * step's own branch.
+ */
+export function checkWords(text) {
+  return matchesOf(CHECK_WORDS, text);
 }
 
 /**
@@ -150,8 +171,13 @@ export function sendProblems(plan) {
   });
   const criteria = Array.isArray(plan?.success_criteria) ? plan.success_criteria : [];
   criteria.forEach((criterion, index) => {
+    const n = index + 1;
+    const named = bannedWords(criterion?.criterion);
+    if (named.length) problems.push(`success_criteria[${n}].criterion: names ${named.join(', ')} — a criterion is measured by its check, never by a person`);
     const names = bannedWords(criterion?.check);
-    if (names.length) problems.push(`success_criteria[${index + 1}].check: names ${names.join(', ')} — a check is a command`);
+    if (names.length) problems.push(`success_criteria[${n}].check: names ${names.join(', ')} — a check is a command`);
+    const says = checkWords(criterion?.check);
+    if (says.length) problems.push(`success_criteria[${n}].check: says ${says.join(', ')} — a check runs from the step's own branch, before the merge (ruling 35 waits on a deploy with mc step blocked --after-deploy, not with a criterion)`);
   });
   return problems;
 }
