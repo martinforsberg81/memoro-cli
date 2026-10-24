@@ -9,6 +9,8 @@
  * no repository behind them. The git and gh half is run.js and
  * archive-programme.js, and the archive itself is project-archive.js.
  */
+import { posix } from 'node:path';
+
 import { planFields } from './brief-collect.js';
 import { readPlanText } from './plan-schema.js';
 
@@ -225,9 +227,17 @@ export function namedFiles(dir, files, sources) {
   const by = new Map();
   const name = (file, where) => { if (!by.has(file)) by.set(file, where); };
   for (const { path, text } of sources) {
-    String(text || '').split('\n').forEach((line, i) => {
+    const lines = String(text || '').split('\n');
+    lines.forEach((line, i) => {
       for (let at = line.indexOf(prefix); at >= 0; at = line.indexOf(prefix, at + prefix.length)) {
-        const tail = line.slice(at + prefix.length);
+        let tail = line.slice(at + prefix.length);
+        // A comment that wraps a path at its slash (`docs/project/staff/` at a
+        // line's end, `rulings.md` opening the next) names the file on the next
+        // line, not the whole directory (2026-10-24: staff and email refused
+        // `--archive` because one wrapped comment each "named" every file).
+        if (tail.trim() === '' && i + 1 < lines.length) {
+          tail = lines[i + 1].replace(/^\s*(?:\/\/+|\*+|#+)?\s*/u, '');
+        }
         const end = tail.search(PATH_END);
         const token = prefix + (end < 0 ? tail : tail.slice(0, end));
         const where = `${path}:${i + 1}`;
@@ -245,6 +255,40 @@ export function namedFiles(dir, files, sources) {
     });
   }
   return [...by].map(([file, where]) => ({ file, by: where })).sort((a, b) => a.file.localeCompare(b.file));
+}
+
+/** A fenced block or an inline code span, blanked: it shows a path, it links none. */
+function withoutCode(text) {
+  const blank = (match) => match.replace(/[^\n]/gu, ' ');
+  return text.replace(/^(```|~~~)[\s\S]*?^\1/gmu, blank).replace(/`[^`\n]*`/gu, blank);
+}
+
+/**
+ * One Markdown file's relative links to what an archive removed, pointed at
+ * the same path on GitHub at `sha`, the commit the archive was cut from —
+ * so main's links still resolve once the files are gone (Martin, 2026-10-25:
+ * staff's archive broke 33). `file` is the file's repository path and
+ * `isGone(path)` says whether a repository path was removed. Pure: `{ text,
+ * count }`, the text unchanged when nothing pointed at a removed path.
+ */
+export function relinkRemoved(text, file, { isGone, slug, sha }) {
+  const prose = withoutCode(String(text || ''));
+  const edits = [];
+  for (const match of prose.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/gu)) {
+    const target = match[1];
+    if (/^[a-z][a-z0-9+.-]*:/iu.test(target) || target.startsWith('#') || target.startsWith('/')) continue;
+    const [pathPart, ...anchor] = target.split('#');
+    let path = pathPart.split('?')[0];
+    try { path = decodeURIComponent(path); } catch { /* the path as written */ }
+    const resolved = posix.normalize(posix.join(posix.dirname(file), path)).replace(/\/+$/u, '');
+    const kind = isGone(resolved);
+    if (!kind) continue;
+    const url = `https://github.com/${slug}/${kind}/${sha}/${resolved}${anchor.length ? `#${anchor.join('#')}` : ''}`;
+    edits.push({ at: match.index + match[0].indexOf(target), length: target.length, url });
+  }
+  let out = String(text || '');
+  for (const edit of edits.reverse()) out = out.slice(0, edit.at) + edit.url + out.slice(edit.at + edit.length);
+  return { text: out, count: edits.length };
 }
 
 /**

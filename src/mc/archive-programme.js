@@ -35,7 +35,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendRow, keptFiles, keptParagraph, remoteSlug } from './archive-plan.js';
+import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
 import { programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
@@ -45,6 +45,9 @@ import { isProgrammeArea } from './work-area.js';
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
 export const PROGRAMME_ARCHIVE_PREFIX = 'mc-programme-archive-';
+
+/** `archiveOnMain`'s answer when every file left is one code reads: nothing to land, main is done. */
+const KEPT_ONLY = Symbol('kept-only');
 
 /** The project cell of a programme's own row: it is no project. */
 export const PROGRAMME_ROW_PROJECT = '-';
@@ -119,6 +122,7 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   for (const repo of homes) {
     const pr = openPr(repo) || await archiveOnMain(repo, programme, { deps, gitOut, say, now });
     if (!pr) return 1;
+    if (pr === KEPT_ONLY) continue;
     const report = await deps.docsMerge({
       repoPath: repo.path,
       pr: Number(pr),
@@ -179,13 +183,33 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
     const { kept, remove } = keptFiles(worktree, dir, { git: deps.git, read });
     for (const { file, by } of kept) say(`${repo.name}: ${file} kept — named by ${by}`);
     if (remove && !remove.length) {
-      say(`${repo.name}: every file under ${dir} is read by code outside docs/ — nothing archived`);
-      return null;
+      // Nothing left that may go: main is as archived as it can be (an
+      // earlier run landed the rest), and the planning session goes next.
+      say(`${repo.name}: every file left under ${dir} is read by code outside docs/ — nothing more to take off main`);
+      return KEPT_ONLY;
     }
+    const lines = (out) => String(out || '').split('\n').filter(Boolean);
+    const before = lines(gitOut(worktree, ['ls-files', '--', dir]));
+    const cutFrom = gitOut(worktree, ['rev-parse', 'HEAD']);
     const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
     if (!deps.git(worktree, rm).ok) {
       say(`${repo.name}: git rm ${dir} failed — nothing archived`);
       return null;
+    }
+    // Main's links stay right: a link to a removed file points at it on
+    // GitHub, at the commit this archive was cut from.
+    const linkSlug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
+    if (linkSlug && cutFrom) {
+      const after = new Set(lines(gitOut(worktree, ['ls-files', '--', dir])));
+      const gone = new Set(before.filter((file) => !after.has(file)));
+      const under = (files, path) => [...files].some((file) => file.startsWith(`${path}/`));
+      const isGone = (path) => (gone.has(path) ? 'blob' : (under(gone, path) && !under(after, path) ? 'tree' : null));
+      let relinked = 0;
+      for (const file of lines(gitOut(worktree, ['ls-files', '--', '*.md']))) {
+        const { text, count } = relinkRemoved(read(file), file, { isGone, slug: linkSlug, sha: cutFrom });
+        if (count) { writeFileSync(join(worktree, file), text); relinked += count; }
+      }
+      if (relinked) say(`${repo.name}: ${relinked} link(s) to removed files now point at ${cutFrom.slice(0, 10)} on GitHub`);
     }
     const logPath = join(worktree, 'docs', 'project', 'project_log.md');
     const logText = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
