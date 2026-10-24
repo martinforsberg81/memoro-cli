@@ -379,8 +379,11 @@ A whole-suite round hands the same count to its own runner as `MC_TEST_LANES`,
 which still overrides all of it. The round record names the `lanes` and the
 `load` it ran at, so a round's speed is read against the lanes it had. And the
 selector's `resourceClasses` are honoured (`testBatches`): a file classed `sqlite`
-or `heavy` runs after the standard batch, one at a time, in its own `node --test`
-— as memoro's own runner runs it — and the batches' TAP is read as one run. A session's
+or `heavy` runs after the standard batch, each class in its own `node --test`,
+`sqlite` at the round's lanes and `heavy` one file at a time (sqlite since
+2026-10-24: its files share nothing; 646 files green at four lanes, 247–300 s
+against 770 s at one) — as memoro's own runner runs them — and the batches' TAP
+is read as one run. A session's
 `mc gate` runs in the lane too (ruling 52, [`src/mc/gate-lane-wait.js`](../../src/mc/gate-lane-wait.js)):
 its detached shell takes the lane's lock for its own pid, with `mode:
 'session-gate'`, waiting while a merge round, a deploy, an iOS build or another
