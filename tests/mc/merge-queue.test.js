@@ -13,8 +13,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  MERGE_BATCH_MAX, dequeue, enqueue, heldLanding, markLanding, markQueued, markRed, markRequeued, mergesPath, nextBatch, nextJob,
-  parseQueue, placeOf, queueEntries, queueOrder, queuedFor, stepsDone, waitingOn,
+  MERGE_BATCH_MAX, dequeue, enqueue, heldBy, heldLanding, markLanding, markMended, markMending, markQueued, markRed, markRequeued,
+  mergesPath, nextBatch, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor, stepsDone, waitingOn,
 } from '../../src/mc/merge-queue.js';
 
 const job = (over = {}) => ({
@@ -210,4 +210,52 @@ test('a requeued job keeps its place, counts the requeue, and is not taken befor
   assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:15:00Z'), max: 4 }).map((e) => e.pr), [1, 2], 'due, it is first again');
   assert.deepEqual(nextBatch(back, { max: 4 }).map((e) => e.pr), [1, 2], 'no now waits for nothing');
   assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].requeues, 2);
+});
+
+test('markLanding names its merger; queueEntries keeps it on landing and mending, and drops it on queued and red', () => {
+  const landing = markLanding(enqueue([], job()), job(), 'T', 4242);
+  assert.equal(landing[0].state, 'landing');
+  assert.equal(landing[0].started, 'T');
+  assert.equal(landing[0].merger, 4242);
+  assert.equal(queueEntries(landing)[0].merger, 4242);
+  assert.equal(queueEntries(markMending(landing, job(), { merger: 4242 }))[0].merger, 4242);
+  const raw = { ...job(), merger: 4242 };
+  assert.equal(queueEntries([{ ...raw, state: 'queued' }])[0].merger, null);
+  assert.equal(queueEntries([{ ...raw, state: 'red' }])[0].merger, null);
+});
+
+test('markMending names its merger on the entry, not in the mend; markRed, markMended, markQueued and markRequeued leave none', () => {
+  const landing = markLanding(enqueue([], job()), job(), 'T', 4242);
+  const mending = markMending(landing, job(), { reason: 'red', stopped_at: 'x', started: 'T', pid: 7, merger: 4242 });
+  assert.equal(mending[0].merger, 4242);
+  assert.equal(mending[0].mend.pid, 7, 'the mend session\'s pid stays in mend');
+  assert.equal(mending[0].mend.merger, undefined);
+  assert.equal(markRed(mending, job(), { reason: 'r', answered: 'z' })[0].merger, null);
+  assert.equal(markMended(mending, job())[0].merger, null);
+  assert.equal(markQueued(landing, job())[0].merger, null);
+  assert.equal(markRequeued(landing, job())[0].merger, null);
+});
+
+test('heldBy: another live merger holds the entry; this merger, a dead one and no merger do not', () => {
+  const held = heldBy({ pid: 1, alive: (p) => p === 2 });
+  assert.equal(held({ merger: 2 }), true);
+  assert.equal(held({ merger: 1 }), false, 'itself');
+  assert.equal(held({ merger: 3 }), false, 'dead');
+  assert.equal(held({ merger: null }), false);
+});
+
+test('nextBatch with held skips a landing entry another live merger holds, and takes the oldest queued instead', () => {
+  let entries = enqueue([], job({ pr: 1, since: '2026-10-10T12:01:00Z' }));
+  entries = enqueue(entries, job({ pr: 2, since: '2026-10-10T12:02:00Z' }));
+  entries = markLanding(entries, { repo: 'memoro-cli', pr: 1 }, 's', 4242);
+  const held = heldBy({ pid: 1, alive: (p) => p === 4242 });
+  assert.deepEqual(nextBatch(entries, { held }).map((e) => e.pr), [2]);
+  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1], 'without held, the landing entry is resumed as before');
+});
+
+test('heldLanding with held leaves out the landing entry another live merger holds', () => {
+  const entries = markLanding(enqueue([], job({ pr: 1 })), { repo: 'memoro-cli', pr: 1 }, 's', 4242);
+  const ordered = () => false;
+  assert.deepEqual(heldLanding(entries, { ordered }).map((e) => e.pr), [1]);
+  assert.deepEqual(heldLanding(entries, { ordered, held: heldBy({ pid: 1, alive: (p) => p === 4242 }) }), []);
 });

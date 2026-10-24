@@ -17,7 +17,8 @@
  * entry is not work: it stays so the page draws it red while the queue goes
  * on (Martin, 2026-10-10: *"en misslyckad merge pr bör ligga kvar som en rad
  * i mc (röd) medan merge-kön fortsätter med nästa"*), and `mc merge` again
- * puts it back in line. A `landing` entry whose merger died is
+ * puts it back in line. A `landing` or `mending` entry names the merger that
+ * has it (`merger`, a pid); a `landing` entry whose merger died is
  * landed again by the next one — the round itself is what says whether the
  * pull request already merged.
  *
@@ -67,6 +68,9 @@ function normalise(entry) {
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,
+    // The pid of the merger that has the job; another live merger leaves the
+    // entry alone (`held`, see `heldBy`).
+    merger: (entry.state === 'landing' || entry.state === 'mending') && Number.isInteger(entry.merger) ? entry.merger : null,
     // A red only under load is put back in line rather than answered
     // (`markRequeued`): how often, and not before when it is taken again.
     requeues: Number.isInteger(entry.requeues) && entry.requeues > 0 ? entry.requeues : 0,
@@ -137,24 +141,26 @@ export function queuedFor(entries, repo, pr) {
  */
 export function markRed(entries, job, { reason = null, answered = null, mended = undefined } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'red', reason, answered, mend: null, ...(mended !== undefined ? { mended } : {}) }
+    ? { ...entry, state: 'red', reason, answered, merger: null, mend: null, ...(mended !== undefined ? { mended } : {}) }
     : entry));
 }
 
 /**
  * The entry set aside for its one mend (mend.js): `state: 'mending'` with
  * the round's stop and reason, until `markMended` or `markRed` answers it.
+ * `merger` is the pid of the merger that mends it, on the entry; `pid` is the
+ * mend session's, in `mend`.
  */
-export function markMending(entries, job, { reason = null, stopped_at = null, started = null, pid = null } = {}) {
+export function markMending(entries, job, { reason = null, stopped_at = null, started = null, pid = null, merger = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'mending', mend: { pid, started, reason, stopped_at } }
+    ? { ...entry, state: 'mending', merger, mend: { pid, started, reason, stopped_at } }
     : entry));
 }
 
 /** The mend pushed: back in line as `queued`, at its old place (`since`), its mend spent. */
 export function markMended(entries, job, { outcome = 'pushed', at = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, mend: null, mended: { at, outcome } }
+    ? { ...entry, state: 'queued', started: null, merger: null, mend: null, mended: { at, outcome } }
     : entry));
 }
 
@@ -192,10 +198,11 @@ export function queueOrder(entries) {
  * it; one whose parent came back red waits until that one is queued again
  * and lands. A job for step n of a plan goes only once every earlier step is
  * `done` (`ordered`, merger.js `stepsBeforeDone`), parent or none — and that
- * holds for a `landing` one too. Null when there is nothing the merger may take.
+ * holds for a `landing` one too. An entry `held` names (another live merger's)
+ * is not taken. Null when there is nothing the merger may take.
  */
-export function nextJob(entries, { landed = () => true, ordered = () => true, now = null } = {}) {
-  const line = queueOrder(inLine(entries).filter(takeable).filter(due(now)));
+export function nextJob(entries, { landed = () => true, ordered = () => true, now = null, held = () => false } = {}) {
+  const line = queueOrder(inLine(entries).filter(takeable).filter(due(now)).filter((entry) => !held(entry)));
   const mayGo = mayGoIn(entries, landed, ordered);
   return line.find((entry) => entry.state === 'landing' && ordered(entry))
     || line.find(mayGo)
@@ -251,18 +258,20 @@ export const MERGE_BATCH_MAX = 1;
  *
  * With a `lane`, only the jobs whose repository's gate lane (`laneOf`) is that
  * one: the merger runs one loop per lane (ruling 34), and each takes its own.
- * A job's parent is in its own repository, so in its own lane.
+ * A job's parent is in its own repository, so in its own lane. Entries `held`
+ * names (another live merger's) are not taken, a `landing` one included.
  */
 export function nextBatch(entries, {
   landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy', now = null,
+  held = () => false,
 } = {}) {
   const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
-  const line = queueOrder(inLine(mine).filter(takeable).filter(due(now)));
+  const line = queueOrder(inLine(mine).filter(takeable).filter(due(now)).filter((entry) => !held(entry)));
   // A resumed member whose earlier step is no longer `done` is not landed:
   // the merger puts it back in line (`heldLanding`).
   const landing = line.filter((entry) => entry.state === 'landing' && ordered(entry));
   if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
-  const first = nextJob(mine, { landed, ordered, now });
+  const first = nextJob(mine, { landed, ordered, now, held });
   if (!first) return [];
   const mayGo = mayGoIn(mine, landed, ordered);
   const batch = [first];
@@ -292,14 +301,15 @@ export function waitingOn(entries, { landed = () => true, ordered = () => true }
 /**
  * `landing` entries a restarted merger may not resume — an earlier step of
  * their plan is no longer `done` — to be put back in line with `markQueued`.
+ * Not those another live merger holds (`held`, see `heldBy`): they are its.
  */
-export function heldLanding(entries, { ordered = () => true } = {}) {
-  return inLine(entries).filter((entry) => entry.state === 'landing' && !ordered(entry));
+export function heldLanding(entries, { ordered = () => true, held = () => false } = {}) {
+  return inLine(entries).filter((entry) => entry.state === 'landing' && !ordered(entry) && !held(entry));
 }
 
 /** The entry back in line, as `queued`, its place (`since`) kept. */
 export function markQueued(entries, job) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null } : entry));
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null, merger: null } : entry));
 }
 
 /**
@@ -310,13 +320,25 @@ export function markQueued(entries, job) {
  */
 export function markRequeued(entries, job, { notBefore = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, requeues: (entry.requeues || 0) + 1, not_before: notBefore }
+    ? { ...entry, state: 'queued', started: null, merger: null, requeues: (entry.requeues || 0) + 1, not_before: notBefore }
     : entry));
 }
 
-/** The entry with `state` and `started` moved. */
-export function markLanding(entries, job, started) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'landing', started } : entry));
+/**
+ * The entry with `state`, `started` and the merger that has it moved. `merger`
+ * is the pid of the merger process landing it; another live merger leaves it alone (`heldBy`).
+ */
+export function markLanding(entries, job, started, merger = null) {
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'landing', started, merger } : entry));
+}
+
+/**
+ * Whether another live merger holds an entry: `merger` names a pid that is not
+ * `pid` (this merger) and `alive(pid)` says it runs. A dead merger's entry is
+ * not held — the next merger lands it again.
+ */
+export function heldBy({ pid = process.pid, alive }) {
+  return (entry) => Number.isInteger(entry.merger) && entry.merger !== pid && alive(entry.merger);
 }
 
 /** How many stand before this pull request — 0 is next. */
