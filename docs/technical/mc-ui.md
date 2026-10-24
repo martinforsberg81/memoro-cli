@@ -59,11 +59,14 @@ has scrolled off the top cannot be written to — which is what
 [*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
 below is about.
 
-- **PROGRAMMES** — one heading per programme with its own `x ready · y blocked`
+- **PROGRAMMES** — one heading per programme with its own `x ready · y waiting · z blocked`
   and the room for its planning session, filled or empty; then one numbered row
-  per project under it: the repository it lives in, where the plan stands, how
-  many of its steps are done, `next`, the open PR. A project's `●` means the
-  runner has a step in flight on it, and nothing else. A programme is drawn
+  per project under it: the repository it lives in, the project's state (one
+  word, one colour — see *The palette*), how many of its steps are done, `next`,
+  the open PR. A waiting project keeps its row; a blocked one collapses under
+  its heading unless it has an open pull request. `next` is the step's title,
+  then the state's detail, on every row. A project's `●` means the runner has a
+  step in flight on it, and nothing else. A programme is drawn
   whether or not any of its projects have a plan the runner can read; one that
   exists only as an open planning session is drawn too, and says `no project
   yet` where the counts would be.
@@ -449,8 +452,9 @@ test can look at one row.
   afterwards.
 - **Every column clips one short of its pad**, so the ellipsis is the last
   character and a clipped name never touches its neighbour.
-- **Colour carries state, never decoration**: green running, yellow waiting
-  on a person, red failed, grey quiet — the table is below. Only on a TTY,
+- **Colour carries state, never decoration**: green is work that moves by
+  itself, yellow waits on a time, a deploy, another project or a measurement,
+  red waits on a person, grey is quiet — the table is below. Only on a TTY,
   and only when `NO_COLOR` is unset **or empty**; the convention is that any
   non-empty value turns colour off, and `--json` is never painted at all.
 - No new dependency. The ANSI is by hand, as the rest of the repo is.
@@ -459,7 +463,7 @@ test can look at one row.
 
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
-page bends to: **a step kind and a plan status have one colour each, wherever
+page bends to: **a step kind and a project state have one colour each, wherever
 they are printed.** RUNNER, NEXT and PROGRAMMES all say `step` in the same
 green, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
@@ -473,15 +477,22 @@ through all three sections.
 | `plan` | cyan |
 | anything else | grey |
 
-| plan status | colour |
+A project's state is its plan's word, with one change: a `blocked` step whose
+blocker releases by itself — a time, a deploy, another project (ruling 35) — is
+`waiting`, because the runner lets it go. `blocked` is what waits on a decision
+or a workarea, which somebody has to open.
+
+| project state | colour |
 |---|---|
 | `ready` | green |
-| `running` | yellow |
-| `failed` | red bold |
-| `blocked` | red |
-| `done` | grey |
+| `running` | green |
+| `landing` | green |
+| `waiting` | yellow |
 | `unmet` | yellow bold |
+| `blocked` | red |
+| `failed` | red bold |
 | `invalid` | red bold |
+| `done` | grey |
 | no plan on main | grey |
 
 Everything else is structure, and structure is quiet. **plain** in the table
@@ -491,7 +502,7 @@ person set it to.
 | where | what | colour |
 |---|---|---|
 | header | `MEMORO·CLI` | bold |
-| header | `N in flight · N ready · N blocked` | plain |
+| header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
 | section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |

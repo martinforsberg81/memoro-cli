@@ -14,8 +14,10 @@
  *   - **Width-aware.** `stdout.columns` clamped to 60–160 through `width`,
  *     `pad` and `clip` from status-render.js, which are escape-aware. Nothing
  *     here is padded to a number somebody typed once.
- *   - **Colour carries state, never decoration**: green is running, yellow
- *     waits on a person, red has failed, grey is quiet. Only on a TTY, and
+ *   - **Colour carries state, never decoration**: green is work that moves by
+ *     itself (ready, running, landing), yellow waits — on a time, a deploy,
+ *     another project or a measurement (waiting, unmet), red waits on a person
+ *     (blocked, failed, invalid), grey is quiet. Only on a TTY, and
  *     only when `NO_COLOR` is unset or empty — the convention is that any
  *     non-empty value turns colour off.
  *
@@ -58,18 +60,20 @@ const PR_TONE = ['cyan', 'bold'];
 /** Past this long without anything happening on it, an open pull request waits on a person. */
 export const PR_QUIET_S = 24 * 60 * 60;
 
-/** Where a plan stands, one colour each, wherever a status is printed. */
+/** Where a project stands, one colour each, wherever its state is printed. */
 const STATUS_TONE = {
   ready: ['green'],
-  running: ['yellow'],
-  failed: ['red', 'bold'],
-  blocked: ['red'],
-  done: ['grey'],
+  running: ['green'],
+  landing: ['green'],
+  waiting: ['yellow'],
   // Steps all done, a criterion not met: somebody has to measure.
   unmet: ['yellow', 'bold'],
+  blocked: ['red'],
+  failed: ['red', 'bold'],
   // A plan that does not parse is not a quiet state: the runner will refuse it
   // at the door, and nobody will be told unless the page says so.
   invalid: ['red', 'bold'],
+  done: ['grey'],
 };
 
 /** What is being done, one colour each, wherever a kind is printed. */
@@ -85,7 +89,7 @@ function kindTone(kind) {
   return KIND_TONE[String(kind || '').replace(/^mc /u, '')] || ['grey'];
 }
 
-/** A plan status's colour; no plan at all is bookkeeping, and grey says so. */
+/** A project state's colour; no plan at all is bookkeeping, and grey says so. */
 function statusTone(status) {
   return STATUS_TONE[status] || ['grey'];
 }
@@ -667,7 +671,7 @@ function briefLines(lines, c, wide, session, intake, programmes, stale) {
   } else {
     say(lines, c, wide, 7, 'no proposals waiting');
   }
-  blockedLines(lines, c, wide, programmes?.blocked);
+  blockedLines(lines, c, wide, programmes?.blocked, programmes?.waiting);
   staleLine(lines, c, wide, stale);
 }
 
@@ -1148,6 +1152,9 @@ function projectColumns(wide) {
  */
 function projectLine(c, wide, project) {
   const mark = project.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  // The row's word is its state (`stateOf`, page-collect.js). A cache from before
+  // the state existed has only the plan's own word, and that is what it draws.
+  const word = project.state ?? project.status;
   // A plan still on the old markdown file has no steps to count and is said to
   // be what it is, rather than drawn as a fraction of nothing.
   const steps = project.steps
@@ -1165,7 +1172,7 @@ function projectLine(c, wide, project) {
   const left = `  ${c(String(project.number).padStart(3), 'grey')} ${mark} `
     + `${project.running ? c(name, 'bold') : name} `
     + repo
-    + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
+    + `${c(pad(clip(word || '—', column.status), column.status), ...statusTone(word))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
   // The right-hand column is the last runner step, which is what says whether
   // anything has happened; the pull request has a column of its own.
@@ -1212,12 +1219,12 @@ const PR_NUMBER = 7;
  * name is still recognisable at twenty-two columns.
  */
 function programmeColumns(wide) {
-  return { name: wide >= 90 ? 31 : 22, counts: 22 };
+  return { name: wide >= 90 ? 31 : 22, counts: 31 };
 }
 
 /**
- * How many of a programme's projects are ready and how many are stopped, or
- * that it has no project yet.
+ * How many of a programme's projects are ready, waiting on the runner and
+ * blocked, or that it has no project yet.
  *
  * A zero keeps no colour. Green on `0 ready` would give a state's colour to the
  * absence of it, and the page's rule is that colour carries state — so a count
@@ -1228,9 +1235,12 @@ function programmeCounts(c, group, columns) {
   const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
   if (!total) return pad(c(clip('no project yet', columns), 'grey'), columns);
   const ready = statuses.ready || 0;
+  const waiting = statuses.waiting || 0;
   const blocked = statuses.blocked || 0;
   return pad(paint(c, [
     { text: `${ready} ready`, styles: ready ? statusTone('ready') : ['grey'] },
+    { text: ' · ', styles: ['grey'] },
+    { text: `${waiting} waiting`, styles: waiting ? statusTone('waiting') : ['grey'] },
     { text: ' · ', styles: ['grey'] },
     { text: `${blocked} blocked`, styles: blocked ? statusTone('blocked') : ['grey'] },
   ], columns), columns);
@@ -1332,10 +1342,14 @@ function blockersFitting(blockers, leads, space) {
  *
  * Drawn under NEXT and not in PROGRAMMES, because it answers *what should I
  * do* and NEXT is where somebody asking that is already looking. It says
- * `blocked` — the plan's own word, and the word the brand row and the skip line
+ * `blocked` — the state's word, and the word the brand row and the skip line
  * use — rather than inventing a third for the same thirty-three projects.
+ *
+ * The projects waiting on the runner are not stopped, so they are not in that
+ * count; their number rides after the blocker words, in grey, so the line still
+ * says how much is waiting on a time, a deploy or another project.
  */
-function blockedLines(lines, c, wide, blocked) {
+function blockedLines(lines, c, wide, blocked, waiting = 0) {
   if (!blocked?.count) return;
   const kinds = blocked.kinds || {};
   const waits = [
@@ -1351,6 +1365,7 @@ function blockedLines(lines, c, wide, blocked) {
   const head = [
     { text: `${blocked.count} blocked`, styles: statusTone('blocked') },
     { text: waits ? ` · ${waits}` : '', styles: ['grey'] },
+    { text: waiting ? ` · ${waiting} waiting` : '', styles: ['grey'] },
   ];
   const holders = blockersFitting(blocked.blockers, [' · held most by ', ' · '], room - head.reduce((n, part) => n + part.text.length, 0));
   lines.push(`       ${paint(c, fitting([...head, { text: holders, styles: ['grey'] }], room), room)}`);
@@ -1502,15 +1517,20 @@ export function renderPageLines(data, {
   const flight = (data.runner?.steps || []).length;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
-    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.blocked || 0} blocked` },
+    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.waiting || 0} waiting · ${statuses.blocked || 0} blocked` },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');
   while (parts.length > 1 && width(brand) + plain().length + 6 > wide) parts.pop();
   const counts = paint(c, between(parts, '  ·  '));
-  const rule = wide - width(brand) - width(counts) - 4;
+  // A narrow terminal gives up the version first, then the rule: the counts are
+  // the answer, and the MC line below says the version again.
+  const head = width(brand) + width(counts) + 6 <= wide ? brand : c('MEMORO·CLI', 'bold');
+  const rule = wide - width(head) - width(counts) - 4;
   lines.push('');
-  lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
+  lines.push(rule >= 2
+    ? `  ${head} ${c('─'.repeat(rule), 'grey')} ${counts}`
+    : `  ${head}  ${counts}`);
   lines.push('');
   // A language run stopped inside a gap is production half-way between two
   // states: above every section, until `mc language resume` closes it.
