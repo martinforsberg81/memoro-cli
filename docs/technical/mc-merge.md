@@ -826,6 +826,14 @@ job `landing`, and the next merger — started by the next `mc merge`, or by
 the runner when it reads a queue with jobs and no live merger — lands that
 one first; the round itself says whether it had already merged.
 
+On new code the merger hands over at once: it releases `merger.json` and starts
+its successor as soon as it sees the new checkout, finishes only the jobs it
+holds, and the successor skips the `landing` and `mending` entries whose
+`merger` pid is alive — a `mending` entry whose merger is gone goes back in
+line on the successor's next pass. Measured 2026-10-17 → 24: 76 handovers
+stalled the queue 643 minutes in all, when the merger left only after its
+rounds in flight.
+
 Until then every `mc merge` was its own waiter — an entry with its pid,
 polling every 15 s, giving up after 8 minutes with exit 3 and "run this
 again" — and the runner's landing of a session's pull request waited the
@@ -990,11 +998,13 @@ entries stay `mending`) and waits for the one running.
 on 3b51ff90 while seven mc pull requests landed, because it read its commit
 once and left only on an empty queue. Since then `serve` in
 [`src/mc/merger.js`](../../src/mc/merger.js) reads its checkout's HEAD before
-each batch; a HEAD past the commit it started on ends it between rounds, like
-a stop, with the queue untouched — the rounds in flight are answered, a mend
-not started yet is dropped and a running one waited for. `merger-run.js` then
-starts its successor through `startMerger` while jobs remain in line
-(`succeed`); a SIGTERM starts none. The runner's `sweepLanding` and the next
+each batch. A HEAD past the commit it started on releases `merger.json` and
+calls `handover` at once, between rounds: `merger-run.js` starts its successor
+through `startMerger` while jobs remain in line (`succeed`), and this merger
+takes nothing more. The rounds and mends it holds finish — a mend not started
+yet is dropped and its entry stays `mending`, a running one is waited for — and
+the successor takes every other job in both lanes. A SIGTERM starts none; it
+finishes what it holds, as before. The runner's `sweepLanding` and the next
 `mc merge` still start one when none lives. `mc merge watch` adds
 `merger on <commit> · main <commit>` to its line while the merger's commit
 and the installed checkout's HEAD differ.

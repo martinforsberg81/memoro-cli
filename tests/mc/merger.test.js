@@ -427,26 +427,86 @@ describe('serve — the loop', () => {
     assert.equal(landed, 0);
   });
 
-  it('a merger whose checkout moved takes no new batch, finishes the round in flight and leaves', async () => {
+  it('a merger whose checkout moved releases merger.json and hands over at once, finishes the round in flight and leaves', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
     const heads = ['aaa1111', 'bbb2222'];
     const said = [];
     const moved = [];
     const landed = [];
+    const order = [];
+    let handovers = 0;
     const code = await serve({
-      root, lock, take, release, ...ONE_LANE, say: (l) => said.push(l),
+      root, lock, take, release: () => order.push('release'), ...ONE_LANE, say: (l) => said.push(l),
       version: { checkout: '~/memoro-cli', commit: 'aaa1111' },
       head: async () => heads.shift() ?? 'bbb2222',
       onMoved: (a, b) => moved.push([a, b]),
+      handover: () => { handovers += 1; order.push('handover'); },
       land: async ([job]) => { landed.push(job.pr); return green; },
     });
     assert.equal(code, 0);
+    assert.equal(handovers, 1);
+    assert.deepEqual(order.slice(0, 2), ['release', 'handover'], 'merger.json is let go before the successor is started');
     assert.deepEqual(landed, [1]);
     assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[2, 'queued']]);
-    assert.ok(said.includes('code moved aaa1111 → bbb2222 — leaving after the rounds in flight; the next start serves on the new code'), said.join('\n'));
+    assert.ok(said.includes('code moved aaa1111 → bbb2222 — successor started; this merger finishes the rounds in flight and leaves'), said.join('\n'));
     assert.ok(said.includes('left for bbb2222'), said.join('\n'));
     assert.deepEqual(moved, [['aaa1111', 'bbb2222']]);
+  });
+
+  it('a landing entry another live merger holds is not landed here; the next queued one is', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      { ...JOB, pr: 1, since: 'a', step: null, state: 'landing', merger: 777 },
+      { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null },
+    ]));
+    const landed = [];
+    await serve({ root, lock, take, release, ...ONE_LANE, alive: (p) => p === 777, land: async ([job]) => { landed.push(job.pr); return green; } });
+    assert.deepEqual(landed, [2]);
+    assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[1, 'landing']]);
+  });
+
+  it('a landing entry whose merger is dead is landed first, as before', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      { ...JOB, pr: 1, since: 'a', step: null, state: 'landing', merger: 777 },
+      { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null },
+    ]));
+    const landed = [];
+    await serve({ root, lock, take, release, ...ONE_LANE, alive: () => false, land: async ([job]) => { landed.push(job.pr); return green; } });
+    assert.deepEqual(landed, [1, 2]);
+  });
+
+  it('a mending entry whose merger is alive stays with it; once that merger is gone it goes back in line on the next pass', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      { ...JOB, pr: 1, since: 'a', step: null },
+      { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null, state: 'mending', merger: 777, mend: { pid: 4321, started: 's', reason: 'x', stopped_at: 'merge' } },
+    ]));
+    let merger777 = true;
+    const landed = [];
+    const seen = [];
+    await serve({
+      root, lock, take, release, ...ONE_LANE, alive: (p) => p === 777 && merger777,
+      land: async ([job]) => {
+        landed.push(job.pr);
+        seen.push(queue().find((e) => e.pr === 2).state);
+        merger777 = false;
+        return green;
+      },
+    });
+    assert.equal(seen[0], 'mending', 'held by its live merger while the first round runs');
+    assert.deepEqual(landed, [1, 2], 'back in line on the next pass, and landed');
+    assert.deepEqual(queue(), []);
+  });
+
+  it('serve writes its pid on the entry it marks landing', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }]));
+    let during = null;
+    await serve({ root, lock, take, release, pid: 4242, land: async () => { during = queue()[0]; return green; } });
+    assert.equal(during.state, 'landing');
+    assert.equal(during.merger, 4242);
   });
 
   it('a head that reads the same commit, a longer sha of it, or nothing changes nothing', async () => {

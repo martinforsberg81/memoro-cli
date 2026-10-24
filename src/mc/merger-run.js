@@ -8,9 +8,11 @@
  * threw.
  *
  * SIGTERM and SIGINT let the jobs in flight finish and then leave; what is
- * still queued waits for the next start. A checkout that moves past the
- * commit this merger started on does the same between rounds, and then starts
- * a successor on the new code while jobs remain. The handler only sets `stopping`:
+ * still queued waits for the next start, and no successor is started. A
+ * checkout that moves past the commit this merger started on releases
+ * merger.json and starts its successor on the new code at once, while jobs
+ * remain: this merger then finishes only the rounds and mends it holds, and the
+ * successor takes every other job (`held` in merge-queue.js). The handler only sets `stopping`:
  * the rounds run with `signals: false`, so nothing else in this process exits
  * on a signal, and every child process is started without holding the event
  * loop (child-async.js), so the signal is seen when it comes.
@@ -63,12 +65,13 @@ const code = await serve({
   stopping: () => stopping,
   head: headNow,
   onMoved: (from, to) => { movedTo = to; },
+  // Told once when the checkout moved, after merger.json is released. A stop
+  // that came in since starts none: SIGTERM means stop.
+  handover: () => { if (!stopping) succeed({ root, movedTo, say }); },
   gh,
   appendRun,
   // A red the change caused gets one mend session first (ruling 37).
   land: landerFor({ root, say, sleep, gh, appendRun, mayMend }),
   mend: (job, report, { onPid }) => runMend({ root, job, report, deps: { onPid } }),
 });
-// A stop means stop: only a merger that left for new code starts its successor.
-if (movedTo && !stopping) succeed({ root, movedTo, say });
 process.exit(code);

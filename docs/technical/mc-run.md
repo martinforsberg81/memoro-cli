@@ -111,9 +111,10 @@ the rules; each lane reads them before it picks.
   once per origin/main sha, so landing a pull request is enough. A checkout
   with local work or one that has diverged is said once in `runner.log` and
   not handed over; `mc run --update` once it is clean. The merger and the
-  repo watcher follow the checkout the same way: each leaves between units of
-  work — the merger after its round, the watcher after its refresh — once
-  the checkout's HEAD has moved, and starts its successor on the new code.
+  repo watcher follow the checkout the same way, once its HEAD has moved: the
+  merger at once, releasing `merger.json` and starting its successor, then
+  finishing only the rounds it holds (*The merge*); the watcher after its
+  refresh, leaving between units of work. Each starts its successor on the new code.
   `--update` only makes it immediate. Until 2026-09-19 a landing under
   `src/mc/` or `canon/` wrote the file whatever the checkout looked like, and
   with most memoro-cli landings touching those trees it drained the lanes
@@ -883,7 +884,11 @@ declares nothing — and `light`, memoro-cli by its `gate_lane`). Each loop
 takes only its own lane's jobs, so a memoro-cli round runs while a memoro
 round is in flight and two memoro rounds never do. A loop with nothing to take
 waits for the other to answer a job, or `MERGER_POLL_MS`, and the merger
-leaves only when neither lane has anything. A deploy waits for the rounds in
+leaves only when neither lane has anything. On new code it does not wait for
+its rounds: it releases `merger.json` and starts its successor as soon as it
+sees the new checkout, finishes only the jobs it holds, and the successor skips
+`landing` and `mending` entries whose `merger` pid is alive; measured 2026-10-17
+→ 24: 76 handovers stalled the queue 643 minutes in all. A deploy waits for the rounds in
 both lanes and starts none while it runs (ruling 32).
 
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
