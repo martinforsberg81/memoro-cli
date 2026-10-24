@@ -30,7 +30,10 @@ mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full
         [--long-press <css>[@ms]]… [--fill <css>=<text>]… [--eval <js>|--eval-file <path>]…
         [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
         [--account <name>] [--onboarding]
-        [--me] [--here] [--out <file.png>] [--open] [--json]
+        [--me] [--here] [--keep] [--out <file.png>] [--open] [--json]
+mc shot next [<id>] [step flags]
+mc shot close [<id>|--all]
+mc shot sessions
 mc shot <dev|prod> --list
 mc shot login prod [--paste]
 mc shot logout prod
@@ -182,6 +185,117 @@ and then the result's `error` lines, so a page that crashed before the picture
 still says why. With `--compare`, each side's `error`, `eval` and `failed`
 lines come after the diff, each prefixed with its side (`here: ` or `<ref>: `),
 so lines 1 and 2 stay the two files; a failed step on either side exits 1.
+
+## A kept browser
+
+A shot opens one browser and closes it in the same call. A session that cannot
+foresee every step then signs in again, navigates again and repeats every
+earlier action on each call, and loses what the page held in memory (an
+unlocked vault, typed text). Measured 2026-10-24: vault's planning session
+drove Claude in Chrome for 58 calls through setup → unlock → add entry →
+search → import, and ran `mc shot` in between only to get the dev server
+restarted after its edits. Martin: "det är viktigt att mc shot också hela tiden
+kan stegas vidare på ett enkelt sätt, om nu inte modellen kan förutse alla
+stegen redan från början. Alla felmeddelanden ska komma tillbaka direkt." So a
+browser can be kept, and stepped one call at a time:
+
+```
+mc shot <dev|prod> <target> --keep [shot flags]
+mc shot next [<id>] [--click …]… [--context-click …]… [--long-press …]… [--fill …]…
+        [--eval …|--eval-file …]… [--upload …]… [--press …]… [--wait-for <css>]
+        [--scroll …] [--measure …] [--el <css>|--shell …] [--full] [--timeout <s>]
+        [--goto <path|target>|--reload] [--no-shot] [--out <file.png>] [--json] [--open]
+mc shot close [<id>|--all]
+mc shot sessions
+```
+
+For example:
+
+```
+mc shot dev /app/tools/vault --keep --fill 'input[name=setupPassword]=…' --click 'text=Create Vault' --timeout 30
+mc shot next --click 'text=New entry' --eval 'document.activeElement.name'
+```
+
+- **`--keep`** is a shot whose request has `mode: "session"` and `socket`. The
+  script answers the first capture as a shot does, and mc prints exactly what a
+  shot prints, then `mc: kept as <id> — mc shot next <id> [--click …] [--eval …]
+  …; mc shot close <id>` on stdout (with `--json`, the object carries `kept`
+  instead). It is refused with `--compare`: `--keep` keeps one browser and
+  `--compare` runs two. The script is spawned as `mc dev open --open` spawns
+  one (`spawnDetached` in [`src/mc/shot.js`](../../src/mc/shot.js)), its stderr
+  to the session's log, and the request directory goes once the first line is
+  read. A first answer of `ok: false` ends the process and keeps nothing.
+- **`next`** is one step on that page. Without an id it is the most recently
+  used session of the worktree `shotWorktree` chooses where you stand, else the
+  only one; with several elsewhere it refuses and names them. Its answer prints
+  exactly as a shot's — path, URL, measure, access, `error`, `eval`, `failed`
+  and warning lines, the same exit codes — so a session reads every step the
+  same way; every error since the previous step comes back with it. `--goto`
+  goes to a path or a declared target inside the app, as a capture navigates;
+  `--reload` loads the current URL again; `--no-shot` answers without a
+  picture, so there is no path line and the URL comes first. Without `--out`
+  the file is named as a shot's with `-<id>-<step>` after the target. **A failed
+  step leaves the page where it stood**: the next call continues from there.
+- **`close`** asks the session to close, waits up to 5 s for its process to
+  leave, else ends its process group, and removes its files. **`sessions`**
+  prints one line per live session — `<id>  <where> <target>  <worktree
+  basename>  <viewport>  idle <n> min` — and removes the files of dead ones.
+- **At most four** are live. A fifth `--keep` closes the longest idle one first
+  and says so on stderr. The id is `s<n>`, the lowest number no live session
+  holds.
+
+### The session file and the socket
+
+Both live in `~/.memoro/mc/shots/sessions/` (`mcHome()/shots/sessions`), mode
+0700. `<id>.json` is mode 0600:
+
+```
+{ id, pid, socket, log, where, worktree, account, target, viewport, base_url,
+  server_id, started, last_used, steps, sign_in_path? }
+```
+
+`steps` counts the steps sent; `sign_in_path` is a dev session's `/dev/login`
+path, which holds no secret. Neither file carries a token, a cookie or a prod
+sign-in URL: those reach the script once, in the request file, which is gone
+before the session file is written. `<id>.sock` is the script's unix socket;
+mc narrows it to 0600 once it exists. `<id>.log` is the script's stderr.
+
+On the socket, one JSON line goes each way per connection. mc sends a step:
+
+```
+{ step, actions, wait_for, scroll, measure, element, shell, full_page, out,
+  goto, reload, shot, timeout_ms, rebase? }
+```
+
+`step` counts from 1; `actions` is the acting flags in argv order, as a
+capture's; `goto` is `{ path }` or `{ name }`, as a capture's `target`; `out` is
+null when `shot` is false. The script answers one capture result line, as a
+shot's result. `{ close: true }` asks it to close; it answers a line and
+exits. Every read has a timeout — a step's as `runCapture`'s, from
+`timeout_ms`; a close's 5 s — so a dead session is never a hang.
+
+### A dead session
+
+`next` on a session whose process is gone, or whose socket refuses or closes
+without an answer, prints one line and exits 1: `mc: <id> has ended (<the last
+line of its log>) — start again with mc shot <where> <target> --keep`, and the
+session's files go. A script ends itself when it has been idle long enough; how
+long is memoro's capture script's to say (project shot-session-capture), and mc
+meets it as a dead session.
+
+### Rebasing after an edit
+
+Before each step of a dev session, `next` runs `ensureAppServer` for the
+session's worktree, as a shot does: a server whose tree moved or was edited is
+started over. When the server's id or URL is no longer the session's, the step
+carries `rebase: { base_url, sign_in }` — the new base URL and the dev
+`/dev/login` URL — and the script signs in again and opens the page it stood on
+there, answering `rebased` (`true` or `{ path }`). mc writes the new
+`base_url` and `server_id` to the session file and prints, after the result,
+`mc: the tree was edited, so the server restarted — the page was opened again at
+<path>; what it held in memory is gone`. A script that does not answer
+`rebased` gets a warning instead, and the next step tries again. Prod never
+rebases: production has one server.
 
 ## mc dev open and mc dev surfaces
 

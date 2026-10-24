@@ -17,7 +17,7 @@ import {
   closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { mcHome } from './paths.js';
 import { callerWorktree, NO_SHARED_WORKTREE, sharedWorktree } from './test-environment.js';
@@ -185,7 +185,7 @@ export function parseActions(argv, { cwd = process.cwd(), deps = {} } = {}) {
       }
       actions.push({ kind: 'eval', script });
     } else if (flag === '--upload') {
-      const eq = value.indexOf('=');
+      const eq = splitAt(value);
       const selector = eq < 0 ? '' : value.slice(0, eq).trim();
       const named = eq < 0 ? '' : value.slice(eq + 1).trim();
       if (!selector || !named) return { ok: false, error: '--upload takes <css>=<file>' };
@@ -232,9 +232,24 @@ function parseLongPress(value) {
   return { ok: true, selector, ms: match ? Number(match[1]) : LONG_PRESS_MS };
 }
 
-/** `<css>=<text>`, split at the first `=`: the text may hold more of them. */
+/**
+ * Where `<css>=<value>` splits: the first `=` outside an attribute selector's
+ * brackets, so `input[name=title]=Bank` is that input and `Bank`. The value
+ * may hold more of them.
+ */
+function splitAt(value) {
+  let depth = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] === '[') depth += 1;
+    else if (value[i] === ']') depth = Math.max(0, depth - 1);
+    else if (value[i] === '=' && depth === 0) return i;
+  }
+  return -1;
+}
+
+/** `<css>=<text>`, split by `splitAt`. */
 function parseFill(value) {
-  const eq = value.indexOf('=');
+  const eq = splitAt(value);
   const selector = eq < 0 ? '' : value.slice(0, eq).trim();
   if (!selector) return { ok: false, error: '--fill takes <css>=<text>' };
   return { ok: true, selector, text: value.slice(eq + 1) };
@@ -510,18 +525,32 @@ export function runCapture({ worktree, declaration, request, env = process.env, 
  * it by the time it answers, and one that never answers is killed.
  */
 export function runOpen({ worktree, declaration, request, env = process.env, deps = {} }) {
-  const dir = (deps.mkdtemp || mkdtempSync)(join(deps.tmpdir || tmpdir(), 'mc-shot-'));
-  const file = join(dir, 'request.json');
   const logDir = deps.logDir || join(mcHome(env), 'shots');
   const log = join(logDir, `open-${stamp(deps.now ? deps.now() : new Date())}.log`);
-  const timeoutMs = deps.timeoutMs ?? OPEN_TIMEOUT_MS;
+  return spawnDetached({
+    worktree, declaration, request, env, log, timeoutMs: deps.timeoutMs ?? OPEN_TIMEOUT_MS, deps,
+  });
+}
+
+/**
+ * What `runOpen` and a kept browser (`mc shot … --keep`, src/mc/shot-session.js)
+ * share: the request written 0600 in a directory of its own, the script spawned
+ * detached with its stderr appended to `log`, its stdout read until the first
+ * result line, the request directory removed whatever happened. The outcome
+ * carries the child's pid and a `kill` for a caller that must end it after all.
+ */
+export function spawnDetached({
+  worktree, declaration, request, env = process.env, log, timeoutMs, deps = {},
+}) {
+  const dir = (deps.mkdtemp || mkdtempSync)(join(deps.tmpdir || tmpdir(), 'mc-shot-'));
+  const file = join(dir, 'request.json');
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
 
   let child = null;
   try {
     writeFileSync(file, `${JSON.stringify(request)}\n`, { mode: 0o600 });
-    mkdirSync(logDir, { recursive: true });
-    const logFd = openSync(log, 'a');
+    mkdirSync(dirname(log), { recursive: true });
+    const logFd = openSync(log, 'a', 0o600);
     try {
       const [command, ...args] = declaration.argv;
       child = (deps.spawn || spawn)(command, args, {
@@ -562,7 +591,9 @@ export function runOpen({ worktree, declaration, request, env = process.env, dep
         const result = resultLine(line);
         if (!result) continue;
         child.unref?.();
-        finish({ ok: true, result, log });
+        finish({
+          ok: true, result, log, pid: child.pid, kill: () => { try { child.kill?.(); } catch { /* gone */ } },
+        });
         return;
       }
     });
@@ -575,7 +606,8 @@ export function runOpen({ worktree, declaration, request, env = process.env, dep
   });
 }
 
-function resultLine(line) {
+/** One JSON object with a boolean `ok`, or null. */
+export function resultLine(line) {
   try {
     const value = JSON.parse(line.trim());
     return value && typeof value === 'object' && typeof value.ok === 'boolean' ? value : null;
