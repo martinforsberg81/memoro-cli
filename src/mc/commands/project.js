@@ -8,6 +8,7 @@
  *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
+ *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
  *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
  *                                                                 add a step, after the others, to a draft or a sent plan
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
@@ -99,6 +100,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, ['--check']);
     if (extra) { stderr.write(`mc: criterion add takes no ${extra}\n`); return 2; }
     return addCriterion(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'criterion' && verb === 'edit') {
+    const extra = onlyFlags(scanned, ['--check']);
+    if (extra) { stderr.write(`mc: criterion edit takes no ${extra}\n`); return 2; }
+    return editCriterion(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'step' && verb === 'add') {
     const extra = onlyFlags(scanned, STEP_ADD_FLAGS);
@@ -425,6 +431,78 @@ function addCriterion(scanned, deps) {
   }
   stdout.write(`mc: ${project} criterion ${outcome.number} — ${text}\n`);
   if (outcome.first) stdout.write(`next: mc project step add ${project} "<title>" --model haiku|opus --done-when "…" --instruction-file <md>\n`);
+  return 0;
+}
+
+/**
+ * `mc project criterion edit <project> <n> --check <command>` — changes the check
+ * of success criterion `n` (1-based), of a draft or a sent plan, and nothing else:
+ * its text is how the register matches it, so it stays. The new check is refused
+ * as `criterion add` refuses one. A criterion the register holds as met goes back
+ * to not met, since nobody has measured it by the new check.
+ */
+function editCriterion(scanned, deps) {
+  const { env, stdout, stderr, root, now, io } = deps;
+  const home = deps.home || programsHome(env);
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(2);
+  if (target.length !== 2) { stderr.write(usage()); return 2; }
+  const [project, number] = target;
+  const check = flags.check;
+  if (check === null || check.trim() === '') {
+    stderr.write('mc: criterion edit needs --check "<command>" — the command that shows it holds\n');
+    return 2;
+  }
+  if (!/^\d+$/u.test(number) || Number(number) < 1) { stderr.write(`mc: ${number} is not a criterion number — 1 is the plan's first\n`); return 2; }
+  const n = Number(number);
+  const names = bannedWords(check);
+  if (names.length) {
+    stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
+    return 1;
+  }
+  if (dependencyWords(check).length) {
+    stderr.write('mc: a dependency goes in mc project step add … --after <repo>:<project>\n');
+    return 1;
+  }
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const criteria = plan.success_criteria;
+      if (!Array.isArray(criteria)) return { problems: ['success_criteria: a list of criteria'] };
+      if (n > criteria.length) return { outOfRange: `${project} has ${criteria.length} criteri${criteria.length === 1 ? 'on' : 'a'} — criterion ${n} is not one` };
+      if (criteria[n - 1].check === check) return { refused: `criterion ${n} of ${project} has that check already` };
+      plan.success_criteria = criteria.map((criterion, i) => (i === n - 1 ? { ...criterion, check } : criterion));
+      const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
+      if (problems.length) return { problems };
+      writePlanFile(found.file, plan);
+      return { text: criteria[n - 1].criterion };
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.outOfRange) { stderr.write(`mc: ${outcome.outOfRange}\n`); return 2; }
+  if (outcome.refused) { stderr.write(`mc: ${outcome.refused}\n`); return 1; }
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} criterion ${n} — check changed\n`);
+  const held = found.sent ? (readEntry(root, project, io)?.criteria ?? []).findIndex((c) => c.criterion === outcome.text && c.met) : -1;
+  if (held !== -1) {
+    try {
+      updateCriterion({ root, project, number: held + 1, met: false, now, ...io });
+      stdout.write(`mc: ${project} criterion ${n} — not met, until its new check is run\n`);
+    } catch (error) {
+      stderr.write(`mc: ${error?.message || error}\n`);
+      return 1;
+    }
+  }
   return 0;
 }
 
@@ -948,6 +1026,7 @@ export function usage() {
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
+    '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
     '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
     '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',

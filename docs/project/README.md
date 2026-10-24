@@ -18,7 +18,7 @@ the same name that was once here is history: ruling 48 took every repository pla
 out, and they stay in git history.
 
 Since `project-verbs` a plan is written only through `mc project new`, `edit`,
-`criterion add`, `step add`, `step edit` and `send`. Until it is sent it is
+`criterion add`, `criterion edit`, `step add`, `step edit` and `send`. Until it is sent it is
 `DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
 `PLAN.json`. The verbs refuse a step without `--model haiku|opus`, the words
 `Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
