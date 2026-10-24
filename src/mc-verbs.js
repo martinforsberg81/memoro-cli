@@ -48,6 +48,12 @@ export const wantsHelp = (argv) => argv.includes('--help') || argv.includes('-h'
 const guarded = new WeakSet();
 
 /**
+ * The codes a write gets once the reader has gone. EPIPE on a plain pipe;
+ * ENOTCONN on macOS, where node's stdio pipe to a child is a socket.
+ */
+const READER_GONE = new Set(['EPIPE', 'ENOTCONN']);
+
+/**
  * A reader that goes away early is the caller's choice, not a fault in the
  * verb: `mc project discard x | grep -q 'would remove'` and `mc … | head -1`
  * both close the pipe while the verb is still writing. Node raises that as an
@@ -62,7 +68,7 @@ export function quietOnClosedReader(stream = process.stdout) {
   guarded.add(stream);
   let readerGone = false;
   stream.on('error', (error) => {
-    if (error?.code === 'EPIPE') { readerGone = true; return; }
+    if (READER_GONE.has(error?.code)) { readerGone = true; return; }
     if (readerGone && error?.code === 'ERR_STREAM_DESTROYED') return;
     throw error;
   });
