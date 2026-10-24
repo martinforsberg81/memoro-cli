@@ -796,9 +796,12 @@ in `~/mc/runner/log/merger.log`). It marks a job `landing`, waits while the
 gate lock or the job's repository lease is somebody else's (an orphaned lease
 is nobody's: the round's own claim reaps it), runs the round as the holder
 who asked, records it, writes the register, drops the job, and takes the
-next; with the queue empty it leaves. Since ruling 34 it takes up to
-`MERGE_BATCH_MAX` (4) jobs for one repository into one batch round and
-answers each by itself, and it runs one loop per gate lane, so a light round
+next; with the queue empty it leaves. Since 2026-10-24 (ruling 55) it lands one
+job a round: `MERGE_BATCH_MAX` is 1, because a batch of four cost about 430 s per
+landed pull request against 210 s alone on memoro's merge rounds of 2026-10-17
+to 10-24. The batch machinery stays for a merger resuming a batch it died under:
+it takes that repository's `landing` jobs again, in one round, and answers each
+by itself. It runs one loop per gate lane, so a light round
 and a heavy one are in flight at once — see [`mc-run.md`](mc-run.md)
 § *The merge* for both. A merger killed mid-round leaves its
 job `landing`, and the next merger — started by the next `mc merge`, or by

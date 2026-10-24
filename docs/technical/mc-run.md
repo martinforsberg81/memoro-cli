@@ -850,21 +850,22 @@ Four answers the merger gives without a person (ruling 37,
   pid). The heading counts it: `1 landing · 1 mending · 2 red · 3 waiting:
   …`. `mc status <project>` says the same for a step's pull request.
 
-**Several steps land in one round** (merge-throughput, ruling 34). The merger
-takes up to `MERGE_BATCH_MAX` (4) queued jobs for one repository that may go
-(`nextBatch` in `merge-queue.js`) and hands them to the round as one batch:
-one candidate with every head merged in, measured once, landed in order. Its
-log says `<repo>: landing a batch of N — #a #b …`. Each job still gets its own
+**One job lands in one round** (ruling 55, 2026-10-24). The merger takes the
+next queued job that may go (`nextJob`) and hands it to the round alone:
+`MERGE_BATCH_MAX` in `merge-queue.js` is 1, and `nextBatch` forms no batch
+wider than that. Before ruling 55, up to four jobs of one repository went as
+one batch (ruling 34): one candidate with every head merged in, measured once,
+landed in order. A batch's log says `<repo>: landing a batch of N — #a #b …`. Each job still gets its own
 answer (`answersFor` in `merger.js`): a landed one is dequeued and its step
 `done`; a red one — its own fallback round's red, a restack it could not
 make, or the stop the batch reached before it — is `red` in the queue with
 its own reason, and its step goes through `redPatch` with its own report. A
 batch that stops at a fallback stop is one round per pull request, as before,
 and the answers are those rounds'. A merger that dies under a batch leaves its
-jobs `landing`, and the next one takes all of them again. Four, because about
-11 % of rounds on 2026-10-09/10 were red: a batch of four is red about a third
-of the time and then pays its fallback rounds, and a larger batch makes the
-fallback cost more than the batch saves.
+jobs `landing`, and the next one takes all of them again. One, because a batch
+of four cost about 430 s per landed pull request against 210 s alone on memoro's
+merge rounds of 2026-10-17 to 10-24: a red batch falls back to one round per
+member, and 54 % of batch rounds were green against 80 % of single ones.
 
 Measured at close-out (2026-10-10 18:01 – 2026-10-11 07:16 UTC, the first
 merger with all four steps): 87 landings in 71 rounds, 8 of them batches of

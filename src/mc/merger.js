@@ -44,7 +44,7 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, mergesPath, nextBatch, parseQueue,
+  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
@@ -705,6 +705,8 @@ export async function serve({
   landed = parentLanded(root, { read }),
   ordered = stepsBeforeDone(root, { read }),
   laneOf = (job) => gateLaneOf(job.repo),
+  // The most jobs one round lands (merge-queue.js): one, unless a test asks.
+  batchMax = MERGE_BATCH_MAX,
   lanes = GATE_LANES,
   // How long a loop with nothing in its lane waits before it looks again while
   // the other is landing: a job queued meanwhile saw this merger alive and
@@ -765,7 +767,7 @@ export async function serve({
     try { await sweeping; } finally { sweeping = null; }
   };
   await sweepReds();
-  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime() });
+  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime(), max: batchMax });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();

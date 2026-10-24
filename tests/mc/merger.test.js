@@ -588,7 +588,7 @@ describe('batches (merge-throughput step 1)', () => {
     registerBatch();
     queueFour();
     const m = machine([batchGreen, green]);
-    await serve({ root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    await serve({ root, lock, take, release, ...ONE_LANE, batchMax: 4, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
     assert.equal(m.rounds.length, 2);
     assert.equal(m.rounds[0].pr, 11);
     assert.deepEqual(m.rounds[0].prs, [11, 12, 13]);
@@ -613,7 +613,7 @@ describe('batches (merge-throughput step 1)', () => {
       },
     };
     const m = machine([fallback, green]);
-    await serve({ root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    await serve({ root, lock, take, release, ...ONE_LANE, batchMax: 4, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
     const [a, b, c] = steps();
     assert.equal(a.status, 'done');
     assert.equal(a.landed.sha, 'm11');
@@ -659,12 +659,27 @@ describe('batches (merge-throughput step 1)', () => {
     const m = machine([resumed, green, green]);
     const rounds = [];
     await serve({
-      root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now,
+      root, lock, take, release, ...ONE_LANE, batchMax: 4, say: m.deps.say, now: m.deps.now,
       land: (batch) => { rounds.push(batch.map((j) => j.pr)); return landJob(batch, m.deps); },
     });
     assert.deepEqual(rounds[0], [11, 13]);
     assert.deepEqual(m.rounds[0].prs, [11, 13]);
     assert.deepEqual(rounds.slice(1), [[671], [12]]);
+  });
+
+  it('two queued jobs of one repository and no batchMax: land is called with a batch of one, each', async () => {
+    registerBatch();
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([jobFor(11, 0, '2026-10-10T12:01:00Z'), jobFor(12, 1, '2026-10-10T12:02:00Z')]));
+    const m = machine([green, green]);
+    const sizes = [];
+    await serve({
+      root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now,
+      land: (batch) => { sizes.push(batch.length); return landJob(batch, m.deps); },
+    });
+    assert.deepEqual(sizes, [1, 1]);
+    assert.deepEqual(m.rounds.map((r) => r.pr), [11, 12]);
+    assert.deepEqual(queue(), []);
   });
 });
 
@@ -713,7 +728,7 @@ describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
     writeFileSync(mergesPath(root), JSON.stringify([jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)]));
     const { gh, asked } = stubGh({ 11: OPEN, 12: MERGED, 13: OPEN });
     const m = machine([two], { gh });
-    await serve({ root, lock, take: () => true, release: () => {}, ...ONE_LANE, gh, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    await serve({ root, lock, take: () => true, release: () => {}, ...ONE_LANE, batchMax: 4, gh, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
     assert.equal(m.rounds.length, 1);
     assert.deepEqual(m.rounds[0].prs, [11, 13]);
     assert.equal(m.rounds[0].pr, 11);
@@ -800,7 +815,7 @@ describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
     writeFileSync(mergesPath(root), JSON.stringify(jobs));
     const at = { seen: null, entries: null };
     await serve({
-      root, lock, take: () => true, release: () => {}, ...ONE_LANE, gh, say: m.deps.say, now: m.deps.now,
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, batchMax: 4, gh, say: m.deps.say, now: m.deps.now,
       land: (batch, lane, extra) => landJob(batch, {
         ...m.deps, ...landOver, ...extra,
         mergeRound: async (options) => {
