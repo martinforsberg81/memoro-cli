@@ -28,6 +28,7 @@ import { planSummary, readPlanText } from './plan-schema.js';
 import { findPlan, programsPlans } from './plan-source.js';
 import { stepAreaName, workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
+import { gitDirOf } from './repos.js';
 import { listEntries, overlayPlans, realLock } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 
@@ -225,7 +226,7 @@ export async function collectProject(name, {
 } = {}) {
   const root = workRoot(env);
   const notes = [];
-  const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
+  const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
   if (!offline) {
     await Promise.all(present.map((repo) => exec('git', ['-C', repo.path, 'fetch', '-q', 'origin'])
       .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — origin/main may be stale`); })));

@@ -113,6 +113,7 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
+import { gitDirOf } from './repos.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
@@ -1484,7 +1485,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function archivedProjects() {
     const names = new Set();
     for (const repo of repos) {
-      if (!deps.exists(join(repo.path, '.git'))) continue;
+      if (!deps.exists(gitDirOf(repo))) continue;
       const text = gitOut(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
       for (const row of logRows(text || '')) if (row.project) names.add(row.project);
     }
@@ -2588,7 +2589,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const answered = [];
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
-      if (!deps.exists(join(repo.path, '.git'))) continue;
+      if (!deps.exists(gitDirOf(repo))) continue;
       askedRepos.push(repo.name);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       // The plan on main says what each step is; the register says where it

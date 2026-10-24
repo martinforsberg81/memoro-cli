@@ -24,8 +24,9 @@ import { registerManifest } from '../../src/mc/dev-servers.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
   accountAvailable, answers, builtFromMoved, editedSince, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
-  serversFor, servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
+  NO_SHARED_WORKTREE, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
+import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const DEAD_PID = 2_147_483_646;
 
@@ -187,6 +188,23 @@ describe('which server is this worktree\'s', () => {
     registerServer(root, worktree, { pid: DEAD_PID, port: 8892 });
     assert.equal(servingWorktree(worktree, { root }), null);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('the worktree shared by default', () => {
+  it('is the primary checkout in the first layout', () => {
+    const fx = makeRepoLayout({ clones: ['memoro'] });
+    try { assert.equal(sharedWorktree(fx.env), join(fx.home, 'memoro')); } finally { fx.cleanup(); }
+  });
+
+  it('is self/memoro beside a bare repository, and none without it', () => {
+    const fx = makeRepoLayout({ bare: ['memoro'], self: ['memoro'] });
+    try {
+      assert.equal(sharedWorktree(fx.env), join(fx.home, 'self', 'memoro'));
+      rmSync(join(fx.home, 'self'), { recursive: true, force: true });
+      assert.equal(sharedWorktree(fx.env), null, 'never the bare directory: it has no files to serve');
+      assert.match(NO_SHARED_WORKTREE, /mc repos migrate makes ~\/mc\/self\/memoro/u);
+    } finally { fx.cleanup(); }
   });
 });
 

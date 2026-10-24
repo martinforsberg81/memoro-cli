@@ -216,8 +216,10 @@ async function buildTestflight(opts, deps) {
     return pre.code;
   }
   for (const warning of pre.warnings) stderr.write(`mc: ${warning}\n`);
-  const { sha, live, repoPath, declaration } = pre;
-  const asc = (deps.listBuilds || listBuilds)({ repoPath, declaration, rev: 'origin/main', run: deps.run, git: deps.git, env });
+  const { sha, live, repoPath, checkout, declaration } = pre;
+  const asc = (deps.listBuilds || listBuilds)({
+    repoPath, ...(checkout === undefined ? {} : { checkout }), declaration, rev: 'origin/main', run: deps.run, git: deps.git, env,
+  });
   if (!asc.ok) {
     stderr.write(`mc: ${asc.line}\n`);
     return 1;
@@ -250,7 +252,7 @@ async function buildTestflight(opts, deps) {
   }
   const key = recordStart({ sha, kind: TESTFLIGHT, build: String(next), live_commit: live, pid: '' }, env);
   const job = {
-    key, sha, live, repoPath, declaration, kind: TESTFLIGHT, build: next, upload,
+    key, sha, live, repoPath, ...(checkout === undefined ? {} : { checkout }), declaration, kind: TESTFLIGHT, build: next, upload,
   };
   return startAndFollow(job, `as build ${next} for TestFlight${upload ? '' : ' (no upload)'}`, deps);
 }

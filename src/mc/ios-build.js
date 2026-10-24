@@ -71,9 +71,20 @@ export function gitRead(cwd, args, { timeoutMs = 60_000 } = {}) {
   return (r.stdout || '').trim();
 }
 
-/** memoro's checkout, found the way `mc deploy` finds it; null when there is none. */
+/**
+ * memoro's repository, found the way `mc deploy` finds it: the `path` git runs
+ * in (repos.js) — the bare repository or the primary checkout; null when there
+ * is none. Every read here is a ref or a `git show`, and the build's worktree
+ * is made from it.
+ */
 export function memoroRepo(env = process.env, repos = defaultRepos(env)) {
   return repos.find((repo) => repo.name === REPO)?.path || null;
+}
+
+/** memoro's working tree on main, for the one thing that needs a directory of files: a declared script's packages. Null when there is none. */
+export function memoroCheckout(env = process.env, repos = defaultRepos(env)) {
+  const repo = repos.find((item) => item.name === REPO);
+  return repo ? (repo.checkout === undefined ? repo.path : repo.checkout) || null : null;
 }
 
 function valueAt(object, dotted) {
@@ -439,7 +450,8 @@ export async function devicePreflight({
   if (!live) return refuse('production did not answer /api/version — cannot say what the app would meet');
   const target = resolveTarget({ repoPath, live, ref, git });
   if (!target.sha) return refuse(target.line);
-  return { ok: true, repoPath, declaration, device: chosen.device, live, sha: target.sha, warnings };
+  const checkout = memoroCheckout(env, repos || defaultRepos(env));
+  return { ok: true, repoPath, checkout, declaration, device: chosen.device, live, sha: target.sha, warnings };
 }
 
 /**
@@ -450,10 +462,10 @@ export async function devicePreflight({
  * on: a number from anywhere else is one two binaries could share.
  */
 export function listBuilds({
-  repoPath, declaration, rev = null, run = runSync, git = gitRead, env = process.env,
+  repoPath, checkout = repoPath, declaration, rev = null, run = runSync, git = gitRead, env = process.env,
 }) {
   const refuse = (why) => ({ ok: false, line: `App Store Connect did not answer (${why}) — no build number can be chosen` });
-  const command = atRev([].concat(declaration.list_builds), { repoPath, rev, git });
+  const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git });
   if (command.missing) return refuse(command.missing);
   const r = run(command.argv, { cwd: command.cwd, input: command.input, env, timeoutMs: 2 * MIN });
   if (r.code !== 0) return refuse(String(r.error || r.stderr || r.stdout || '').trim().split('\n')[0].trim() || `exit ${r.code}`);
@@ -472,16 +484,21 @@ export function listBuilds({
  * `--json`. The source goes in on stdin, with the script's own directory as
  * the cwd so its packages and relative imports resolve as they would from the
  * file. Anything that is not `node <relative path>` runs as declared.
+ *
+ * The source is read from `repoPath`, where git runs; the directory is
+ * `checkout`'s, memoro's working tree on main (repos.js), since a bare
+ * repository has no files to stand in. Without one it refuses in words.
  */
-export function atRev(argv, { repoPath, rev = null, git = gitRead }) {
+export function atRev(argv, { repoPath, checkout = repoPath, rev = null, git = gitRead }) {
+  if (!checkout) return { missing: 'no memoro checkout to run it in — mc repos migrate makes ~/mc/self/memoro' };
   if (!rev || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || isAbsolute(argv[1])) {
-    return { argv, cwd: repoPath, input: undefined };
+    return { argv, cwd: checkout, input: undefined };
   }
   const source = git(repoPath, ['show', `${rev}:${argv[1]}`]);
   if (source === null) return { missing: `${argv[1]} is not on ${rev}` };
   return {
     argv: ['node', '--input-type=module', '-', ...argv.slice(2)],
-    cwd: join(repoPath, dirname(argv[1])),
+    cwd: join(checkout, dirname(argv[1])),
     input: `${source}\n`,
   };
 }
@@ -819,7 +836,7 @@ export async function buildIos(job, deps = {}) {
     // to take, and a stamped binary is not renumbered.
     at = 'number-taken';
     const again = (deps.listBuilds || listBuilds)({
-      repoPath, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
+      repoPath, checkout: job.checkout === undefined ? repoPath : job.checkout, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
     });
     if (!again.ok) return fail('number-taken', again.line);
     if (again.versions.includes(number)) {

@@ -36,7 +36,7 @@ import {
   parseSafeArea, parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
-  ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
+  ensureAppServer, NO_SHARED_WORKTREE, readDeclaration, sharedWorktree, tokenFor,
 } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 
@@ -279,7 +279,7 @@ async function account(verb, argv, { stdout, stderr, deps }) {
   } else {
     const env = deps.env || process.env;
     const worktree = sharedWorktree(env);
-    if (!worktree) { stderr.write('mc: no memoro checkout to read .mc/shot.json from\n'); return 1; }
+    if (!worktree) { stderr.write(`mc: ${NO_SHARED_WORKTREE}\n`); return 1; }
     const shot = readShotDeclaration(worktree);
     if (!shot.ok) { stderr.write(`mc: ${shot.error}\n`); return 1; }
     const read = readDeclaration(worktree);

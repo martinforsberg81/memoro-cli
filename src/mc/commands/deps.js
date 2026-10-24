@@ -12,11 +12,10 @@
  * `package-lock.json`. `mc deps bump` turns a group into a pull request
  * through the gate — `src/mc/deps-bump.js`.
  */
-import { basename } from 'node:path';
-
 import { defaultRepos } from '../brief-collect.js';
 import { bump } from '../deps-bump.js';
 import { formatReading, hasLockfile, readDeps } from '../deps.js';
+import { repoNameOf } from '../repos.js';
 import { scanArgs } from './flags.js';
 import { resolveRepoPath } from './repo.js';
 
@@ -66,7 +65,7 @@ export async function run(argv, deps = {}) {
   let code = 0;
   for (const repoPath of paths) {
     try {
-      const { reading } = await readDeps({ repoPath, repo: basename(repoPath), now, ...options });
+      const { reading } = await readDeps({ repoPath, repo: repoNameOf(repoPath), now, ...options });
       readings.push(reading);
       if (!flags.json) stdout.write(`${readings.length > 1 ? '\n' : ''}${formatReading(reading, { now: now() })}`);
     } catch (error) {
@@ -95,7 +94,7 @@ async function runBump(argv, deps) {
     return 1;
   }
   return bump({
-    repo: basename(repoPath),
+    repo: repoNameOf(repoPath),
     repoPath,
     what: positional[1],
     dryRun: flags['dry-run'],

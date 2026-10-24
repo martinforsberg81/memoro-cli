@@ -27,6 +27,7 @@ import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
 import { INSTALLED_MARK, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
+import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const MANIFEST = {
   name: 'memoro-cli',
@@ -305,6 +306,34 @@ describe('mc work add, and the tree it leaves the session', () => {
     // symlink there is not matched by `.gitignore`'s `node_modules/`.
     assert.equal(existsSync(join(work, 'area', 'memoro-cli', 'node_modules')), false);
     assert.equal(git(join(work, 'area', 'memoro-cli'), ['status', '--porcelain']), '');
+  });
+});
+
+describe('a bare repository (repos.js, the second layout)', () => {
+  it('reads main\'s two files through git show, since a bare repository has no files to read', () => {
+    const lock = '{"lockfileVersion":3,"bare":1}\n';
+    const fx = makeRepoLayout({
+      bare: ['memoro-cli'],
+      files: { 'memoro-cli': { 'package.json': `${JSON.stringify(MANIFEST, null, 2)}\n`, 'package-lock.json': lock } },
+    });
+    try {
+      const installs = [];
+      const install = (cwd) => { installs.push(cwd); mkdirSync(join(cwd, 'node_modules'), { recursive: true }); };
+      const out = ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install });
+      assert.equal(out.state, 'installed', out.why);
+      assert.deepEqual(installs, [fx.env.MC_WORK_ROOT], 'the repository is memoro-cli, not memoro-cli.git');
+      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), lock);
+      assert.equal(readFileSync(workDepsManifestPath(fx.env), 'utf8'), workDepsManifest(JSON.stringify(MANIFEST)));
+      assert.equal(ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install }).state, 'current');
+    } finally { fx.cleanup(); }
+  });
+
+  it('says no-manifest for a main without package.json, rather than failing', () => {
+    const fx = makeRepoLayout({ bare: ['memoro-cli'] });
+    try {
+      const out = ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install: () => assert.fail('nothing to install') });
+      assert.equal(out.state, 'no-manifest');
+    } finally { fx.cleanup(); }
   });
 });
 

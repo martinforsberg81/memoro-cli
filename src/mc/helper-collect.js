@@ -51,10 +51,10 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { lastDeploy } from './deploys.js';
+import { defaultRepos } from './repos.js';
 import { cliFailing, cliRows as cliCollect, renderCliSections } from './helper-cli-collect.js';
 import { writeLiveVersion } from './live-version.js';
 import { workRoot } from './paths.js';
@@ -78,9 +78,13 @@ export const DEPLOY_STALE_HOURS = 36;
 const TOKEN_KEY = 'ADMIN_TOKEN';
 const TOKEN_FILE = '.dev.vars';
 
-/** The checkout the admin scripts and the local secrets file live in. */
+/**
+ * The checkout the admin scripts and the local secrets file live in: memoro's
+ * `checkout` (repos.js). Null in a bare layout without `self/memoro`, and then
+ * the digest says the two scripts cannot run.
+ */
 export function memoroRoot(env = process.env) {
-  return env.MC_MEMORO_ROOT || join(env.MC_REPOS_HOME || homedir(), 'memoro');
+  return env.MC_MEMORO_ROOT || defaultRepos(env).find((repo) => repo.name === 'memoro')?.checkout || null;
 }
 
 export function intakeDir(env = process.env) {
@@ -840,11 +844,12 @@ export async function collectHelper({
   const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);
   const notes = [];
 
-  const haveCheckout = existsSync(join(memoro, 'scripts', 'admin', 'survey-errors.mjs'));
-  if (!haveCheckout) notes.push(`no memoro checkout at ${memoro} — the two admin scripts cannot run`);
+  const haveCheckout = Boolean(memoro) && existsSync(join(memoro, 'scripts', 'admin', 'survey-errors.mjs'));
+  const where = memoro ? `no memoro checkout at ${memoro}` : 'no memoro checkout — mc repos migrate makes ~/mc/self/memoro';
+  if (!haveCheckout) notes.push(`${where} — the two admin scripts cannot run`);
   const token = readAdminToken(memoro, env);
   const base = baseUrl(env);
-  const missing = { ok: false, error: `no memoro checkout at ${memoro}` };
+  const missing = { ok: false, error: where };
 
   const [survey, providerRaw, analysisRaw, servicesRaw, operationsRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
     haveCheckout

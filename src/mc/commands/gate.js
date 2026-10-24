@@ -40,7 +40,7 @@
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, declaredTestFlags } from '../gate-fast.js';
@@ -48,6 +48,7 @@ import { gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
+import { repositoryDir } from '../repos.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 
@@ -151,7 +152,7 @@ export async function run(argv, deps = {}) {
 
   // The lane is the primary checkout's: a worktree of memoro is memoro.
   const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  const primary = common ? dirname(common) : root;
+  const primary = common ? repositoryDir(common) : root;
   const lane = io.lane(primary, { env });
   // The free cores, not the core count, as a merge round's run has them (`testLanes`).
   const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };

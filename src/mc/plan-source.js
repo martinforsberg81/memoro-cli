@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import { programsHome } from './paths.js';
 import { readPlanText } from './plan-schema.js';
+import { gitDirOf } from './repos.js';
 
 /** The directory, in a repository, that holds the plans. */
 export const PROJECT_DIR = 'docs/project';
@@ -81,7 +82,7 @@ export function findPlan(repos, name, { programs = programsPlans } = {}) {
   if (!held) return null;
   // The plan is its repository's, so a repository not here has nothing to find.
   const repo = repos.find((r) => r.name === held.repo);
-  if (!repo || !existsSync(join(repo.path, '.git'))) return null;
+  if (!repo || !existsSync(gitDirOf(repo))) return null;
   return {
     repo: repo.name,
     path: repo.path,

@@ -48,7 +48,7 @@ import { listServers } from '../dev-servers.js';
 import { log } from '../logger.js';
 import {
   accountAvailable, answers, callerWorktree, ensureAppServer, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
-  runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
+  NO_SHARED_WORKTREE, runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import { renderNightlyLines } from '../repo-render.js';
@@ -131,7 +131,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   if (!worktree) {
     stderr.write(opts.here
       ? 'mc: --here needs a git worktree, and this is not one\n'
-      : 'mc: no memoro checkout to read a declaration from\n');
+      : `mc: ${NO_SHARED_WORKTREE}\n`);
     return 1;
   }
 
@@ -454,7 +454,7 @@ async function token(argv, { stdout, stderr, deps = {} }) {
 
   const env = deps.env || process.env;
   const worktree = sharedWorktree(env);
-  const read = worktree ? readDeclaration(worktree) : { ok: false, error: 'no memoro checkout' };
+  const read = worktree ? readDeclaration(worktree) : { ok: false, error: NO_SHARED_WORKTREE };
   if (!read.ok) {
     stderr.write(`mc: ${read.error}\n`);
     return 1;

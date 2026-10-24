@@ -114,9 +114,16 @@ export function notInDev(declaration) {
   return (declaration?.environments?.dev?.not_in_dev || []).map((gap) => `${gap.name} — ${gap.why}`);
 }
 
-/** The worktree `mc test dev` shares by default: the installation, on main. */
+/** What a caller says when `sharedWorktree` has none to give. */
+export const NO_SHARED_WORKTREE = 'no memoro checkout to serve — mc repos migrate makes ~/mc/self/memoro';
+
+/**
+ * The worktree `mc test dev` shares by default: memoro's `checkout` on main
+ * (repos.js) — `~/mc/self/memoro`, or `~/memoro` before the move. Null in a
+ * bare layout without `self/memoro`; the caller says `NO_SHARED_WORKTREE`.
+ */
 export function sharedWorktree(env = process.env) {
-  return defaultRepos(env).find((repo) => repo.name === 'memoro')?.path || null;
+  return defaultRepos(env).find((repo) => repo.name === 'memoro')?.checkout || null;
 }
 
 /**
