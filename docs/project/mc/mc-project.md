@@ -95,6 +95,7 @@ never an area.**
 ```
 mc project new <programme>/<project> --repo <repo>[,<repo>] --goal "…"
 mc project criterion add <project> "…" --check "<command>"
+mc project criterion edit <project> <n> --check "<command>"   a new check; a met criterion goes back to not met
 mc project step add <project> "<title>" --model haiku|opus [--effort …] --done-when "…"
                                         [--after <repo>:<project>] --instruction-file <md>
 mc project step edit <project> <n> [any of the above]

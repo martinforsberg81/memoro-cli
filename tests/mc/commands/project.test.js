@@ -1136,3 +1136,71 @@ test('discard with no project, or a flag other than --apply, is usage, exit 2; a
     assert.equal(existsSync(f.dir), true);
   } finally { f.cleanup(); }
 });
+
+test('criterion edit changes a draft criterion\'s check, keeps its text, and the draft still reads', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'node --test'], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.success_criteria, [{ met: false, criterion: 'It runs.', check: 'node --test' }]);
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, ['mc: alpha criterion 1 — check changed\n']);
+  } finally { f.cleanup(); }
+});
+
+test('criterion edit on a sent plan records a met criterion not met, and leaves an unmet one alone', async () => {
+  const f = draftFixture();
+  try {
+    const file = sentStep(f, [{ key: 'One', status: 'done', pr: 7 }]);
+    const path = registerPath(f.deps.root, 'sent');
+    const files = { [path]: JSON.stringify({ project: 'sent', repo: 'memoro-cli', steps: [{ key: 'One', status: 'done', pr: 7 }], criteria: [{ criterion: 'It runs.', met: true, at: '2026-09-01T00:00:00Z' }] }) };
+    Object.assign(f.deps, {
+      now: () => new Date('2026-09-18T10:00:00Z'), read: (p) => files[p] ?? null,
+      write: (p, value) => { files[p] = JSON.stringify(value); }, lock: (_root, fn) => fn(),
+    });
+    assert.equal(await run(['criterion', 'edit', 'sent', '1', '--check', 'npm test'], f.deps), 0);
+    const text = readFileSync(file, 'utf8');
+    assert.deepEqual(readPlanText(text).problems, []);
+    assert.equal(JSON.parse(text).success_criteria[0].check, 'npm test');
+    assert.deepEqual(parseEntry(files[path]).criteria[0], { criterion: 'It runs.', met: false, at: '2026-09-18T10:00:00Z' });
+    assert.deepEqual(f.out, ['mc: sent criterion 1 — check changed\n', 'mc: sent criterion 1 — not met, until its new check is run\n']);
+
+    f.out.length = 0;
+    const before = files[path];
+    assert.equal(await run(['criterion', 'edit', 'sent', '1', '--check', 'node --test'], f.deps), 0);
+    assert.equal(files[path], before);
+    assert.deepEqual(f.out, ['mc: sent criterion 1 — check changed\n']);
+  } finally { f.cleanup(); }
+});
+
+test('criterion edit refuses a check that names a person, the same check, and a criterion out of range', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'Martin checks it'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: the check names Martin — a check is a command the last step runs, never a person\n');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'npm test'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: criterion 1 of alpha has that check already\n');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '2', '--check', 'node --test'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha has 1 criterion — criterion 2 is not one\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion edit without --check, with a number that is not one, or with a flag it does not take is usage, exit 2', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: criterion edit needs --check "<command>" — the command that shows it holds\n');
+    assert.equal(await run(['criterion', 'edit', 'alpha', 'x', '--check', 'npm test'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: x is not a criterion number — 1 is the plan\'s first\n');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'npm test', '--goal', 'x'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: criterion edit takes no --goal\n');
+  } finally { f.cleanup(); }
+});
