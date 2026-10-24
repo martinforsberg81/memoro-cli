@@ -241,6 +241,9 @@ describe('mc shot — the pieces', () => {
     assert.deepEqual(parseActions(['--fill', 'a=b=c', '--fill', 'd=']), {
       ok: true, actions: [{ kind: 'fill', selector: 'a', text: 'b=c' }, { kind: 'fill', selector: 'd', text: '' }],
     });
+    assert.deepEqual(parseActions(['--fill', 'input[name=setupPassword]=a=b']), {
+      ok: true, actions: [{ kind: 'fill', selector: 'input[name=setupPassword]', text: 'a=b' }],
+    }, 'an attribute selector\'s = is the selector\'s');
     assert.deepEqual(parseActions(['dev', 'home']), { ok: true, actions: [] });
   });
 

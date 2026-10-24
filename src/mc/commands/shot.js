@@ -11,6 +11,8 @@
  *           [--account <name>] [--onboarding] [--me] [--here]
  *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
+ *   mc shot <dev|prod> <target> --keep [shot flags]
+ *   mc shot next [<id>] [step flags] · mc shot close [<id>|--all] · mc shot sessions
  *   mc shot login prod [--paste]
  *   mc shot logout prod
  *
@@ -45,6 +47,9 @@ import {
   ensureAppServer, NO_SHARED_WORKTREE, readDeclaration, sharedWorktree, tokenFor,
 } from '../test-environment.js';
 import { scanArgs } from './flags.js';
+import {
+  close, keep, next, sessions,
+} from './shot-session.js';
 
 const PLACES = ['dev', 'prod'];
 
@@ -54,9 +59,12 @@ export async function run(argv, deps = {}) {
   const io = { stdout, stderr, deps };
 
   if (argv[0] === 'login' || argv[0] === 'logout') return account(argv[0], argv.slice(1), io);
+  if (argv[0] === 'next') return next(argv.slice(1), io);
+  if (argv[0] === 'close') return close(argv.slice(1), io);
+  if (argv[0] === 'sessions') return sessions(argv.slice(1), io);
 
   const scanned = scanArgs(argv, {
-    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding'],
+    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
@@ -85,6 +93,10 @@ export async function run(argv, deps = {}) {
   }
   if (flags.compare && where === 'prod') {
     stderr.write('mc: --compare is for dev — production has one tree\n');
+    return 2;
+  }
+  if (flags.keep && flags.compare) {
+    stderr.write('mc: --keep keeps one browser and --compare runs two\n');
     return 2;
   }
   if (flags.compare && flags.out) {
@@ -151,6 +163,7 @@ export async function run(argv, deps = {}) {
   let signIn = null;
   let who = flags.account || 'seeded';
   let served = null;
+  let serverId = null;
   let resolved = null;
   const secrets = [];
   if (where === 'dev') {
@@ -161,6 +174,7 @@ export async function run(argv, deps = {}) {
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
     served = (deps.servedTree || servedTree)(worktree, app.server);
+    serverId = app.server?.instance_id ?? null;
     if (!flags.json) stderr.write(`mc: ${flags.compare ? 'here: ' : ''}serving ${served.line}\n`);
     who = resolved.account;
     signIn = { kind: 'url', url: `${baseUrl}${resolved.path}` };
@@ -217,6 +231,24 @@ export async function run(argv, deps = {}) {
     timeoutMs: timeout.timeoutMs,
   });
   const scrub = scrubber(secrets);
+  if (flags.keep) {
+    return keep({
+      worktree,
+      declared,
+      request,
+      session: {
+        where, worktree, account: who, target: word, viewport: viewport.label, base_url: baseUrl, server_id: serverId,
+        ...(where === 'dev' ? { sign_in_path: resolved.path } : {}),
+      },
+      served,
+      env: withoutToken(env, declaration),
+      flags,
+      scrub,
+      stdout,
+      stderr,
+      deps,
+    });
+  }
   if (flags.compare) {
     return runCompare({
       worktree,
@@ -238,7 +270,24 @@ export async function run(argv, deps = {}) {
   }
   const ran = (deps.runCapture || runCapture)({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
   if (!ran.ok) { stderr.write(`mc: ${scrub(ran.error)}\n`); return 1; }
-  const { result } = ran;
+  return answer(ran.result, {
+    request, served, who, json: flags.json, open: flags.open, scrub, stdout, stderr, deps,
+  });
+}
+
+/**
+ * A capture's result line, printed: the path alone first, the URL, the measure
+ * line, the access line, then what the shot met (`reportLines`) and the
+ * warnings — or `--json`'s object. The exit code: 1 for a failure, a step that
+ * failed or a gate that did not hold, else 0. A kept browser's every step is
+ * printed here too (src/mc/commands/shot-session.js), so a session reads a
+ * step as it reads a shot; `picture: false` is a step asked for no picture,
+ * which answers without the path line.
+ */
+export function answer(result, {
+  request, served = null, who = null, json = false, open = false, picture = true,
+  scrub = (text) => String(text), stdout, stderr, deps = {},
+}) {
   if (!result.ok) {
     stderr.write(`mc: ${scrub(result.error || result.code || 'the capture failed')}\n`);
     // A page that crashed before the picture still says why.
@@ -246,7 +295,7 @@ export async function run(argv, deps = {}) {
     if (result.code === 'not-signed-in' && who === 'me') stderr.write('mc shot login prod\n');
     return 1;
   }
-  if (typeof result.file !== 'string' || !result.file) {
+  if (picture && (typeof result.file !== 'string' || !result.file)) {
     stderr.write('mc: the capture script said ok and named no file\n');
     return 1;
   }
@@ -259,10 +308,10 @@ export async function run(argv, deps = {}) {
   // What the shot met, in the same call. An error is information; only a
   // failed step (pictured as the page stood) makes the exit 1.
   const report = reportLines(result);
-  if (flags.json) {
+  if (json) {
     stdout.write(`${scrub(JSON.stringify(served ? { ...result, served } : result, null, 2))}\n`);
   } else {
-    stdout.write(`${result.file}\n`);
+    if (picture) stdout.write(`${result.file}\n`);
     if (result.url) stdout.write(`${scrub(result.url)}\n`);
     // The numbers, one line, after the path: what a layout question turns on.
     if (result.measure) stdout.write(`${scrub(JSON.stringify({ measure: result.measure, safe_area: result.safe_area ?? null }))}\n`);
@@ -271,7 +320,7 @@ export async function run(argv, deps = {}) {
     for (const warning of result.warnings || []) stdout.write(`mc: warning — ${scrub(warning)}\n`);
   }
   if (access?.failed) stderr.write(`mc: ${scrub(access.line)}\n`);
-  if (flags.open) openFile(result.file, deps);
+  if (open && picture && result.file) openFile(result.file, deps);
   return access?.failed || report.failed ? 1 : 0;
 }
 
@@ -388,7 +437,7 @@ function scrubber(secrets) {
   return (text) => live.reduce((out, secret) => out.split(secret).join('<redacted>'), String(text));
 }
 
-function openFile(file, deps) {
+export function openFile(file, deps) {
   const how = openCommandFor((deps.platform || platform)());
   if (!how) return;
   const child = (deps.spawn || spawn)(how.cmd, [...how.args, file], { detached: true, stdio: 'ignore' });
@@ -436,7 +485,16 @@ export function usage() {
     '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
     '          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n',
     '                                      --compare <sha> pins the tree and its database\n',
+    '          [--keep]                    keep the browser open for mc shot next\n',
     '          [--out <file.png>] [--open] [--json]\n',
+    '        mc shot next [<id>] [step flags]   one more step on a kept browser, answered as a shot;\n',
+    '                                      the step flags are the seven acting flags, --wait-for,\n',
+    '                                      --scroll, --measure, --el, --shell, --full, --timeout,\n',
+    '                                      --out, --json, --open, and --goto <path|target> (go there\n',
+    '                                      in the app), --reload, --no-shot (answer without a picture);\n',
+    '                                      without an id, this worktree\'s most recently used session\n',
+    '        mc shot close [<id>|--all]    end a kept browser\n',
+    '        mc shot sessions              the kept browsers, and how long each has been idle\n',
     '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
     '        mc shot login prod            sign in once in a browser; mc keeps the session\n',
     '        mc shot login prod --paste    …or pipe it in: the memoro_session cookie value from\n',
@@ -458,5 +516,13 @@ export function usage() {
     'Example — the bottom of the main chat on a phone, with its numbers:\n',
     '  mc shot dev assistant --viewport iphone --scroll \'.window-view__content\' \\\n',
     '    --measure \'.window-view__content, .assistant-layout__footer, .assistant-summon\'\n',
+    '\n',
+    'A kept browser holds the page between calls, so each step is one call and what the page\n',
+    'holds in memory stays; a failed step leaves the page where it stood. A dev session whose\n',
+    'tree was edited has its server restarted and the page opened again on it. At most four are\n',
+    'kept; a fifth --keep closes the longest idle. Example — set up a vault, then take one step:\n',
+    '  mc shot dev /app/tools/vault --keep --fill \'input[name=setupPassword]=…\' \\\n',
+    '    --click \'text=Create Vault\' --timeout 30\n',
+    '  mc shot next --click \'text=New entry\' --eval \'document.activeElement.name\'\n',
   ].join('');
 }
