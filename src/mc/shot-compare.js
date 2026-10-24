@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { serversUnder, stopServer } from './dev-servers.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
-import { clickGap, runCapture } from './shot.js';
+import { actionGap, runCapture } from './shot.js';
 import { ensureAppServer, readDeclaration, serversFor } from './test-environment.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -258,7 +258,7 @@ export async function runCompare({
       stderr.write(`mc: ${label}: the capture script said ok and named no file\n`);
       return 1;
     }
-    const gap = clickGap(req, result);
+    const gap = actionGap(req, result);
     if (gap) { stderr.write(`mc: ${label}: ${scrub(gap)}\n`); return 1; }
     results[side] = result;
   }

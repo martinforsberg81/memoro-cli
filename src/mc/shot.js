@@ -144,6 +144,54 @@ export function parseScroll(value) {
   return { ok: false, error: `--scroll ${text}: after @ comes end, top or a number of pixels` };
 }
 
+const ACTING_FLAGS = ['--click', '--context-click', '--long-press', '--fill'];
+const LONG_PRESS_MS = 600;
+
+/**
+ * The acting flags, in the order they were written: `--click <css>`,
+ * `--context-click <css>`, `--long-press <css>[@<ms>]` (600 ms unless said) and
+ * `--fill <css>=<text>`. scanArgs keeps each flag's values apart, so the order
+ * across flags is read here from argv: each acting flag takes the word after it.
+ */
+export function parseActions(argv) {
+  const actions = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const flag = argv[i];
+    if (!ACTING_FLAGS.includes(flag)) continue;
+    const value = argv[i + 1];
+    if (value === undefined) return { ok: false, error: `${flag} needs a value` };
+    i += 1;
+    if (flag === '--long-press') {
+      const press = parseLongPress(value);
+      if (!press.ok) return press;
+      actions.push({ kind: 'long-press', selector: press.selector, ms: press.ms });
+    } else if (flag === '--fill') {
+      const fill = parseFill(value);
+      if (!fill.ok) return fill;
+      actions.push({ kind: 'fill', selector: fill.selector, text: fill.text });
+    } else {
+      actions.push({ kind: flag === '--click' ? 'click' : 'context-click', selector: value });
+    }
+  }
+  return { ok: true, actions };
+}
+
+/** `<css>[@<ms>]`: the selector, and how long to hold it. */
+function parseLongPress(value) {
+  const match = /@(\d+)$/u.exec(value);
+  const selector = (match ? value.slice(0, match.index) : value).trim();
+  if (!selector) return { ok: false, error: '--long-press takes <css>[@<ms>]' };
+  return { ok: true, selector, ms: match ? Number(match[1]) : LONG_PRESS_MS };
+}
+
+/** `<css>=<text>`, split at the first `=`: the text may hold more of them. */
+function parseFill(value) {
+  const eq = value.indexOf('=');
+  const selector = eq < 0 ? '' : value.slice(0, eq).trim();
+  if (!selector) return { ok: false, error: '--fill takes <css>=<text>' };
+  return { ok: true, selector, text: value.slice(eq + 1) };
+}
+
 /**
  * The `accounts` table `.mc/shot.json` declares, or null for an older memoro
  * that declares none — then `DEV_ACCOUNTS` and the two sign-in paths stand.
@@ -240,12 +288,20 @@ export function outPath({
   return join(dir, `${parts.join('-')}.png`);
 }
 
-/** The capture request, in the shape the contract fixes. */
+/**
+ * The capture request, in the shape the contract fixes. `actions` is every
+ * acting flag in order, or null. `click` is the plain presses for a script that
+ * knows only those: the same selectors when every action is a click, else null.
+ */
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
   theme = null, locale = null, out, safeArea = null, waitFor = null, scroll = null, measure = null,
-  onboarding = false, click = null,
+  onboarding = false, click = null, actions = null,
 }) {
+  const acts = Array.isArray(actions) && actions.length ? actions.map((a) => ({ ...a })) : null;
+  const plain = acts
+    ? (acts.every((a) => a.kind === 'click') ? acts.map((a) => a.selector) : null)
+    : (Array.isArray(click) && click.length ? [...click] : null);
   return {
     mode: 'capture',
     base_url: baseUrl,
@@ -264,7 +320,8 @@ export function buildRequest({
     scroll,
     measure,
     onboarding: Boolean(onboarding),
-    click: Array.isArray(click) && click.length ? [...click] : null,
+    click: plain,
+    actions: acts,
   };
 }
 
@@ -291,15 +348,21 @@ export function parseResult(stdout, { status = 0 } = {}) {
 }
 
 /**
- * A capture asked to click and answered by a script that does not say it
- * clicked as many: the picture is of the page without the clicks. The sentence,
- * or null when nothing was asked or every click was answered.
+ * A capture asked to act and answered by a script that does not say it did as
+ * much: the picture is of the page without the actions. Plain clicks alone are
+ * answered in `clicked`, one entry per click, as they always were; any other
+ * kind is answered in `acted`, one entry per action. The sentence, or null when
+ * nothing was asked or everything was answered.
  */
-export function clickGap(request, result) {
-  const asked = Array.isArray(request?.click) ? request.click : [];
+export function actionGap(request, result) {
+  const asked = Array.isArray(request?.actions) ? request.actions : [];
   if (!asked.length) return null;
-  if (Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
-  return `the picture at ${result?.file} was taken without the clicks — this memoro's capture script does not answer clicked, so --click is not supported yet (memoro's scripts/shot/shot.mjs has to honour request.click)`;
+  if (asked.every((action) => action.kind === 'click')) {
+    if (Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
+    return `the picture at ${result?.file} was taken without the clicks — this memoro's capture script does not answer clicked, so --click is not supported yet (memoro's scripts/shot/shot.mjs has to honour request.click)`;
+  }
+  if (Array.isArray(result?.acted) && result.acted.length === asked.length) return null;
+  return `the picture at ${result?.file} was taken without the actions — this memoro's capture script does not answer acted, so --context-click, --long-press and --fill are not supported yet (memoro's scripts/shot/shot.mjs has to honour request.actions)`;
 }
 
 /**

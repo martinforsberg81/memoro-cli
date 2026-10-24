@@ -15,8 +15,8 @@ import { describe, it } from 'node:test';
 
 import { run, servedTree, usage } from '../../src/mc/commands/shot.js';
 import {
-  accessLine, buildRequest, clickGap, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget,
-  slug, targetRequires,
+  accessLine, actionGap, buildRequest, outPath, parseActions, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount,
+  resolveTarget, slug, targetRequires,
 } from '../../src/mc/shot.js';
 
 const TOKEN = 'tok-5ecret-7e57';
@@ -39,7 +39,7 @@ if (how === 'not-signed-in') {
 if (request.mode === 'login') { console.log(JSON.stringify({ ok: true, session: '${COOKIE}' })); process.exit(0); }
 writeFileSync(request.out, Buffer.from('89504e470d0a1a0a', 'hex'));
 console.log('some progress on stdout');
-console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, safe_area: request.safe_area, ...(request.measure ? { measure: [{ element: 'main.window-view__content', rect: { top: 0, bottom: 844 } }] } : {}), warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [], ...(request.click && how !== 'no-clicked' ? { clicked: request.click } : {}) }));
+console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, safe_area: request.safe_area, ...(request.measure ? { measure: [{ element: 'main.window-view__content', rect: { top: 0, bottom: 844 } }] } : {}), warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [], ...(request.click && how !== 'no-clicked' ? { clicked: request.click } : {}), ...(request.actions && how !== 'no-acted' ? { acted: request.actions } : {}) }));
 `;
 
 const SHOT_JSON = {
@@ -198,11 +198,12 @@ describe('mc shot — the pieces', () => {
     });
     assert.deepEqual(Object.keys(request), [
       'mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out',
-      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click',
+      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click', 'actions',
     ]);
     assert.equal(request.onboarding, false);
     assert.equal(request.full_page, false);
     assert.equal(request.click, null);
+    assert.equal(request.actions, null);
   });
 
   it('click reaches the request in order, and nothing asked is a null click', () => {
@@ -211,12 +212,53 @@ describe('mc shot — the pieces', () => {
     assert.equal(buildRequest({ ...base, click: [] }).click, null);
   });
 
-  it('clickGap is silent when every click is answered, and names the picture when one is not', () => {
-    const request = { click: ['.tab', 'text=Save'] };
-    assert.equal(clickGap(request, { file: '/o.png', clicked: ['.tab', 'text=Save'] }), null);
-    assert.equal(clickGap({ click: null }, { file: '/o.png' }), null, 'nothing asked, nothing to say');
-    assert.match(clickGap(request, { file: '/o.png' }), /^the picture at \/o\.png was taken without the clicks/u);
-    assert.match(clickGap(request, { file: '/o.png', clicked: ['.tab'] }), /without the clicks/u, 'one answer short');
+  it('actions reach the request in order: click for clicks only, null once a fill or a press is among them', () => {
+    const base = { baseUrl: 'http://127.0.0.1:8787', account: 'seeded', signIn: { kind: 'url', url: 'u' }, target: { name: 'home' }, viewport: 'desktop', out: '/o.png' };
+    const clicks = [{ kind: 'click', selector: '.tab' }, { kind: 'click', selector: 'text=Save' }];
+    const onlyClicks = buildRequest({ ...base, actions: clicks });
+    assert.deepEqual(onlyClicks.actions, clicks);
+    assert.deepEqual(onlyClicks.click, ['.tab', 'text=Save']);
+    const mixed = [{ kind: 'click', selector: '.tab' }, { kind: 'fill', selector: 'input', text: 'hi' }];
+    const withFill = buildRequest({ ...base, actions: mixed });
+    assert.deepEqual(withFill.actions, mixed);
+    assert.equal(withFill.click, null);
+    assert.equal(buildRequest({ ...base, actions: [] }).actions, null);
+    assert.equal(buildRequest(base).actions, null);
+  });
+
+  it('parseActions keeps argv order across the four flags', () => {
+    assert.deepEqual(parseActions(['dev', 'home', '--click', 'a', '--fill', 'b=hi', '--context-click', 'c', '--long-press', 'd@800']), {
+      ok: true,
+      actions: [
+        { kind: 'click', selector: 'a' },
+        { kind: 'fill', selector: 'b', text: 'hi' },
+        { kind: 'context-click', selector: 'c' },
+        { kind: 'long-press', selector: 'd', ms: 800 },
+      ],
+    });
+    assert.deepEqual(parseActions(['--long-press', 'd']), { ok: true, actions: [{ kind: 'long-press', selector: 'd', ms: 600 }] });
+    assert.deepEqual(parseActions(['--fill', 'a=b=c', '--fill', 'd=']), {
+      ok: true, actions: [{ kind: 'fill', selector: 'a', text: 'b=c' }, { kind: 'fill', selector: 'd', text: '' }],
+    });
+    assert.deepEqual(parseActions(['dev', 'home']), { ok: true, actions: [] });
+  });
+
+  it('parseActions refuses a fill with no = or no selector, and a long press with no selector', () => {
+    assert.deepEqual(parseActions(['--fill', 'b']), { ok: false, error: '--fill takes <css>=<text>' });
+    assert.deepEqual(parseActions(['--fill', '=hi']), { ok: false, error: '--fill takes <css>=<text>' });
+    assert.deepEqual(parseActions(['--long-press', '@800']), { ok: false, error: '--long-press takes <css>[@<ms>]' });
+  });
+
+  it('actionGap is silent when acted has the same length, names the picture when it is missing, and keeps the clicked rule for clicks', () => {
+    const mixed = { actions: [{ kind: 'click', selector: '.tab' }, { kind: 'fill', selector: 'input', text: 'hi' }] };
+    assert.equal(actionGap(mixed, { file: '/o.png', acted: mixed.actions }), null);
+    assert.match(actionGap(mixed, { file: '/o.png', clicked: ['.tab'] }), /^the picture at \/o\.png was taken without the actions — .*--context-click, --long-press and --fill/u);
+    assert.match(actionGap(mixed, { file: '/o.png', acted: [{}] }), /without the actions/u, 'one answer short');
+    const clicks = { actions: [{ kind: 'click', selector: '.tab' }, { kind: 'click', selector: 'text=Save' }] };
+    assert.equal(actionGap(clicks, { file: '/o.png', clicked: ['.tab', 'text=Save'] }), null);
+    assert.equal(actionGap({ actions: null }, { file: '/o.png' }), null, 'nothing asked, nothing to say');
+    assert.match(actionGap(clicks, { file: '/o.png' }), /^the picture at \/o\.png was taken without the clicks/u);
+    assert.match(actionGap(clicks, { file: '/o.png', clicked: ['.tab'] }), /without the clicks/u, 'one answer short');
   });
 });
 
@@ -365,6 +407,28 @@ describe('mc shot — the run', () => {
     const result = await shot(['dev', 'home'], fx, { behaviour: 'no-clicked' });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(sideOf(fx).request.click, null);
+  });
+
+  it('the acting flags reach the request in the order given, and a script that does not answer acted is refused', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--click', '.tab', '--fill', 'input.name=Ada', '--context-click', '.chip', '--long-press', '.chip@800'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    const { request } = sideOf(fx);
+    assert.deepEqual(request.actions, [
+      { kind: 'click', selector: '.tab' },
+      { kind: 'fill', selector: 'input.name', text: 'Ada' },
+      { kind: 'context-click', selector: '.chip' },
+      { kind: 'long-press', selector: '.chip', ms: 800 },
+    ]);
+    assert.equal(request.click, null);
+    assert.equal(result.stdout.split('\n')[0], request.out);
+    const old = await shot(['dev', 'home', '--context-click', '.chip'], fx, { behaviour: 'no-acted' });
+    assert.equal(old.code, 1);
+    assert.match(old.stderr, /mc: the picture at .* was taken without the actions/u);
+    assert.equal(old.stdout, '');
+    const bad = await shot(['dev', 'home', '--fill', 'input'], fx);
+    assert.equal(bad.code, 2);
+    assert.equal(bad.stderr, 'mc: --fill takes <css>=<text>\n');
   });
 });
 
