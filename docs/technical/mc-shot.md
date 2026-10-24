@@ -15,8 +15,8 @@ The work is split between the two repositories, and they meet in one place:
   [`src/mc/shot.js`](../../src/mc/shot.js) holds the parts.
 - **memoro owns the app**: `.mc/shot.json` in memoro names the capture script,
   the targets, the shells and the viewports, and the script drives the browser.
-  It is built by memoro's `shot-capture` project
-  (`docs/project/test-architecture/shot-capture/PLAN.json` in memoro). mc knows
+  It was built by memoro's `shot-capture` project
+  (archived: its row of 2026-09-26 in memoro's `docs/project/project_log.md`). mc knows
   no selector, and this document does not repeat the targets: read
   `.mc/shot.json`, or run `mc shot dev --list`.
 
@@ -212,8 +212,7 @@ from the script's environment, so a token exported in your shell reaches the
 script only through the request file. Capture mode sends `mode`, `base_url`,
 `account`, `sign_in`, `target`, `element`, `shell`, `full_page`, `viewport`,
 `theme`, `locale` and `out`. Login mode sends `mode`, `base_url`, `account` and
-`profile_dir`. The shape is fixed in the project's contract
-([`PLAN.json`](../project/mc/mc-shot/PLAN.json)).
+`profile_dir`. The shape is fixed in the `mc-shot` project's contract (its row of 2026-09-26 in `docs/project/project_log.md`).
 
 Capture mode also sends `click` and `actions`. `actions` is every acting flag in
 the order given, one object each: `{ kind, selector }`, with `text` on a `fill`

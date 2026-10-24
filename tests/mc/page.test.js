@@ -2756,7 +2756,7 @@ describe('the palette', () => {
     // The two fallbacks are rows of their own in the doc, and they are the
     // colours `kindTone` and `statusTone` reach for when the table has no key.
     assert.ok(/\| anything else \| grey \|/u.test(doc));
-    assert.ok(/\| no plan on main \| grey \|/u.test(doc));
+    assert.ok(/\| no plan \| grey \|/u.test(doc));
     // And no row of any table in the document names a colour the page has
     // stopped drawing. The prose above them may still explain what `dim grey`
     // and `white` were; a table row saying so would be a table that lies.

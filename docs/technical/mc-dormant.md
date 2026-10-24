@@ -19,7 +19,7 @@ was written in a workarea, which no checkout contains and nothing keeps.
 
 | the PM did | now |
 |---|---|
-| triage: what to work on next | `mc run` — the queue is `~/mc/queue.md` and every `ready` plan on `origin/main` |
+| triage: what to work on next | `mc run` — the queue is `~/mc/queue.md` and every plan under `~/mc/programs/` with a `ready` step |
 | holding the queue | the same; `queue.md` is a strict list of names that empties itself |
 | taking questions to Martin | `mc brief` — the proposals waiting in `~/mc/proposals/` are the agenda |
 | waking the sessions that stalled | nobody; a step session is one fresh headless conversation that ends |

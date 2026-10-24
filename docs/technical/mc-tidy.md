@@ -364,11 +364,9 @@ squash-merge case (branch ahead, plan done, last run merged → closable), the
 dirty case, the missing-plan case and the live-session refusal.
 `tests/mc/run.test.js` drives the chore pass against fake git, gh and tmux —
 the archive PR, the hold-off while one is open, the intake files, the queue
-rewrite. `tests/mc/archive-live.test.js` and `tests/mc/close-live.test.js`
-run the same against real git repositories and a real work root, which is
-where a row already written is left alone and a programme left empty by its
-last project is seen to go with it: `git rm -r` and `git worktree remove` are
-the two calls whose behaviour a fake would only assert back at itself.
+rewrite. `tests/mc/close-live.test.js` runs the same against real git repositories
+and a real work root, which is where `git worktree remove` is the call whose
+behaviour a fake would only assert back at itself.
 `tests/mc/brief-collect.test.js` covers the two sections that raise the
 intake files, including the absent-versus-empty answer.
 `tests/mc/tidy.test.js` runs `mc tidy` over a temp home with git faked: each
