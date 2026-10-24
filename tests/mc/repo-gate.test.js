@@ -1431,6 +1431,7 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'red');
         assert.match(report.reason, /broken by the change/u);
+        assert.match(report.reason, /broken by the change.* — and 1 command gate the selection chose failed: css:lint \(exit 2\)$/u);
         assert.deepEqual(report.extra_gates.map((gate) => [gate.name, gate.ok]), [['sql:pr-ci', true], ['css:lint', false]]);
       } finally { fx.cleanup(); }
     });

@@ -496,7 +496,7 @@ was sequentially: every gate runs and is judged and is reported in
 `selected-gate` with every failure named; a suite that could not be measured
 is the suite's stop, with the gates that ran listed; and a half that throws is
 waited out with the other and then thrown, so nothing turns green because one
-half threw. Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
+half threw. A round red in its tests names its failed gates in the same reason, and the mend prompt lists each with its last output, because the mend gets one try (memoro #14169, 2026-10-24). Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
 2026-10-11 07:19 UTC): within a round the two together took 320 s mean where
 suite plus gates add up to 546 s, so the overlap saves 226 s a round — but
 beside the suite the gates are slower, 161 s at the median against 36 s when

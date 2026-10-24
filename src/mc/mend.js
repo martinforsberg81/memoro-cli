@@ -127,6 +127,7 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
   const red = redFilesOf(report);
   const conflicts = conflictPaths(report?.reason);
   const conflict = stop === 'merge' || stop === 'restack';
+  const failedGates = ((report?.gate || report || {}).extra_gates || []).filter((gate) => gate.ok === false && gate.unavailable !== true);
   const out = [
     `You are mending ${job.repo} #${job.pr}${title ? ` — ${title}` : ''}, branch \`${branch}\`.`,
     `The worktree you stand in is \`origin/${branch}\`, detached. The merger measured it and it did not land:`,
@@ -139,6 +140,10 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
     out.push(...redLines({ files: red, detail: handed?.detail || null, names: handed?.names || [] }).map((line) => `    ${line}`));
   }
   if (conflicts.length) out.push(`    conflicts in: ${conflicts.join(' ')}`);
+  for (const gate of failedGates) {
+    out.push(`    failed command gate: ${gate.name} (exit ${gate.exit_code})`);
+    if (gate.output) out.push(...String(gate.output).trimEnd().split('\n').slice(-15).map((line) => `        ${line}`));
+  }
   if (step) {
     out.push('', `It is ${job.step.project} step ${job.step.index + 1}${step.title ? `, "${step.title}"` : ''}. What it was for:`, '');
     if (step.done_when) out.push(`done_when: ${step.done_when}`, '');
@@ -154,6 +159,7 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
     red.length
       ? `- Run \`mc gate ${red.join(' ')}\` until they are green — never the whole suite: the merger measures it after you.`
       : '- Run the tests the fix reaches with `mc gate <files…>` until they are green — never the whole suite: the merger measures it after you.',
+    ...failedGates.map((gate) => `- Run \`npm run ${gate.name}\` until it passes, for each failed command gate above.`),
     `- Commit, then \`mc publish --branch ${branch}\` — it pushes without force, lists the commit under the pull request's description and queues nothing: the merger measures the moved branch. Never \`git push\`.`,
     '- Edit no `PLAN.json`.',
     '- If it cannot be fixed here, push nothing and say why in your last line.',
