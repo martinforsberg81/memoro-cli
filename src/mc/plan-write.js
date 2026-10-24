@@ -74,6 +74,41 @@ export function dependencyWords(text) {
   return matchesOf(DEPENDENCY_WORDS, text);
 }
 
+/** The `node --test` command word, wherever it is written. */
+const NODE_TEST = /\bnode\s+--test\b/gu;
+
+/** A shell word that ends a `node --test` command: a list, a pipe, a redirect. */
+function endsCommand(token) {
+  return token === '&&' || token === '||' || token === ';' || token === '|' || token.startsWith('>') || token.startsWith('2>');
+}
+
+/** A word that names a directory: a `/` in it, no `*`, and not a script. */
+function looksLikeDirectory(word) {
+  return word.includes('/') && !word.includes('*') && !/\.(?:m|c)?js$|\.ts$/u.test(word);
+}
+
+/**
+ * The directories `node --test` is given in `text`, as written, distinct, in
+ * order — or none, and none for a text that is not a string. Node 24 tries to
+ * load a directory as a module and fails, so such a check never passes. The
+ * words after `node --test` run to the end of its shell command, or to the
+ * backtick that closes a code span around it.
+ */
+export function testDirectories(text) {
+  if (typeof text !== 'string') return [];
+  const found = new Set();
+  for (const match of text.matchAll(NODE_TEST)) {
+    for (const token of text.slice(match.index + match[0].length).trim().split(/\s+/u)) {
+      if (endsCommand(token)) break;
+      const closes = token.endsWith('`');
+      const word = token.replace(/^['"`]+/u, '').replace(/['"`,.;:)]+$/u, '');
+      if (!word.startsWith('-') && looksLikeDirectory(word)) found.add(word);
+      if (closes) break;
+    }
+  }
+  return [...found];
+}
+
 /** The names of the directories in `path`, sorted, dot-directories left out; none when it cannot be read. */
 function listDirs(path) {
   try {
