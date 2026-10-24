@@ -523,6 +523,20 @@ describe('a merge that gh refuses', () => {
  * The claims that must stay true are asserted against the source rather than
  * remembered, because remembering is what failed.
  */
+describe('a round stopped from outside ends gone, and lands nothing', () => {
+  it('a green verdict that arrives after the stop is not merged', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('merged on GitHub'));
+    const fx = fixture();
+    try {
+      const report = await fx.run({ signal: controller.signal });
+      assert.equal(report.stopped_at, 'gone');
+      assert.equal(report.reason, 'merged on GitHub');
+      assert.equal(fx.ran('gh').filter((call) => call.args[0] === 'pr' && call.args[1] === 'merge').length, 0);
+    } finally { fx.cleanup(); }
+  });
+});
+
 describe('the verb describes itself accurately', () => {
   const read = (...parts) => {
     const here = dirname(fileURLToPath(import.meta.url));

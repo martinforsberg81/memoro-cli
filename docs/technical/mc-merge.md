@@ -957,6 +957,14 @@ job(s) in flight`, answer the rounds in flight as usual (no `killed`), and
 queued waits for the next start. The gate's handler had cut the 17:47 round
 short (`repo-gate.js:318-341` then).
 
+**`signal`.** `runGate` and `runMergeRound` take an `AbortSignal`. On abort the
+test process group is killed at once (SIGKILL), no further phase starts, and a
+running command gate is waited out rather than killed; the round then ends
+`stopped_at: 'gone'` with the signal's reason, and its workspace, lease and lock
+are released as on any end. Nothing in the round reads the signal as a red or a
+stop it can fall back from: `gone` is in no fallback list. The merger's watch
+that passes the signal is the next step of round-abort.
+
 **Already merged on GitHub.** Before a round, `landJob` asks GitHub for each
 job's state (`prStateOf`). A MERGED one is answered landed by itself with
 GitHub's merge commit (`memoro #13372: already merged on GitHub as <sha> —

@@ -1363,6 +1363,34 @@ describe('a repository that selects by diff', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a round stopped before it measures anything starts no test, and ends gone', async () => {
+    const fx = selecting({ files: ['tests/a.test.js'] });
+    const controller = new AbortController();
+    controller.abort(new Error('stop here'));
+    try {
+      const report = await fx.report({ signal: controller.signal });
+      assert.equal(report.stopped_at, 'gone');
+      assert.equal(report.reason, 'stop here');
+      assert.equal(fx.runs.length, 0, 'the injected tests were never called');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a round stopped while its selected files run ends gone, not red', async () => {
+    const fx = selecting({ files: ['tests/a.test.js'] });
+    const controller = new AbortController();
+    try {
+      const report = await fx.report({
+        signal: controller.signal,
+        tests: async () => {
+          controller.abort(new Error('merged on GitHub'));
+          return { code: null, tap: '', aborted: true };
+        },
+      });
+      assert.equal(report.stopped_at, 'gone');
+      assert.equal(report.reason, 'merged on GitHub');
+    } finally { fx.cleanup(); }
+  });
+
   describe('command gates beside the suite', () => {
     const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
     const twoGates = [
@@ -2849,6 +2877,27 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(tapTotals(run.tap).pass, 2, 'the other tests, in both files, still pass');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
+
+  it('realTests: a round stopped from outside kills its test process at once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-abort-'));
+    try {
+      writeFileSync(join(dir, 'slow.test.js'), "import { test } from 'node:test';\ntest('slow', async () => { await new Promise((r) => setTimeout(r, 60_000)); });\n");
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 300);
+      const started = Date.now();
+      const run = await realTests({ cwd: dir, files: ['slow.test.js'], flags: ['--no-warnings'], env: { PATH: process.env.PATH }, lanes: 1, signal: controller.signal });
+      assert.equal(run.aborted, true);
+      assert.ok(Date.now() - started < 10_000, 'killed, not waited out');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('realTests: a round already stopped spawns nothing', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('stop here'));
+    const run = await realTests({ cwd: tmpdir(), files: ['never.test.js'], flags: ['--no-warnings'], env: { PATH: process.env.PATH }, signal: controller.signal });
+    assert.equal(run.aborted, true);
+    assert.equal(run.tap, '');
+  });
 
   it('TEST_TIMEOUT_MS: ten minutes, the default per-test timeout of every selected file', () => {
     assert.equal(TEST_TIMEOUT_MS, 600_000);

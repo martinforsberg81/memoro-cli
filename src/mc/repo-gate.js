@@ -79,6 +79,15 @@ export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
 
 /**
+ * Thrown by a phase that would start after the round was stopped from outside
+ * (`runGate`'s `signal`). The round catches it and ends `stopped_at: 'gone'`.
+ */
+export class RoundAborted extends Error {}
+
+/** The reason an aborted signal carries, as the round words it. */
+function abortReason(signal) { return String(signal?.reason?.message || signal?.reason || 'the round was stopped'); }
+
+/**
  * Where the throwaway worktree lives: under the work root, never inside the
  * repository.
  *
@@ -149,6 +158,8 @@ export async function runGate({
   // this round, which is the merger's pid in a merge.
   holderPid = process.pid,
   onProgress = () => {},
+  // Stops the round from outside: step 2 of round-abort, the merger's watch.
+  signal = null,
   clock = () => Date.now(),
   // Whether the round owns the lease or is running inside somebody else's.
   //
@@ -217,8 +228,8 @@ export async function runGate({
   // gate the free cores (`testLanes`). The round record names both.
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = testLanes({ env, load, mode: gateMode });
-  const runSuite = suite || ((options) => realSuite({ ...options, env, lanes }));
-  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses }));
+  const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal }));
+  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal }));
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
@@ -306,6 +317,7 @@ export async function runGate({
     duration_ms: null,
   };
   const timed = async (step, fn) => {
+    if (signal?.aborted) throw new RoundAborted(abortReason(signal));
     const from = clock();
     try { return await fn(); } finally {
       report.timings[step] = (report.timings[step] || 0) + (clock() - from);
@@ -1020,6 +1032,9 @@ export async function runGate({
         : Promise.resolve([]),
     ]);
     if (runCommands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
+    // A command gate that was running when the signal came was waited out, not
+    // killed (they run under three minutes); the round stops here.
+    if (signal?.aborted) return finish('gone', abortReason(signal));
     const thrown = halves.find((half) => half.status === 'rejected');
     if (thrown) throw thrown.reason;
     const [after, selectedGates] = halves.map((half) => half.value);
@@ -1150,6 +1165,9 @@ export async function runGate({
     }
 
     return finish(null, null);
+  } catch (error) {
+    if (error instanceof RoundAborted) return finish('gone', error.message);
+    throw error;
   } finally {
     for (const signal of caught) process.off(signal, onSignal);
     await clearWorkspace({ git: askGit, repoPath, workspace });
@@ -1263,6 +1281,7 @@ function scopeOf(report) {
 async function measure({ suite, git, cwd, command, say, is }) {
   const at = await git(['rev-parse', 'HEAD'], { cwd });
   const run = await suite({ cwd, command, onLine: (line) => say(line) });
+  if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (!totals.finished) {
@@ -1560,6 +1579,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
   const at = await git(['rev-parse', 'HEAD'], { cwd });
   const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
   const run = await tests({ cwd, files, flags, onLine: (line) => say(line) });
+  if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (!totals.finished) {
@@ -2159,25 +2179,28 @@ export function testBatches(files, classes = {}, lanes = 1) {
  * as one result: the TAP of each batch in order (`tapTotals` adds up one
  * summary per process), the first non-zero exit, and the time budget shared.
  */
-export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {} } = {}) {
+export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null } = {}) {
   const batches = testBatches(files, classes, lanes);
-  if (batches.length <= 1) return runTestBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes });
+  if (batches.length <= 1) return runTestBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal });
   const started = Date.now();
   let tap = '';
   let code = 0;
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
-    const ran = await runTestBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes });
+    const ran = await runTestBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal });
     tap += ran.tap;
     if (ran.error) return { code: -1, tap, error: ran.error };
     if (!code && ran.code) code = ran.code;
+    if (ran.aborted) return { code: ran.code ?? -1, tap, aborted: true, timeoutMs };
     if (ran.timedOut) return { code, tap, timedOut: true, timeoutMs };
   }
   return { code, tap, timedOut: false, timeoutMs, lanes };
 }
 
-function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
+function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null } = {}) {
   return new Promise((resolve) => {
+    // Stopped before it started: nothing is spawned.
+    if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
     const clean = suiteEnv(env);
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
@@ -2198,6 +2221,16 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
       detached: true,
     });
     let timedOut = false;
+    // Stopped from outside: the process group goes at once, and the close says
+    // `aborted`. A child that cannot be signalled as a group is signalled alone.
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch {
+        try { child.kill('SIGKILL'); } catch { /* gone */ }
+      }
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const settle = stopAfter(child, timeoutMs, () => { timedOut = true; });
     let tap = '';
     let pending = '';
@@ -2211,8 +2244,8 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* the verdict is in the TAP */ });
-    child.on('error', (error) => { settle(); resolve({ code: -1, tap, error: error.message }); });
-    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs, lanes: concurrency.length ? lanes : null }); });
+    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, error: error.message, aborted }); });
+    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
   });
 }
 
@@ -2281,8 +2314,10 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
+function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null } = {}) {
   return new Promise((resolve) => {
+    // Stopped before it started: nothing is spawned.
+    if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
     // The suite is started in a clean test context, not this process's.
     //
     // `NODE_TEST_CONTEXT` is set by node inside a test run, and a suite that
@@ -2310,6 +2345,16 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
       detached: true,
     });
     let timedOut = false;
+    // Stopped from outside: the process group goes at once, and the close says
+    // `aborted`. A child that cannot be signalled as a group is signalled alone.
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch {
+        try { child.kill('SIGKILL'); } catch { /* gone */ }
+      }
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const settle = stopAfter(child, timeoutMs, () => { timedOut = true; });
 
     let tap = '';
@@ -2327,7 +2372,7 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => { settle(); resolve({ code: -1, tap, error: error.message }); });
-    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs }); });
+    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, error: error.message, aborted }); });
+    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted }); });
   });
 }
