@@ -6,7 +6,9 @@
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
  *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
  *           [--click <selector>]… [--context-click <css>]… [--long-press <css>[@ms]]…
- *           [--fill <css>=<text>]… [--account <name>] [--onboarding] [--me] [--here]
+ *           [--fill <css>=<text>]… [--eval <js> | --eval-file <path>]…
+ *           [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
+ *           [--account <name>] [--onboarding] [--me] [--here]
  *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
@@ -20,7 +22,9 @@
  * hands it one request file and reads back one result line (src/mc/shot.js).
  *
  * The file's path is the first line on stdout, alone, so a caller can take
- * `$(mc shot … | head -1)`; every progress line goes to stderr. A token or a
+ * `$(mc shot … | head -1)`; every progress line goes to stderr. What the shot
+ * met — the page's errors, each `--eval`'s value, a step that failed — comes
+ * after it, in the same call (`reportLines`). A token or a
  * session is never printed, never in `--json`, never in argv.
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -34,7 +38,8 @@ import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
   SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, actionGap, buildLoginRequest, buildRequest, outPath,
-  parseActions, parseSafeArea, parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
+  errorLines, parseActions, parseSafeArea, parseScroll, parseTimeout, parseViewport, readShotDeclaration, reportLines, resolveAccount,
+  resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
   ensureAppServer, NO_SHARED_WORKTREE, readDeclaration, sharedWorktree, tokenFor,
@@ -54,9 +59,9 @@ export async function run(argv, deps = {}) {
     booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
     ],
-    repeatable: ['--click', '--context-click', '--long-press', '--fill'],
+    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -91,8 +96,10 @@ export async function run(argv, deps = {}) {
   const scroll = parseScroll(flags.scroll);
   if (!scroll.ok) { stderr.write(`mc: ${scroll.error}\n`); return 2; }
   // The acting flags in the order given; --click's count must agree with scanArgs'.
-  const acting = parseActions(argv);
+  const acting = parseActions(argv, { cwd: deps.cwd || process.cwd(), deps });
   if (!acting.ok) { stderr.write(`mc: ${acting.error}\n`); return 2; }
+  const timeout = parseTimeout(flags.timeout);
+  if (!timeout.ok) { stderr.write(`mc: ${timeout.error}\n`); return 2; }
   if (acting.actions.filter((action) => action.kind === 'click').length !== flags.click.length) {
     stderr.write('mc: --click was read two ways — report it\n');
     return 2;
@@ -207,6 +214,7 @@ export async function run(argv, deps = {}) {
     measure: flags.measure,
     onboarding: resolved?.state === 'fresh',
     actions: acting.actions,
+    timeoutMs: timeout.timeoutMs,
   });
   const scrub = scrubber(secrets);
   if (flags.compare) {
@@ -233,6 +241,8 @@ export async function run(argv, deps = {}) {
   const { result } = ran;
   if (!result.ok) {
     stderr.write(`mc: ${scrub(result.error || result.code || 'the capture failed')}\n`);
+    // A page that crashed before the picture still says why.
+    for (const line of errorLines(result)) stderr.write(`${scrub(line)}\n`);
     if (result.code === 'not-signed-in' && who === 'me') stderr.write('mc shot login prod\n');
     return 1;
   }
@@ -246,6 +256,9 @@ export async function run(argv, deps = {}) {
   // A gated target's verdict: the picture is taken either way, and a gate
   // that did not hold makes the exit 1.
   const access = accessLine(result.access);
+  // What the shot met, in the same call. An error is information; only a
+  // failed step (pictured as the page stood) makes the exit 1.
+  const report = reportLines(result);
   if (flags.json) {
     stdout.write(`${scrub(JSON.stringify(served ? { ...result, served } : result, null, 2))}\n`);
   } else {
@@ -254,11 +267,12 @@ export async function run(argv, deps = {}) {
     // The numbers, one line, after the path: what a layout question turns on.
     if (result.measure) stdout.write(`${scrub(JSON.stringify({ measure: result.measure, safe_area: result.safe_area ?? null }))}\n`);
     if (access && !access.failed) stdout.write(`${scrub(access.line)}\n`);
+    for (const line of report.lines) stdout.write(`${scrub(line)}\n`);
     for (const warning of result.warnings || []) stdout.write(`mc: warning — ${scrub(warning)}\n`);
   }
   if (access?.failed) stderr.write(`mc: ${scrub(access.line)}\n`);
   if (flags.open) openFile(result.file, deps);
-  return access?.failed ? 1 : 0;
+  return access?.failed || report.failed ? 1 : 0;
 }
 
 /** `mc shot login prod [--paste]` and `mc shot logout prod`. */
@@ -410,7 +424,12 @@ export function usage() {
     '          [--context-click <css>]     right-click it\n',
     '          [--long-press <css>[@ms]]   press and hold it (600 ms unless said)\n',
     '          [--fill <css>=<text>]       type text into it\n',
-    '                                      the four act in the order they are given\n',
+    '          [--eval <js> | --eval-file <path>]\n',
+    '                                      run it in the page; its value prints as eval <n>\n',
+    '          [--upload <css>=<file>]     choose the file in that file input\n',
+    '          [--press <key>]             press a key (Enter, Escape, Meta+K)\n',
+    '                                      the seven act in the order they are given\n',
+    '          [--timeout <s>]             how long each wait and action may take (10 s)\n',
     '          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n',
     '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
@@ -431,6 +450,10 @@ export function usage() {
     'the test account, or as you with --me. A target that requires a role (every /admin path)\n',
     'is judged against the account\'s declared role: one line says whether its gate held, and\n',
     'a gate that did not hold exits 1.\n',
+    '\n',
+    'Every error the page, its requests, the dev server or a dialog raised during the shot\n',
+    'prints as error lines after the path; a step that fails is pictured as the page stood\n',
+    'and named in a failed line (exit 1).\n',
     '\n',
     'Example — the bottom of the main chat on a phone, with its numbers:\n',
     '  mc shot dev assistant --viewport iphone --scroll \'.window-view__content\' \\\n',

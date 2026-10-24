@@ -17,7 +17,7 @@ import {
   closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { mcHome } from './paths.js';
 import { callerWorktree, NO_SHARED_WORKTREE, sharedWorktree } from './test-environment.js';
@@ -144,16 +144,20 @@ export function parseScroll(value) {
   return { ok: false, error: `--scroll ${text}: after @ comes end, top or a number of pixels` };
 }
 
-const ACTING_FLAGS = ['--click', '--context-click', '--long-press', '--fill'];
+export const ACTING_FLAGS = [
+  '--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press',
+];
 const LONG_PRESS_MS = 600;
 
 /**
  * The acting flags, in the order they were written: `--click <css>`,
- * `--context-click <css>`, `--long-press <css>[@<ms>]` (600 ms unless said) and
- * `--fill <css>=<text>`. scanArgs keeps each flag's values apart, so the order
+ * `--context-click <css>`, `--long-press <css>[@<ms>]` (600 ms unless said),
+ * `--fill <css>=<text>`, `--eval <js>` (or `--eval-file <path>`, its text read
+ * here), `--upload <css>=<file>` (the file resolved against `cwd`) and
+ * `--press <key>`. scanArgs keeps each flag's values apart, so the order
  * across flags is read here from argv: each acting flag takes the word after it.
  */
-export function parseActions(argv) {
+export function parseActions(argv, { cwd = process.cwd(), deps = {} } = {}) {
   const actions = [];
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
@@ -169,11 +173,55 @@ export function parseActions(argv) {
       const fill = parseFill(value);
       if (!fill.ok) return fill;
       actions.push({ kind: 'fill', selector: fill.selector, text: fill.text });
+    } else if (flag === '--eval') {
+      actions.push({ kind: 'eval', script: value });
+    } else if (flag === '--eval-file') {
+      const path = resolve(cwd, value);
+      let script = null;
+      try {
+        script = (deps.readFileSync || readFileSync)(path, 'utf8');
+      } catch (error) {
+        return { ok: false, error: `--eval-file: cannot read ${path}: ${error.code || error.message}` };
+      }
+      actions.push({ kind: 'eval', script });
+    } else if (flag === '--upload') {
+      const eq = value.indexOf('=');
+      const selector = eq < 0 ? '' : value.slice(0, eq).trim();
+      const named = eq < 0 ? '' : value.slice(eq + 1).trim();
+      if (!selector || !named) return { ok: false, error: '--upload takes <css>=<file>' };
+      const file = resolve(cwd, named);
+      if (!(deps.existsSync || existsSync)(file)) return { ok: false, error: `--upload: no file at ${file}` };
+      actions.push({ kind: 'upload', selector, file });
+    } else if (flag === '--press') {
+      if (!value.trim()) return { ok: false, error: '--press takes a key (Enter, Escape, Meta+K)' };
+      actions.push({ kind: 'press', key: value.trim() });
     } else {
       actions.push({ kind: flag === '--click' ? 'click' : 'context-click', selector: value });
     }
   }
   return { ok: true, actions };
+}
+
+/**
+ * `--timeout <s>`: how long each wait and each action may take, whole seconds
+ * 1–120, as `timeout_ms`; null when not given, and the script's own 10 s stands.
+ */
+export function parseTimeout(value) {
+  if (value === null || value === undefined) return { ok: true, timeoutMs: null };
+  const seconds = /^\d+$/u.test(String(value)) ? Number(value) : NaN;
+  if (!(seconds >= 1 && seconds <= 120)) return { ok: false, error: '--timeout is whole seconds, 1 to 120' };
+  return { ok: true, timeoutMs: seconds * 1000 };
+}
+
+/**
+ * How long mc lets the script run: the fixed 180 s, or longer when `--timeout`
+ * lets each of the waits and actions take that long, so a slow page is not
+ * killed by mc before the script's own timeout names it.
+ */
+export function captureTimeoutMs(request) {
+  const each = Number(request?.timeout_ms) || 0;
+  const steps = 1 + (Array.isArray(request?.actions) ? request.actions.length : 0);
+  return Math.max(CAPTURE_TIMEOUT_MS, 60_000 + 4 * each * steps);
 }
 
 /** `<css>[@<ms>]`: the selector, and how long to hold it. */
@@ -296,7 +344,7 @@ export function outPath({
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
   theme = null, locale = null, out, safeArea = null, waitFor = null, scroll = null, measure = null,
-  onboarding = false, click = null, actions = null,
+  onboarding = false, click = null, actions = null, timeoutMs = null,
 }) {
   const acts = Array.isArray(actions) && actions.length ? actions.map((a) => ({ ...a })) : null;
   const plain = acts
@@ -322,6 +370,7 @@ export function buildRequest({
     onboarding: Boolean(onboarding),
     click: plain,
     actions: acts,
+    timeout_ms: timeoutMs ?? null,
   };
 }
 
@@ -351,18 +400,71 @@ export function parseResult(stdout, { status = 0 } = {}) {
  * A capture asked to act and answered by a script that does not say it did as
  * much: the picture is of the page without the actions. Plain clicks alone are
  * answered in `clicked`, one entry per click, as they always were; any other
- * kind is answered in `acted`, one entry per action. The sentence, or null when
- * nothing was asked or everything was answered.
+ * kind is answered in `acted`, one entry per action. A script that names the
+ * step that `failed` answered: `reportLines` says it. The sentence, or null
+ * when nothing was asked or everything was answered.
  */
 export function actionGap(request, result) {
   const asked = Array.isArray(request?.actions) ? request.actions : [];
   if (!asked.length) return null;
+  if (result?.failed && typeof result.failed === 'object') return null;
   if (asked.every((action) => action.kind === 'click')) {
     if (Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
     return `the picture at ${result?.file} was taken without the clicks — this memoro's capture script does not answer clicked, so --click is not supported yet (memoro's scripts/shot/shot.mjs has to honour request.click)`;
   }
   if (Array.isArray(result?.acted) && result.acted.length === asked.length) return null;
   return `the picture at ${result?.file} was taken without the actions — this memoro's capture script does not answer acted, so --context-click, --long-press and --fill are not supported yet (memoro's scripts/shot/shot.mjs has to honour request.actions)`;
+}
+
+export const ERROR_LINES = 20;
+const ERROR_TEXT = 300;
+const EVAL_TEXT = 4000;
+
+/** One line, at most `max` characters: a stack trace does not break the line format. */
+function oneLine(text, max) {
+  const flat = String(text ?? '').replace(/\s*\n\s*/gu, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** The `error  <kind>  <text>[ ×<count>]` lines of a result, at most 20 and a line saying how many more. */
+export function errorLines(result) {
+  const errors = Array.isArray(result?.errors) ? result.errors.filter((e) => e && typeof e === 'object') : [];
+  const lines = errors.slice(0, ERROR_LINES).map((entry) => {
+    const count = Number(entry.count) > 1 ? ` ×${entry.count}` : '';
+    return `error  ${entry.kind ?? 'page'}  ${oneLine(entry.text, ERROR_TEXT)}${count}`;
+  });
+  if (errors.length > ERROR_LINES) lines.push(`error  … ${errors.length - ERROR_LINES} more — --json has them all`);
+  return lines;
+}
+
+/**
+ * What came back besides the picture, in the order it prints after the path,
+ * the URL and the measure line: the errors the page, its requests, the server
+ * or a dialog raised; each `--eval`'s value (`eval <n>`, counted from 1) or
+ * what it threw; and the step that failed, with what was visible instead.
+ * `failed` is true when a step failed — the shot then exits 1.
+ */
+export function reportLines(result) {
+  const lines = errorLines(result);
+  const evaluated = Array.isArray(result?.evaluated) ? result.evaluated : [];
+  evaluated.forEach((entry, index) => {
+    const n = index + 1;
+    if (entry && Object.hasOwn(entry, 'error')) {
+      lines.push(`eval ${n}  threw: ${oneLine(entry.error, EVAL_TEXT)}`);
+      return;
+    }
+    const json = JSON.stringify(entry?.value) ?? 'undefined';
+    lines.push(json.length > EVAL_TEXT
+      ? `eval ${n}  ${json.slice(0, EVAL_TEXT)}… (${Buffer.byteLength(json)} bytes; --json has it whole)`
+      : `eval ${n}  ${json}`);
+  });
+  const failed = result?.failed && typeof result.failed === 'object' ? result.failed : null;
+  if (failed) {
+    const what = failed.selector ?? failed.key ?? null;
+    lines.push(`failed  step ${failed.step} (${failed.kind}${what ? ` ${what}` : ''}): ${oneLine(failed.error, ERROR_TEXT)}`);
+    if (failed.here) lines.push(`  here: ${oneLine(failed.here, ERROR_TEXT)}`);
+  }
+  return { lines, failed: Boolean(failed) };
 }
 
 /**
@@ -373,6 +475,7 @@ export function actionGap(request, result) {
 export function runCapture({ worktree, declaration, request, env = process.env, deps = {} }) {
   const dir = (deps.mkdtemp || mkdtempSync)(join(deps.tmpdir || tmpdir(), 'mc-shot-'));
   const file = join(dir, 'request.json');
+  const timeoutMs = deps.timeoutMs ?? captureTimeoutMs(request);
   try {
     writeFileSync(file, `${JSON.stringify(request)}\n`, { mode: 0o600 });
     const [command, ...args] = declaration.argv;
@@ -381,11 +484,11 @@ export function runCapture({ worktree, declaration, request, env = process.env, 
       env: { ...env, MEMORO_SHOT_REQUEST: file },
       stdio: ['ignore', 'pipe', 'inherit'],
       encoding: 'utf8',
-      timeout: deps.timeoutMs ?? CAPTURE_TIMEOUT_MS,
+      timeout: timeoutMs,
       maxBuffer: 16 << 20,
     });
     if (ran.error?.code === 'ETIMEDOUT') {
-      return { ok: false, error: `the capture script did not finish within ${Math.round((deps.timeoutMs ?? CAPTURE_TIMEOUT_MS) / 1000)}s` };
+      return { ok: false, error: `the capture script did not finish within ${Math.round(timeoutMs / 1000)}s` };
     }
     if (ran.error) return { ok: false, error: `the capture script could not run: ${ran.error.message}` };
     const status = ran.status ?? 1;

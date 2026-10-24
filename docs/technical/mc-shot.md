@@ -26,7 +26,10 @@ The work is split between the two repositories, and they meet in one place:
 mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full]
         [--viewport <name|WxH[@dpr]>] [--theme light|dark] [--locale <code>]
         [--safe-area <t,r,b,l>|0] [--wait-for <css>] [--scroll <css>[@end|@top|@<px>]|@end]
-        [--measure <css>|@<name>] [--account <name>] [--onboarding]
+        [--measure <css>|@<name>] [--click <css>]… [--context-click <css>]…
+        [--long-press <css>[@ms]]… [--fill <css>=<text>]… [--eval <js>|--eval-file <path>]…
+        [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
+        [--account <name>] [--onboarding]
         [--me] [--here] [--out <file.png>] [--open] [--json]
 mc shot <dev|prod> --list
 mc shot login prod [--paste]
@@ -47,7 +50,8 @@ mc shot logout prod
   exits 2.
 - **The output** is the file path, alone on the first stdout line, so
   `$(mc shot … | head -1)` is the path. The page URL comes next, then any
-  warning as `mc: warning — …`. The dev-server progress lines go to stderr.
+  warning as `mc: warning — …`; what the shot met in between is § *What comes
+  back*. The dev-server progress lines go to stderr.
   `--json` prints the script's result object instead, and `--open` opens the
   file with the platform's opener (`open`, `xdg-open`, `start`), detached.
 
@@ -65,7 +69,8 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   declared viewport may carry its own (`viewports.iphone.safe_area` in
   memoro's `.mc/shot.json`: 47, 0, 34, 0), so `--viewport iphone` is a phone
   with a notch and a home indicator without saying so; the flag overrides it.
-- **`--wait-for <css>`**: wait until it is visible (10 s), else `no-element`.
+- **`--wait-for <css>`**: wait until it is visible (10 s unless `--timeout`
+  says), else `no-element`.
 - **`--scroll <css>[@end|@top|@<px>]`**: scroll that element first; `@end`
   when nothing follows the `@`. The last `@` separates, so an attribute
   selector keeps its own characters. A bare `@end` or `@top` (no selector)
@@ -115,10 +120,68 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   The text is read from the command line like any flag's value: type no secret
   into it. A result that does not answer `acted` with one entry per action is
   refused (exit 1, no path), as `clicked` does for clicks alone.
+- `--eval <js>` (run it in the page; its value comes back as an `eval` line),
+  `--upload <css>=<file>` (choose the file in that file input) and `--press
+  <key>` (a Playwright key name — `Enter`, `Escape`, `Meta+K` — pressed on the
+  page, no selector), all repeatable, join the same list: the seven act in the
+  order they are given. `--eval-file <path>` is `--eval` with the file's text,
+  read by mc (refused when unreadable), so a long probe needs no shell
+  quoting; it keeps its place in the order. `--upload` splits at its first
+  `=`, as `--fill` does; the file is resolved against the current directory and
+  refused when it does not exist (`mc: --upload: no file at <path>`).
+- `--timeout <s>`, whole seconds 1 to 120 (else `mc: --timeout is whole
+  seconds, 1 to 120`, exit 2): how long each wait and each action may take —
+  `--wait-for` and every acting flag — not the whole shot. Without it the
+  script's own 10 s stands. mc lets the script run `max(180 s, 60 s + 4 ×
+  timeout × (1 + actions))`, so a long wait is not killed by mc first.
 
 The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding`,
-`click` and `actions`, after `out`; a capture result gains `safe_area` and, when asked,
-`measure`.
+`click`, `actions` and `timeout_ms`, after `out`; a capture result gains
+`safe_area` and, when asked, `measure`.
+
+## What comes back (2026-10-24)
+
+Measured on 2026-10-24 from the transcripts of three sessions in ten days: a
+session left `mc shot` for Claude in Chrome every time `mc shot` could not
+answer, and then spent one model turn per browser action. One needed to run
+JavaScript in the page (a stacking chain, a hit test, a live CSS change);
+another waited on a setup longer than the fixed 10 s, so two shots failed with
+`.hero-card__actions was not visible within 10 s`, and its CSV import needed a
+file chooser. Martin: "alla felmeddelanden ska komma tillbaka direkt". So
+`--eval`, `--upload`, `--press` and `--timeout` above, and everything the shot
+met comes back in the same call, on stdout after the path, the URL and the
+measure line (and the access line of a gated target), in this order, each line
+scrubbed:
+
+```
+error  <kind>  <text>[ ×<count>]
+eval <n>  <json>
+eval <n>  threw: <error>
+failed  step <n> (<kind> <selector|key>): <error>
+  here: <what is visible instead>
+mc: warning — …
+```
+
+- **`error`**: one line per entry of the result's `errors`, `kind` one of
+  `page`, `console`, `request`, `server`, `dialog`; ` ×<count>` when the same
+  error came more than once. Each text is one line, cut at 300 characters. At
+  most 20 lines, then `error  … <n> more — --json has them all`.
+- **`eval`**: one line per entry of `evaluated`, `<n>` counting the `--eval`s
+  from 1; the value as JSON on one line, cut at 4000 characters with `…
+  (<bytes> bytes; --json has it whole)`.
+- **`failed`**: the step that failed, counted from 1 over the acting flags,
+  then `here:` when the script names what was visible instead. The picture is
+  still taken and printed first — it is the page as it stood when the step
+  failed.
+
+`--json` prints the result whole, as before. **Exit codes**: 0 when nothing
+failed, whatever `errors` holds — an app's console error is information, not a
+failed shot; 1 when a step failed, or a gate did not hold; 2 for a flag mc
+refuses. When the script answers `ok: false`, mc prints `mc: <error>` on stderr
+and then the result's `error` lines, so a page that crashed before the picture
+still says why. With `--compare`, each side's `error`, `eval` and `failed`
+lines come after the diff, each prefixed with its side (`here: ` or `<ref>: `),
+so lines 1 and 2 stay the two files; a failed step on either side exits 1.
 
 ## mc dev open and mc dev surfaces
 
@@ -223,11 +286,24 @@ without its actions and mc says so. A result answers `clicked`, one entry per
 click, when every action is a click, and `acted`, one entry per action,
 otherwise.
 
+Three more kinds: `{ kind: "eval", script }`, `{ kind: "upload", selector, file }`
+(`file` an absolute path) and `{ kind: "press", key }` (no selector). Each makes
+`click` null. After `actions` comes `timeout_ms`: milliseconds each wait and
+action may take, or `null` for the script's own 10 s. A capture result may
+carry `errors` (`[{ kind, text, count? }]`, `kind` one of `page`, `console`,
+`request`, `server`, `dialog`), `evaluated` (`[{ value }]` or `[{ error }]`,
+one per eval action, in order) and `failed` (`{ step, kind, selector?, key?,
+error, here? }`, `step` counted from 1). A result with `failed` is not asked for
+a full `acted`: the steps after the failed one were not done, and the `failed`
+line says so. A failure result (`ok: false`) may carry `errors` too. The
+capture script performing these is memoro's project `shot-report-capture`.
+
 The script's stderr goes straight to your terminal, so you see its progress.
 mc reads stdout, and the last non-empty line there must be the one result
 object: `{ ok: true, file, url, subject, selector, width, height, warnings }`
 for a capture, `{ ok: true, session }` for a login, or
-`{ ok: false, code, error }`. The run times out after 180 s. mc reports an error,
+`{ ok: false, code, error }`. The run times out after 180 s, or longer with
+`--timeout` (§ *Measuring a layout*). mc reports an error,
 with the script's exit code in it, when the last line does not parse, when there
 is no result line, or when the run times out. On `ok: false`, mc prints
 `mc: <error>` and exits 1. If the code is `not-signed-in` and the account is
