@@ -37,10 +37,10 @@
  *
  * The register also holds whether each success criterion is met (ruling 48):
  * the plan says what a criterion *is*, the register whether it *holds*. An
- * entry's `criteria` are seeded from the file's `met` once, matched to the
- * plan's criteria by their text, and written by `mc project criterion met`
- * (`updateCriterion`), and dropped by `mc project criterion drop` (`dropCriterion`);
- * a file's `met` is not read after that.
+ * entry's `criteria` are matched to the plan's criteria by their text, and written
+ * by `mc project criterion met` (`updateCriterion`), and dropped by `mc project
+ * criterion drop` (`dropCriterion`). The plan file's `met` is not read: a criterion
+ * the register has not seen is not met.
  *
  * Every write to the register also appends one line to `runner/log/register.log`
  * (`registerLogPath`): what changed and which process made it — its pid, its
@@ -288,16 +288,20 @@ function stepFromPlan(fileStep, now) {
   };
 }
 
-/** The criteria as the plan file says them: the seed for an entry that has none. */
+/**
+ * The criteria as the plan file says them: the seed for an entry that has none.
+ * The file's `met` is not read — a criterion the register has not seen is not
+ * met; only `mc project criterion met` makes one met.
+ */
 export function criteriaFromPlan(plan) {
-  return (Array.isArray(plan?.success_criteria) ? plan.success_criteria : []).map((c) => ({ criterion: String(c?.criterion ?? ''), met: c?.met === true, at: null }));
+  return (Array.isArray(plan?.success_criteria) ? plan.success_criteria : []).map((c) => ({ criterion: String(c?.criterion ?? ''), met: false, at: null }));
 }
 
 /**
  * The criteria an entry holds, brought up to the plan's: each criterion of the
  * plan takes the held one with its text (the first not yet taken, so a text
  * the plan repeats is matched in order), and a text the register has not seen
- * takes the file's `met`. A held criterion the plan no longer has is dropped.
+ * is not met. A held criterion the plan no longer has is dropped.
  */
 function reconcileCriteria(held, plan) {
   const fromFile = criteriaFromPlan(plan);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { overlayPlans, registerPath } from '../../src/mc/register.js';
+import { markCriterion, overlayPlans, registerPath, seedEntry } from '../../src/mc/register.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { ago, blockerDue, describeWait, left, releaseDue } from '../../src/mc/step-release.js';
 
@@ -111,11 +111,19 @@ function record(project, second, repo = 'memoro') {
   return { repo, programme: 'p', project, path: `docs/project/p/${project}/PLAN.json`, plan, ...planSummary(plan) };
 }
 
-/** The register in memory, seeded the way `queue()` seeds it, and the records laid over it. */
+/**
+ * The register in memory, seeded the way `queue()` seeds it, and the records
+ * laid over it. A record whose last step is done has its criterion recorded met
+ * in the register, as `mc project criterion met` would: the file's `met` is
+ * read by nothing.
+ */
 function world(records) {
   const files = {};
   const read = (path) => files[path] ?? null;
   const write = (path, value) => { files[path] = `${JSON.stringify(value, null, 2)}\n`; };
+  for (const r of records.filter((each) => each.plan.steps.at(-1).status === 'done')) {
+    write(registerPath(ROOT, r.project), markCriterion(seedEntry(r, '2026-10-11T00:00:00Z'), 1, true, '2026-10-11T00:00:00Z'));
+  }
   const plans = overlayPlans(records, { root: ROOT, read, write, now: '2026-10-11T00:00:00Z' });
   const said = [];
   const entry = (project) => JSON.parse(files[registerPath(ROOT, project)]);

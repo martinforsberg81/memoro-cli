@@ -3212,6 +3212,7 @@ test('a done workarea with an uncommitted change is kept, and says why', async (
     dirty: ['over'],
     session: okSession(),
   });
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-29T10:00:00Z');
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.equal('/w/over/memoro/.git' in f.files, true, 'the checkout is untouched');
@@ -3231,6 +3232,7 @@ test('a done workarea whose last step is still open is kept', async () => {
     runs: RUNS_HEAD + ranRow('over', 'success,open'),
     session: okSession(),
   });
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-29T10:00:00Z');
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
@@ -3409,6 +3411,7 @@ test('a live workarea is never closed, however done its plan is', async () => {
     live: ['over'],
     session: okSession(),
   });
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-29T10:00:00Z');
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a live tmux session/u);
@@ -3473,6 +3476,7 @@ test('queue.md is rewritten to names only, and a name leaves it when its plan is
     session: okSession(),
     gh: { alpha: { number: 7 }, beta: { number: 8 } },
   });
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-29T10:00:00Z');
   await round(createRunner({ deps: f.deps }));
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /queue: dropped "# the queue" — not a project name/u);

@@ -49,10 +49,10 @@ the door.
   criterion is usually missing: the assertion, the query, the measurement — and
   for anything with a surface, the measurement *in the running app*. "Done" is
   never the session's judgement of its own work. Whether a criterion is met is
-  the register's, written by `mc project criterion met <project> <n>`; the
-  file's `met` is read once, when the register first sees the criteria. A
-  criterion that turns out not to be a step's is removed with `mc project
-  criterion drop`, never set met.
+  the register's, written by `mc project criterion met <project> <n>`: the
+  file's `met` is not read; a criterion is met only when `mc project criterion
+  met` has recorded it. A criterion that turns out not to be a step's is removed
+  with `mc project criterion drop`, never set met.
 - `documents` — `{ label, path }`.
 - `runner` — optional: `tool`, `model`, `effort`, `check_in_minutes`,
   `stall_minutes`.

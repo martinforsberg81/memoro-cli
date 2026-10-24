@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
+import { markCriterion, registerPath, seedEntry } from '../../src/mc/register.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
 import {
@@ -2066,6 +2067,12 @@ describe('collectPage', () => {
     writeFileSync(join(root, 'intake', 'errors-2026-08-29.md'), '# Errors\n\n## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n');
     writeFileSync(join(root, 'proposals', '2026-08-29-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
     for (const area of ['mc-ui', 'docx-editor']) mkdirSync(join(root, area, 'memoro-cli', '.git'), { recursive: true });
+    // mc-run is done because the register says its criterion is met: the
+    // plan file's `met` is read by nothing.
+    const finished = PLANS.find((record) => record.project === 'mc-run');
+    const at = '2026-08-29T10:00:00Z';
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mc-run'), JSON.stringify(markCriterion(seedEntry(finished, at), 1, true, at)));
     return root;
   }
 
