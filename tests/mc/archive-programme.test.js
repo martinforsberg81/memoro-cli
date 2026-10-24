@@ -115,10 +115,10 @@ describe('archiveVerdict', () => {
 
   it('refuses what release would keep, and anything somebody put in the area', () => {
     const v = archiveVerdict({
-      programme: 'x', homes: [{}], areaExists: true,
+      programme: 'x', homes: [{}], areaExists: true, area: '~/mc/programs/x',
       forecast: { kept: [{ path: '/a/memoro', why: '2 uncommitted' }], held_by: ['notes.md'] },
     });
-    assert.deepEqual(v.lines, ['/a/memoro would be kept: 2 uncommitted', '~/mc/plan/x/notes.md is not mc\'s to remove']);
+    assert.deepEqual(v.lines, ['/a/memoro would be kept: 2 uncommitted', '~/mc/programs/x/notes.md is not mc\'s to remove']);
   });
 
   it('refuses a programme that is nowhere', () => {
