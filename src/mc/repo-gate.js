@@ -2088,6 +2088,13 @@ export function suiteTimeoutMs(env = process.env) {
 }
 
 /**
+ * One test running longer than this is a hang, not load: it is reported red by
+ * name ("test timed out after 600000ms") and the round goes on, instead of the
+ * whole run's hour stopping it with no name (memoro #14067, 95 minutes, 2026-10-23).
+ */
+export const TEST_TIMEOUT_MS = 10 * 60_000;
+
+/**
  * The environment a suite runs in: the caller's, without what belongs to the
  * caller alone. `NODE_TEST_CONTEXT` makes a suite think it is nested and skip
  * its files (`realSuite`). `MC_WORK_ROOT` and `MC_HOME` are the runner's own
@@ -2178,7 +2185,13 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     // Declared flags first; the test-script heuristic only when none are.
     const declared = flags.length ? flags : nodeTestFlags(cwd);
     const concurrency = declared.some((flag) => String(flag).startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${lanes}`];
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...concurrency, ...declared, ...files], {
+    // A test that never ends is a red by name, not the run's hour: `--test-timeout`
+    // reports it, and `--test-force-exit` ends its file's process too, since with
+    // the timeout alone that process stays alive on the test's own timers. A
+    // repository that declares its own `--test-timeout` keeps it.
+    const perTest = declared.some((flag) => String(flag).startsWith('--test-timeout')) ? [] : [`--test-timeout=${TEST_TIMEOUT_MS}`];
+    const forceExit = declared.includes('--test-force-exit') ? [] : ['--test-force-exit'];
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],

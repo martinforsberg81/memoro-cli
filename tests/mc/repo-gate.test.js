@@ -27,9 +27,9 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
-import { tapTotals } from '../../src/mc/tap-red.js';
+import { redNames, tapTotals } from '../../src/mc/tap-red.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
@@ -2836,6 +2836,22 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(totals.fail, 1);
       assert.notEqual(run.code, 0, 'the red batch\'s exit is the result\'s');
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('realTests: a test that never ends is a red by name, and the run ends', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-hang-'));
+    try {
+      writeFileSync(join(dir, 'hang.test.js'), "import { test } from 'node:test';\ntest('hangs', async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\ntest('after', () => {});\n");
+      writeFileSync(join(dir, 'ok.test.js'), "import { test } from 'node:test'; test('ok', () => {});\n");
+      const run = await realTests({ cwd: dir, files: ['hang.test.js', 'ok.test.js'], flags: ['--no-warnings', '--test-timeout=300'], env: { PATH: process.env.PATH } });
+      assert.equal(run.timedOut, false, 'the run ends on its own, not at the whole-run timer');
+      assert.deepEqual(redNames(run.tap), ['hangs']);
+      assert.equal(tapTotals(run.tap).pass, 2, 'the other tests, in both files, still pass');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('TEST_TIMEOUT_MS: ten minutes, the default per-test timeout of every selected file', () => {
+    assert.equal(TEST_TIMEOUT_MS, 600_000);
   });
 
   it('testBatches: standard first at the lanes, then sqlite at the lanes and heavy one file at a time', () => {

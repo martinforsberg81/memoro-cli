@@ -695,6 +695,12 @@ is not a mend stop. Its failures are kept under
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
+**A test that never ends is a red by name** (`TEST_TIMEOUT_MS` in
+`src/mc/repo-gate.js`). Every selected file runs with `--test-timeout=600000
+--test-force-exit` unless the repository declares its own `--test-timeout`; a
+test that runs past ten minutes is a red named `test timed out after 600000ms`,
+not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
+
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
 `archive-plan.js`) and, when two rows share date, programme and project, stops
