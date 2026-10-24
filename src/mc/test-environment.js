@@ -35,6 +35,7 @@ import {
   admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer,
 } from './dev-servers.js';
 import { log } from './logger.js';
+import { pidAlive } from './status-collect.js';
 
 /** Where a repository says what it may be measured with. */
 export const DECLARATION_FILE = join('.mc', 'test.json');
@@ -58,6 +59,14 @@ export const DEV_DEFINITION_FILE = join('.mc', 'dev.json');
  *
  * The long wait is not blind. Each turn checks the registered pid is still
  * alive, so a wrapper that dies fails in a second rather than in ten minutes.
+ *
+ * The first window is doubled once for a child that is alive. A wrapper mc
+ * spawned that is still alive when the window lapses without having registered
+ * is building, not gone: measured on 2026-10-18 at load 48–61, a memoro measure
+ * server's css build alone took 483 seconds, and it became READY three minutes
+ * after mc had given up. One extension, and only while the pid answers; a dead
+ * child, or one whose pid mc does not know, gets the window it always had. Nothing
+ * is stopped — a child still alive after both windows is named in the error.
  */
 export const REGISTER_TIMEOUT_MS = 120_000;
 export const READY_TIMEOUT_MS = 600_000;
@@ -404,18 +413,33 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   });
   child.unref?.();
 
-  // Stage one: has it said where it will serve?
-  const registerBy = now() + registerMs;
+  // Stage one: has it said where it will serve? One window, and one more if the
+  // wrapper spawned here is still alive when the first lapses — see REGISTER_TIMEOUT_MS.
+  const alive = deps.pidAlive || pidAlive;
+  const childPid = Number.isInteger(child?.pid) ? child.pid : null;
+  let registerBy = now() + registerMs;
+  let extended = false;
   let server = null;
-  while (!server && now() < registerBy) {
-    await sleep(1000);
-    server = fresh();
+  for (;;) {
+    while (!server && now() < registerBy) {
+      await sleep(1000);
+      server = fresh();
+    }
+    if (server || extended || childPid === null || !alive(childPid)) break;
+    extended = true;
+    registerBy = now() + registerMs;
+    const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
+      + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
+    if (deps.onWaiting) deps.onWaiting(line);
+    else process.stderr.write(`${line}\n`);
   }
   if (!server) {
+    const stillAlive = extended && alive(childPid);
     return {
       ok: false,
       error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
-        + ' — its log is under .wrangler/dev-server/logs/',
+        + ' — its log is under .wrangler/dev-server/logs/'
+        + (stillAlive ? ` (pid ${childPid} is still alive — mc dev stop it, or wait for it and run this again)` : ''),
     };
   }
   deps.onRegistered?.(server);

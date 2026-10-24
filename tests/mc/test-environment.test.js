@@ -698,6 +698,95 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
+  it('waits one more window for a spawned wrapper that is alive, and takes it when it registers', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    let registered = false;
+    const waiting = [];
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        // Still building when the first window lapses; registers in the second.
+        if (!registered && t > 5_000) { registerServer(root, worktree, { port: 8900 }); registered = true; }
+      },
+      registerTimeoutMs: 5_000,
+      spawn: () => ({ pid: 4242, unref() {} }),
+      pidAlive: () => true,
+      onWaiting: (line) => waiting.push(line),
+      fetch: async () => ({ ok: true }),
+    });
+
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.started, true);
+    assert.equal(waiting.length, 1, 'said once that it was waiting on');
+    assert.match(waiting[0], /\(pid 4242\) is still starting after 5s — waiting another 5s/u);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('names a spawned wrapper that is still alive after two windows, and stops nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    let stopped = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      registerTimeoutMs: 5_000,
+      spawn: () => ({ pid: 4242, unref() {} }),
+      pidAlive: () => true,
+      stopServer: () => { stopped += 1; return { ok: true }; },
+      onWaiting: () => {},
+      fetch: async () => ({ ok: true }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /within/u);
+    assert.match(ensured.error, /pid 4242 is still alive/u);
+    assert.ok(t >= 10_000, `gave up after ${t}ms`);
+    assert.equal(stopped, 0, 'a live child is named, never stopped');
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a spawned wrapper that is dead when its window lapses gets no extension', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const waiting = [];
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      registerTimeoutMs: 5_000,
+      spawn: () => ({ pid: 4242, unref() {} }),
+      pidAlive: () => false,
+      onWaiting: (line) => waiting.push(line),
+      fetch: async () => ({ ok: true }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /within/u);
+    assert.doesNotMatch(ensured.error, /still alive/u);
+    assert.deepEqual(waiting, []);
+    assert.ok(t >= 5_000 && t < 10_000, `gave up after ${t}ms`);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
   it('a wrapper that dies while starting fails at once, not in ten minutes', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
