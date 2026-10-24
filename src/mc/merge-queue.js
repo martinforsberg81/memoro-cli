@@ -230,13 +230,17 @@ export function stepsDone(stepsOf) {
 }
 
 /**
- * The most jobs one round lands (merge-throughput, ruling 34). About 11 % of
- * rounds on 2026-10-09/10 were red in the suite or a gate, so a batch of four
- * is red about a third of the time and then costs its fallback rounds — one
- * per pull request. Four still roughly halves the time per landing at a queue
- * of ten; a larger batch makes the fallback longer than the batch saves.
+ * The most jobs one round lands: one (ruling 55, 2026-10-24). Measured over
+ * `~/.memoro/mc/gate-rounds.jsonl` on memoro's merge rounds 2026-10-17 to
+ * 2026-10-24: a single round (305) selected 349 files at the median, its suite
+ * took 154 s and its wall 210 s, 80 % green. A batch (37) selected 874 files,
+ * its suite took 406 s and its wall 822 s, 54 % green, and a red batch falls
+ * back to one round per member: about 430 s per landed pull request against
+ * 210 s alone. So no round is formed with more than one job. The constant stays
+ * and `nextBatch` keeps its `max`, so a test can ask for a wider batch; a merger
+ * resuming a batch it died under still takes its `landing` entries again.
  */
-export const MERGE_BATCH_MAX = 4;
+export const MERGE_BATCH_MAX = 1;
 
 /**
  * The jobs the merger lands in one round: `nextJob`'s pick and the next ones

@@ -81,7 +81,7 @@ import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry, realLock } from './register.js';
 import { readTailEntries } from './conversations.js';
 import { claudeTail, codexTail } from './work-status.js';
-import { planState } from './plan-schema.js';
+import { planState, unmetCriteria } from './plan-schema.js';
 import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import {
@@ -1059,30 +1059,76 @@ function blockerOf(record) {
 }
 
 /**
- * A blocked row's sentence when its step waits on a time or a deploy (ruling
- * 35): `step 2 is blocked until 2026-10-14 08:00Z — 3d left`, by
- * `describeWait`. A deploy wait is said without what it has left: that needs
- * the landed sha's ancestry in memoro's checkout, which is a git call per
- * paint, so the row says what it waits for and `mc step` says how long. Null
- * for every other row, which keeps the plan's own sentence.
+ * The one word a project row says its state in. `status` is the plan's own
+ * word and `mc --json` keeps it; `state` is what the row means by it. A blocked
+ * step whose blocker releases by itself — a time, a deploy or another project
+ * (ruling 35) — is `waiting`: the runner lets it go, so it is not the red of a
+ * step waiting on Martin. A decision, a workarea or no blocker stays `blocked`.
  */
-function waitNext(record, now) {
-  if (record.status !== 'blocked') return null;
-  const { step, index } = planState(record.plan);
-  const by = step?.status === 'blocked' ? step.blocked_by : null;
-  if (by?.kind === 'time') return `step ${index + 1} is blocked ${describeWait(step, { now })}`;
-  if (by?.kind === 'deploy' && Number.isInteger(by.step)) {
-    const hours = Number.isFinite(by.hours) && by.hours > 0 ? ` + ${by.hours}h` : '';
-    return `step ${index + 1} is blocked on deploy of step ${by.step}${hours}`;
-  }
-  return null;
+const RELEASED_BY_RUNNER = new Set(['time', 'deploy', 'project']);
+export function stateOf({ status, blocker }) {
+  if (status === 'blocked' && RELEASED_BY_RUNNER.has(blocker?.kind)) return 'waiting';
+  return status;
 }
 
-/** How many of each plan status a set of projects holds. */
+/** A reason as one line of at most `max` characters, cut with `…`; '' when there is none. */
+function clipLine(text, max) {
+  const line = String(text ?? '').replace(/\s+/gu, ' ').trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * A project row's NEXT cell, the same shape on every row: the step's title,
+ * then what the state says about it. `title` is the step the row is about, as
+ * `planSummary` names it; `done`, `unmet` and `invalid` have no step, so they
+ * say their own sentence, and `invalid` keeps the plan's.
+ *
+ * A time wait is said in `describeWait`'s words, with how long it has left. A
+ * deploy wait is not said with what it has left: that needs the landed sha's
+ * ancestry in memoro's checkout, a git call per paint, so the row says what it
+ * waits for and `mc step` says how long.
+ */
+function nextCell(record, state, now) {
+  const { title } = record;
+  const { step } = planState(record.plan);
+  const by = step?.blocked_by;
+  switch (state) {
+    case 'ready':
+    case 'running':
+      return title;
+    case 'landing':
+      return step?.pr ? `${title} · #${step.pr} in the merge queue` : title;
+    case 'waiting': {
+      if (by?.kind === 'time') return `${title} · ${describeWait(step, { now })}`;
+      if (by?.kind === 'deploy') {
+        const hours = Number.isFinite(by.hours) && by.hours > 0 ? ` + ${by.hours}h` : '';
+        return `${title} · after deploy of step ${by.step}${hours}`;
+      }
+      return `${title} · after project ${by?.name}`;
+    }
+    case 'blocked':
+      return by?.name ? `${title} · on ${by.kind} ${by.name}` : `${title} · blocked`;
+    case 'failed': {
+      const reason = clipLine(step?.reason, 120);
+      return `${title} · failed${reason ? `: ${reason}` : ''}`;
+    }
+    case 'done':
+      return 'every step is done';
+    case 'unmet':
+      return `criteria ${unmetCriteria(record.plan).join(', ')} not met`;
+    default:
+      return record.next || null;
+  }
+}
+
+/**
+ * How many of each state a set of projects holds: the heading's own count. It
+ * is the row's word, not the plan's, so a waiting project counts as `waiting`.
+ */
 function statusesOf(projects) {
   const out = {};
   for (const project of projects) {
-    const key = project.status || 'unknown';
+    const key = project.state || 'unknown';
     out[key] = (out[key] || 0) + 1;
   }
   return out;
@@ -1121,9 +1167,11 @@ function blockersOf(projects) {
  * A blocked project the runner has a step in flight on keeps its own row: the
  * plan on `origin/main` says blocked, but something is happening to it right
  * now, and that is the one thing a person watching this page wants to see.
+ * A waiting project keeps its row too: nobody stopped it, and its row says what
+ * it waits for and until when.
  */
 function collapsedOf(projects) {
-  const blocked = projects.filter((project) => project.status === 'blocked' && !project.running);
+  const blocked = projects.filter((project) => project.state === 'blocked' && !project.running);
   if (!blocked.length) return null;
   return {
     count: blocked.length,
@@ -1208,15 +1256,18 @@ export function programmesSection({
     // has got costs nothing to say — and "3 of 7" is the one number that turns
     // a list of names into a picture of where the work stands.
     const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
+    const blocked_by = blockerOf(plan);
+    const state = stateOf({ status: plan.status || null, blocker: blocked_by });
     return {
       name,
       repo: plan.repo,
       programme: plan.programme,
       status: plan.status || null,
-      next: waitNext(plan, now) || plan.next || null,
+      state,
+      next: nextCell(plan, state, now),
       // What would move it, for a project that is stopped. Null for every other
       // project, and for a blocked plan too old to carry the field.
-      blocked_by: blockerOf(plan),
+      blocked_by,
       legacy: Boolean(plan.legacy),
       steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
       // The runner, and only the runner: a session somebody has open in the
@@ -1291,7 +1342,7 @@ export function programmesSection({
     };
   });
 
-  const stopped = projects.filter((project) => project.status === 'blocked');
+  const stopped = projects.filter((project) => project.state === 'blocked');
   const kinds = {};
   for (const project of stopped) {
     const kind = project.blocked_by?.kind;
@@ -1302,12 +1353,14 @@ export function programmesSection({
     count: projects.length,
     programmes: groups,
     statuses: statusesOf(projects),
-    // Every stopped project at once: how many wait on an answer from Martin,
-    // how many on another project, and which blockers hold the most. The page
-    // draws it under NEXT, where somebody is looking for what to do.
+    // Every stopped project at once: how many wait on an answer from Martin (a
+    // decision or a workarea), and which blockers hold the most. A project that
+    // the runner releases itself is `waiting`, counted below and not here. The
+    // page draws it under NEXT, where somebody is looking for what to do.
     blocked: { count: stopped.length, kinds, blockers: blockersOf(stopped) },
     planning: groups.filter((group) => group.planning).length,
     running: projects.filter((project) => project.running).length,
+    waiting: projects.filter((project) => project.state === 'waiting').length,
     no_workarea: projects.filter((project) => !project.workarea).length,
     // The directories under `~/mc` that are none of the kinds (`listStrays`),
     // drawn under `not an area mc knows`. Nothing removes one.
