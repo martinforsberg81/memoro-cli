@@ -232,6 +232,37 @@ It does leave a line in the round log
 alongside `merge` and `check`. Every round mc runs is countable, including the
 ones that did not run a suite.
 
+## The admin form
+
+`mc merge <repo> <pr> --admin` lands one pull request past the gate. It is
+Martin's alone: a session runs it only when he tells it to, and no other form
+of the verb changes for it. [`runAdmin`](../../src/mc/commands/merge.js) does,
+in order:
+
+1. reads the pull request with `gh pr view --json number,title,state,headRefOid,headRefName,baseRefName,body,mergeCommit`. Unreadable is refused; a closed one is refused as nothing to land; a merged one is booked without a merge call;
+2. squash-merges an open one with `gh pr merge --squash --admin --subject "<title> (#<n>)" --match-head-commit <head>`: GitHub's admin override, pinned to the head it read. No round is formed: no candidate, no suite, no gate;
+3. reads the state back. Anything but `MERGED` is `NOT merged`, with the last line of gh's error, exit 1, and nothing booked;
+4. takes its queue entry out under the register's lock. An entry the merger is landing (`landing`) is left as it is, for the merger;
+5. books the step — the entry's own, else the one the pull request's branch stands on — `done`, with its landing, unless the step is already `done` or `blocked`;
+6. drops the pull request from the page's cached list. A page that cannot be written costs nothing;
+7. writes one round-log line with `mode: admin`;
+8. prints what landed, into what, as which commit, and the step it booked. `--json` gives the same as one object. Exit 0.
+
+It never stops a round itself. A round in flight on the pull request is the
+merger's to stop: its watch (`watchSubject` in
+[`src/mc/merger.js`](../../src/mc/merger.js)) notices within a minute that the
+pull request is merged, and answers its `landing` entry as landed. So `--admin`
+leaves a `landing` entry to that watch and does not touch the round.
+
+It is refused with several pull requests, with `--check` (it lands; a check
+only measures), with `--docs`, and with `--watch` (it lands in the call, so
+there is nothing to watch).
+
+**Why it exists.** Six raw `gh pr merge --squash --admin` calls between
+2026-10-17 and 2026-10-24 left the merger's round for each pull request
+running, and nothing was booked until the merger noticed. The verb does the
+merge and the booking together, and the merger's watch does the rest.
+
 ## The three places that say it
 
 A role is not the last word a session hears, which is what step 2 of this

@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
@@ -374,5 +375,145 @@ describe('mc merge --watch queues, then follows the job (ruling 36)', () => {
     assert.match(parseMergeArgs(['memoro-cli', '835', '836', '--watch'], { docs: true, watch: true }).error, /^--watch follows one pull request/u);
     assert.equal(parseMergeArgs(['memoro-cli', '835', '--watch'], { full: true }).error, 'unknown flag: --watch');
     assert.equal(parseMergeArgs(['memoro-cli', '835', '--watch'], { docs: true, watch: true }).watch, true);
+  });
+});
+
+describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\'s verb)', () => {
+  fresh('mc-merge-admin');
+
+  const HEAD = 'c'.repeat(40);
+  const MERGE_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
+  const OPEN = { number: 671, title: 'Fix the thing', state: 'OPEN', headRefOid: HEAD, headRefName: 'merge-queue-2', baseRefName: 'main', body: '## Remainder\n\nNone.', mergeCommit: null };
+  const MERGED = { state: 'MERGED', mergeCommit: { oid: MERGE_SHA } };
+  const ok = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
+  const queued = (over = {}) => ({ repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 671, state: 'queued', step: { project: 'merge-queue', index: 1 }, since: '2026-10-24T11:00:00Z', ...over });
+  const writeQueue = (entries) => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify(entries));
+  };
+
+  /**
+   * `gh` answers `pr view` from `views`, in order, the last one again after
+   * that, and `pr merge` with `merge`. The verb's own output is captured.
+   */
+  function adminRun({ views = [ok(OPEN), ok(MERGED)], merge = { status: 0, stdout: '', stderr: '' } } = {}) {
+    const calls = [];
+    const out = { out: '', err: '' };
+    let reads = 0;
+    const gh = async (args) => {
+      calls.push(args);
+      if (args[1] === 'merge') return merge;
+      const answer = views[Math.min(reads, views.length - 1)];
+      reads += 1;
+      return answer;
+    };
+    return {
+      out,
+      merges: () => calls.filter((args) => args[1] === 'merge'),
+      run: (argv = ['memoro-cli', '671', '--admin']) => run(argv, {
+        stdout: { write: (text) => { out.out += text; } },
+        stderr: { write: (text) => { out.err += text; } },
+        root,
+        env: { MC_WORK_ROOT: root },
+        resolveRepoPath: async () => '/repos/memoro-cli',
+        gh,
+        lock: (_root, fn) => fn(),
+        now: () => new Date('2026-10-24T12:00:00Z'),
+      }),
+    };
+  }
+
+  it('an open pull request: squashed, pinned to its head, the entry gone, the step done with its landing', async () => {
+    register();
+    writeQueue([queued(), queued({ pr: 672, since: '2026-10-24T11:05:00Z' })]);
+    const d = adminRun();
+    assert.equal(await d.run(), 0);
+    assert.deepEqual(d.merges(), [['pr', 'merge', '671', '--squash', '--admin', '--subject', 'Fix the thing (#671)', '--match-head-commit', HEAD]]);
+    assert.deepEqual(queue().map((entry) => entry.pr), [672], 'only this pull request leaves the queue');
+    const step = entryNow().steps[1];
+    assert.equal(step.status, 'done');
+    assert.equal(step.pr, 671);
+    assert.equal(step.landed.sha, MERGE_SHA);
+    assert.equal(entryNow().steps[0].status, 'done', 'the step below is untouched');
+    assert.equal(d.out.out, 'mc: merged #671 into main as abcdef1 (squash, --admin: no gate round)\nmc: merge-queue step 2 is done\n');
+    assert.equal(d.out.err, '');
+  });
+
+  it('a landing entry is left as the merger has it, and its step untouched: the merger\'s watch books it', async () => {
+    register();
+    writeQueue([queued({ state: 'landing' })]);
+    const d = adminRun();
+    assert.equal(await d.run(), 0);
+    assert.equal(d.merges().length, 1);
+    assert.equal(queue()[0].state, 'landing');
+    assert.equal(entryNow().steps[1].status, 'running');
+    assert.match(d.out.out, /^mc: #671 is landing in the merger's queue — the merger's round for it stops within a minute and books it$/mu);
+  });
+
+  it('a pull request already merged is booked without a merge call, its step found from its branch', async () => {
+    register();
+    const d = adminRun({ views: [ok({ ...OPEN, ...MERGED })] });
+    assert.equal(await d.run(), 0);
+    assert.equal(d.merges().length, 0);
+    assert.equal(entryNow().steps[1].status, 'done');
+    assert.equal(entryNow().steps[1].landed.sha, MERGE_SHA);
+    assert.equal(d.out.err, 'mc: #671 was already merged as abcdef1 — booking it\n');
+  });
+
+  it('--json says what landed, where, and what was booked', async () => {
+    register();
+    const d = adminRun();
+    assert.equal(await d.run(['memoro-cli', '671', '--admin', '--json']), 0);
+    assert.deepEqual(JSON.parse(d.out.out), {
+      ok: true, merged: true, merge_commit: MERGE_SHA, merged_into: 'main', step: { project: 'merge-queue', index: 1 }, queue: 'none',
+    });
+  });
+
+  it('a closed pull request exits 1 and changes nothing', async () => {
+    register();
+    writeQueue([queued()]);
+    const before = readFileSync(mergesPath(root), 'utf8');
+    const d = adminRun({ views: [ok({ ...OPEN, state: 'CLOSED' })] });
+    assert.equal(await d.run(), 1);
+    assert.equal(d.merges().length, 0);
+    assert.equal(readFileSync(mergesPath(root), 'utf8'), before);
+    assert.equal(entryNow().steps[1].status, 'running');
+    assert.equal(d.out.err, 'mc: #671 is closed, not merged — nothing to land\n');
+  });
+
+  it('a gh pr merge that fails leaves the queue and the register unchanged, and says the last line of its error', async () => {
+    register();
+    writeQueue([queued()]);
+    const before = readFileSync(mergesPath(root), 'utf8');
+    const d = adminRun({
+      views: [ok(OPEN)],
+      merge: { status: 1, stdout: '', stderr: 'X Pull request is not mergeable\nGraphQL: Head branch was modified\n' },
+    });
+    assert.equal(await d.run(), 1);
+    assert.equal(d.merges().length, 1);
+    assert.equal(readFileSync(mergesPath(root), 'utf8'), before);
+    assert.equal(entryNow().steps[1].status, 'running');
+    assert.equal(d.out.err, 'mc: NOT merged — GraphQL: Head branch was modified\n');
+  });
+
+  it('a pull request gh cannot read exits 1 and nothing is merged', async () => {
+    register();
+    const d = adminRun({ views: [{ status: 1, stdout: '', stderr: 'no such pull request' }] });
+    assert.equal(await d.run(), 1);
+    assert.equal(d.merges().length, 0);
+    assert.equal(d.out.err, 'mc: gh could not read #671\n');
+  });
+
+  it('parseMergeArgs takes --admin for one pull request and refuses it with the four it cannot be with', () => {
+    const forms = { docs: true, watch: true, admin: true };
+    const parsed = parseMergeArgs(['memoro-cli', '671', '--admin'], forms);
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.admin, true);
+    assert.equal(parsed.pr, 671);
+    assert.equal(parseMergeArgs(['memoro-cli', '671', '672', '--admin'], forms).error, '--admin lands one pull request at a time');
+    assert.equal(parseMergeArgs(['memoro-cli', '671', '--admin', '--check'], forms).error, '--admin lands; --check only measures');
+    assert.equal(parseMergeArgs(['memoro-cli', '671', '--admin', '--docs'], forms).error, '--admin or --docs, not both');
+    assert.equal(parseMergeArgs(['memoro-cli', '671', '--admin', '--watch'], forms).error, '--admin lands in the call — there is nothing to watch');
+    assert.equal(parseMergeArgs(['memoro-cli', '671', '--admin'], { docs: true, watch: true }).error, 'unknown flag: --admin', 'the other forms do not take it');
   });
 });
