@@ -29,6 +29,8 @@ export const COMPARE_IDLE_MS = 15 * 60 * 1000;
 
 /** The fields compared besides `element` and the keys of `rect` and `scroll`. */
 const FIELDS = ['position', 'padding', 'margin', 'overflow_y', 'z_index', 'visible'];
+/** Fields a capture script may not report yet: compared only when both trees carry them. */
+const OPTIONAL_FIELDS = ['background_color', 'color'];
 
 /**
  * The tree `<ref>` is checked out in, made or reused. Refuses a ref git does
@@ -198,6 +200,7 @@ export function diffMeasure(refList, hereList) {
       for (const key of keys) push(`${group}.${key}`, ref[group]?.[key], here[group]?.[key]);
     }
     for (const field of FIELDS) push(field, ref[field], here[field]);
+    for (const field of OPTIONAL_FIELDS) if (ref[field] !== undefined && here[field] !== undefined) push(field, ref[field], here[field]);
   }
   return diff;
 }

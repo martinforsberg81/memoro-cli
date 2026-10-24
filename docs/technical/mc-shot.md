@@ -73,8 +73,10 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   carries `selector: null`.
 - **`--measure <css> | @<name>`**: every element the selector matches (at most
   20; a selector list measures each part), as `{ element, rect, position,
-  padding, margin, overflow_y, z_index, scroll, visible }`, with `visible`
-  walking the ancestors. A name is one of the surface's declared measurements
+  padding, margin, overflow_y, z_index, background_color, color, scroll,
+  visible }`, with `visible` walking the ancestors. The two colours are the
+  computed values as CSS reports them (`rgb(…)`/`rgba(…)`), and `--compare`
+  compares them only when both trees report them. A name is one of the surface's declared measurements
   (`mc dev surfaces`). Printed as one JSON line `{ measure, safe_area }` after
   the path and the URL; with `--json` it is part of the result.
 - **`--account <name>`** (dev only) picks an account `.mc/shot.json` declares
