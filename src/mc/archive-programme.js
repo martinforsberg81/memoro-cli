@@ -32,12 +32,12 @@
  * attempt is landed rather than opened twice.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
-import { planAreaName, programsHome } from './paths.js';
+import { programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 import { tilde } from './status-project.js';
@@ -64,11 +64,12 @@ export function programmeRow({ programme, date, pointer }) {
 
 /**
  * Whether the programme may be archived, from facts gathered elsewhere:
- * `{ ok: true }` or `{ ok: false, lines }`, each line one reason.
+ * `{ ok: true }` or `{ ok: false, lines }`, each line one reason. `area` is
+ * the programme's directory as the lines name it; it is passed in, never
+ * looked up, so the verdict reads no directory — not even the user's ~/mc.
  */
 export function archiveVerdict({
-  programme, plans = [], homes = [], areaExists = false, forecast = null,
-  area = tilde(join(homedir(), 'mc', planAreaName(programme, { root: join(homedir(), 'mc') }))),
+  programme, plans = [], homes = [], areaExists = false, forecast = null, area,
 }) {
   const lines = [];
   for (const plan of plans) {
