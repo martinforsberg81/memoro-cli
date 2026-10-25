@@ -18,6 +18,7 @@
  * blocks nothing: git and gh are untouched by anything here.
  */
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { criteriaDoor } from '../merge-boundary.js';
@@ -779,8 +780,11 @@ function readAll(stream) {
 
 export async function resolveRepoPath(name) {
   const snapshot = readCombinedSnapshot();
-  const roots = snapshot.kind === 'present'
-    ? (snapshot.value.repos || []).map((repo) => repo.path)
+  // Only a snapshot the watcher still keeps: one it stopped writing holds the
+  // paths of whatever layout the machine had then (2026-10-25, the move to
+  // ~/mc/repos left `~/memoro` in an August snapshot, and every merge read it).
+  const roots = snapshot.kind === 'present' && !snapshot.stale
+    ? (snapshot.value.repos || []).map((repo) => repo.path).filter((path) => existsSync(path))
     : [];
   const quick = matchRepo(name, roots);
   if (quick) return quick;

@@ -612,6 +612,34 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
   });
 });
 
+describe('collectPage — the repositories it reads', () => {
+  it('reads a bare repository, which has no .git under its path', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-bare-'));
+    const bare = join(root, 'repos', 'memoro.git');
+    mkdirSync(bare, { recursive: true });
+    const asked = [];
+    try {
+      await collectPage({
+        claudeSettings: () => null,
+        env: { MC_WORK_ROOT: root, MC_HOME: root },
+        now: NOW,
+        repos: [{ name: 'memoro', path: bare, git: bare, bare: true, checkout: null }],
+        offline: true,
+        exec: async () => ({ ok: false, stdout: '' }),
+        run: () => ({ status: 1, stdout: '' }),
+        git: () => null,
+        checkout: null,
+        cache: {
+          loadPlans: ({ repos }) => { asked.push(...repos.map((repo) => repo.name)); return { plans: [], sources: [] }; },
+          loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }),
+          savePrs: () => { throw new Error('savePrs on the offline page'); },
+        },
+      });
+      assert.deepEqual(asked, ['memoro'], 'the plans are read from the bare repository (2026-10-25: none were, and the page had 0 projects)');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe('DOCKER — one line from the state file', () => {
   const STATE = {
     at: NOW.toISOString(),

@@ -79,6 +79,7 @@ import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, workRoot } f
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry, realLock } from './register.js';
+import { gitDirOf } from './repos.js';
 import { readTailEntries } from './conversations.js';
 import { claudeTail, codexTail } from './work-status.js';
 import { planState, unmetCriteria } from './plan-schema.js';
@@ -1546,7 +1547,7 @@ export async function collectPage({
   // (2026-10-10, 2026-10-11).
   const home = mcHome(env);
   const notes = [];
-  const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
+  const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
 
   let fetched = false;
   if (!offline) {
