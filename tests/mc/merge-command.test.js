@@ -113,6 +113,15 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.match(d.out.out, /^mc: the merger \(pid 777, just started\) lands it; follow it in .*merger\.log$/mu);
   });
 
+  it('a bare repository is queued under its name, without .git', async () => {
+    const d = deps({ head: 'some-branch' });
+    d.io.resolveRepo = async () => '/mc/repos/memoro-cli.git';
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    const [job] = queue();
+    assert.equal(job.repo, 'memoro-cli', 'memoro-cli.git queued #1101 a second time beside its memoro-cli entry (2026-10-25)');
+    assert.equal(job.repo_path, '/mc/repos/memoro-cli.git');
+  });
+
   it('several at once are queued one by one, in the order given, each with its own place', async () => {
     const d = deps({ env: { MC_STEP: 'merge-queue:1' } });
     assert.equal(await gate({ repo: 'memoro-cli', pr: 673, prs: [673, 671, 672] }, d.io), 0);

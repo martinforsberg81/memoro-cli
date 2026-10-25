@@ -11,7 +11,6 @@
  * GitHub's admin override and no round, and books it (`runAdmin`).
  */
 import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
 
 import { writeJsonAtomic } from '../atomic-write.js';
 import { runTool } from '../child-async.js';
@@ -27,6 +26,7 @@ import { recordRound } from '../repo-round-log.js';
 import { currentHolder } from '../work-identity.js';
 import { scanArgs } from './flags.js';
 import { gate, parseMergeArgs, resolveRepoPath } from './repo.js';
+import { repoNameOf } from '../repos.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -179,7 +179,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
   let queue = 'none';
   (io.lock || realLock)(root, () => {
     const entries = parseQueue((io.read || readText)(queuePath));
-    entry = entries.find((item) => item.pr === opts.pr && (item.repo_path === repoPath || item.repo === basename(repoPath))) || null;
+    entry = entries.find((item) => item.pr === opts.pr && (item.repo_path === repoPath || item.repo === repoNameOf(repoPath))) || null;
     if (!entry) return;
     if (entry.state === 'landing') { queue = 'landing'; return; }
     writeQueue(queuePath, dequeue(entries, { repo: entry.repo, pr: opts.pr }));
@@ -205,7 +205,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
   }
 
   // The page drops the row at once; a page that cannot be written costs nothing.
-  try { dropPr({ root, repo: basename(repoPath), number: opts.pr }); } catch { /* the page catches up on its own */ }
+  try { dropPr({ root, repo: repoNameOf(repoPath), number: opts.pr }); } catch { /* the page catches up on its own */ }
 
   const now = deps.now ? deps.now() : new Date();
   recordRound({ repo: repoPath, pr: { number: opts.pr }, ok: true, merged: true, merge_commit: sha, stopped_at: null, reason: null, holder: currentHolder(), started_at: now.toISOString() }, { mode: 'admin' });
