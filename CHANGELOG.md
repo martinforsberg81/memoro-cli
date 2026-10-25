@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- A session's whole-tree `npm ci` or `npm install` (no package) is turned to
+  `npm run deps:ensure` by the pre-tool hook (`npm-install`). 16 full
+  `node_modules` trees (about 8 GB) were made on 2026-10-25 by sessions that
+  ran `npm ci` themselves, since `npm test` had been turned to `mc gate`,
+  which attaches nothing. `npm install <pkg>` and `--package-lock-only` pass.
 - The gate carries the candidate's result forward as the next baseline
   (A1, approved by Martin 2026-08-23: "Verkställ 1+2"). After a green
   merge, main is the tree the candidate was just measured on — 52 of 61
