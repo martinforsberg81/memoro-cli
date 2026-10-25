@@ -345,12 +345,14 @@ IN FULL
                                     server — the warnings (a merged branch, a
                                     stale one, main, a session started outside
                                     the repository) and the mc toolbox
-  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read|Edit|MultiEdit: gh pr
+  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read|Edit|MultiEdit
+                                    and the Claude in Chrome tools: gh pr
                                     create, gh pr edit and git push → mc publish, gh pr
                                     merge → mc merge, npm run ci, npm test and
                                     node --test → mc gate <files…>, npm
                                     run dev → mc test dev --here --url, a scratch
-                                    Playwright script → mc shot. MC_HOOK_ALLOW=1
+                                    Playwright script → mc shot, Chrome sent to a
+                                    local server → mc shot next. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
                                     the hook JSON on stdin and always exit 0
   mc hook install [--check]        Write mc's two hook entries into

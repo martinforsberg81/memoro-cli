@@ -135,8 +135,9 @@ export function warningsFor(state) {
  */
 export const TOOLBOX = [
   'mc is the first choice for every mechanical step; the raw tool only when mc cannot (say why).',
-  '  see the app       mc shot dev <target|/app/path> [--viewport iphone] [--scroll <css>] [--measure <css>]',
+  '  see the app       mc shot dev <target|/app/path> [--viewport iphone] [--measure <css>] [--keep → mc shot next …]',
   '                    serves the worktree you stand in, restarts it after edits, prints which tree it served',
+  '  step a flow       mc shot next [<id>] --click/--fill/--press/--upload/--eval <js> … — errors back in the same call',
   '  a server URL      mc test dev --here --url',
   '  run tests         mc gate <files…> [--test-name-pattern …]   (in the gate lane, at most 30 files, 2 KB verdict)',
   '                    mc gate alone: the test files this branch changed; no whole suite — that is the merger\'s',
@@ -272,6 +273,45 @@ export const BASH_RULES = [
 /** Playwright written into a scratch file is a shot mc already takes. */
 const PLAYWRIGHT = /\bfrom\s+['"][^'"]*playwright[^'"]*['"]|require\(\s*['"][^'"]*playwright/u;
 
+/*
+ * Claude in Chrome against a local dev server is a flow `mc shot --keep` and
+ * `mc shot next` step through, one call each with the errors in the answer
+ * (2026-10-24: three sessions in ten days, 76 Chrome calls). Only a navigation
+ * to a local host is turned; a real site, a published artifact and a tab that
+ * is already open pass.
+ */
+const CHROME = 'mcp__claude-in-chrome__';
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const CHROME_REASON = 'Use `mc shot dev <path> --keep` and then `mc shot next [--click|--fill|--press|--upload|--eval <js>|--goto <path>|--wait-for <css>|--measure <css>] [--timeout <s>]`: one call per step, the same browser, every page, request, server and dialog error back in the same call, and the server restarted after your edits. If mc shot cannot do what you need, say what is missing so mc can learn it; a call that still needs Chrome carries #MC_HOOK_ALLOW=1 on its URL and says why.';
+
+/** Whether `url` names a server on this machine; a bare `localhost:8920/app` counts. */
+function localUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  const text = url.trim();
+  try {
+    return LOCAL_HOSTS.has(new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(text) ? text : `http://${text}`).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether one `browser_batch` action is a navigate to a local server, whatever shape it is written in. */
+function localNavigateAction(action) {
+  if (!isPlainObject(action)) return false;
+  const named = ['tool', 'name', 'action', 'type', 'tool_name'].some((key) => typeof action[key] === 'string' && /(^|__)navigate$/u.test(action[key]));
+  if (!named) return false;
+  return [action, action.input, action.args, action.arguments, action.params, action.parameters]
+    .some((place) => isPlainObject(place) && localUrl(place.url));
+}
+
+/** Whether a Claude in Chrome call sends the browser to a local server. */
+function chromeToLocal(tool, args) {
+  const verb = tool.slice(CHROME.length);
+  if (verb === 'navigate' || verb === 'tabs_create_mcp') return localUrl(args.url);
+  if (verb === 'browser_batch') return Array.isArray(args.actions) && args.actions.some(localNavigateAction);
+  return false;
+}
+
 /**
  * The PreToolUse answer for one tool call: `null` to let it run, or the reason
  * it is turned to an mc verb. `inRepo` says whether a written file lands inside
@@ -280,6 +320,10 @@ const PLAYWRIGHT = /\bfrom\s+['"][^'"]*playwright[^'"]*['"]|require\(\s*['"][^'"
 export function preToolDecision(input, { inRepo = () => false, programs = programsHome() } = {}) {
   const tool = input?.tool_name;
   const args = input?.tool_input || {};
+  if (typeof tool === 'string' && tool.startsWith(CHROME)) {
+    if (JSON.stringify(args).includes(ALLOW_MARK) || !chromeToLocal(tool, args)) return null;
+    return { id: 'chrome-dev', reason: CHROME_REASON };
+  }
   if (tool === 'Bash') {
     const command = String(args.command || '');
     if (command.includes(ALLOW_MARK)) return null;
@@ -408,11 +452,12 @@ export function inMcTerritory(cwd, deps = {}) {
  * must never stand between a session and its work. `Read` is in the matcher so
  * the repositories' Read hooks (memoro's block-sqlite-state.sh) answer through
  * `mc hook pre-tool`. `Edit` and `MultiEdit` are in it so the plan-file refusal
- * sees them.
+ * sees them, and the Claude in Chrome tools so a dev-server flow is turned to
+ * `mc shot next`.
  */
 export const MC_HOOKS = Object.freeze([
   Object.freeze({ event: 'SessionStart', which: 'session-start', matcher: null, command: 'mc hook session-start 2>/dev/null || true' }),
-  Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read|Edit|MultiEdit', command: 'mc hook pre-tool 2>/dev/null || true' }),
+  Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*', command: 'mc hook pre-tool 2>/dev/null || true' }),
 ]);
 
 /** Claude Code's user settings file. */

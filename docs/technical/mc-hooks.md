@@ -26,7 +26,7 @@ warning most.
 ```json
 "hooks": {
   "SessionStart": [{ "hooks": [{ "type": "command", "command": "mc hook session-start 2>/dev/null || true" }] }],
-  "PreToolUse": [{ "matcher": "Bash|Write|Read|Edit|MultiEdit", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
+  "PreToolUse": [{ "matcher": "Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
 }
 ```
 
@@ -38,7 +38,10 @@ registration has drifted from the block, and the page's MC line names the drift
 as `hooks: … · mc hook install`.
 
 `Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too. `Edit`
-and `MultiEdit` are there so the plan-file refusal below sees them.
+and `MultiEdit` are there so the plan-file refusal below sees them, and
+`mcp__claude-in-chrome__.*` so the Chrome rule does. When the matcher changes,
+`mc hook install` rewrites mc's entry in place (no second entry), and
+`--check` reports the old matcher as drift until it has run.
 
 `|| true` because a hook must never stand between a session and its work: an
 mc that does not know the verb yet, or any failure, is silence. The verbs
@@ -96,6 +99,21 @@ A `Write` whose content imports Playwright, to a path outside every known
 repository, is turned to `mc shot dev … --measure`: a scratch measurement
 script is the thing `mc shot` exists to replace, and when it cannot, the reason
 is what mc should learn next. A repository's own Playwright code is left alone.
+
+A Claude in Chrome call (`mcp__claude-in-chrome__*`) that sends the browser to a
+server on this machine is turned to `mc shot dev <path> --keep` and
+`mc shot next` (`chrome-dev`): a `navigate` or `tabs_create_mcp` whose `url`
+host is `127.0.0.1`, `localhost` or `[::1]` (a URL without a scheme is read as
+`http://`), or a `browser_batch` whose `actions` hold such a `navigate`.
+Everything else in Chrome passes — a real site, a published artifact on
+claude.ai, a screenshot or click in a tab already open. Measured 2026-10-24:
+three sessions in ten days drove the dev server through Chrome, 76 calls, one
+model turn each, because `mc shot` could not yet run JavaScript, wait longer
+than 10 s, upload a file or keep a browser between calls. It can now (`--eval`,
+`--timeout`, `--upload`, `--keep`, `mc shot next`), and each step answers with
+the page, request, server and dialog errors in the same call. The escape is
+`MC_HOOK_ALLOW=1` anywhere in the tool input — a `#MC_HOOK_ALLOW=1` fragment on
+the URL — with the reason said, so what `mc shot` lacks is what mc learns next.
 
 A `Write`, `Edit` or `MultiEdit` of a `PLAN.json`, `DRAFT.json`, `STATE.json` or
 `CLOSEOUT.json` under `~/mc/programs/` is refused (`plan-file`): a plan changes
