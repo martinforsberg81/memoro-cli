@@ -21,7 +21,7 @@
  * with one, `npm ci` may write outside `node_modules`, a clone of
  * `node_modules` is not what it would have left, and scripts are not in the
  * key. A cache that cannot be read, cloned or written never stops a round:
- * every failure is said and becomes the install it replaced.
+ * every failure is said and becomes the install it replaced. Eviction is least recently used: a store sets `meta.at` and every hit renews it.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -42,6 +42,12 @@ import { repoFileSlug } from './repo-snapshot.js';
  * written, so an entry costs far less than that.
  */
 export const PREPARE_CACHE_KEEP = 4;
+
+/**
+ * An entry no round has used for fourteen days goes in `mc tidy` (rule A,
+ * `tidy.js`), whatever the count. Nothing in this file uses it yet.
+ */
+export const PREPARE_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** The `package.json` fields that change what `npm ci` installs, in key order. */
 export const INSTALL_FIELDS = Object.freeze([
@@ -101,6 +107,7 @@ export async function prepareCandidate({
   run = defaultRun,
   exists = existsSync,
   read = readFileSync,
+  write = writeFileSync,
   now = () => Date.now(),
   platform = process.platform,
   node = process.version,
@@ -129,6 +136,10 @@ export async function prepareCandidate({
   if (exists(join(entry, 'node_modules')) && readMeta(entry, read)?.key === key) {
     const cloned = await run('cp', ['-cR', join(entry, 'node_modules'), target]);
     if (cloned.status === 0) {
+      try {
+        const meta = readMeta(entry, read);
+        write(join(entry, 'meta.json'), `${JSON.stringify({ ...meta, at: now(), hits: (Number(meta?.hits) || 0) + 1 })}\n`);
+      } catch { /* the entry keeps its old `at`: evicted a little early, never a failed round */ }
       say(`prepare: cloned node_modules from the cache (${key})`);
       return { status: 0, stdout: '', stderr: '', cached: true, key };
     }
@@ -164,7 +175,10 @@ async function store({ key, entry, cacheDir, target, run, read, now, node, pid, 
   }
 }
 
-/** Remove the oldest entries by `meta.at` until `PREPARE_CACHE_KEEP` remain. */
+/**
+ * Remove the least recently used entries — by `meta.at`, which a store sets and
+ * every hit renews — until `PREPARE_CACHE_KEEP` remain.
+ */
 export function evict({ cacheDir, read = readFileSync, keep = PREPARE_CACHE_KEEP, say = () => {} }) {
   const entries = readdirSync(cacheDir, { withFileTypes: true })
     .filter((item) => item.isDirectory() && !item.name.includes('.tmp-'))
