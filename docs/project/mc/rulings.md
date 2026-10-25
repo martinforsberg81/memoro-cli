@@ -1937,3 +1937,26 @@ and GitHub, memoro, 2026-10-17 → 2026-10-24:
    before it squashes, still in the call (project `docs-reads`).
 5. **A test that never ends is a red by name** after ten minutes (project
    `hung-test`).
+
+## 57 · An archived programme's directory leaves `programs/` for `archive/programs/`
+
+`ruling · 2026-10-25` · raised by Martin
+
+> "Meningen är ju att jag ska köra plan --archive när ett program är avklarat
+> och inte behövs mer." (Martin, 2026-10-25)
+
+`mc plan staff --archive` released the planning session's worktrees and said
+"the programme's directory stays": ruling 51 § 5 kept every programme's
+directory, and #1051 let the archive inherit that. § 5 was written for a
+programme that is still going; for one that is over it left an empty shell
+under `~/mc/programs/` for every programme ever closed.
+
+1. **Archiving a programme moves its directory whole** to
+   `~/mc/archive/programs/<programme>/`, once main is archived and the
+   planning session's worktrees are released: its projects (`PLAN.json`,
+   `STATE.json`, `CLOSEOUT.json`) and documents go with it. A name archived
+   before gets `-2`, `-3`, …; nothing is moved over.
+2. **Nothing under `archive/` is live**: no plan, register entry, area or
+   stray is read from it.
+3. Ruling 51 § 5 holds for every other verb: in a programme's directory mc
+   removes only git worktrees.
