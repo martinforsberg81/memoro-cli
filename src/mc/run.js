@@ -586,8 +586,7 @@ export function realDeps(env = process.env) {
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
     // `mc tidy --apply` (tidy.js): its list written, then removed from, and
-    // Docker's images and build cache unused for three days on a runtime that
-    // is already up (`tidyDocker`). A dependency so a fixture without it
+    // Docker's images unused for three days on a runtime that is already up (`tidyDocker`). A dependency so a fixture without it
     // removes nothing on the machine running the suite.
     tidy: async () => ({ ...runTidy({ apply: true, env }), docker: await tidyDocker({ apply: true, env }) }),
     // runner.log to runner.log.1 past the limit (logger.js).

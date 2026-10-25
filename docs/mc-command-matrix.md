@@ -37,8 +37,8 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. Rule C removes `mc shot --compare` trees under `~/.memoro/mc/compare/` unused for a day with no dev server, by `git worktree remove` in their repository. Rule K removes gate, gate-cache and selection directories whose repository slug no repository mc knows has, and rule A gate-cache entries unused for 14 days. With the runtime up, it also prunes Docker images and build cache unused for three days, and never starts the runtime to do so. |
-| `mc tidy --docker [--apply] [--json]` | Docker only: the dry run shows what `docker system df` calls reclaimable, and `--apply` prunes images and build cache unused for three days. `--apply` starts OrbStack or Docker Desktop if it is down, through `mc docker ensure`'s lease, and releases the lease afterwards. |
+| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. Rule C removes `mc shot --compare` trees under `~/.memoro/mc/compare/` unused for a day with no dev server, by `git worktree remove` in their repository. Rule K removes gate, gate-cache and selection directories whose repository slug no repository mc knows has, and rule A gate-cache entries unused for 14 days. With the runtime up, it also prunes Docker images unused for three days (never the build cache), and never starts the runtime to do so. |
+| `mc tidy --docker [--apply] [--json]` | Docker only: the dry run shows what `docker system df` calls reclaimable, and `--apply` prunes images unused for three days. `--apply` starts OrbStack or Docker Desktop if it is down, through `mc docker ensure`'s lease, and releases the lease afterwards. |
 | `mc work tidy [--apply] [--days <n>] [--json]` | The same as `mc tidy`. |
 | `mc layout [--json]` | `layout 1` or `layout 2` (ruling 51, `~/mc/runner/layout.json`), and the four roots: planning sessions, step areas, deps areas, registers. |
 | `mc layout migrate [--json]` | The move from layout 1 to layout 2 as a dry run (`layout-migrate.js`: `gatherLayoutFacts` reads, the pure `planLayoutMove` decides): each `would move <from> → <to> (<how>)` under PLANNING SESSIONS, STEP AREAS, REGISTERS, TRANSCRIPTS, HOOKS, LAYOUT, then REFUSED — a live runner, step session, merger or merge, an open session in an old area, a process standing in one, a dev server serving one, a destination that exists, a bad programme name, a register that does not parse. Writes nothing; exit 0 with no refusal, 1 otherwise. In layout 2: `layout 2 — nothing to move`. `--json` is `{ layout, moves, refusals }`. |
@@ -113,7 +113,7 @@ a planning area's `memoro/` and `memoro-cli/`, and every `memory/` under
 `~/.claude/projects` are never removed. The runner runs it once a day and
 after a lane skipped for disk. The apply logs `tidy` with counts only.
 Its Docker half (`tidyDocker`, `docker.js`) runs `docker image prune --all`
-and `docker builder prune --all` with `--filter until=72h`. It runs only
+with `--filter until=72h`, and leaves the build cache alone. It runs only
 when the runtime is already up, except under `mc tidy --docker --apply`.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a

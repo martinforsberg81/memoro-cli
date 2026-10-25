@@ -7,8 +7,8 @@
  *                            each target asked again first
  *   mc tidy --json           the list object
  *   mc tidy --days <n>       how old a loose transcript must be (default 14)
- *   mc tidy --docker         Docker only: images and build cache unused for
- *                            three days; with --apply it starts the runtime
+ *   mc tidy --docker         Docker only: images unused for three days;
+ *                            with --apply it starts the runtime
  *                            if it is down, which nothing else here does
  *
  * Without `--docker` the Docker half runs too, but only on a runtime that is
@@ -127,7 +127,7 @@ function writeDocker(stdout, answer) {
     return;
   }
   if (answer.reclaimable) {
-    stdout.write(`docker: would prune images and build cache unused for 3 days — at most ${answer.reclaimable.images} of images and ${answer.reclaimable.build_cache} of build cache\n`);
+    stdout.write(`docker: would prune images unused for 3 days — at most ${answer.reclaimable.images}\n`);
     return;
   }
   for (const item of answer.pruned) {

@@ -391,9 +391,15 @@ export async function removeDeadHolders({ dryRun = false, io = {} } = {}) {
 }
 
 /**
- * How old an image or a build-cache entry must be before `mc tidy` prunes it.
- * Martin, 2026-10-19: images and build cache older than a few days, in `mc
- * tidy`. Three days, so what this week's deploys and dev servers built stays.
+ * How old an image must be before `mc tidy` prunes it. Martin, 2026-10-19:
+ * images older than a few days, in `mc tidy`. Three days, so what this week's
+ * deploys and dev servers built stays.
+ *
+ * The build cache is not pruned. Martin, 2026-10-25: with it pruned, every
+ * deploy rebuilt the avatar-motion image from nothing, its 1.45 GB of torch,
+ * pip and LivePortrait layers came out with new digests (measured: 075fa9e7
+ * against 928242af, all four), and each push to registry.cloudflare.com ran
+ * for most of an hour and then timed out.
  */
 export const TIDY_KEEP_FILTER = 'until=72h';
 /** One prune: Docker walks every layer, which takes longer than a status call. */
@@ -401,16 +407,15 @@ export const PRUNE_TIMEOUT_MS = 5 * 60_000;
 
 const PRUNES = [
   { what: 'images', args: ['image', 'prune', '--all', '--force', '--filter', TIDY_KEEP_FILTER] },
-  { what: 'build cache', args: ['builder', 'prune', '--all', '--force', '--filter', TIDY_KEEP_FILTER] },
 ];
 
-/** `Total reclaimed space: 1.2GB` (image prune) or `Total:\t1.2GB` (builder prune). */
+/** `Total reclaimed space: 1.2GB`. */
 function reclaimedOf(text) {
-  return /Total(?: reclaimed space)?:\s*(\S+)/u.exec(String(text ?? ''))?.[1] ?? null;
+  return /Total reclaimed space:\s*(\S+)/u.exec(String(text ?? ''))?.[1] ?? null;
 }
 
 /**
- * `mc tidy`'s Docker half: images and build cache unused for three days.
+ * `mc tidy`'s Docker half: images unused for three days.
  * Docker itself never prunes an image a container uses, so a running gate or
  * dev server keeps its own.
  *
@@ -442,7 +447,7 @@ export async function tidyDocker({
       const rows = await jsonLines(m, ['system', 'df', '--format', '{{json .}}'], 'docker system df', errors);
       if (!rows) return { ...answer, reason: errors.join('; ') };
       const of = (type) => String(rows.find((row) => row.Type === type)?.Reclaimable ?? '0B');
-      return { ...answer, reclaimable: { images: of('Images'), build_cache: of('Build Cache') } };
+      return { ...answer, reclaimable: { images: of('Images') } };
     }
     for (const { what, args } of PRUNES) {
       const result = await m.run('docker', args, { timeoutMs: PRUNE_TIMEOUT_MS });

@@ -2900,10 +2900,10 @@ test('the tidy line says what Docker reclaimed, and nothing when Docker was down
   const f = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + tidyRowAt('2026-08-28T09:00:00Z') });
   f.deps.tidy = async () => ({
     outcome: { freed: 0, removed: 0, kept: 0 },
-    docker: { up: true, pruned: [{ what: 'images', ok: true, reclaimed: '12.4GB' }, { what: 'build cache', ok: false, detail: 'busy' }] },
+    docker: { up: true, pruned: [{ what: 'images', ok: false, detail: 'busy' }] },
   });
   await createRunner({ deps: f.deps }).chores();
-  assert.match(f.files['/w/runner/log/runner.log'], /kept 0 on re-check · docker: images 12\.4GB, build cache failed — busy/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /kept 0 on re-check · docker: images failed — busy/u);
   assert.equal(dockerNote({ up: false, pruned: [] }), '');
   assert.equal(dockerNote(null), '');
 });

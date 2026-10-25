@@ -306,9 +306,8 @@ describe('docker.js', () => {
   }));
 });
 
-describe('tidyDocker — mc tidy\'s images and build cache', () => {
+describe('tidyDocker — mc tidy\'s images', () => {
   const IMAGES = `docker image prune --all --force --filter ${TIDY_KEEP_FILTER}`;
-  const BUILDER = `docker builder prune --all --force --filter ${TIDY_KEEP_FILTER}`;
   const DF = 'docker system df --format {{json .}}';
   const running = { 'orbctl status': { status: 0, stdout: 'Running\n' } };
 
@@ -320,38 +319,36 @@ describe('tidyDocker — mc tidy\'s images and build cache', () => {
       },
     });
     const answer = await tidyDocker({ root, io });
-    assert.deepEqual(answer.reclaimable, { images: '15.2GB (89%)', build_cache: '3.1GB' });
+    assert.deepEqual(answer.reclaimable, { images: '15.2GB (89%)' });
     assert.deepEqual(answer.pruned, []);
     assert.ok(calls.every((call) => !call.argv.includes('prune')));
   }));
 
-  it('an apply prunes images, then build cache, unused for three days, and says what each reclaimed', () => withRoot(async (root) => {
+  it('an apply prunes images unused for three days, says what it reclaimed, and never the build cache', () => withRoot(async (root) => {
     const { io, calls, logged } = fakeIo({
       answers: {
         ...running,
         [IMAGES]: { status: 0, stdout: 'Deleted Images:\nuntagged: x\n\nTotal reclaimed space: 12.4GB\n' },
-        [BUILDER]: { status: 0, stdout: 'ID\tRECLAIMABLE\nabc\ttrue\nTotal:\t2.1GB\n' },
       },
     });
     const answer = await tidyDocker({ apply: true, root, io });
     assert.equal(TIDY_KEEP_FILTER, 'until=72h');
     assert.deepEqual(answer.pruned, [
       { what: 'images', ok: true, reclaimed: '12.4GB', detail: null },
-      { what: 'build cache', ok: true, reclaimed: '2.1GB', detail: null },
     ]);
-    assert.deepEqual(calls.slice(1).map((call) => call.argv.join(' ')), [IMAGES, BUILDER]);
+    assert.deepEqual(calls.slice(1).map((call) => call.argv.join(' ')), [IMAGES]);
+    assert.ok(calls.every((call) => call.argv[0] !== 'builder'), 'the build cache is never pruned');
     assert.ok(calls.slice(1).every((call) => call.timeoutMs === PRUNE_TIMEOUT_MS));
     assert.equal(logged.at(-1).event, 'docker-tidy');
   }));
 
-  it('a prune that fails is a line, and the other still runs', () => withRoot(async (root) => {
+  it('a prune that fails is a line', () => withRoot(async (root) => {
     const { io } = fakeIo({
-      answers: { ...running, [IMAGES]: { status: 1, stderr: 'a prune operation is already running\n' }, [BUILDER]: { status: 0, stdout: 'Total:\t0B\n' } },
+      answers: { ...running, [IMAGES]: { status: 1, stderr: 'a prune operation is already running\n' } },
     });
     const answer = await tidyDocker({ apply: true, root, io });
     assert.deepEqual(answer.pruned.map((item) => [item.what, item.ok, item.detail]), [
       ['images', false, 'a prune operation is already running'],
-      ['build cache', true, null],
     ]);
   }));
 
@@ -373,12 +370,11 @@ describe('tidyDocker — mc tidy\'s images and build cache', () => {
         'orbctl start': { status: 0 },
         [INFO]: { status: 0, stdout: '28.0.1\n' },
         [IMAGES]: { status: 0, stdout: 'Total reclaimed space: 1GB\n' },
-        [BUILDER]: { status: 0, stdout: 'Total:\t0B\n' },
       },
     });
     const answer = await tidyDocker({ apply: true, start: { pid: 5000, run: 'mc tidy --docker' }, root, io });
     assert.equal(answer.up, true);
-    assert.equal(answer.pruned.length, 2);
+    assert.equal(answer.pruned.length, 1);
     assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
     assert.deepEqual(leaseFiles(root), [], 'the lease is released');
     assert.equal(readState({ root }).started_by_mc, true, 'so the idle stop stops it again');

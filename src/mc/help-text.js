@@ -121,8 +121,8 @@ IN FULL
                                     What mc may remove, per root, written to a
                                     list under ~/mc/runner/tidy/ first; --apply
                                     removes from that list after asking again.
-                                    Docker images and build cache unused for
-                                    3 days go too, if the runtime is up
+                                    Docker images unused for 3 days go too,
+                                    if the runtime is up
   mc tidy --docker [--apply] [--json]
                                     Docker only; with --apply it starts the
                                     runtime when it is down

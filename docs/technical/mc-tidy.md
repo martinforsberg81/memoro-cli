@@ -359,10 +359,9 @@ chore pass after a lane skipped for disk, at most once per hour
 
 ### Docker
 
-Docker's images and build cache are not files under a root, so they are not
-in the list. `tidyDocker` (`src/mc/docker.js`) prunes them after the list has
-been applied: `docker image prune --all` and then `docker builder prune --all`,
-both with `--filter until=72h`. Docker itself never removes an image that a
+Docker's images are not files under a root, so they are not in the list.
+`tidyDocker` (`src/mc/docker.js`) prunes them after the list has been
+applied: `docker image prune --all --filter until=72h`. Docker itself never removes an image that a
 container uses, so a running gate or dev server keeps its own. The dry run
 removes nothing and reports `docker system df`'s reclaimable sizes. Those
 sizes are an upper bound, because they ignore the three days. A failed prune
@@ -377,11 +376,19 @@ lease for its own pid, and releases the lease when it is done, so the
 runner's idle stop stops it again ([`mc-docker.md`](mc-docker.md)). Martin
 asked for both on 2026-10-19. On 2026-10-10 OrbStack held 21 images (17 GB)
 on an 8 GB machine whose disk was 98 % full. `mc deploy`'s prune after a
-container rollout keeps a week of images. This keeps three days and also
-reaches the build cache.
+container rollout keeps a week of images. This keeps three days.
+
+The build cache is never pruned. It was, from 2026-10-19 to 2026-10-25, with
+the same three days, and OrbStack's builder was capped at 4 GB besides. With
+the cache gone every deploy rebuilt the avatar-motion image from nothing: its
+torch, pip and LivePortrait layers (1.45 GB compressed) are not reproducible,
+so they came out with new digests every build, and every push to
+registry.cloudflare.com re-uploaded them for most of an hour before a layer
+commit timed out. Martin removed both on 2026-10-25. BuildKit's own GC bounds
+the cache.
 
 The runner's tidy line ends with what Docker reclaimed
-(`· docker: images 12.4GB, build cache 2.1GB`), and has no such ending when
+(`· docker: images 12.4GB`), and has no such ending when
 the runtime was down.
 
 ### Never touched
