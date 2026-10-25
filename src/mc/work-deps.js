@@ -87,12 +87,17 @@
  * workarea was made first. memoro is not it: it declares `prepare: 'npm ci'`
  * in `repo-gate-table.js` (measured, D-0089) and its dependencies are its
  * own. A repository that is not on this list is left alone and told so.
+ * memoro keeps its own tree, and a checkout mc makes of it is attached to that
+ * tree by the repository's own `scripts/ensure-worktree-deps.mjs`, when it has
+ * one (`attachRepoDeps`, below): the repository says how by having the file,
+ * not by its name.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { runTool } from './child-async.js';
 import {
   workDepsLockPath,
   workDepsManifestPath,
@@ -195,6 +200,38 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
 }
 
 /**
+ * The repository's own attachment, for a checkout mc made of a repository that
+ * keeps its own tree. The repository says how by having the script:
+ * `scripts/ensure-worktree-deps.mjs` links the checkout's `node_modules` into
+ * its per-lockfile cache (`package-links`, about 250 KB a checkout where a full
+ * `npm ci` was 510 MB) and prints a line saying which way it went. A repository
+ * without the script has nothing to attach and is told so.
+ *
+ * Never throws and never fatal to its caller: `mc work add`, `mc plan` and
+ * `mc deps bump` report a failure and go on with the worktree.
+ */
+export function attachRepoDeps(worktree, { run = runAttachScript } = {}) {
+  const script = join(worktree, 'scripts', 'ensure-worktree-deps.mjs');
+  if (!existsSync(script)) return noAttachScript(worktree);
+  try {
+    return attachedWith(join(worktree, 'node_modules'), run(worktree, script));
+  } catch (error) {
+    return { ok: false, state: 'failed', path: join(worktree, 'node_modules'), why: whyItFailed(error) };
+  }
+}
+
+/** `attachRepoDeps`, awaited, so a cold `npm ci` does not hold the runner's event loop. */
+export async function attachRepoDepsAsync(worktree, { run = runAttachScriptAsync } = {}) {
+  const script = join(worktree, 'scripts', 'ensure-worktree-deps.mjs');
+  if (!existsSync(script)) return noAttachScript(worktree);
+  try {
+    return attachedWith(join(worktree, 'node_modules'), await run(worktree, script));
+  } catch (error) {
+    return { ok: false, state: 'failed', path: join(worktree, 'node_modules'), why: whyItFailed(error) };
+  }
+}
+
+/**
  * The install's outcome, as a promise when `install` returned one, as the
  * result otherwise. The merge gate's install returns a promise, so the
  * merger's process is not held for the ten minutes `npm ci` may take;
@@ -239,6 +276,30 @@ function npmCi(cwd) {
   execFileSync('npm', ['ci', '--no-audit', '--no-fund'], {
     cwd, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 10 * 60 * 1000,
   });
+}
+
+function noAttachScript(worktree) {
+  return { ok: true, state: 'no-attach-script', path: worktree, why: 'this repository attaches no dependency cache' };
+}
+
+/** What the script printed last is what it did: `[deps] Reused attached dependencies in 0.47 s.` */
+function attachedWith(path, output) {
+  const lines = String(output ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+  return { ok: true, state: 'attached', path, why: lines.at(-1) || 'attached' };
+}
+
+function runAttachScript(cwd, script) {
+  return execFileSync(process.execPath, [script], {
+    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10 * 60 * 1000,
+  });
+}
+
+async function runAttachScriptAsync(cwd, script) {
+  const ran = await runTool(process.execPath, [script], { cwd, timeoutMs: 10 * 60_000 });
+  if (ran.status !== 0) {
+    throw Object.assign(new Error(ran.error?.message || `ensure-worktree-deps exited ${ran.status}`), { stderr: ran.stderr });
+  }
+  return ran.stdout;
 }
 
 /** npm narrates before it fails; the last thing it said is the diagnosis. */

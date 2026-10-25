@@ -26,7 +26,7 @@ import { workDepsLockPath, workDepsManifestPath, workDepsPath } from '../../src/
 import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
-import { INSTALLED_MARK, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
+import { INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const MANIFEST = {
@@ -334,6 +334,70 @@ describe('a bare repository (repos.js, the second layout)', () => {
       const out = ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install: () => assert.fail('nothing to install') });
       assert.equal(out.state, 'no-manifest');
     } finally { fx.cleanup(); }
+  });
+});
+
+describe('memoro attaches its own (attachRepoDeps)', () => {
+  const dirs = [];
+  after(() => { for (const dir of dirs) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } } });
+
+  /** A checkout, with the attach script when `script` is a string and without it when null. */
+  const checkout = (script) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-attach-'));
+    dirs.push(dir);
+    if (script !== null) {
+      mkdirSync(join(dir, 'scripts'), { recursive: true });
+      writeFileSync(join(dir, 'scripts', 'ensure-worktree-deps.mjs'), script);
+    }
+    return dir;
+  };
+  const REUSED = '[deps] Reused attached dependencies in 0.47 s.\n';
+  const failure = () => Object.assign(new Error('Command failed'), { stderr: 'npm error boom\n' });
+  const never = () => assert.fail('nothing to attach, so nothing runs');
+
+  it('says a repository with no attach script attaches no cache, and runs nothing', () => {
+    const dir = checkout(null);
+    assert.deepEqual(attachRepoDeps(dir, { run: never }), {
+      ok: true, state: 'no-attach-script', path: dir, why: 'this repository attaches no dependency cache',
+    });
+  });
+
+  it('reports attached, with the line the script printed last', () => {
+    const dir = checkout('');
+    const calls = [];
+    const out = attachRepoDeps(dir, { run: (cwd, script) => { calls.push([cwd, script]); return REUSED; } });
+    assert.deepEqual(out, { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] Reused attached dependencies in 0.47 s.' });
+    assert.deepEqual(calls, [[dir, join(dir, 'scripts', 'ensure-worktree-deps.mjs')]]);
+  });
+
+  it('never throws when the script fails, and repeats what it said', () => {
+    const dir = checkout('');
+    const out = attachRepoDeps(dir, { run: () => { throw failure(); } });
+    assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: 'npm error boom' });
+  });
+
+  it('the async form says a repository with no attach script attaches no cache, and runs nothing', async () => {
+    const dir = checkout(null);
+    assert.deepEqual(await attachRepoDepsAsync(dir, { run: never }), {
+      ok: true, state: 'no-attach-script', path: dir, why: 'this repository attaches no dependency cache',
+    });
+  });
+
+  it('the async form reports attached, with the line the script printed last', async () => {
+    const dir = checkout('');
+    const out = await attachRepoDepsAsync(dir, { run: async () => REUSED });
+    assert.deepEqual(out, { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] Reused attached dependencies in 0.47 s.' });
+  });
+
+  it('the async form never throws when the script fails, and repeats what it said', async () => {
+    const dir = checkout('');
+    const out = await attachRepoDepsAsync(dir, { run: async () => { throw failure(); } });
+    assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: 'npm error boom' });
+  });
+
+  it('runs the script with node, in the checkout, under the default runner', () => {
+    const dir = checkout(`process.stdout.write('[deps] fixture\\n');\n`);
+    assert.deepEqual(attachRepoDeps(dir), { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] fixture' });
   });
 });
 

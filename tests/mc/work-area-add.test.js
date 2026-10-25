@@ -80,6 +80,15 @@ describe('addWorktree, when git refuses', () => {
     assert.equal(result.ok, true, result.reason);
     assert.equal(existsSync(join(result.path, '.git')), true);
   });
+
+  it('says the fixture attaches no dependency cache, and attaches nothing when asked not to', () => {
+    const result = addWorktree({ name: 'attach-check', repo: fx.dir, branch: 'attach-check', from: 'origin/main', env });
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(result.attachment.state, 'no-attach-script');
+    const unattached = addWorktree({ name: 'attach-off', repo: fx.dir, branch: 'attach-off', from: 'origin/main', env, attach: false });
+    assert.equal(unattached.ok, true, unattached.reason);
+    assert.equal(unattached.attachment, null);
+  });
 });
 
 describe('a bare repository (repos.js, the second layout)', () => {

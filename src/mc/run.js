@@ -1959,7 +1959,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const claim = claimProjectBranch({ repo: repo.path, branch: name, plan, registered, git: deps.git });
       if (claim.verdict === 'foreign') return block(REFUSAL['branch-foreign'], `branch ${name} is not the runner's: ${claim.holder ? `checked out at ${claim.holder}` : 'no worktree holds it'} (${claim.why}) — remove that worktree or delete the branch, then mc step ready`);
       if (claim.verdict === 'recreated') say(`${name}: local branch ${name} had landed and no worktree held it — deleted, the workarea starts from origin/main`);
-      const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
+      // `attach: false`: the runner attaches the checkout before each step itself, asynchronously.
+      const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env, attach: false });
       if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }
     // A merge of origin/main a killed session left behind. The runner aborts
