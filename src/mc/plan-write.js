@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { PLAN_FILE } from './plan-source.js';
-import { NAME_RE, validatePlan } from './plan-schema.js';
+import { branchFlow, NAME_RE, validatePlan } from './plan-schema.js';
 
 /**
  * The file a plan is written to until `mc project send` renames it. It sits
@@ -33,6 +33,32 @@ export const DRAFT_FILE = 'DRAFT.json';
  * § Decisions). A step names its own model; the plan does not name one for it.
  */
 export const MODELS = Object.freeze(['haiku', 'opus']);
+
+/**
+ * The review step `mc project send` adds, last, to every plan it sends (the
+ * branch flow): it measures every success criterion by its check, holds the
+ * branch to the goal, and lands the whole project as one pull request. Its
+ * instruction names canon/roles/review.md, which is where the role is read.
+ * `mc project step add` writes the same fields for a step it adds, and no others.
+ */
+export const REVIEW_STEP = Object.freeze({
+  title: 'Review the project against its goal',
+  kind: 'review',
+  status: 'ready',
+  done_when: 'Every success criterion is met in the register, measured by its check, and the branch does what the goal says within the contract and out of scope.',
+  instruction: Object.freeze(['canon/roles/review.md is this step\'s instruction: measure every criterion, hold the diff to the goal, close the gaps, land the project as one pull request.']),
+  runner: Object.freeze({ model: 'opus', effort: 'high' }),
+});
+
+/**
+ * The plan with a copy of `REVIEW_STEP` appended, or the plan unchanged when it
+ * is a branch-flow plan already. The copy is what the plan holds, never the
+ * frozen constant itself.
+ */
+export function withReviewStep(plan) {
+  if (branchFlow(plan)) return plan;
+  return { ...plan, steps: [...plan.steps, structuredClone(REVIEW_STEP)] };
+}
 
 /**
  * Words that name a person where a check or a step's end has to be a command.
@@ -212,6 +238,7 @@ export function sendProblems(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   steps.forEach((step, index) => {
     const n = index + 1;
+    if (step && typeof step === 'object' && 'kind' in step) problems.push(`steps[${n}].kind: the review step is mc's — send adds it`);
     if (!MODELS.includes(step?.runner?.model)) problems.push(`steps[${n}].runner.model: haiku or opus`);
     const names = bannedWords(step?.done_when);
     if (names.length) problems.push(`steps[${n}].done_when: names ${names.join(', ')} — a step's end is a check, never a person's`);
