@@ -162,7 +162,7 @@ export function planRecords(repoName, entries, textOf) {
  * the names of its `docs/project/<programme>/closeout/<project>.json` files on a
  * ref, then the `project` of every archived project under `~/mc/programs/` whose
  * `repo` is this repository (`programsArchived`: a `CLOSEOUT.json` beside its
- * plan). The ref's names are what `mc run` writes when it archives a plan
+ * plan, under `~/mc/programs/` or moved to `~/mc/archive/projects/`). The ref's names are what `mc run` writes when it archives a plan
  * (`closeoutPath` in `closeout.js`), and the archive takes only a done plan, so
  * a project with one was delivered. When the ref cannot be read, the programs
  * names are still returned.

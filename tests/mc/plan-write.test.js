@@ -13,6 +13,7 @@ import {
   checkWords,
   dependencyWords,
   draftProblems,
+  findArchivedProjectDir,
   findProjectDir,
   instructionParagraphs,
   readDraftOrPlan,
@@ -109,6 +110,28 @@ test('findProjectDir finds a draft, a sent plan, and nothing', () => {
     assert.equal(findProjectDir(home, '../drafted'), null);
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('findArchivedProjectDir finds a project the runner moved to the archive, and not a draft-only directory', () => {
+  const archive = scratch();
+  try {
+    mkdirSync(join(archive, 'mc', 'moved'), { recursive: true });
+    writeFileSync(join(archive, 'mc', 'moved', 'PLAN.json'), '{}');
+    writeFileSync(join(archive, 'mc', 'moved', 'CLOSEOUT.json'), '{}');
+    mkdirSync(join(archive, 'ops', 'drafted'), { recursive: true });
+    writeFileSync(join(archive, 'ops', 'drafted', DRAFT_FILE), '{}');
+
+    assert.deepEqual(findArchivedProjectDir(archive, 'moved'), {
+      programme: 'mc',
+      dir: join(archive, 'mc', 'moved'),
+      file: join(archive, 'mc', 'moved', 'PLAN.json'),
+    });
+    assert.equal(findArchivedProjectDir(archive, 'drafted'), null);
+    assert.equal(findArchivedProjectDir(archive, 'nothing'), null);
+    assert.equal(findArchivedProjectDir(archive, '../moved'), null);
+  } finally {
+    rmSync(archive, { recursive: true, force: true });
   }
 });
 

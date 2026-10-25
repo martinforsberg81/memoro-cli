@@ -19,7 +19,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { programsHome } from './paths.js';
+import { archivedProjectsHome, programsHome } from './paths.js';
 import { readPlanText } from './plan-schema.js';
 import { gitDirOf } from './repos.js';
 
@@ -165,22 +165,27 @@ export function programsPlans({ home = programsHome(), list = listDirs, read = r
 }
 
 /**
- * The archived projects under `~/mc/programs/`: one record a project directory
- * that holds both its `PLAN.json` and its `CLOSEOUT.json` beside it. `path` is
- * the plan and `closeoutPath` the closeout, both absolute; `repo` is read the
- * way `programsPlans` reads it. A directory with only a closeout is not one.
- * In listing order, as `programsPlans`.
+ * The archived projects: one record per project directory that holds both its
+ * `PLAN.json` and its `CLOSEOUT.json` beside it. They are looked for under
+ * `home` (`~/mc/programs/`, where a project stays until the runner moves it),
+ * then under `archivedHome` (`~/mc/archive/projects/`, where it is after: see
+ * `archivedProjectsHome`). `path` is the plan and `closeoutPath` the closeout,
+ * both absolute; `repo` is read the way `programsPlans` reads it. A directory
+ * with only a closeout is not one. In listing order, as `programsPlans`, `home`'s
+ * projects first. `list` and `read` serve both homes.
  */
-export function programsArchived({ home = programsHome(), list = listDirs, read = readText } = {}) {
+export function programsArchived({ home = programsHome(), archivedHome = archivedProjectsHome(), list = listDirs, read = readText } = {}) {
   const archived = [];
-  for (const programme of list(home)) {
-    for (const project of list(join(home, programme))) {
-      const dir = join(home, programme, project);
-      const path = join(dir, PLAN_FILE);
-      const closeoutPath = join(dir, CLOSEOUT_FILE);
-      const text = read(path);
-      if (text === null || read(closeoutPath) === null) continue;
-      archived.push({ path, programme, project, repo: namedRepo(text), closeoutPath });
+  for (const base of [home, archivedHome]) {
+    for (const programme of list(base)) {
+      for (const project of list(join(base, programme))) {
+        const dir = join(base, programme, project);
+        const path = join(dir, PLAN_FILE);
+        const closeoutPath = join(dir, CLOSEOUT_FILE);
+        const text = read(path);
+        if (text === null || read(closeoutPath) === null) continue;
+        archived.push({ path, programme, project, repo: namedRepo(text), closeoutPath });
+      }
     }
   }
   return archived;

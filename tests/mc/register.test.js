@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, dropCriterion, keyOf, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
+  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, dropCriterion, keyOf, listArchivedEntries, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
   patchStep, readEntry, realLock, reconcileEntry, registerDir, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI, withDoneAt,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
@@ -560,6 +560,29 @@ test('layout 2: updateStep writes STATE.json and nothing under runner/projects/,
     assert.equal(readEntry(root, 'x').steps[0].pr, 9);
     assert.equal(existsSync(join(root, 'runner', 'projects')), false, 'nothing under runner/projects/');
     assert.deepEqual(listEntries(root).map((entry) => entry.project), ['x', 'y']);
+  } finally { cleanup(); }
+});
+
+test('layout 2: a project the runner moved to archive/projects/ keeps its register there, and listEntries leaves it out', () => {
+  const { root, put, cleanup } = layout2Root();
+  try {
+    overlayPlans([at(root, 'x'), at(root, 'y')], { root, ...quiet, now: 't0' });
+    updateStep({ root, project: 'x', index: 0, patch: { status: 'done', pr: 9 }, ...quiet, now: 't1' });
+    const moved = join(root, 'archive', 'projects', 'a', 'x');
+    mkdirSync(join(root, 'archive', 'projects', 'a'), { recursive: true });
+    renameSync(join(root, 'programs', 'a', 'x'), moved);
+
+    assert.equal(registerPath(root, 'x'), join(moved, 'STATE.json'));
+    assert.equal(readEntry(root, 'x').steps[0].pr, 9);
+    assert.deepEqual(listEntries(root).map((entry) => entry.project), ['y']);
+    assert.deepEqual(listArchivedEntries(root).map((entry) => [entry.project, entry.steps[0].pr]), [['x', 9]]);
+
+    updateStep({ root, project: 'x', index: 1, patch: { status: 'done', pr: 10 }, ...quiet, now: 't2' });
+    assert.equal(parseEntry(readFileSync(join(moved, 'STATE.json'), 'utf8')).steps[1].pr, 10, 'a late write lands beside the moved plan');
+
+    put(join(root, 'programs', 'a', 'x', 'PLAN.json'), JSON.stringify(plan([step(), step()])));
+    assert.equal(registerPath(root, 'x'), join(root, 'programs', 'a', 'x', 'STATE.json'), 'the live project wins when both exist');
+    assert.deepEqual(listArchivedEntries('/w'), [], 'layout 1 has no archived registers');
   } finally { cleanup(); }
 });
 

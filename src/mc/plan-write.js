@@ -162,6 +162,22 @@ export function findProjectDir(home, project, { list = listDirs, exists = exists
 }
 
 /**
+ * Where an archived project is: the first `<home>/<programme>/<project>/` that
+ * holds `PLAN.json`, the programmes walked in order, `home` being the archive's
+ * projects directory (`archivedProjectsHome`). A draft-only directory is not one.
+ * Null when none is, and for a project name that is not a name, as `findProjectDir`.
+ */
+export function findArchivedProjectDir(home, project, { list = listDirs, exists = existsSync } = {}) {
+  if (!NAME_RE.test(project)) return null;
+  for (const programme of list(home)) {
+    const dir = join(home, programme, project);
+    const file = join(dir, PLAN_FILE);
+    if (exists(file)) return { programme, dir, file };
+  }
+  return null;
+}
+
+/**
  * What is wrong with a draft that is not yet a plan to send, which is all of
  * `validatePlan`'s problems except the two that only say a draft is unfinished:
  * no success criteria yet, and no steps yet. Those two are reported only while
