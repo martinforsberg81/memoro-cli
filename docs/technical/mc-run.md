@@ -518,6 +518,8 @@ session resolves the merge and delivers the step, and one pull request carries
 both. If the session leaves the
 merge unfinished, the runner aborts it after the session.
 
+After the merge of `origin/main`, a fresh step with no conflicts re-attaches its workarea's dependency cache (`attachRepoDepsAsync` in [`work-deps.js`](../../src/mc/work-deps.js)), since a lockfile that moved on main leaves last round's attachment stale, and a failure is logged and never blocks the step.
+
 **A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
 what lets a pull request be matched back to a project at all, and step 8 is
 what makes it true rather than hoped for: `projectForBranch` takes the longest

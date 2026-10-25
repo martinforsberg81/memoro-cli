@@ -10,6 +10,7 @@
  * moved.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -428,5 +429,27 @@ describe('a planning area nothing could be checked out into', () => {
     });
     assert.equal(result.ok, false);
     assert.equal(existsSync(area(root, 'standing')), true);
+  });
+});
+
+describe('a standing planning checkout', () => {
+  it('is attached again when the programme is reopened, and a failed attach is said and not fatal', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-reattach-'));
+    const checkout = join(root, 'plan', 'reopened', 'memoro');
+    mkdirSync(checkout, { recursive: true });
+    // A real checkout: `inspectWorktree` asks git whether it is one.
+    spawnSync('git', ['init', '-q', checkout]);
+    const attached = [];
+    const stderr = sink();
+    const result = ensurePlanArea('reopened', {
+      repos: [{ name: 'memoro', path: join(root, 'no-such-repo') }],
+      env: { MC_WORK_ROOT: root },
+      stdout: sink(),
+      stderr,
+      attach: (path) => { attached.push(path); return { ok: false, state: 'failed', why: 'npm error boom' }; },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(attached, [checkout]);
+    assert.match(stderr.out.text, /mc: dependencies not attached in .*memoro — npm error boom/u);
   });
 });
