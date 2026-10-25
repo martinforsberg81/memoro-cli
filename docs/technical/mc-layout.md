@@ -153,7 +153,8 @@ catches a mistake; it does not stop an intent.
   `cp`, `rm`, `truncate` or `install` naming one of the four files. It sits under
   the usual `MC_HOOK_ALLOW=1` escape. It may match such a name outside
   `programs/`, which is accepted: no repository holds such a file any more.
-- The `PreToolUse` matcher is `Bash|Write|Read|Edit|MultiEdit`. `mc hook install`
+- The `PreToolUse` matcher is `Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*`
+  (the Chrome tools since chrome-turn, see `mc-hooks.md`). `mc hook install`
   writes it; `mc hook install --check` reports the old matcher as drift until it
   is run.
 

@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile,
+  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile, TOOLBOX,
   readClaudeSettings, repoHookDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
@@ -217,7 +217,55 @@ describe('mc hook — a plan file under ~/mc/programs is mc\'s to change', () =>
   });
 
   it('the PreToolUse matcher carries the edit tools, so the refusal sees them', () => {
-    assert.equal(MC_HOOKS.find((hook) => hook.which === 'pre-tool').matcher, 'Bash|Write|Read|Edit|MultiEdit');
+    assert.equal(MC_HOOKS.find((hook) => hook.which === 'pre-tool').matcher, 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
+  });
+});
+
+describe('mc hook — Claude in Chrome against a local dev server is turned to mc shot next', () => {
+  const chrome = (verb, input) => ({ tool_name: `mcp__claude-in-chrome__${verb}`, tool_input: input });
+
+  it('turns a navigate to 127.0.0.1, localhost or [::1] with id chrome-dev', () => {
+    const decision = preToolDecision(chrome('navigate', { url: 'http://127.0.0.1:8920/app', tabId: 1 }));
+    assert.equal(decision?.id, 'chrome-dev');
+    assert.match(decision.reason, /mc shot dev <path> --keep.*mc shot next/u);
+    assert.match(decision.reason, /#MC_HOOK_ALLOW=1/u);
+    for (const url of ['http://localhost:8920/app/notes', 'http://[::1]:8920/app', 'localhost:5173']) {
+      assert.equal(preToolDecision(chrome('navigate', { url }))?.id, 'chrome-dev', url);
+    }
+    assert.equal(preToolDecision(chrome('tabs_create_mcp', { url: 'http://localhost:8920/app' }))?.id, 'chrome-dev');
+  });
+
+  it('turns a browser_batch that holds one such navigate', () => {
+    const batch = chrome('browser_batch', {
+      actions: [
+        { tool: 'computer', input: { action: 'screenshot' } },
+        { tool: 'navigate', input: { url: 'http://127.0.0.1:8920/app' } },
+      ],
+    });
+    assert.equal(preToolDecision(batch)?.id, 'chrome-dev');
+    assert.equal(preToolDecision(chrome('browser_batch', {
+      actions: [{ tool: 'navigate', input: { url: 'https://example.com' } }, { tool: 'computer', input: { action: 'screenshot' } }],
+    })), null, 'a batch on a real site passes');
+  });
+
+  it('lets through a real site, a published artifact, an open tab and the escape', () => {
+    for (const input of [
+      chrome('navigate', { url: 'https://claude.ai/artifact/0f3c' }),
+      chrome('navigate', { url: 'https://meetmemoro.app/app' }),
+      chrome('navigate', { url: 'http://localhost.example.com/' }),
+      chrome('computer', { action: 'screenshot', tabId: 1 }),
+      chrome('tabs_context_mcp', {}),
+      chrome('navigate', { url: 'http://127.0.0.1:8920/app#MC_HOOK_ALLOW=1' }),
+      chrome('browser_batch', { actions: [{ tool: 'navigate', input: { url: 'http://localhost:8920/app#MC_HOOK_ALLOW=1' } }] }),
+    ]) {
+      assert.equal(preToolDecision(input), null, JSON.stringify(input));
+    }
+  });
+
+  it('the session-start toolbox names stepping a flow with mc shot next, within the block\'s width', () => {
+    assert.ok(TOOLBOX.some((line) => /^ {2}step a flow {7}mc shot next /u.test(line)));
+    assert.ok(TOOLBOX.some((line) => line.includes('[--keep → mc shot next …]')));
+    assert.ok(Math.max(...TOOLBOX.map((line) => [...line].length)) <= 119);
   });
 });
 
@@ -296,7 +344,22 @@ describe('mc hook install — mc\'s own registration', () => {
     const before = hookRegistration(OLD);
     assert.equal(before.problems.length, 1);
     assert.equal(before.problems[0].which, 'pre-tool');
-    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read|Edit|MultiEdit');
+    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
+  });
+
+  it('replaces the entry with the matcher before the Chrome tools in place, rather than adding one', () => {
+    const before = {
+      hooks: {
+        PreToolUse: [FOREIGN, { matcher: 'Bash|Write|Read|Edit|MultiEdit', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
+        SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+      },
+    };
+    assert.equal(hookDrift(hookRegistration(before)), 'pre-tool on Bash|Write|Read|Edit|MultiEdit, want Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
+    const next = installHooks(before);
+    assert.equal(hookRegistration(next).ok, true);
+    assert.equal(next.hooks.PreToolUse.length, 2);
+    assert.deepEqual(next.hooks.PreToolUse[0], FOREIGN);
+    assert.equal(next.hooks.PreToolUse[1].matcher, 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
   });
 
   it('names both entries as missing from settings with no hooks', () => {
@@ -323,7 +386,7 @@ describe('mc hook install — mc\'s own registration', () => {
     });
     assert.equal(next.hooks.PreToolUse.length, 1);
     assert.deepEqual(next.hooks.PreToolUse[0], {
-      matcher: 'Bash|Write|Read|Edit|MultiEdit', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
+      matcher: 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
     });
   });
 

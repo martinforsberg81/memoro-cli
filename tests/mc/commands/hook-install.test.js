@@ -39,11 +39,11 @@ describe('mc hook install — the command', () => {
     const { home, path } = setup(JSON.stringify(OLD, null, 2));
     const check = sink();
     assert.equal(await run(['install', '--check'], { home, stdout: check, stderr: sink() }), 1);
-    assert.match(check.text, /pre-tool on Bash\|Write, want Bash\|Write\|Read\|Edit\|MultiEdit — mc hook install writes them/u);
+    assert.match(check.text, /pre-tool on Bash\|Write, want Bash\|Write\|Read\|Edit\|MultiEdit\|mcp__claude-in-chrome__\.\* — mc hook install writes them/u);
 
     const out = sink();
     assert.equal(await run(['install'], { home, stdout: out, stderr: sink() }), 0);
-    assert.match(out.text, /hooks registered in .*settings\.json \(pre-tool on Bash\|Write, want Bash\|Write\|Read\|Edit\|MultiEdit before\)/u);
+    assert.match(out.text, /hooks registered in .*settings\.json \(pre-tool on Bash\|Write, want Bash\|Write\|Read\|Edit\|MultiEdit\|mcp__claude-in-chrome__\.\* before\)/u);
     const written = JSON.parse(readFileSync(path, 'utf8'));
     assert.deepEqual(written.permissions, OLD.permissions);
     assert.deepEqual(written.hooks.PreToolUse[0], FOREIGN);
