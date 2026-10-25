@@ -208,9 +208,9 @@ export const SHIPPED = Object.freeze({
     // gate-consolidation plan says the same thing from its end — the contract
     // suite belongs inside `npm run ci`, not beside it.
     extra_gates: Object.freeze([]),
-    // The SQL snapshot is a function of the whole tree, so the candidate's
-    // copy is wrong the moment main gains a file under `scripts/` or `src/`,
-    // whatever the branch regenerated. Inventory first: coverage reads it.
+    // The SQL inventory and coverage snapshots left with their scripts
+    // (memoro #14313, sql-shape-rules step 1): rules derived from the code
+    // replaced them, so there is nothing under `docs/plans/sql/` to regenerate.
     // The 3D avatar runtime bundle is committed and is a function of the
     // lockfile (three, @pixiv/three-vrm, esbuild): #13177 bumped three-vrm
     // without rebuilding it, and every deploy stopped at its post-build git
@@ -225,8 +225,6 @@ export const SHIPPED = Object.freeze({
     // them only as a decision that the output moved (`sdk/corpus/README.md`,
     // `scripts/corpus-card-html-digests.mjs`), so a merge must not.
     derived: Object.freeze([
-      Object.freeze({ command: 'npm run sql:inventory -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
-      Object.freeze({ command: 'npm run sql:coverage -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
       Object.freeze({
         command: 'npm run build:assistant-3d-avatar',
         paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
