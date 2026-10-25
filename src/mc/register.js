@@ -80,7 +80,9 @@ export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
  * request, if any, is open and `reason` says what happened; `blocked` it
  * waits on something named in `blocked_by`; `landing` its pull request is
  * in the merger's queue (`merge-queue.js`, ruling 30) and the merger writes
- * what comes of it. A `failed` or `blocked` step is a person's: the runner
+ * what comes of it. A `built` step (the branch flow) has its work on the
+ * project's branch, behind the plan, and its pull request is the review step's:
+ * that step's landing makes it `done`. A `failed` or `blocked` step is a person's: the runner
  * never retries one, and the way back is `mc step ready` (ruling 21). The
  * one exception is a `time`, `deploy` or `project` blocker whose wait is
  * over, which the runner releases itself (`releaseDue`, ruling 35); a
@@ -96,7 +98,7 @@ export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
  * (ruling 33): every reader that draws `ready` keeps working, and the record
  * stays while the step is `ready` or `running` and goes on any other status.
  */
-export const STEP_STATES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
+export const STEP_STATES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked', 'built']);
 
 /**
  * Layout 1's register directory, `runner/projects/`. Null in layout 2, where
@@ -140,7 +142,7 @@ export function registerLogPath(root) {
 export function emptyStep() {
   return {
     key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
-    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, red: null, answered: null, updated: null,
+    session: null, attempts: 0, landed: null, built: null, stacked_on: null, interrupted: null, red: null, answered: null, updated: null,
   };
 }
 
@@ -493,7 +495,7 @@ export function patchStep(entry, index, patch = {}, now = null) {
   if (next.status !== 'blocked') next.blocked_by = null;
   if (next.status !== 'running') next.session = null;
   if (next.status !== 'ready' && next.status !== 'running') next.interrupted = null;
-  if (['blocked', 'failed', 'landing', 'done'].includes(next.status)) next.answered = null;
+  if (['blocked', 'failed', 'landing', 'done', 'built'].includes(next.status)) next.answered = null;
   if (comment) next.comments = [...(next.comments || []), String(comment)];
   next.updated = now;
   const steps = entry.steps.map((step, i) => (i === index ? next : step));
@@ -518,11 +520,11 @@ export function markCriterion(entry, number, met, now = null) {
   }, now);
 }
 
-/** The first step that is not done, or -1: the one `mc step` means when no index is given. */
+/** The first step that is neither done nor built, or -1: the one `mc step` means when no index is given. */
 export function currentIndex(entry) {
   const running = entry.steps.findIndex((step) => step.status === 'running');
   if (running >= 0) return running;
-  return entry.steps.findIndex((step) => step.status !== 'done');
+  return entry.steps.findIndex((step) => step.status !== 'done' && step.status !== 'built');
 }
 
 /**

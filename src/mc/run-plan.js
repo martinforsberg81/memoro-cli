@@ -267,8 +267,9 @@ export function inFlight(openPrs = []) {
  * queue, and the next step starts on top of it; a red the merger sent back is
  * the step `ready` with its `pr` kept, the next session's work. A step
  * `blocked` with its `pr` is parked on a question a person answers (ruling
- * 21), and nobody's session is on it either (ruling 39). None of the three is
- * somebody's in flight. Any other open pull request still ends the round
+ * 21), and nobody's session is on it either (ruling 39). A step `built` shares
+ * its branch's one pull request with every other step of a branch-flow plan,
+ * and nobody's session is on that either. None of the four is somebody's in flight. Any other open pull request still ends the round
  * (`inFlight`).
  *
  * Dropping a blocked step's pull request starts nothing past it: the runner
@@ -281,7 +282,7 @@ export function inFlight(openPrs = []) {
 export function holdingPrs(openPrs = [], record = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
   const own = new Set(steps
-    .filter((step) => step?.pr && (step.status === 'landing' || step.status === 'ready' || step.status === 'blocked'))
+    .filter((step) => step?.pr && (step.status === 'landing' || step.status === 'ready' || step.status === 'blocked' || step.status === 'built'))
     .map((step) => Number(step.pr)));
   return own.size ? openPrs.filter((pr) => !own.has(Number(pr.number))) : openPrs;
 }

@@ -327,6 +327,11 @@ describe('stepForMerge', () => {
     assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-6', entries: blocked }).index, 1, 'the step\'s own branch still finds it');
     assert.equal(stepForMerge({ env: {}, head: 'mc-cut-fix', entries }), null);
   });
+
+  it('a built step is not the one to land: on a branch-flow plan the step still running on the branch is', () => {
+    const flow = [{ project: 'flow', steps: [{ status: 'built', branch: 'x' }, { status: 'built', branch: 'x' }, { status: 'running', branch: 'x' }] }];
+    assert.equal(stepForMerge({ env: {}, head: 'x', entries: flow }).index, 2);
+  });
 });
 
 describe('mc merge --watch queues, then follows the job (ruling 36)', () => {

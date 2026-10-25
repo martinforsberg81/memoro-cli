@@ -91,10 +91,11 @@ function sentence(machine, home) {
 /** One line per step: where the project got to, and where it stopped. */
 export function stepRows(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const mark = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked: '■' };
+  const mark = { done: '✓', built: '◆', ready: '▸', running: '●', failed: '✗', blocked: '■' };
   return steps.map((step, index) => {
     const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : (step.status === 'failed' && step.pr ? ` — #${step.pr} open` : '');
-    const state = step.status === 'done'
+    // A built step's pull request is the review step's, and it shows as a done step's does.
+    const state = step.status === 'done' || (step.status === 'built' && step.pr)
       ? (step.pr ? `#${step.pr}` : 'done')
       : `${step.status}${waiting}`;
     return `  ${mark[step.status] || '·'} ${String(index + 1).padStart(2)}  ${clip(step.title, 52).padEnd(53)} ${state}`;

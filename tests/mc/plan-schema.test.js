@@ -13,6 +13,7 @@ import { describe, it } from 'node:test';
 
 import {
   readPlanText,
+  branchFlow,
   deliverableStep,
   planState,
   planSummary,
@@ -337,6 +338,34 @@ describe('the plan has no status of its own', () => {
     assert.equal(planState(met).status, 'done');
     const one = plan({ steps, success_criteria: [criterion(true), criterion(false)] });
     assert.equal(planSummary(one).next, 'every step is done, but success criterion 2 is not met — run its check and record it with mc project criterion met <project> 2, or add a step that does');
+  });
+});
+
+describe('a review step ends a branch-flow plan', () => {
+  const [done, ready] = plan().steps;
+  const review = { ...ready, title: 'Review the branch', kind: 'review' };
+
+  it('takes kind review on the last step, and refuses it elsewhere, twice, or as another value', () => {
+    assert.deepEqual(validatePlan(plan({ steps: [done, review] })), { ok: true, problems: [] });
+    const middle = validatePlan(plan({ steps: [done, { ...review, title: 'Middle' }, ready] })).problems.join('\n');
+    assert.match(middle, /steps\[1\]\.kind: only the last step may be the review step/u);
+    const twice = validatePlan(plan({ steps: [done, { ...ready, kind: 'review' }, review] })).problems.join('\n');
+    assert.match(twice, /steps\[1\]\.kind: only the last step may be the review step/u);
+    assert.match(validatePlan(plan({ steps: [done, { ...ready, kind: 'build' }] })).problems.join('\n'), /steps\[1\]\.kind: review, or absent/u);
+  });
+
+  it('takes a built step, which is behind the plan the way a landing one is', () => {
+    const built = { ...ready, title: 'Built', status: 'built', pr: 12 };
+    assert.deepEqual(validatePlan(plan({ steps: [done, built, review] })), { ok: true, problems: [] });
+    const state = planState({ steps: [built, { ...built, title: 'Built too' }, review] });
+    assert.equal(state.status, 'ready');
+    assert.equal(state.index, 2);
+  });
+
+  it('is a branch-flow plan when its last step is the review step, and never for no plan', () => {
+    assert.equal(branchFlow(plan({ steps: [done, review] })), true);
+    assert.equal(branchFlow(plan()), false);
+    assert.equal(branchFlow(null), false);
   });
 });
 

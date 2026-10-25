@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import {
   collectProject, fieldRows, findMainPlan,
-  renderProject, wrap,
+  renderProject, stepRows, wrap,
 } from '../../src/mc/status-project.js';
 import { run as project } from '../../src/mc/commands/status-project.js';
 import { runMcCli } from './_helpers/mc-cli.js';
@@ -363,6 +363,13 @@ describe('the project page', () => {
     assert.match(text, /08-27 18:00Z +step +300s +#402 +success,merged/u);
     assert.match(text, /#427 {2}mc status <name>/u);
     assert.match(text, /note: gh pr list failed/u);
+  });
+
+  it('a built step shows its pull request, as a done one does; without one it says built', () => {
+    const flow = JSON.parse(PLAN('built', 'One project'));
+    flow.steps[1].pr = 402;
+    assert.match(stepRows(flow)[1], /#402$/u);
+    assert.match(stepRows(JSON.parse(PLAN('built', 'One project')))[1], / built$/u);
   });
 
   it('NEXT says why a failed step failed, and what starts it again (ruling 45 § 4)', () => {
