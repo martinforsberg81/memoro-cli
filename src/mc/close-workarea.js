@@ -65,14 +65,16 @@ export function lastRunFor(tsv, name) {
  *
  * `live` is not one of those conditions and is not a fourth rule: it is the
  * same refusal `runStep` already makes. Removing the worktree somebody is
- * sitting in would be the one irreversible thing here.
+ * sitting in would be the one irreversible thing here. It is true when a tmux
+ * session of the project is live, or any process stands in the area — its cwd
+ * is the area or somewhere under it.
  */
 export function closable({
   plan = null, archived = false, dirty = false, live = false, lastRun = null, legacy = true, stepsDone = false,
 } = {}) {
   if (!plan && !archived) return { close: false, unplanned: true, why: 'no project on main' };
   if (plan && plan.status !== 'done') return { close: false, unplanned: false, why: `the plan is ${plan.status || 'unreadable'}` };
-  if (live) return { close: false, unplanned: false, why: 'a live tmux session' };
+  if (live) return { close: false, unplanned: false, why: 'a process stands in it' };
   if (dirty) return { close: false, unplanned: false, why: 'an uncommitted change' };
   // Only the runner makes areas under `step/` (ruling 39), so a hand-made area
   // sharing a project's name cannot be one — and that was the whole reason for

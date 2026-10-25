@@ -38,6 +38,7 @@ import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, fi
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
+import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 
@@ -888,7 +889,7 @@ function writeTextFile(path, text) {
  * done and that is not archived yet; the row and the closeout are the ones the
  * runner writes, through `archivePrograms`. Then the project's step area is
  * closed, unless a checkout in it has an uncommitted change or its tmux session
- * is live: the area stays, and the line says why. The archive stands either way.
+ * is live or a process stands in it: the area stays, and the line says why. The archive stands either way.
  */
 async function archiveProject(scanned, deps) {
   const { env, stdout, stderr, root } = deps;
@@ -937,13 +938,16 @@ async function archiveProject(scanned, deps) {
   const area = join(workRoot(env), stepAreaName(project, { root: workRoot(env) }));
   if (!existsSync(area)) { stdout.write(`mc: ${project} archived\n`); return 0; }
   const checkouts = repos.filter((candidate) => existsSync(join(area, candidate.name, '.git')));
+  // `[]` is lsof failing (it always sees this process): then tmux alone answers.
+  const reading = (deps.cwds || cwdsOfUser)();
+  const standing = reading.length ? reading : null;
   const verdict = closable({
     plan: { status: 'done' }, archived: true, legacy: false,
     dirty: checkouts.some((candidate) => {
       const status = git(join(area, candidate.name), ['status', '--porcelain']);
       return !status.ok || status.stdout.trim() !== '';
     }),
-    live: tmuxHas(`mc-${project}`),
+    live: tmuxHas(`mc-${project}`) || (standing !== null && processesStandingIn([area], { cwds: standing }).length > 0),
     stepsDone: Array.isArray(entry.steps) && entry.steps.every((step) => step.status === 'done'),
   });
   if (!verdict.close) { stdout.write(`mc: ${project} archived; its step area stays — ${verdict.why}\n`); return 0; }

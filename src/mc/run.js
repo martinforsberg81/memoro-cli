@@ -129,7 +129,7 @@ import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from 
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
-import { runTidy } from './tidy.js';
+import { runTidy, scratchRe } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
   RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planAreaRoot, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
@@ -155,6 +155,8 @@ import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
+import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
@@ -481,6 +483,8 @@ export function realDeps(env = process.env) {
     // of two seconds at most (github-backoff.js).
     diagnoseGithub: () => diagnoseGithub({ run: (cmd, args) => sh(cmd, args, { timeout: DIAGNOSE_TIMEOUT_MS }) }),
     tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
+    // Every process of this user with its cwd (standing.js): a workarea with one standing in it is live.
+    cwds: () => cwdsOfUser(),
     exists: existsSync,
     // The register's lock (register.js): every register write the runner makes takes it.
     lock: (root, fn) => realLock(root, fn),
@@ -543,7 +547,8 @@ export function realDeps(env = process.env) {
     },
     // `kern.memorystatus_level`, the percent of memory free; null off macOS.
     freeMemoryPercent: () => freeMemoryPercent(),
-    rmTree:(path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
+    // Read-only files and directories go too (rm-tree.js): memoro's dependency cache is read-only.
+    rmTree: (path) => rmTree(path),
     pid: process.pid,
     // `~/mc/runner/billing.json` and `billing-state.json` (billing.js): the
     // mode Martin set and the plan's windows the runner has seen. A dependency
@@ -1421,13 +1426,29 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
+   * The scratch directories `runStep` made for this project (`<name>-<stamp>`,
+   * under the runner's scratch), removed with the area they served rather than
+   * by the two-day rule: a closed project has no session left that wants them.
+   */
+  function removeScratchOf(name) {
+    const dirs = deps.scratchDirs(paths.scratch).filter((dir) => scratchRe(name).test(dir.name));
+    const removed = dirs.filter((dir) => deps.rmTree(join(paths.scratch, dir.name))).length;
+    say(`close: ${name} — ${removed} scratch director${removed === 1 ? 'y' : 'ies'} removed`);
+  }
+
+  /**
    * The end of the round: every workarea whose plan is finished is taken
    * down, and every workarea with no plan on main is written where somebody
    * looks.
    *
-   * `landed` is the projects whose archive PR merged in this round — the plan
-   * goes first, then the workarea, so a workarea is never removed while the
-   * plan that explains it is still on main. `plans` is the round's reading of
+   * A step area (under `step/`) closes as soon as its plan is done: it is the
+   * checkout the steps ran in, and once the register says every step is done
+   * it holds nothing the project still needs, so the first chore pass after the
+   * project is done takes it, with the project's scratch, and the archive is not
+   * waited for. Only a legacy area, directly under `~/mc`, waits for the plan to
+   * leave main: `landed` is the projects whose archive PR merged in this round,
+   * and a legacy workarea is never removed while the plan that explains it is
+   * still on main. `plans` is the round's reading of
    * main, taken before that archive removed them. `archived` is every project
    * `project_log.md` names, which is what a plan removed by an *earlier* round
    * leaves behind: without it, a round cut short between the archive and the
@@ -1440,28 +1461,33 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function closeWorkareas(plans, landed = [], archived = new Set()) {
     const byProject = new Map(plans.map((plan) => [plan.project, plan]));
     const tsv = deps.read(paths.runs) || '';
+    // One reading of who stands where, for the whole round. `[]` is lsof failing —
+    // it always sees this process — so then tmux alone answers, as tidy's does.
+    const reading = deps.cwds ? deps.cwds() : null;
+    const standing = reading && reading.length ? reading : null;
     const rows = [];
     let closed = 0;
     for (const name of workareas()) {
       const plan = byProject.get(name) || null;
       if (plan && plan.status !== 'done') continue;
+      const legacy = areaName(name) === name;
       const verdict = closable({
         plan,
         archived: archived.has(name),
         dirty: uncommitted(name) > 0,
-        live: deps.tmuxHas(`mc-${name}`),
+        live: deps.tmuxHas(`mc-${name}`) || (standing !== null && processesStandingIn([areaPath(name)], { cwds: standing }).length > 0),
         lastRun: lastRunFor(tsv, name),
-        legacy: areaName(name) === name,
+        legacy,
         stepsDone: stepsDone(name),
       });
       if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
       if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
-      // The plan goes first, then the workarea. A plan this round still read on
+      // A legacy area goes after its plan does. A plan this round still read on
       // main goes only if the archive PR that removes it actually merged; one
       // that was already gone is answered by the project log instead, which is
       // what lets a round cut short by STOP be finished by the next one.
-      if (plan && !landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
-      if (closeWorkarea(name)) closed += 1;
+      if (legacy && plan && !landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
+      if (closeWorkarea(name)) { closed += 1; removeScratchOf(name); }
     }
     deps.write(paths.unplanned, unplannedFile(rows));
     if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);

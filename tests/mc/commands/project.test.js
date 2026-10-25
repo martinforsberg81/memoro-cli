@@ -908,6 +908,8 @@ function archiveFixture({ file = 'PLAN.json', steps = null, criteria = [], close
   const deps = {
     env: { MC_WORK_ROOT: work }, root: work, home, repos: [{ name: 'memoro-cli', path: join(home, 'memoro-cli') }],
     now: () => new Date('2026-10-20T10:00:00Z'), git, gh, docsMerge, tmuxHas: () => false,
+    // Nothing stands in anything unless a case says so: no reading of the real machine's processes.
+    cwds: () => [],
     stopServers: () => ({ stopped: [], failed: [] }),
     stdout: { write: (t) => out.push(t) }, stderr: { write: (t) => err.push(t) },
   };
@@ -979,6 +981,19 @@ test('archive of a done project with a dirty step area archives it, keeps the ar
     assert.equal(await run(['archive', 'alpha'], f.deps), 0);
     assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
     assert.match(f.out.join(''), /mc: alpha archived; its step area stays — an uncommitted change\n$/u);
+    assert.ok(existsSync(join(f.work, 'step', 'alpha', 'memoro-cli', '.git')));
+    assert.ok(existsSync(join(f.work, 'step', 'alpha', 'notes.txt')));
+    assert.equal(f.calls.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c.at(-1) === join(f.work, 'step', 'alpha', 'memoro-cli')), false);
+  } finally { f.cleanup(); }
+});
+
+test('archive of a done project keeps its step area while a process stands in it, and says why', async () => {
+  const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET, area: true });
+  try {
+    f.deps.cwds = () => [{ pid: 9, cwd: join(f.work, 'step', 'alpha', 'memoro-cli', 'src') }];
+    assert.equal(await run(['archive', 'alpha'], f.deps), 0);
+    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.match(f.out.join(''), /mc: alpha archived; its step area stays — a process stands in it\n$/u);
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'memoro-cli', '.git')));
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'notes.txt')));
     assert.equal(f.calls.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c.at(-1) === join(f.work, 'step', 'alpha', 'memoro-cli')), false);
