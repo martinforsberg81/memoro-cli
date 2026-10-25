@@ -1960,3 +1960,37 @@ under `~/mc/programs/` for every programme ever closed.
    stray is read from it.
 3. Ruling 51 § 5 holds for every other verb: in a programme's directory mc
    removes only git worktrees.
+
+## 58 · A project builds on one branch and lands once, after a review step mc adds
+
+`ruling · 2026-10-25` · raised by Martin
+
+> "Jag tror vi ska göra om hur mc genomför projekt. Det blir onödigt många
+> merges-rundor. Jag tänker att vi istället ska låta ett projekt gå färdigt
+> innan vi gör merge. Ett steg gör sin kod, nästa steg plockar upp och fortsätter,
+> fixar ev test-fel som kommer efter föregående session. När projektet är klart
+> inför vi ett review-steg. Projektmål mot ufall genomförs. Eventuella brister
+> fixas till. Därefter skicka till merge." (Martin, 2026-10-25)
+
+One pull request per step made a project as many merger rounds as it had steps:
+each step stacked on the one before, was measured alone, and landed alone, and
+the criteria were measured only at the last of them. Martin asks for the
+project to be finished first, and for one step of its own to measure every
+criterion against the goal, close what falls short, and then land the project.
+
+1. **A plan sent from now on builds on its project's one branch.** Its steps
+   build on that branch one after the other, and a step whose work is done and
+   published is `built`, not landed: it is behind the plan, and nothing of it is
+   queued.
+2. **`mc project send` appends a review step, always, one-step plans included.**
+   It is the plan's last step, `kind: review`, mc's and not the plan's. It
+   measures every success criterion, holds the diff to the goal, the contract and
+   the out of scope, closes the gaps, and lands the one pull request. Its landing
+   makes every built step `done`, with the same landed sha.
+3. **Plans sent before this ruling keep one pull request per step**, as they
+   ran (Martin chose the old flow for them). Converting them is not done here.
+4. **Nothing in a plan with a review step waits for its own deploy.**
+   `--after-deploy` is refused there, and a check that needs production is left
+   out of such a plan (Martin: that is outside the project).
+
+The project that carries this is `project-branch`.

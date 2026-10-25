@@ -75,7 +75,12 @@ carries:
   needing three pages of interface, order and edge cases gets three pages,
   because the under-specified step is the expensive one. Paragraphs rather than
   one string so a diff stays line-oriented for whoever reads the PR.
-- `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
+- `kind` — absent for a step; `review` for the plan's last step, which
+  `mc project send` appends and nothing else writes (ruling 58). A review step
+  measures every success criterion, closes what falls short, and lands the
+  project's one pull request; a plan with one is a branch flow.
+- `status` — `ready`, `done`, `blocked`, and `built` (the register's: a step
+  before a review, on the project's branch and not yet landed) — with `pr` and `blocked_by`
   (`{ kind: "decision" | "project" | "workarea", name }`, required when
   stopped). `decision` waits on an answer, `project` on another project's plan.
   `workarea` is the runner's own and the only kind it writes: a step `mc run`

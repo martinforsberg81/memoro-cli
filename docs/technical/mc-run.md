@@ -215,7 +215,10 @@ repository. What it does, for as long as the runner runs:
 3. **Pick** — `nextFor` ([`run-plan.js`](../../src/mc/run-plan.js)): the first
    name in `assembleQueue`'s order (*The queue*) that is in this repository and
    - whose plan under `~/mc/programs/` says its first unfinished step is `ready`
-     (`kindFor`, the same call the page makes),
+     (`kindFor`, the same call the page makes). A `landing` or a `built` step is
+     behind the plan, as `planState` reads it, so the step after it is the one
+     picked (a `built` step's work is on the project's branch, *A plan with a
+     review step*),
    - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
      that cannot see what is open starts nothing). A failed `gh pr list` is
      not asked again at once: the repository is left alone for 1, 2, 5 and
@@ -822,7 +825,7 @@ for the steps `done`, waits until every step before it has landed
 (`planState`, `plan-schema.js`), because what it measures is what landed. Nor does a `blocked`
 step (ruling 39, 2026-10-11): its pull request is parked on a question, not
 work in flight, so `holdingPrs` (`run-plan.js`) drops a pull request recorded
-on any of the project's own `landing`, `ready` or `blocked` steps, and an
+on any of the project's own `landing`, `ready`, `blocked` or `built` steps, and an
 earlier step the merger sent back red is started even while a later one waits
 on a decision. A pull request on none of the project's steps still ends the
 pick (`inFlight`), and a `blocked` step that is the first unfinished one still
@@ -973,6 +976,51 @@ jobs and no live merger starts one (`sweepLanding`), and a step `landing`
 whose job is in no queue is `failed` with that reason. A `ready` or `failed` step
 whose register entry carries `landed` is written `done` before the pick and said
 in runner.log (`log-page` step 1, 2026-10-12).
+
+### A plan with a review step
+
+A plan sent from 2026-10-25 (ruling 58) ends in a step of `kind: review`, which
+`mc project send` appends and no one else writes (*What a PLAN.json is*,
+[`docs/project/README.md`](../project/README.md)). `branchFlow` in
+`plan-schema.js` asks that of the last step, and such a plan is a **branch
+flow**: its steps build on one branch of the project's, and its one pull
+request lands with the review. A plan without one runs as before (*The
+merge*, above), one pull request per step.
+
+- **`built`.** A step before the review whose session ends `success` with its
+  pull request open is not queued: `landForSession` writes it `built` with
+  `builtPatch` (`merge-step.js`) — `pr`, `branch`, and `built: { sha, at }`,
+  where `sha` is the head the session left — and the row's note is
+  `success,built`. `mc publish` from such a step does the same from the
+  session's side (`publish.js`, [`mc-merge.md`](mc-merge.md) § *The door*). Nothing
+  is queued. `built` is behind the plan the way `landing` is: `planState` steps
+  past it, and `holdingPrs` drops its pull request as it drops a `landing`
+  one's, since no session is on it.
+- **`placeBranch`, the built case.** The step after a built one is placed on the
+  highest built step's branch, as pushed, or as the workarea already stands on
+  it, with `origin/main` merged in after (`syncMain`). It is not stacked
+  (`stacked_on` stays null): the work below is on the same branch and the same
+  pull request. The log says `steps 1–N are built on <branch> — step M continues
+  there`.
+- **The built preamble.** `builtPreamble` (`run-plan.js`) is put first in the
+  prompt of a step that continues on a built branch: the branch, the steps built
+  on it and the pull request they are in, that their work is the session's to
+  keep green and to build on, that it runs a bare `mc gate` first, and that
+  `mc publish` records its own step built and ends the session. A resumed session
+  is not told it; its branch did not move.
+- **The review session.** A step of `kind: review` runs as kind `review`
+  (`chooseKind` and `SESSION_DEFAULTS` in `run-plan.js`): its role is
+  `canon/roles/review.md`, its model and effort are the review's defaults (*The
+  session*, above), and its landing is the only one the project makes. A
+  criterion `met: false` still refuses it at the door (`criteriaDoor`), so the
+  review measures and closes before it can land.
+- **The landing books the built steps.** The review's landing makes every built
+  step of the project `done` with the same `landed` sha and no body of its own
+  (`bookBuilt`, `merge-step.js`): from the merger's round (`merger.js`), the docs
+  path and `mc merge --admin` (`commands/merge.js`). The review step is what
+  makes them done; they are not landed on their own. The merger counts a built
+  step as done when it orders a job, so the review's round is not held behind
+  them (`stepsDone`, [`mc-merge.md`](mc-merge.md) § *The door*).
 
 ### Held before merge — history
 
@@ -1387,9 +1435,11 @@ ending and its pull request landing.
 So the state lives in **the register**: one file per project under
 `~/mc/runner/projects/`, written whole and atomically under one lock
 (`register.js`), one entry per step, matched to the plan by the step's key (`stepKey`: the label before ` — `, a leading ordinal such as `5.` dropped; a re-plan that puts a new step in a slot whose old key is gone keeps the slot's status and clears the replaced step's pull request, branch, stack and red, with a comment) —
-`status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
+`status` (`ready` · `running` · `done` · `failed` · `blocked` · `built`), `pr`, `branch`,
 `blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
-running), `attempts`, `landed` (sha and time). The plan still says what
+running), `attempts`, `landed` (sha and time), and `built` (`{ sha, at }`: the
+head a step before a review left on the project's branch — *A plan with a
+review step*). The plan still says what
 a step is; every reader lays the register over it (`overlayPlans`) and sees the
 plan record it always saw, with the register's word for the state — the
 picker, the page, the brief and `mc status` changed their source, not their
@@ -1455,6 +1505,10 @@ one of three outcomes:
   dying is a person's.
 
 A session on a branch that carries an earlier session's commits is handed them (`earlierPreamble`: the branch's commits past origin/main, at most 20), and a step answered without a pull request is handed the answer (`answeredPreamble`).
+
+In a plan with a review step, a step before the review whose session ends
+with its pull request open is written `built` (*A plan with a review step*),
+and the review's landing writes every built step `done` with its `landed`.
 
 **What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
 (or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a

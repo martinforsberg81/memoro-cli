@@ -119,6 +119,25 @@ could not measure.
 <pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
 believed-safe case.
 
+**A branch flow lands once, at its review** (ruling 58, 2026-10-25). In a plan
+whose last step is `kind: review`, `criteriaDoor` refuses the pull request of
+any step before it with `stop: 'before-review'`: `mc: … step n is built on the
+project's branch and does not land by itself`, on stderr, exit 1, nothing
+queued. The step's pull request is the project's one, and the review's landing
+is what lands it. The refusal is the same for `mc merge` and `mc merge --docs`.
+Two paths book such a step `built` instead of asking the door: `mc publish` from
+the step's own session (`publish.js`, `builtPatch`), which pushes, records
+`built` with the head it pushed, and queues nothing; and the runner's queueing
+of a session that ended `success` without publishing (`landForSession`).
+
+The review's own pull request passes the door as the last step's does: every
+criterion `met` in the register, or it is refused as `unmet-criteria`. Its
+landing, from the merger's round, from the docs form or from `--admin`, books
+every `built` step of the project `done` with the same landed sha and no body of
+their own (`bookBuilt`, `merge-step.js`; the register's `built` is what names
+them). A `built` step counts as done when the merger orders jobs (`stepsDone`,
+`merge-queue.js`), so the review is not held behind the steps it lands.
+
 ### Watching a merge
 
 Past the door the pull request is the merger's, and `mc merge` returns at once
