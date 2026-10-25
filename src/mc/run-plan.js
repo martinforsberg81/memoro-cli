@@ -731,7 +731,7 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, earlier = null, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, built = null, earlier = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
@@ -740,6 +740,7 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     ...earlierPreamble(earlier),
     ...interruptedPreamble(interrupted),
     ...stackedPreamble(retry ? null : stacked),
+    ...builtPreamble(retry ? null : built),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Your plan is at \`${planPath}\`, under ~/mc/programs/. It is mc's and`,
     'changes only through `mc project` and `mc step` verbs: read it, never edit it;',
@@ -901,6 +902,23 @@ function stackedPreamble(stacked) {
     'red in it is that step\'s, and comes back to it. Your pull request shows its',
     'commits too until it has landed; the merger lands it first and moves yours',
     'onto main after.',
+    '',
+  ];
+}
+
+/**
+ * What a session is told when its step continues on the project's branch (the
+ * branch flow, a plan ending in a review step): the steps before it are built
+ * there, in one pull request that lands with the review, and their work is
+ * this session's to keep green. Empty when no step before it is built.
+ */
+export function builtPreamble(built) {
+  if (!built) return [];
+  return [
+    `Your branch, ${built.branch}, is the project's: steps 1–${built.through + 1} are built on it, in #${built.pr}, which does not land until the project's review step.`,
+    'Their work is yours to build on and to keep. origin/main is merged in.',
+    'First run bare `mc gate` — the test files this branch changed. A red there, from an earlier step or from main, is yours to fix before your own work.',
+    'Then do your step, commit, and `mc publish`: it pushes and records the step built; nothing is queued, and your session is over.',
     '',
   ];
 }

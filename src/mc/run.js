@@ -119,7 +119,7 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
-import { deliverableStep } from './plan-schema.js';
+import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -143,7 +143,7 @@ import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
 import { criteriaDoor } from './merge-boundary.js';
-import { redPatch } from './merge-step.js';
+import { builtPatch, redPatch } from './merge-step.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
 import { pidAlive } from './status-collect.js';
@@ -1226,6 +1226,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    *   builds on is in the branch already. `stacked` says on what, for the
    *   register and the merger, which lands the two in order and moves this one
    *   onto main past that sha once the one below has landed;
+   * - a step after one that is `built` (the branch flow, a plan ending in a
+   *   review step) continues on the highest such step's branch, as pushed —
+   *   or as it stands, when the workarea is already on it. The project's
+   *   steps share that branch and its one pull request; `built` says through
+   *   which step, for the prompt. `syncMain` merges origin/main in after;
    * - anything else is `freshBranch`'s, as before.
    */
   function placeBranch(worktree, name, record, { keepLocal = false } = {}) {
@@ -1258,7 +1263,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const below = state.stacked_on && entry.steps[state.stacked_on.index]?.status !== 'done' ? state.stacked_on : null;
       return { ok: true, moved: current === state.branch ? null : state.branch, stacked: below };
     }
-    const top = entry.steps.map((step, at) => ({ step, at }))
+    const built = entry.steps.map((step, at) => ({ step, at }))
+      .filter(({ step, at }) => at < index && step.status === 'built' && step.branch).at(-1);
+    if (built) {
+      const { branch } = built.step;
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      // The workarea already on it keeps its local branch: it may carry
+      // commits the session before did not push, and the next `mc publish`
+      // pushes them.
+      const placed = current === branch
+        || deps.git(worktree, ['checkout', '-q', '-B', branch, `origin/${branch}`]).ok
+        || onto(branch);
+      if (!placed) return { ok: false, moved: null, why: `${branch}, the project's branch, could not be checked out` };
+      say(`${name}: steps 1–${built.at + 1} are built on ${branch} — step ${index + 1} continues there`);
+      return { ok: true, moved: current === branch ? null : branch, stacked: null, built: { through: built.at, pr: built.step.pr, branch } };
+    }
+    const top =entry.steps.map((step, at) => ({ step, at }))
       .filter(({ step, at }) => at < index && step.status === 'landing' && step.branch).at(-1);
     if (!top) return freshBranch(worktree, name);
     if (!onto(top.step.branch)) return { ok: false, moved: null, why: `${top.step.branch}, the landing step's branch, could not be checked out` };
@@ -2201,18 +2221,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       : null;
     // A resumed step keeps the stack it was started on; the branch did not move.
     const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);
+    // A step continuing on the project's branch (the branch flow) is told what
+    // the steps before it built there; their commits are not its own earlier work.
+    const built = resuming ? null : (moved.built || null);
     // A fresh session on an interrupted step is told what the one before it
     // left, and only when it is that step it is handed.
     const interrupted = fresh && fresh.index === choice.index ? handoverOf(worktree, name, fresh, wip) : null;
     // A fresh session on a step with no pull request is told what the branch
     // already carries: commits an earlier session made (or the WIP commit of
     // its files) that no pull request holds yet. Nothing else is handed it.
-    const earlierCommits = !resuming && !interrupted && !retry && !stacked && !standingBefore?.pr ? commitsPastMain(worktree) : [];
+    const earlierCommits = !resuming && !interrupted && !retry && !stacked && !built && !standingBefore?.pr ? commitsPastMain(worktree) : [];
     const earlier = earlierCommits.length ? { commits: earlierCommits } : null;
     const handed = { ...plan.plan, success_criteria: standing(plan).plan?.success_criteria ?? plan.plan.success_criteria };
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, earlier, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
@@ -2521,6 +2544,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } else if (after?.status === 'landing') {
       note = `${note},queued`;
       say(`${name}: #${after.pr || pr} is in the merge queue — step ${choice.index + 1} is landing`);
+    } else if (after?.status === 'built') {
+      note = `${note},built`;
+      say(`${name}: step ${choice.index + 1} is built on ${after.branch} (#${after.pr}) — the next step continues there`);
     } else if (after?.status === 'ready' && after.pr && after.attempts > (standingBefore?.attempts || 0)) {
       note = `${note},red`;
       say(`${name}: #${after.pr} came back red from the merger — step ${choice.index + 1} is ready for its next session (${after.reason})`);
@@ -2540,7 +2566,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
-      note = await landForSession({ worktree, repo, name, index: choice.index, pr, branch, rc: result.status });
+      note = await landForSession({ worktree, repo, name, index: choice.index, pr, branch, rc: result.status, plan: plan?.plan });
     } else if (resuming && !result.signal && result.status !== 0 && !sessionSpoke({ toolId: launch.id, stdout: result.stdout }) && choice.index != null) {
       // The resume never started — claude's `No conversation found`, a codex
       // rollout that is gone. Not another interruption: the step is ready
@@ -2583,11 +2609,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `mc merge`'s — the plan's last-step criteria — and then the merger's
    * queue, as `mc merge` does it (ruling 30): the step is `landing` and the
    * merger writes what comes of it. A refusal at the door is a red and goes
-   * back to the step like any red. Returns the row's note.
+   * back to the step like any red. In a branch-flow plan a step before the
+   * review is not queued at all: it is booked `built`, as its own
+   * `mc publish` would have. Returns the row's note.
    */
-  async function landForSession({ worktree, repo, name, index, pr, branch, rc }) {
-    say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without queueing it — the runner queues it`);
+  async function landForSession({ worktree, repo, name, index, pr, branch, rc, plan = null }) {
     const number = Number(pr);
+    if (branchFlow(plan) && index < plan.steps.length - 1) {
+      recordStep(name, index, builtPatch({ pr: number, branch, sha: gitOut(worktree, ['rev-parse', 'HEAD']), now: stamp() }));
+      say(`${name}: #${pr} is open and the session ended success without publishing — step ${index + 1} is built`);
+      return 'success,built';
+    }
+    say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without queueing it — the runner queues it`);
     // The plan's last step lands only with every criterion met (`criteriaDoor`).
     const door = deps.criteriaDoor ? await deps.criteriaDoor({ repoPath: worktree, pr: number, step: { project: name, index } }) : { checked: false };
     if (door.checked && !door.ok) {

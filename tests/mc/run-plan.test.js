@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
   AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
-  describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
+  builtPreamble, describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, creditsResetAt, resumePrompt,
   COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionSpoke, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
@@ -484,6 +484,25 @@ test('stepPrompt: a branch that carries an earlier session\'s commits says so, a
   const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 });
   assert.doesNotMatch(bare, /do not start over|already carries work/u);
   assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, earlier: { commits: [] } }), /already carries work/u);
+});
+
+test('builtPreamble: a step on the project\'s branch is told what is built there, and the retry suppresses it (built)', () => {
+  assert.deepEqual(builtPreamble(null), []);
+  assert.deepEqual(builtPreamble({ through: 1, pr: 9, branch: 'p' }), [
+    'Your branch, p, is the project\'s: steps 1–2 are built on it, in #9, which does not land until the project\'s review step.',
+    'Their work is yours to build on and to keep. origin/main is merged in.',
+    'First run bare `mc gate` — the test files this branch changed. A red there, from an earlier step or from main, is yours to fix before your own work.',
+    'Then do your step, commit, and `mc publish`: it pushes and records the step built; nothing is queued, and your session is over.',
+    '',
+  ]);
+  const { plan } = threeSteps();
+  const step = plan.steps[2];
+  const built = { through: 1, pr: 9, branch: 'p' };
+  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 2, built });
+  assert.match(p, /^Your branch, p, is the project's: steps 1–2 are built on it/u);
+  assert.match(p, /Your step is `steps\[2\]` — 3/u);
+  const retried = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 2, built, retry: { pr: 9, reason: 'red', attempts: 1 } });
+  assert.doesNotMatch(retried, /is the project's: steps/u);
 });
 
 test('stepPrompt: an answer without a pull request says so; with one, the answer goes on from it', () => {
