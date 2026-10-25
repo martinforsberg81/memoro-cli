@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,9 +18,10 @@ import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/t
 import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
+import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, outsideRoots, runTidy, sessionLogRe, tidyPlan,
-  tidyRoots,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy, sessionLogRe,
+  tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
 import * as workTidy from '../../src/mc/work-tidy.js';
 
@@ -694,6 +695,105 @@ describe('(C) mc shot --compare trees under ~/.memoro/mc/compare/', () => {
   });
 });
 
+describe('(K) slug directories no repository mc knows has, under the gate, its cache and the selection state', () => {
+  /** The one repository the tests know: its bare path and its checkout. */
+  const repos = (m) => [{ name: 'memoro', path: join(m.home, 'repos', 'memoro.git'), checkout: join(m.home, 'repos', 'memoro') }];
+
+  /** A slug directory with one file in it, its directories last touched at `at` too: `newestMtime` reads them. */
+  function slugTree(m, path, at = OLD) {
+    m.write(join(path, 'node_modules', 'x.js'), 'x', at);
+    for (const dir of [path, join(path, 'node_modules')]) utimesSync(dir, new Date(at), new Date(at));
+    return path;
+  }
+
+  it('gatherTidyFacts names the slug directories of the three roots, and knows the ones a repository mc knows has', () => {
+    const m = machine();
+    try {
+      const known = repoFileSlug(repos(m)[0].path);
+      slugTree(m, join(m.work, 'gate', known));
+      slugTree(m, join(m.work, 'gate', `${known}-freshen`));
+      slugTree(m, join(m.work, 'gate', 'old-12345678'));
+      slugTree(m, join(m.work, 'gate-cache', 'memoro-a66fc130'));
+      slugTree(m, join(m.home, 'mchome', 'selection', 'memoro-1ee6756a'));
+      m.write(join(m.work, 'gate', 'stray.txt'));
+      const items = Object.fromEntries(gatherTidyFacts(m.doors({ repos: repos(m) })).cache_slugs.map((item) => [item.slug, item]));
+      assert.deepEqual(Object.keys(items).sort(), [known, `${known}-freshen`, 'memoro-1ee6756a', 'memoro-a66fc130', 'old-12345678'].sort());
+      assert.equal(items[known].known, true);
+      assert.equal(items[`${known}-freshen`].known, true);
+      assert.equal(items['old-12345678'].known, false);
+      assert.deepEqual(items['old-12345678'].live, []);
+      assert.equal(items['memoro-1ee6756a'].kind, 'selection-slug');
+      assert.equal(items['memoro-1ee6756a'].path, join(m.home, 'mchome', 'selection', 'memoro-1ee6756a'));
+      assert.equal(items['memoro-a66fc130'].kind, 'gate-cache-slug');
+    } finally { m.cleanup(); }
+  });
+
+  it('a root that cannot be read gives no items, and the plan keeps the rest', () => {
+    const m = machine();
+    try {
+      const facts = gatherTidyFacts(m.doors({ repos: repos(m) }));
+      assert.deepEqual(facts.cache_slugs, []);
+      assert.equal(facts.register_error, null);
+    } finally { m.cleanup(); }
+  });
+
+  it('orphanSlug keeps a known slug, a slug with a process in it, and one touched within a day; it throws on an error', () => {
+    const orphan = { path: '/x/gate/old-12345678', kind: 'gate-slug', slug: 'old-12345678', known: false, live: [], newest_ms: OLD, bytes: 0 };
+    assert.deepEqual(orphanSlug({ ...orphan, known: true }, NOW), { target: false, why: 'a repository mc knows uses it' });
+    assert.deepEqual(orphanSlug({ ...orphan, live: [42, 77] }, NOW), { target: false, why: 'process 42, 77 stands in it' });
+    assert.deepEqual(orphanSlug({ ...orphan, newest_ms: NOW - HOUR }, NOW), { target: false, why: 'touched in the last day' });
+    assert.deepEqual(orphanSlug(orphan, NOW), { target: true, why: 'no repository mc knows has the slug old-12345678' });
+    assert.throws(() => orphanSlug({ ...orphan, error: 'EACCES: permission denied' }, NOW), /EACCES/u);
+    assert.throws(() => orphanSlug({ ...orphan, live: null }, NOW), /could not tell whether a process stands in it/u);
+  });
+
+  it('tidyPlan removes one unknown slug under each root and keeps the known ones, by rule K', () => {
+    const slug = (kind, name, over = {}) => ({ path: `/x/${kind}/${name}`, kind, slug: name, known: false, live: [], newest_ms: OLD, bytes: 7, ...over });
+    const items = ['gate-cache-slug', 'gate-slug', 'selection-slug'].flatMap((kind) => [
+      slug(kind, 'memoro.git-17111bc1', { known: true, newest_ms: null, bytes: 0 }),
+      slug(kind, 'old-12345678'),
+    ]);
+    const plan = tidyPlan(facts({ cache_slugs: items }));
+    assert.deepEqual(ruled(plan, 'K').map((item) => [item.path, item.kind, item.bytes]), [
+      ['/x/gate-cache-slug/old-12345678', 'gate-cache-slug', 7],
+      ['/x/gate-slug/old-12345678', 'gate-slug', 7],
+      ['/x/selection-slug/old-12345678', 'selection-slug', 7],
+    ]);
+    for (const kind of ['gate-cache-slug', 'gate-slug', 'selection-slug']) {
+      assert.equal(keptOf(plan, `/x/${kind}/memoro.git-17111bc1`).rule, 'K');
+      assert.equal(keptOf(plan, `/x/${kind}/memoro.git-17111bc1`).why, 'a repository mc knows uses it');
+    }
+  });
+
+  it('outsideRoots accepts a direct child of the selection root and refuses one nested two levels deep', () => {
+    const m = machine();
+    try {
+      const roots = tidyRoots(m.env);
+      const direct = join(roots.selection, 'memoro-1ee6756a');
+      const nested = join(roots.selection, 'memoro-1ee6756a', 'deeper');
+      mkdirSync(nested, { recursive: true });
+      assert.equal(outsideRoots({ kind: 'selection-slug', path: direct }, roots), null);
+      assert.match(outsideRoots({ kind: 'selection-slug', path: nested }, roots), /^not the shape a selection-slug has/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('--apply removes an unknown slug tree that is read-only inside, and keeps a known one', () => {
+    const m = machine();
+    try {
+      const known = slugTree(m, join(m.work, 'gate', repoFileSlug(repos(m)[0].path)));
+      const orphan = slugTree(m, join(m.work, 'gate', 'old-12345678'));
+      const inner = join(orphan, 'node_modules');
+      chmodSync(join(inner, 'x.js'), 0o444);
+      chmodSync(inner, 0o555);
+      chmodSync(orphan, 0o555);
+      const { outcome } = runTidy({ ...m.doors({ repos: repos(m) }), apply: true });
+      assert.equal(existsSync(orphan), false);
+      assert.equal(outcome.applied.find((item) => item.path === orphan).ok, true);
+      assert.ok(existsSync(known));
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('the list file and the apply', () => {
   it('a dry run writes the list whole, every target and keep with its rule', () => {
     const m = machine();
@@ -704,7 +804,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 3);
+      assert.equal(written.rules_version, 4);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
