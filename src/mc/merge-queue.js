@@ -230,7 +230,8 @@ export function stepsDone(stepsOf) {
     const steps = stepsOf(job.step.project);
     if (!Array.isArray(steps)) return true;
     for (let index = 0; index < job.step.index; index += 1) {
-      if (steps[index]?.status !== 'done') return false;
+      // A built step counts: the review's own landing is what makes it done, and the review waits for it.
+      if (steps[index]?.status !== 'done' && steps[index]?.status !== 'built') return false;
     }
     return true;
   };

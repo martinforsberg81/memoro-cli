@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { mergesPath, parseQueue, stepsDone } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
   landerFor, landJob, MAX_REQUEUES, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, SUBJECT_POLL_MS, succeed,
@@ -309,6 +309,45 @@ describe('landJob — one job, landed or answered', () => {
     await landJob({ ...JOB, step: null }, m.deps);
     assert.equal(m.rounds.length, 1);
     assert.equal(m.rows[0].name, 'memoro-cli');
+  });
+});
+
+describe('the review step\'s landing books the built steps (branch flow)', () => {
+  // A branch flow's register: steps 0 and 1 built on `mq`, the review (2) in the queue.
+  const flow = (reviewOver = {}) => {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mq'), JSON.stringify({
+      project: 'mq', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/mq/PLAN.json',
+      steps: [
+        { status: 'built', pr: 671, branch: 'mq', comments: [], attempts: 0, built: { sha: 'aaa1111', at: '2026-10-25T10:00:00Z' } },
+        { status: 'built', pr: 671, branch: 'mq', comments: [], attempts: 0, built: { sha: 'bbb2222', at: '2026-10-25T10:05:00Z' } },
+        { status: 'landing', pr: 671, branch: 'mq', comments: [], attempts: 0, ...reviewOver },
+      ],
+    }));
+  };
+  const REVIEW = { ...JOB, step: { project: 'mq', index: 2 } };
+  const stepsNow = () => JSON.parse(readFileSync(registerPath(root, 'mq'), 'utf8')).steps;
+
+  it('green: every built step is done with the review\'s landing, the same sha', async () => {
+    flow();
+    const m = machine([green]);
+    await landJob(REVIEW, m.deps);
+    const steps = stepsNow();
+    assert.deepEqual(steps.map((step) => step.status), ['done', 'done', 'done']);
+    assert.deepEqual(steps.map((step) => step.landed.sha), ['abc1234def', 'abc1234def', 'abc1234def']);
+    assert.deepEqual(steps.map((step) => step.pr), [671, 671, 671]);
+    assert.ok(m.said.some((line) => /^memoro-cli #671: mq steps 1, 2 were built on its branch — done with it$/u.test(line)));
+  });
+
+  it('red: the built steps stay built, and the review is ready again', async () => {
+    flow();
+    await landJob(REVIEW, machine([red]).deps);
+    assert.deepEqual(stepsNow().map((step) => step.status), ['built', 'built', 'ready']);
+  });
+
+  it('stepsDone lets the review\'s job through with steps 0 and 1 built, and holds it behind a step still ready', () => {
+    assert.equal(stepsDone(() => [{ status: 'built' }, { status: 'built' }, { status: 'landing' }])(REVIEW), true);
+    assert.equal(stepsDone(() => [{ status: 'built' }, { status: 'ready' }, { status: 'landing' }])(REVIEW), false);
   });
 });
 

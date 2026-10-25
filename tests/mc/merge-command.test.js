@@ -303,6 +303,47 @@ describe('the door refuses what cannot land as asked (ruling 43)', () => {
   });
 });
 
+describe('a docs landing of the review books the built steps (branch flow)', () => {
+  fresh('mc-merge-docs-built');
+
+  // The register of a branch flow: steps 0 and 1 built on `merge-queue`, the review (2) running on it.
+  function flow() {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'merge-queue'), JSON.stringify({
+      project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
+      steps: [
+        { status: 'built', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, built: { sha: 'aaa1111', at: '2026-10-25T10:00:00Z' } },
+        { status: 'built', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, built: { sha: 'bbb2222', at: '2026-10-25T10:05:00Z' } },
+        { status: 'running', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, session: { pid: 4242, started: '2026-10-25T10:10:00Z' } },
+      ],
+    }));
+  }
+
+  it('the review\'s docs landing is booked done, and the built steps under it with the same landing', async () => {
+    flow();
+    const out = { out: '', err: '' };
+    const code = await run(['memoro-cli', '671', '--docs'], {
+      stdout: { write: (text) => { out.out += text; } },
+      stderr: { write: (text) => { out.err += text; } },
+      root,
+      env: { MC_WORK_ROOT: root },
+      resolveRepoPath: async () => '/repos/memoro-cli',
+      criteriaDoor: async () => ({ checked: false }),
+      runDocsMerge: async () => ({
+        ok: true, merged: true, merge_commit: 'abcdef1234567890', merged_into: 'main', branch: 'merge-queue',
+        pr: { number: 671, base: 'main' }, files: ['docs/project/mc/merge-queue/notes.md'], body: null, measured: null,
+      }),
+      lock: (_root, fn) => fn(),
+      now: () => new Date('2026-10-25T12:00:00Z'),
+    });
+    assert.equal(code, 0);
+    const steps = JSON.parse(readFileSync(registerPath(root, 'merge-queue'), 'utf8')).steps;
+    assert.deepEqual(steps.map((step) => step.status), ['done', 'done', 'done']);
+    assert.deepEqual(steps.map((step) => step.landed.sha), ['abcdef1234567890', 'abcdef1234567890', 'abcdef1234567890']);
+    assert.match(out.out, /^mc: merge-queue step 3 is done; steps 1, 2 were built on its branch — done with it$/mu);
+  });
+});
+
 describe('stepForMerge', () => {
   const entries = [
     { project: 'mc-cut', steps: [{ status: 'done', branch: 'mc-cut' }, { status: 'running', branch: 'mc-cut-2' }] },
@@ -451,6 +492,25 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
     assert.equal(entryNow().steps[0].status, 'done', 'the step below is untouched');
     assert.equal(d.out.out, 'mc: merged #671 into main as abcdef1 (squash, --admin: no gate round)\nmc: merge-queue step 2 is done\n');
     assert.equal(d.out.err, '');
+  });
+
+  it('built steps under the review: an admin landing books them done with its landing', async () => {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'merge-queue'), JSON.stringify({
+      project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
+      steps: [
+        { status: 'built', pr: 671, branch: 'merge-queue-2', comments: [], attempts: 0, built: { sha: 'aaa1111', at: '2026-10-25T10:00:00Z' } },
+        { status: 'built', pr: 671, branch: 'merge-queue-2', comments: [], attempts: 0, built: { sha: 'bbb2222', at: '2026-10-25T10:05:00Z' } },
+        { status: 'running', pr: null, branch: 'merge-queue-2', comments: [], attempts: 0 },
+      ],
+    }));
+    writeQueue([queued({ step: { project: 'merge-queue', index: 2 } })]);
+    const d = adminRun();
+    assert.equal(await d.run(), 0);
+    const steps = entryNow().steps;
+    assert.deepEqual(steps.map((step) => step.status), ['done', 'done', 'done']);
+    assert.deepEqual(steps.map((step) => step.landed.sha), [MERGE_SHA, MERGE_SHA, MERGE_SHA]);
+    assert.match(d.out.out, /^mc: merge-queue step 3 is done; steps 1, 2 were built on its branch — done with it$/mu);
   });
 
   it('a landing entry is left as the merger has it, and its step untouched: the merger\'s watch books it', async () => {

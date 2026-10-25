@@ -128,6 +128,25 @@ export function builtPatch({ pr, branch, sha, now }) {
   return { status: 'built', pr: Number(pr), branch, reason: null, red: null, built: { sha, at: now } };
 }
 
+/** The indexes of a register entry's `built` steps, ascending; `[]` for no entry. */
+export function builtIndexes(entry) {
+  return (entry?.steps || []).flatMap((step, index) => (step?.status === 'built' ? [index] : []));
+}
+
+/**
+ * The review step's landing books every built step of its project `done`, with
+ * the same landing and no body of its own: the remainder belongs to the review
+ * step alone. Returns the indexes booked. The register functions are handed in,
+ * as the report is, so this file stays pure.
+ */
+export function bookBuilt({ root, project, pr, report, now, io, updateStep, readEntry }) {
+  const indexes = builtIndexes(readEntry(root, project, io));
+  for (const index of indexes) {
+    updateStep({ root, project, index, patch: landedPatch({ pr, report, now, body: null }), now, ...io });
+  }
+  return indexes;
+}
+
 /**
  * The register patch for a step whose round did not land: the attempt
  * counted, the reason kept, the pull request kept. Below the cap the step is

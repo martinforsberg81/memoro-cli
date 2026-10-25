@@ -49,7 +49,7 @@ import {
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
-import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
+import { bookBuilt, landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
@@ -741,7 +741,10 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
           try { body = JSON.parse(seen?.stdout || '{}')?.body || null; } catch { body = null; }
         }
         updateStep({ root, project: job.step.project, index: job.step.index, patch: landedPatch({ pr: job.pr, report, now: stamp, body }), now: stamp, ...io });
+        // A branch flow's review lands the steps built under it too.
+        const built = bookBuilt({ root, project: job.step.project, pr: job.pr, report, now: stamp, io, updateStep, readEntry });
         say(`${label}: ${job.step.project} step ${job.step.index + 1} is done`);
+        if (built.length) say(`${label}: ${job.step.project} steps ${built.map((index) => index + 1).join(', ')} were built on its branch — done with it`);
       } else {
         const patch = redPatch({ step: standing, report });
         // Once the one below has landed, the next session merges main into
