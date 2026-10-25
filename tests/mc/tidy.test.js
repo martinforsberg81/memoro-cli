@@ -19,7 +19,8 @@ import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, runTidy, sessionLogRe, tidyPlan,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, outsideRoots, runTidy, sessionLogRe, tidyPlan,
+  tidyRoots,
 } from '../../src/mc/tidy.js';
 import * as workTidy from '../../src/mc/work-tidy.js';
 
@@ -400,6 +401,128 @@ describe('(X), (W), (S) and (R): areas and worktrees', () => {
   });
 });
 
+/** A programme's own two checkouts under programs/ in layout 2, clean and landed. */
+function checkoutsOf(m, programme = 'mc') {
+  layout2(m);
+  const area = join(m.work, 'programs', programme);
+  for (const name of ['memoro', 'memoro-cli']) m.write(join(area, name, '.git'), 'gitdir: /fake');
+  return area;
+}
+
+describe('(I) a planning area\'s own checkouts, while their programme has no project that is not done', () => {
+  it('a clean, landed checkout of an idle programme is an (I) target, and the apply releases it through git', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      const { list, outcome } = runTidy({ ...m.doors(), apply: true });
+      assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [
+        [join(area, 'memoro'), 'plan-checkout', 'I'], [join(area, 'memoro-cli'), 'plan-checkout', 'I'],
+      ]);
+      assert.ok(list.targets.every((item) => item.bytes > 0), 'weighed, since the rule takes them');
+      assert.deepEqual(m.released, [join(area, 'memoro'), join(area, 'memoro-cli')]);
+      assert.equal(outcome.removed, 2);
+      assert.equal(existsSync(join(area, 'memoro')), false);
+    } finally { m.cleanup(); }
+  });
+
+  it('a draft in the programme keeps both, and says why', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      m.write(join(area, 'drafting', 'DRAFT.json'), '{}');
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I'), []);
+      assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a project that is not done');
+    } finally { m.cleanup(); }
+  });
+
+  it('a sent plan whose step is not done keeps both', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      project(m, 'busy', { archived: false, closeout: false, steps: [{ status: 'ready' }] });
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I'), []);
+      assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a project that is not done');
+    } finally { m.cleanup(); }
+  });
+
+  it('a plan whose every step is done but whose criterion is not met keeps both: it is not done', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      const plan = join(area, 'waiting', 'PLAN.json');
+      m.write(plan, '{}');
+      m.register({ project: 'waiting', repo: 'memoro-cli', programme: 'mc', plan, steps: [{ status: 'done' }], criteria: [{ met: false }] });
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I'), []);
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a project that is not done');
+    } finally { m.cleanup(); }
+  });
+
+  it('a process standing in the programme\'s directory keeps both, though it stands in neither checkout', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      m.cwds = [{ pid: 1, cwd: '/' }, { pid: 4242, cwd: join(area, 'memoro-cli', 'src') }];
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I'), []);
+      assert.equal(keptOf(list, join(area, 'memoro')).why, 'in use by claude');
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'in use by claude');
+    } finally { m.cleanup(); }
+  });
+
+  it('an uncommitted change keeps that checkout only', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      m.worktreeState.memoro = { uncommitted: 3 };
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I').map((item) => item.path), [join(area, 'memoro-cli')]);
+      assert.equal(keptOf(list, join(area, 'memoro')).why, '3 uncommitted');
+    } finally { m.cleanup(); }
+  });
+
+  it('an lsof that fails keeps both, with the error', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      const { list } = runTidy(m.doors({ cwds: () => { throw new Error('lsof: not found'); } }));
+      assert.deepEqual(ruled(list, 'I'), []);
+      for (const name of ['memoro', 'memoro-cli']) {
+        assert.equal(keptOf(list, join(area, name)).rule, 'error');
+        assert.equal(keptOf(list, join(area, name)).why, 'error: lsof could not say who stands in it');
+      }
+    } finally { m.cleanup(); }
+  });
+
+  it('a draft that appears between the list and the apply keeps both: the apply asks again', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      const { listPath } = runTidy(m.doors());
+      m.write(join(area, 'late', 'DRAFT.json'), '{}');
+      const outcome = applyTidy({ listPath, ...m.doors() });
+      assert.deepEqual(m.released, []);
+      assert.equal(outcome.removed, 0);
+      assert.equal(outcome.applied.length, 2);
+      assert.ok(outcome.applied.every((item) => !item.ok && /^re-check: its programme has a project that is not done/u.test(item.why)), JSON.stringify(outcome.applied));
+    } finally { m.cleanup(); }
+  });
+
+  it('outsideRoots accepts a checkout at <plan root>/<programme>/memoro and refuses another directory of the programme', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      m.write(join(area, 'other', '.git'), 'gitdir: /fake');
+      const roots = tidyRoots(m.env);
+      assert.equal(outsideRoots({ kind: 'plan-checkout', path: join(area, 'memoro') }, roots), null);
+      assert.match(outsideRoots({ kind: 'plan-checkout', path: join(area, 'other') }, roots), /^not the shape a plan-checkout has/u);
+    } finally { m.cleanup(); }
+  });
+});
+
 /** `~/mc/runner/layout.json` saying layout 2 (ruling 51). */
 function layout2(m) {
   m.write(join(m.work, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }), NOW);
@@ -581,7 +704,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 2);
+      assert.equal(written.rules_version, 3);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
