@@ -114,6 +114,8 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
 import { gitDirOf } from './repos.js';
+import { runningRound } from './gate-lock.js';
+import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
@@ -485,6 +487,8 @@ export function realDeps(env = process.env) {
     tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
     // Every process of this user with its cwd (standing.js): a workarea with one standing in it is live.
     cwds: () => cwdsOfUser(),
+    // Whether a gate round holds this repository's gate lane (gate-lock.js): the archive waits for it.
+    gateBusy: (name) => Boolean(runningRound({ lane: gateLaneOf(name) })),
     exists: existsSync,
     // The register's lock (register.js): every register write the runner makes takes it.
     lock: (root, fn) => realLock(root, fn),
@@ -1322,11 +1326,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
+   * Whether a gate round holds this repository's gate lane. A session in
+   * another lane does not count: the archive's pull request is measured
+   * without the gate lock (docs-measure.js), so it does not queue behind one.
+   */
+  function gateBusy(name) {
+    return deps.gateBusy ? deps.gateBusy(name) : false;
+  }
+
+  /**
    * The done projects under `~/mc/programs/` of one repository that have been
    * done for `ARCHIVE_HOLD_MS` (`archiveDue`), archived by `archivePrograms` in
    * one docs-only pull request (ruling 48). A done project still inside the hold
    * is said once, with why, and waits. Returns `{ archived }`: the projects whose
-   * CLOSEOUT.json was written in this pass. Nothing lands when `merge` is off.
+   * CLOSEOUT.json was written in this pass. Nothing lands when `merge` is off,
+   * or while a gate round holds the repository's lane.
    */
   async function archiveProgramsDue(repo, plans) {
     const items = [];
@@ -1341,6 +1355,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
     }
     if (!items.length || !merge) return { archived: [] };
+    // Said only when there is something to archive: a gate round runs for minutes, and a line per pass would be said all day.
+    if (gateBusy(repo.name)) {
+      say(`archive: ${repo.name} waits — a gate round is running in its lane`);
+      return { archived: [] };
+    }
     const { archived } = await archivePrograms({
       repo, items, root, paths: { runs: paths.runs, log: paths.log, undocumented: paths.undocumented },
       deps, docsMerge: deps.docsMerge, now: deps.now, say,
@@ -2892,12 +2911,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * finished workareas closed. Read from the whole queue — which is why it is
    * not in a lane's round.
    *
-   * Archiving lands a docs PR through the gate, and the gate refuses a
-   * second round rather than queueing it (gate-lock.js): a lane landing its
-   * step at that moment would lose the landing. So archives wait for a pass
-   * when no lane is in a session. `closeWorkareas` needs no such care — a
-   * workarea whose plan is not `done` is never touched, and a running step's
-   * plan is not.
+   * Archiving lands a pull request through `runDocsMerge`, which is documents
+   * only and measured by `measureDocs`, which takes no gate lock. So an archive
+   * runs in any pass where no gate round holds this repository's lane — a
+   * session in another lane does not hold it — and waits for a round there,
+   * because the gate refuses a second round rather than queueing it
+   * (gate-lock.js). A workarea is closed in the same pass. `closeWorkareas`
+   * needs no such care: a workarea whose plan is not `done` is never touched,
+   * and a running step's plan is not.
    */
   async function chores() {
     if (stopRequested()) return;
@@ -2919,9 +2940,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
     tidyQueue(plans);
     writeUnreadable(plans);
-    const quiet = paths.currents().length === 0;
     // A programme project done for 24 hours is archived by the runner as well (ruling 48).
-    const programmes = quiet ? await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans))) : [];
+    const programmes = await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans)));
     closeWorkareas(plans, programmes.flatMap((a) => a.archived), archivedProjects());
     await reapOrphans();
     await sweepDockerChore();

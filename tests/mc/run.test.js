@@ -32,7 +32,7 @@ const namingRepo = (text, repo) => (/^\s*\{/u.test(text) ? text.replace(/^\s*\{/
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -207,6 +207,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         ? { ok: false, merged: false, stopped_at: 'merge', reason: 'nope', pr: { number: options.pr } }
         : { ok: true, merged: true, merged_into: 'main', pr: { number: options.pr } };
     },
+    // The repositories whose gate lane a round holds (gate-lock.js): none unless a test says so.
+    gateBusy: (name) => gateBusy.includes(name),
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     // `modelArgs` guards on a missing model exactly as both real adapters do:
     // no model named means no flag, not `--model null`. Effort and advisor
@@ -3147,6 +3149,47 @@ test('a programme project done two hours ago is not archived, and its line is sa
   const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /young: .* — not archived yet$/u.test(line));
   assert.equal(said.length, 1, 'said once, not once a round');
   assert.match(said[0], /young: done 2h ago — archived after 24h — not archived yet$/u);
+});
+
+/** A programme project done 25 hours ago, and a session running in the other lane of memoro-cli. */
+function dueWhileSessionRuns(extra = {}) {
+  const f = fixture({ projectLog: { memoro: LOG_HEAD }, session: okSession(), ...extra });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
+  f.files['/w/runner/current-memoro-cli.json'] = JSON.stringify({ name: 'alpha', step: 1, pid: 7000, lane: 0 });
+  return f;
+}
+
+test('a programme project due is archived while a session runs in another lane, when no gate round holds its repository\'s lane', async () => {
+  const f = dueWhileSessionRuns();
+  await createRunner({ deps: f.deps }).chores();
+  assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath), ['/w/runner/archive/programs/memoro'], 'the archive PR lands in the pass a session is running in');
+  assert.ok(f.files['/w/programs/prog/over/CLOSEOUT.json'], 'the closeout is written beside the plan');
+  assert.match(f.files['/w/runner/log/runner.log'], /prog\/over archived — CLOSEOUT\.json written/u);
+});
+
+test('a programme project due waits while a gate round runs in its repository\'s lane, and the wait is said once a pass', async () => {
+  const f = dueWhileSessionRuns({ gateBusy: ['memoro'] });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.deepEqual(f.calls.docsRounds, [], 'nothing lands while a gate round holds the lane');
+  assert.equal(f.files['/w/programs/prog/over/CLOSEOUT.json'], undefined);
+  const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /archive: memoro waits — a gate round is running in its lane$/u.test(line));
+  assert.equal(said.length, 2, 'said once in each of the two passes');
+});
+
+test('a gate round in another repository\'s lane does not hold this repository\'s archive', async () => {
+  const f = dueWhileSessionRuns({ gateBusy: ['memoro-cli'] });
+  await createRunner({ deps: f.deps }).chores();
+  assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath), ['/w/runner/archive/programs/memoro']);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /waits — a gate round/u);
+});
+
+test('a pass with nothing due says nothing about a gate round, however long it runs', async () => {
+  const f = fixture({ projectLog: { memoro: LOG_HEAD }, session: okSession(), gateBusy: ['memoro'] });
+  await createRunner({ deps: f.deps }).chores();
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] ?? '', /waits — a gate round/u);
 });
 
 /* ------------------------------------------------------------- closing */
