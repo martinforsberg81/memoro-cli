@@ -88,6 +88,7 @@ describe('mc publish', () => {
       return { ok: false, stdout: '', text: 'unexpected' };
     };
     const deps = {
+      env: {},
       stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
       cwd: '/w/x', git, gh, push: (name, opts) => { out.pushed.push(name); out.pushOpts.push(opts); return { ok: true, text: '' }; },
       merge: async (argv, { stdout }) => { out.merged.push(argv); stdout.write(`queued for the merger: ${argv.join(' ')}\n`); return 0; },
@@ -234,6 +235,39 @@ describe('mc publish', () => {
     assert.equal(await run(['--branch', 'bad..name'], bad.deps), 2);
     assert.deepEqual([bad.out.pushed, bad.out.gh], [[], []]);
     assert.match(bad.out.stderr, /--branch bad\.\.name is not a branch name/u);
+  });
+
+  it('a step before the review is booked built on its branch and queues nothing; the review and a plan without one queue as before', async () => {
+    const flow = { steps: [{ status: 'running' }, { status: 'running' }, { status: 'ready', kind: 'review' }] };
+    const built = fixture();
+    const writes = [];
+    Object.assign(built.deps, {
+      root: '/r', env: { MC_STEP: 'p:0' }, now: () => new Date('2026-10-25T10:00:00Z'),
+      projectPlan: () => ({ project: 'p', plan: flow }), updateStep: (args) => writes.push(args),
+    });
+    assert.equal(await run([], built.deps), 0);
+    assert.deepEqual(built.out.merged, []);
+    assert.deepEqual(writes, [{
+      root: '/r', project: 'p', index: 0, now: '2026-10-25T10:00:00Z',
+      patch: { status: 'built', pr: 9, branch: 'step-x', reason: null, red: null, built: { sha: 'aaaaaaa1111', at: '2026-10-25T10:00:00Z' } },
+    }]);
+    assert.match(built.out.stdout, /\nmc: built — step 1 stands on step-x at aaaaaaa in #9; the next step continues on this branch\. Your work is over\.\n$/u);
+
+    const review = fixture();
+    Object.assign(review.deps, {
+      env: { MC_STEP: 'p:2' }, projectPlan: () => ({ project: 'p', plan: flow }),
+      updateStep: () => { throw new Error('the review is not built'); },
+    });
+    assert.equal(await run([], review.deps), 0);
+    assert.deepEqual(review.out.merged, [['memoro', '9']]);
+
+    const old = fixture();
+    Object.assign(old.deps, {
+      env: { MC_STEP: 'p:0' }, projectPlan: () => ({ project: 'p', plan: { steps: [{ status: 'running' }, { status: 'ready' }] } }),
+      updateStep: () => { throw new Error('no built step in a plan without a review'); },
+    });
+    assert.equal(await run([], old.deps), 0);
+    assert.deepEqual(old.out.merged, [['memoro', '9']]);
   });
 
   it('a detached HEAD without --branch is still refused', async () => {

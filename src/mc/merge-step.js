@@ -120,6 +120,15 @@ export function landingPatch({ pr, branch = null }) {
 }
 
 /**
+ * The register patch for a step before a branch flow's review: its work stands
+ * on the project's branch in the project's one pull request, and the review
+ * step's landing makes it `done`.
+ */
+export function builtPatch({ pr, branch, sha, now }) {
+  return { status: 'built', pr: Number(pr), branch, reason: null, red: null, built: { sha, at: now } };
+}
+
+/**
  * The register patch for a step whose round did not land: the attempt
  * counted, the reason kept, the pull request kept. Below the cap the step is
  * `ready`, and the runner's next session for it is handed the reason and the

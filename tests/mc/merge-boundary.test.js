@@ -88,3 +88,35 @@ it('criteriaDoor judges the programmes copy and asks git for no plan; with no pr
   const unheld = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last, root: '/r', read: () => null, programs: () => [] });
   assert.equal(unheld.checked, false);
 });
+
+/** A branch-flow plan: two steps built before the review, which is the last; criterion 1 met as `met` says. */
+function flowPlan(met = false) {
+  const step = (title, extra = {}) => ({ title, status: 'ready', done_when: 'd', instruction: ['i'], comments: [], pr: null, blocked_by: null, ...extra });
+  return plan({
+    success_criteria: [{ met, criterion: 'x', check: 'y' }],
+    steps: [step('first'), step('second'), step('the review', { kind: 'review' })],
+  });
+}
+
+it('criteriaDoor refuses a step before the review with stop before-review, and the review with unmet-criteria', async () => {
+  const text = JSON.stringify(flowPlan(false));
+  const flow = { root: '/r', programs: () => [{ project: 'step-lands-itself', text }], read: () => null };
+  const { git, gh } = tools();
+  const early = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: { project: 'step-lands-itself', index: 0 }, ...flow });
+  assert.equal(early.checked, true);
+  assert.equal(early.ok, false);
+  assert.equal(early.stop, 'before-review');
+  assert.match(early.problems[0], /^step 1 is built on the project's branch and does not land by itself — the project lands with its review step, step 3$/u);
+
+  const review = { project: 'step-lands-itself', index: 2 };
+  const refused = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: review, ...flow });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.stop, 'unmet-criteria');
+  assert.deepEqual(refused.unmet, [1]);
+
+  const registered = JSON.stringify({ project: 'step-lands-itself', steps: [], criteria: [{ criterion: 'x', met: true, at: null }] });
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: review, ...flow, read: () => registered }), { checked: true, ok: true, problems: [] }, 'the review passes with the criteria met');
+
+  const oldStyle = { root: '/r', programs: () => [{ project: 'step-lands-itself', text: JSON.stringify(plan()) }], read: () => null };
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: { project: 'step-lands-itself', index: 0 }, ...oldStyle }), { checked: true, ok: true, problems: [] }, 'a plan without a review is not held before its last step');
+});

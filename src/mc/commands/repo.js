@@ -424,14 +424,14 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
       recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
       recordRound({
         ok: false,
-        stopped_at: 'unmet-criteria',
+        stopped_at: door.stop || 'unmet-criteria',
         reason: door.problems.join('; '),
         repo: repoPath,
         pr: { number: opts.pr },
         started_at: now.toISOString(),
         finished_at: now.toISOString(),
       }, { mode });
-      for (const problem of door.problems) stderr.write(`mc: unmet-criteria — ${problem}\n`);
+      for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
       return 1;
     }
   }
