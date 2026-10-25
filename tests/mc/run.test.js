@@ -3119,7 +3119,7 @@ test('a programme project done for 25 hours is archived in the round: closeout b
   f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
   await round(createRunner({ deps: f.deps }));
 
-  const wt = '/w/runner/archive/memoro-programs';
+  const wt = '/w/runner/archive/programs/memoro';
   assert.ok(f.files['/w/programs/prog/over/CLOSEOUT.json'], 'the closeout is written beside the plan');
   assert.ok(f.files['/w/programs/prog/over/PLAN.json'], 'the plan stays where it is');
   assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath), [wt], 'the archive PR lands through mc merge --docs');
@@ -3357,7 +3357,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
   const f = fixture({
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
     projectLog: { memoro: LOG_HEAD },
-    archive: { 'memoro-programs': { mergeFails: true } },
+    archive: { 'programs/memoro': { mergeFails: true } },
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });

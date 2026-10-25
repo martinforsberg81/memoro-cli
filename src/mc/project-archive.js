@@ -212,7 +212,8 @@ async function landRows({ repo, need, root, paths, deps, docsMerge, now, say, ro
 
   const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z').replace(/[-:]/gu, '');
   const branch = `${ARCHIVE_BRANCH_PREFIX}${stamp}-programs`;
-  const worktree = join(root, 'runner', 'archive', `${repo.name}-programs`);
+  // Named for the repository: the docs route reads its name from the last segment of this path.
+  const worktree = join(root, 'runner', 'archive', 'programs', repo.name);
   if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
   try {
     if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {

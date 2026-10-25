@@ -76,7 +76,7 @@ one-line index into it, not a replacement for it.
 Two things about the repository archive's mechanics, which ruling 48 removed,
 are worth knowing:
 
-- **The archive gets a worktree of its own**, `~/mc/runner/archive/<repo>`,
+- **The archive gets a worktree of its own**, `~/mc/runner/archive/programs/<repo>`,
   made from origin/main and taken down however the pass ends. Not the
   project's own workarea: a done project need not have one, several projects
   are archived in the one PR, and the workarea is removed later in the same

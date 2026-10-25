@@ -437,6 +437,38 @@ describe('a repository that declares itself in .mc/test.json', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('the archive worktree is named after its repository, so memoro\'s own file is read as memoro\'s', () => {
+    // The archive pass opens its worktree at runner/archive/programs/<repo>.
+    // declarationFor names the repository by the last segment of the path, so
+    // only that path finds memoro's shipped entry. Under the old name the same
+    // file is a partial declaration, and it is refused.
+    const fx = repo('memoro');
+    try {
+      const own = {
+        schema_version: 1,
+        environments: { dev: { service: 'memoro-measure', profile: 'measure' }, prod: { base_url: 'https://meetmemoro.app' } },
+        base_url_env: 'MEMORO_BASE_URL',
+        skip_exit_code: 78,
+        suites: [{ name: 'write-smoke', argv: ['npm', 'run', 'test:environment-smoke'], server: 'app', needs_account: true }],
+      };
+      const at = (...parts) => join(fx.root, 'runner', 'archive', ...parts);
+      for (const dir of [at('programs', 'memoro'), at('memoro-programs')]) {
+        mkdirSync(join(dir, '.mc'), { recursive: true });
+        writeFileSync(repoDeclarationPath(dir), JSON.stringify(own, null, 2));
+      }
+      const opts = { root: fx.home, env: { MC_WORK_ROOT: join(fx.root, 'work') } };
+
+      const named = declarationFor(at('programs', 'memoro'), opts);
+      assert.equal(named.ok, true, named.reason);
+      assert.equal(named.name, 'memoro');
+
+      const oldName = declarationFor(at('memoro-programs'), opts);
+      assert.equal(oldName.ok, false);
+      assert.equal(oldName.name, 'memoro-programs');
+      assert.match(oldName.reason, /says nothing about its preparation/u);
+    } finally { fx.cleanup(); }
+  });
+
   /**
    * The one field this table did not have until 2026-09-02, layered like the
    * rest.

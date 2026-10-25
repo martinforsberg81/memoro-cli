@@ -14,6 +14,7 @@ import {
 } from '../../src/mc/project-archive.js';
 import { UNDOCUMENTED_HEADER } from '../../src/mc/archive-plan.js';
 import { RUNS_HEADER } from '../../src/mc/run-plan.js';
+import { repoNameOf } from '../../src/mc/repos.js';
 
 const row = (cells) => RUNS_HEADER.map((key) => cells[key] ?? '-').join('\t');
 const RUNS = [
@@ -199,7 +200,7 @@ test('closeoutFileOf puts CLOSEOUT.json beside the PLAN.json', () => {
 const ROOT = '/work';
 const REPO = '/repos/memoro-cli';
 const LOG = 'docs/project/project_log.md';
-const WORKTREE = join(ROOT, 'runner', 'archive', 'memoro-cli-programs');
+const WORKTREE = join(ROOT, 'runner', 'archive', 'programs', 'memoro-cli');
 const BRANCH = 'mc-archive-20261020T120000Z-programs';
 const PR = 1040;
 const CLOCK = () => new Date('2026-10-20T12:00:00Z');
@@ -322,6 +323,20 @@ test('archivePrograms: projects without rows go in one commit and one pull reque
   assert.ok(w.store.has(closeoutFileOf(b.record.path)));
   assert.equal(w.calls.git.filter((c) => c.args[0] === 'fetch').length, 1, 'main is fetched once the row has landed');
   assertWorktreeTakenDown(w);
+});
+
+test('archivePrograms: the worktree is named after its repository, so the docs route reads that repository\'s declaration', async () => {
+  for (const name of ['memoro', 'memoro-cli']) {
+    const a = plan('plans-in-mc');
+    const w = world({ files: filesOf(a) });
+    const out = await archivePrograms({
+      repo: { name, path: `/repos/${name}` }, items: [a], root: ROOT, paths: PATHS, deps: w.deps,
+      docsMerge: w.docsMerge, now: CLOCK, say: (line) => w.lines.push(line),
+    });
+    assert.deepEqual(out, { archived: ['plans-in-mc'], held: [] });
+    assert.equal(w.calls.docsMerge[0].repoPath, join(ROOT, 'runner', 'archive', 'programs', name));
+    assert.equal(repoNameOf(w.calls.docsMerge[0].repoPath), name);
+  }
 });
 
 test('archivePrograms: an open mc-archive- pull request holds the projects and writes nothing', async () => {
