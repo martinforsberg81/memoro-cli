@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  PROGRAMME_ARCHIVE_PREFIX, archiveProgramme, archiveVerdict, programmeRow,
+  PROGRAMME_ARCHIVE_PREFIX, archiveProgramme, archiveVerdict, programmeRow, shelveProgramme,
 } from '../../src/mc/archive-programme.js';
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
@@ -151,17 +151,34 @@ describe('archiveProgramme', () => {
     assert.equal(git(fx.repo, ['worktree', 'list']).stdout.trim().split('\n').length, 1);
   });
 
-  it('in layout 2 the planning session\'s worktrees go, the programme\'s directory stays, and the archive exits 0', async () => {
+  it('in layout 2 the planning session\'s worktrees go, the programme\'s directory moves whole to archive/programs/, and the archive exits 0', async () => {
     const fx = fixture();
     const area = join(fx.root, 'work', 'programs', 'gone');
-    mkdirSync(area, { recursive: true });
+    mkdirSync(join(area, 'proj'), { recursive: true });
     writeFileSync(join(area, 'rulings.md'), '# rulings\n');
+    writeFileSync(join(area, 'proj', 'CLOSEOUT.json'), '{}\n');
     const { deps, calls } = stubs();
     const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
     assert.equal(await archiveProgramme('gone', a), 0);
     assert.deepEqual(calls.release, [true, false]);
-    assert.ok(a.stdout.out.text.endsWith(`mc: ${area} — the planning session's worktrees released; the programme's directory stays\nmc: gone archived\n`), a.stdout.out.text);
-    assert.ok(existsSync(join(area, 'rulings.md')));
+    const moved = join(fx.root, 'work', 'archive', 'programs', 'gone');
+    assert.ok(a.stdout.out.text.endsWith(`mc: ${area} — the planning session's worktrees released; the programme's directory moved to ${moved}\nmc: gone archived\n`), a.stdout.out.text);
+    assert.equal(existsSync(area), false);
+    assert.ok(existsSync(join(moved, 'rulings.md')));
+    assert.ok(existsSync(join(moved, 'proj', 'CLOSEOUT.json')));
+  });
+
+  it('a programme archived under a name archived before goes beside it, never over it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-shelve-'));
+    const env = { MC_WORK_ROOT: root };
+    mkdirSync(join(root, 'archive', 'programs', 'gone'), { recursive: true });
+    writeFileSync(join(root, 'archive', 'programs', 'gone', 'old.md'), 'old\n');
+    mkdirSync(join(root, 'programs', 'gone'), { recursive: true });
+    writeFileSync(join(root, 'programs', 'gone', 'new.md'), 'new\n');
+    const to = shelveProgramme(join(root, 'programs', 'gone'), 'gone', env);
+    assert.equal(to, join(root, 'archive', 'programs', 'gone-2'));
+    assert.ok(existsSync(join(to, 'new.md')));
+    assert.ok(existsSync(join(root, 'archive', 'programs', 'gone', 'old.md')));
   });
 
   it('keeps a file a test reads, removes the rest, and names it in the PR body', async () => {

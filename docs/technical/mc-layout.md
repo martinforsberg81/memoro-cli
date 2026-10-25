@@ -124,8 +124,11 @@ itself. `src/mc/work-area.js`:
 - `releaseWorkArea` and `discardWorkArea` remove the git worktrees named, and
   for a programme's directory never the area, its conversations, or its
   `held_by`: `removes_area` is `false`.
-- Archiving a programme releases `memoro/` and `memoro-cli/` and keeps the rest;
-  `mc plan <programme> --archive` says "the programme's directory stays".
+- Archiving a programme releases `memoro/` and `memoro-cli/`, then moves the
+  directory whole to `~/mc/archive/programs/<programme>` (`-2`, `-3`, … when
+  that name was archived before; ruling 57, `shelveProgramme` in
+  `src/mc/archive-programme.js`). Nothing under `archive/` is read as live: its
+  plans, `STATE.json` files and documents are out of every listing.
 
 In layout 1 a plan area holds only checkouts, so the only change there is that a
 stray non-git directory is no longer listed or removed.

@@ -228,7 +228,11 @@ never triggered.
 3. **Then the planning session**, only once every PR has merged:
    `releaseWorkArea('plan/<programme>')`, as `mc work release` — each worktree
    handed back, `plan/<programme>` deleted, the conversations and the
-   directory gone with them.
+   directory gone with them. In layout 2 the directory is
+   `~/mc/programs/<programme>/` and holds the programme's projects and
+   documents too: once its worktrees are released it is moved whole to
+   `~/mc/archive/programs/<programme>/` (ruling 57), and the conversations
+   are left where Claude keeps them.
 
 Main goes first because it is the half that fails on the network. A PR that
 does not merge stops the command with the planning session untouched — the

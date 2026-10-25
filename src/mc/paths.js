@@ -198,6 +198,17 @@ export function programsHome(env = process.env) {
 }
 
 /**
+ * `~/mc/archive/programs/` — where `mc plan <programme> --archive` moves a
+ * programme's directory once the programme is over (ruling 57). Nothing
+ * under `archive/` is read as live: no plan, no register entry, no area.
+ */
+export const ARCHIVE_HOME = 'archive';
+
+export function archivedProgramsHome(env = process.env) {
+  return join(workRoot(env), ARCHIVE_HOME, PROGRAMS_HOME);
+}
+
+/**
  * `~/mc/repos/` — the bare repositories, `<name>.git`, every worktree mc makes
  * hangs off; and `~/mc/self/` — a worktree of each on `main`, the one mc links
  * to and serves from (repos.js). `MC_REPOS_HOME` moves both, with the primary
@@ -358,7 +369,7 @@ export function sessionName(areaName) {
  * work-area.js). Dot-directories are left out by the caller.
  */
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
 ]);
 
