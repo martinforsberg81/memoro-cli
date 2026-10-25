@@ -1694,6 +1694,88 @@ test('the step after a landing one starts at once, on a branch on top of it', as
 });
 
 /**
+ * The branch flow (project-branch): in a plan ending in a review step, a step
+ * before the review is `built` on the project's branch, and the step after it
+ * continues on that branch rather than stacking a new one.
+ */
+const branchFlowPlan = plan({ steps: [
+  { title: 'S1 — first', status: 'ready', done_when: 'one', instruction: ['One.'], pr: null, blocked_by: null },
+  { title: 'S2 — second', status: 'ready', done_when: 'two', instruction: ['Two.'], pr: null, blocked_by: null },
+  { title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null },
+] });
+
+const builtFirst = (f) => {
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'built', pr: 9, branch: 'p', comments: [], attempts: 0, built: { sha: 'abc', at: '2026-10-25T08:00:00Z' } },
+      { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+      { key: 'Review', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+    ],
+  });
+};
+
+/** A session that ran `mc publish` in the branch flow: the step is `built`, nothing queued. */
+const buildsItself = (f, name, pr, branch, inner = okSession()) => (call) => {
+  const entry = JSON.parse(f.files[`/w/runner/projects/${name}.json`]);
+  const index = entry.steps.findIndex((step) => step.status === 'running');
+  entry.steps[index] = { ...entry.steps[index], status: 'built', pr, branch, session: null };
+  f.files[`/w/runner/projects/${name}.json`] = JSON.stringify(entry);
+  return inner(call);
+};
+
+test('the step after a built one continues on the project\'s branch, not a stacked one, and is told so (built)', async () => {
+  const f = fixture({
+    plans: { memoro: { m: branchFlowPlan } },
+    openPrs: { memoro: [{ number: 9, headRefName: 'p', baseRefName: 'main', isDraft: false, title: 'S1' }] },
+  });
+  builtFirst(f);
+  // Commits past main the earlier steps made: not this step's earlier work.
+  f.deps.git = ((inner) => (cwd, args, options) => (args[0] === 'log' && args.includes('origin/main..HEAD')
+    ? { ok: true, stdout: 'abc1234 m: step 1' }
+    : inner(cwd, args, options)))(f.deps.git);
+  f.deps.session = (call) => { f.calls.sessions.push(call); return buildsItself(f, 'm', 9, 'p')(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1, '#9 is the project\'s own pull request, not in flight');
+  assert.ok(f.calls.git.some((c) => c[1] === 'checkout' && c.includes('-B') && c.includes('p') && c.includes('origin/p')), 'on the project\'s branch, as pushed');
+  assert.equal(f.calls.checkouts.some(([, branch]) => /^m-\d+$/u.test(branch)), false, 'no stacked branch is made');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_STEP, 'm:1');
+  assert.match(call.prompt, /^Your branch, p, is the project's: steps 1–1 are built on it, in #9, which does not land until the project's review step\./mu);
+  assert.doesNotMatch(call.prompt, /starts on top of step|already carries work/u);
+  const steps = registerOf(f, 'm').steps;
+  assert.equal(steps[1].stacked_on ?? null, null);
+  assert.equal(steps[0].status, 'built', 'the step below is untouched');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: steps 1–1 are built on p — step 2 continues there/u);
+});
+
+test('a session that ended with its step built is logged ,built', async () => {
+  const f = fixture({
+    plans: { memoro: { m: branchFlowPlan } },
+    openPrs: { memoro: [{ number: 9, headRefName: 'p', baseRefName: 'main', isDraft: false, title: 'S1' }] },
+  });
+  builtFirst(f);
+  f.deps.session = buildsItself(f, 'm', 9, 'p');
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 0, 'nothing is queued');
+  assert.equal(registerOf(f, 'm').steps[1].status, 'built');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,built\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 2 is built on p \(#9\) — the next step continues there/u);
+});
+
+test('a middle step that ended success without publishing is booked built by the runner, not queued', async () => {
+  const f = fixture({ plans: { memoro: { m: branchFlowPlan } }, gh: { m: { number: 9 } }, session: okSession() });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 0, 'a step before the review queues nothing');
+  const [first] = registerOf(f, 'm').steps;
+  assert.equal(first.status, 'built');
+  assert.equal(first.pr, 9);
+  assert.equal(first.built.sha, 'tip-HEAD');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,built\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is open and the session ended success without publishing — step 1 is built/u);
+});
+
+/**
  * `log-page` step 1, 2026-10-12: it landed as memoro #13590 and stood `ready`
  * again with `landed` still on it, and the runner started it twice. A landed
  * step is written `done` before the pick, so the next step is handed out.
