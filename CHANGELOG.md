@@ -12,6 +12,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `node_modules` trees (about 8 GB) were made on 2026-10-25 by sessions that
   ran `npm ci` themselves, since `npm test` had been turned to `mc gate`,
   which attaches nothing. `npm install <pkg>` and `--package-lock-only` pass.
+- `attachRepoDeps` says `attached` only when memoro's script left
+  `node_modules/.memoro-deps.json`, and runs it by the checkout's real path.
+  A worktree reached through a symlink was reported attached while memoro's
+  script, whose guard compares real paths, had exited 0 having done nothing.
 - The gate carries the candidate's result forward as the next baseline
   (A1, approved by Martin 2026-08-23: "Verkställ 1+2"). After a green
   merge, main is the tree the candidate was just measured on — 52 of 61

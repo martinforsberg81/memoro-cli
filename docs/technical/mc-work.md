@@ -111,6 +111,15 @@ worktree is still the deliverable. `mc work add`, `mc plan` and `mc deps bump`
 all attach through `addWorktree`; the runner passes `attach: false` because it
 attaches before each step itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
 
+An exit of 0 is not taken for an attachment: `attachRepoDeps` reports
+`attached` only when the script left `node_modules/.memoro-deps.json`, which
+memoro writes on both its cache and its local `npm ci` path, and `failed`
+otherwise. It runs the script by the checkout's real path, because memoro's
+script runs only when `process.argv[1]` equals its `import.meta.url` and exits
+0 having done nothing when the checkout is reached through a symlink (measured
+2026-10-25: a worktree under macOS's `/var` → `/private/var` was reported
+attached and had no `node_modules` at all).
+
 ## It is not a piece of work, and nothing had to be taught that
 
 Both listings that matter — `mc status`'s `areasWithCheckout` and the runner's

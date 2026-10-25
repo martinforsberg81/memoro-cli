@@ -94,7 +94,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runTool } from './child-async.js';
@@ -119,6 +119,9 @@ export const SHARED_TREE_REPOS = Object.freeze(['memoro-cli']);
 
 /** The file inside the tree that says a successful install made it, and from what. */
 export const INSTALLED_MARK = '.mc-installed';
+
+/** The file the repository's attach script leaves in `node_modules` once it has attached. */
+export const ATTACHED_MARK = '.memoro-deps.json';
 
 /** What the mark holds: sha256 over the lockfile, NUL, the manifest copy. */
 export function installedHash(lock, manifest) {
@@ -214,7 +217,8 @@ export function attachRepoDeps(worktree, { run = runAttachScript } = {}) {
   const script = join(worktree, 'scripts', 'ensure-worktree-deps.mjs');
   if (!existsSync(script)) return noAttachScript(worktree);
   try {
-    return attachedWith(join(worktree, 'node_modules'), run(worktree, script));
+    const root = realpathSync(worktree);
+    return attachedWith(join(worktree, 'node_modules'), run(root, join(root, 'scripts', 'ensure-worktree-deps.mjs')));
   } catch (error) {
     return { ok: false, state: 'failed', path: join(worktree, 'node_modules'), why: whyItFailed(error) };
   }
@@ -225,7 +229,8 @@ export async function attachRepoDepsAsync(worktree, { run = runAttachScriptAsync
   const script = join(worktree, 'scripts', 'ensure-worktree-deps.mjs');
   if (!existsSync(script)) return noAttachScript(worktree);
   try {
-    return attachedWith(join(worktree, 'node_modules'), await run(worktree, script));
+    const root = realpathSync(worktree);
+    return attachedWith(join(worktree, 'node_modules'), await run(root, join(root, 'scripts', 'ensure-worktree-deps.mjs')));
   } catch (error) {
     return { ok: false, state: 'failed', path: join(worktree, 'node_modules'), why: whyItFailed(error) };
   }
@@ -282,9 +287,20 @@ function noAttachScript(worktree) {
   return { ok: true, state: 'no-attach-script', path: worktree, why: 'this repository attaches no dependency cache' };
 }
 
-/** What the script printed last is what it did: `[deps] Reused attached dependencies in 0.47 s.` */
+/**
+ * What the script printed last is what it did: `[deps] Reused attached
+ * dependencies in 0.47 s.` — but only once the mark is there. memoro's script
+ * writes `node_modules/.memoro-deps.json` on both of its paths (the cache's
+ * `package-links` and the local `npm ci`), and it exits 0 having done nothing
+ * at all when its own path does not compare equal to `import.meta.url` (a
+ * checkout reached through a symlink, measured 2026-10-25 under macOS's
+ * `/var` → `/private/var`). An exit of 0 is not an attachment; the mark is.
+ */
 function attachedWith(path, output) {
   const lines = String(output ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!existsSync(join(path, ATTACHED_MARK))) {
+    return { ok: false, state: 'failed', path, why: `ensure-worktree-deps.mjs left no ${ATTACHED_MARK}${lines.length ? ` (${lines.at(-1).slice(0, 160)})` : ''}` };
+  }
   return { ok: true, state: 'attached', path, why: lines.at(-1) || 'attached' };
 }
 

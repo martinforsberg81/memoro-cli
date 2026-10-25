@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -26,7 +26,7 @@ import { workDepsLockPath, workDepsManifestPath, workDepsPath } from '../../src/
 import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
-import { INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
+import { ATTACHED_MARK, INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const MANIFEST = {
@@ -351,9 +351,27 @@ describe('memoro attaches its own (attachRepoDeps)', () => {
     }
     return dir;
   };
+  /** What memoro's script leaves behind on either of its paths. */
+  const attach = (cwd) => {
+    mkdirSync(join(cwd, 'node_modules'), { recursive: true });
+    writeFileSync(join(cwd, 'node_modules', ATTACHED_MARK), '{"schemaVersion":1,"mode":"package-links"}\n');
+  };
   const REUSED = '[deps] Reused attached dependencies in 0.47 s.\n';
   const failure = () => Object.assign(new Error('Command failed'), { stderr: 'npm error boom\n' });
   const never = () => assert.fail('nothing to attach, so nothing runs');
+  // memoro's own guard (scripts/ensure-worktree-deps.mjs): it runs only when
+  // its path is the one node resolved it to, and exits 0 having done nothing
+  // otherwise.
+  const GUARDED = [
+    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { resolve } from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "if (resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {",
+    `  mkdirSync('node_modules', { recursive: true }); writeFileSync('node_modules/${ATTACHED_MARK}', '{}');`,
+    "  process.stdout.write('[deps] fixture\\n');",
+    '}',
+    '',
+  ].join('\n');
 
   it('says a repository with no attach script attaches no cache, and runs nothing', () => {
     const dir = checkout(null);
@@ -365,15 +383,21 @@ describe('memoro attaches its own (attachRepoDeps)', () => {
   it('reports attached, with the line the script printed last', () => {
     const dir = checkout('');
     const calls = [];
-    const out = attachRepoDeps(dir, { run: (cwd, script) => { calls.push([cwd, script]); return REUSED; } });
+    const out = attachRepoDeps(dir, { run: (cwd, script) => { calls.push([cwd, script]); attach(cwd); return REUSED; } });
     assert.deepEqual(out, { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] Reused attached dependencies in 0.47 s.' });
-    assert.deepEqual(calls, [[dir, join(dir, 'scripts', 'ensure-worktree-deps.mjs')]]);
+    assert.deepEqual(calls, [[realpathSync(dir), join(realpathSync(dir), 'scripts', 'ensure-worktree-deps.mjs')]]);
   });
 
   it('never throws when the script fails, and repeats what it said', () => {
     const dir = checkout('');
     const out = attachRepoDeps(dir, { run: () => { throw failure(); } });
     assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: 'npm error boom' });
+  });
+
+  it('a script that exits 0 and leaves no mark has not attached anything', () => {
+    const dir = checkout('');
+    const out = attachRepoDeps(dir, { run: () => '' });
+    assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: `ensure-worktree-deps.mjs left no ${ATTACHED_MARK}` });
   });
 
   it('the async form says a repository with no attach script attaches no cache, and runs nothing', async () => {
@@ -385,7 +409,7 @@ describe('memoro attaches its own (attachRepoDeps)', () => {
 
   it('the async form reports attached, with the line the script printed last', async () => {
     const dir = checkout('');
-    const out = await attachRepoDepsAsync(dir, { run: async () => REUSED });
+    const out = await attachRepoDepsAsync(dir, { run: async (cwd) => { attach(cwd); return REUSED; } });
     assert.deepEqual(out, { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] Reused attached dependencies in 0.47 s.' });
   });
 
@@ -395,9 +419,25 @@ describe('memoro attaches its own (attachRepoDeps)', () => {
     assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: 'npm error boom' });
   });
 
+  it('the async form: a script that exits 0 and leaves no mark has not attached anything', async () => {
+    const dir = checkout('');
+    const out = await attachRepoDepsAsync(dir, { run: async () => '[deps] said something\n' });
+    assert.deepEqual(out, { ok: false, state: 'failed', path: join(dir, 'node_modules'), why: `ensure-worktree-deps.mjs left no ${ATTACHED_MARK} ([deps] said something)` });
+  });
+
   it('runs the script with node, in the checkout, under the default runner', () => {
-    const dir = checkout(`process.stdout.write('[deps] fixture\\n');\n`);
+    const dir = checkout(GUARDED);
     assert.deepEqual(attachRepoDeps(dir), { ok: true, state: 'attached', path: join(dir, 'node_modules'), why: '[deps] fixture' });
+  });
+
+  it('a checkout reached through a symlink still runs the script (memoro\'s guard compares real paths)', async () => {
+    const dir = checkout(GUARDED);
+    const link = `${dir}-link`;
+    symlinkSync(dir, link, 'dir');
+    dirs.push(link);
+    assert.deepEqual(attachRepoDeps(link), { ok: true, state: 'attached', path: join(link, 'node_modules'), why: '[deps] fixture' });
+    rmSync(join(dir, 'node_modules'), { recursive: true, force: true });
+    assert.deepEqual(await attachRepoDepsAsync(link), { ok: true, state: 'attached', path: join(link, 'node_modules'), why: '[deps] fixture' });
   });
 });
 
