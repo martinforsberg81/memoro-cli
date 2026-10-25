@@ -69,7 +69,7 @@ test('a project the runner archived in an earlier round is still closable', () =
 test('an archived name alone removes nothing — the worktree and the last run still decide', () => {
   assert.equal(closable({ plan: null, archived: true, lastRun: null }).why, 'no runner step to point at');
   assert.equal(closable({ plan: null, archived: true, dirty: true, lastRun: merged }).why, 'an uncommitted change');
-  assert.equal(closable({ plan: null, archived: true, live: true, lastRun: merged }).why, 'a live tmux session');
+  assert.equal(closable({ plan: null, archived: true, live: true, lastRun: merged }).why, 'a process stands in it');
   assert.equal(closable({ plan: null, archived: true, lastRun: { note: 'success,open' } }).why, 'the last run says success,open');
   for (const verdict of [
     closable({ plan: null, archived: true, lastRun: null }),
@@ -87,8 +87,8 @@ test('a last run that did not merge, and no last run at all, both keep the worka
 // runner stopped declining a step for a live session (2026-09-02); this
 // refusal stays, because pulling the ground from under a terminal somebody is
 // standing in is a different kind of harm.
-test('a live tmux session still stops the directory being removed', () => {
-  assert.equal(closable({ plan: donePlan, live: true, lastRun: merged }).why, 'a live tmux session');
+test('a live tmux session, or a process standing in the area, still stops the directory being removed', () => {
+  assert.equal(closable({ plan: donePlan, live: true, lastRun: merged }).why, 'a process stands in it');
 });
 
 test('the last row for a project is the one that decides, not the first', () => {
@@ -138,7 +138,7 @@ test('an area under step/ closes on every register step done, whatever the last 
 test('an area under step/ with a step not done is kept, and the other refusals still come first', () => {
   assert.equal(closable({ plan: null, archived: true, lastRun: merged, legacy: false, stepsDone: false }).why, 'not every step is done in the register');
   assert.equal(closable({ plan: null, archived: true, dirty: true, legacy: false, stepsDone: true }).why, 'an uncommitted change');
-  assert.equal(closable({ plan: null, archived: true, live: true, legacy: false, stepsDone: true }).why, 'a live tmux session');
+  assert.equal(closable({ plan: null, archived: true, live: true, legacy: false, stepsDone: true }).why, 'a process stands in it');
   assert.equal(closable({ plan: null, archived: false, legacy: false, stepsDone: true }).unplanned, true);
 });
 
