@@ -30,14 +30,20 @@ and sleeps `--idle-sleep` between two passes. One chore pass reads every
 2. **archives** every plan that has been `done` for 24 hours, under
    `~/mc/programs/` (*What archiving does*), its row landing as a docs-only pull
    request,
-3. **closes** the workareas whose archive has landed in step 2.
+3. **closes** the step areas of every project that is `done` — with the
+   project's scratch directories — and the legacy areas directly under `~/mc`
+   whose archive has landed in step 2.
 
-The order is not cosmetic. A workarea is closed only after the project that
-explains it is archived, so there is never a moment where a folder exists that
-no plan or closeout accounts for. The close is given the pass's own reading,
+The order is not cosmetic for a legacy area: it is closed only after the project
+that explains it is archived, so there is never a moment where a folder exists
+that no plan or closeout accounts for. A step area does not wait for the
+archive. Its checkout is where the steps ran, and once the register says every
+step is `done` it holds nothing the project still needs, so the first pass after
+the project is `done` closes it. The close is given the pass's own reading,
 taken before the archive, and the list of projects whose archive actually
-landed. A done project whose
-archive has not landed keeps its workarea, and runner.log says so.
+landed. A step area with a process standing in it (a session, a dev server, or
+a live tmux session) or an uncommitted change is kept, and runner.log says so;
+so is a done legacy project whose archive has not landed.
 
 **But the two halves need not be the same pass.** They had to be, once: the
 close tested `status: done`, so a plan an *earlier* pass had already

@@ -3415,7 +3415,66 @@ test('a live workarea is never closed, however done its plan is', async () => {
   f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-29T10:00:00Z');
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a live tmux session/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a process stands in it/u);
+});
+
+/**
+ * A step area whose project is done on main, with every register step done,
+ * and whose archive PR does not merge: `landed` is empty, so the plan is still
+ * on main when the area is looked at. `extra` is the fixture's own options.
+ */
+function doneStepArea(extra = {}) {
+  const f = fixture({
+    areas: { 'step/over': { repo: 'memoro' } },
+    projectLog: { memoro: LOG_HEAD },
+    archive: { 'programs/memoro': { mergeFails: true } },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+    ...extra,
+  });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
+  return f;
+}
+
+/** A step area closes in the first chore pass after its project is done — the archive is not waited for (2026-10-25). */
+test('a step area whose project is done closes though its plan is still on main', async () => {
+  const f = doneStepArea();
+  await round(createRunner({ deps: f.deps }));
+  assert.deepEqual(f.calls.rmdirs, ['/w/step/over']);
+  assert.ok(f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c[3] === '/w/step/over/memoro'));
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /close: over removed — worktree, branch over/u);
+  assert.doesNotMatch(log, /its plan is still on main/u);
+});
+
+test('a step area with a process standing in it is kept, and says why', async () => {
+  const f = doneStepArea();
+  f.deps.cwds = () => [{ pid: 9, cwd: '/w/step/over/memoro/src' }];
+  await round(createRunner({ deps: f.deps }));
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.equal('/w/step/over/memoro/.git' in f.files, true, 'the checkout is untouched');
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a process stands in it/u);
+});
+
+test('an empty reading of who stands where is lsof failing, and the area closes on tmux alone', async () => {
+  const f = doneStepArea();
+  f.deps.cwds = () => [];
+  await round(createRunner({ deps: f.deps }));
+  assert.deepEqual(f.calls.rmdirs, ['/w/step/over']);
+});
+
+test('the closed project\'s scratch directories go with its area, and another project\'s stay', async () => {
+  const f = doneStepArea();
+  f.dirs.add('/w/runner/scratch/over-20260828T100000Z');
+  f.dirs.add('/w/runner/scratch/over-20260828T120000Z');
+  f.dirs.add('/w/runner/scratch/over-2-20260828T100000Z');
+  f.dirs.add('/w/runner/scratch/other-20260828T100000Z');
+  await round(createRunner({ deps: f.deps }));
+  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/over-20260828T100000Z', '/w/runner/scratch/over-20260828T120000Z']);
+  assert.ok(f.dirs.has('/w/runner/scratch/over-2-20260828T100000Z'), 'a project whose name starts with this one is not this one');
+  assert.ok(f.dirs.has('/w/runner/scratch/other-20260828T100000Z'));
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over — 2 scratch directories removed/u);
 });
 
 /**
