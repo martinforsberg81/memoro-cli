@@ -11,10 +11,10 @@
  *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
  *   mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure, from a draft or a sent plan; the register's log records why
  *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
- *                                                                 add a step, after the others, to a draft or a sent plan
+ *                                                                 add a step, after the others, to a draft; to a sent plan, before its review
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
- *   mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner
+ *   mc project send <project>                    check a draft whole, add the review step (last, mc's) and rename it to PLAN.json: the handover to the runner
  *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its directory moved to ~/mc/archive/projects/, its step area closed
  *   mc project discard <project> [--apply]       gone: its directory, step area, register file and open pull requests; without --apply it shows what would go
  *   mc project <name> [--json] [--offline]       show a project: a sent plan as mc status <name> does, a draft as it stands
@@ -32,9 +32,9 @@ import { defaultRepos, listArchived, listPlans } from '../brief-collect.js';
 import { closable, closeArea } from '../close-workarea.js';
 import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
-import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
+import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, testDirectories, withPlanLock, writePlanFile } from '../plan-write.js';
+import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -170,8 +170,10 @@ function sendPlan(scanned, deps) {
       const plan = readDraftOrPlan(found.file);
       const problems = sendProblems(plan);
       if (problems.length) return { problems };
+      const sent = withReviewStep(plan);
+      writePlanFile(found.file, sent);
       rename(found.file, sentFile);
-      return { plan };
+      return { plan: sent };
     });
   } catch (error) {
     stderr.write(`mc: ${error?.message || error}\n`);
@@ -183,6 +185,7 @@ function sendPlan(scanned, deps) {
     return 1;
   }
   stdout.write(`mc: ${project} sent — ${sentFile}\n`);
+  stdout.write(`mc: step ${outcome.plan.steps.length} — the review, added by mc\n`);
   stdout.write(`${runnerLine(outcome.plan)}\n`);
   return 0;
 }
@@ -609,7 +612,7 @@ function dropCriterion(scanned, deps) {
 /**
  * `mc project step add <project> <title> --model haiku|opus --done-when <text>
  * --instruction-file <md> [--effort <level>] [--after <repo>:<project>]` —
- * appends a step, after the others, to a draft or a sent plan. The model is the
+ * appends a step, after the others, to a draft, or to a sent plan before its review. The model is the
  * step's own (ruling 42), and `done_when` ends on a check, never on a person.
  * The instruction is the markdown file's paragraphs. `--after` makes the step
  * wait, `blocked` on that project, which `blockerDue` releases once it is done
@@ -680,12 +683,14 @@ function addStep(scanned, deps) {
         runner: { model, ...(effort ? { effort } : {}) },
       };
       if (waits) step.blocked_by = { kind: 'project', name: waits.name };
-      plan.steps = [...steps, step];
+      // A sent plan's review is its last step and stays last: the step goes before it.
+      const at = found.sent && branchFlow(plan) ? steps.length - 1 : steps.length;
+      plan.steps = [...steps.slice(0, at), step, ...steps.slice(at)];
       const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
       if (problems.length) return { problems };
       writePlanFile(found.file, plan);
       const criteria = Array.isArray(plan.success_criteria) ? plan.success_criteria.length : 0;
-      return { number: plan.steps.length, sendable: !found.sent && criteria > 0 };
+      return { number: at + 1, sendable: !found.sent && criteria > 0 };
     });
   } catch (error) {
     stderr.write(`mc: ${error?.message || error}\n`);
@@ -708,7 +713,8 @@ function addStep(scanned, deps) {
  * those, of step `n` (1-based). Each is checked as `step add` checks it. A draft's
  * steps are all editable. A sent plan's step is frozen once it has started (the
  * register holds it at a status other than `ready`, or with a pull request), and
- * a project mc does not hold is exit 1. Changing a ready step's title is a rename
+ * a project mc does not hold is exit 1, and the review step of a sent plan is mc's and is
+ * refused. Changing a ready step's title is a rename
  * the register already follows: `reconcileEntry` carries its state by position.
  */
 function editStep(scanned, deps) {
@@ -750,6 +756,7 @@ function editStep(scanned, deps) {
       const steps = plan.steps;
       if (!Array.isArray(steps)) return { problems: ['steps: a list of steps'] };
       if (n > steps.length) return { outOfRange: `${project} has ${steps.length} step${steps.length === 1 ? '' : 's'} — step ${n} is not one` };
+      if (steps[n - 1]?.kind === 'review') return { refused: `step ${n} is the review — mc's, not the plan's` };
       if (found.sent) {
         const started = startedAs(readEntry(root, project, io), n);
         if (started) return { frozen: `step ${n} of ${project} is ${started} — a step that has started is frozen` };

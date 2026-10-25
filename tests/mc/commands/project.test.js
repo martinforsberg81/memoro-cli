@@ -6,8 +6,8 @@ import { test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/project.js';
 import { PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../../../src/mc/plan-schema.js';
-import { draftProblems } from '../../../src/mc/plan-write.js';
-import { parseEntry, registerPath } from '../../../src/mc/register.js';
+import { draftProblems, REVIEW_STEP } from '../../../src/mc/plan-write.js';
+import { emptyStep, parseEntry, reconcileEntry, registerPath } from '../../../src/mc/register.js';
 
 const ROOT = '/work';
 
@@ -698,16 +698,97 @@ test('step edit whose done-when names a person or a dependency, or whose instruc
   } finally { f.cleanup(); }
 });
 
-test('send renames a complete draft to PLAN.json byte for byte, and says the runner takes step 1', async () => {
+test('send renames a complete draft to PLAN.json, its steps as drafted and the review last, and says the runner takes step 1', async () => {
   const f = draftFixture();
   try {
     await draftWithStep(f);
-    const draft = readFileSync(f.draft('alpha'), 'utf8');
+    const draft = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
     const plan = join(f.home, 'mc', 'alpha', 'PLAN.json');
     assert.equal(await run(['send', 'alpha'], f.deps), 0);
     assert.equal(existsSync(f.draft('alpha')), false);
-    assert.equal(readFileSync(plan, 'utf8'), draft);
-    assert.deepEqual(f.out, [`mc: alpha sent — ${plan}\n`, 'the runner takes step 1 on its next pass\n']);
+    assert.deepEqual(JSON.parse(readFileSync(plan, 'utf8')), { ...draft, steps: [...draft.steps, REVIEW_STEP] });
+    assert.deepEqual(f.out, [`mc: alpha sent — ${plan}\n`, 'mc: step 2 — the review, added by mc\n', 'the runner takes step 1 on its next pass\n']);
+  } finally { f.cleanup(); }
+});
+
+test('send appends the review step: PLAN.json ends in REVIEW_STEP, the line says so, and the plan reads', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    const text = readFileSync(join(f.home, 'mc', 'alpha', 'PLAN.json'), 'utf8');
+    assert.deepEqual(JSON.parse(text).steps.at(-1), REVIEW_STEP);
+    assert.deepEqual(readPlanText(text).problems, []);
+    assert.equal(f.out[1], 'mc: step 2 — the review, added by mc\n');
+  } finally { f.cleanup(); }
+});
+
+test('send appends the review step once: a second send is refused as before, and no second review is added', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    const sent = readFileSync(join(f.home, 'mc', 'alpha', 'PLAN.json'), 'utf8');
+    f.out.length = 0;
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.equal(f.err.at(-1), `mc: alpha is sent already — ${join(f.home, 'mc', 'alpha', 'PLAN.json')}\n`);
+    assert.equal(readFileSync(join(f.home, 'mc', 'alpha', 'PLAN.json'), 'utf8'), sent);
+    assert.equal(f.out.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('send appends the review step: a draft whose step already carries a kind is refused, exit 1, and moves nothing', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    plan.steps[0].kind = 'review';
+    writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
+    const draft = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is not sent:\n  steps[1].kind: the review step is mc\'s — send adds it\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), draft);
+    assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('send appends the review step: step add on a sent plan inserts before the review, and the register follows the review by its key', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    f.out.length = 0;
+    const plan = join(f.home, 'mc', 'alpha', 'PLAN.json');
+    assert.equal(await run(['step', 'add', 'alpha', 'Two', '--model', 'opus', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
+    const text = readFileSync(plan, 'utf8');
+    const written = JSON.parse(text);
+    assert.deepEqual(written.steps.map((step) => step.title), ['One', 'Two', 'Review the project against its goal']);
+    assert.equal(written.steps.at(-1).kind, 'review');
+    assert.deepEqual(readPlanText(text).problems, []);
+    assert.deepEqual(f.out, ['mc: alpha step 2 — Two (opus)\n']);
+
+    const entry = {
+      project: 'alpha', repo: 'memoro-cli', programme: 'mc', plan: null, criteria: [],
+      steps: [{ ...emptyStep(), key: 'One', status: 'done', pr: 3 }, { ...emptyStep(), key: 'Review the project against its goal', status: 'done', pr: 9 }],
+    };
+    const { entry: next } = reconcileEntry(entry, { project: 'alpha', repo: 'memoro-cli', programme: 'mc', path: plan, plan: written });
+    assert.deepEqual(next.steps.map((state) => [state.key, state.status, state.pr]), [
+      ['One', 'done', 3], ['Two', 'ready', null], ['Review the project against its goal', 'done', 9],
+    ]);
+  } finally { f.cleanup(); }
+});
+
+test('send appends the review step: step edit refuses the review, exit 1, and the plan is untouched', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    const plan = join(f.home, 'mc', 'alpha', 'PLAN.json');
+    const before = readFileSync(plan, 'utf8');
+    f.out.length = 0;
+    assert.equal(await run(['step', 'edit', 'alpha', '2', '--done-when', 'It is tested.'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: step 2 is the review — mc\'s, not the plan\'s\n');
+    assert.equal(readFileSync(plan, 'utf8'), before);
   } finally { f.cleanup(); }
 });
 
@@ -719,7 +800,7 @@ test('send of a draft whose first step waits on a project says what it waits for
     assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 0);
     f.out.length = 0;
     assert.equal(await run(['send', 'alpha'], f.deps), 0);
-    assert.deepEqual(f.out, [`mc: alpha sent — ${join(f.home, 'mc', 'alpha', 'PLAN.json')}\n`, 'step 1 waits: project other\n']);
+    assert.deepEqual(f.out, [`mc: alpha sent — ${join(f.home, 'mc', 'alpha', 'PLAN.json')}\n`, 'mc: step 2 — the review, added by mc\n', 'step 1 waits: project other\n']);
     assert.equal(existsSync(f.draft('alpha')), false);
   } finally { f.cleanup(); }
 });

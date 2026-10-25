@@ -18,6 +18,7 @@ function fixture() {
     write: (path, value) => { files[path] = JSON.stringify(value); },
     lock: (_root, fn) => fn(),
     projects: () => ['p', 'sql-w1-universe-closure'],
+    planOf: () => null,
   };
   return { deps, out, err, step: (i) => parseEntry(files[registerPath(ROOT, 'p')]).steps[i] };
 }
@@ -127,6 +128,20 @@ test('blocked refuses a past --until, --after-deploy outside memoro, on itself o
   assert.equal(await run(['blocked', '--after-deploy', '--hours', '-1'], self.deps), 2);
   assert.equal(await run(['blocked', '--until', '2026-10-14T08:00Z', '--on', 'x'], self.deps), 2);
   assert.equal(self.step(2).status, 'running');
+});
+
+test('blocked --after-deploy is refused in a plan with a review step, and accepted in one without', async () => {
+  const branch = waiting();
+  branch.deps.planOf = () => ({ steps: [{ title: 'A' }, { title: 'C' }, { title: 'Review the project against its goal', kind: 'review' }] });
+  assert.equal(await run(['blocked', '--after-deploy'], branch.deps), 2);
+  assert.equal(branch.err.join(''), 'mc: a plan with a review step lands once, at its end — a check that needs the deploy is not a criterion here; leave it out of this plan\n');
+  assert.equal(branch.step(2).status, 'running');
+  assert.equal(await run(['blocked', '--until', '2026-10-14T08:00Z'], branch.deps), 0);
+
+  const old = waiting();
+  old.deps.planOf = () => ({ steps: [{ title: 'A' }, { title: 'C' }] });
+  assert.equal(await run(['blocked', '--after-deploy'], old.deps), 0);
+  assert.deepEqual(old.step(2).blocked_by, { kind: 'deploy', name: 'deploy-step-2', step: 2, hours: 0 });
 });
 
 test('mc step <project> prints how long a time or deploy wait has left', async () => {

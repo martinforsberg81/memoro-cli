@@ -32,14 +32,16 @@
  * `--until` and `--after-deploy` (ruling 35) block a step on a wait the
  * runner releases by itself (`step-release.js`): a moment, or an earlier
  * step's deploy plus `--hours`. Only memoro deploys, so `--after-deploy` is
- * refused for a step in any other repository.
+ * refused for a step in any other repository. In a plan with a review step (the
+ * branch flow) `--after-deploy` is refused too: such a plan lands once, at its review.
  */
 import { spawnSync } from 'node:child_process';
 
 import { currentIndex, listEntries, parseStepEnv, readEntry, updateStep } from '../register.js';
 import { workRoot } from '../paths.js';
 import { defaultRepos, listPlans } from '../brief-collect.js';
-import { NAME_RE } from '../plan-schema.js';
+import { branchFlow, NAME_RE, readPlanText } from '../plan-schema.js';
+import { findPlan } from '../plan-source.js';
 import { readDeploys } from '../deploys.js';
 import { ago, describeWait } from '../step-release.js';
 import { scanArgs } from './flags.js';
@@ -105,6 +107,10 @@ export async function run(argv, deps = {}) {
   }
   if (status !== 'blocked' && (flags.until || afterDeploy || flags.hours)) {
     stderr.write('mc: --until, --after-deploy and --hours block a step — mc step blocked\n');
+    return 2;
+  }
+  if (status === 'blocked' && afterDeploy && branchFlow((deps.planOf || planOf)(env, target.project))) {
+    stderr.write('mc: a plan with a review step lands once, at its end — a check that needs the deploy is not a criterion here; leave it out of this plan\n');
     return 2;
   }
   if (status === 'blocked' && (flags.until || afterDeploy)) {
@@ -229,6 +235,15 @@ function waitBlocker({ flags, afterDeploy, index, repo, nowMs }) {
     if (hours) blocker.name = `deploy-step-${step}-${String(hours).replace('.', '-')}h`;
   }
   return blocker;
+}
+
+/**
+ * The parsed plan `mc project` holds for a project under `~/mc/programs/`, or
+ * null: found by the project's name, as `findPlan` finds a project's plan.
+ */
+function planOf(env, project) {
+  const held = findPlan(defaultRepos(env), project);
+  return held ? readPlanText(held.text).plan : null;
 }
 
 /** A wait the runner releases by itself, and `describeWait` can say the time of. */

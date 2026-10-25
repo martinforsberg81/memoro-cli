@@ -23,21 +23,20 @@ start to finish, and know when it is done? If not, it is not a step
 - **Nothing in a plan is Martin's:** no step, `done_when`, criterion or
   `check` that waits on him. No "show Martin", "Martin's check", "at his
   terminal", "by hand", "decide whether", "evaluate", "propose", and no
-  review step — there is no such step yet. Anything he must see or decide is
+  review step: `mc project send` adds one, last, and it measures the criteria and lands the project. Anything he must see or decide is
   done in session, before the plan lands; he tests once the project is done.
   - **Every `check` is the step's to run.** A live check on this machine —
     a service stopped and started, a build, an install on the paired phone,
-    a wait for the runner's next chore pass — is commands the last step
-    runs, not a hand check. Write them as commands.
-  - **A check the last step's own branch cannot reach is not a criterion.**
-    The merge door refuses the last step until every criterion is `met` in the
+    a wait for the runner's next chore pass — is commands the review runs, not a hand check. Write them as commands.
+  - **A check the review step's own branch cannot reach is not a criterion.**
+    The merge door refuses the review step until every criterion is `met` in the
     register, so a check that needs this plan landed first (the runner updated,
     the page redrawn from main) never passes. Measure it from the branch
     (`node src/mc-cli.js …`), or leave it out. `mc project criterion add` and
     `mc project send` refuse a check that says "after the deploy", "in
-    production", "not a step's" or names Martin; what must be read from
-    production after a deploy is a later step parked with
-    `mc step blocked --after-deploy`, whose check runs then.
+    production", "not a step's" or names Martin; A plan lands once, at its
+    review, so nothing in it can wait for its own deploy: a check that needs
+    production is left out of the plan.
   - **Work outside this plan comes first.** A criterion that needs another
     project's code on main is not written until that code is on main; a
     person's act (a sign-in, a production migration, a store submission) is
