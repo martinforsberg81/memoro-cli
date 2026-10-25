@@ -21,7 +21,7 @@ import { registerPath } from '../../src/mc/register.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
   LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy, sessionLogRe,
-  tidyPlan, tidyRoots,
+  staleGateCacheEntry, tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
 import * as workTidy from '../../src/mc/work-tidy.js';
 
@@ -794,6 +794,98 @@ describe('(K) slug directories no repository mc knows has, under the gate, its c
   });
 });
 
+describe('(A) gate-cache entries under a known slug, by their last use', () => {
+  const repos = (m) => [{ name: 'memoro', path: join(m.home, 'repos', 'memoro.git'), checkout: join(m.home, 'repos', 'memoro') }];
+  const entry = (over = {}) => ({ path: '/x/gate-cache/memoro.git-17111bc1/k', key: 'k', staging: false, at: null, newest_ms: OLD, bytes: 0, ...over });
+
+  /** A known slug's cache: one entry used two days ago, one whose meta says OLD, one with no meta, and a staging a killed store left. */
+  function cacheOf(m) {
+    const cache = join(m.work, 'gate-cache', repoFileSlug(repos(m)[0].path));
+    const dirs = { used: join(cache, 'used'), idle: join(cache, 'idle'), bare: join(cache, 'bare'), staging: join(cache, 'killed.tmp-4242') };
+    m.write(join(dirs.used, 'meta.json'), JSON.stringify({ key: 'used', at: NOW - 2 * DAY }));
+    m.write(join(dirs.idle, 'meta.json'), JSON.stringify({ key: 'idle', at: OLD }));
+    for (const dir of Object.values(dirs)) if (dir !== dirs.used) m.write(join(dir, 'node_modules', 'x.js'), 'x', OLD);
+    for (const dir of Object.values(dirs)) utimesSync(dir, new Date(OLD), new Date(OLD));
+    return dirs;
+  }
+
+  it('staleGateCacheEntry: used in the last fourteen days is kept, unused for fifteen is a target; meta.at beats the directory', () => {
+    assert.deepEqual(staleGateCacheEntry(entry({ at: NOW - 13 * DAY }), NOW), { target: false, why: 'used in the last 14 days' });
+    assert.deepEqual(staleGateCacheEntry(entry({ at: NOW - 15 * DAY }), NOW), { target: true, why: 'no round has used it for 15 days' });
+    assert.equal(staleGateCacheEntry(entry({ at: NOW - HOUR, newest_ms: OLD }), NOW).target, false);
+  });
+
+  it('staleGateCacheEntry: without a meta its directory\'s mtime decides', () => {
+    assert.deepEqual(staleGateCacheEntry(entry({ at: null, newest_ms: OLD }), NOW), { target: true, why: 'no round has used it for 30 days' });
+  });
+
+  it('staleGateCacheEntry: staging is a target once a day old, and kept while a store may be running', () => {
+    assert.deepEqual(staleGateCacheEntry(entry({ staging: true, newest_ms: NOW - HOUR }), NOW), { target: false, why: 'a store may be running' });
+    assert.deepEqual(staleGateCacheEntry(entry({ staging: true, newest_ms: NOW - 2 * DAY }), NOW), { target: true, why: 'a store that never finished' });
+  });
+
+  it('staleGateCacheEntry: an error throws, and a time that is not known is never a target', () => {
+    assert.throws(() => staleGateCacheEntry(entry({ error: 'EACCES: permission denied' }), NOW), /EACCES/u);
+    assert.throws(() => staleGateCacheEntry(entry({ at: null, newest_ms: null }), NOW), /could not tell when it was last used/u);
+  });
+
+  it('tidyPlan: a target is rule A under its kind, a keep is A, and an error keeps with its error', () => {
+    const cache = (key, over = {}) => ({ path: `/x/gate-cache/memoro.git-17111bc1/${key}`, key, staging: key.includes('.tmp-'), at: null, newest_ms: OLD, bytes: 9, ...over });
+    const plan = tidyPlan(facts({
+      gate_cache_entries: [cache('used', { at: NOW - 2 * DAY }), cache('idle', { at: OLD }), cache('killed.tmp-4242'), cache('broken', { error: 'EACCES' })],
+    }));
+    assert.deepEqual(plan.targets.map((item) => [item.path, item.kind, item.rule, item.why, item.bytes]), [
+      [cache('idle').path, 'gate-cache-entry', 'A', 'no round has used it for 30 days', 9],
+      [cache('killed.tmp-4242').path, 'gate-cache-entry', 'A', 'a store that never finished', 9],
+    ]);
+    assert.equal(keptOf(plan, cache('used').path).rule, 'A');
+    assert.equal(keptOf(plan, cache('used').path).why, 'used in the last 14 days');
+    assert.deepEqual(keptOf(plan, cache('broken').path), { path: cache('broken').path, rule: 'error', why: 'error: EACCES' });
+  });
+
+  it('gatherTidyFacts judges every entry of a known slug: meta.at decides, a missing meta falls back to the mtime, staging by its age', () => {
+    const m = machine();
+    try {
+      const { used, idle, bare, staging } = cacheOf(m);
+      const items = Object.fromEntries(gatherTidyFacts(m.doors({ repos: repos(m) })).gate_cache_entries.map((item) => [item.key, item]));
+      assert.equal(items.used.at, NOW - 2 * DAY);
+      assert.equal(items.bare.at, null);
+      assert.equal(items.bare.newest_ms, OLD);
+      assert.equal(items['killed.tmp-4242'].staging, true);
+      const { list } = runTidy(m.doors({ repos: repos(m) }));
+      assert.deepEqual(ruled(list, 'A').map((item) => item.path).sort(), [idle, bare, staging].sort());
+      assert.ok(ruled(list, 'A').every((item) => item.kind === 'gate-cache-entry' && item.bytes > 0));
+      assert.equal(keptOf(list, used).rule, 'A');
+      assert.equal(keptOf(list, used).why, 'used in the last 14 days');
+    } finally { m.cleanup(); }
+  });
+
+  it('--apply removes a stale entry through rmTree, read-only files and all, and keeps the one used', () => {
+    const m = machine();
+    try {
+      const { used, idle } = cacheOf(m);
+      chmodSync(join(idle, 'node_modules', 'x.js'), 0o444);
+      chmodSync(join(idle, 'node_modules'), 0o555);
+      chmodSync(idle, 0o555);
+      const { outcome } = runTidy({ ...m.doors({ repos: repos(m) }), apply: true });
+      assert.equal(existsSync(idle), false);
+      assert.equal(outcome.applied.find((item) => item.path === idle).ok, true);
+      assert.ok(existsSync(used));
+    } finally { m.cleanup(); }
+  });
+
+  it('outsideRoots accepts <gate-cache>/<slug>/<key> as an entry and refuses <gate-cache>/<slug> as one', () => {
+    const m = machine();
+    try {
+      const roots = tidyRoots(m.env);
+      const entryPath = join(roots.gate_cache, 'memoro-a66fc130', 'k1');
+      mkdirSync(entryPath, { recursive: true });
+      assert.equal(outsideRoots({ kind: 'gate-cache-entry', path: entryPath }, roots), null);
+      assert.match(outsideRoots({ kind: 'gate-cache-entry', path: join(roots.gate_cache, 'memoro-a66fc130') }, roots), /^not the shape a gate-cache-entry has/u);
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('the list file and the apply', () => {
   it('a dry run writes the list whole, every target and keep with its rule', () => {
     const m = machine();
@@ -804,7 +896,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 4);
+      assert.equal(written.rules_version, 5);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
