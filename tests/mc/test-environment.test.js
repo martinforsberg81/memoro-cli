@@ -203,7 +203,7 @@ describe('the worktree shared by default', () => {
       assert.equal(sharedWorktree(fx.env), join(fx.home, 'self', 'memoro'));
       rmSync(join(fx.home, 'self'), { recursive: true, force: true });
       assert.equal(sharedWorktree(fx.env), null, 'never the bare directory: it has no files to serve');
-      assert.match(NO_SHARED_WORKTREE, /mc repos migrate makes ~\/mc\/self\/memoro/u);
+      assert.match(NO_SHARED_WORKTREE, /~\/mc\/self\/memoro is missing/u);
     } finally { fx.cleanup(); }
   });
 });

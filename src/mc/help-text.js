@@ -72,7 +72,7 @@ THE PAGE
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
   mc work <name>                  Open that workarea, ~/mc/work/<name>
   mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
-  mc repos [migrate]               Where mc's two repositories live; migrate shows the move to bare ones
+  mc repos                         Where mc's two repositories live
 
 IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
@@ -140,16 +140,6 @@ IN FULL
   mc repos [--json]                The two repositories: bare or primary, the git
                                     directory, the checkout mc serves, and the
                                     linked worktrees each has
-  mc repos migrate [--json]        The move from the primary checkouts to bare
-                                    repositories under ~/mc/repos, as a dry run:
-                                    every move in order, and what refuses it — a
-                                    runner, the merger, a dev server, a checkout
-                                    with uncommitted changes. Writes nothing;
-                                    exit 1 when something refuses
-  mc repos migrate --apply         The move, once, with the runner, the merger and
-                                    the dev servers stopped: each move done in
-                                    order and logged; the first that fails stops
-                                    it, a second run continues
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind
