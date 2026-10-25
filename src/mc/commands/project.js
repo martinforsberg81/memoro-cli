@@ -15,7 +15,7 @@
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner
- *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its step area closed
+ *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its directory moved to ~/mc/archive/projects/, its step area closed
  *   mc project discard <project> [--apply]       gone: its directory, step area, register file and open pull requests; without --apply it shows what would go
  *   mc project <name> [--json] [--offline]       show a project: a sent plan as mc status <name> does, a draft as it stands
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
@@ -36,7 +36,7 @@ import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanT
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, testDirectories, withPlanLock, writePlanFile } from '../plan-write.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
-import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
+import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
@@ -923,7 +923,7 @@ async function archiveProject(scanned, deps) {
     repo,
     items: [{ record: { path: found.file, programme: found.programme, project, repo: repo.name, status: 'done' }, entry }],
     root,
-    paths: { runs: join(log, 'runs.tsv'), log, undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, env) },
+    paths: { runs: join(log, 'runs.tsv'), log, undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, env), archived: archivedProjectsHome(env) },
     deps: {
       git, gh: deps.gh || ghIn, read: deps.read || readFileOrNull, write: deps.write || writeTextFile,
       exists: deps.exists || existsSync, append: deps.append || appendText, list: deps.list || listEntries,

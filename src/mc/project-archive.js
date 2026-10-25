@@ -6,8 +6,9 @@
  * `~/mc/programs/` is archived by `mc project archive <project>`, or by the
  * runner once it has been done for 24 hours. What reaches the repository is one
  * row in that repository's `docs/project/project_log.md`, landed as a
- * docs-only pull request. The plan and its closeout stay in mc: `CLOSEOUT.json`
- * beside `PLAN.json`. A programme is never archived automatically.
+ * docs-only pull request. The closeout stays in mc, `CLOSEOUT.json` beside
+ * `PLAN.json`, and the project's directory moves to `~/mc/archive/projects/`
+ * (`shelveProject`). A programme is never archived automatically.
  *
  * The row and its cells are the ones `archive-plan.js` writes for a plan in a
  * repository, reused unchanged. The rules take what they need as arguments.
@@ -15,6 +16,7 @@
  * through the `deps` it is handed, as run.js does; the register is read by its
  * caller (the runner and the `mc project` verbs).
  */
+import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 
 import {
@@ -22,8 +24,10 @@ import {
   mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { buildCloseout, closeoutText, readSessionResults } from './closeout.js';
+import { archivedProjectsHome } from './paths.js';
 import { CLOSEOUT_FILE } from './plan-source.js';
 import { landingNote } from './run-plan.js';
+import { tilde } from './status-project.js';
 
 /** How long a done project stays listed as done before the runner archives it. */
 export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
@@ -114,6 +118,26 @@ export function closeoutFileOf(planPath) {
   return join(dirname(planPath), CLOSEOUT_FILE);
 }
 
+/**
+ * Moves a project's directory, whole, to `archive/projects/<programme>/<project>`
+ * — or to `<project>-2`, `-3`, … when one of that name is there already. Its
+ * PLAN.json, CLOSEOUT.json and STATE.json go with it, and nothing in it is
+ * deleted. Returns where it went; throws when the move fails, with the directory
+ * where it was.
+ */
+export function shelveProject(dir, programme, project, {
+  home = archivedProjectsHome(),
+  exists = existsSync,
+  mkdir = (path) => mkdirSync(path, { recursive: true }),
+  rename = renameSync,
+} = {}) {
+  mkdir(join(home, programme));
+  let to = join(home, programme, project);
+  for (let n = 2; exists(to); n += 1) to = join(home, programme, `${project}-${n}`);
+  rename(dir, to);
+  return to;
+}
+
 /* ------------------------------------------------- the archive, through git */
 
 /** The project log of a repository, as its docs-only archive pull request edits it. */
@@ -137,7 +161,10 @@ function parsedPlan(text) {
  * finds the row next time.
  *
  * Returns `{ archived, held }`: the projects whose CLOSEOUT.json was written,
- * and `[{ project, why }]` for the rest. A failure holds the projects it stopped
+ * and `[{ project, why }]` for the rest. Each of those then has its directory
+ * moved to `archive/projects/` — by `deps.shelve`, else `shelveProject` at
+ * `paths.archived`. A move that fails is said and the project stays archived:
+ * its CLOSEOUT.json is there, and every reader skips a project that has one. A failure holds the projects it stopped
  * — the others go on. The worktree is taken down however the pass ends.
  */
 export async function archivePrograms({ repo, items, root, paths, deps, docsMerge, now, say }) {
@@ -189,6 +216,14 @@ export async function archivePrograms({ repo, items, root, paths, deps, docsMerg
       continue;
     }
     say(`${prefix}${programme}/${project} archived — CLOSEOUT.json written`);
+    try {
+      const to = deps.shelve
+        ? deps.shelve(dirname(record.path), programme, project)
+        : shelveProject(dirname(record.path), programme, project, { home: paths.archived });
+      say(`${prefix}${project} moved to ${tilde(to)}`);
+    } catch (error) {
+      say(`${prefix}${project} not moved (${error?.message || error}) — left in ~/mc/programs; nothing tries the move again`);
+    }
   }
 
   for (const item of items) {

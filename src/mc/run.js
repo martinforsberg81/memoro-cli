@@ -134,7 +134,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy, scratchRe } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planAreaRoot, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, archivedProjectsHome, planAreaRoot, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -680,6 +680,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // rewritten whole every round, so an inbox that drained one would find it
     // back the next round, forever (paths.js).
     undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, deps.env),
+    // Where a done project's directory is moved once its closeout is written (project-archive.js).
+    archived: archivedProjectsHome(deps.env),
     unplanned: runnerTablePath(UNPLANNED_WORKAREAS, deps.env),
     unreadable: runnerTablePath(UNREADABLE_PLANS, deps.env),
     // The repositories GitHub could not be asked about, and when to ask
@@ -1361,7 +1363,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return { archived: [] };
     }
     const { archived } = await archivePrograms({
-      repo, items, root, paths: { runs: paths.runs, log: paths.log, undocumented: paths.undocumented },
+      repo, items, root, paths: { runs: paths.runs, log: paths.log, undocumented: paths.undocumented, archived: paths.archived },
       deps, docsMerge: deps.docsMerge, now: deps.now, say,
     });
     return { archived };

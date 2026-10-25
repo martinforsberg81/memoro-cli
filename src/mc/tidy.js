@@ -44,7 +44,7 @@ import {
 } from './paths.js';
 import { lsTreeArgs, planPath } from './plan-source.js';
 import { closeoutFileOf } from './project-archive.js';
-import { listEntries, registerDir, registerPath } from './register.js';
+import { listArchivedEntries, listEntries, registerDir, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -52,7 +52,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 1;
+export const RULES_VERSION = 2;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -182,17 +182,21 @@ export function gatherTidyFacts({
     main.set(repo.name, { tree: new Set(tree.split('\n').filter(Boolean)), rows: logRows(text) });
   }
 
+  // The live projects, then the archived ones: the runner moved those out of
+  // programs/, and their leftovers are purged as a live project's are.
   let entries = [];
-  try { entries = listEntries(root); } catch (error) { facts.register_error = message(error); }
+  try { entries = listEntries(root).map((entry) => ({ entry, archived: false })); } catch (error) { facts.register_error = message(error); }
+  entries.push(...listArchivedEntries(root).map((entry) => ({ entry, archived: true })));
   const logFiles = listNames(roots.log);
   const scratchDirs = listNames(roots.scratch);
-  for (const entry of entries) {
+  for (const { entry, archived } of entries) {
     const item = {
       project: entry.project, programme: entry.programme, repo: entry.repo,
       register_path: registerPath(root, entry.project),
       in_log: false, plan_on_main: null, closeout_on_main: false, area_exists: null,
       files: [],
     };
+    if (archived) item.archived_dir = true;
     facts.projects.push(item);
     try {
       const repo = main.get(entry.repo);
@@ -201,7 +205,11 @@ export function gatherTidyFacts({
           && (!row.programme || !entry.programme || row.programme === entry.programme));
         // A plan under `~/mc/programs/` is a file on this machine, not a path in origin/main's tree.
         // Its archiving leaves a CLOSEOUT.json beside it (ruling 48): that file is the closeout.
-        if (isAbsolute(entry.plan || '')) {
+        if (archived) {
+          // Moved to archive/projects/: no plan directory is left there, and its closeout is beside its STATE.json.
+          item.plan_on_main = false;
+          item.closeout_on_main = present(closeoutFileOf(item.register_path));
+        } else if (isAbsolute(entry.plan || '')) {
           item.plan_on_main = present(entry.plan) && !present(closeoutFileOf(entry.plan));
           item.closeout_on_main = present(closeoutFileOf(entry.plan));
         } else {
@@ -215,7 +223,8 @@ export function gatherTidyFacts({
       item.area_exists = directoryExists(join(root, stepAreaName(entry.project, { root }))) || directoryExists(join(root, entry.project));
       // Only a project the rule would take has its files listed and weighed.
       if (!projectPurge(item, facts).target) continue;
-      if (roots.register) item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
+      // An archived project keeps its STATE.json: it is the project's knowledge, not a leftover.
+      if (roots.register && !archived) item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
       const logRe = sessionLogRe(entry.project);
       for (const name of logFiles) {
         if (logRe.test(name)) item.files.push({ path: join(roots.log, name), kind: 'session-log', bytes: treeBytes(join(roots.log, name)) });
@@ -371,7 +380,9 @@ function judge(rule, ...args) {
  * origin/main, and no area for it on this machine. A project under
  * `~/mc/programs/` is archived with its CLOSEOUT.json beside its plan
  * (ruling 48): that file on this machine is its closeout, and a plan with
- * one beside it counts as no plan directory.
+ * one beside it counts as no plan directory. A project the runner has archived
+ * is in `archive/projects/` with its STATE.json: its session logs, closed logs
+ * and scratch go, and the STATE.json stays.
  */
 export function projectPurge(item, facts) {
   if (facts.git_error) return { target: false, why: `git could not answer — ${facts.git_error}` };

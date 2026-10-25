@@ -874,6 +874,8 @@ function archiveFixture({ file = 'PLAN.json', steps = null, criteria = [], close
   const home = mkdtempSync(join(tmpdir(), 'mc-archive-'));
   const work = join(home, 'work');
   const dir = join(home, 'mc', 'alpha');
+  // Where archive moves the directory: archive/projects/<programme>/<project> under the work root.
+  const moved = join(work, 'archive', 'projects', 'mc', 'alpha');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, file), `${JSON.stringify({ ...JSON.parse(repoPlan('alpha')), repo: 'memoro-cli' }, null, 2)}\n`);
   if (closeout) writeFileSync(join(dir, 'CLOSEOUT.json'), '{}\n');
@@ -914,7 +916,7 @@ function archiveFixture({ file = 'PLAN.json', steps = null, criteria = [], close
     stdout: { write: (t) => out.push(t) }, stderr: { write: (t) => err.push(t) },
   };
   return {
-    deps, out, err, calls, landed, work, dir,
+    deps, out, err, calls, landed, work, dir, moved,
     cleanup: () => rmSync(home, { recursive: true, force: true }),
   };
 }
@@ -966,7 +968,10 @@ test('archive of a done project writes its row through a docs-only pull request,
     assert.equal(f.landed.length, 1);
     assert.equal(f.landed[0].pr, 7);
     assert.match(f.landed[0].text, /^\|\s*2026-10-20\s*\|\s*mc\s*\|\s*alpha\s*\|\s*delivered\s*\|/mu);
-    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.ok(existsSync(join(f.moved, 'CLOSEOUT.json')));
+    assert.ok(existsSync(join(f.moved, 'PLAN.json')), 'the plan goes with its directory');
+    assert.equal(existsSync(f.dir), false, 'the directory has left programs/');
+    assert.match(f.out.join(''), /archive: memoro-cli alpha moved to \S*archive\/projects\/mc\/alpha\n/u);
     assert.match(f.out.join(''), /^mc: alpha archived\n/mu);
     assert.equal(existsSync(join(f.work, 'step', 'alpha')), false);
     assert.equal(readFileSync(join(f.work, 'runner', 'log', 'closed', 'alpha', 'notes.txt'), 'utf8'), 'kept\n');
@@ -979,7 +984,7 @@ test('archive of a done project with a dirty step area archives it, keeps the ar
   const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET, area: true, dirty: ' M notes.txt\n' });
   try {
     assert.equal(await run(['archive', 'alpha'], f.deps), 0);
-    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.ok(existsSync(join(f.moved, 'CLOSEOUT.json')));
     assert.match(f.out.join(''), /mc: alpha archived; its step area stays — an uncommitted change\n$/u);
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'memoro-cli', '.git')));
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'notes.txt')));
@@ -992,7 +997,7 @@ test('archive of a done project keeps its step area while a process stands in it
   try {
     f.deps.cwds = () => [{ pid: 9, cwd: join(f.work, 'step', 'alpha', 'memoro-cli', 'src') }];
     assert.equal(await run(['archive', 'alpha'], f.deps), 0);
-    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.ok(existsSync(join(f.moved, 'CLOSEOUT.json')));
     assert.match(f.out.join(''), /mc: alpha archived; its step area stays — a process stands in it\n$/u);
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'memoro-cli', '.git')));
     assert.ok(existsSync(join(f.work, 'step', 'alpha', 'notes.txt')));
@@ -1158,6 +1163,17 @@ test('discard of an archived project is refused, exit 1, and removes nothing', a
     assert.equal(f.err.join(''), 'mc: alpha is archived — archive is the way out it took\n');
     assert.equal(existsSync(f.dir), true);
     assert.deepEqual(f.calls, []);
+  } finally { f.cleanup(); }
+});
+
+test('discard of a project whose archive moved its directory says there is no such project, and removes nothing', async () => {
+  const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 0);
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is not a project under ~/mc/programs/\n');
+    assert.equal(existsSync(join(f.moved, 'PLAN.json')), true);
+    assert.equal(existsSync(join(f.moved, 'CLOSEOUT.json')), true);
   } finally { f.cleanup(); }
 });
 

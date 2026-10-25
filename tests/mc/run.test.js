@@ -81,7 +81,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   };
   const log = [];
   const aborted = new Set();
-  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [] };
+  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [], shelved: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -163,6 +163,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     scratchDirs: (p) => [...dirs].filter((d) => d.startsWith(`${p}/`) && !d.slice(p.length + 1).includes('/'))
       .map((d) => ({ name: d.slice(p.length + 1), mtimeMs: scratchAges[d] ?? Date.parse(now) })),
     rmTree: (p) => { dirs.delete(p); calls.rmScratch.push(p); return true; },
+    // The archive moves a done project's directory: recorded here, not moved, as the fixture's files are not the disk's.
+    shelve: (dir, programme, project) => { calls.shelved.push([dir, programme, project]); return `/w/archive/projects/${programme}/${project}`; },
     pid: 4242,
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
@@ -3133,6 +3135,8 @@ test('a programme project done for 25 hours is archived in the round: closeout b
   assert.deepEqual(f.calls.rmdirs, ['/w/over'], 'the area goes in the pass that archived its project');
   const runnerLog = f.files['/w/runner/log/runner.log'];
   assert.match(runnerLog, /prog\/over archived — CLOSEOUT\.json written/u);
+  assert.deepEqual(f.calls.shelved, [['/w/programs/prog/over', 'prog', 'over']], 'the directory is moved to the archive');
+  assert.match(runnerLog, /archive: memoro over moved to \/w\/archive\/projects\/prog\/over/u);
   assert.match(runnerLog, /close: over removed — worktree, branch over/u);
 });
 
