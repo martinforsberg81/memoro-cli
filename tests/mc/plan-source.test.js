@@ -260,9 +260,28 @@ describe('programsArchived', () => {
       put('mc/x/PLAN.json', '{"repo":"memoro-cli"}');
       put('mc/x/CLOSEOUT.json', '{}');
       put('mc/y/CLOSEOUT.json', '{}');
-      assert.deepEqual(programsArchived({ home }), [
+      assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), [
         { path: join(home, 'mc', 'x', PLAN_FILE), programme: 'mc', project: 'x', repo: 'memoro-cli', closeoutPath: join(home, 'mc', 'x', CLOSEOUT_FILE) },
       ]);
     });
+  });
+
+  it('counts a project moved to the archive home, after the programs home, with the repository its plan names', () => {
+    const files = {
+      '/p/mc/x/PLAN.json': '{"repo":"memoro-cli"}', '/p/mc/x/CLOSEOUT.json': '{}',
+      '/a/mc/m/PLAN.json': '{"repo":"memoro"}', '/a/mc/m/CLOSEOUT.json': '{}',
+      '/a/mc/n/PLAN.json': '{"repo":"memoro"}',
+      '/a/ops/w/CLOSEOUT.json': '{}',
+    };
+    const dirs = { '/p': ['mc'], '/p/mc': ['x'], '/a': ['mc', 'ops'], '/a/mc': ['m', 'n'], '/a/ops': ['w'] };
+    assert.deepEqual(programsArchived({
+      home: '/p',
+      archivedHome: '/a',
+      list: (path) => dirs[path] ?? [],
+      read: (path) => files[path] ?? null,
+    }), [
+      { path: '/p/mc/x/PLAN.json', programme: 'mc', project: 'x', repo: 'memoro-cli', closeoutPath: '/p/mc/x/CLOSEOUT.json' },
+      { path: '/a/mc/m/PLAN.json', programme: 'mc', project: 'm', repo: 'memoro', closeoutPath: '/a/mc/m/CLOSEOUT.json' },
+    ]);
   });
 });

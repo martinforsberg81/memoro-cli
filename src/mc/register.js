@@ -62,8 +62,8 @@ import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { invocationShape, rotateIfLarge, runId } from './logger.js';
-import { PROGRAMS_HOME, RUNNER_HOME, layoutVersion } from './paths.js';
-import { findProjectDir } from './plan-write.js';
+import { ARCHIVE_HOME, ARCHIVED_PROJECTS, PROGRAMS_HOME, RUNNER_HOME, layoutVersion } from './paths.js';
+import { findArchivedProjectDir, findProjectDir } from './plan-write.js';
 import { BLOCKER_KINDS, NAME_RE, blockerFieldProblems, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
@@ -110,13 +110,15 @@ export function registerDir(root, { read } = {}) {
 /**
  * Where a project's register is: `runner/projects/<project>.json` in layout 1;
  * in layout 2 `programs/<programme>/<project>/STATE.json`, beside its plan or
- * draft (`findProjectDir`), and null when there is no such project. `read` is
- * the one the layout file is read with; `exists` and `list` the ones the
- * project's directory is found with.
+ * draft (`findProjectDir`), or, once the runner has moved the project, beside
+ * its plan under `archive/projects/` (`findArchivedProjectDir`). Null when there
+ * is no such project. `read` is the one the layout file is read with; `exists`
+ * and `list` the ones the project's directory is found with.
  */
 export function registerPath(root, project, { read, exists, list } = {}) {
   if (layoutVersion({ root, read }) !== 2) return join(root, RUNNER_HOME, REGISTER_DIR, `${project}.json`);
-  const found = findProjectDir(join(root, PROGRAMS_HOME), project, { list, exists });
+  const found = findProjectDir(join(root, PROGRAMS_HOME), project, { list, exists })
+    ?? findArchivedProjectDir(join(root, ARCHIVE_HOME, ARCHIVED_PROJECTS), project, { list, exists });
   return found ? join(found.dir, STATE_FILE) : null;
 }
 
@@ -608,6 +610,21 @@ export function listEntries(root, { list = realList, read = realRead } = {}) {
       .filter(Boolean);
   }
   const home = join(root, PROGRAMS_HOME);
+  return [...list(home)].sort()
+    .flatMap((programme) => [...list(join(home, programme))].sort().map((project) => join(home, programme, project, STATE_FILE)))
+    .map((path) => parseEntry(read(path)))
+    .filter(Boolean);
+}
+
+/**
+ * Every archived project's entry: each `archive/projects/<programme>/<project>/STATE.json`
+ * that parses, in layout 2 — the projects the runner has moved out of
+ * `programs/`. Layout 1 has no archive of registers, so it has none. `listEntries`
+ * lists the live projects and never these.
+ */
+export function listArchivedEntries(root, { list = realList, read = realRead } = {}) {
+  if (layoutVersion({ root, read }) !== 2) return [];
+  const home = join(root, ARCHIVE_HOME, ARCHIVED_PROJECTS);
   return [...list(home)].sort()
     .flatMap((programme) => [...list(join(home, programme))].sort().map((project) => join(home, programme, project, STATE_FILE)))
     .map((path) => parseEntry(read(path)))

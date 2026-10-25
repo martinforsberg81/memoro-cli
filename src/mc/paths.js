@@ -208,6 +208,17 @@ export function archivedProgramsHome(env = process.env) {
   return join(workRoot(env), ARCHIVE_HOME, PROGRAMS_HOME);
 }
 
+export const ARCHIVED_PROJECTS = 'projects';
+
+/**
+ * `~/mc/archive/projects/<programme>/<project>/` — where the runner moves an
+ * archived project's directory, whole: its CLOSEOUT.json, PLAN.json, STATE.json
+ * and anything else that was in it. Nothing under it is a live plan.
+ */
+export function archivedProjectsHome(env = process.env) {
+  return join(workRoot(env), ARCHIVE_HOME, ARCHIVED_PROJECTS);
+}
+
 /**
  * `~/mc/repos/` — the bare repositories, `<name>.git`, every worktree mc makes
  * hangs off; and `~/mc/self/` — a worktree of each on `main`, the one mc links

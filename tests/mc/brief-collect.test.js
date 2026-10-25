@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import {
   listArchived, listPlans, listProposals, parsePlanFrontmatter, planFields, runsFor, showBatch,
 } from '../../src/mc/brief-collect.js';
+import { programsArchived } from '../../src/mc/plan-source.js';
 
 const RUNS = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -127,6 +128,15 @@ describe('archived projects', () => {
       { path: '/w/programs/mc/b/PLAN.json', programme: 'mc', project: 'b', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/b/CLOSEOUT.json' },
     ];
     assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived }), ['b']);
+  });
+
+  it('names a project that is only under the archive home', () => {
+    const files = { '/a/mc/moved/PLAN.json': '{"repo":"memoro-cli"}', '/a/mc/moved/CLOSEOUT.json': '{}' };
+    const dirs = { '/a': ['mc'], '/a/mc': ['moved'] };
+    const archived = () => programsArchived({
+      home: '/nowhere', archivedHome: '/a', list: (path) => dirs[path] ?? [], read: (path) => files[path] ?? null,
+    });
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived }), ['moved']);
   });
 });
 
