@@ -124,7 +124,7 @@ export function notInDev(declaration) {
 }
 
 /** What a caller says when `sharedWorktree` has none to give. */
-export const NO_SHARED_WORKTREE = 'no memoro checkout to serve — mc repos migrate makes ~/mc/self/memoro';
+export const NO_SHARED_WORKTREE = 'no memoro checkout to serve — ~/mc/self/memoro is missing';
 
 /**
  * The worktree `mc test dev` shares by default: memoro's `checkout` on main

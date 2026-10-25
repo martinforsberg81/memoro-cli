@@ -490,7 +490,7 @@ export function listBuilds({
  * repository has no files to stand in. Without one it refuses in words.
  */
 export function atRev(argv, { repoPath, checkout = repoPath, rev = null, git = gitRead }) {
-  if (!checkout) return { missing: 'no memoro checkout to run it in — mc repos migrate makes ~/mc/self/memoro' };
+  if (!checkout) return { missing: 'no memoro checkout to run it in — ~/mc/self/memoro is missing' };
   if (!rev || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || isAbsolute(argv[1])) {
     return { argv, cwd: checkout, input: undefined };
   }

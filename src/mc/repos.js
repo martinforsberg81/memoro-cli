@@ -8,8 +8,7 @@
  * proposal 2026-10-24-mc-environment-model, part 3): `~/mc/repos/<name>.git`
  * is a bare repository every worktree hangs off, and `~/mc/self/<name>` is a
  * worktree of it on `main` — the one mc links to (memoro-cli) and the one
- * `mc shot` and `mc test dev` serve outside a worktree (memoro). `mc repos
- * migrate` is the move from the first to the second.
+ * `mc shot` and `mc test dev` serve outside a worktree (memoro).
  *
  * Every caller asks `defaultRepos` and takes the field it needs, so the same
  * code runs before and after the move:

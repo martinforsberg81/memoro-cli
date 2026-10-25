@@ -845,7 +845,7 @@ export async function collectHelper({
   const notes = [];
 
   const haveCheckout = Boolean(memoro) && existsSync(join(memoro, 'scripts', 'admin', 'survey-errors.mjs'));
-  const where = memoro ? `no memoro checkout at ${memoro}` : 'no memoro checkout — mc repos migrate makes ~/mc/self/memoro';
+  const where = memoro ? `no memoro checkout at ${memoro}` : 'no memoro checkout — ~/mc/self/memoro is missing';
   if (!haveCheckout) notes.push(`${where} — the two admin scripts cannot run`);
   const token = readAdminToken(memoro, env);
   const base = baseUrl(env);
