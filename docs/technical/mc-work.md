@@ -109,7 +109,7 @@ without the script gets `state: 'no-attach-script'` and nothing runs. The attach
 is reported, never fatal: a failure is one line from `mc work add`, and the
 worktree is still the deliverable. `mc work add`, `mc plan` and `mc deps bump`
 all attach through `addWorktree`; the runner passes `attach: false` because it
-attaches before each step itself.
+attaches before each step itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
 
 ## It is not a piece of work, and nothing had to be taught that
 

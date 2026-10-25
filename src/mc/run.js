@@ -157,6 +157,7 @@ import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
+import { attachRepoDepsAsync } from './work-deps.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
@@ -567,6 +568,7 @@ export function realDeps(env = process.env) {
     // never opens the vault.
     creditKey: () => readStepCreditKey(),
     addWorktree,
+    attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
     launch: resolveLaunch,
     // The two halves of `mc helper --intake`, so a round can be driven in a test with
@@ -2145,6 +2147,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // for the same reason: nothing the runner does next installs a role file or
     // a tool. The merge is abandoned first, so the block is written over a
     // workarea that is not left mid-merge.
+    // A fresh step's workarea is attached again before its session: `origin/main`
+    // has just been merged in, and a lockfile that moved since the attachment was
+    // made is what the session would install from. A resumed session's tree is
+    // left as it was (ruling 33, `recoveryOf`), and a tree with conflicts may hold
+    // a `package-lock.json` the script cannot read — that session runs
+    // `npm run deps:ensure` itself. A failure is said and never blocks the step.
+    if (!resuming && !conflicts.length) {
+      const attached = await deps.attachDeps(worktree);
+      if (attached.state === 'attached') say(`${name}: dependencies — ${attached.why}`);
+      if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
+    }
     const role = deps.role(kind);
     if (!role?.overlay) {
       abandonMerge(`canon/roles/${kind}.md is missing`);

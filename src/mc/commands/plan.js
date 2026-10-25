@@ -41,6 +41,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { archiveProgramme } from '../archive-programme.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
+import { attachRepoDeps } from '../work-deps.js';
 import { openInWorkArea } from '../work-open.js';
 import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
@@ -190,7 +191,7 @@ export async function run(argv, deps = {}) {
  * the session over the other one's absence helps nobody. Nothing at all is the
  * only failure.
  */
-export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null } = {}) {
+export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null, attach = attachRepoDeps } = {}) {
   const name = planArea(programme, env);
   const branch = planBranch(programme);
   const runGit = git || ((args) => spawnSync('git', args, { stdio: 'ignore' }));
@@ -202,7 +203,15 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
   if (madeTheArea) createWorkArea(name, env);
 
   for (const repo of repos) {
-    if (area.worktrees.some((item) => item.repo === repo.name && item.is_git)) continue;
+    // A checkout that stands is reopened, and its attachment may predate the
+    // lockfile on main, so it is attached again here and what it says is said.
+    // A new one is attached by `addWorktree`.
+    if (area.worktrees.some((item) => item.repo === repo.name && item.is_git)) {
+      const path = join(area.path, repo.name);
+      const attached = attach(path);
+      if (!attached.ok) stderr.write(`mc: dependencies not attached in ${path} — ${attached.why}\n`);
+      continue;
+    }
     if (!existsSync(repo.path)) {
       stderr.write(`mc: no ${repo.name} checkout at ${repo.path} — planning without it\n`);
       continue;
