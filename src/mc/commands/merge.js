@@ -17,7 +17,7 @@ import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { criteriaDoor } from '../merge-boundary.js';
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
-import { landedPatch, stepForMerge } from '../merge-step.js';
+import { bookBuilt, landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
 import { dropPr } from '../page-cache.js';
 import { listEntries, readEntry, realLock, updateStep } from '../register.js';
@@ -96,7 +96,8 @@ export async function run(argv, deps = {}) {
  * #13784, 2026-10-18). The step is found as the gate's door finds it
  * (`stepForMerge`); a planning session's pull request is nobody's step and
  * books nothing. A step already `done` or `blocked` is left as it is, as the
- * merger leaves it. Returns the line to print, or null.
+ * merger leaves it. A review's landing books the steps built under it too
+ * (`bookBuilt`). Returns the line to print, or null.
  */
 function bookDocsLanding(report, body, deps) {
   const root = deps.root || workRoot(deps.env || process.env);
@@ -109,7 +110,8 @@ function bookDocsLanding(report, body, deps) {
     if (standing?.status === 'done' || standing?.status === 'blocked') return null;
     const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
     updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: report.pr.number, report, now: stamp, body }), now: stamp, ...io });
-    return `${step.project} step ${step.index + 1} is done`;
+    const built = bookBuilt({ root, project: step.project, pr: report.pr.number, report, now: stamp, io, updateStep, readEntry });
+    return `${step.project} step ${step.index + 1} is done${builtSaid(built)}`;
   } catch (error) {
     return `the landing is not booked on its step (${error?.message || error}) — mc step done <project> <n> --pr ${report.pr.number}`;
   }
@@ -189,6 +191,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
   // The step, unless the merger has the entry: the entry's own, else the one
   // the pull request's branch stands on. Done or blocked is left as it is.
   let booked = null;
+  let built = [];
   if (queue !== 'landing') {
     try {
       const step = entry?.step || stepForMerge({ env: deps.env || process.env, head: view.headRefName, entries: listEntries(root, io) });
@@ -196,6 +199,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
       if (standing && standing.status !== 'done' && standing.status !== 'blocked') {
         const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
         updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report: { merge_commit: sha, merged_into: view.baseRefName }, now: stamp, body: view.body }), now: stamp, ...io });
+        built = bookBuilt({ root, project: step.project, pr: opts.pr, report: { merge_commit: sha, merged_into: view.baseRefName }, now: stamp, io, updateStep, readEntry });
         booked = step;
       }
     } catch (error) {
@@ -216,7 +220,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     return 0;
   }
   stdout.write(`mc: merged #${opts.pr} into ${view.baseRefName} as ${sha7(sha)} (squash, --admin: no gate round)\n`);
-  if (booked) stdout.write(`mc: ${booked.project} step ${booked.index + 1} is done\n`);
+  if (booked) stdout.write(`mc: ${booked.project} step ${booked.index + 1} is done${builtSaid(built)}\n`);
   if (queue === 'landing') stdout.write(`mc: #${opts.pr} is landing in the merger's queue — the merger's round for it stops within a minute and books it\n`);
   return 0;
 }
@@ -229,6 +233,9 @@ function ghJson(answer) {
 
 /** The short commit a line names, or nothing when there is none. */
 const sha7 = (sha) => String(sha || '').slice(0, 7);
+
+/** The clause that says which built steps a review's landing booked done with it, or nothing. */
+const builtSaid = (built) => (built.length ? `; steps ${built.map((index) => index + 1).join(', ')} were built on its branch — done with it` : '');
 
 /** `mc merge watch <repo> <pr> [--timeout <min>] [--json]` — the arguments. */
 export function parseWatchArgs(argv) {
