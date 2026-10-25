@@ -164,8 +164,9 @@ function parsedPlan(text) {
  * and `[{ project, why }]` for the rest. Each of those then has its directory
  * moved to `archive/projects/` — by `deps.shelve`, else `shelveProject` at
  * `paths.archived`. A move that fails is said and the project stays archived:
- * its CLOSEOUT.json is there, and every reader skips a project that has one. A failure holds the projects it stopped
- * — the others go on. The worktree is taken down however the pass ends.
+ * its CLOSEOUT.json is there, and every reader skips a project that has one.
+ * A failure holds the projects it stopped — the others go on. The worktree is
+ * taken down however the pass ends.
  */
 export async function archivePrograms({ repo, items, root, paths, deps, docsMerge, now, say }) {
   const prefix = `archive: ${repo.name} `;
