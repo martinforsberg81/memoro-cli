@@ -12,7 +12,7 @@ Read the code before you decide or ask. Report what you ran and what it said;
 never call something verified that was not. Tests: `mc gate <files…>`, the
 test files your change reaches — once, at the end, in the foreground. Never
 the whole suite (`npm test`, `npm run ci`, a bare `node --test`, `mc gate
---full`): that is the merger's, measured once in its lane after you publish.
+--full`): that is the merger's, measured once in its lane after you publish. Dependencies are attached for you: never `npm ci` or a bare `npm install` — in memoro `npm run deps:ensure` re-attaches the shared cache; memoro-cli needs none.
 
 Nothing is loaded for you beyond this text — no CLAUDE.md, AGENTS.md or
 memory. A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/`, and the

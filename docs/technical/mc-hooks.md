@@ -89,6 +89,7 @@ A `Bash` command is matched on its words:
 | `gh pr merge` without `--admin` | `mc merge <repo> <pr>` (the admin merge stays memoro's documented livelock fallback) |
 | `npm run ci`, `npm test`, `npm run test` | `mc gate <files…>` — the whole suite is the merger's (ruling 52) |
 | `node --test …` | `mc gate <files…>`, which runs it in the gate lane |
+| `npm ci`, `npm install` / `npm i` with no package | `npm run deps:ensure` in memoro (links to the per-lockfile cache); nothing in memoro-cli. `npm install <pkg>` and `--package-lock-only` pass |
 | `npm run dev`, `npm run dev:agent` | `mc test dev --here --url`, or `mc shot dev` |
 
 A `Write` whose content imports Playwright, to a path outside every known

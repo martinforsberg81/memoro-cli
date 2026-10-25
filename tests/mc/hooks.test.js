@@ -114,6 +114,13 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['cd memoro && npm run test 2>&1 | tail', 'npm-test', /mc gate/u],
       ['node --test tests/a.test.js 2>&1 | tail -20', 'node-test', /mc gate <files…>/u],
       ['node --import ./tests/_isolate-home.mjs --test tests/a.test.js', 'node-test', /gate lane/u],
+      ['npm ci', 'npm-install', /deps:ensure/u],
+      ['cd memoro && npm ci 2>&1 | tail -5', 'npm-install', /deps:ensure/u],
+      ['npm install', 'npm-install', /deps:ensure/u],
+      ['npm i --include=dev', 'npm-install', /deps:ensure/u],
+      ['npm ci --no-audit --no-fund', 'npm-install', /deps:ensure/u],
+      ['npm clean-install', 'npm-install', /deps:ensure/u],
+      ['npm install && npm run build', 'npm-install', /deps:ensure/u],
       ['npm run dev:agent -- --restart', 'dev-server', /mc test dev --here --url/u],
       ['npm run dev', 'dev-server', /mc test dev/u],
       ['xcrun simctl create "iPhone 16 (one-camera)" com.apple.CoreSimulator.SimDeviceType.iPhone-16', 'simulator', /device named `mc`/u],
@@ -136,6 +143,8 @@ describe('mc hook — shell commands that have an mc verb', () => {
       'npm run ci -- --list --json',
       'xcrun simctl create mc "iPhone 17"', "xcrun simctl create 'mc' 'iPhone 17'", 'xcrun simctl boot mc', 'xcrun simctl erase mc',
       'xcrun simctl list devices',
+      'npm install pako', 'npm i -D @types/node', 'npm install --save-dev foo', 'npm install --package-lock-only --ignore-scripts',
+      'npm run deps:ensure', 'npm install-test', 'npm ci-info', `${ALLOW_MARK} npm ci`,
     ]) {
       assert.equal(preToolDecision(bash(command)), null, command);
     }
