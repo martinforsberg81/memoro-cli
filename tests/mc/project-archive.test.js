@@ -81,6 +81,18 @@ test('doneAt is null when no time can be read from the entry', () => {
   assert.equal(doneAt(entry), null);
 });
 
+test('doneAt is the done_at the register holds while the entry is still done, and the computed time without one', () => {
+  const entry = {
+    steps: [{ status: 'done', updated: '2026-10-19T08:00:00Z' }],
+    criteria: [{ criterion: 'c', met: true, at: '2026-10-20T09:00:00Z' }],
+    done_at: '2026-10-19T12:00:00Z',
+  };
+  assert.equal(doneAt(entry), '2026-10-19T12:00:00Z', 'the moment it became done, not the last write');
+  assert.equal(doneAt({ ...entry, done_at: null }), '2026-10-20T09:00:00.000Z', 'computed for a register written before done_at');
+  assert.equal(doneAt({ ...entry, done_at: 'not a date' }), '2026-10-20T09:00:00.000Z', 'computed when done_at reads as no time');
+  assert.equal(doneAt({ ...entry, criteria: [{ criterion: 'c', met: false, at: null }] }), null, 'a done_at the entry no longer earns is not done');
+});
+
 const ABSOLUTE = '/Users/x/mc/programs/mc/project-archive/PLAN.json';
 const DONE = {
   steps: [{ status: 'done', updated: '2026-10-19T12:00:00Z' }],

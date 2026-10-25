@@ -3101,11 +3101,12 @@ test('--once is one step and no archiving', async () => {
 /** A plan under `~/mc/programs/`: the done plan, naming the repository it belongs to. */
 const programsPlan = (repo, text = done()) => JSON.stringify({ ...JSON.parse(text), repo }, null, 2);
 
-/** The register entry of a project whose last step and criterion were settled at `at`. */
+/** The register entry of a project whose last step and criterion were settled at `at`, and which became done then (`done_at`). */
 const registered = (project, at) => JSON.stringify({
   project, repo: 'memoro', programme: 'prog', plan: `/w/programs/prog/${project}/PLAN.json`,
   steps: [{ status: 'done', updated: at }],
   criteria: [{ criterion: 'It is done.', met: true, at }],
+  done_at: at,
 });
 
 test('a programme project done for 25 hours is archived in the round: closeout beside its plan, one PR, and its area closed in the same pass', async () => {

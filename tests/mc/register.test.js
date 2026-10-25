@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import {
   STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, dropCriterion, keyOf, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
-  patchStep, readEntry, realLock, reconcileEntry, registerDir, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI,
+  patchStep, readEntry, realLock, reconcileEntry, registerDir, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI, withDoneAt,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -111,6 +111,51 @@ test('patchStep clears what the new status makes meaningless, and appends a comm
   entry = patchStep(entry, 0, { status: 'ready' }, 't2');
   assert.equal(entry.steps[0].blocked_by, null, 'a step that is not blocked waits on nothing');
   assert.equal(entry.updated, 't2');
+});
+
+test('withDoneAt sets done_at when the entry is done, keeps an earlier one, and clears it when a step or a criterion is not done', () => {
+  const done = { steps: [{ status: 'done' }, { status: 'done' }], criteria: [{ criterion: 'x', met: true, at: 't0' }], done_at: null };
+  assert.equal(withDoneAt(done, 't1').done_at, 't1');
+  assert.equal(withDoneAt({ ...done, done_at: 't0' }, 't1').done_at, 't0', 'an earlier time is kept');
+  const was = { ...done, done_at: 't0' };
+  assert.equal(withDoneAt({ ...was, steps: [{ status: 'done' }, { status: 'ready' }] }, 't1').done_at, null, 'a step not done');
+  assert.equal(withDoneAt({ ...was, criteria: [{ criterion: 'x', met: false, at: null }] }, 't1').done_at, null, 'a criterion unmet');
+  assert.equal(withDoneAt({ ...was, steps: [] }, 't1').done_at, null, 'no steps');
+  assert.equal(withDoneAt({ ...was, criteria: null }, 't1').done_at, 't0', 'no criteria key is no criterion unmet');
+});
+
+test('patchStep sets done_at when the last step is done under met criteria, and a later comment keeps it', () => {
+  const entry = markCriterion(seedEntry(record([step(), step()])), 1, true, 't0');
+  const half = patchStep(entry, 0, { status: 'done' }, 't1');
+  assert.equal(half.done_at, null, 'a step still ready');
+  const done = patchStep(half, 1, { status: 'done' }, 't2');
+  assert.equal(done.done_at, 't2');
+  assert.equal(patchStep(done, 1, { comment: 'Swept.' }, 't3').done_at, 't2', 'a comment does not move it');
+});
+
+test('markCriterion sets done_at when it meets the last criterion of a done project, and clears it when unmet', () => {
+  const entry = seedEntry(record([step({ status: 'done' })]), 't0');
+  assert.equal(entry.done_at, null, 'a plan seeded not met is not done');
+  assert.equal(markCriterion(entry, 1, true, 't1').done_at, 't1');
+  assert.equal(markCriterion(markCriterion(entry, 1, true, 't1'), 1, false, 't2').done_at, null);
+});
+
+test('seedEntry gives a plan seeded already done its time', () => {
+  const seeded = seedEntry(record([step({ status: 'done' })], { plan: { ...plan([step({ status: 'done' })]), success_criteria: [] } }), 't0');
+  assert.equal(seeded.done_at, 't0');
+});
+
+test('dropping the criterion that held a project open makes it done, and says when', () => {
+  const { io } = disk();
+  overlayPlans([record([step({ status: 'done' })])], { root: '/w', ...io, now: 't0' });
+  const next = dropCriterion({ root: '/w', project: 'p', text: 'x', reason: 'Nobody can measure it.', ...io, now: 't1' });
+  assert.equal(next.done_at, 't1');
+});
+
+test('normaliseEntry keeps a string done_at and drops anything else', () => {
+  assert.equal(normaliseEntry({ project: 'p', done_at: '2026-10-20T10:00:00Z' }).done_at, '2026-10-20T10:00:00Z');
+  assert.equal(normaliseEntry({ project: 'p', done_at: 3 }).done_at, null);
+  assert.equal(normaliseEntry({ project: 'p' }).done_at, null);
 });
 
 test('reconcileEntry follows the plan: a step added at the end is seeded, one removed is dropped, nothing else moves', () => {
