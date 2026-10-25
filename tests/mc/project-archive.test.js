@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 
 import {
-  ARCHIVE_HOLD_MS, archiveDue, archivePrograms, archiveRow, closeoutFileOf, closeoutOf, doneAt,
+  ARCHIVE_HOLD_MS, archiveDue, archivePrograms, archiveRow, closeoutFileOf, closeoutOf, doneAt, shelveProject,
 } from '../../src/mc/project-archive.js';
 import { UNDOCUMENTED_HEADER } from '../../src/mc/archive-plan.js';
 import { RUNS_HEADER } from '../../src/mc/run-plan.js';
@@ -214,6 +214,7 @@ const REPO = '/repos/memoro-cli';
 const LOG = 'docs/project/project_log.md';
 const WORKTREE = join(ROOT, 'runner', 'archive', 'programs', 'memoro-cli');
 const BRANCH = 'mc-archive-20261020T120000Z-programs';
+const ARCHIVED = join(ROOT, 'archive', 'projects');
 const PR = 1040;
 const CLOCK = () => new Date('2026-10-20T12:00:00Z');
 const PATHS = {
@@ -243,7 +244,7 @@ const filesOf = (...plans) => Object.fromEntries(plans.map((p) => [p.record.path
  * pull requests; `merge` whether docsMerge lands the pull request.
  */
 function world({ log = LOG_HEADER, open = [], merge = true, worktreeAdd = true, files = {} } = {}) {
-  const calls = { git: [], gh: [], docsMerge: [] };
+  const calls = { git: [], gh: [], docsMerge: [], shelve: [] };
   const store = new Map(Object.entries(files));
   const deps = {
     git(cwd, args) {
@@ -270,6 +271,11 @@ function world({ log = LOG_HEADER, open = [], merge = true, worktreeAdd = true, 
     append: (path, text) => { store.set(path, (store.get(path) ?? '') + text); },
     list: () => [],
     readBytes: () => null,
+    // The move is recorded, not made: the fake file system holds no directories.
+    shelve: (dir, programme, project) => {
+      calls.shelve.push([dir, programme, project]);
+      return join(ARCHIVED, programme, project);
+    },
   };
   const docsMerge = async (options) => {
     calls.docsMerge.push(options);
@@ -309,7 +315,10 @@ test('archivePrograms: a project whose row is already on main gets its CLOSEOUT.
   assert.equal(closeout.schema, 'mc-closeout');
   assert.equal(closeout.project, 'plans-in-mc');
   assert.equal(closeout.repo, 'memoro-cli');
-  assert.deepEqual(w.lines, ['archive: memoro-cli mc/plans-in-mc archived — CLOSEOUT.json written']);
+  assert.deepEqual(w.lines, [
+    'archive: memoro-cli mc/plans-in-mc archived — CLOSEOUT.json written',
+    `archive: memoro-cli plans-in-mc moved to ${join(ARCHIVED, 'mc', 'plans-in-mc')}`,
+  ]);
 });
 
 test('archivePrograms: projects without rows go in one commit and one pull request, and get their CLOSEOUT.json once it lands', async () => {
@@ -435,4 +444,66 @@ test('archivePrograms: a plan that names a document the worktree does not have g
   const log = w.store.get(join(WORKTREE, LOG));
   assert.match(log, /\| delivered \| 2\. Second — the last step \| none \| none \|/u);
   assert.match(w.store.get(PATHS.undocumented), /\| 2026-10-20 \| memoro-cli \| mc \| plans-in-mc \| none \|/u);
+});
+
+/* ----------------------------------------------------------- shelveProject */
+
+test('shelveProject moves the directory to archive/projects/<programme>/<project>, the programme\'s directory made first', () => {
+  const made = [];
+  const moves = [];
+  const to = shelveProject('/w/programs/mc/alpha', 'mc', 'alpha', {
+    home: '/w/archive/projects', exists: () => false,
+    mkdir: (path) => made.push(path), rename: (from, path) => moves.push([from, path]),
+  });
+  assert.equal(to, '/w/archive/projects/mc/alpha');
+  assert.deepEqual(made, ['/w/archive/projects/mc']);
+  assert.deepEqual(moves, [['/w/programs/mc/alpha', '/w/archive/projects/mc/alpha']]);
+});
+
+test('shelveProject takes -2, -3, … when the name is taken in the archive, and never overwrites', () => {
+  const taken = new Set(['/w/archive/projects/mc/alpha', '/w/archive/projects/mc/alpha-2']);
+  const moves = [];
+  const to = shelveProject('/w/programs/mc/alpha', 'mc', 'alpha', {
+    home: '/w/archive/projects', exists: (path) => taken.has(path), mkdir: () => {}, rename: (from, path) => moves.push(path),
+  });
+  assert.equal(to, '/w/archive/projects/mc/alpha-3');
+  assert.deepEqual(moves, ['/w/archive/projects/mc/alpha-3']);
+});
+
+test('shelveProject throws when the move fails', () => {
+  assert.throws(() => shelveProject('/w/programs/mc/alpha', 'mc', 'alpha', {
+    home: '/w/archive/projects', exists: () => false, mkdir: () => {},
+    rename: () => { throw new Error('EXDEV: cross-device link not permitted'); },
+  }), /EXDEV/u);
+});
+
+test('archivePrograms: each archived project is moved once, after its CLOSEOUT.json is written', async () => {
+  const a = plan('plans-in-mc');
+  const b = plan('project-archive');
+  const log = `${LOG_HEADER}| 2026-10-19 | mc | plans-in-mc | delivered | Done. | ${DOCUMENTED} | #1025 |\n`
+    + `| 2026-10-19 | mc | project-archive | delivered | Done. | ${DOCUMENTED} | #1026 |\n`;
+  const w = world({ log, files: filesOf(a, b) });
+  const seen = [];
+  w.deps.shelve = (dir, programme, project) => {
+    seen.push([dir, programme, project, w.store.has(closeoutFileOf(planPath(project)))]);
+    return join(ARCHIVED, programme, project);
+  };
+  const out = await run(w, [a, b]);
+  assert.deepEqual(out, { archived: ['plans-in-mc', 'project-archive'], held: [] });
+  assert.deepEqual(seen, [
+    ['/Users/x/mc/programs/mc/plans-in-mc', 'mc', 'plans-in-mc', true],
+    ['/Users/x/mc/programs/mc/project-archive', 'mc', 'project-archive', true],
+  ]);
+  assert.ok(w.lines.includes(`archive: memoro-cli plans-in-mc moved to ${join(ARCHIVED, 'mc', 'plans-in-mc')}`));
+});
+
+test('archivePrograms: a project whose move fails is archived all the same, and the line says it was left in ~/mc/programs', async () => {
+  const a = plan('plans-in-mc');
+  const log = `${LOG_HEADER}| 2026-10-19 | mc | plans-in-mc | delivered | Done. | ${DOCUMENTED} | #1025 |\n`;
+  const w = world({ log, files: filesOf(a) });
+  w.deps.shelve = () => { throw new Error('disk is full'); };
+  const out = await run(w, [a]);
+  assert.deepEqual(out, { archived: ['plans-in-mc'], held: [] });
+  assert.ok(w.store.has(closeoutFileOf(a.record.path)), 'its CLOSEOUT.json is written');
+  assert.equal(w.lines.at(-1), 'archive: memoro-cli plans-in-mc not moved (disk is full) — left in ~/mc/programs; nothing tries the move again');
 });

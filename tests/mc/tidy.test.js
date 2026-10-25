@@ -299,6 +299,30 @@ describe('(P) a plan under ~/mc/programs/ with its closeout beside it', () => {
   });
 });
 
+describe('(P) a project the runner has archived: its directory is under archive/projects/', () => {
+  it('its session log and scratch go, and its STATE.json stays', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const dir = join(m.work, 'archive', 'projects', 'mc', 'moved');
+      m.write(join(dir, 'PLAN.json'), '{}');
+      m.write(join(dir, 'CLOSEOUT.json'), '{}');
+      m.write(join(dir, 'STATE.json'), JSON.stringify({ project: 'moved', repo: 'memoro-cli', programme: 'mc', steps: [], criteria: [] }));
+      m.main['memoro-cli'].log += logRow('moved');
+      const log = join(m.work, 'runner', 'log', 'moved-20261001T100000Z.jsonl');
+      const scratch = join(m.work, 'runner', 'scratch', 'moved-20261001T100000Z');
+      m.write(log);
+      m.write(join(scratch, 'probe.txt'));
+      const { list } = runTidy(m.doors());
+      const p = ruled(list, 'P').map((item) => item.path);
+      assert.ok(p.includes(log), 'its session log is a P target');
+      assert.ok(p.includes(scratch), 'its scratch directory is a P target');
+      assert.ok(!list.targets.some((item) => item.path === join(dir, 'STATE.json')), 'its STATE.json is not a target');
+      assert.equal(existsSync(join(dir, 'STATE.json')), true);
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('(G) planning transcripts', () => {
   it('the newest of a directory stays at any age, and so does anything within 72 hours; memory/ is never listed', () => {
     const m = machine();
@@ -557,7 +581,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 1);
+      assert.equal(written.rules_version, 2);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
