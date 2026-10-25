@@ -2,9 +2,9 @@
  * Derived artifacts, regenerated on the tree that is about to be measured.
  *
  * Some files in a repository are a function of the whole tree rather than of
- * the change: memoro's SQL snapshot under `docs/plans/sql/` is computed from
- * every file under `scripts/` and `src/`, and a test compares the snapshot to
- * a fresh computation. The gate merges the current base into the candidate
+ * the change: memoro's SQL snapshot under `docs/plans/sql/`, until #14313
+ * removed it, was computed from every file under `scripts/` and `src/`, and a
+ * test compared the snapshot to a fresh computation. The gate merges the current base into the candidate
  * before it measures, so the moment main gains a file the snapshot in the
  * candidate is wrong — even when the branch regenerated it a minute earlier.
  * The step cannot win that race from its side; five attempts at it in one
