@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { PREPARE_CACHE_KEEP, prepareCacheKey, prepareCandidate } from '../../src/mc/prepare-cache.js';
+import { PREPARE_CACHE_KEEP, evict, prepareCacheKey, prepareCandidate } from '../../src/mc/prepare-cache.js';
 
 function fixture({ lock = '{"lockfileVersion":3}', manifest = '{"name":"memoro"}' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-prepare-cache-'));
@@ -92,6 +92,59 @@ describe('the prepare cache', () => {
     assert.equal(fx.clones.length, 1);
     assert.deepEqual(fx.clones[0], ['cp', '-cR', join(fx.cacheDir, result.key, 'node_modules'), join(fx.headDir, 'node_modules')]);
     assert.ok(fx.said.includes(`prepare: cloned node_modules from the cache (${result.key})`));
+  });
+
+  it('a hit renews meta.at to now and counts the hit', async () => {
+    const fx = fixture();
+    const first = await fx.go();
+    const metaPath = join(fx.cacheDir, first.key, 'meta.json');
+    fx.fresh();
+    fx.clock = 5000;
+    assert.equal((await fx.go()).cached, true);
+    let meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+    assert.equal(meta.at, 5000);
+    assert.equal(meta.hits, 1);
+    assert.equal(meta.key, first.key);
+    fx.fresh();
+    fx.clock = 6000;
+    await fx.go();
+    meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+    assert.equal(meta.at, 6000);
+    assert.equal(meta.hits, 2);
+  });
+
+  it('a hit whose meta cannot be renewed is still a cached round', async () => {
+    const fx = fixture();
+    await fx.go();
+    fx.fresh();
+    const result = await fx.go('npm ci', { write: () => { throw new Error('EACCES: permission denied'); } });
+    assert.equal(result.status, 0);
+    assert.equal(result.cached, true);
+    assert.deepEqual(fx.installs, []);
+  });
+
+  it('eviction removes the least recently used entry, not the oldest stored one', async () => {
+    const fx = fixture();
+    const a = await fx.go();
+    fx.fresh();
+    fx.clock = 2;
+    fx.lockfile('{"v":"b"}');
+    const b = await fx.go();
+    fx.fresh();
+    fx.clock = 3;
+    fx.lockfile('{"v":"c"}');
+    const c = await fx.go();
+    // A hit on the first entry renews it: it is now the most recently used.
+    fx.fresh();
+    fx.clock = 10;
+    fx.lockfile('{"lockfileVersion":3}');
+    const hit = await fx.go();
+    assert.equal(hit.key, a.key);
+    assert.equal(hit.cached, true);
+    evict({ cacheDir: fx.cacheDir, keep: 2 });
+    assert.deepEqual(entries(fx), [a.key, c.key].sort());
+    assert.ok(!entries(fx).includes(b.key));
+    assert.equal(JSON.parse(readFileSync(join(fx.cacheDir, a.key, 'meta.json'), 'utf8')).at, 10);
   });
 
   it('a changed lockfile is a miss, and a key past PREPARE_CACHE_KEEP evicts the oldest', async () => {
