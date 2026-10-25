@@ -33,7 +33,7 @@ import { defaultRepos, repoNameOf, repositoryDir } from './repos.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
-import { ensureWorkDeps } from './work-deps.js';
+import { attachRepoDeps, ensureWorkDeps } from './work-deps.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
@@ -358,7 +358,7 @@ function baseFor(repo) {
   return { ref, why: fetched ? null : `could not reach ${remote} — using the last ${ref} it saw` };
 }
 
-export function addWorktree({ name, repo, branch, from = null, env = process.env } = {}) {
+export function addWorktree({ name, repo, branch, from = null, env = process.env, attach = true } = {}) {
   // Whether the area was already there decides who has to clean up after a
   // failure: an area this call made and could not fill is this call's litter.
   const madeTheArea = !existsSync(workAreaPath(name, env));
@@ -387,11 +387,15 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   // Its failure is reported, never fatal — the worktree is the deliverable.
   let guard = null;
   try { guard = installPushGuard(repo); } catch (error) { guard = { ok: false, reason: error?.message || String(error) }; }
-  // And so does the dependency tree the checkout's tests will resolve — one
-  // directory above every workarea, never inside one (work-deps.js). Also
-  // reported rather than fatal: a session with a checkout and no tree can
-  // still work, and it is told which packages it will not find.
+  // And so does the dependency tree the checkout's tests will resolve. Both
+  // ways to one are reported rather than fatal, and a session with a checkout
+  // and no tree can still work: the shared directory above every workarea,
+  // never inside one, for the repository it names (`ensureWorkDeps`, work-deps.js),
+  // and the repository's own attach for one that keeps its own (`attachRepoDeps`,
+  // memoro's `scripts/ensure-worktree-deps.mjs`). `attach: false` leaves the
+  // second to the caller: the runner attaches before every step itself.
   const dependencies = ensureWorkDeps({ repo, env });
+  const attachment = attach ? attachRepoDeps(target) : null;
   return {
     ok: true,
     path: target,
@@ -400,6 +404,7 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
     base_note: base.why,
     push_guard: guard,
     dependencies,
+    attachment,
   };
 }
 

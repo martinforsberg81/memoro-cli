@@ -698,12 +698,15 @@ export async function openArea(name, opts, deps) {
  * to it: an install the user waited for, or a failure that will show up as
  * five test files that cannot resolve their imports. The ordinary case — the
  * tree is already the one this repository's lockfile describes — is silence.
+ * The repository's own attach follows the same rule: said when it failed,
+ * silent when it attached or when the repository has no attach script.
  */
 function sayDependencies(result, { stdout, stderr }) {
   const deps = result.dependencies;
-  if (!deps) return;
-  if (deps.state === 'installed') stdout.write(`mc: dependencies installed at ${deps.path} — ${deps.why}\n`);
-  if (!deps.ok) stderr.write(`mc: no dependency tree at ${deps.path} — ${deps.why}\n`);
+  if (deps?.state === 'installed') stdout.write(`mc: dependencies installed at ${deps.path} — ${deps.why}\n`);
+  if (deps && !deps.ok) stderr.write(`mc: no dependency tree at ${deps.path} — ${deps.why}\n`);
+  const attachment = result.attachment;
+  if (attachment?.state === 'failed') stderr.write(`mc: dependencies not attached in ${attachment.path} — ${attachment.why}\n`);
 }
 
 function stakes(result, name) {

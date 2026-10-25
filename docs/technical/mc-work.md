@@ -94,6 +94,23 @@ Two consequences worth knowing before they surprise somebody:
   are its own. A repository that is not on the list is left alone and told so —
   `state: 'not-shared'`.
 
+## memoro attaches its own
+
+memoro is not in `SHARED_TREE_REPOS`, because one directory holds one lockfile
+and memoro writes inside its own `node_modules` (`.cache`, `.mf`), so a tree
+shared with it would be written under by whatever else ran there. It keeps its
+own, and a worktree `addWorktree` makes runs the repository's
+`scripts/ensure-worktree-deps.mjs` when it has one (`attachRepoDeps` in
+[`src/mc/work-deps.js`](../../src/mc/work-deps.js)). That script attaches the
+checkout to memoro's per-lockfile cache under
+`~/Library/Caches/memoro-dependency-cache/` as `package-links` — one symlink per
+package, about 250 KB a checkout where a full `npm ci` was 510 MB. A repository
+without the script gets `state: 'no-attach-script'` and nothing runs. The attach
+is reported, never fatal: a failure is one line from `mc work add`, and the
+worktree is still the deliverable. `mc work add`, `mc plan` and `mc deps bump`
+all attach through `addWorktree`; the runner passes `attach: false` because it
+attaches before each step itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
+
 ## It is not a piece of work, and nothing had to be taught that
 
 Both listings that matter — `mc status`'s `areasWithCheckout` and the runner's

@@ -32,7 +32,7 @@ const namingRepo = (text, repo) => (/^\s*\{/u.test(text) ? text.replace(/^\s*\{/
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -81,7 +81,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   };
   const log = [];
   const aborted = new Set();
-  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [], shelved: [] };
+  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [], shelved: [], attached: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -179,6 +179,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       }
       return { ok: true, path: `${root}/${name}/${repoName}` };
     },
+    // The attach before a step, faked: `calls.attached` says where it ran and how
+    // many sessions had been launched by then.
+    attachDeps: async (worktree) => { calls.attached.push({ worktree, sessionsBefore: calls.sessions.length }); return attach; },
     collect: async (options) => { calls.collects.push(options); return collect(options); },
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
     // The nightly's tick, faked: what proves it ran is `calls.ticks` and its row.
@@ -4896,6 +4899,57 @@ test('recovery: a warm interrupted claude session over a dirty worktree is resum
   assert.equal(during.interrupted.session_id, DEAD_ID, 'the record stays while the resumed session runs');
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: resuming claude session c1a2b3c4-dead-4bee-8000-000000000001 \(warm, 12 min since last request\)/u);
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /uncommitted changes/u);
+});
+
+/**
+ * The attach before a fresh step's session: in the workarea the step runs in,
+ * before the session is launched. Never for a resumed session, and never for a
+ * merge that left conflicts — those sessions are handed the tree as it is.
+ */
+test('a step that starts in an existing area attaches its dependencies once, before the session', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    session: okSession(), gh: { c: { number: 93, title: 'The one step' } },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.attached.length, 1);
+  assert.equal(f.calls.attached[0].worktree, '/w/c/memoro');
+  assert.equal(f.calls.attached[0].sessionsBefore, 0, 'the attach came before the session was launched');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /c: dependencies — reused/u);
+});
+
+test('a failed attach is said, and the step still runs', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    attach: { ok: false, state: 'failed', why: 'npm error boom' },
+    session: okSession(), gh: { c: { number: 93, title: 'The one step' } },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1, 'the step is launched all the same');
+  assert.match(f.files['/w/runner/log/runner.log'], /c: dependencies could not be attached — npm error boom/u);
+});
+
+test('a resumed session is left as it was: its dependencies are not attached', async () => {
+  const f = interruptedArea();
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(f.calls.sessions[0].args.slice(0, 3), ['-p', '--resume', DEAD_ID]);
+  assert.deepEqual(f.calls.attached, []);
+});
+
+test('a merge of origin/main that left conflicts is not attached: the session runs deps:ensure itself', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['docs/project/project_log.md', 'src/a.js'] },
+    session: okSession(), gh: { c: { number: 93, title: 'The one step' } },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(f.calls.attached, []);
 });
 
 test('recovery: a cold small session is resumed, a cold large one is not', async () => {
