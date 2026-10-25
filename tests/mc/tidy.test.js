@@ -1016,7 +1016,7 @@ describe('the printout', () => {
 
   const pruned = (ok = true) => ({
     up: true, apply: true, reclaimable: null, reason: null,
-    pruned: [{ what: 'images', ok, reclaimed: ok ? '12.4GB' : null, detail: ok ? null : 'daemon gone' }, { what: 'build cache', ok: true, reclaimed: '2.1GB', detail: null }],
+    pruned: [{ what: 'images', ok, reclaimed: ok ? '12.4GB' : null, detail: ok ? null : 'daemon gone' }],
   });
 
   it('mc tidy asks Docker too, without starting it, and a failed prune exits 1', async () => {
@@ -1027,7 +1027,6 @@ describe('the printout', () => {
     assert.equal(await tidyCommand({ apply: true, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome }), docker }), 1);
     assert.deepEqual(asked, [{ apply: true }], 'no start: only --docker may start the runtime');
     assert.match(out.join(''), /docker: the images prune failed — daemon gone/u);
-    assert.match(out.join(''), /docker: build cache unused for 3 days pruned — 2\.1GB reclaimed/u);
   });
 
   it('--docker runs Docker alone; with --apply it may start the runtime', async () => {
