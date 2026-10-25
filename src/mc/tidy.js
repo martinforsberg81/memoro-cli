@@ -27,9 +27,13 @@
  *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when
  *     their programme has no project that is not done, judged as (X) judges an
  *     extra worktree. `mc plan` adds them back when it next opens the programme.
+ *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
+ *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
+ *     repository's path moved and left it — goes when untouched for a day and no
+ *     process stands in it, through `rmTree`. A known one is never judged.
  */
 import { execFileSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
@@ -37,18 +41,20 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos } from './brief-collect.js';
+import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
 import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
-  planAreaRoot, runnerDir, stepAreaName, stepAreaRoot, workRoot,
+  planAreaRoot, runnerDir, stepAreaName, stepAreaRoot, workGateCachePath, workGatePath, workRoot,
 } from './paths.js';
 import { PLAN_FILE, lsTreeArgs, planPath } from './plan-source.js';
 import { DRAFT_FILE } from './plan-write.js';
 import { closeoutFileOf } from './project-archive.js';
 import { listArchivedEntries, listEntries, readEntry, registerDir, registerPath } from './register.js';
+import { rmTree } from './rm-tree.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -56,7 +62,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 3;
+export const RULES_VERSION = 4;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -75,7 +81,7 @@ const LIST_FILE = /^\d{8}T\d{6}Z(-\d+)?\.json$/u;
 /** A planning area's own checkouts: never a target. */
 const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'work-area', 'step-area', 'G']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'work-area', 'step-area', 'G', 'K']);
 
 /** Every root tidy reads, by name. A kind removes only under its own. */
 export function tidyRoots(env = process.env) {
@@ -94,6 +100,10 @@ export function tidyRoots(env = process.env) {
     tidy: join(runner, 'tidy'),
     claude: join(claudeHome(env), 'projects'),
     compare: join(mcHome(env), 'compare'),
+    // The gate's dependency cache, the gate's own directory and the selection state: each holds a directory per repository slug (K).
+    gate_cache: workGateCachePath(env),
+    gate: workGatePath(env),
+    selection: join(mcHome(env), 'selection'),
   };
 }
 
@@ -108,7 +118,20 @@ const KIND_ROOT = {
   'plan-checkout': 'plan',
   'plan-worktree': 'plan',
   'compare-worktree': 'compare',
+  'gate-cache-slug': 'gate_cache',
+  'gate-slug': 'gate',
+  'selection-slug': 'selection',
 };
+
+/** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
+const SLUG_ROOTS = [['gate_cache', 'gate-cache-slug'], ['gate', 'gate-slug'], ['selection', 'selection-slug']];
+
+/** The directories directly under `dir`: none when it cannot be read. */
+function listDirs(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch { return []; }
+}
 
 const escape = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
@@ -174,7 +197,7 @@ export function gatherTidyFacts({
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
     git_error: null, register_error: null, projects: [], plan_checkouts: [], plan_worktrees: [],
-    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [],
+    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [],
   };
 
   // origin/main, one `ls-tree` and one `show` per repository. A repository
@@ -303,6 +326,29 @@ export function gatherTidyFacts({
       if (!compareWorktree(item, now).target) continue;
       item.bytes = treeBytes(path);
     } catch (error) { item.error = message(error); }
+  }
+
+  // (K) The slug directories of the gate, its dependency cache and the selection state. A slug is the hash of a repository's path
+  // (`repoFileSlug`), so one that no repository mc knows hashes to is what a move left. A known one is kept whatever its age, and
+  // its tree is not walked.
+  const known = new Set();
+  for (const repo of repos) for (const path of [repo.path, repo.checkout]) if (path) known.add(repoFileSlug(path));
+  for (const [key, kind] of SLUG_ROOTS) {
+    for (const name of listDirs(roots[key])) {
+      const path = join(roots[key], name);
+      // A gate's `<slug>-freshen` is known by its `<slug>`.
+      const isKnown = known.has(key === 'gate' ? name.replace(/-freshen$/u, '') : name);
+      const item = { path, kind, slug: name, known: isKnown, live: null, newest_ms: null, bytes: 0 };
+      facts.cache_slugs.push(item);
+      if (isKnown) continue;
+      try {
+        if (!running) throw new Error('lsof could not say who stands in it');
+        item.newest_ms = newestMtime(path);
+        item.live = [...new Set(processesStandingIn([path], { cwds: running }).map((p) => p.pid))];
+        if (!orphanSlug(item, now).target) continue;
+        item.bytes = treeBytes(path);
+      } catch (error) { item.error = message(error); }
+    }
   }
 
   // Worktrees git knows of outside the work root: listed, never removed.
@@ -478,6 +524,20 @@ export function compareWorktree(item, now) {
   return { target: true, why: 'a mc shot --compare tree unused for a day, with no dev server' };
 }
 
+/**
+ * (K) A slug directory no repository mc knows hashes to: untouched for a day,
+ * with no process standing in it. A known slug is never a target.
+ */
+export function orphanSlug(item, now) {
+  if (item.error) throw new Error(item.error);
+  if (item.known) return { target: false, why: 'a repository mc knows uses it' };
+  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
+  if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in it` };
+  if (typeof item.newest_ms !== 'number') throw new Error('could not tell when it was last touched');
+  if (!(item.newest_ms <= now - DAY_MS)) return { target: false, why: 'touched in the last day' };
+  return { target: true, why: `no repository mc knows has the slug ${item.slug}` };
+}
+
 /** (L) T1–T5: a transcript neither P nor G claims. `rule` names which one answered. */
 export function looseTranscript(item, { cutoff, days, root, newest }) {
   if (item.error) throw new Error(item.error);
@@ -586,6 +646,13 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
     else keep(item.path, 'C', verdict.why);
   }
 
+  // (K) the slug directories no repository mc knows has, judged as orphanSlug judges them.
+  for (const item of facts.cache_slugs || []) {
+    const verdict = judge(orphanSlug, item, facts.now);
+    if (verdict.target) targets.push({ path: item.path, kind: item.kind, rule: 'K', why: verdict.why, bytes: item.bytes || 0 });
+    else keep(item.path, 'K', verdict.why);
+  }
+
   // (L) T1–T5 and leftovers, unchanged, over what P and G left.
   const cutoff = facts.now - days * DAY_MS;
   const loose = transcripts.filter((item) => !claimed.has(item));
@@ -617,7 +684,8 @@ function present(path) {
   try { lstatSync(path); return true; } catch { return false; }
 }
 
-const realRemove = (path) => rmSync(path, { recursive: true });
+/** Read-only files and all (rm-tree.js): a gate-cache tree a session's `deps:ensure` made read-only still goes. */
+const realRemove = (path) => { if (!rmTree(path)) throw new Error('could not remove it'); };
 
 /** `git worktree remove` in the owning repository, without `--force`: a tree with edits stays. */
 const realRemoveWorktree = (owner, path) => realGit(owner, ['worktree', 'remove', path]) !== null;
@@ -651,6 +719,9 @@ export function outsideRoots(target, roots) {
     'plan-checkout': dirname(parent) === base && PLAN_CHECKOUTS.has(name),
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
     'compare-worktree': parent === base,
+    'gate-cache-slug': parent === base,
+    'gate-slug': parent === base,
+    'selection-slug': parent === base,
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }

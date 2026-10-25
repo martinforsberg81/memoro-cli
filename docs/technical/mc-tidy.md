@@ -249,6 +249,7 @@ stays.
 | `~/mc/work/<name>/` | a work area `mc work` made | nothing (W) |
 | `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
+| `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I), and the registers sit beside their plans ([mc-layout.md](mc-layout.md)).
 
@@ -313,6 +314,23 @@ removed with `git worktree remove`, without `--force`, run in the repository
 git names as its owner (`rev-parse --git-common-dir`), read again at the
 apply. A tree with edits, or one whose server started after the list was
 written, stays. These trees are no longer listed as `foreign-worktree`.
+
+**K — slug directories no repository mc knows has.** The gate's directories
+(`~/mc/gate/<slug>/` and `~/mc/gate/<slug>-freshen/`), its dependency cache
+(`~/mc/gate-cache/<slug>/`) and its selection state
+(`~/.memoro/mc/selection/<slug>/`) are named by `repoFileSlug` of a repository's
+path, a hash of it, so a moved repository leaves its old directories where
+nothing reads them again. A slug is known when it hashes to a repository's bare
+path or its checkout (`defaultRepos`), and `<slug>-freshen` is known by its
+`<slug>`. A known slug is never a target, whatever its age. An unknown one goes
+when no file under it was touched within a day and no process stands in it
+(`processesStandingIn`), through `rmTree`, which takes read-only files too. A
+slug that is not a direct child of its root is refused at the apply. Measured
+2026-10-25, after the move to `~/mc/repos/*.git`: `~/mc/gate-cache/memoro-a66fc130/`
+(the hash of `/Users/martinforsberg/memoro`) held 2 GB until it was removed by
+hand, and `~/.memoro/mc/selection/` held `memoro-1ee6756a`, `memoro-76f950b8`,
+`memoro-ffede537` and `memoro-cli-1d5e7a04` beside the live `memoro.git-17111bc1`
+and `memoro-cli.git-365b96c6`.
 
 ### The list file
 
