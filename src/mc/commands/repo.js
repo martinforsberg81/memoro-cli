@@ -19,7 +19,6 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
 
 import { criteriaDoor } from '../merge-boundary.js';
 import { followMerge } from '../merge-watch.js';
@@ -42,6 +41,7 @@ import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
+import { repoNameOf } from '../repos.js';
 
 const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
 // `merge` and `nightly` stay in the list only so the old spellings can be
@@ -378,7 +378,7 @@ function doorRefusal({ pr, mergeable, head, worktreeBranch, localHead, remoteHea
  */
 async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps }) {
   const env = deps.env || process.env;
-  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const repo = repoNameOf(repoPath);
   const askGh = deps.gh || spawnTool('gh');
   let head = null;
   let mergeable = null;
@@ -586,7 +586,7 @@ function selectedGates(report, source = 'selection') {
  * `#400` alone names nothing.
  */
 function subjectOf(report) {
-  const name = basename(report.repo || '') || report.repo || 'the repository';
+  const name = repoNameOf(report.repo || '') || report.repo || 'the repository';
   // `--full` has no pull request: what it measured is a branch.
   if (report.pr?.number === null || report.pr?.number === undefined) {
     return `${name} ${report.base?.ref || 'the default branch'}`;

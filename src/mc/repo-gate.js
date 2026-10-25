@@ -74,6 +74,7 @@ import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
+import { repoNameOf } from './repos.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -233,7 +234,7 @@ export async function runGate({
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
-  const dockerLabel = { run: `${gateMode} ${label}`, repo: basename(repoPath) };
+  const dockerLabel = { run: `${gateMode} ${label}`, repo: repoNameOf(repoPath) };
 
   const report = {
     schema: GATE_SCHEMA,
@@ -571,7 +572,7 @@ export async function runGate({
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = await ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env, install: npmCiAsync, ownTree: headDir });
+    const deps = await ensureWorkDeps({ repo: headDir, repoName: repoNameOf(repoPath), env, install: npmCiAsync, ownTree: headDir });
     if (deps.state === 'installed-own') say(`the candidate's own dependency tree was installed — ${deps.why}`);
     if (!deps.ok) say(`the candidate's dependency tree could not be installed — ${deps.why}`);
 
@@ -670,7 +671,7 @@ export async function runGate({
       for (const file of files) {
         const names = (result.red_tests || []).filter((test) => test.file === file).map((test) => test.name);
         const note = noteRedOnMain({
-          env, now: clock(), repo: basename(String(repoPath)), file, names,
+          env, now: clock(), repo: repoNameOf(repoPath), file, names,
           breaks: (probe?.breaks || []).filter((found) => found.file === file), prs: numbers,
         });
         if (note) say(`intake note: ${note}`);
@@ -900,7 +901,7 @@ export async function runGate({
     if (selection && facts.pr && !batch) {
       const tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
       const green = findGreen({
-        root, repo: basename(String(repoPath)), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION,
+        root, repo: repoNameOf(repoPath), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION,
       });
       if (green) {
         const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
@@ -936,7 +937,7 @@ export async function runGate({
     let rerun = null;
     if (selection && facts.pr && !batch && !reused && declared.declaration.select_changed_path) {
       const delta = await timed('delta', () => deltaFromGreen({
-        git: askGit, cwd: headDir, root, repo: basename(String(repoPath)), headSha: facts.pr.head_sha,
+        git: askGit, cwd: headDir, root, repo: repoNameOf(repoPath), headSha: facts.pr.head_sha,
         baseCommit: report.base.commit, derived: report.derived?.commit ? report.derived.regenerated : [],
         command: declared.declaration.select, env, selection,
       }));
@@ -1619,7 +1620,7 @@ function killedOf(tap, files) {
  * none rather than another pull request's files.
  */
 export function previousRedFiles({ root = mcHome(), repoPath, pr }) {
-  const repo = basename(String(repoPath || ''));
+  const repo = repoNameOf(repoPath || '');
   const number = Number(pr);
   const last = readRounds({ root }).rounds
     .filter((round) => (round.phase === 'end' || !round.phase) && round.repo === repo && (round.prs || []).map(Number).includes(number))
@@ -1729,14 +1730,14 @@ function suiteCommand({ repoPath, declaration = {}, root = mcHome() }) {
   if (declaration.select) {
     return {
       ok: false,
-      reason: `${basename(repoPath)} declares how it selects the tests a change reaches ("select": ${declaration.select}) `
+      reason: `${repoNameOf(repoPath)} declares how it selects the tests a change reaches ("select": ${declaration.select}) `
         + 'but not what its whole suite is ("suite"), so --full has nothing to run. '
         + 'mc will not fall back to npm test here: a repository that declares a selector has already said that '
         + 'npm test narrows, and running it with no change to narrow against reports a handful of files as the whole tree. '
         + `Declare it where the fact belongs — in the repository, ${repoDeclarationPath(repoPath)}: `
         + '{"suite": "<command>", "suite_why": "<the measurement>"} '
         + `— or, if it is a fact about this machine, in ${tablePath(root)}: `
-        + `{"${basename(repoPath)}": {"suite": "<command>", "suite_why": "<the measurement>"}}.`,
+        + `{"${repoNameOf(repoPath)}": {"suite": "<command>", "suite_why": "<the measurement>"}}.`,
     };
   }
 
