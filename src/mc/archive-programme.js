@@ -20,7 +20,10 @@
  *    PR is.
  * 2. **the planning session** — the planning directory released the way
  *    `mc work release` releases any area: each worktree handed back, its
- *    branch deleted, the conversations and the directory gone with them.
+ *    branch deleted, the conversations and the directory gone with them. In
+ *    layout 2 the directory is the programme's own — its projects and
+ *    documents — so it is moved whole to `~/mc/archive/programs/` instead
+ *    (ruling 57).
  *
  * Refused, with nothing touched, while any plan under the programme is still
  * on main in either repository (a done one is the runner's to archive first),
@@ -31,13 +34,13 @@
  * and running it again carries on: an archive PR still open from an earlier
  * attempt is landed rather than opened twice.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
-import { programsHome } from './paths.js';
+import { archivedProgramsHome, programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 import { tilde } from './status-project.js';
@@ -139,16 +142,27 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   if (areaExists) {
     const released = deps.release(areaName, { env, dryRun: false });
     for (const item of released.removed) say(`${item.path} — ${item.what} removed${item.branch ? ` (${item.branch})` : ''}`);
-    // In layout 2 the directory is the programme's and stays by design: what
-    // release keeps is the only thing left to refuse.
+    // In layout 2 the directory is the programme's: release leaves it, and
+    // what release keeps is the only thing left to refuse.
     const beside = isProgrammeArea(areaName, env);
     if (released.kept.length || (!beside && (released.held_by.length || existsSync(areaPath)))) {
       stderr.write(`mc: ${tilde(areaPath)}/ is still there — mc work release ${areaName} says why\n`);
       return 1;
     }
-    say(beside
-      ? `${tilde(areaPath)} — the planning session's worktrees released; the programme's directory stays`
-      : `${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
+    if (beside) {
+      // The programme is over, so its directory leaves programs/ whole — its
+      // projects and documents with it — for archive/programs/ (ruling 57).
+      let moved;
+      try {
+        moved = shelveProgramme(areaPath, programme, env);
+      } catch (error) {
+        stderr.write(`mc: ${tilde(areaPath)}/ could not be moved to ${tilde(archivedProgramsHome(env))}/ — ${error.message}. Run it again to carry on.\n`);
+        return 1;
+      }
+      say(`${tilde(areaPath)} — the planning session's worktrees released; the programme's directory moved to ${tilde(moved)}`);
+    } else {
+      say(`${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
+    }
   }
   say(`${programme} archived`);
   return 0;
@@ -161,6 +175,21 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     if (pr) say(`${repo.name}: #${pr} is still open from an earlier attempt — landing that one`);
     return pr || null;
   }
+}
+
+/**
+ * Moves a programme's directory to `archive/programs/<programme>`, or to
+ * `<programme>-2`, `-3`, … when a programme of that name was archived before.
+ * Returns where it went; throws when the move fails, with the directory where
+ * it was.
+ */
+export function shelveProgramme(areaPath, programme, env = process.env) {
+  const home = archivedProgramsHome(env);
+  mkdirSync(home, { recursive: true });
+  let to = join(home, programme);
+  for (let n = 2; existsSync(to); n += 1) to = join(home, `${programme}-${n}`);
+  renameSync(areaPath, to);
+  return to;
 }
 
 /** The PR that removes `docs/project/<programme>/` in one repository, or null. */
