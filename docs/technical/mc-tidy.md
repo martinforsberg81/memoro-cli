@@ -244,13 +244,13 @@ stays.
 
 | Root | What lives there | What tidy may remove |
 |---|---|---|
-| `~/mc/plan/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X) |
+| `~/mc/plan/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no project that is not done (I) |
 | `~/mc/step/<project>/` | a step area the runner made | nothing (S) |
 | `~/mc/work/<name>/` | a work area `mc work` made | nothing (W) |
 | `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
 
-In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees, and the registers sit beside their plans ([mc-layout.md](mc-layout.md)).
+In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I), and the registers sit beside their plans ([mc-layout.md](mc-layout.md)).
 
 **P — an archived project.** A register entry under `runner/projects/` whose
 repository's origin/main has its row in `project_log.md`, no plan directory,
@@ -276,6 +276,17 @@ release` judges it: no process stands in it, nothing uncommitted, and its
 content on main (or its tip a merged pull request's head). Removed with
 `git worktree remove` without `--force`, then `branch -D`. One `lsof` answers
 for all of them; an lsof that fails keeps every one.
+
+**I — a planning area's own checkouts** (`memoro/`, `memoro-cli/`, made by
+`ensurePlanArea`) go while their programme has no project that is not done.
+A project is not done when it has a draft (`DRAFT.json`), or a sent plan with no
+`CLOSEOUT.json` beside it whose register entry is not done: a step not `done`, or
+a criterion not met. A register that cannot be read counts as not done. The
+checkout is judged by the release verdict as X judges it, but no process may
+stand anywhere in the programme's directory, since a planning session stands
+there and not in the checkout. Removed the same way as X, and `mc plan
+<programme>` adds it back when it next opens the programme. An lsof that fails
+keeps every one, with its error.
 
 **W — work areas** are listed with the rule `work-area` and never removed:
 only `mc work release` or `mc work discard` removes one. **S — step areas**

@@ -24,6 +24,9 @@
  *     mtime, which `compareTree` touches on every reuse — and no dev server
  *     runs in them, through `git worktree remove` in the repository that
  *     owns each one.
+ *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when
+ *     their programme has no project that is not done, judged as (X) judges an
+ *     extra worktree. `mc plan` adds them back when it next opens the programme.
  */
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
@@ -42,9 +45,10 @@ import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
   planAreaRoot, runnerDir, stepAreaName, stepAreaRoot, workRoot,
 } from './paths.js';
-import { lsTreeArgs, planPath } from './plan-source.js';
+import { PLAN_FILE, lsTreeArgs, planPath } from './plan-source.js';
+import { DRAFT_FILE } from './plan-write.js';
 import { closeoutFileOf } from './project-archive.js';
-import { listArchivedEntries, listEntries, registerDir, registerPath } from './register.js';
+import { listArchivedEntries, listEntries, readEntry, registerDir, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -52,7 +56,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 2;
+export const RULES_VERSION = 3;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -101,6 +105,7 @@ const KIND_ROOT = {
   scratch: 'scratch',
   transcript: 'claude',
   leftover: 'claude',
+  'plan-checkout': 'plan',
   'plan-worktree': 'plan',
   'compare-worktree': 'compare',
 };
@@ -246,10 +251,25 @@ export function gatherTidyFacts({
   const tip = pullAtTip || ((wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {}));
   for (const programme of listNames(roots.plan)) {
     const area = join(roots.plan, programme);
+    const active = programmeHasOpenProject(root, area);
     for (const name of listNames(area)) {
       const path = join(area, name);
       if (!present(join(path, '.git'))) continue;
-      if (PLAN_CHECKOUTS.has(name)) { facts.plan_checkouts.push({ path }); continue; }
+      if (PLAN_CHECKOUTS.has(name)) {
+        // (I) asks who stands anywhere in the programme's directory: a planning session stands there, not in the checkout.
+        const item = { path, programme, name, active, wt: null, verdict: null, bytes: 0 };
+        facts.plan_checkouts.push(item);
+        try {
+          if (!running) throw new Error('lsof could not say who stands in it');
+          const wt = inspect(path, name);
+          if (!wt.is_git) throw new Error('not a git worktree');
+          item.wt = wt;
+          const pids = [...new Set(processesStandingIn([area], { cwds: running }).map((p) => p.pid))];
+          item.verdict = releaseVerdict(wt, { inUse: [...new Set(pids.map(command))], pullAtTip: tip });
+          if (idlePlanCheckout(item).target) item.bytes = treeBytes(path);
+        } catch (error) { item.error = message(error); }
+        continue;
+      }
       const item = { path, programme, name, wt: null, verdict: null, bytes: 0 };
       facts.plan_worktrees.push(item);
       try {
@@ -330,6 +350,28 @@ export function gatherTidyFacts({
     }
   }
   return facts;
+}
+
+/**
+ * Whether a programme has a project that is not done: a draft, or a sent plan
+ * with no `CLOSEOUT.json` beside it whose register entry is not done (every
+ * step `done` and every criterion met, as `withDoneAt` says). An entry that is
+ * missing or cannot be read counts as not done.
+ */
+function programmeHasOpenProject(root, area) {
+  for (const project of listNames(area)) {
+    const dir = join(area, project);
+    if (present(join(dir, DRAFT_FILE))) return true;
+    const plan = join(dir, PLAN_FILE);
+    if (!present(plan) || present(closeoutFileOf(plan))) continue;
+    let entry = null;
+    try { entry = readEntry(root, project); } catch { return true; }
+    const steps = Array.isArray(entry?.steps) ? entry.steps : [];
+    const criteria = Array.isArray(entry?.criteria) ? entry.criteria : [];
+    const done = steps.length > 0 && steps.every((step) => step.status === 'done') && criteria.every((criterion) => criterion.met === true);
+    if (!done) return true;
+  }
+  return false;
 }
 
 /** The names in a directory; none when it cannot be read. */
@@ -414,6 +456,16 @@ export function planWorktree(item) {
   }
   const pr = item.verdict.landed_by?.pr;
   return { target: true, why: pr ? `#${pr} merged at this tip` : 'its content is on main' };
+}
+
+/** (I) A planning area's own checkout: idle once its programme has no project that is not done. */
+export function idlePlanCheckout(item) {
+  if (item.error) throw new Error(item.error);
+  if (item.active) return { target: false, why: 'its programme has a project that is not done' };
+  if (!item.verdict?.remove || item.verdict.what !== 'worktree and branch') {
+    return { target: false, why: item.verdict?.why || 'not a git worktree' };
+  }
+  return { target: true, why: 'its programme has no project that is not done; mc plan adds it back' };
 }
 
 /** (C) A compare tree: unused for a day and no dev server in it. */
@@ -510,8 +562,12 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
     }
   }
 
-  // (X), with the planning area's own checkouts kept.
-  for (const item of facts.plan_checkouts || []) keep(item.path, 'plan-checkout', 'a planning area\'s own checkout');
+  // (I) a planning area's own checkouts, then (X) its extra worktrees.
+  for (const item of facts.plan_checkouts || []) {
+    const verdict = judge(idlePlanCheckout, item);
+    if (verdict.target) targets.push({ path: item.path, kind: 'plan-checkout', rule: 'I', why: verdict.why, bytes: item.bytes || 0 });
+    else keep(item.path, 'plan-checkout', verdict.why);
+  }
   for (const item of facts.plan_worktrees || []) {
     const verdict = judge(planWorktree, item);
     if (verdict.target) targets.push({ path: item.path, kind: 'plan-worktree', rule: 'X', why: verdict.why, bytes: item.bytes || 0 });
@@ -592,6 +648,7 @@ export function outsideRoots(target, roots) {
     transcript: dirname(parent) === base && SESSION_ID.test(TRANSCRIPT.exec(name)?.[1] || ''),
     leftover: dirname(parent) === base && SESSION_ID.test(name) && lstatSync(real).isDirectory(),
     // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
+    'plan-checkout': dirname(parent) === base && PLAN_CHECKOUTS.has(name),
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
     'compare-worktree': parent === base,
   }[target.kind];
@@ -631,7 +688,7 @@ export function applyTidy({
   const fresh = tidyPlan(facts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS });
   const holds = new Map(fresh.targets.map((item) => [item.path, item]));
   const keptNow = new Map(fresh.kept.map((item) => [item.path, item]));
-  const worktrees = new Map((facts.plan_worktrees || []).map((item) => [item.path, item]));
+  const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
   const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
 
   const applied = [];
@@ -648,7 +705,7 @@ export function applyTidy({
         applied.push({ path, ok: false, why: `re-check: ${keptNow.get(path)?.why || 'the rule no longer holds'}` });
         continue;
       }
-      if (target.kind === 'plan-worktree') {
+      if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'compare-worktree') {
