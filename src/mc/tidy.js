@@ -31,6 +31,9 @@
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
  *     repository's path moved and left it — goes when untouched for a day and no
  *     process stands in it, through `rmTree`. A known one is never judged.
+ *   - (A) A `~/mc/gate-cache/<slug>/<key>/` entry under a slug a repository mc knows has goes when no round has used it for fourteen days
+ *     (`meta.at`), and a `<key>.tmp-<pid>` staging directory once it is a day old, through `rmTree`. The dependency cache is bounded by
+ *     count (`prepare-cache.js`); this bounds it by age too.
  */
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
@@ -52,6 +55,7 @@ import {
 } from './paths.js';
 import { PLAN_FILE, lsTreeArgs, planPath } from './plan-source.js';
 import { DRAFT_FILE } from './plan-write.js';
+import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { closeoutFileOf } from './project-archive.js';
 import { listArchivedEntries, listEntries, readEntry, registerDir, registerPath } from './register.js';
 import { rmTree } from './rm-tree.js';
@@ -62,7 +66,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 4;
+export const RULES_VERSION = 5;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -81,7 +85,7 @@ const LIST_FILE = /^\d{8}T\d{6}Z(-\d+)?\.json$/u;
 /** A planning area's own checkouts: never a target. */
 const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'work-area', 'step-area', 'G', 'K']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'work-area', 'step-area', 'G', 'K', 'A']);
 
 /** Every root tidy reads, by name. A kind removes only under its own. */
 export function tidyRoots(env = process.env) {
@@ -121,6 +125,7 @@ const KIND_ROOT = {
   'gate-cache-slug': 'gate_cache',
   'gate-slug': 'gate',
   'selection-slug': 'selection',
+  'gate-cache-entry': 'gate_cache',
 };
 
 /** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
@@ -131,6 +136,20 @@ function listDirs(dir) {
   try {
     return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch { return []; }
+}
+
+/**
+ * The slugs a repository mc knows has: `repoFileSlug` of its bare path and of its checkout. A slug that is none of them is one a move left.
+ */
+function knownSlugs(repos) {
+  const known = new Set();
+  for (const repo of repos) for (const path of [repo.path, repo.checkout]) if (path) known.add(repoFileSlug(path));
+  return known;
+}
+
+/** The `at` a store or a hit wrote into a gate-cache entry's meta.json: null when there is none, or it cannot be read. */
+function entryUsedAt(path) {
+  try { return Number(JSON.parse(readFileSync(join(path, 'meta.json'), 'utf8')).at) || null; } catch { return null; }
 }
 
 const escape = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -197,7 +216,7 @@ export function gatherTidyFacts({
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
     git_error: null, register_error: null, projects: [], plan_checkouts: [], plan_worktrees: [],
-    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [],
+    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
   };
 
   // origin/main, one `ls-tree` and one `show` per repository. A repository
@@ -331,8 +350,7 @@ export function gatherTidyFacts({
   // (K) The slug directories of the gate, its dependency cache and the selection state. A slug is the hash of a repository's path
   // (`repoFileSlug`), so one that no repository mc knows hashes to is what a move left. A known one is kept whatever its age, and
   // its tree is not walked.
-  const known = new Set();
-  for (const repo of repos) for (const path of [repo.path, repo.checkout]) if (path) known.add(repoFileSlug(path));
+  const known = knownSlugs(repos);
   for (const [key, kind] of SLUG_ROOTS) {
     for (const name of listDirs(roots[key])) {
       const path = join(roots[key], name);
@@ -347,6 +365,23 @@ export function gatherTidyFacts({
         item.live = [...new Set(processesStandingIn([path], { cwds: running }).map((p) => p.pid))];
         if (!orphanSlug(item, now).target) continue;
         item.bytes = treeBytes(path);
+      } catch (error) { item.error = message(error); }
+    }
+  }
+
+  // (A) The entries of the gate's dependency cache under a slug a repository mc knows has: an unknown slug is (K)'s whole. An entry is
+  // judged by its last use, `meta.at` (a hit renews it) or without a meta the directory's own mtime — never by walking it. Only an entry
+  // the rule takes is weighed.
+  for (const name of listDirs(roots.gate_cache)) {
+    if (!known.has(name)) continue;
+    for (const key of listDirs(join(roots.gate_cache, name))) {
+      const path = join(roots.gate_cache, name, key);
+      const item = { path, key, staging: key.includes('.tmp-'), at: null, newest_ms: null, bytes: 0 };
+      facts.gate_cache_entries.push(item);
+      try {
+        item.at = entryUsedAt(path);
+        item.newest_ms = statSync(path).mtimeMs;
+        if (staleGateCacheEntry(item, now).target) item.bytes = treeBytes(path);
       } catch (error) { item.error = message(error); }
     }
   }
@@ -561,6 +596,25 @@ export function leftover(item, { cutoff, days }) {
   return { target: true, why: 'left behind by an earlier delete', rule: 'leftover' };
 }
 
+/**
+ * (A) A gate-cache entry no round has used for fourteen days, and a staging
+ * directory `<key>.tmp-<pid>` a killed store left, once it is a day old. A
+ * store that is running renews its staging directory's mtime as it writes, so
+ * a fresh one is kept. A time that cannot be read throws, and the item is kept.
+ */
+export function staleGateCacheEntry(item, now) {
+  if (item.error) throw new Error(item.error);
+  if (item.staging) {
+    if (typeof item.newest_ms !== 'number') throw new Error('could not tell when it was last touched');
+    if (!(item.newest_ms <= now - DAY_MS)) return { target: false, why: 'a store may be running' };
+    return { target: true, why: 'a store that never finished' };
+  }
+  const used = item.at ?? item.newest_ms;
+  if (typeof used !== 'number') throw new Error('could not tell when it was last used');
+  if (!(used <= now - PREPARE_CACHE_MAX_AGE_MS)) return { target: false, why: 'used in the last 14 days' };
+  return { target: true, why: `no round has used it for ${Math.floor((now - used) / DAY_MS)} days` };
+}
+
 /* ------------------------------------------------------------- deciding */
 
 /**
@@ -653,6 +707,14 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
     else keep(item.path, 'K', verdict.why);
   }
 
+  // (A) the entries of the gate's dependency cache under a known slug, by their last use. A round that is cloning an entry as it is
+  // removed falls back to `npm ci` (prepare-cache.js), which is why no lock is taken here.
+  for (const item of facts.gate_cache_entries || []) {
+    const verdict = judge(staleGateCacheEntry, item, facts.now);
+    if (verdict.target) targets.push({ path: item.path, kind: 'gate-cache-entry', rule: 'A', why: verdict.why, bytes: item.bytes || 0 });
+    else keep(item.path, 'A', verdict.why);
+  }
+
   // (L) T1–T5 and leftovers, unchanged, over what P and G left.
   const cutoff = facts.now - days * DAY_MS;
   const loose = transcripts.filter((item) => !claimed.has(item));
@@ -722,6 +784,8 @@ export function outsideRoots(target, roots) {
     'gate-cache-slug': parent === base,
     'gate-slug': parent === base,
     'selection-slug': parent === base,
+    // `<gate-cache>/<slug>/<key>`: two levels down, as the entry of a repository's cache.
+    'gate-cache-entry': dirname(parent) === base,
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }
