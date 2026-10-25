@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 import { run } from '../../src/mc/commands/build.js';
 import {
-  archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives,
+  archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, secretsEnv,
 } from '../../src/mc/ios-build.js';
 import { readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -79,7 +79,7 @@ const ASC = JSON.stringify({ builds: [{ version: '40' }, { version: '42' }, { ve
 function fakeRun({ asc = { code: 0, stdout: ASC, stderr: '' }, identities = ['Apple Development: T (X)', 'Apple Distribution: T (Y)'] } = {}) {
   const calls = [];
   const fn = (argv, options = {}) => {
-    calls.push({ argv, cwd: options.cwd, input: options.input });
+    calls.push({ argv, cwd: options.cwd, input: options.input, env: options.env });
     if (argv[1] === 'xcodebuild') return { code: 0, stdout: 'Xcode 26.6\n', stderr: '' };
     if (argv[0] === 'security') {
       return { code: 0, stdout: `${identities.map((id, i) => `  ${i + 1}) ABCDEF "${id}"`).join('\n')}\n`, stderr: '' };
@@ -145,6 +145,17 @@ describe('the number from App Store Connect', () => {
     assert.deepEqual(asked, {
       ok: false, line: 'App Store Connect did not answer (scripts/list.mjs is not on origin/main) — no build number can be chosen',
     });
+  });
+
+  it('names the secrets file in memoro\'s checkout for the script', () => {
+    const runFake = fakeRun();
+    listBuilds({ repoPath: '/repos/memoro', checkout: '/mc/self/memoro', declaration: DECLARATION, run: runFake, env: { HOME: '/h' } });
+    assert.equal(runFake.calls[0].env.MEMORO_DEV_VARS, '/mc/self/memoro/.dev.vars');
+  });
+
+  it('keeps a secrets file the caller named, and names none without a checkout', () => {
+    assert.equal(secretsEnv({ MEMORO_DEV_VARS: '/elsewhere' }, '/mc/self/memoro').MEMORO_DEV_VARS, '/elsewhere');
+    assert.equal(secretsEnv({ HOME: '/h' }, null).MEMORO_DEV_VARS, undefined);
   });
 
   it('runs anything but node <relative path> as declared', () => {
@@ -296,6 +307,7 @@ describe('buildIos --testflight — the builder', () => {
     assert.deepEqual(call('upload').argv, ['node', 'scripts/upload.mjs', ipaPath(b.env)]);
     assert.equal(call('upload').cwd, worktree);
     assert.equal(call('upload').timeoutMs, 30 * 60 * 1000);
+    assert.match(call('upload').env.MEMORO_DEV_VARS, /\/\.dev\.vars$/u);
     assert.match(b.stdout.text, new RegExp(`mc: ${archivedApp(archive).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} says test\\.bundle, 1\\.4 \\(${NEXT}\\)`, 'u'));
     const [row] = readIosBuilds(b.env);
     assert.equal(row.outcome, 'uploaded');

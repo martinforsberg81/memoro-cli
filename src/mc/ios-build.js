@@ -455,11 +455,24 @@ export async function devicePreflight({
 }
 
 /**
+ * `env` with `MEMORO_DEV_VARS` naming the secrets file in memoro's checkout,
+ * where mc keeps it (`self/memoro/.dev.vars`), unless the caller named one.
+ * memoro's App Store Connect scripts read their key from that file; mc only
+ * says where it is and never opens it. The scripts run in the build worktree
+ * or piped from `origin/main`, neither of which has the file of its own.
+ */
+export function secretsEnv(env = process.env, checkout = null) {
+  if (env.MEMORO_DEV_VARS || !checkout) return env;
+  return { ...env, MEMORO_DEV_VARS: join(checkout, '.dev.vars') };
+}
+
+/**
  * The build numbers App Store Connect has, asked through the declaration's
  * `list_builds` in memoro's checkout — its script reads the credentials
- * itself; mc reads no key. `{ ok: true, versions, next }` with `next` one
- * more than the highest, or `{ ok: false, line }`. Never a file to fall back
- * on: a number from anywhere else is one two binaries could share.
+ * itself from the file `secretsEnv` names; mc reads no key. `{ ok: true,
+ * versions, next }` with `next` one more than the highest, or `{ ok: false,
+ * line }`. Never a file to fall back on: a number from anywhere else is one
+ * two binaries could share.
  */
 export function listBuilds({
   repoPath, checkout = repoPath, declaration, rev = null, run = runSync, git = gitRead, env = process.env,
@@ -467,7 +480,7 @@ export function listBuilds({
   const refuse = (why) => ({ ok: false, line: `App Store Connect did not answer (${why}) — no build number can be chosen` });
   const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git });
   if (command.missing) return refuse(command.missing);
-  const r = run(command.argv, { cwd: command.cwd, input: command.input, env, timeoutMs: 2 * MIN });
+  const r = run(command.argv, { cwd: command.cwd, input: command.input, env: secretsEnv(env, checkout), timeoutMs: 2 * MIN });
   if (r.code !== 0) return refuse(String(r.error || r.stderr || r.stdout || '').trim().split('\n')[0].trim() || `exit ${r.code}`);
   let json;
   try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
@@ -835,14 +848,15 @@ export async function buildIos(job, deps = {}) {
     // (k) The number asked again: one uploaded meanwhile is not this binary's
     // to take, and a stamped binary is not renumbered.
     at = 'number-taken';
+    const checkout = job.checkout === undefined ? repoPath : job.checkout;
     const again = (deps.listBuilds || listBuilds)({
-      repoPath, checkout: job.checkout === undefined ? repoPath : job.checkout, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
+      repoPath, checkout, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
     });
     if (!again.ok) return fail('number-taken', again.line);
     if (again.versions.includes(number)) {
       return fail('number-taken', `build ${number} is in App Store Connect by now — this binary carries ${number} and is not renumbered; build again`);
     }
-    const uploaded = await run('upload', [...[].concat(declaration.upload), ipa], { timeoutMs: 30 * MIN });
+    const uploaded = await run('upload', [...[].concat(declaration.upload), ipa], { env: secretsEnv(env, checkout), timeoutMs: 30 * MIN });
     if (!uploaded.ok) return failed('upload', uploaded, 30 * MIN);
     recordEnd(key, { outcome: UPLOADED, ...done, delivery: deliveryId(uploaded.output) }, env);
     prune();
