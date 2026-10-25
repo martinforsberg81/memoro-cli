@@ -248,6 +248,7 @@ export function normaliseEntry(value) {
     programme: typeof value.programme === 'string' ? value.programme : null,
     plan: typeof value.plan === 'string' ? value.plan : null,
     updated: typeof value.updated === 'string' ? value.updated : null,
+    done_at: typeof value.done_at === 'string' ? value.done_at : null,
     steps: Array.isArray(value.steps) ? value.steps.map(normaliseStep) : [],
     criteria: Array.isArray(value.criteria)
       ? value.criteria.filter(plain).map((c) => ({ criterion: String(c.criterion ?? ''), met: c.met === true, at: typeof c.at === 'string' ? c.at : null }))
@@ -320,7 +321,7 @@ function reconcileCriteria(held, plan) {
  */
 export function seedEntry(record, now = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
-  return {
+  return withDoneAt({
     schema: REGISTER_SCHEMA,
     version: REGISTER_VERSION,
     project: record.project,
@@ -330,7 +331,7 @@ export function seedEntry(record, now = null) {
     updated: now,
     steps: steps.map((step) => stepFromPlan(step, now)),
     criteria: criteriaFromPlan(record?.plan),
-  };
+  }, now);
 }
 
 /**
@@ -402,7 +403,7 @@ export function reconcileEntry(entry, record, now = null) {
     || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null)
     || JSON.stringify(criteria) !== JSON.stringify(entry.criteria);
   return {
-    entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next, criteria } : entry,
+    entry: changed ? withDoneAt({ ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next, criteria }, now) : entry,
     changed,
     carried,
   };
@@ -439,6 +440,21 @@ export function applyEntry(record, entry) {
     });
   }
   return { ...record, plan, ...planSummary(plan) };
+}
+
+/**
+ * Whether an entry is done — it has steps, every step is `done`, and every
+ * criterion it holds (when `criteria` is an array) is met — and when it became
+ * so. A done entry keeps the `done_at` it has, or takes `now` the first time a
+ * write finds it done; one that is not done holds none, so a step moved back
+ * off `done` starts the clock again when it is done once more. Nothing else
+ * writes `done_at`: the archive's 24 hours run from it (project-archive.js).
+ */
+export function withDoneAt(entry, now = null) {
+  const steps = Array.isArray(entry.steps) ? entry.steps : [];
+  const criteria = Array.isArray(entry.criteria) ? entry.criteria : [];
+  const done = steps.length > 0 && steps.every((step) => step.status === 'done') && criteria.every((criterion) => criterion.met === true);
+  return { ...entry, done_at: done ? entry.done_at || now : null };
 }
 
 /**
@@ -479,7 +495,7 @@ export function patchStep(entry, index, patch = {}, now = null) {
   if (comment) next.comments = [...(next.comments || []), String(comment)];
   next.updated = now;
   const steps = entry.steps.map((step, i) => (i === index ? next : step));
-  return { ...entry, updated: now, steps };
+  return withDoneAt({ ...entry, updated: now, steps }, now);
 }
 
 /**
@@ -493,11 +509,11 @@ export function markCriterion(entry, number, met, now = null) {
   if (!Number.isInteger(number) || number < 1 || number > n) {
     throw new Error(`${entry.project}: no success criterion ${number} — the register holds ${n}`);
   }
-  return {
+  return withDoneAt({
     ...entry,
     updated: now,
     criteria: criteria.map((c, i) => (i === number - 1 ? { ...c, met: met === true, at: now } : c)),
-  };
+  }, now);
 }
 
 /** The first step that is not done, or -1: the one `mc step` means when no index is given. */
@@ -699,7 +715,7 @@ export function dropCriterion({ root, project, text, reason, read = realRead, wr
     if (!entry) throw new Error(`${project}: not in the register at ${path}`);
     const at = entry.criteria.findIndex((c) => c.criterion === text);
     if (at === -1) return entry;
-    const next = { ...entry, criteria: entry.criteria.filter((_, i) => i !== at), updated: now };
+    const next = withDoneAt({ ...entry, criteria: entry.criteria.filter((_, i) => i !== at), updated: now }, now);
     write(path, next);
     logWrite(root, append, by, { event: 'criterion-drop', project, criterion: text, reason });
     return next;

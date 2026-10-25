@@ -31,12 +31,15 @@ export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * The ISO time a register entry became done: the latest of its steps'
- * `updated` and its criteria's `at`, each one only when `Date.parse` reads it.
- * A project is done when every step is `done` and every criterion is met, and
- * the last of those moments is when it became so. Null when the entry is
- * missing, has no steps, has a step that is not `done`, has a criterion that
- * is not met, or no time can be read from it.
+ * The ISO time a register entry became done. The register holds it as
+ * `done_at`, set by the write that made the entry done (`withDoneAt` in
+ * register.js), and that is what this returns while the entry is still done.
+ * The computed time is the fallback for registers written before `done_at`
+ * existed: the latest of its steps' `updated` and its criteria's `at`, each
+ * one only when `Date.parse` reads it. A project is done when every step is
+ * `done` and every criterion is met. Null when the entry is missing, has no
+ * steps, has a step that is not `done`, has a criterion that is not met, or no
+ * time can be read from it.
  */
 export function doneAt(entry) {
   const steps = Array.isArray(entry?.steps) ? entry.steps : [];
@@ -44,6 +47,7 @@ export function doneAt(entry) {
   if (steps.some((step) => step?.status !== 'done')) return null;
   const criteria = Array.isArray(entry.criteria) ? entry.criteria : [];
   if (criteria.some((criterion) => criterion?.met !== true)) return null;
+  if (typeof entry.done_at === 'string' && !Number.isNaN(Date.parse(entry.done_at))) return entry.done_at;
   const times = [...steps.map((step) => step.updated), ...criteria.map((criterion) => criterion.at)]
     .filter((at) => typeof at === 'string' && !Number.isNaN(Date.parse(at)))
     .map((at) => Date.parse(at));
