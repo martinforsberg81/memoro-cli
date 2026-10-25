@@ -1776,6 +1776,22 @@ test('a middle step that ended success without publishing is booked built by the
 });
 
 /**
+ * The review step (project-branch) is a session of its own kind: it launches on
+ * the review role, not the step role, and is told which step it is.
+ */
+test('a review step launches as the review kind, on the review role', async () => {
+  const review = plan({ steps: [
+    { title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null },
+  ] });
+  const f = fixture({ plans: { memoro: { m: review } }, session: okSession() });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE review$/u);
+  assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "Review"/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tm\treview\t/u);
+});
+
+/**
  * `log-page` step 1, 2026-10-12: it landed as memoro #13590 and stood `ready`
  * again with `landed` still on it, and the runner started it twice. A landed
  * step is written `done` before the pick, so the next step is handed out.

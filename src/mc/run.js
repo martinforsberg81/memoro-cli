@@ -166,7 +166,7 @@ import {
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
-  stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
+  stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -797,14 +797,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const found = entry ? planOf(worktree, name) : null;
     if (!found?.plan) return null;
     const choice = chooseKind({ plan: applyEntry({ ...found, project: name }, entry) });
-    const interrupted = choice.kind === 'step' ? entry.steps?.[choice.index]?.interrupted : null;
+    const interrupted = STEP_KINDS.has(choice.kind) ? entry.steps?.[choice.index]?.interrupted : null;
     if (!interrupted) return null;
-    const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: 'step' });
+    const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
     // The billing the next launch would get: a session moving between the
     // plan's login and the key's workspace never finds its cache.
     const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
-    const cache = deps.role('step')?.cache || '1h';
+    const cache = deps.role(choice.kind)?.cache || '1h';
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow });
     return { ...decided, interrupted, index: choice.index };
   }
@@ -2151,7 +2151,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return entry ? applyEntry({ ...found, project: name }, entry) : found;
     };
     const choice = chooseKind({ plan: standing(plan) });
-    if (conflicts.length && choice.kind !== 'step') {
+    if (conflicts.length && !STEP_KINDS.has(choice.kind)) {
       // The way here is `runStep` driven by hand past the picker — the plan on
       // disk is main's and it refuses the project itself. A project main's plan
       // refuses is never picked at all (`nextFor`, run-plan.js), so no worktree

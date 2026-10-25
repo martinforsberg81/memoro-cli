@@ -53,6 +53,13 @@ from starting the step again once it is answered.
 queue:** that step's work is in your branch already. Build on it and leave it
 as it is; its red, if it comes, is that step's.
 
+**When the prompt says your branch is the project's:** the steps before you
+are built on it, and the plan ends in a review step that measures the success
+criteria and lands the project. Run bare `mc gate` first and fix any red
+before your own work. Then build your step; `mc publish` answers `built` —
+nothing is queued, the criteria are the review's, and your session ends in
+that turn.
+
 **When the prompt says the step came back from the merger:** the PR is open on
 your branch. Fix what the gate named — never lower a threshold or skip/weaken
 a test; `conflicts with origin/main` is merging `origin/main` and keeping both
