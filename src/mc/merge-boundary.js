@@ -1,6 +1,8 @@
 /**
  * The door a plan's last step passes: its pull request does not land while a
- * success criterion of the plan is not `met` (`criteriaDoor`, below).
+ * success criterion of the plan is not `met` (`criteriaDoor`, below). In a
+ * branch-flow plan a step before the review is refused too (`stop:
+ * 'before-review'`): it is built on the project's branch and lands with the review step.
  *
  * Plans are not in pull requests (ruling 48), so nothing here compares a pull
  * request's plan with its base's: the plan is the one under `~/mc/programs/`,
@@ -8,7 +10,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
-import { readPlanText, unmetCriteria, unmetWords } from './plan-schema.js';
+import { branchFlow, readPlanText, unmetCriteria, unmetWords } from './plan-schema.js';
 import { stepForMerge } from './merge-step.js';
 import { projectForBranch } from './project-prs.js';
 import { applyEntry, readEntry } from './register.js';
@@ -20,6 +22,22 @@ function run(tool) {
 }
 
 const notChecked = { checked: false, ok: true, problems: [] };
+
+/**
+ * The project and its plan, from the programmes plans: `project` when named,
+ * else the one the branch's name begins with (`projectForBranch`). Null when
+ * there is none, or its plan does not read.
+ */
+export function projectPlan({ project = null, head = null, programs = programsPlans } = {}) {
+  const all = programs();
+  const name = project || projectForBranch(head, all.map((one) => one.project));
+  if (!name) return null;
+  const held = all.find((one) => one.project === name);
+  if (!held) return null;
+  const { plan } = readPlanText(held.text);
+  if (!plan || !Array.isArray(plan.steps)) return null;
+  return { project: name, plan };
+}
 
 /**
  * The last step is where a plan becomes done, and done means its success
@@ -40,7 +58,8 @@ const notChecked = { checked: false, ok: true, problems: [] };
  * the one whose name the branch begins with among the programs plans
  * (`projectForBranch`). No repository is read: `git` is accepted and not used.
  *
- * `{ checked, ok, problems }`, and `unmet` (1-based) on a refusal.
+ * `{ checked, ok, problems }`, and `unmet` (1-based) and `stop` on a refusal:
+ * `before-review` (a step before a branch flow's review) or `unmet-criteria`.
  */
 export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
   const askGh = gh || run('gh');
@@ -56,13 +75,12 @@ export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = p
   const target = step !== undefined ? step : stepForMerge({ env, head, entries });
   if (!target) return notChecked;
 
-  const all = programs();
-  const project = target.project || projectForBranch(head, all.map((one) => one.project));
-  if (!project) return notChecked;
-  const held = all.find((one) => one.project === project);
-  if (!held) return notChecked;
-  const { plan } = readPlanText(held.text);
-  if (!plan || !Array.isArray(plan.steps)) return notChecked;
+  const found = projectPlan({ project: target.project, head, programs });
+  if (!found) return notChecked;
+  const { project, plan } = found;
+  if (branchFlow(plan) && target.index !== plan.steps.length - 1) {
+    return { checked: true, ok: false, stop: 'before-review', problems: [`step ${target.index + 1} is built on the project's branch and does not land by itself — the project lands with its review step, step ${plan.steps.length}`] };
+  }
   if (target.index !== plan.steps.length - 1) return { checked: true, ok: true, problems: [] };
   const entry = readEntry(root, project, read ? { read } : {});
   const judged = entry ? applyEntry({ plan }, entry).plan : plan;
@@ -71,6 +89,7 @@ export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = p
   return {
     checked: true,
     ok: false,
+    stop: 'unmet-criteria',
     unmet,
     problems: [`step ${target.index + 1} is the plan's last, and ${unmetWords(unmet)} — or mc step failed --reason "…" naming what could not be measured`],
   };

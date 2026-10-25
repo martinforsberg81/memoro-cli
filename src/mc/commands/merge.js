@@ -71,7 +71,7 @@ export async function run(argv, deps = {}) {
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
   const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, gh: deps.gh, git: deps.git, env: deps.env || process.env, entries: listEntries(root, io) });
   if (door.checked && !door.ok) {
-    for (const problem of door.problems) stderr.write(`mc: unmet-criteria — ${problem}\n`);
+    for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
     return 1;
   }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
