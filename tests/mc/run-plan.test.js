@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
+  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, STEP_KINDS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
   builtPreamble, describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, creditsResetAt, resumePrompt,
@@ -157,6 +157,21 @@ test('nextFor: a blocked later step with its pull request open does not hold the
 test('chooseKind: a blocked first unfinished step still starts nothing', () => {
   const steps = [OWN_STEPS[0], OWN_STEPS[3], { ...OWN_STEPS[1], pr: null }];
   assert.equal(chooseKind({ plan: record({ steps }), openPrs: [] }).reason, 'blocked');
+});
+
+/** The review step is the last step of a branch-flow plan; its session is a session of its own kind. */
+test('chooseKind: a review step is a review session, every other step a step session', () => {
+  const review = { title: 'Review', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null, kind: 'review' };
+  const reviewing = chooseKind({ plan: record({ steps: [review] }) });
+  assert.deepEqual([reviewing.kind, reviewing.index], ['review', 0]);
+  assert.equal(chooseKind({ plan: record({ steps: [{ ...review, kind: undefined }] }) }).kind, 'step');
+  assert.deepEqual([...STEP_KINDS].sort(), ['review', 'step']);
+});
+
+test('SESSION_DEFAULTS: the review session runs on opus at high effort, with no advisor', () => {
+  assert.deepEqual(SESSION_DEFAULTS.review, { model: 'opus', effort: 'high', advisor: null });
+  const settings = sessionSettings({}, null, { kind: 'review' });
+  assert.deepEqual([settings.model, settings.effort, settings.advisor], ['opus', 'high', null]);
 });
 
 /** The page passes its own reading, which has seen a worktree this cannot. */
@@ -861,7 +876,7 @@ test('sessionSettings: tool, check_in_minutes and stall_minutes from the plan, w
  * step naming only its effort keeps the plan's model.
  */
 test('sessionSettings: the step defaults, plan and step overrides, advisor off, codex getting none', () => {
-  assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'opus', effort: 'medium', advisor: null } }, 'one kind: the repair is gone (ruling 21)');
+  assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'opus', effort: 'medium', advisor: null }, review: { model: 'opus', effort: 'high', advisor: null } }, 'two kinds: the repair is gone (ruling 21), and the review has its own');
   assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, subagents: false, ...wait() });
   // Since 2026-09-25 the default names no advisor, so a plan back on sonnet
   // gets one only by naming it.

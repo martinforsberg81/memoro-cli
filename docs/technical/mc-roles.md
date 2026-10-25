@@ -60,6 +60,7 @@ What canon holds today:
 | `intake` | sonnet | the inbox drain, one headless turn per file |
 | `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/plan/<programme>/` |
 | `step` | opus | `mc run`, one step of a `PLAN.json` |
+| `review` | opus | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
 | `worker` | opus | `mc worker`, and every conversation in that area after |
 
 `worker` is the one that reaches a session through a work area rather than a

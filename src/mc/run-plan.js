@@ -45,7 +45,12 @@ export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turn
  */
 export const SESSION_DEFAULTS = Object.freeze({
   step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
+  review: Object.freeze({ model: 'opus', effort: 'high', advisor: null }),
 });
+// The session kinds that run one of a plan's steps: a step, or the review step
+// that lands the project (`chooseKind`). Anything that asks whether a session is
+// for a plan's step asks this set; nothing compares a kind to 'step' by hand.
+export const STEP_KINDS = new Set(['step', 'review']);
 // The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
 // context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
@@ -353,7 +358,7 @@ export function chooseKind({ plan, openPrs = [] }) {
   }
   const { step, index, reason, why, problems } = deliverableStep(plan.plan);
   if (!step) return { kind: null, reason, skip: why, problems };
-  return { kind: 'step', step, index };
+  return { kind: step.kind === 'review' ? 'review' : 'step', step, index };
 }
 
 /**

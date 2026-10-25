@@ -546,7 +546,7 @@ and `mc step`, and the runner reads what they wrote.
 
 | state | kind |
 |---|---|
-| plan says `status: ready` | `step` — with the conflicting files in its prompt if a merge is in progress |
+| plan says `status: ready` | `step`, or `review` when the step's `kind` is `review` — with the conflicting files in its prompt if a merge is in progress |
 | plan says anything else | nothing, one skip line |
 | the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
 | no plan under `~/mc/programs/` | nothing, silently |
@@ -645,8 +645,11 @@ time — a step that names only its effort keeps the plan's model. `tool`,
 | kind | `model` | `effort` | `advisor` |
 |---|---|---|---|
 | step | `opus` | `medium` | none |
+| review | `opus` | `high` | none |
 
-That is [ruling 18](../project/mc/rulings.md)'s second addendum
+A `review` is a plan's step whose `kind` is `review`: the session that
+measures the success criteria and lands the project, with the role
+`canon/roles/review.md`. The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
 (2026-09-25): opus 5.5, still at `medium`, and no advisor. From 2026-09-11 a
 step was `sonnet` at `medium` with `opus` as advisor, because opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all

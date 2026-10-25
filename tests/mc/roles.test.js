@@ -82,6 +82,15 @@ describe('role files', () => {
     assert.equal(readCanonRole('plan').cache, '1h');
   });
 
+  it('the canon review role parses, runs on opus and five minutes, and is the review\'s own words', () => {
+    const role = readCanonRole('review');
+    assert.equal(role.name, 'review');
+    assert.equal(role.model, 'opus');
+    assert.equal(role.singleton, false);
+    assert.equal(role.cache, '5m');
+    assert.match(role.overlay, /You are a plan's review step: headless, one workarea/u);
+  });
+
   it('a CRLF checkout is still a role', () => {
     const role = parseRole(WORKER_MD.replace(/\n/gu, '\r\n'));
     assert.equal(role.name, 'worker');
@@ -207,7 +216,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'helper', 'intake', 'step', 'worker']) {
+    for (const name of ['brief', 'helper', 'intake', 'review', 'step', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -366,7 +375,7 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
     ]);
   });
 });
