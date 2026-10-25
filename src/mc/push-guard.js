@@ -98,13 +98,26 @@ export function installPushGuard(repoPath, { git = defaultGit } = {}) {
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
     if (!current.includes(MARKER)) {
+      // A hook that already runs the check is the guard in force, whoever
+      // wrote it — the same reading pushGuardState gives it. Nothing to do.
+      if (current.includes('mc repo push-check')) {
+        return { ok: true, installed: false, path, owned: 'repository', chained: null };
+      }
       // A version-controlled hook is the repository's, and a change to the
       // repository goes through a pull request — a rename here would dirty
       // every working tree that shares it, unexplained (PM's ruling,
       // 2026-08-24; K3). The way in is to add the check to that file in a
       // PR; the state below recognises a repository-owned check as in
       // force.
-      if (git(['-C', repoPath, 'ls-files', '--error-unmatch', '--', path]) !== null) {
+      //
+      // Git is asked from the hook's own directory, not from repoPath: an
+      // absolute core.hooksPath in a bare repository's config points every
+      // worktree at one checkout's .githooks, and asked from another
+      // worktree that file is "outside repository" — which read as
+      // untracked, and the rename dirtied ~/mc/self/memoro so that
+      // mc deploy refused it (2026-10-25). A hooks directory inside .git is
+      // no work tree; that reads as untracked too, and rightly.
+      if (git(['-C', dir, 'ls-files', '--error-unmatch', '--', 'pre-push']) !== null) {
         return { ok: false, reason: `${path} is version-controlled — it is the repository's; add 'mc repo push-check' to it through a pull request instead`, path };
       }
       // An untracked hook that was here first is never overwritten and

@@ -199,6 +199,51 @@ describe('the hook, installed', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it('a tracked hook in another checkout, reached through an absolute core.hooksPath, is left alone from every worktree', () => {
+    // ~/mc's layout (2026-10-25): a bare repository whose config points
+    // core.hooksPath at one checkout's .githooks, shared by every worktree.
+    // Installed from another worktree, the tracked hook read as untracked
+    // and was renamed — the checkout came up dirty and mc deploy refused.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-push-guard-bare-')));
+    try {
+      const seed = repo();
+      const theirs = '#!/bin/sh\nsh scripts/reminder.sh\n';
+      mkdirSync(join(seed, '.githooks'), { recursive: true });
+      writeFileSync(join(seed, '.githooks', 'pre-push'), theirs, { mode: 0o755 });
+      git(seed, ['add', '.githooks/pre-push']);
+      git(seed, ['commit', '-q', '-m', 'their hook']);
+      const bare = join(root, 'r.git');
+      execFileSync('git', ['clone', '-q', '--bare', seed, bare]);
+      rmSync(seed, { recursive: true, force: true });
+      const self = join(root, 'self');
+      const other = join(root, 'other');
+      git(bare, ['worktree', 'add', '-q', self, 'main']);
+      git(bare, ['worktree', 'add', '-q', '-b', 'topic', other]);
+      git(bare, ['config', 'core.hooksPath', join(self, '.githooks')]);
+      const path = join(self, '.githooks', 'pre-push');
+
+      for (const from of [other, self]) {
+        const outcome = installPushGuard(from);
+        assert.equal(outcome.ok, false, `refused from ${from}`);
+        assert.match(outcome.reason, /version-controlled/u);
+      }
+      assert.equal(readFileSync(path, 'utf8'), theirs, 'untouched');
+      assert.equal(existsSync(join(self, '.githooks', 'pre-push.before-mc')), false, 'nothing renamed');
+      assert.equal(git(self, ['status', '--porcelain']), '', 'the checkout stays clean');
+
+      // Once the repository's hook carries the check, installing is a no-op
+      // that says the guard is in force — from either worktree.
+      const owned = '#!/bin/sh\ninput=$(cat)\nprintf \'%s\\n\' "$input" | mc repo push-check "$1" "$2" || exit $?\n';
+      writeFileSync(path, owned, { mode: 0o755 });
+      git(self, ['commit', '-q', '-am', 'the check']);
+      for (const from of [other, self]) {
+        assert.deepEqual(installPushGuard(from), { ok: true, installed: false, path, owned: 'repository', chained: null });
+      }
+      assert.equal(readFileSync(path, 'utf8'), owned);
+      assert.equal(git(self, ['status', '--porcelain']), '');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('installs where the hooks actually live: core.hooksPath, relative or absolute', () => {
     // Both real repos have it set (measured 2026-08-24): memoro-cli to the
     // absolute default directory, memoro to a versioned .githooks. The old
