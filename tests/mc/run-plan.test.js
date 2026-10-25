@@ -137,6 +137,16 @@ test('holdingPrs: a ready, a landing and a blocked step\'s pull requests are the
   assert.deepEqual(held.map((pr) => pr.number), [9]);
 });
 
+test('holdingPrs: a built step\'s pull request is the project\'s own too — every step of a branch-flow plan shares it', () => {
+  const steps = [
+    { title: 'One', status: 'built', done_when: 'x', instruction: ['do'], pr: 7, blocked_by: null },
+    { title: 'Two', status: 'built', done_when: 'x', instruction: ['do'], pr: 7, blocked_by: null },
+    { title: 'Review', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null, kind: 'review' },
+  ];
+  const held = holdingPrs([7, 9].map((number) => ({ number })), { plan: { steps } });
+  assert.deepEqual(held.map((pr) => pr.number), [9]);
+});
+
 test('nextFor: a blocked later step with its pull request open does not hold the red step before it', () => {
   const plans = [planRow('alpha', { plan: READY(OWN_STEPS) })];
   const open = [2, 3, 4].map((number) => ({ repo: 'memoro', number, headRefName: `alpha-${number}`, baseRefName: 'main', isDraft: false, title: 'Step' }));

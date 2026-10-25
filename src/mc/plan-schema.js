@@ -53,7 +53,11 @@ export const PLAN_VERSION = 1;
 // `project` release by themselves — the runner sets the step `ready` when
 // `blockerDue` (`step-release.js`) says the wait is over. `decision` and
 // `workarea` stay a person's.
-export const STEP_STATUSES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
+// `built` (the branch flow, see `branchFlow`) is a step whose work is on the
+// project's branch and not yet landed. The plan's review step lands it: that
+// step's landing makes every built step `done`. It is behind the plan the way
+// `landing` is (`planState`).
+export const STEP_STATUSES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked', 'built']);
 export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea', 'time', 'deploy']);
 
 const STATUSES = new Set(STEP_STATUSES);
@@ -95,6 +99,7 @@ const STEP_KEYS = Object.freeze([
   'blocked_by',
   'reason',
   'runner',
+  'kind',
 ]);
 
 /** `met` in the file is written `false` by the verbs and read by nothing; the register holds it. */
@@ -271,6 +276,10 @@ function validateSteps(steps, problems) {
     for (const key of unknownKeys(step, STEP_KEYS)) problems.push(`${at}.${key}: unknown key`);
     if (!text(step.title)) problems.push(`${at}.title: what the step does`);
     if (!STATUSES.has(step.status)) problems.push(`${at}.status: one of ${STEP_STATUSES.join(', ')}`);
+    // The review step of a branch-flow plan is the last step, and the only one
+    // that lands: every step before it stands on its branch until it does.
+    if (step.kind !== undefined && step.kind !== 'review') problems.push(`${at}.kind: review, or absent`);
+    if (step.kind === 'review' && index !== steps.length - 1) problems.push(`${at}.kind: only the last step may be the review step`);
     // The sentence the runner's prompt calls the session's success criterion.
     // A step without one sends a session off with nothing to verify.
     if (!text(step.done_when)) problems.push(`${at}.done_when: when this step is finished`);
@@ -397,15 +406,17 @@ export function planSummary(plan) {
  * numbers in `unmet`. photo-analysis was archived on 2026-10-11 with three
  * criteria `met: false`, because done was read off the steps alone.
  *
- * The runner considers that first unfinished step and no other. Steps are an
- * order, and skipping over a stopped one to reach a later `ready` step is how a
- * plan ends up half-built in an order nobody chose.
+ * The runner considers that first unfinished step and no other. A `built`
+ * step is behind the plan, as a `landing` one is: its work is on the project's
+ * branch until the review step lands it. Steps are an order, and skipping over
+ * a stopped one to reach a later `ready` step is how a plan ends up
+ * half-built in an order nobody chose.
  */
 export function planState(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   // A `landing` step is behind the plan, not in front of it: its pull request
   // is the merger's, and the next step starts on top of it (ruling 30, A).
-  const index = steps.findIndex((step) => step?.status !== 'done' && step?.status !== 'landing');
+  const index = steps.findIndex((step) => step?.status !== 'done' && step?.status !== 'landing' && step?.status !== 'built');
   if (index === -1) {
     const landing = steps.findIndex((step) => step?.status === 'landing');
     if (landing === -1) {
@@ -425,6 +436,16 @@ export function planState(plan) {
     if (landing >= 0) return { status: 'landing', index: landing, step: steps[landing] };
   }
   return { status: STATUSES.has(step?.status) ? step.status : 'invalid', index, step };
+}
+
+/**
+ * Whether the plan is a branch-flow plan: its last step is the review step
+ * (`kind: 'review'`), which lands every step built before it in one pull
+ * request. Null-safe, like `planState`.
+ */
+export function branchFlow(plan) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  return steps[steps.length - 1]?.kind === 'review';
 }
 
 /** The 1-based numbers of the success criteria that are not `met: true`. */

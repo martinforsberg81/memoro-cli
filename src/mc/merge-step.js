@@ -41,7 +41,8 @@ export function stepForMerge({ env = {}, head = null, entries = [] } = {}) {
   }
   if (!head) return null;
   for (const entry of entries) {
-    const index = entry.steps.findIndex((step) => step.branch === head && step.status !== 'done');
+    // Built steps all stand on one branch; the one still to land is the one meant.
+    const index = entry.steps.findIndex((step) => step.branch === head && step.status !== 'done' && step.status !== 'built');
     if (index >= 0) return { project: entry.project, index, entry, from: 'branch' };
   }
   const project = projectForBranch(head, entries.map((entry) => entry.project));
