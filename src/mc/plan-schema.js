@@ -115,8 +115,18 @@ const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'subage
 const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor', 'subagents']);
 /** `runner.subagents`: whether a claude step may hand work to Haiku workers. */
 export const SUBAGENT_SETTINGS = Object.freeze(['on', 'off']);
-/** claude's `--effort` levels, as `claude --help` lists them (2.1.268). */
+/**
+ * claude's `--effort` levels, as `claude --help` lists them (2.1.268). A codex
+ * step's effort is the same word, passed as `model_reasoning_effort`: the
+ * installed codex (0.151.0) lists these names among its own.
+ */
 export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+/**
+ * The step models that run on claude, and the ones that run on codex. A model
+ * belongs to one tool, and the plan's `runner.tool` says which (`pairingProblem`).
+ */
+export const CLAUDE_MODELS = Object.freeze(['haiku', 'opus']);
+export const CODEX_MODELS = Object.freeze(['gpt-6.1-sol', 'gpt-6.1-luna']);
 const BLOCKER_KEYS = Object.freeze(['kind', 'name', 'at', 'step', 'hours']);
 
 /** The field a blocker carries beyond its name, and the one kind that may carry it. */
@@ -176,7 +186,7 @@ function positiveInteger(value) {
 // problem text says it is, `keys` what that level may carry. A plan-level key
 // on a step is refused by name rather than as unknown, because the author who
 // wrote it meant something the step cannot say.
-function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } = {}) {
+function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, tool = runner?.tool ?? 'claude' } = {}) {
   if (runner === null || runner === undefined) return;
   if (!plain(runner)) { problems.push(`${at}: must be an object, or absent for the defaults`); return; }
   for (const key of unknownKeys(runner, keys)) {
@@ -188,6 +198,8 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } 
   if (runner.model !== undefined && runner.model !== null && !MODEL_RE.test(String(runner.model))) {
     problems.push(`${at}.model: must be a model name`);
   }
+  const paired = runner.model !== undefined && runner.model !== null ? pairingProblem(runner.model, tool) : null;
+  if (paired) problems.push(`${at}.model: ${paired}`);
   if (runner.effort !== undefined && runner.effort !== null && !EFFORT_LEVELS.includes(runner.effort)) {
     problems.push(`${at}.effort: one of ${EFFORT_LEVELS.join(', ')}`);
   }
@@ -205,6 +217,22 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } 
       problems.push(`${at}.${key}: must be a positive whole number of minutes`);
     }
   }
+}
+
+/**
+ * What is wrong with a model on a plan whose tool is `tool`, or null. A Codex
+ * name needs a `codex` plan, and a Claude name is refused on one: the pairing is
+ * stated, never worked out from the name, so a plan cannot run a model on a tool
+ * that does not have it.
+ */
+function pairingProblem(model, tool) {
+  if (CODEX_MODELS.includes(model) && tool !== 'codex') {
+    return `${model} is a Codex model — it needs runner.tool codex (haiku and opus are Claude's)`;
+  }
+  if (CLAUDE_MODELS.includes(model) && tool === 'codex') {
+    return `${model} is a Claude model — a codex plan names ${CODEX_MODELS.join(' or ')}`;
+  }
+  return null;
 }
 
 function validateCriteria(list, problems) {
@@ -265,7 +293,7 @@ function validateBlocker(step, at, problems, number) {
   }
 }
 
-function validateSteps(steps, problems) {
+function validateSteps(steps, problems, tool) {
   if (!Array.isArray(steps) || steps.length < 1) {
     problems.push('steps: at least one step — the plan holds every step, written before the work');
     return;
@@ -312,7 +340,7 @@ function validateSteps(steps, problems) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
     validateBlocker(step, at, problems, index + 1);
-    validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS });
+    validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS, tool });
   });
 }
 
@@ -346,7 +374,7 @@ export function validatePlan(value) {
   validateCriteria(value.success_criteria, problems);
   validateDocuments(value.documents, problems);
   validateRunner(value.runner, problems);
-  validateSteps(value.steps, problems);
+  validateSteps(value.steps, problems, plain(value.runner) && value.runner.tool !== undefined ? value.runner.tool : 'claude');
 
   return { ok: problems.length === 0, problems };
 }

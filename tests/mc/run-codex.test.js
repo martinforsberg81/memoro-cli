@@ -92,7 +92,7 @@ function stub(dir, name, body) {
  * The world the runner is started in: a stub codex, a repository with one
  * ready plan on its origin/main, and a workarea that is a real worktree of it.
  */
-function codexWorld(t) {
+function codexWorld(t, plan = PLAN) {
   const base = mkdtempSync(join(tmpdir(), 'mc-run-codex-'));
   const bin = join(base, 'bin');
   const reposHome = join(base, 'repos');
@@ -118,7 +118,7 @@ function codexWorld(t) {
   git(repo, 'commit', '-qm', 'readme');
   // The plan is under the work root's programs/, naming its repository.
   mkdirSync(join(work, 'programs', 'mc', 'cx'), { recursive: true });
-  writeFileSync(join(work, 'programs', 'mc', 'cx', 'PLAN.json'), JSON.stringify({ ...PLAN, repo: 'memoro-cli' }, null, 2));
+  writeFileSync(join(work, 'programs', 'mc', 'cx', 'PLAN.json'), JSON.stringify({ ...plan, repo: 'memoro-cli' }, null, 2));
   git(repo, 'remote', 'add', 'origin', origin);
   git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'fetch', '-q', 'origin');
@@ -223,4 +223,41 @@ test('an interrupted codex step is resumed through `codex exec resume`, its work
   assert.equal(git(worktree, 'rev-parse', 'HEAD').trim(), head);
   assert.equal(git(worktree, 'status', '--porcelain'), status);
   assert.equal(git(worktree, 'branch', '--show-current').trim(), 'cx');
+});
+
+test('a codex step on gpt-6.1-sol at high effort is launched with its model and effort, and no claude flag', async (t) => {
+  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6.1-sol', effort: 'high' } }] };
+  const { env, work, argvFile } = codexWorld(t, plan);
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
+  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
+
+  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
+  assert.deepEqual(argv.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=high']);
+  assert.equal(argv.includes('--effort'), false);
+  assert.equal(argv.includes('--advisor'), false);
+  const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
+  assert.match(log, /cx: step starting \(codex gpt-6\.1-sol · effort high, no check-in, no stall guard\)/u);
+});
+
+test('an interrupted codex step on gpt-6.1-luna at medium effort resumes with the same model and effort', async (t) => {
+  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6.1-luna', effort: 'medium' } }] };
+  const { env, work, argvFile } = codexWorld(t, plan);
+  mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
+  writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
+    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: join(work, 'programs', 'mc', 'cx', 'PLAN.json'),
+    steps: [{
+      status: 'ready', branch: 'cx',
+      interrupted: {
+        at: '2026-10-10T08:00:00Z', session_id: '019a0c0d-0000-7000-8000-00000000c0de', tool: 'codex', model: null,
+        log: null, last_activity: '2026-10-10T07:55:00Z', context_tokens: 4000, branch: 'cx', count: 1,
+      },
+    }],
+  }));
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
+  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
+
+  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
+  assert.deepEqual(argv.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6.1-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
+  assert.equal(argv.includes('--effort'), false);
+  assert.equal(argv.at(-2), '019a0c0d-0000-7000-8000-00000000c0de');
 });

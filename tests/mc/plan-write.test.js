@@ -6,9 +6,11 @@ import { test } from 'node:test';
 
 import {
   BANNED_WORDS,
+  CODEX_REVIEW_RUNNER,
   DEPENDENCY_WORDS,
   DRAFT_FILE,
   MODELS,
+  REVIEW_STEP,
   bannedWords,
   checkWords,
   dependencyWords,
@@ -20,9 +22,10 @@ import {
   sendProblems,
   testDirectories,
   withPlanLock,
+  withReviewStep,
   writePlanFile,
 } from '../../src/mc/plan-write.js';
-import { PLAN_SCHEMA, PLAN_VERSION } from '../../src/mc/plan-schema.js';
+import { PLAN_SCHEMA, PLAN_VERSION, validatePlan } from '../../src/mc/plan-schema.js';
 
 const scratch = () => mkdtempSync(join(tmpdir(), 'plan-write-'));
 
@@ -54,7 +57,7 @@ function complete(overrides = {}) {
 
 test('DRAFT_FILE, MODELS and the two word patterns are what the verbs share', () => {
   assert.equal(DRAFT_FILE, 'DRAFT.json');
-  assert.deepEqual(MODELS, ['haiku', 'opus']);
+  assert.deepEqual(MODELS, ['haiku', 'opus', 'gpt-6.1-sol', 'gpt-6.1-luna']);
   assert.ok(Object.isFrozen(MODELS));
   assert.ok(BANNED_WORDS.test('Martin'));
   assert.ok(DEPENDENCY_WORDS.test('--on-project x'));
@@ -146,11 +149,11 @@ test('sendProblems is empty for a complete plan, and names each thing that stops
 
   const noModel = complete();
   delete noModel.steps[0].runner;
-  assert.deepEqual(sendProblems(noModel), ['steps[1].runner.model: haiku or opus']);
+  assert.deepEqual(sendProblems(noModel), ['steps[1].runner.model: haiku, opus, gpt-6.1-sol or gpt-6.1-luna']);
 
   const sonnet = complete();
   sonnet.steps[1].runner.model = 'sonnet';
-  assert.deepEqual(sendProblems(sonnet), ['steps[2].runner.model: haiku or opus']);
+  assert.deepEqual(sendProblems(sonnet), ['steps[2].runner.model: haiku, opus, gpt-6.1-sol or gpt-6.1-luna']);
 
   const planModel = complete({ runner: { model: 'haiku' } });
   assert.deepEqual(sendProblems(planModel), ['runner.model: a plan names no model — each step names its own (ruling 42)']);
@@ -166,6 +169,28 @@ test('sendProblems is empty for a complete plan, and names each thing that stops
   const onProject = complete();
   onProject.steps[1].instruction = ['Do it.', 'Wait with --on-project mc'];
   assert.deepEqual(sendProblems(onProject), ['steps[2]: a dependency goes in --after <repo>:<project>']);
+});
+
+test('sendProblems takes a codex plan with its Codex models, and refuses a Claude model on it', () => {
+  const codexPlan = complete({ runner: { tool: 'codex' } });
+  codexPlan.steps[0].runner.model = 'gpt-6.1-luna';
+  codexPlan.steps[1].runner.model = 'gpt-6.1-sol';
+  assert.deepEqual(sendProblems(codexPlan), []);
+
+  codexPlan.steps[1].runner.model = 'opus';
+  assert.deepEqual(sendProblems(codexPlan), ['steps[1].runner.model: opus is a Claude model — a codex plan names gpt-6.1-sol or gpt-6.1-luna']);
+});
+
+test('withReviewStep runs the review on gpt-6.1-sol at high effort on a codex plan, and on opus everywhere else', () => {
+  assert.deepEqual(withReviewStep(complete()).steps.at(-1), REVIEW_STEP);
+
+  const codexPlan = complete({ runner: { tool: 'codex' } });
+  codexPlan.steps[0].runner.model = 'gpt-6.1-luna';
+  codexPlan.steps[1].runner.model = 'gpt-6.1-sol';
+  const sent = withReviewStep(codexPlan);
+  assert.deepEqual(sent.steps.at(-1), { ...REVIEW_STEP, runner: { ...CODEX_REVIEW_RUNNER } });
+  assert.deepEqual(validatePlan(sent).problems, []);
+  assert.deepEqual(REVIEW_STEP.runner, { model: 'opus', effort: 'high' }, 'the constant is the claude review, untouched');
 });
 
 test('sendProblems refuses a check that says it runs after the deploy, and a criterion that names a person', () => {

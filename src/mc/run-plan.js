@@ -934,8 +934,9 @@ export function builtPreamble(built) {
 /**
  * The argument list for a session nobody sits in front of, per tool. The
  * model rides through the adapter's own `modelArgs`, and for claude the
- * effort and the advisor through its `effortArgs` and `advisorArgs` — codex
- * gets neither; the instructions
+ * effort and the advisor through its `effortArgs` and `advisorArgs`, and codex
+ * its effort through its own `effortArgs` (`-c model_reasoning_effort`) and no
+ * advisor; the instructions
  * (`_common.md` + role overlay) through the same channel `mc work` uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
  * ways (`stream: true`, the step lanes): the prompt is not an
@@ -1025,14 +1026,15 @@ export const STEP_WORKER_AGENTS = Object.freeze({
 
 export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
+  const effortArgs = adapter?.effortArgs?.(effort) ?? [];
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
   const session = adapter?.sessionArgs?.({ cache }) ?? [];
   const instr = profileArgs(toolId, instructions);
   // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
   // setting goes through `-c`, and the session id is the first positional.
-  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, resume, prompt];
-  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...session, ...instr, prompt];
-  const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
+  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, ...effortArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, resume, prompt];
+  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...effortArgs, ...session, ...instr, prompt];
+  const tuning = [...effortArgs, ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
   const io = stream
     ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
@@ -1641,8 +1643,9 @@ export function tsvHeader() {
  * the step dies on its own argument list before it has read a word of the
  * plan. A plan on another tool that names no model gets none — `modelArgs`
  * of nothing is `[]`, and the tool's own default is a better answer than
- * mc's guess at what that tool calls its best model. Effort and advisor are
- * claude's flags, so another tool gets neither, named or not.
+ * mc's guess at what that tool calls its best model. The advisor is claude's
+ * flag, so another tool gets none, named or not. Effort is the plan's word on
+ * either tool: claude's `--effort`, codex's `model_reasoning_effort`.
  *
  * `subagents` resolves step over plan too, and is `on` only where it says
  * so: off by default, and off on any tool but claude (`STEP_WORKER_AGENTS`).
@@ -1661,7 +1664,7 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
   return {
     tool,
     model,
-    effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
+    effort: EFFORT_LEVELS.includes(effort) ? effort : null,
     advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
     subagents: claude && named('subagents') === 'on',
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),

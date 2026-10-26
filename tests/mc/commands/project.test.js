@@ -250,7 +250,7 @@ test('criterion add appends to a draft, in order, unmet, and names the next verb
     assert.deepEqual(draftProblems(plan), []);
     assert.deepEqual(f.out, [
       'mc: alpha criterion 1 — It runs.\n',
-      'next: mc project step add alpha "<title>" --model haiku|opus --done-when "…" --instruction-file <md>\n',
+      'next: mc project step add alpha "<title>" --model <model> --done-when "…" --instruction-file <md>\n',
       'mc: alpha criterion 2 — It is tested.\n',
     ]);
     assert.equal(f.err.length, 0);
@@ -431,14 +431,62 @@ test('step add --effort lands in the step\'s runner, beside its model', async ()
   } finally { f.cleanup(); }
 });
 
-test('step add without --model, with a model that is not haiku or opus, or missing a flag, is refused, exit 2, and the draft is untouched', async () => {
+test('new --tool codex drafts a plan that names codex, and a step on a Codex model goes in; a Claude one on it is refused', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run([...NEW, '--tool', 'codex'], f.deps), 0);
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).runner, { tool: 'codex' });
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    f.out.length = 0;
+    const md = instructionFile(f);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6.1-sol', '--effort', 'high', '--done-when', 'It runs.', '--instruction-file', md], f.deps), 0);
+    assert.deepEqual(f.out, ['mc: alpha step 1 — One (gpt-6.1-sol, high)\n', 'next: mc project send alpha\n']);
+    f.err.length = 0;
+    assert.equal(await run(['step', 'add', 'alpha', 'Two', '--model', 'haiku', '--done-when', 'It runs.', '--instruction-file', md], f.deps), 1);
+    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: haiku is a Claude model — a codex plan names gpt-6\.1-sol or gpt-6\.1-luna/u);
+    assert.equal(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps.length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('new --tool names only codex, and a step on a Codex model on a claude plan is refused, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run([...NEW, '--tool', 'sonnet'], f.deps), 2);
+    assert.match(f.err.join(''), /--tool sonnet is not a tool a draft names — codex, or none for claude/u);
+    assert.equal(existsSync(f.draft('alpha')), false);
+    f.err.length = 0;
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal('runner' in JSON.parse(readFileSync(f.draft('alpha'), 'utf8')), false, 'a plan without --tool names no runner, as before');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6.1-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 1);
+    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: gpt-6\.1-luna is a Codex model — it needs runner\.tool codex \(haiku and opus are Claude's\)/u);
+  } finally { f.cleanup(); }
+});
+
+test('send on a codex plan runs its review on gpt-6.1-sol at high effort, and the sent plan reads', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run([...NEW, '--tool', 'codex'], f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6.1-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    const text = readFileSync(join(f.home, 'mc', 'alpha', 'PLAN.json'), 'utf8');
+    const sent = JSON.parse(text);
+    assert.deepEqual(sent.runner, { tool: 'codex' });
+    assert.deepEqual(sent.steps.at(-1), { ...REVIEW_STEP, runner: { model: 'gpt-6.1-sol', effort: 'high' } });
+    assert.deepEqual(readPlanText(text).problems, []);
+  } finally { f.cleanup(); }
+});
+
+test('step add without --model, with a model that is none of the four, or missing a flag, is refused, exit 2, and the draft is untouched', async () => {
   const f = draftFixture();
   try {
     assert.equal(await run(NEW, f.deps), 0);
     const md = instructionFile(f);
     const cases = [
-      [['step', 'add', 'alpha', 'One', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku or opus \(ruling 42\) — no default/u],
-      [['step', 'add', 'alpha', 'One', '--model', 'sonnet', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku or opus/u],
+      [['step', 'add', 'alpha', 'One', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna \(ruling 42\) — no default/u],
+      [['step', 'add', 'alpha', 'One', '--model', 'sonnet', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna/u],
       [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--instruction-file', md], /a step needs --done-when/u],
       [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'It runs.'], /a step needs --instruction-file/u],
       [[...STEP, '--instruction-file', join(f.home, 'missing.md')], /cannot read /u],
@@ -660,7 +708,7 @@ test('step edit on a sent plan\'s step that has started is refused, exit 1, and 
   } finally { f.cleanup(); }
 });
 
-test('step edit with a step number out of range, no field, or a model that is not haiku or opus is usage, exit 2', async () => {
+test('step edit with a step number out of range, no field, or a model that is none of the four is usage, exit 2', async () => {
   const f = draftFixture();
   try {
     await draftWithStep(f);
@@ -672,7 +720,7 @@ test('step edit with a step number out of range, no field, or a model that is no
     assert.equal(await run(['step', 'edit', 'alpha', '1'], f.deps), 2);
     assert.match(f.err.at(-1), /^mc: step edit needs --title, --model, --effort, --done-when or --instruction-file\n$/u);
     assert.equal(await run(['step', 'edit', 'alpha', '1', '--model', 'sonnet'], f.deps), 2);
-    assert.match(f.err.at(-1), /a step names --model haiku or opus \(ruling 42\) — no default/u);
+    assert.match(f.err.at(-1), /a step names --model haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna \(ruling 42\) — no default/u);
     assert.equal(await run(['step', 'edit', 'alpha', '1', '--after', 'memoro-cli:other', '--model', 'opus'], f.deps), 2);
     assert.equal(f.err.at(-1), 'mc: step edit takes no --after\n');
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
@@ -818,7 +866,7 @@ test('send refuses a draft with no step, names the problem, and moves nothing, e
   } finally { f.cleanup(); }
 });
 
-test('send refuses a plan that names a model for itself, or a step model that is not haiku or opus, exit 1', async () => {
+test('send refuses a plan that names a model for itself, or a step model that is none of the four, exit 1', async () => {
   const f = draftFixture();
   try {
     await draftWithStep(f);
@@ -832,7 +880,7 @@ test('send refuses a plan that names a model for itself, or a step model that is
     plan.steps[0].runner.model = 'sonnet';
     writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
     assert.equal(await run(['send', 'alpha'], f.deps), 1);
-    assert.match(f.err.join(''), /steps\[1\]\.runner\.model: haiku or opus/u);
+    assert.match(f.err.join(''), /steps\[1\]\.runner\.model: haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna/u);
     assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
   } finally { f.cleanup(); }
 });

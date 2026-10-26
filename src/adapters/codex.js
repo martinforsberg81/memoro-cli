@@ -275,6 +275,18 @@ export function modelArgs(model) {
   return ['-m', model];
 }
 
+/**
+ * The reasoning effort, as codex's own config override: `-c
+ * model_reasoning_effort=<level>`. The level is the plan's word, passed as
+ * given; codex refuses a level it does not have. Nothing named, nothing passed,
+ * so codex keeps its own default. Claude's `--effort` and `--advisor` are not
+ * codex's and never come through here.
+ */
+export function effortArgs(effort) {
+  if (!effort || typeof effort !== 'string') return [];
+  return ['-c', `model_reasoning_effort=${effort}`];
+}
+
 export function renderPolicy(policy = null) {
   const permissions = policy?.permissions && typeof policy.permissions === 'object'
     ? policy.permissions
