@@ -23,7 +23,8 @@ import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.j
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
-import { pageKey, run as page } from '../../src/mc/commands/home.js';
+import { codeCommit, pageKey, restartPage, run as page } from '../../src/mc/commands/home.js';
+import { RESTART } from '../../src/mc/page-live.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
@@ -2005,6 +2006,68 @@ describe('the page', () => {
     assert.equal(shown.length, 1, 'one redraw, for the one a');
     assert.match(shown[0], /^ {4}1 · avatar-self-serve/mu);
     assert.doesNotMatch(shown[0], / {8}1 blocked {2}· {2}1 {2}·/u);
+  });
+
+  /**
+   * A page left open while `~/mc/self` fast-forwards goes on drawing with the
+   * code it started on — on 2026-10-26 that showed codex-models as `invalid —
+   * steps[2].kind: unknown key` a day after the review kind landed. A draw
+   * that finds the commit moved makes the next RESTART start mc again.
+   */
+  it('starts again on the new code when the commit mc runs from moves under it', async () => {
+    const commits = ['aaaaaaaa1', 'aaaaaaaa1', 'bbbbbbbb2'];
+    const asked = ['a', RESTART];
+    const restarted = [];
+    const code = await page([], {
+      collect: async () => DATA,
+      stdout: { columns: 120, write: () => {} },
+      stderr: { write: () => {} },
+      env: {},
+      interactive: () => true,
+      reader: { ask: async () => asked.shift() ?? null, show: () => {} },
+      commit: () => commits.shift() ?? 'bbbbbbbb2',
+      restartPage: (how) => { restarted.push(how); return 7; },
+      checkAndPrintFreshInstall: async () => {},
+    });
+    assert.equal(code, 7, 'the new page\'s exit code is this one\'s');
+    assert.deepEqual(restarted.map(({ from, to }) => [from, to]), [['aaaaaaaa1', 'bbbbbbbb2']]);
+  });
+
+  it('runs mc again with the same arguments, and the wrapper\'s fd 3 when it holds one', () => {
+    const calls = [];
+    const written = [];
+    const spawn = (bin, args, options) => { calls.push({ bin, args, stdio: options.stdio }); return { status: 3 }; };
+    const code = restartPage({
+      stdout: { write: (text) => written.push(text) },
+      env: { MC_EMIT_SHELL_DIRECTIVES: '1' },
+      from: 'aaaaaaaa1',
+      to: 'bbbbbbbb2',
+      spawn,
+      argv: ['node', '/opt/homebrew/bin/mc', '--emit-shell-directives'],
+    });
+    assert.equal(code, 3);
+    assert.deepEqual(calls[0].args, ['/opt/homebrew/bin/mc', '--emit-shell-directives']);
+    assert.deepEqual(calls[0].stdio, ['inherit', 'inherit', 'inherit', 3]);
+    assert.match(written.join(''), /mc moved from aaaaaaaa to bbbbbbbb under this page/u);
+
+    // A wrapper flag with no descriptor behind it: the restart still happens, without it.
+    const fallback = [];
+    restartPage({
+      stdout: { write: () => {} },
+      env: { MC_EMIT_SHELL_DIRECTIVES: '1' },
+      spawn: (bin, args, options) => {
+        fallback.push(options.stdio.length);
+        return options.stdio.length > 3 ? { error: new Error('EBADF'), status: null } : { status: 0 };
+      },
+      argv: ['node', 'mc'],
+    });
+    assert.deepEqual(fallback, [4, 3]);
+  });
+
+  it('reads no commit when mc is not running from a checkout, or git does not answer', () => {
+    assert.equal(codeCommit({ checkout: null }), null);
+    assert.equal(codeCommit({ checkout: '/x', spawn: () => ({ status: 128, stdout: '' }) }), null);
+    assert.equal(codeCommit({ checkout: '/x', spawn: () => ({ status: 0, stdout: 'abc\n' }) }), 'abc');
   });
 
   it('fits the terminal it is printed in, from 60 columns to 160', () => {

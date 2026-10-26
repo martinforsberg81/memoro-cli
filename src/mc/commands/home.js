@@ -31,13 +31,16 @@
  * `--json` prints the same object the renderer takes, so the two surfaces
  * cannot drift.
  */
+import { spawnSync } from 'node:child_process';
+
 import { getPackageVersion } from '../../lib/version.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import { PRS_STALE_SECONDS } from '../page-cache.js';
 import { collectPage } from '../page-collect.js';
-import { LIVE_MIN_COLUMNS, liveReader, plainReader } from '../page-live.js';
+import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
+import { mcCheckout } from '../run-control.js';
 import { inspectWorkArea } from '../work-area.js';
 import { workAreaName } from '../paths.js';
 import { openArea, parseArgs, runVerb, startSomething } from './work.js';
@@ -89,6 +92,16 @@ export async function run(argv, deps = {}) {
   let freshOnce = false;
   let askedAt = -Infinity;
   const clock = deps.clock || (() => Date.now());
+  // The commit mc is running from, read when the page starts and again at
+  // every draw. Node read its module graph once, at start, so a page left open
+  // while `~/mc/self` fast-forwards goes on drawing with the old code: on
+  // 2026-10-26 a page started the morning before showed codex-models as
+  // `invalid — steps[2].kind: unknown key` a day after the review kind had
+  // landed. A page whose commit has moved starts again instead (`restartPage`),
+  // the way `mc run --update` hands the runner over.
+  const commitOf = deps.commit || codeCommit;
+  const startedOn = live ? commitOf() : null;
+  let movedTo = null;
   // One way to make a page, used by both surfaces: the width and the
   // colour are read per draw.
   const page = async () => {
@@ -96,8 +109,11 @@ export async function run(argv, deps = {}) {
     freshOnce = false;
     const data = await collect({ fresh, offline: opts.offline });
     if (data?.caches?.prs?.asked) askedAt = clock();
+    const now = startedOn ? commitOf() : null;
+    if (now && now !== startedOn) movedTo = now;
     return {
       data,
+      restart: movedTo !== null,
       key: pageKey(data),
       lines: renderPageLines(data, {
         columns: columnsFor(stdout),
@@ -122,7 +138,35 @@ export async function run(argv, deps = {}) {
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
+    restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
+}
+
+/** The commit of the checkout mc runs from, or null: not a checkout, or git did not answer. */
+export function codeCommit({ checkout = mcCheckout(), spawn = spawnSync } = {}) {
+  if (!checkout) return null;
+  const out = spawn('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return out.status === 0 ? String(out.stdout).trim() || null : null;
+}
+
+/**
+ * `mc` again, on the code that is on disk now, in this terminal: the same
+ * arguments, and the shell wrapper's fd 3 when it holds one, so a project
+ * opened from the new page still `cd`s the shell (run-control.js, `childEnv`).
+ * This process waits for it and leaves with its code.
+ */
+export function restartPage({ stdout, env = process.env, from, to, spawn = spawnSync, argv = process.argv }) {
+  const short = (sha) => String(sha || '').slice(0, 8);
+  stdout.write(`\nmc: mc moved from ${short(from)} to ${short(to)} under this page — starting it again on the new code\n`);
+  const run = (fds) => spawn(process.execPath, argv.slice(1), { stdio: ['inherit', 'inherit', 'inherit', ...fds], env });
+  let child = null;
+  try {
+    child = run(env.MC_EMIT_SHELL_DIRECTIVES === '1' ? [3] : []);
+  } catch {
+    child = run([]);
+  }
+  if (child?.error) child = run([]);
+  return child?.status ?? 1;
 }
 
 /**
@@ -236,6 +280,8 @@ export async function menu(first, {
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
+  // The page on newer code, when a frame said mc moved under it (`RESTART`).
+  restart = () => 0,
 }) {
   let data = first;
   // Off, and a redraw away from on. `a` is a way of looking rather than a verb:
@@ -254,6 +300,7 @@ export async function menu(first, {
       ...(data.programmes.unplanned?.shown || []),
     ];
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
+    if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
 
     if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });

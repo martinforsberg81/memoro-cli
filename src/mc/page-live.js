@@ -92,6 +92,13 @@ export const LIVE_MIN_COLUMNS = 60;
  */
 export const ANCHOR_MS = 200;
 
+/**
+ * What `ask` answers instead of a line when a frame says the page should start
+ * again (`restart` on what `page()` returned): the code mc runs from has moved
+ * under it, and the menu re-runs `mc` rather than drawing another frame.
+ */
+export const RESTART = Symbol('restart');
+
 /** Device Status Report — cursor position. Answered as `ESC [ row ; col R`. */
 const DSR = '\x1b[6n';
 
@@ -219,6 +226,11 @@ export function liveReader({
     const schedule = () => { timer = setTimer(tick, intervalMs); };
     schedule();
 
+    // The other way out of the question: a frame that asks for a restart ends
+    // it with `RESTART`, whatever has been typed so far.
+    let leave = () => {};
+    const left = new Promise((resolve) => { leave = resolve; });
+
     // The reading is started before the question is asked, because the answer
     // to `CSI 6n` arrives on the same stream as the typing and `readLine` is
     // what is listening to it.
@@ -231,7 +243,7 @@ export function liveReader({
     });
     askAnchor();
     try {
-      const answer = await line;
+      const answer = await Promise.race([line, left]);
       stopped = true;
       clearTimer(timer);
       return answer;
@@ -294,6 +306,7 @@ export function liveReader({
       // The answer came in while the collect was running: those rows belong to
       // whatever happens next, not to a frame nobody is waiting for any more.
       if (stopped) return;
+      if (next.restart) { leave(RESTART); return; }
       draw(next.lines, next.key ?? null);
       schedule();
     }
