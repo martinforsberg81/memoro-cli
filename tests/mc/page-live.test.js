@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 
 import headless from '@xterm/headless';
 
-import { liveReader, plainReader, readLine, screenRows } from '../../src/mc/page-live.js';
+import { RESTART, liveReader, plainReader, readLine, screenRows } from '../../src/mc/page-live.js';
 
 const { Terminal } = headless;
 
@@ -404,6 +404,19 @@ describe('the live page under the prompt', () => {
     assert.equal(it_.input.destroyed, true, 'the terminal is handed back');
     await it_.time.advance(120_000);
     assert.equal(it_.collected.length, 0, 'and nothing refreshes after it');
+  });
+
+  it('answers RESTART, draws nothing and gives the terminal back when a frame asks to start again', async () => {
+    const it_ = live([async () => ({ data: {}, lines: frame('9 h'), restart: true })]);
+    const answer = it_.reader.ask(TAIL, '>');
+    it_.input.type('3');
+    const mark = it_.at();
+    await it_.time.advance(31_000);
+    assert.equal(await answer, RESTART, 'the half-typed 3 is not the answer');
+    assert.ok(!it_.stdout.since(mark).includes('9 h'), 'the frame from the old code is not drawn');
+    assert.equal(it_.input.destroyed, true, 'the terminal is handed back for the new mc');
+    await it_.time.advance(120_000);
+    assert.equal(it_.collected.length, 1, 'and nothing refreshes after it');
   });
 });
 
