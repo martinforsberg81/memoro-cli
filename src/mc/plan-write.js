@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { PLAN_FILE } from './plan-source.js';
-import { branchFlow, NAME_RE, validatePlan } from './plan-schema.js';
+import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, validatePlan } from './plan-schema.js';
 
 /**
  * The file a plan is written to until `mc project send` renames it. It sits
@@ -30,9 +30,11 @@ export const DRAFT_FILE = 'DRAFT.json';
 
 /**
  * The only models a step written by a verb may name (ruling 42, `mc-project.md`
- * § Decisions). A step names its own model; the plan does not name one for it.
+ * § Decisions): haiku and opus on claude, gpt-6.1-sol and gpt-6.1-luna on codex.
+ * A step names its own model; the plan does not name one for it. Which of the
+ * two a step may name is the plan's `runner.tool` (`validatePlan`).
  */
-export const MODELS = Object.freeze(['haiku', 'opus']);
+export const MODELS = Object.freeze([...CLAUDE_MODELS, ...CODEX_MODELS]);
 
 /**
  * The review step `mc project send` adds, last, to every plan it sends (the
@@ -51,13 +53,22 @@ export const REVIEW_STEP = Object.freeze({
 });
 
 /**
+ * The review step's runner on a codex plan: the same effort, on the codex model
+ * that stands where opus does. A plan on codex has no opus to review it with
+ * (`validatePlan` refuses a claude model there), so mc names this one, and says so.
+ */
+export const CODEX_REVIEW_RUNNER = Object.freeze({ model: 'gpt-6.1-sol', effort: 'high' });
+
+/**
  * The plan with a copy of `REVIEW_STEP` appended, or the plan unchanged when it
  * is a branch-flow plan already. The copy is what the plan holds, never the
- * frozen constant itself.
+ * frozen constant itself. On a `codex` plan the copy runs on `CODEX_REVIEW_RUNNER`.
  */
 export function withReviewStep(plan) {
   if (branchFlow(plan)) return plan;
-  return { ...plan, steps: [...plan.steps, structuredClone(REVIEW_STEP)] };
+  const review = structuredClone(REVIEW_STEP);
+  if (plan?.runner?.tool === 'codex') review.runner = { ...CODEX_REVIEW_RUNNER };
+  return { ...plan, steps: [...plan.steps, review] };
 }
 
 /**
@@ -239,7 +250,7 @@ export function sendProblems(plan) {
   steps.forEach((step, index) => {
     const n = index + 1;
     if (step && typeof step === 'object' && 'kind' in step) problems.push(`steps[${n}].kind: the review step is mc's — send adds it`);
-    if (!MODELS.includes(step?.runner?.model)) problems.push(`steps[${n}].runner.model: haiku or opus`);
+    if (!MODELS.includes(step?.runner?.model)) problems.push(`steps[${n}].runner.model: haiku, opus, gpt-6.1-sol or gpt-6.1-luna`);
     const names = bannedWords(step?.done_when);
     if (names.length) problems.push(`steps[${n}].done_when: names ${names.join(', ')} — a step's end is a check, never a person's`);
     const prose = [step?.done_when, ...instructionOf(step)];

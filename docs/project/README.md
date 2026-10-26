@@ -20,7 +20,9 @@ out, and they stay in git history.
 Since `project-verbs` a plan is written only through `mc project new`, `edit`,
 `criterion add`, `criterion edit`, `step add`, `step edit` and `send`. Until it is sent it is
 `DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
-`PLAN.json`. The verbs refuse a step without `--model haiku|opus`, the words
+`PLAN.json`. The verbs refuse a step whose `--model` its plan's tool does not
+run (`haiku` or `opus` on claude, `gpt-6.1-sol` or `gpt-6.1-luna` on codex,
+`--tool codex`), the words
 `Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
 dependency written anywhere but `--after <repo>:<project>`, and a change to a
 sent plan's goal, contract or out of scope, or to a step that has started.
@@ -57,9 +59,13 @@ the door.
 - `runner` — optional: `tool`, `model`, `effort`, `check_in_minutes`,
   `stall_minutes`.
   Only what the runner actually reads; there is no field here that nothing
-  enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`. What a
-  key leaves unsaid is the runner's default for the session's kind — a step
-  runs on `opus` at `medium`, and a plan session (`mc plan`) on `opus`
+  enforces. `tool` is `claude`, the default, or `codex`, and it picks the
+  provider the step models run on: `haiku` and `opus` on claude, `gpt-6.1-sol`
+  and `gpt-6.1-luna` on codex. `effort` is one of `low`, `medium`, `high`,
+  `xhigh`, `max`; it reaches claude as `--effort` and codex as
+  `-c model_reasoning_effort=<level>`. What a key leaves unsaid is the
+  runner's default for the session's kind — a claude step runs on `opus` at
+  `medium`, and a plan session (`mc plan`) on `opus`
   (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *The session*). Each step names its own model (below, ruling 42).
 
@@ -102,7 +108,10 @@ carries:
   from the schema when the last reader of them does.
 - `runner` — `model` and `effort`. Every step names its `model`: `haiku` at
   `high` effort for a narrow step with a checkable `done_when`, `opus` for one
-  that needs judgement (ruling 42, `canon/roles/_plan-writing.md`). Each key
+  that needs judgement (ruling 42, `canon/roles/_plan-writing.md`). On a codex
+  plan (`tool: codex`) the step names `gpt-6.1-sol` or `gpt-6.1-luna` instead:
+  those are Codex's models, not stand-ins for `haiku` or `opus`, and the
+  installed, signed-in codex CLI decides whether it has them. Each key
   overrides the plan's `runner` on its own.
   `tool`, `check_in_minutes` and `stall_minutes` are the plan's alone and
   refused here by name.

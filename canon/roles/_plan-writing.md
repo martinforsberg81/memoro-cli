@@ -7,10 +7,10 @@ start to finish, and know when it is done? If not, it is not a step
 
 - **Where:** a plan is written with `mc project` verbs, never by editing a
   file (ruling 48): `mc project new <programme>/<project> --repo memoro|memoro-cli
-  --goal … --contract … --out-of-scope …`, then `mc project criterion add` per
+  --goal … --contract … --out-of-scope … [--tool codex]`, then `mc project criterion add` per
   criterion (`mc project criterion drop <project> <n> --reason "…"` takes one
-  out that nobody can measure), `mc project step add` per step (`--model haiku|opus`,
-  `--done-when`, `--instruction-file <md>` with the step's paragraphs,
+  out that nobody can measure), `mc project step add` per step (`--model`, one of
+  the step models below, `--done-when`, `--instruction-file <md>` with the step's paragraphs,
   `--after <repo>:<project>` for a dependency), then `mc project send
   <project>`, which checks the whole plan and hands it to the runner.
   `mc project <project>` shows a draft and what send would refuse. No branch,
@@ -44,7 +44,11 @@ start to finish, and know when it is done? If not, it is not a step
 - **Each step:** `instruction` as long as the work needs — interface, order,
   edge cases, the trap. `done_when`: one checkable sentence. Name the file
   behind every claim, and only files you opened.
-- **Model per step (ruling 42):** every step names `--model haiku` or `opus`. Haiku is
+- **Model per step (ruling 42):** every step names a `--model`, and the plan's
+  `runner.tool` says which tool runs it. The step models are `haiku` and `opus`
+  on claude (the default), and `gpt-6.1-sol` and `gpt-6.1-luna` on codex
+  (`--tool codex`). A name belongs to one tool: the verbs refuse the other tool's
+  name at the write, and `send` checks it again. On a claude plan, Haiku is
   the first choice: `{ "model": "haiku", "effort": "high" }` for a step
   whose `instruction` says exactly what changes, where and in what order,
   and whose `done_when` passes or fails on its own — a test, a grep, an
@@ -54,18 +58,25 @@ start to finish, and know when it is done? If not, it is not a step
   beat one broad Opus step.
   - Never put `model` in the plan's own `runner`: it makes every step that
     model. The model is named on each step, never left to the default.
-  - **Haiku** when you can name the files, the functions, the order and the
+  - **Haiku** (claude) when you can name the files, the functions, the order and the
     tests: a bug whose cause you found, a function whose signature and cases
     you wrote down, wiring a finished function into its call site, a flag or
     message, a doc paragraph, a test the instruction lists case by case.
-  - **Opus** only when the step itself must choose, and you cannot choose
+  - **Opus** (claude) only when the step itself must choose, and you cannot choose
     for it: a layout or visual result judged against `mc shot`, a change
     spread across many files whose shape the code only shows while it is
     being made, a concurrency or ordering change where every edge case
     cannot be listed, a merge that is expected to conflict.
-  - Unsure? Write it as Haiku. If you cannot write the instruction precisely
+  - Unsure? On a claude plan, write it as Haiku. If you cannot write the instruction precisely
     enough for Haiku, the investigation is not done: do it here, not in an
     Opus step.
+  - **Codex plans.** `gpt-6.1-sol` and `gpt-6.1-luna` are Codex's models, not
+    stand-ins for `haiku` or `opus`: the Haiku and Opus guidance above does not
+    carry over, and this passage does not say which Codex name suits a step.
+    `send` gives a codex plan's review step `gpt-6.1-sol` at `high`. `effort`
+    takes the same five levels on both tools; on codex it reaches the session as
+    `-c model_reasoning_effort=<level>`. The name goes to `codex exec -m`, and
+    which names exist is for the installed, signed-in codex CLI to decide, not mc.
 - **Overall:** `goal`; `contract` (what may not change without Martin);
   `out_of_scope`, named; `success_criteria` with a `check` — for anything
   with a surface, measured in the running app. All frozen: a step session

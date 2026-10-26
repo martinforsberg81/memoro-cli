@@ -5,14 +5,15 @@
  * register's, never a pull request's. Whoever measured a criterion by its check
  * says so here.
  *
- *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json
+ *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>... [--tool codex]
+ *                                                                 draft a plan, as DRAFT.json; --tool codex runs its steps on Codex, else on claude
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
  *   mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure, from a draft or a sent plan; the register's log records why
- *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
+ *   mc project step add <project> <title> --model <model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
  *                                                                 add a step, after the others, to a draft; to a sent plan, before its review
- *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
+ *   mc project step edit <project> <n> [--title <text>] [--model <model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project send <project>                    check a draft whole, add the review step (last, mc's) and rename it to PLAN.json: the handover to the runner
  *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its directory moved to ~/mc/archive/projects/, its step area closed
@@ -43,7 +44,7 @@ import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
-const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope'];
+const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope', '--tool'];
 const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
@@ -61,7 +62,7 @@ export async function run(argv, deps = {}) {
 
   const scanned = scanArgs(argv, {
     booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool'],
     repeatable: ['--contract', '--out-of-scope'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -288,6 +289,11 @@ function newPlan(scanned, deps) {
   };
   const absent = Object.keys(given).filter((flag) => !given[flag]);
   if (absent.length) { stderr.write(`mc: new needs ${absent.join(', ')}\n`); return 2; }
+  // Codex is the only tool a draft names: a plan without one runs on claude, as it always has.
+  if (flags.tool !== null && flags.tool !== 'codex') {
+    stderr.write(`mc: --tool ${flags.tool} is not a tool a draft names — codex, or none for claude (haiku and opus are claude's; gpt-6.1-sol and gpt-6.1-luna are codex's)\n`);
+    return 2;
+  }
   const repoNames = repos.map((repo) => repo.name);
   if (!repoNames.includes(flags.repo)) {
     stderr.write(`mc: ${flags.repo} is not a repository mc knows — ${repoNames.join(', ')}\n`);
@@ -318,6 +324,7 @@ function newPlan(scanned, deps) {
     out_of_scope: flags['out-of-scope'],
     success_criteria: [],
     documents: [],
+    ...(flags.tool !== null ? { runner: { tool: flags.tool } } : {}),
     steps: [],
   };
   const issues = draftProblems(plan);
@@ -455,7 +462,7 @@ function addCriterion(scanned, deps) {
     return 1;
   }
   stdout.write(`mc: ${project} criterion ${outcome.number} — ${text}\n`);
-  if (outcome.first) stdout.write(`next: mc project step add ${project} "<title>" --model haiku|opus --done-when "…" --instruction-file <md>\n`);
+  if (outcome.first) stdout.write(`next: mc project step add ${project} "<title>" --model <model> --done-when "…" --instruction-file <md>\n`);
   return 0;
 }
 
@@ -610,7 +617,7 @@ function dropCriterion(scanned, deps) {
 }
 
 /**
- * `mc project step add <project> <title> --model haiku|opus --done-when <text>
+ * `mc project step add <project> <title> --model <model> --done-when <text>
  * --instruction-file <md> [--effort <level>] [--after <repo>:<project>]` —
  * appends a step, after the others, to a draft, or to a sent plan before its review. The model is the
  * step's own (ruling 42), and `done_when` ends on a check, never on a person.
@@ -796,9 +803,12 @@ function editStep(scanned, deps) {
   return 0;
 }
 
-/** What is wrong with a step's model, or null: a step names haiku or opus (ruling 42), so `step add` and `step edit` refuse any other. */
+/**
+ * What is wrong with a step's model, or null: a step names one of the four (ruling 42), so `step add` and `step edit`
+ * refuse any other. Whether it pairs with the plan's tool is `validatePlan`'s to say, once the plan is read.
+ */
 function modelProblem(model) {
-  return MODELS.includes(model) ? null : 'a step names --model haiku or opus (ruling 42) — no default';
+  return MODELS.includes(model) ? null : 'a step names --model haiku, opus, gpt-6.1-sol or gpt-6.1-luna (ruling 42) — no default';
 }
 
 /** What is wrong with a step's effort, or null: none is fine, and otherwise it is one of `EFFORT_LEVELS`. */
@@ -1133,12 +1143,13 @@ function waitingOn(project, records) {
 
 export function usage() {
   return [
-    'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
+    'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>... [--tool codex]   draft a plan, as DRAFT.json; --tool codex runs its steps on Codex\n',
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
-    '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
-    '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
+    '        mc project step add <project> <title> --model <model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
+    '        mc project step edit <project> <n> [--title <text>] [--model <model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
+    '        <model> is haiku or opus (claude), or gpt-6.1-sol or gpt-6.1-luna (codex: the plan needs --tool codex)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
