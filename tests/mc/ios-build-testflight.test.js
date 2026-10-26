@@ -10,14 +10,15 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { run } from '../../src/mc/commands/build.js';
 import {
-  archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, secretsEnv,
+  archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, reasonLine, runSync,
+  secretsEnv,
 } from '../../src/mc/ios-build.js';
 import { readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -41,7 +42,9 @@ const DECLARATION = {
 };
 
 const LIST_SOURCE = "console.log('list on main');\n";
-const STDIN_LIST = ['node', '--input-type=module', '-', '--json'];
+/** origin/main's list script, as `atRev` writes it out: `node <its directory>/scripts/list.mjs --json`. */
+const isRevList = (argv) => argv[0] === 'node' && /\/mc-ios-script-[^/]+\/scripts\/list\.mjs$/u.test(argv[1] || '') && argv[2] === '--json';
+const noExport = () => null;
 
 const SHA = '3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d';
 const NEXT = 43;
@@ -84,7 +87,7 @@ function fakeRun({ asc = { code: 0, stdout: ASC, stderr: '' }, identities = ['Ap
     if (argv[0] === 'security') {
       return { code: 0, stdout: `${identities.map((id, i) => `  ${i + 1}) ABCDEF "${id}"`).join('\n')}\n`, stderr: '' };
     }
-    if (argv.join(' ') === DECLARATION.list_builds.join(' ') || argv.join(' ') === STDIN_LIST.join(' ')) return asc;
+    if (argv.join(' ') === DECLARATION.list_builds.join(' ') || isRevList(argv)) return asc;
     return { code: 1, stdout: '', stderr: `unexpected ${argv.join(' ')}` };
   };
   fn.calls = calls;
@@ -123,19 +126,44 @@ describe('the number from App Store Connect', () => {
   it('asks with origin/main\'s script, not the checkout\'s working tree', async () => {
     const t = await testflight();
     const call = t.runFake.calls.find((c) => c.argv[0] === 'node');
-    assert.deepEqual(call.argv, STDIN_LIST);
+    assert.ok(isRevList(call.argv), call.argv.join(' '));
     assert.equal(call.cwd, join(t.repo, 'scripts'));
-    assert.equal(call.input, LIST_SOURCE);
     assert.equal(t.started[0].build, NEXT);
+    assert.equal(existsSync(dirname(dirname(call.argv[1]))), false, 'the written-out tree is removed afterwards');
   });
 
-  it('runs the script as the rev has it, even when the working tree is on another branch', () => {
+  it('runs the script with the rev\'s helpers and the checkout\'s packages, the checkout behind and on another branch', () => {
     const { repo } = makeRepo();
-    sh(repo, 'checkout', '-q', '-b', 'elsewhere');
-    writeFileSync(join(repo, 'scripts', 'list.mjs'), "console.log('old');\n");
-    sh(repo, 'commit', '-qam', 'old');
+    mkdirSync(join(repo, 'scripts', 'lib'));
+    writeFileSync(join(repo, 'scripts', 'lib', 'helper.mjs'), "export const said = 'helper on main';\n");
+    writeFileSync(join(repo, 'scripts', 'list.mjs'), [
+      "import { said } from './lib/helper.mjs';",
+      "import { pkg } from 'fakepkg';",
+      'console.log(JSON.stringify({ said, pkg, cwd: process.cwd() }));',
+      '',
+    ].join('\n'));
+    sh(repo, 'add', '-A');
+    sh(repo, 'commit', '-qm', 'main imports a helper');
+    sh(repo, 'update-ref', 'refs/remotes/origin/main', sh(repo, 'rev-parse', 'HEAD'));
+    sh(repo, 'checkout', '-q', '-b', 'elsewhere', 'HEAD~1');
+    // The installed packages are the checkout's, outside git.
+    mkdirSync(join(repo, 'node_modules', 'fakepkg'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', 'fakepkg', 'package.json'), JSON.stringify({ name: 'fakepkg', type: 'module', exports: './index.js' }));
+    writeFileSync(join(repo, 'node_modules', 'fakepkg', 'index.js'), "export const pkg = 'installed';\n");
+    assert.equal(existsSync(join(repo, 'scripts', 'lib')), false);
+
     const command = atRev(DECLARATION.list_builds, { repoPath: repo, rev: 'origin/main' });
-    assert.deepEqual(command, { argv: STDIN_LIST, cwd: join(repo, 'scripts'), input: LIST_SOURCE });
+    try {
+      assert.ok(isRevList(command.argv), command.argv.join(' '));
+      const r = runSync(command.argv, { cwd: command.cwd });
+      assert.equal(r.code, 0, r.stderr);
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.said, 'helper on main');
+      assert.equal(out.pkg, 'installed');
+      assert.equal(realpathSync(out.cwd), realpathSync(join(repo, 'scripts')));
+    } finally {
+      rmSync(command.dir, { recursive: true, force: true });
+    }
   });
 
   it('refuses a script the rev does not have', async () => {
@@ -143,8 +171,33 @@ describe('the number from App Store Connect', () => {
       repoPath: '/repos/memoro', declaration: DECLARATION, rev: 'origin/main', run: fakeRun(), git: () => null,
     });
     assert.deepEqual(asked, {
-      ok: false, line: 'App Store Connect did not answer (scripts/list.mjs is not on origin/main) — no build number can be chosen',
+      ok: false,
+      line: 'App Store Connect\'s build numbers could not be read (scripts/list.mjs is not on origin/main) — no build number can be chosen',
     });
+  });
+
+  it('refuses in words when the tree cannot be written out, and leaves no directory', () => {
+    let written;
+    const asked = listBuilds({
+      repoPath: '/repos/memoro', declaration: DECLARATION, rev: 'origin/main', run: fakeRun(), git: () => '',
+      exportTree: (_repo, _rev, path, dir) => { written = dir; return `git archive origin/main ${path}: fatal: nope`; },
+    });
+    assert.equal(asked.line, 'App Store Connect\'s build numbers could not be read (git archive origin/main scripts: fatal: nope) — no build number can be chosen');
+    assert.equal(existsSync(written), false);
+  });
+
+  it('names the error, not the place in Node that threw it', () => {
+    const stderr = [
+      'node:internal/modules/esm/resolve:274',
+      '    throw new ERR_MODULE_NOT_FOUND(',
+      '          ^',
+      '',
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/m/scripts/lib/dev-vars-path.mjs' imported from /m/scripts/",
+      '    at finalizeResolution (node:internal/modules/esm/resolve:274:11)',
+    ].join('\n');
+    assert.equal(reasonLine(stderr), "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/m/scripts/lib/dev-vars-path.mjs' imported from /m/scripts/");
+    assert.equal(reasonLine('TypeError: x is not a function\n    at y'), 'TypeError: x is not a function');
+    assert.equal(reasonLine('no builds for that app\n'), 'no builds for that app');
   });
 
   it('names the secrets file in memoro\'s checkout for the script', () => {
@@ -160,7 +213,7 @@ describe('the number from App Store Connect', () => {
 
   it('runs anything but node <relative path> as declared', () => {
     const argv = ['npm', 'run', 'asc:list'];
-    assert.deepEqual(atRev(argv, { repoPath: '/r', rev: 'origin/main', git: () => 'x' }), { argv, cwd: '/r', input: undefined });
+    assert.deepEqual(atRev(argv, { repoPath: '/r', rev: 'origin/main', git: () => 'x' }), { argv, cwd: '/r' });
   });
 
   it('exits 1 when App Store Connect does not answer, and builds nothing', async () => {
@@ -169,7 +222,7 @@ describe('the number from App Store Connect', () => {
     });
     assert.equal(t.code, 1);
     // The test's repository has no origin to fetch, which is the warning before it.
-    assert.equal(t.err.split('\n').at(-2), 'mc: App Store Connect did not answer (Error: 401 NOT_AUTHORIZED) — no build number can be chosen');
+    assert.equal(t.err.split('\n').at(-2), 'mc: App Store Connect\'s build numbers could not be read (Error: 401 NOT_AUTHORIZED) — no build number can be chosen');
     assert.deepEqual(t.started, []);
     assert.deepEqual(readIosBuilds(t.env), []);
   });
@@ -270,9 +323,10 @@ function builder({
     readFile: () => JSON.stringify({ server: { url: 'https://example.test' }, packageClassList: ['MemoroCameraPlugin'] }),
     codesign: () => ({ ok: true, detail: '' }),
     git: () => LIST_SOURCE.trim(),
+    exportTree: noExport,
     codesignDisplay: () => `Executable=/x/App\nIdentifier=test.bundle\n${authority}\nAuthority=Apple Worldwide Developer Relations Certification Authority\n`,
     run: (argv) => {
-      events.push(`asc ${argv.join(' ')}`);
+      events.push(isRevList(argv) ? 'asc list' : `asc ${argv.join(' ')}`);
       return { code: 0, stdout: ascAgain, stderr: '' };
     },
   };
@@ -288,7 +342,7 @@ describe('buildIos --testflight — the builder', () => {
     assert.equal(code, 0, b.stderr.text);
     assert.deepEqual(b.events.slice(b.events.indexOf('npm run cap:build')), [
       'npm run cap:build', 'xcodebuild archive', 'read-back', 'xcodebuild -exportArchive', 'unzip', 'IPA read-back',
-      `asc ${STDIN_LIST.join(' ')}`, 'upload',
+      'asc list', 'upload',
     ]);
     const { worktree, derived, spm } = buildPaths(b.env);
     const { archive, exportDir } = archivePaths(NEXT, b.env);
