@@ -179,13 +179,17 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   try { bin = resolveBinary(); } catch { bin = null; }
   const buildArgs = (
     argv = [],
-    { startupMessage = null, effectivePolicy = null, gitCommonDir = null } = {},
+    { startupMessage = null, effectivePolicy = null, gitCommonDir = null, writableDirectories = [] } = {},
   ) => {
     const base = [...argv];
     const policyArgs = renderPolicy(effectivePolicy).launchArgs;
     void startupMessage;
-    const commonDirArg = gitCommonDir ? ['--add-dir', gitCommonDir] : [];
-    return [...base, ...policyArgs, ...commonDirArg];
+    const directories = [...new Set([gitCommonDir, ...writableDirectories].filter(Boolean))];
+    const accessArgs = directories.flatMap(directory => ['--add-dir', directory]);
+    // Resume options precede the session id; new-session options precede the prompt.
+    return base[0] === 'resume'
+      ? ['resume', ...policyArgs, ...accessArgs, ...base.slice(1)]
+      : [...policyArgs, ...accessArgs, ...base];
   };
   return {
     bin,

@@ -30,6 +30,7 @@ import { profileArgs } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
 import { clearStopMark } from './work-stop-marker.js';
+import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -103,9 +104,11 @@ export async function openInWorkArea({
   // where only the role text is left off.
   const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
-  const args = resuming
+  const baseArgs = resuming
     ? [...resumeWith(toolId, resumed, session), ...(resumePrompt ? [resumePrompt] : [])]
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(prompt ? [prompt] : [])];
+
+  const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
 
   log('work.open', {
     area: areaRoot,
@@ -314,6 +317,7 @@ export function startInBackground({
 
   const command = launchCommand(launch, {
     task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
+    areaRoot, cwd: worktree.path, env,
   });
 
   const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
@@ -334,6 +338,14 @@ export function startInBackground({
     task: Boolean(task && !conversation),
   });
   return { ok: true, target, tool: launch.id, resumed: conversation?.id || null };
+}
+
+/** All interactive entry points pass through the adapter, including resumes. */
+function interactiveArgs(launch, args, context) {
+  const options = launch.id === 'codex'
+    ? { writableDirectories: interactiveWorkspaceDirectories(context) }
+    : {};
+  return launch.spec.args(args, options);
 }
 
 /**
@@ -362,6 +374,9 @@ function launchCommand(launch, {
   defaultModelTool = null,
   conversation = null,
   cache = '1h',
+  areaRoot,
+  cwd,
+  env = process.env,
 } = {}) {
   // The role default follows the role's tool here too (see openInWorkArea).
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
@@ -371,13 +386,11 @@ function launchCommand(launch, {
   // already holds any overlay, and the model — resolved by
   // the caller, flag over transcript — rides on the resume flags.
   const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
-  const args = conversation
+  const baseArgs = conversation
     ? [
-      launch.spec.bin,
       ...resumeWith(launch.id, launch.adapter?.resumeArgs?.({ sessionId: conversation.id, model: conversation.model || null }) || [], session),
     ]
     : [
-      launch.spec.bin,
       ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
       ...profileArgs(launch.id, instructionsFor(launch.id, overlay)),
       ...session,
@@ -386,7 +399,8 @@ function launchCommand(launch, {
   // on a resumed one it lands as a reply to wherever that conversation
   // stopped — which is what somebody asking for both at once is asking for.
   // Nothing combined them before this, so no existing launch changes shape.
-  if (task) args.push(task);
+  if (task) baseArgs.push(task);
+  const args = [launch.spec.bin, ...interactiveArgs(launch, baseArgs, { areaRoot, cwd, env })];
   // tmux runs its command through a shell, so the instructions — kilobytes of
   // prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
@@ -448,6 +462,7 @@ export function respawnInBackground({
   const window = `${target}:${index}`;
   const command = launchCommand(launch, {
     task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
+    areaRoot, cwd: worktree.path, env,
   });
 
   // Written before the respawn, not after: the abrupt path is mc replacing the
