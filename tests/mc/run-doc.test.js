@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 
 import { CREDITS_AT_UTILIZATION } from '../../src/mc/billing.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
-import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
+import { CLAUDE_MODELS, CODEX_MODELS, STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
@@ -130,5 +130,16 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     // it with (`RETIRED_ROUNDS`, commands/run.js).
     assert.match(DOC, /`--rounds <n>` was retired with the round/u);
     assert.match(parseRunArgs(['--rounds', '2']).error, /a round no longer exists/u);
+  });
+
+  it('names the four step models on the tool that runs them, and the codex flag and effort override the runner passes', () => {
+    const text = DOC.replace(/\s+/gu, ' ');
+    const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;
+    assert.ok(text.includes(onTool(CLAUDE_MODELS, 'claude')), 'the doc no longer pairs haiku and opus with claude');
+    assert.ok(text.includes(onTool(CODEX_MODELS, 'codex')), 'the doc no longer pairs the Codex names with codex');
+    assert.ok(text.includes('`codex exec -m <name>`'), 'the doc no longer says the Codex name goes to codex exec -m');
+    assert.ok(text.includes('`-c model_reasoning_effort=<level>`'), 'the doc no longer says effort reaches codex as model_reasoning_effort');
+    assert.match(DOC, /\[-m …\] \[-c model_reasoning_effort=…\]/u, 'the codex argument list no longer shows the effort override');
+    assert.doesNotMatch(text, /Effort and advisor are claude's flags/u, 'the doc still calls effort claude-only');
   });
 });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/project.js';
-import { PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../../../src/mc/plan-schema.js';
+import { CLAUDE_MODELS, CODEX_MODELS, PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../../../src/mc/plan-schema.js';
 import { draftProblems, REVIEW_STEP } from '../../../src/mc/plan-write.js';
 import { emptyStep, parseEntry, reconcileEntry, registerPath } from '../../../src/mc/register.js';
 
@@ -1493,4 +1493,16 @@ test('criterion drop refuses a criterion out of range, exit 2, and the last crit
     assert.equal(f.err.at(-1), 'mc: a plan keeps at least one criterion — edit it instead\n');
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
   } finally { f.cleanup(); }
+});
+
+test('the project docs name the four step models, each on its tool, and say a name from the other tool is refused', () => {
+  const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;
+  for (const doc of ['docs/project/README.md', 'docs/project/mc/mc-project.md']) {
+    const text = readFileSync(new URL(`../../../${doc}`, import.meta.url), 'utf8').replace(/\s+/gu, ' ');
+    for (const model of [...CLAUDE_MODELS, ...CODEX_MODELS]) assert.ok(text.includes(`\`${model}\``), `${doc} does not name ${model}`);
+    assert.ok(text.includes(onTool(CLAUDE_MODELS, 'claude')), `${doc} no longer pairs haiku and opus with claude`);
+    assert.ok(text.includes(onTool(CODEX_MODELS, 'codex')), `${doc} no longer pairs the Codex names with codex`);
+    assert.doesNotMatch(text, /only `?haiku`? (?:or|and) `?opus/u, `${doc} says only haiku and opus are valid`);
+  }
+  assert.match(readFileSync(new URL('../../../docs/project/mc/mc-project.md', import.meta.url), 'utf8'), /mc project new .*\[--tool codex\]/u);
 });

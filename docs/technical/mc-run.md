@@ -658,19 +658,27 @@ step was `sonnet` at `medium` with `opus` as advisor, because opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
 on `claude-opus-5` at this machine's `effortLevel: high` — and the advisor is
 the strong model at the decision points rather than throughout. The defaults
-are `SESSION_DEFAULTS` in `run-plan.js`.
+are `SESSION_DEFAULTS` in `run-plan.js`. They are claude's: a codex plan has
+no row, so a codex step runs on the model it names, and with none named the
+tool picks its own. `mc project send` gives a codex plan's review step
+`gpt-6.1-sol` at `high` (`CODEX_REVIEW_RUNNER`).
 
-- **`tool:`** — `claude` by default, resolved through `resolveLaunch`. A tool
-  that is not installed is a block with the adapter's own hint.
+- **`tool:`** — `claude` by default, resolved through `resolveLaunch`. `codex`
+  is the other: the same step, run by `codex exec`. A tool that is not
+  installed is a block with the adapter's own hint.
 - **`model:`** — `opus` by default for a step, and
-  that default belongs to claude alone. They are claude aliases; handed to
-  `codex -m` one names a model that tool does not have and the step dies on
-  its argument list before reading a word of the plan. A plan on another tool
-  that names no model gets none, and the tool picks its own.
-- **`effort:`** — `low`, `medium`, `high`, `xhigh` or `max`, passed as
-  `--effort`. Without it claude falls back to the machine's own
-  `effortLevel`, which is why the step default names one. Anything else is
-  refused by the schema.
+  that default belongs to claude alone. The names are per tool: `haiku` and
+  `opus` on claude, `gpt-6.1-sol` and `gpt-6.1-luna` on codex. The schema
+  refuses a name on the other tool (`pairingProblem`), so a claude alias never
+  reaches `codex -m`. A codex name is passed as `codex exec -m <name>`, and
+  whether the installed, signed-in codex CLI has it is codex's to decide. A
+  plan on another tool that names no model gets none, and the tool picks its own.
+- **`effort:`** — `low`, `medium`, `high`, `xhigh` or `max`, the same words on
+  both tools. On claude it is passed as `--effort`. Without it claude falls back
+  to the machine's own `effortLevel`, which is why the step default names one.
+  On codex it is passed as `-c model_reasoning_effort=<level>`, on new and
+  resumed launches alike; codex's own default applies when none is named.
+  Anything else is refused by the schema.
 - **`advisor:`** — a model name passed as `--advisor`, or `off` for none;
   a step has none by default since 2026-09-25, so a plan back on `sonnet`
   names one if it wants one. An
@@ -695,8 +703,9 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   and killed only if the question gets no answer. Nothing is killed for how
   long it has run ([ruling 18](../project/mc/rulings.md)).
 
-Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
-claude adapter), so a codex session gets neither, named or not. A step's
+`advisorArgs` is claude's flag alone, so a codex session never gets an advisor.
+Each adapter has its own `effortArgs`: claude's gives `--effort`, codex's gives
+`-c model_reasoning_effort=<level>`, and neither tool is handed the other's. A step's
 `runner` is its author's, like its `instruction`, and nothing in the runner
 checks that a session left it alone.
 
@@ -766,7 +775,7 @@ claude  -p [--model …] [--effort …] [--advisor …] \
         --tools Bash,Read,Edit,Write,Grep,Glob --strict-mcp-config \
         --settings <env> --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
-codex   exec --json --sandbox danger-full-access [-m …] \
+codex   exec --json --sandbox danger-full-access [-m …] [-c model_reasoning_effort=…] \
         -c project_doc_max_bytes=0 -c instructions=<instructions> <prompt>
 ```
 
