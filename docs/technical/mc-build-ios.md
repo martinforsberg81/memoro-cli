@@ -74,12 +74,25 @@ names what a person does, and stops.
 
 A TestFlight build number comes from App Store Connect, never from a file.
 After the preflights, the asking process runs the declaration's `list_builds`
-command in memoro's checkout. memoro's script reads its own App Store Connect
-credentials; mc reads no key. The command's `builds[].version` values are
-parsed as integers, and the build is `max + 1` (`listBuilds`). When the call
-fails, the verb exits 1 with
-`App Store Connect did not answer (<first stderr line>) — no build number can be chosen`.
-It does not fall back to anything.
+command as `origin/main` has it, whatever memoro's checkout stands on
+(`atRev`): the script's top directory (`scripts/`) is written out from
+`origin/main` with `git archive` into a temporary directory, `node_modules`
+there links to the checkout's, and the script runs from that copy with the
+checkout's `scripts/` as its working directory. So `origin/main`'s script
+gets `origin/main`'s helpers and the checkout's installed packages. Piping
+only the script on stdin, as mc did before, ran it against the checkout's
+helpers: on 2026-10-26 the checkout was 57 commits behind and lacked
+`scripts/lib/dev-vars-path.mjs`, and the script stopped at its import.
+
+memoro's script reads its own App Store Connect credentials; mc reads no key.
+The command's `builds[].version` values are parsed as integers, and the build
+is `max + 1` (`listBuilds`). When the call fails, the verb exits 1 with
+`App Store Connect's build numbers could not be read (<reason>) — no build number can be chosen`,
+where the reason is the first output line that names an error (`reasonLine`).
+Node prints where it threw before what it threw, so the first line alone can be
+`node:internal/modules/esm/resolve:274`. The sentence does not say App Store
+Connect failed to answer, because the script can fail before it asks. It does
+not fall back to anything.
 
 The number is asked for once more just before the upload. A number that has
 appeared in App Store Connect meanwhile fails the build at `number-taken`. The

@@ -28,10 +28,10 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
+  existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 
 import { stripAnsi } from '../lib/prompt.js';
 import { IOS_BUILD_MODE } from './await-deploy.js';
@@ -467,53 +467,105 @@ export function secretsEnv(env = process.env, checkout = null) {
 }
 
 /**
+ * The line of a failed command's output that says why: Node prints where it
+ * threw before the error itself, so a first line can be
+ * `node:internal/modules/esm/resolve:274`, which names nothing. The first
+ * line that starts with an error's name, else the first line.
+ */
+export function reasonLine(text) {
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  return lines.find((line) => /^(?:[A-Z]\w*)?Error\b/u.test(line)) || lines[0] || '';
+}
+
+/**
  * The build numbers App Store Connect has, asked through the declaration's
  * `list_builds` in memoro's checkout — its script reads the credentials
  * itself from the file `secretsEnv` names; mc reads no key. `{ ok: true,
  * versions, next }` with `next` one more than the highest, or `{ ok: false,
  * line }`. Never a file to fall back on: a number from anywhere else is one
- * two binaries could share.
+ * two binaries could share. A failure says the numbers could not be read,
+ * not that App Store Connect did not answer: the script can fail before it
+ * asks.
  */
 export function listBuilds({
-  repoPath, checkout = repoPath, declaration, rev = null, run = runSync, git = gitRead, env = process.env,
+  repoPath, checkout = repoPath, declaration, rev = null, run = runSync, git = gitRead, exportTree = exportAtRev,
+  env = process.env,
 }) {
-  const refuse = (why) => ({ ok: false, line: `App Store Connect did not answer (${why}) — no build number can be chosen` });
-  const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git });
+  const refuse = (why) => ({ ok: false, line: `App Store Connect's build numbers could not be read (${why}) — no build number can be chosen` });
+  const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git, exportTree });
   if (command.missing) return refuse(command.missing);
-  const r = run(command.argv, { cwd: command.cwd, input: command.input, env: secretsEnv(env, checkout), timeoutMs: 2 * MIN });
-  if (r.code !== 0) return refuse(String(r.error || r.stderr || r.stdout || '').trim().split('\n')[0].trim() || `exit ${r.code}`);
-  let json;
-  try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
-  if (!Array.isArray(json?.builds)) return refuse(`${declaration.list_builds.join(' ')} printed no builds[]`);
-  const versions = json.builds.map((b) => Number.parseInt(String(b?.version ?? ''), 10)).filter(Number.isInteger);
-  return { ok: true, versions, next: Math.max(0, ...versions) + 1 };
+  try {
+    const r = run(command.argv, { cwd: command.cwd, env: secretsEnv(env, checkout), timeoutMs: 2 * MIN });
+    if (r.code !== 0) return refuse(reasonLine(r.error || r.stderr || r.stdout) || `exit ${r.code}`);
+    let json;
+    try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
+    if (!Array.isArray(json?.builds)) return refuse(`${declaration.list_builds.join(' ')} printed no builds[]`);
+    const versions = json.builds.map((b) => Number.parseInt(String(b?.version ?? ''), 10)).filter(Number.isInteger);
+    return { ok: true, versions, next: Math.max(0, ...versions) + 1 };
+  } finally {
+    if (command.dir) rmSync(command.dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `path` as `rev` has it, written under `dir`: `git archive` into `tar -x`.
+ * Null when it was written, else the line that says why not.
+ */
+export function exportAtRev(repoPath, rev, path, dir) {
+  const archive = spawnSync('git', ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
+    timeout: 60_000, maxBuffer: 1024 * 1024 * 1024,
+  });
+  if (archive.error || archive.status !== 0) {
+    return `git archive ${rev} ${path}: ${reasonLine(archive.error?.message || String(archive.stderr || '')) || `exit ${archive.status}`}`;
+  }
+  const tar = spawnSync('tar', ['-x', '-C', dir], { input: archive.stdout, timeout: 60_000 });
+  if (tar.error || tar.status !== 0) {
+    return `tar -x: ${reasonLine(tar.error?.message || String(tar.stderr || '')) || `exit ${tar.status}`}`;
+  }
+  return null;
 }
 
 /**
  * A declared `node <script> …`, run as `rev` has the script rather than as
  * memoro's working tree does. The declaration is read from `origin/main`, but
- * the checkout is Martin's and can stand on any branch: on 2026-10-18 it was
- * `camera-test`, 23 commits behind, whose `asc-list-builds.mjs` had no
- * `--json`. The source goes in on stdin, with the script's own directory as
- * the cwd so its packages and relative imports resolve as they would from the
- * file. Anything that is not `node <relative path>` runs as declared.
+ * the checkout is Martin's and can stand on any branch or behind: on
+ * 2026-10-18 it was `camera-test`, 23 commits behind, whose
+ * `asc-list-builds.mjs` had no `--json`; on 2026-10-26 it was `main`, 57
+ * behind, without the `scripts/lib/dev-vars-path.mjs` that origin/main's
+ * script imports. Piping the script alone on stdin, as this once did, ran
+ * main's script against the checkout's own helpers.
  *
- * The source is read from `repoPath`, where git runs; the directory is
+ * So the script's whole top directory (`scripts/`) is written out as `rev`
+ * has it, into a directory of its own, with `node_modules` linked to the
+ * checkout's for the packages — `rev`'s script, `rev`'s relative imports,
+ * the checkout's install. The cwd stays the script's directory in the
+ * checkout, where a script looking for the repository finds it. `dir` is
+ * the directory to remove afterwards. Anything that is not
+ * `node <relative path>` runs as declared.
+ *
+ * The tree is read from `repoPath`, where git runs; the packages are
  * `checkout`'s, memoro's working tree on main (repos.js), since a bare
- * repository has no files to stand in. Without one it refuses in words.
+ * repository has none. Without one it refuses in words.
  */
-export function atRev(argv, { repoPath, checkout = repoPath, rev = null, git = gitRead }) {
+export function atRev(argv, {
+  repoPath, checkout = repoPath, rev = null, git = gitRead, exportTree = exportAtRev,
+}) {
   if (!checkout) return { missing: 'no memoro checkout to run it in — ~/mc/self/memoro is missing' };
   if (!rev || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || isAbsolute(argv[1])) {
-    return { argv, cwd: checkout, input: undefined };
+    return { argv, cwd: checkout };
   }
-  const source = git(repoPath, ['show', `${rev}:${argv[1]}`]);
-  if (source === null) return { missing: `${argv[1]} is not on ${rev}` };
-  return {
-    argv: ['node', '--input-type=module', '-', ...argv.slice(2)],
-    cwd: join(checkout, dirname(argv[1])),
-    input: `${source}\n`,
-  };
+  const script = normalize(argv[1]);
+  if (script.startsWith('..')) return { argv, cwd: checkout };
+  if (git(repoPath, ['cat-file', '-e', `${rev}:${script}`]) === null) return { missing: `${script} is not on ${rev}` };
+  const dir = mkdtempSync(join(tmpdir(), 'mc-ios-script-'));
+  const why = exportTree(repoPath, rev, script.split('/')[0], dir);
+  if (why) {
+    rmSync(dir, { recursive: true, force: true });
+    return { missing: why };
+  }
+  const modules = join(checkout, 'node_modules');
+  if (existsSync(modules)) symlinkSync(modules, join(dir, 'node_modules'), 'dir');
+  return { argv: ['node', join(dir, script), ...argv.slice(2)], cwd: join(checkout, dirname(script)), dir };
 }
 
 /** `plutil -convert json` of a plist, parsed; throws when it will not convert. */
@@ -850,7 +902,8 @@ export async function buildIos(job, deps = {}) {
     at = 'number-taken';
     const checkout = job.checkout === undefined ? repoPath : job.checkout;
     const again = (deps.listBuilds || listBuilds)({
-      repoPath, checkout, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
+      repoPath, checkout, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead,
+      exportTree: deps.exportTree || exportAtRev, env,
     });
     if (!again.ok) return fail('number-taken', again.line);
     if (again.versions.includes(number)) {
