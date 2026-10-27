@@ -118,7 +118,11 @@ export async function runDocsMerge({
   // The tests that read the documents, on a candidate of this head with its base
   // merged in. A red, or a measurement that could not run, is not merged.
   const measured = await measure({ repoPath, pr, headSha: head, headRef: report.branch, base: report.pr.base, say: onProgress });
-  report.measured = { files: measured.files ?? 0, red: measured.red ?? [], seconds: measured.seconds ?? null, reason: measured.reason ?? null };
+  report.measured = { ...measured };
+  if (!measured.ok) {
+    report.red_detail = measured.log || null;
+    report.red_files = measured.red_files || [];
+  }
   if (!measured.ok) {
     return measured.stopped_at === 'red'
       ? finish('red', `#${pr}: ${measured.reason} — not merged; fix the documents and push`)
@@ -153,5 +157,13 @@ export function docsMergeLines(report) {
       `mc: merged #${report.pr.number} into ${report.merged_into} as ${String(report.merge_commit || '').slice(0, 7)} (squash, docs only: ${files}${tests})`,
     ];
   }
-  return [`mc: NOT merged — ${report.reason}`];
+  return [
+    `mc: NOT merged — ${report.reason}`,
+    ...(report.measured?.red_tests || []).slice(0, 5).flatMap((test) => [
+      `  ${test.at || test.file || test.name}`,
+      ...(test.error || []).map((line) => `    ${line}`),
+    ]),
+    ...(report.measured?.red_files?.length ? [`re-run: mc gate ${report.measured.red_files.join(' ')}`] : []),
+    ...(report.measured?.log ? [`whole output: ${report.measured.log}`] : []),
+  ];
 }

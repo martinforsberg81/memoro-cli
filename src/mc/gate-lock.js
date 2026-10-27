@@ -7,51 +7,23 @@
  * floor was invented to absorb. So one round runs, and the second is told to
  * wait.
  *
- * ## Why this is a file and a pid and nothing else
+ * Each lane uses an atomic directory claim owned by a live process, plus a
+ * JSON status file for existing readers. Concurrent claimants cannot both
+ * acquire it. A dead process's claim can be reclaimed; reservation errors
+ * refuse the run. There is no expiry that could mistake a slow run for a
+ * dead one.
  *
- * What was here before was "the suite right": a lease with a holder, an
- * errand, a liveness verdict derived from the work board, a `--force`
- * release, an inbox message to whoever held it, a row on the status page, and
- * four verbs of its own (`mc suite run|claim|release|who`). Four hundred lines
- * of vocabulary for "one at a time", and a name — *the suite right* — that
- * nobody could say out loud without explaining it.
- *
- * Martin, 2026-08-30: *"Svit-rätten är ett mycket märkligt namn/begrepp. Det
- * kastar vi ut. Skapa ingen konstig avancerad kod för det. Vi använder enbart
- * mc test för de stora testerna. En instans kan köra åt gången."*
- *
- * The big suites have exactly one door — the gate round, reached by `mc test`
- * and `mc merge` — so the guard belongs on that door and nowhere else. One
- * file, one pid, two functions:
- *
- *   - taken, and the pid is alive → refused, and told which round it is;
- *   - taken, and the pid is gone → that round was killed; take it;
- *   - not taken → take it.
- *
- * There is no expiry, because there is no clock that can tell a slow round
- * from a dead one — a round is *supposed* to take minutes. Asking the
- * operating system whether the pid exists is the only honest question, and it
- * is one line.
- *
- * It never blocks anything but a gate round. A person running `npm test` in
- * their own worktree is not asking mc's permission and is not refused it.
- *
- * ## One round per lane (ruling 34, 2026-10-10)
- *
- * "One at a time" was about the cores, and only one repository pins them:
- * memoro's suite is seven lanes of node for five minutes. memoro-cli's is one
- * `node --test` over its own tree in about a minute, with no `npm ci` and no
- * browser — and on 2026-10-09/10 every one of those minutes waited behind a
- * memoro round of three to fifteen. So there are two locks, one per lane
- * (`GATE_LANES`): two rounds in one lane still exclude each other, and a
- * heavy and a light round may run side by side. The heavy lane keeps the old
- * file, so a round on old code and one on new code still see each other.
+ * Code merges, documents' tests and local gates all reserve their declared
+ * lane. Heavy and light rounds may run side by side, but two rounds in the
+ * same lane exclude each other. The status files keep their previous names;
+ * old workers should finish before an update starts new ones.
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
+import { readClaim, releaseClaim, takeClaim } from './resource-claim.js';
 
 /**
  * The lanes a gate round runs in, one round at a time in each. They exist
@@ -68,8 +40,10 @@ export function gateLockPath(root = mcHome(), lane = 'heavy') {
 
 /** The round running right now in this lane, or null. A file that will not parse is nobody. */
 export function runningRound({ root = mcHome(), alive = isAlive, lane = 'heavy' } = {}) {
+  const claim = readClaim(`${gateLockPath(root, lane)}.claim`);
   let raw = null;
-  try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { return null; }
+  try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { /* a claim may precede its status file */ }
+  if (claim && alive(claim.pid)) raw = raw?.pid === claim.pid ? raw : claim;
   if (!Number.isFinite(raw?.pid)) return null;
   // A round that was killed left this behind. It is not a holder; it is
   // litter, and saying so is the whole of the reaping this needs.
@@ -90,24 +64,30 @@ export function runningRounds({ root = mcHome(), alive = isAlive } = {}) {
  * and it is the other round's own words rather than a guess.
  *
  * `pid` is the holder, this process unless said otherwise: a session's `mc
- * gate` takes the lane for the shell that runs its tests (`gate-lane-wait.js`),
- * and the lock is litter the moment that shell is gone.
+ * gate` worker owns the lane while its tests run, and the lock is litter
+ * once that worker is gone.
  */
 export function takeGateLock({
   repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane = 'heavy', pid = process.pid,
 } = {}) {
-  const running = runningRound({ root, alive, lane });
-  if (running) return { ok: false, running };
   const mine = {
     pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
   };
+  const path = `${gateLockPath(root, lane)}.claim`;
+  const claim = takeClaim(path, mine, { alive });
+  if (!claim.ok) return { ...claim, ...(claim.running ? { running: { ...claim.running, lane } } : {}) };
   try {
+    // Respect a round started by the previous mc version during an update.
+    let legacy = null;
+    try { legacy = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { /* absent */ }
+    if (Number.isInteger(legacy?.pid) && alive(legacy.pid)) {
+      releaseClaim(path, claim.marker);
+      return { ok: false, running: { ...legacy, lane } };
+    }
     writeJsonAtomic(gateLockPath(root, lane), mine, { mode: 0o600 });
-  } catch {
-    // A lock that cannot be written must not stop the round it was meant to
-    // protect: the worst case is the contention it was avoiding, and refusing
-    // to measure anything is worse than measuring it slowly.
-    return { ok: true, took: false, mine };
+  } catch (error) {
+    releaseClaim(path, claim.marker);
+    return { ok: false, error: `cannot write gate reservation: ${error.message}` };
   }
   return { ok: true, took: true, mine };
 }
@@ -120,12 +100,16 @@ export function takeGateLock({
  * which is the one way a lock this simple could do real damage.
  */
 export function releaseGateLock({ root = mcHome(), lane = 'heavy', pid = process.pid } = {}) {
+  const path = `${gateLockPath(root, lane)}.claim`;
+  const claim = readClaim(path);
+  if (claim && claim.pid !== pid) return false;
   try {
     const raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8'));
     if (raw?.pid !== pid) return false;
     rmSync(gateLockPath(root, lane), { force: true });
     return true;
-  } catch { return false; }
+  } catch { return Boolean(claim?.pid === pid); }
+  finally { if (claim?.pid === pid) releaseClaim(path, claim.marker); }
 }
 
 /**

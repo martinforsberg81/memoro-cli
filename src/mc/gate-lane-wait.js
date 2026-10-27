@@ -41,15 +41,18 @@ function holder(running) {
  * waits for and once that it starts. Resolves with how many polls it slept.
  */
 export async function takeLane({
-  lane = 'heavy', pid, repo = null, root = mcHome(),
+  lane = 'heavy', pid = process.pid, repo = null, root = mcHome(), mode = SESSION_GATE_MODE,
   take = takeGateLock,
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   write = (line) => process.stdout.write(line),
+  signal,
 } = {}) {
   let polls = 0;
   for (;;) {
-    const held = take({ repo, pr: null, mode: SESSION_GATE_MODE, root, lane, pid });
+    if (signal?.aborted) throw new Error('waiting for the gate lane was interrupted');
+    const held = take({ repo, pr: null, mode, root, lane, pid });
     if (held.ok) break;
+    if (held.error) throw new Error(held.error);
     if (!polls) write(`mc gate: waiting for ${holder(held.running)} in the ${lane} lane — the tests start when it is done\n`);
     polls += 1;
     await sleep(LANE_POLL_MS);

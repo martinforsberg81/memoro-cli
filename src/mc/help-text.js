@@ -291,9 +291,9 @@ IN FULL
                                     mc.holder whose pid is gone. Unlabelled
                                     ones are reported and never removed
   mc gate <test files…> [--test-name-pattern <p>] [--json] [--budget <s>]
-                                    The named test files (at most 30) with this
+                                    The named test files with this
                                     repository's node --test flags, run in its
-                                    gate lane: the shell waits while a merge
+                                    gate lane: the worker waits while a merge
                                     round, a deploy, an iOS build or another
                                     session's gate holds the lane, so no two
                                     runs share its cores. The whole output in a
@@ -304,11 +304,11 @@ IN FULL
                                     past it, RUNNING and exit 3 — the tests run
                                     on, and --wait prints the verdict from the
                                     same log. One gate per worktree
-  mc gate [--base <ref>]           The test files this branch adds or changes
-                                    against origin/main; none, and it says what
-                                    to name. There is no whole gate: --full is
-                                    refused — the merger measures the pull
-                                    request once, in its lane
+  mc gate [--base <ref>]           Affected tests and command gates selected
+                                    from all changes against origin/main,
+                                    including staged, unstaged and untracked
+                                    files. Uses the repository selector and
+                                    bounded test runner; --full is refused
   mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]

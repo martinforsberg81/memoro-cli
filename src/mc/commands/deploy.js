@@ -845,6 +845,7 @@ export async function holdHeavyLane(job, deps = {}) {
     await waitForGate(job, deps);
     const held = take({ repo: mode, pr: null, mode, root, lane: 'heavy' });
     if (held.ok) return held.took;
+    if (held.error) throw new Error(held.error);
   }
 }
 

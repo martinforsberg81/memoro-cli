@@ -16,16 +16,19 @@
  * answer is reused (`selectFiles` from repo-gate.js), not copied, so the two
  * cannot disagree about what a selection is.
  */
-import { rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { runShell, runTool } from './child-async.js';
 import { declarationFor } from './repo-gate-table.js';
 import { realTests, selectFiles } from './repo-gate.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
-import { workGatePath } from './paths.js';
+import { mcHome, workGatePath } from './paths.js';
+import { takeLane } from './gate-lane-wait.js';
+import { releaseGateLock } from './gate-lock.js';
 import { repoFileSlug } from './repo-snapshot.js';
-import { redNames, tapTotals } from './tap-red.js';
+import { redFiles, redNames, redTests, tapTotals } from './tap-red.js';
 
 const PREFIX = "documents' tests: ";
 
@@ -46,9 +49,11 @@ function trim(value) {
 export async function measureDocs({
   repoPath, pr, headSha, headRef, base, env = process.env, say = () => {}, deps = {},
 }) {
+  const controller = new AbortController();
+  const interrupted = () => controller.abort();
   const io = {
     git: deps.git ?? ((args, { cwd }) => runTool('git', args, { cwd, env })),
-    shell: deps.shell ?? ((command, { cwd }) => runShell(command, { cwd, env })),
+    shell: deps.shell ?? ((command, { cwd }) => runShell(command, { cwd, env, signal: controller.signal, timeoutMs: 60 * 60_000 })),
     declaration: deps.declaration ?? declarationFor,
     select: deps.select ?? selectFiles,
     tests: deps.tests ?? realTests,
@@ -56,6 +61,9 @@ export async function measureDocs({
     cacheDir: deps.cacheDir ?? prepareCacheDir({ repoPath, env }),
     gateDir: deps.gateDir ?? workGatePath(env),
     clock: deps.clock ?? Date.now,
+    takeLane: deps.takeLane ?? takeLane,
+    releaseLane: deps.releaseLane ?? releaseGateLock,
+    outputDir: deps.outputDir ?? join(mcHome(env), 'gate-output'),
   };
   const started = io.clock();
   const note = (line) => say(`${PREFIX}${line}`);
@@ -67,18 +75,33 @@ export async function measureDocs({
   }
 
   const dir = join(io.gateDir, repoFileSlug(repoPath), `docs-${pr}`);
+  const lane = declared.declaration.gate_lane || 'heavy';
+  const reservation = { root: mcHome(env), lane, repo: repoFileSlug(repoPath), mode: 'docs-gate' };
+  const logPath = join(io.outputDir, `docs-${repoFileSlug(repoPath)}-${pr}-${randomUUID()}.log`);
+  let holding = false;
+  const save = (text) => { mkdirSync(io.outputDir, { recursive: true }); appendFileSync(logPath, String(text || '')); };
   const removeWorktree = async () => {
     try { await io.git(['worktree', 'remove', '--force', dir], { cwd: repoPath }); } catch { /* not there to remove */ }
   };
 
   let result;
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, interrupted);
   try {
+    await io.takeLane({ ...reservation, signal: controller.signal, write: (line) => note(line.trimEnd()) });
+    holding = true;
     result = await measure();
+  } catch (error) {
+    result = { ok: false, stopped_at: holding ? 'measurement' : 'reservation', reason: error.message };
   } finally {
-    await removeWorktree();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      if (holding) {
+        try { await removeWorktree(); rmSync(dir, { recursive: true, force: true }); }
+        finally { io.releaseLane(reservation); }
+      }
+    } finally { for (const signal of ['SIGTERM', 'SIGINT']) process.removeListener(signal, interrupted); }
   }
-  return finish(result);
+  if (controller.signal.aborted) result = { ...result, ok: false, stopped_at: 'interrupted', reason: 'documents test measurement interrupted' };
+  return finish({ ...result, log: logPath });
 
   /** The candidate's life: made, prepared, selected, run. Cleaned up by the caller. */
   async function measure() {
@@ -103,32 +126,42 @@ export async function measureDocs({
       }
     }
 
-    const sel = await io.select({ command: select, cwd: dir, env, say: note });
+    const sel = await io.select({ command: select, cwd: dir, env, signal: controller.signal, say: note });
     if (!sel.ok) return { ok: false, stopped_at: 'selection', reason: sel.reason };
     note(`${sel.files.length} test file(s) and ${(sel.commands || []).length} command gate(s) drawn for #${pr}`);
 
     const failed = [];
+    const commandResults = [];
     for (const command of sel.commands || []) {
       const invocation = `npm run ${command.packageScript}${command.passBaseRef ? ` -- --base-ref origin/${base}` : ''}`;
       const run = await io.shell(invocation, { cwd: dir });
-      if (run.status !== 0 && run.status !== command.unavailableExitCode) failed.push(command.id || command.packageScript);
+      save(`$ ${invocation}\n${run.stdout || ''}${run.stderr || ''}\n`);
+      const ok = run.status === 0 || (command.unavailableExitCode != null && run.status === command.unavailableExitCode);
+      commandResults.push({ command: invocation, exit: run.status, ok });
+      if (!ok) failed.push(command.id || command.packageScript);
     }
 
     let red = [];
+    let details = [];
+    let failingFiles = [];
     if (sel.files.length) {
-      const run = await io.tests({ cwd: dir, files: sel.files, flags, env, classes: sel.classes || {} });
+      const run = await io.tests({ cwd: dir, files: sel.files, flags, env, signal: controller.signal, classes: sel.classes || {} });
+      save(`${run.tap || ''}\n${run.stderr || ''}`);
       if (run.timedOut) return { ok: false, stopped_at: 'suite', reason: "the documents' tests ran past their time" };
       if (!tapTotals(run.tap).finished) {
         return { ok: false, stopped_at: 'suite', reason: "the documents' tests never reached their summary" };
       }
       red = redNames(run.tap);
+      details = redTests(run.tap, sel.files, { cwd: dir });
+      failingFiles = redFiles(run.tap, sel.files);
+      if (run.error || (run.code != null && run.code !== 0 && !red.length)) return { ok: false, stopped_at: 'suite', reason: run.error || `the documents' tests exited ${run.code}`, command_results: commandResults };
     }
 
     if (red.length || failed.length) {
       const parts = [];
       if (red.length) parts.push(`${red.length} test(s) red: ${red.slice(0, 5).join(', ')}`);
       if (failed.length) parts.push(`command gate(s) failed: ${failed.join(', ')}`);
-      return { ok: false, stopped_at: 'red', reason: parts.join('; '), files: sel.files.length, red, commands: failed };
+      return { ok: false, stopped_at: 'red', reason: parts.join('; '), files: sel.files.length, red, commands: failed, red_tests: details, red_files: failingFiles, command_results: commandResults };
     }
     return { ok: true, stopped_at: null, reason: null, files: sel.files.length, red: [], commands: [] };
   }

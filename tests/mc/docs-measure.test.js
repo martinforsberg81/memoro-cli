@@ -7,7 +7,7 @@
  * and the TAP reading have their own tests; this one only needs their answers.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -54,6 +54,9 @@ function fakes(log) {
     cacheDir: join(GATE, 'cache'),
     gateDir: GATE,
     clock: () => 0,
+    takeLane: async () => {},
+    releaseLane: () => {},
+    outputDir: join(GATE, 'output'),
   };
 }
 
@@ -70,6 +73,42 @@ function measure(log, overrides = {}) {
 }
 
 describe('measureDocs — the tests the selector draws for a documents-only pull request', () => {
+  it('reserves its declared lane before preparation and releases it after cleanup, even on failure', async () => {
+    const log = recorder();
+    const events = [];
+    const result = await measure(log, {
+      declaration: () => ({ ok: true, declaration: { select: 'select', gate_lane: 'light' } }),
+      takeLane: async ({ lane }) => { assert.equal(lane, 'light'); events.push('reserved'); },
+      select: async () => { assert.deepEqual(events, ['reserved']); throw new Error('selector crashed'); },
+      releaseLane: ({ lane }) => { assert.equal(lane, 'light'); assert.equal(existsSync(DIR), false); events.push('released'); },
+    });
+    assert.equal(result.ok, false);
+    assert.deepEqual(events, ['reserved', 'released']);
+  });
+
+  it('keeps assertion diagnostics and the raw output after removing the candidate', async () => {
+    const log = recorder();
+    const tap = `TAP version 13
+not ok 1 - a link resolves
+  ---
+  location: 'tests/docs/doc-links.test.js:12:3'
+  failureType: 'testCodeFailure'
+  error: 'missing docs/target.md'
+  ...
+1..1
+# tests 1
+# pass 0
+# fail 1
+`;
+    const result = await measure(log, { tests: async () => ({ tap, code: 1 }) });
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(DIR), false);
+    assert.match(readFileSync(result.log, 'utf8'), /missing docs\/target.md/u);
+    assert.deepEqual(result.red_files, [FILES[0]]);
+    assert.equal(result.red_tests[0].file, FILES[0]);
+    assert.match(result.red_tests[0].error.join('\n'), /missing docs\/target.md/u);
+  });
+
   it('a declaration with no select measures nothing, and makes no candidate', async () => {
     const log = recorder();
     const result = await measure(log, { declaration: () => ({ ok: true, declaration: {} }) });

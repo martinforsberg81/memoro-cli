@@ -38,11 +38,11 @@ export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, tim
  * person writes them (`npm ci`, `npm run test:msr:contract`), and splitting
  * those by hand would be a second grammar to get wrong.
  */
-export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null } = {}) {
-  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs });
+export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal } = {}) {
+  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, group: true });
 }
 
-function collect(start, { maxBuffer, timeoutMs }) {
+function collect(start, { maxBuffer, timeoutMs, signal, group = false }) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -51,15 +51,22 @@ function collect(start, { maxBuffer, timeoutMs }) {
     let error = null;
     let settled = false;
     let timer = null;
+    let escalation = null;
     const text = (chunks) => Buffer.concat(chunks).toString('utf8');
-    const settle = (status, signal) => {
+    const settle = (status, exitSignal) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve({ status: error ? null : status, signal: signal ?? null, stdout: text(out), stderr: text(err), error });
+      if (escalation) clearTimeout(escalation);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ status: error ? null : status, signal: exitSignal ?? null, stdout: text(out), stderr: text(err), error });
     };
 
     let child = null;
+    const stop = (name) => {
+      try { if (group) process.kill(-child.pid, name); else child.kill(name); } catch { /* already gone */ }
+    };
+    const onAbort = () => kill('ABORT_ERR', 'command interrupted');
     try { child = start(); } catch (thrown) {
       error = thrown;
       settle(null, null);
@@ -68,7 +75,9 @@ function collect(start, { maxBuffer, timeoutMs }) {
     const kill = (code, message) => {
       if (error) return;
       error = Object.assign(new Error(message), { code });
-      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      stop('SIGTERM');
+      escalation = setTimeout(() => stop('SIGKILL'), 1000);
+      escalation.unref?.();
     };
     // Only what fits is kept, as the synchronous spawn keeps it.
     const take = (chunks, chunk, used) => {
@@ -89,6 +98,8 @@ function collect(start, { maxBuffer, timeoutMs }) {
       if (child.pid === undefined) settle(null, null);
     });
     child.on('close', (status, signal) => settle(status, signal));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
     if (timeoutMs !== null && timeoutMs !== undefined) {
       timer = setTimeout(() => kill('ETIMEDOUT', `spawn ETIMEDOUT — still running after ${timeoutMs} ms`), timeoutMs);
     }

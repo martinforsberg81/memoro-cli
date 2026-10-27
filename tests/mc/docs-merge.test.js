@@ -63,7 +63,7 @@ describe('runDocsMerge', () => {
     assert.equal(report.ok, true);
     assert.deepEqual(seen.map(({ repoPath, pr, headSha, headRef, base }) => ({ repoPath, pr, headSha, headRef, base })), [{ repoPath: '/repo', pr: 12, headSha: 'aaaa111', headRef: 'plan/mc', base: 'main' }]);
     assert.ok(calls.findIndex((c) => c[0] === 'measure') < calls.findIndex((c) => c[1] === 'merge'), 'the tests ran before the squash');
-    assert.deepEqual(report.measured, { files: 8, red: [], seconds: 3, reason: null });
+    assert.deepEqual(report.measured, { ok: true, files: 8, red: [], seconds: 3 });
   });
 
   it('refuses a red measurement, by its reason, and does not merge', async () => {
