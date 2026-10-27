@@ -21,7 +21,7 @@ Since `project-verbs` a plan is written only through `mc project new`, `edit`,
 `criterion add`, `criterion edit`, `step add`, `step edit`, `send` and the
 explicit `amend` exception below. Until it is sent it is
 `DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
-`PLAN.json`. The verbs refuse a step whose `--model` its plan's tool does not
+`PLAN.json`. The verbs refuse a concrete step whose `--model` its plan's tool does not
 run (`haiku` or `opus` on claude, `gpt-6.1-sol` or `gpt-6.1-luna` on codex,
 `--tool codex`), the words
 `Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
@@ -117,13 +117,19 @@ carries:
   says why. A transition is `mc step <status>`, never a pull request. The
   fields stay in the file for now so a plan written today still reads; they go
   from the schema when the last reader of them does.
-- `runner` — `model` and `effort`. Every step names its `model`: `haiku` at
-  `high` effort for a narrow step with a checkable `done_when`, `opus` for one
-  that needs judgement (ruling 42, `canon/roles/_plan-writing.md`). On a codex
-  plan (`tool: codex`) the step names `gpt-6.1-sol` or `gpt-6.1-luna` instead:
-  those are Codex's models, not stand-ins for `haiku` or `opus`, and the
-  installed, signed-in codex CLI decides whether it has them. Each key
-  overrides the plan's `runner` on its own.
+- `runner` — `model` and `effort`. An ordinary step names a work class,
+  `fast` or `large` (ruling 59). At launch mc picks a candidate for the class
+  from the catalog (`mc model list`; changed with `mc model add|remove fast|large`
+  and `mc model set review`) and from the subscription capacity it has seen, on
+  included subscriptions only. The candidate's tool, model and effort are the
+  session's, and a catalog edit never rewrites a plan. A step may name a concrete
+  model instead: `haiku` at `high` for a narrow step with a checkable `done_when`,
+  or `opus` for one that needs judgement, on claude; on a codex plan (`tool: codex`)
+  `gpt-6.1-sol` or `gpt-6.1-luna`, which are Codex's models, not stand-ins for
+  `haiku` or `opus`, and the installed, signed-in codex CLI decides whether it
+  has them. Concrete models run as written (ruling 42, `canon/roles/_plan-writing.md`).
+  The routing is in [`docs/technical/mc-run.md`](../technical/mc-run.md)
+  § *Work classes and capacity*. Each key overrides the plan's `runner` on its own.
   `tool`, `check_in_minutes` and `stall_minutes` are the plan's alone and
   refused here by name.
   It is the plan author's, like `instruction`: a step session that changes its

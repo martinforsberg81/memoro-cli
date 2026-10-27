@@ -129,6 +129,18 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(parseRunArgs(['--rounds', '2']).error, /a round no longer exists/u);
   });
 
+  it('names the catalog verbs, that a class step is on the plan, and that Codex is read hourly without a turn', () => {
+    const text = DOC.replace(/\s+/gu, ' ');
+    for (const verb of ['mc model add fast|large <tool>:<model>:<effort>', 'mc model remove fast|large <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
+      assert.ok(text.includes(verb), `the doc no longer names \`${verb}\``);
+    }
+    assert.ok(text.includes('A class-routed step is on the plan under every mode'), 'the doc no longer says a class step is on the plan');
+    assert.ok(text.includes('read once an hour'), 'the doc no longer says Codex is read once an hour');
+    assert.ok(text.includes('It is never sent a thread or a turn'), 'the doc no longer says the Codex read starts no thread or turn');
+    assert.ok(text.includes('Subscription monitoring is not a hard guard against purchased ChatGPT credits'), 'the doc no longer says monitoring does not guard against purchased credits');
+    assert.ok(text.includes('Not verified live.'), 'the doc no longer says the Codex collector is not verified live');
+  });
+
   it('names the four step models on the tool that runs them, and the codex flag and effort override the runner passes', () => {
     const text = DOC.replace(/\s+/gu, ' ');
     const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;

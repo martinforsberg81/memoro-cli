@@ -660,14 +660,18 @@ on `claude-opus-5` at this machine's `effortLevel: high` — and the advisor is
 the strong model at the decision points rather than throughout. The defaults
 are `SESSION_DEFAULTS` in `run-plan.js`. They are claude's: a codex plan has
 no row, so a codex step runs on the model it names, and with none named the
-tool picks its own. `mc project send` gives a codex plan's review step
-`gpt-6.1-sol` at `high` (`CODEX_REVIEW_RUNNER`).
+tool picks its own. A class-routed step (ruling 59) takes its
+tool, model and effort from its candidate. `mc project send` gives the review
+step the `review` class, the one review candidate `mc model set review`
+configures, on either tool.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. `codex`
   is the other: the same step, run by `codex exec`. A tool that is not
   installed is a block with the adapter's own hint.
 - **`model:`** — `opus` by default for a step, and
-  that default belongs to claude alone. The names are per tool: `haiku` and
+  that default belongs to claude alone. A class step (`fast` or `large`) names
+  no model: the candidate it is routed to sets its model (*Work classes and
+  capacity*). The names are per tool: `haiku` and
   `opus` on claude, `gpt-6.1-sol` and `gpt-6.1-luna` on codex. The schema
   refuses a name on the other tool (`pairingProblem`), so a claude alias never
   reaches `codex -m`. A codex name is passed as `codex exec -m <name>`, and
@@ -1623,7 +1627,8 @@ Who pays for a claude step session is a mode Martin sets with
   credit.
 - **`auto`** — plan only: a claude step session runs on the plan's budget, as
   under `plan`. No mode moves a session to the credit; `credits`, which Martin
-  sets, is the only one that does.
+  sets, is the only one that does. A class-routed step is on the plan under
+  every mode (*Work classes and capacity*).
 
 Two files under `~/mc/runner/` (`src/mc/billing.js`): **`billing.json`** is
 Martin's — `{ mode, set }`, written by the verb, which also clears any credit
@@ -1659,6 +1664,100 @@ The next pick resumes or restarts the step on the new billing, and that resume
 is never warm: the prompt cache is per organisation and workspace, so
 `recoveryFor` treats any billing change as cold (`billing changed plan→credits,
 cold, …`) and `COLD_RESUME_MAX_TOKENS` decides resume or fresh.
+
+## Work classes and capacity (ruling 59)
+
+A step may name a work class, `fast` or `large`, instead of a model. The route
+is decided locally, before a tool is launched, from the catalog
+(`~/mc/runner/models.json`) and the capacity snapshot
+(`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
+account. The snapshot is refreshed by sessions that run anyway, and by one
+read-only Codex call an hour. `review` is a class too, but only the plan's
+review step names it, and it always takes the review candidate.
+
+**The catalog** is Martin's. `mc model` is its only writer, and the file is
+written whole or not at all:
+
+- `mc model [list] [--json]` — the candidates of each class in preference
+  order, and the review candidate, and whether they come from the file or the
+  defaults.
+- `mc model add fast|large <tool>:<model>:<effort>` — appends a candidate.
+- `mc model remove fast|large <tool>:<model>` — removes the candidate with
+  exactly that tool and model.
+- `mc model set review <tool>:<model>:<effort>` — replaces the review candidate.
+
+With no file, the defaults are: `fast`, `claude:haiku:high` then
+`codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
+`codex:gpt-6.1-sol:high`; review, `claude:opus:high`. A file that is there and
+cannot be read is refused, never quietly replaced by the defaults. A catalog
+edit never rewrites a plan.
+
+**The snapshot** is the runner's, kept apart from the catalog, so an observation
+never edits the catalog and an edit never rewrites what was observed. Per
+provider it holds the last valid observation (when it was taken, each window's
+fraction used and reset instant, the models listed where known, any refusal
+instant) and, beside it, the last failure. A failure never erases the last valid
+observation. A window whose reset has passed is expired: its usage is unknown,
+never zero.
+
+- **Claude is observed passively.** After each claude session the runner reads
+  the `rate_limit_event` windows in that session's stream and writes them
+  (`observeClaudeStream`). A refusal a session got is written as the provider's
+  refusal until its reset, or for the quota sleep when none is named
+  (`refuseProvider`). No account read and no extra turn.
+- **Codex is read once an hour**, from the chore pass (`refreshCodexDue`, every
+  `CODEX_POLL_MS`; the first pass is due when nothing has been observed). `codex
+  app-server --stdio` is sent `initialize`, then `account/rateLimits/read` and
+  `model/list`, every page of the list up to five. It is never sent a thread or a
+  turn, so no model is asked anything and no rate-limit reset is spent, and
+  `send` refuses any other method. It is bounded to 20 s and 1 MiB. Credits are
+  not read: they are not subscription headroom. A failed read keeps the last
+  valid snapshot and is said in `runner.log`.
+- **Not verified live.** The collector is tested against fixture answers. No
+  live read of the signed-in codex CLI is claimed here, so no live Codex quota
+  is claimed. The account type is inferred: a successful windows read is taken
+  as the ChatGPT entitlement, and a failed one as its absence.
+
+**The choice at launch.** `chooseCandidate` judges each candidate of the class
+at that instant:
+
+- *refused* — its provider refused, and the refusal has not passed. Never chosen.
+- *reserved* — a window in force is at 80 % or more. The last fifth is kept for
+  Martin's interactive work. Never chosen until that window resets.
+- *known* — every window in force has a read, each under 80 %. Its headroom is
+  what remains of its tightest window. The most headroom wins, and the first in
+  catalog order wins a tie.
+- *unknown* — no usable read, or a claude read more than 3 h old. Usage only
+  grows inside a window, so an old reading proves nothing about now.
+- *unavailable* (codex) — no fresh read, or the model is not listed at that effort.
+
+If no candidate is known, the first claude candidate with unknown capacity is
+bootstrapped on the included plan. That is an unknown, not proven free quota:
+the choice's basis is `bootstrap`, and its reason says so.
+
+**Credits.** A class-routed session is on the plan under every billing mode, and
+the router never chooses a credit. This project does not enable Anthropic API
+credits; that is a later, deliberate decision with limits. Codex purchased
+ChatGPT credits are out of scope, and none is configured. Subscription
+monitoring is not a hard guard against purchased ChatGPT credits being added
+while a Codex session is active: the snapshot is read hourly and at each
+session's end, so it would not see such a purchase in between. No such credits
+are currently configured.
+
+**Refusals and the wait.** A class-routed session is never switched to another
+provider while it runs. If its provider refuses it, the session is interrupted
+and not counted (its row's note ends `,rerouted`), and the next pick routes the
+step again. It resumes on the same tool and model only if that is still the
+route, and starts cold otherwise. If no candidate in the class has capacity, the
+step is skipped as `no-capacity`: it stays `ready`, it is not blocked on the
+project, and the next pick routes it again. The reason names each candidate and
+why. The chooser also returns `retry_at`, the earliest instant an answer can
+change; the runner does not act on it yet.
+
+**Audit.** A class step's `runs.tsv` row carries `class`, `tool`, `effort`, and
+`billing` (always `plan`), and `model` is the model of the candidate it was
+routed to. The session's `.json` `modelUsage` is the exact record of which models
+ran and what they used.
 
 ## What runs beside it
 

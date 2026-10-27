@@ -54,4 +54,10 @@ describe('canon/roles/_plan-writing.md names the step models and their tool', ()
     assert.doesNotMatch(role, /\breplac\w* (?:for )?`?(?:haiku|opus)/iu);
     assert.doesNotMatch(role, /\bonly `?haiku`? (?:or|and) `?opus/iu);
   });
+
+  it('names the work classes fast and large and the review model, and no longer makes Haiku the rule for every step', () => {
+    assert.ok(role.includes('`fast`') && role.includes('`large`'), 'the role no longer names the work classes fast and large');
+    assert.ok(role.includes('`mc model set review`'), 'the role no longer says review is configured with mc model set review');
+    assert.doesNotMatch(role, /Haiku is the first choice/u, 'the role still makes Haiku the first choice for every step');
+  });
 });
