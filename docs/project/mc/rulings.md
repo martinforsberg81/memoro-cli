@@ -1994,3 +1994,42 @@ criterion against the goal, close what falls short, and then land the project.
    out of such a plan (Martin: that is outside the project).
 
 The project that carries this is `project-branch`.
+
+## 59 · A step names a work class; mc routes subscriptions, not credits
+
+`ruling · 2026-10-27` · raised by Martin
+
+> "Arbetsklasser absolut. Men fördelen är att vi kan ändra efter behov; lägga
+> till och byta efter att priser mm ändras." … "Ja, set review add/remove
+> fast/large. Detta låter bra." … "jag tänker att detta inte är något som ska
+> kollas vid varje step körning utan det är någon som mc håller och kan kolla
+> t ex en gång per timme eller så." (Martin, 2026-10-26)
+
+> "Ja!" (Martin, on preferring an available subscription to credits even when
+> that changes provider) … "Nej. Användning av krediter behöver kopplas in
+> medvetet med gränser isf. just nu har jag enbart anthropic krediter som kan
+> användas." … "Ja, kör på abonnemang först." (Martin, 2026-10-26–27)
+
+1. New implementation steps name `fast` or `large`, not a provider's model.
+   These are work classes, not claims that two models have equal quality. The
+   initial candidates are Claude Haiku and Codex Luna for `fast`, Claude Opus
+   and Codex Sol for `large`; `mc model add/remove fast|large` changes each
+   class's candidates and their effort without rewriting plans. Existing plans
+   with concrete models keep their meaning.
+2. Review is one separately configured model, changed by `mc model set review`:
+   Claude Opus at high effort now. It does not inherit the implementation
+   step's provider. `mc plan` remains the tool Martin chooses when starting it.
+3. mc observes subscription capacity centrally, on roughly an hourly cadence
+   and when sessions report usage or a refusal. Starting a step reads that
+   observation locally and chooses a candidate in its class; it does not
+   query each account then. The actual tool, model, effort and billing are
+   recorded for the session. A running session is never switched between
+   providers; a refusal can affect the next launch.
+4. Automatic routing uses available **included subscriptions first**, even
+   across providers. It does not automatically spend credits. `mc run
+   --billing plan` was set on 2026-10-27 so new Claude sessions use the plan
+   while this changes. Codex paid credits are out of scope. Anthropic API
+   credits are a separate, later decision requiring a deliberate enablement
+   and limits; the present project's `auto` must not silently turn them on.
+
+The project that carries the subscription part is `subscription-model-routing`.
