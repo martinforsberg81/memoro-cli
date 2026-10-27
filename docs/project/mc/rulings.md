@@ -2067,3 +2067,20 @@ Implementation authorized: "Go!"
 profiles remain restricted, approval policy is separate, and a running session
 cannot widen its own permissions. Browser evidence is limited to requests and
 timing; physical haptics require a physical device.
+
+## One execution boundary regardless of coding tool
+
+`ruling · 2026-10-27` · `mc-tool-neutral-execution-access`
+
+**Question.** Should normal mc commands provide the same host execution access
+regardless of the selected coding tool, instead of requiring a Codex-specific
+environment variable at each launch?
+
+**Answer.** Martin: "Gör detta lika oavsett Claude/Codex eller annat verktyg."
+
+**Carried by.** The in-session unified access change. This supersedes the
+per-tool opt-in workflow in `mc-codex-explicit-full-access`. Every interactive
+launch uses one host-execution contract; adapters translate it or refuse
+unsupported access. Approval policy stays separate and external restrictions
+remain authoritative. A running session does not grant itself new access.
+Browser haptic evidence remains requests and timing, not physical sensation.
