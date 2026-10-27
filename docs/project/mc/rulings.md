@@ -2051,3 +2051,19 @@ The project that carries this is `project-branch`.
    and limits; the present project's `auto` must not silently turn them on.
 
 The project that carries the subscription part is `subscription-model-routing`.
+
+## Explicit interactive Codex full-access selection
+
+`ruling · 2026-10-27` · `mc-codex-explicit-full-access`
+
+**Question.** Should mc honor explicitly selected full execution access for
+interactive Codex sessions, without changing defaults or automatically escalating
+a failed browser launch?
+
+**Answer.** Martin: "Ja, MEN du kan inte göra riktig haptik-kontroll i en browser på en Mac."
+Implementation authorized: "Go!"
+
+**Carried by.** The in-session explicit-workspace change. Read-only and worktree
+profiles remain restricted, approval policy is separate, and a running session
+cannot widen its own permissions. Browser evidence is limited to requests and
+timing; physical haptics require a physical device.
