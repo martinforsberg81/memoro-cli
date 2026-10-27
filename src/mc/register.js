@@ -753,6 +753,8 @@ export function dropCriterion({ root, project, text, reason, read = realRead, wr
  * `merges.json`, deploys, language runs and iOS builds: `runner/projects/.lock`
  * in layout 1 (so a process on older code and one on newer still exclude each
  * other), `runner/register.lock` in layout 2 (`lockPath`).
+ * A plan amendment uses `strict: true`: it must not commit without the lock.
+ * Existing register callers retain their timeout policy.
  */
 export const LOCK_WAIT_MS = 5000;
 const LOCK_POLL_MS = 25;
@@ -761,7 +763,7 @@ export function lockPath(root) {
   return layoutVersion({ root }) === 2 ? join(root, RUNNER_HOME, 'register.lock') : join(root, RUNNER_HOME, REGISTER_DIR, '.lock');
 }
 
-export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS } = {}) {
+export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS, strict = false } = {}) {
   const path = lockPath(root);
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -774,13 +776,16 @@ export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS } =
     } catch (error) {
       if (error?.code === 'ENOENT') {
         // The directory is not there yet: the first lock makes it.
-        try { mkdirSync(dirname(path), { recursive: true }); } catch { break; }
+        try { mkdirSync(dirname(path), { recursive: true }); } catch (mkdirError) { if (strict) throw mkdirError; break; }
         continue;
       }
-      if (error?.code !== 'EEXIST') break;
+      if (error?.code !== 'EEXIST') { if (strict) throw error; break; }
       const holder = Number(realRead(path));
       if (!alive(holder)) { try { rmSync(path, { force: true }); } catch { /* raced */ } continue; }
-      if (Date.now() > deadline) break;
+      if (Date.now() > deadline) {
+        if (strict) throw new Error(`register is being written by pid ${holder} — try again`);
+        break;
+      }
       sleepSync(LOCK_POLL_MS);
     }
   }
