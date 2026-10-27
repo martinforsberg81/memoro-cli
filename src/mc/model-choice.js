@@ -5,13 +5,13 @@
  * Pure: it reads no file, spends no model turn and writes nothing, and the one
  * instant it needs is `now`, passed in. The catalog is what `readModels`
  * returns (model-config.js); the snapshot is what `readCapacity` returns
- * (model-capacity.js). Nothing here is wired into the runner yet.
+ * (model-capacity.js).
  *
- * Only subscriptions are candidates: claude on the Max plan, codex on the
- * ChatGPT plan. No credit is a candidate in any billing mode. Review is not
- * chosen: it is the catalog's one review candidate, returned as it stands —
- * unless its provider refused and the refusal has not passed, which is a
- * transient no-capacity until it does, never another model.
+ * Subscription candidates are used under plan billing. An explicit credits
+ * mode selects the first Claude candidate for a class on the API credit.
+ * Review uses the catalog's one review candidate. Under plan billing a
+ * provider refusal makes it transiently unavailable; under credits it must
+ * be an Anthropic model.
  *
  * A candidate is judged at `now` as:
  *   - refused: its provider refused and the refusal has not passed. Never chosen.
@@ -76,17 +76,20 @@ const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls
  * The candidate a class runs on.
  *
  * `{ ok: true, class, candidate, spec, basis, headroom, why }`, where `basis` is
- * `pinned` (review), `known` (the candidate with the most headroom; the first in
- * catalog order on a tie) or `bootstrap` (the first claude candidate with unknown
- * capacity, when no candidate is known).
+ * `pinned` (review on plan), `known` (the candidate with the most headroom; the
+ * first in catalog order on a tie), `bootstrap` (the first claude candidate
+ * with unknown capacity when no candidate is known), or `credits` (manual
+ * Anthropic API credits).
  *
  * `{ ok: false, transient: true, class, reason, retry_at }` when nothing can take
  * the class now. `retry_at` is the earliest instant that changes an answer (a
  * refusal passing, a window resetting), or null when none is known. Transient:
  * the step waits for it, it is not a block on the project.
  */
-export function chooseCandidate({ cls, catalog, capacity, now = new Date() }) {
+export function chooseCandidate({ cls, catalog, capacity, now = new Date(), credits = false }) {
   if (cls === REVIEW_CLASS) {
+    if (credits && catalog.review.tool === 'claude') return answer(cls, catalog.review, 'credits', null, 'manual Anthropic credits');
+    if (credits) return { ok: false, transient: true, class: cls, reason: 'the review model is not an Anthropic model', retry_at: null };
     // Never routed, so its usage is not scored and its reserve not kept; but a
     // provider that refused is refused for review too, and review waits for it.
     const until = providerAt(capacity, catalog.review.tool, now).refusal_until;
@@ -94,6 +97,11 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date() }) {
     return answer(cls, catalog.review, 'pinned', null, 'review is the catalog\'s review model, never routed');
   }
   if (!CLASSES.includes(cls)) throw new Error(`"${cls}" is not a class — fast, large or review`);
+  if (credits) {
+    const claude = catalog[cls].find((candidate) => candidate.tool === 'claude');
+    if (claude) return answer(cls, claude, 'credits', null, 'manual Anthropic credits');
+    return { ok: false, transient: true, class: cls, reason: `no Anthropic candidate is configured for ${cls}`, retry_at: null };
+  }
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   const known = judged.filter((entry) => entry.state === 'known');
   if (known.length) {

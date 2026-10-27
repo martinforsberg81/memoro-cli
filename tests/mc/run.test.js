@@ -2081,15 +2081,32 @@ test('a codex refusal on a class step is recorded against codex alone, and the s
   assert.equal(f.calls.sessions.length, 1, 'no second session while codex is refused');
 });
 
-test('a class step is on the plan whatever the billing mode says: credits are not used by class routing', async () => {
+test('manual credits select Anthropic for a class step and pass its API key', async () => {
   const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1 }) });
   f.deps.billing = { readMode: () => 'credits', readState: () => ({}), patchState: () => {} };
   f.deps.creditKey = async () => ({ ok: true, key: 'sk-test' });
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
-  assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
-  assert.ok(call.unsetEnv.includes('ANTHROPIC_API_KEY'));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tplan\n/u);
+  assert.equal(call.env.ANTHROPIC_API_KEY, 'sk-test');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tcredits\n/u);
+});
+
+test('manual credits skip a class step when the key cannot be read', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
+  f.deps.billing = { readMode: () => 'credits', readState: () => ({}), patchState: () => {} };
+  f.deps.creditKey = async () => ({ ok: false, reason: 'vault-locked' });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 0);
+});
+
+test('manual credits do not launch a class step while the Anthropic workspace limit is in force', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('large') } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
+  f.deps.billing = { readMode: () => 'credits', readState: () => ({ credits: { unusable_until: '2026-11-01T00:00:00Z', why: 'workspace API usage limit reached' } }), patchState: () => {} };
+  f.deps.creditKey = async () => { throw new Error('key should not be read while credits are blocked'); };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 0);
 });
 
 test('a concrete claude step is not routed: it runs on its own model under a refused claude, and waits out the quota as it always has', async () => {
@@ -5560,7 +5577,24 @@ const streamed = (ended) => (call) => {
 const REFUSED_429 = streamed(apiEndedSession("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }));
 const CREDIT_LOW = streamed(apiEndedSession('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.', { api_error_status: 400 }));
 
-test('auto is plan-only: a plan refusal is written and slept on as in plan, never handed to credits', async () => {
+test('a class step on manual credits stays on Anthropic and waits after the workspace limit', async () => {
+  const state = { plan: {}, credits: {} };
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: streamed(apiEndedSession('API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.', { api_error_status: 400 })), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
+  f.deps.billing = {
+    readMode: () => 'credits', readState: () => state,
+    patchState: (patch) => { state.plan = { ...state.plan, ...(patch.plan || {}) }; state.credits = { ...state.credits, ...(patch.credits || {}) }; },
+  };
+  f.deps.creditKey = async () => ({ ok: true, key: 'sk-test' });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(state.credits.unusable_until, '2026-11-01T00:00:00.000Z');
+  assert.equal(registerOf(f, 'cls').steps[0].interrupted.billing, 'credits');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 1, 'no fallback to Codex or the subscription');
+});
+
+test('retired auto value behaves as plan: a refusal is written and slept on', async () => {
   const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z', 'the refusal\'s own reset');
@@ -5572,7 +5606,7 @@ test('auto is plan-only: a plan refusal is written and slept on as in plan, neve
   assert.doesNotMatch(log, /handed/u);
 });
 
-test('auto: a refusal that named no reset is refused for QUOTA_SLEEP_MS, then resumed on the plan', async () => {
+test('retired auto value: a refusal without a reset uses QUOTA_SLEEP_MS', async () => {
   const { f, billing, calls } = onRefusal('auto', streamed(apiEndedSession('API Error: Request rejected (429)', { api_error_status: 429 })));
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 30 * 60_000).toISOString());
@@ -5644,7 +5678,7 @@ test('credits: a 429 on a credits session leaves the plan alone and is waited ou
   assert.equal(registerOf(f, 'r').steps[0].status, 'done');
 });
 
-test('auto with the credit unusable: a plan refusal is slept on as today', async () => {
+test('retired auto value with credit unusable: a plan refusal is slept on', async () => {
   const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429, { state: { credits: { unusable_until: '2026-08-30T10:00:00Z', why: 'credit balance too low' } } });
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');

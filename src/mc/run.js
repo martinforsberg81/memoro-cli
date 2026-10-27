@@ -816,8 +816,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       ? routedSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind, candidate: route.candidate })
       : sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
     // The billing the next launch would get: a session moving between the
-    // plan's login and the key's workspace never finds its cache. A routed step is on the plan.
-    const billingNow = route ? 'plan' : billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
+    // The plan login and the API key use separate prompt caches.
+    const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
     const cache = deps.role(choice.kind)?.cache || '1h';
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow, modelNow: route ? model : null });
@@ -1105,7 +1105,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
   function routeClass(cls) {
     try {
-      return chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      return chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), credits: deps.billing?.readMode?.() === 'credits' });
     } catch (error) {
       return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
     }
@@ -2331,27 +2331,32 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // Who pays for a launch, chosen at each launch and never during one
     // (step-credits, ruling 38): `billingFor` over the mode and the plan's
     // windows. Credits carries the key read from the vault for this launch
-    // alone; a key that cannot be read is a plan launch. codex is plan before
-    // the vault is asked.
+    // alone. A key that cannot be read falls back to plan for a legacy
+    // concrete step; a class step waits. Codex is plan before the vault is asked.
     const pickBilling = async () => {
-      // A class-routed session is on the plan whatever the mode says: the router
-      // never chooses a credit, and an explicit credits mode is not used by it (ruling 59).
-      if (route) return { billing: 'plan', why: 'class routing is on the plan (ruling 59)', key: null };
-      const chosen = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: launch.id, now: deps.now() });
+      const mode = deps.billing?.readMode?.();
+      if (route && (route.basis === 'credits') !== (mode === 'credits')) return { billing: 'unavailable', why: 'billing mode changed since routing', key: null };
+      const chosen = billingFor({ mode, state: deps.billing?.readState?.(), toolId: launch.id, now: deps.now() });
+      if (route?.basis === 'credits' && chosen.billing !== 'credits') return { billing: 'unavailable', why: chosen.why, key: null };
       if (chosen.billing !== 'credits') return { billing: 'plan', why: chosen.why, key: null };
       let got = null;
       try { got = deps.creditKey ? await deps.creditKey() : { ok: false, reason: 'no key reader' }; } catch { got = { ok: false, reason: 'key-unreadable' }; }
       if (!got?.ok || !got.key) {
-        say(`${name}: credits wanted (${chosen.why}) but the key could not be read (${got?.reason || 'key-unreadable'}) — plan`);
-        return { billing: 'plan', why: chosen.why, key: null };
+        say(`${name}: credits wanted (${chosen.why}) but the key could not be read (${got?.reason || 'key-unreadable'}) — ${route ? 'skip' : 'plan'}`);
+        return { billing: route ? 'unavailable' : 'plan', why: got?.reason || 'key-unreadable', key: null };
       }
       return { billing: 'credits', why: chosen.why, key: got.key };
     };
     // The billing of the launch in hand, and of the last one once it is over.
     let picked = await pickBilling();
+    if (picked.billing === 'unavailable') {
+      dropSlot();
+      abandonMerge(`Anthropic credits unavailable: ${picked.why}`);
+      return refuse('no-capacity', `Anthropic credits unavailable (${picked.why}) — skip`);
+    }
     // What a refusal says about the billing it came on: a plan refusal is
     // `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
-    // named none — which `auto` reads to move to the credit; an exhausted or
+    // named none; an exhausted or
     // rejected credit is unusable for `CREDITS_RETRY_MS`, or until the date a
     // spent workspace limit names (`creditsUntil`, ruling 45 § 1). A 429 on a
     // credits session is the API's own rate limit and touches neither. Returns
@@ -2364,10 +2369,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (quota && billing === 'plan') {
           const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
           deps.billing.patchState({ plan: { refused_until: until.toISOString() } });
-        } else if ((kind === 'credits' || kind === 'key') && billing === 'credits') {
+        } else if ((kind === 'credits' || kind === 'key' || (quota && route)) && billing === 'credits') {
           const named = creditsUntil instanceof Date;
-          const until = (named && creditsUntil.getTime() > nowMs ? creditsUntil : new Date(nowMs + CREDITS_RETRY_MS)).toISOString();
-          const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : 'API key rejected';
+          const reset = named && creditsUntil.getTime() > nowMs ? creditsUntil
+            : quota && quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset
+              : new Date(nowMs + (quota ? QUOTA_SLEEP_MS : CREDITS_RETRY_MS));
+          const until = reset.toISOString();
+          const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : kind === 'key' ? 'API key rejected' : 'API rate limit reached';
           deps.billing.patchState({ credits: { unusable_until: until, why } });
           say(`${name}: the step credit is unusable until ${until} (${why}) — \`mc run --billing ${deps.billing.readMode?.() || 'plan'}\` clears it sooner`);
         } else {
@@ -2486,6 +2494,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return attempt;
     };
     let result;
+    let creditUnavailableOnResume = false;
     // Whether the last interruption has already been waited out here, so the
     // quota pause after the row is not a second sleep on the same refusal.
     let waited = false;
@@ -2501,7 +2510,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // A class-routed session does not wait out a refusal (ruling 59): it ends
         // here, and the next pick routes around the refusal. A server error is
         // still waited out in its own lane, on the same tool and model.
-        if (route && last.interrupted !== 'server') break;
+        if (route && last.interrupted !== 'server') {
+          if (picked.billing === 'credits') noteRefusal(last, picked.billing);
+          noted = true;
+          break;
+        }
         handOver = route ? null : noteRefusal(last, picked.billing);
         noted = true;
         // A session that wrote its own end before the API cut it off has
@@ -2535,7 +2548,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         }
         // A resume is a session boundary: its billing is chosen again, and the
         // lane's file and the register say what it is now.
-        picked = await pickBilling();
+        const nextPicked = await pickBilling();
+        if (nextPicked.billing === 'unavailable') {
+          creditUnavailableOnResume = true;
+          say(`${name}: Anthropic credits unavailable before resume (${nextPicked.why}) — ready for the next pick`);
+          break;
+        }
+        picked = nextPicked;
         current.billing = picked.billing;
         writeJson(currentPath, current);
         if (stepIndex != null) {
@@ -2556,7 +2575,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     writeSessionLogs(out, result);
     // The plan's 5-hour and seven-day windows, as the stream last carried
-    // them: what `auto` reads to move to the credit (billing.js).
+    // them, for status and subscription routing.
     if (launch.id === 'claude-code' && deps.billing?.patchState) {
       const windows = planWindows(result.stdout);
       try {
@@ -2607,15 +2626,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
     let { note } = read;
     // A refusal the resume loop did not see — no session id, or a quota
-    // read off the stream of a session that wrote no result. A class-routed
-    // session has no billing hand-over: it is on the plan (ruling 59).
-    if (!noted && !route) handOver = noteRefusal(read, picked.billing);
+    // read off the stream of a session that wrote no result.
+    if (!noted) {
+      const nextBilling = noteRefusal(read, picked.billing);
+      if (!route) handOver = nextBilling;
+    }
     // What the answer says about the provider it ran on, for every session (ruling
     // 59): a quota, or a claude login that was lost. The next pick reads it.
     const provider = launch.id === 'codex' ? 'codex' : 'claude';
     const refused = read.quota || (provider === 'claude' && read.interrupted === 'login');
-    if (refused) refuseProvider(provider, read.quotaReset);
-    const rerouted = Boolean(route) && refused;
+    if (refused && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
+    const rerouted = Boolean(route) && (refused || creditUnavailableOnResume || (picked.billing === 'credits' && (read.interrupted === 'credits' || read.interrupted === 'key')));
     if (result.lingered) say(`${name}: the process did not exit within ${Math.round(RESULT_GRACE_MS / 60_000)}m of its result — killed, the result stands`);
 
     // Where the step stands now is the register's word, not this process's
@@ -2670,7 +2691,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A class-routed session refused (ruling 59): interrupted and not counted, so
       // the next pick routes it again. It resumes on the same tool and model if
       // that is still the route, and starts cold if not (recoveryFor).
-      recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: 'plan', counted: false });
+      recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: picked.billing, counted: false });
       say(`${name}: step ${choice.index + 1} left ${provider} (${settings.tool} ${settings.model}) — ready for the next pick`);
       note = `${note},rerouted`;
     } else if (read.quota) {

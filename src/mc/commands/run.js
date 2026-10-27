@@ -30,7 +30,7 @@
  *                          both. No argument prints both and what is running.
  *                          Both read live, so a running runner takes new
  *                          counts without `--update`
- *   mc run --billing [plan|credits|auto]
+ *   mc run --billing [plan|credits]
  *                          who pays for claude step sessions (billing.js);
  *                          no argument prints the mode, the plan's windows
  *                          and what the next session would run on
@@ -71,7 +71,7 @@ const USAGE = [
   `        mc run lanes [<n>] [--total <n>|none]`,
   `                                    steps in flight: <n> per repository, --total across every`,
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
-  '        mc run --billing [plan|credits|auto]',
+  '        mc run --billing [plan|credits]',
   '                                    who pays for claude step sessions; no argument prints the mode,',
   '                                    the plan\'s windows and what the next session would run on',
 ].join('\n');
@@ -157,7 +157,7 @@ function lanes(opts, deps) {
 }
 
 /**
- * `mc run --billing [plan|credits|auto]` — the mode, what the runner has seen
+ * `mc run --billing [plan|credits]` — the mode, what the runner has seen
  * of the plan's windows, any refusal or credit mark, and what the next claude
  * step session would run on; with a mode, written first.
  *
@@ -302,7 +302,7 @@ export function parseRunArgs(argv) {
     const rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
     const mode = rest.length === 1 && !String(rest[0]).startsWith('-') && at === 0 ? rest[0] : null;
     if (rest.length > 1 || (rest.length === 1 && mode === null)) {
-      return { error: '--billing is one order on its own: mc run --billing [plan|credits|auto]' };
+      return { error: '--billing is one order on its own: mc run --billing [plan|credits]' };
     }
     return { verb: 'billing', mode };
   }

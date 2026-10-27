@@ -55,6 +55,17 @@ test('large chooses from the large list', () => {
   assert.equal(won.spec, 'codex:gpt-6.1-sol:high');
 });
 
+test('manual credits choose Anthropic for fast and large regardless of subscription capacity', () => {
+  const capacity = codex(claude(empty(), win(0.95), win(0.95)), win(0.1));
+  for (const cls of ['fast', 'large']) {
+    const result = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity, now: NOW, credits: true });
+    assert.equal(result.candidate.tool, 'claude');
+    assert.equal(result.basis, 'credits');
+  }
+  const noClaude = { ...DEFAULT_CATALOG, fast: [DEFAULT_CATALOG.fast[1]] };
+  assert.match(chooseCandidate({ cls: 'fast', catalog: noClaude, capacity, now: NOW, credits: true }).reason, /no Anthropic candidate/u);
+});
+
 test('review is pinned to the catalog review, whatever the usage says', () => {
   const unread = choose(empty(), 'review');
   assert.equal(unread.ok, true);
