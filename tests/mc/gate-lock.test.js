@@ -91,13 +91,15 @@ describe('taking it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a lock it cannot write lets the round run anyway', () => {
-    // The worst case is the contention it was avoiding. A guard that refuses
-    // to measure anything because it could not write a file has made the
-    // failure it exists to prevent look mild.
-    const out = takeGateLock({ repo: 'x', pr: 1, root: '/proc/definitely/not/writable' });
-    assert.equal(out.ok, true);
-    assert.equal(out.took, false);
+  it('a lock it cannot write refuses the run', () => {
+    const root = home();
+    try {
+      const file = join(root, 'not-a-directory');
+      writeFileSync(file, 'x');
+      const out = takeGateLock({ repo: 'x', pr: 1, root: file });
+      assert.equal(out.ok, false);
+      assert.match(out.error, /cannot reserve/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

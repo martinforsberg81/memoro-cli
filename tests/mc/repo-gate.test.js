@@ -741,12 +741,15 @@ describe('one gate round at a time', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a lock it cannot write does not stop the round it was meant to protect', () => {
-    // The worst case is the contention it was avoiding. Refusing to measure
-    // anything at all is worse than measuring it slowly.
-    const out = takeGateLock({ repo: 'x', pr: 1, root: '/proc/definitely/not/writable' });
-    assert.equal(out.ok, true);
-    assert.equal(out.took, false);
+  it('a lock it cannot write stops before measuring without a reservation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-unwritable-'));
+    try {
+      const file = join(root, 'file');
+      writeFileSync(file, 'not a directory');
+      const out = takeGateLock({ repo: 'x', pr: 1, root: file });
+      assert.equal(out.ok, false);
+      assert.match(out.error, /cannot reserve/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

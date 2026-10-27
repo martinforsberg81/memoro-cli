@@ -372,7 +372,7 @@ export async function runGate({
   const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root, lane });
   if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
-    return finish('busy', describeRunning(held.running, lane));
+    return finish(held.error ? 'reservation' : 'busy', held.error || describeRunning(held.running, lane));
   }
   const ownGateLock = held.took;
   if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane on this machine`);
@@ -1325,8 +1325,8 @@ async function measure({ suite, git, cwd, command, say, is }) {
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
-export async function selectFiles({ command, cwd, env, say }) {
-  const run = await shell(command, { cwd, env });
+export async function selectFiles({ command, cwd, env, say, signal }) {
+  const run = await shell(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
   }
@@ -2185,17 +2185,19 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   if (batches.length <= 1) return runTestBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal });
   const started = Date.now();
   let tap = '';
+  let stderr = '';
   let code = 0;
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
     const ran = await runTestBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal });
     tap += ran.tap;
-    if (ran.error) return { code: -1, tap, error: ran.error };
+    stderr += ran.stderr || '';
+    if (ran.error) return { code: -1, tap, stderr, error: ran.error };
     if (!code && ran.code) code = ran.code;
-    if (ran.aborted) return { code: ran.code ?? -1, tap, aborted: true, timeoutMs };
-    if (ran.timedOut) return { code, tap, timedOut: true, timeoutMs };
+    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs };
+    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs };
   }
-  return { code, tap, timedOut: false, timeoutMs, lanes };
+  return { code, tap, stderr, timedOut: false, timeoutMs, lanes };
 }
 
 function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null } = {}) {
@@ -2234,6 +2236,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     signal?.addEventListener('abort', onAbort, { once: true });
     const settle = stopAfter(child, timeoutMs, () => { timedOut = true; });
     let tap = '';
+    let stderr = '';
     let pending = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -2244,9 +2247,9 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
       for (const line of lines) if (/^# (tests|pass|fail) /u.test(line)) onLine(line.trim());
     });
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', () => { /* the verdict is in the TAP */ });
-    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, error: error.message, aborted }); });
-    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
+    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
   });
 }
 
@@ -2257,8 +2260,8 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
  * null): memoro's selector printed 1.3 MB for #12720 and the round stopped
  * with nothing measured.
  */
-function shell(command, { cwd, env }) {
-  return runShellAsync(command, { cwd, env });
+function shell(command, options) {
+  return runShellAsync(command, options);
 }
 
 /**
@@ -2373,7 +2376,7 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, error: error.message, aborted }); });
+    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted }); });
   });
 }

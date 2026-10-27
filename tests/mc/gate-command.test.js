@@ -8,10 +8,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { MAX_FILES, run } from '../../src/mc/commands/gate.js';
+import { run } from '../../src/mc/commands/gate.js';
 
 const CHILD = 4242;
-const LOG = '/scratch/gate-20260925T100000Z.log';
+const LOG = '/scratch/gate-20260925T100000Z-test.log';
 const EXIT = `${LOG}.exit`;
 const LOCK = '/w/x/.git/mc-gate.json';
 const OLD_LOG = '/scratch/gate-20260925T095000Z.log';
@@ -36,6 +36,9 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
     cwd: '/w/x',
     env: { MC_SCRATCH: '/scratch' },
     now: () => new Date(clock),
+    id: () => 'test',
+    claim: () => ({ ok: true, marker: 'fixture' }),
+    release: () => true,
     git: (cwd, args) => {
       if (args[0] === 'merge-base') return 'mb0000';
       if (args[0] === 'diff') return changed.join('\0');
@@ -61,7 +64,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
       return { pid: CHILD, unref: () => { out.unref = true; } };
     },
     alive: (pid) => alive.has(pid),
-    declaration: () => ({ ok: true, declaration: {} }),
+    declaration: () => ({ ok: true, declaration: { select: 'node select.js --base-ref origin/main' } }),
     lane: (repoPath) => { out.lanes.push(repoPath); return lane; },
     sleep: async (ms) => {
       clock += ms;
@@ -76,11 +79,6 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
   return { out, deps, files };
 }
 
-/** The shell line the gate runs: the lane taken for `$$`, the tests, the lane given back, the exit code. */
-function laneScript(command, lane = 'heavy') {
-  return new RegExp(`^'[^']+' '[^']+gate-lane-wait\\.js' take ${lane} \\$\\$ memoro; ${command.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}; rc=\\$\\?; '[^']+' '[^']+gate-lane-wait\\.js' release ${lane} \\$\\$; echo \\$rc > '${EXIT.replace(/[.]/gu, '\\.')}'$`, 'u');
-}
-
 const oldGate = (pid, extra = {}) => ({ pid, log: OLD_LOG, started: '2026-09-25T09:50:00.000Z', lane: 'heavy', command: { run: 'node --test a.test.js', script: 'node --test', files: ['a.test.js'] }, ...extra });
 const GREEN = 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n';
 
@@ -88,8 +86,9 @@ describe('mc gate <test files…>', () => {
   it('runs the named files in the repository\'s gate lane, prints the verdict and clears the lock', async () => {
     const { out, deps, files } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 3, output: `✔ a (1ms)\n${GREEN}` });
     assert.equal(await run(['a.test.js'], deps), 0);
-    assert.equal(out.spawned[0].file, 'sh');
-    assert.match(out.spawned[0].args[1], laneScript('node --test --import ./tests/_isolate-home.mjs a.test.js'));
+    assert.equal(out.spawned[0].file, process.execPath);
+    assert.match(out.spawned[0].args[0], /session-gate-run\.js$/u);
+    assert.equal(out.spawned[0].args[1], `${LOG}.request.json`);
     assert.deepEqual(out.lanes, ['/repo/memoro']);
     assert.deepEqual([out.spawned[0].opts.cwd, out.spawned[0].opts.detached, out.spawned[0].opts.stdio], ['/w/x', true, ['ignore', 9, 9]]);
     assert.deepEqual([out.spawned[0].opts.env.CI, out.spawned[0].opts.env.FORCE_COLOR, out.spawned[0].opts.env.NO_COLOR], ['1', '0', '1']);
@@ -103,18 +102,19 @@ describe('mc gate <test files…>', () => {
   });
 
   it('a light repository\'s tests wait in the light lane', async () => {
-    const { out, deps } = harness({ tests: ['a.test.js'], lane: 'light', finishAfter: 1, output: GREEN });
+    const { out, deps, files } = harness({ tests: ['a.test.js'], lane: 'light', finishAfter: 1, output: GREEN });
     assert.equal(await run(['a.test.js'], deps), 0);
-    assert.match(out.spawned[0].args[1], laneScript('node --test a.test.js', 'light'));
+    assert.equal(JSON.parse(files.get(`${LOG}.request.json`)).reservation.lane, 'light');
   });
 
   it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
-    const { out, deps } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: GREEN });
+    const { out, deps, files } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: GREEN });
     const asked = [];
     deps.declaration = (path) => { asked.push(path); return { ok: true, declaration: { pr_tests_flags: ['--import', './tests/_helpers/browser-paths.mjs'] } }; };
     assert.equal(await run(['tests/x.test.js'], deps), 0);
-    assert.match(out.spawned[0].args[1], laneScript('node --test --import ./tests/_helpers/browser-paths.mjs tests/x.test.js'));
-    assert.deepEqual(asked, ['/repo/memoro']);
+    assert.equal(out.spawned[0].args[1], `${LOG}.request.json`);
+    assert.deepEqual(JSON.parse(files.get(`${LOG}.request.json`)).flags, ['--import', './tests/_helpers/browser-paths.mjs']);
+    assert.deepEqual(asked, ['/repo/memoro', '/repo/memoro']);
   });
 
   it('the child is told the lanes to use, unless its environment already names them', async () => {
@@ -144,9 +144,10 @@ describe('mc gate <test files…>', () => {
   });
 
   it('--test-name-pattern reaches node, and goes with named files only', async () => {
-    const named = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+    const named = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run(['a.test.js', '--test-name-pattern', 'adds up'], named.deps), 0);
-    assert.match(named.out.spawned[0].args[1], laneScript("node --test a.test.js --test-name-pattern 'adds up'"));
+    assert.equal(JSON.parse(named.files.get(`${LOG}.request.json`)).pattern, 'adds up');
+    assert.deepEqual(JSON.parse(named.files.get(`${LOG}.request.json`)).flags, ['--import', './tests/_isolate-home.mjs']);
 
     const bare = harness({ changed: ['tests/a.test.js'], tests: ['tests/a.test.js'] });
     assert.equal(await run(['--test-name-pattern', 'adds up'], bare.deps), 2);
@@ -163,23 +164,34 @@ describe('mc gate <test files…>', () => {
 });
 
 describe('mc gate, with no files named', () => {
-  it('runs the test files the branch adds or changes, and nothing else', async () => {
-    const { out, deps } = harness({ changed: ['src/a.js', 'tests/a.test.js', 'tests/gone.test.js', 'docs/x.md'], tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN });
+  it('selects from production changes, even when no test was edited', async () => {
+    const { out, deps, files } = harness({ changed: ['src/a.js', 'src/old.js', 'src/new.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run([], deps), 0);
-    assert.match(out.spawned[0].args[1], laneScript('node --test tests/a.test.js'));
+    const request = JSON.parse(files.get(`${LOG}.request.json`));
+    assert.equal(request.files, null);
+    assert.equal(request.select, "node select.js --base-ref 'origin/main' --changed-path 'src/a.js' --changed-path 'src/new.js' --changed-path 'src/old.js'");
+    assert.match(out.stdout, /GREEN/u);
   });
 
-  it('a branch that changes no test file runs nothing, and says what to name', async () => {
-    const { out, deps } = harness({ changed: ['src/a.js'] });
+  it('an unchanged worktree says nothing changed, without claiming tests passed', async () => {
+    const { out, deps } = harness();
     assert.equal(await run([], deps), 0);
-    assert.equal(out.stdout, 'NOTHING RUN — this branch adds or changes no test file against origin/main. Name the tests your change reaches: mc gate <files…>. The rest is the merger\'s measurement.\n');
+    assert.equal(out.stdout, 'NOTHING CHANGED — no changes against origin/main\n');
     assert.deepEqual(out.spawned, []);
   });
 
-  it('--base picks another base, and takes no named files', async () => {
+  it('a missing selector refuses instead of claiming an untested source change passed', async () => {
     const { out, deps } = harness({ changed: ['src/a.js'] });
+    deps.declaration = () => ({ ok: true, declaration: {} });
+    assert.equal(await run([], deps), 2);
+    assert.match(out.stderr, /no repository test selector/u);
+    assert.deepEqual(out.spawned, []);
+  });
+
+  it('--base reaches the selector and takes no named files', async () => {
+    const { deps, files } = harness({ changed: ['src/a.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run(['--base', 'origin/dev'], deps), 0);
-    assert.match(out.stdout, /against origin\/dev\./u);
+    assert.match(JSON.parse(files.get(`${LOG}.request.json`)).select, /--base-ref 'origin\/dev'/u);
     const named = harness({ tests: ['a.test.js'] });
     assert.equal(await run(['a.test.js', '--base', 'origin/dev'], named.deps), 2);
   });
@@ -195,12 +207,12 @@ describe('mc gate runs no suite', () => {
     }
   });
 
-  it(`more than ${MAX_FILES} files is refused as a suite`, async () => {
-    const many = Array.from({ length: MAX_FILES + 1 }, (_, i) => `tests/t${i}.test.js`);
-    const { out, deps } = harness({ tests: many });
-    assert.equal(await run(many, deps), 2);
-    assert.match(out.stderr, new RegExp(`${MAX_FILES + 1} test files is a suite, and the suite is the merger's`, 'u'));
-    assert.deepEqual(out.spawned, []);
+  it('a project with more than thirty tests runs in the bounded worker', async () => {
+    const many = Array.from({ length: 45 }, (_, i) => `tests/t${i}.test.js`);
+    const { out, deps, files } = harness({ tests: many, finishAfter: 1, output: GREEN });
+    assert.equal(await run(many, deps), 0);
+    assert.deepEqual(JSON.parse(files.get(`${LOG}.request.json`)).files, many);
+    assert.match(out.spawned[0].args[0], /session-gate-run/u);
   });
 
   it('a directory or a file that is not a test is refused', async () => {

@@ -5,30 +5,27 @@
  *   mc gate <files…> [--test-name-pattern <p>]
  *                             the named test files, with the node --test flags the repository declares
  *                             (pr_tests_flags), else those of its test script
- *   mc gate                   the test files this branch adds or changes against origin/main
+ *   mc gate                   affected tests and command gates against origin/main
  *   mc gate --base <ref>      … against another base
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
  *   mc gate --wait            wait for the gate running here and print its verdict
  *
- * There is no whole gate here (Martin, 2026-10-24: *"det ska i princip inte gå
- * att köra full gate"*). The whole measurement is the merger's: `mc publish`
- * queues the pull request, and the merge round runs the repository's selection
- * in its lane, once. A session's whole gate measured the same thing minutes
- * before, beside every other session's, and the round reused it in 36 of 300
- * memoro rounds (2026-10-20..24) — the rest it measured again. So `mc gate`
- * runs named test files, at most `MAX_FILES` of them; with none named, the
- * test files the branch itself adds or changes. `--full` is refused.
+ * With no files named, the repository selector maps the complete branch and
+ * local changes to tests and command gates. Named files run explicitly, with
+ * the selector's resource classes when available. There is no file-count cap:
+ * the shared runner bounds concurrency and test duration. The final merge
+ * still verifies the candidate with the current base.
  *
  * The tests run in the repository's gate lane (`gate-lane-wait.js`): the
- * detached shell takes the lane's lock for its own pid before it starts, and
+ * detached worker takes the lane's lock for its own pid before it starts, and
  * waits while a merge round, a deploy, an iOS build or another session's gate
  * holds it. So no two test runs share the cores of one lane, and the merger
  * waits for a session's few seconds of tests as it waits for any round.
  *
  * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
  * system temp directory otherwise — as it is written; when the tests end the
- * shell writes their exit code beside the log. This verb answers within the
+ * worker writes their exit code beside the log. This verb answers within the
  * budget: GREEN or RED, the counts, the failing lines with their locations,
  * and the file's path, at most 2 KB. Past the budget it answers `RUNNING` and
  * exits 3; the tests run on, and `mc gate --wait` prints the verdict from the
@@ -38,34 +35,32 @@
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
  */
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { changedAgainst, declaredTestFlags } from '../gate-fast.js';
-import { gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
+import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '../gate-fast.js';
+import { selectorCommand } from '../session-gate-run.js';
+import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '../gate-local.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
 import { repositoryDir } from '../repos.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
+import { takeClaim, releaseClaim } from '../resource-claim.js';
 
 /** How long the answer waits for the gate, in seconds, unless `--budget` says otherwise. */
 const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
-/**
- * The most test files one `mc gate` runs. More than this is a suite, and the
- * suite is the merger's: name the files the change reaches.
- */
-export const MAX_FILES = 30;
 /** What a test file is called: `….test.js`, `.mjs`, `.cjs`, `.ts`. */
 const TEST_FILE = /\.test\.[cm]?[jt]s$/u;
 
-/** What the gate's shell runs before and after the tests: the lane taken and given back. */
-const LANE_WAIT = fileURLToPath(new URL('../gate-lane-wait.js', import.meta.url));
+/** The worker owns the lane from selection through completion. */
+const SESSION_RUN = fileURLToPath(new URL('../session-gate-run.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
 const SYSTEM = {
@@ -84,6 +79,9 @@ const SYSTEM = {
   },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
+  id: randomUUID,
+  claim: takeClaim,
+  release: releaseClaim,
   declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
   lane: (repoPath, { env }) => gateLaneOf(repoPath, { root: mcHome(env) }),
 };
@@ -103,7 +101,7 @@ export async function run(argv, deps = {}) {
   const named = scanned.positional;
   const pattern = scanned.flags['test-name-pattern'];
   if (named.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
-  if (named.length && scanned.flags.base) { stderr.write(`mc: --base picks the changed test files — it takes no named files\n${usage()}`); return 2; }
+  if (named.length && scanned.flags.base) { stderr.write(`mc: --base selects checks for the changed code — it takes no named files\n${usage()}`); return 2; }
   if (pattern != null && !named.length) { stderr.write(`mc: --test-name-pattern goes with named test files (mc gate <files…> --test-name-pattern <p>)\n${usage()}`); return 2; }
   const budget = scanned.flags.budget == null ? DEFAULT_BUDGET : Number(scanned.flags.budget);
   if (!(budget > 0)) { stderr.write(`mc: --budget takes seconds, a positive number (${scanned.flags.budget})\n${usage()}`); return 2; }
@@ -120,82 +118,88 @@ export async function run(argv, deps = {}) {
     return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout });
   }
 
-  let files = named;
+  const files = named;
+  const base = scanned.flags.base || 'origin/main';
+  let select = null;
+  let addedTests = [];
   if (!files.length) {
-    const base = scanned.flags.base || 'origin/main';
-    const changed = changedTests(io, { root, base });
+    const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
+    const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
     if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${base} — name the test files: mc gate <files…>\n`); return 2; }
     if (!changed.length) {
-      stdout.write(`NOTHING RUN — this branch adds or changes no test file against ${base}. Name the tests your change reaches: mc gate <files…>. The rest is the merger's measurement.\n`);
+      stdout.write(`NOTHING CHANGED — no changes against ${base}\n`);
       return 0;
     }
-    files = changed;
+    const declared = primaryCheckoutDeclaration(io, { root, env });
+    if (!declared?.declaration.select) {
+      stderr.write('mc: no repository test selector declared — name the tests explicitly; nothing was verified\n');
+      return 2;
+    }
+    select = selectorCommand(declared.declaration.select, { base, changed });
+    addedTests = changed.filter((file) => TEST_FILE.test(file) && io.exists(join(root, file)));
   }
   const missing = files.find((file) => !io.exists(join(root, file)));
   if (missing) { stderr.write(`mc: no such test file: ${missing}\n`); return 2; }
   const notTest = files.find((file) => !TEST_FILE.test(file) || !io.isFile(join(root, file)));
   if (notTest) { stderr.write(`mc: ${notTest} is not a test file (….test.js) — mc gate runs named test files, not directories or the suite\n`); return 2; }
-  if (files.length > MAX_FILES) {
-    stderr.write(`mc: ${files.length} test files is a suite, and the suite is the merger's — name at most ${MAX_FILES}, the ones your change reaches\n`);
-    return 2;
-  }
 
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
-  const command = namedCommand(manifest, files, { pattern, flags: declaredTestFlags(io, { root, env }) });
-
-  const held = readLock(io, lockPath);
-  if (held && isRunning(io, held)) {
-    stderr.write(`mc: a gate is already running here (pid ${held.pid}, since ${held.started}) — mc gate --wait\n`);
-    return 2;
+  const flags = declaredTestFlags(io, { root, env });
+  if (files.length) {
+    const declared = primaryCheckoutDeclaration(io, { root, env });
+    if (declared?.declaration.select) select = selectorCommand(declared.declaration.select, { base, changed: files });
   }
+  const command = files.length ? namedCommand(manifest, files, { pattern, flags })
+    : { run: `affected tests and command gates against ${base}`, source: 'selection' };
 
-  // The lane is the primary checkout's: a worktree of memoro is memoro.
-  const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  const primary = common ? repositoryDir(common) : root;
-  const lane = io.lane(primary, { env });
-  // The free cores, not the core count: a session's gate has no round mode, so
-  // `testLanes` answers the free cores here (a merge round takes at least four).
-  const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
-
-  const startedAt = io.now();
-  const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
-  const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
-  const logPath = join(dir, `gate-${stamp}.log`);
-  let child;
+  const launchPath = `${lockPath}.launch`;
+  const launch = io.claim(launchPath, { pid: process.pid });
+  if (!launch.ok) { stderr.write(`mc: ${launch.error || 'a gate is starting here — use mc gate --wait'}\n`); return 2; }
+  let lock;
+  let startedAt;
   try {
-    io.mkdir(dir);
-    const fd = io.open(logPath);
-    // `$$` is this shell's own pid, which is `child.pid`: the lane's holder.
-    // The wait for the lane is inside the child, so the verb answers within
-    // its budget as ever and the wait is in the log.
-    const lanes = `'${process.execPath}' '${LANE_WAIT}'`;
-    const script = `${lanes} take ${lane} $$ ${shellWord(basename(primary))}; ${command.run}; rc=$?; ${lanes} release ${lane} $$; echo $rc > '${logPath}.exit'`;
-    child = io.spawn('sh', ['-c', script], {
-      cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
-    });
-    io.close(fd);
-  } catch (error) {
-    stderr.write(`mc: could not start the gate, log ${logPath}: ${error.message}\n`);
-    return 2;
-  }
-  child.unref();
-  io.write(`${logPath}.pid`, `${child.pid}\n`);
-  const lock = { pid: child.pid, log: logPath, started: startedAt.toISOString(), lane, command };
-  io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout });
-}
+    const held = readLock(io, lockPath);
+    if (held && isRunning(io, held)) {
+      stderr.write(`mc: a gate is already running here (pid ${held.pid}, since ${held.started}) — mc gate --wait\n`);
+      return 2;
+    }
 
-/**
- * The test files the branch adds or changes against `base`, committed or not,
- * untracked ones included, that still exist; null when git cannot say.
- */
-function changedTests(io, { root, base }) {
-  const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
-  if (!mergeBase) return null;
-  const changed = changedAgainst(io, root, mergeBase);
-  if (!changed) return null;
-  return changed.filter((path) => TEST_FILE.test(path) && io.exists(join(root, path)));
+    // The lane is the primary checkout's: a worktree of memoro is memoro.
+    const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const primary = common ? repositoryDir(common) : root;
+    const lane = io.lane(primary, { env });
+    // The free cores, not the core count: a session's gate has no round mode, so
+    // `testLanes` answers the free cores here (a merge round takes at least four).
+    const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+
+    startedAt = io.now();
+    const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
+    const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
+    const logPath = join(dir, `gate-${stamp}-${io.id()}.log`);
+    const requestPath = `${logPath}.request.json`;
+    let child;
+    try {
+      io.mkdir(dir);
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: flags || testFlags(manifest?.scripts?.test), pattern, select, base,
+        log: logPath, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
+      const fd = io.open(logPath);
+      // The worker owns the reservation, the test children and the result.
+      // A short-lived command or shell cannot release its lane early.
+      child = io.spawn(process.execPath, [SESSION_RUN, requestPath], {
+        cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
+      });
+      io.close(fd);
+    } catch (error) {
+      stderr.write(`mc: could not start the gate, log ${logPath}: ${error.message}\n`);
+      return 2;
+    }
+    child.unref();
+    io.write(`${logPath}.pid`, `${child.pid}\n`);
+    lock = { pid: child.pid, log: logPath, request: requestPath, started: startedAt.toISOString(), lane, command };
+    io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  } finally { io.release(launchPath, launch.marker); }
+  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout });
 }
 
 /**
@@ -213,15 +217,22 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     stdout.write(`RUNNING — ${shown} — ${seconds}s so far, ${queued ? `still waiting for the ${lock.lane} lane` : 'still running'} (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
     return 3;
   }
-  io.remove(lockPath);
+  const current = readLock(io, lockPath);
+  if (current?.log === lock.log && current?.pid === lock.pid) io.remove(lockPath);
   if (outcome.dead) {
     stdout.write(`RED — the gate's process ended without an exit code — log: ${lock.log}\n`);
     return 1;
   }
   const output = readText(io, lock.log);
   const summary = summarizeGate(output, { exitCode: outcome.code });
+  let result = null;
+  try { result = JSON.parse(readText(io, `${lock.request}.result`)); } catch { /* an older gate or interrupted worker */ }
+  if (result?.files) lock.command.files = result.files;
+  if (result?.red_tests?.length) summary.failures = result.red_tests.slice(0, 5).flatMap((test) => [
+    `✖ ${test.name}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
+  ]);
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
     stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
   }
@@ -264,22 +275,18 @@ function readText(io, path) {
   try { return io.read(path, 'utf8'); } catch { return ''; }
 }
 
-function shellWord(text) {
-  return /^[\w./:=@%+,-]+$/u.test(text) ? text : `'${String(text).replace(/'/gu, `'\\''`)}'`;
-}
-
 export function usage() {
   return [
-    `usage — mc gate <test files…> [--test-name-pattern <p>]   the named test files (at most ${MAX_FILES}), with the node --test flags the repository declares (pr_tests_flags), else those of its test script\n`,
-    '        mc gate                       the test files this branch adds or changes against origin/main\n',
+    'usage — mc gate <test files…> [--test-name-pattern <p>]   the named test files, with repository flags and bounded concurrency\n',
+    '        mc gate                       affected tests and command gates against origin/main, including local changes\n',
     '        mc gate --base <ref>          … against another base\n',
     '        mc gate --json                the summary as one object\n',
     '        mc gate --budget <s>          answer after at most s seconds, default 540; the tests keep running\n',
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
     '\n',
-    'No whole gate: the merger measures the pull request once, in its lane — mc publish queues it.\n',
+    'The merge gate still verifies the candidate with the current base; --full is refused.\n',
     'The tests run in the repository\'s gate lane, one run at a time beside merge rounds, deploys and other sessions\' gates.\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
-    'Exit 0 green (or nothing to run), 1 red, 2 refused or already running, 3 still running.\n',
+    'Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n',
   ].join('');
 }

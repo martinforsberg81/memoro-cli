@@ -9,10 +9,11 @@ A turn is the unit of cost: every turn re-reads the whole context. So:
 - No prose between calls. Report once, at the end.
 
 Read the code before you decide or ask. Report what you ran and what it said;
-never call something verified that was not. Tests: `mc gate <files…>`, the
-test files your change reaches — once, at the end, in the foreground. Never
-the whole suite (`npm test`, `npm run ci`, a bare `node --test`, `mc gate
---full`): that is the merger's, measured once in its lane after you publish. Dependencies are attached for you: never `npm ci` or a bare `npm install` — in memoro `npm run deps:ensure` re-attaches the shared cache; memoro-cli needs none.
+never call something verified that was not. Tests: `mc gate` selects affected
+tests and command gates from code changes; `mc gate <files…>` is a focused
+rerun. Both use the shared resource lane and bounded runner. Do not bypass
+that with `npm test`, `npm run ci`, a bare `node --test` or `mc gate --full`.
+The merger still verifies the candidate with the current base. Dependencies are attached for you: never `npm ci` or a bare `npm install` — in memoro `npm run deps:ensure` re-attaches the shared cache; memoro-cli needs none.
 
 Nothing is loaded for you beyond this text — no CLAUDE.md, AGENTS.md or
 memory. A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/`, and the

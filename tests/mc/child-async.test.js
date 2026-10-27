@@ -4,7 +4,8 @@
  * that must not use the synchronous one.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,6 +66,34 @@ describe('runTool and runShell resolve what spawnSync returns', () => {
       const both = await Promise.all([runTool('sh', ['-c', meetAt('a', 'b')]), runShell(meetAt('b', 'a'))]);
       assert.deepEqual(both.map((ran) => ran.status), [0, 0], 'each child saw the other running');
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('aborting a shell also kills a descendant that ignores SIGTERM', { timeout: 15000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-child-abort-'));
+    const ready = join(dir, 'ready');
+    const fixture = join(dir, 'child.cjs');
+    const quote = (word) => `'${word.replace(/'/gu, "'\\''")}'`;
+    writeFileSync(fixture, `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`);
+    const controller = new AbortController();
+    const running = runShell(`${quote(process.execPath)} ${quote(fixture)}`, { signal: controller.signal, timeoutMs: 10000 });
+    try {
+      for (let i = 0; i < 400 && !existsSync(ready); i++) await delay(20);
+      assert.ok(existsSync(ready), 'the descendant reached its signal handler');
+      const pid = Number(readFileSync(ready, 'utf8'));
+      controller.abort();
+      const result = await running;
+      assert.equal(result.error?.code, 'ABORT_ERR');
+      assert.equal(result.status, null);
+      // Reaping may follow pipe closure; wait for that OS boundary, not a
+      // fixed runtime for a loaded CI machine.
+      const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      for (let i = 0; i < 100 && alive(); i++) await delay(20);
+      assert.equal(alive(), false, 'the descendant did not outlive the command');
+    } finally {
+      controller.abort();
+      await running;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

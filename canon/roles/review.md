@@ -26,7 +26,7 @@ land it.
    tests, and measure again. One that needs a decision is
    `mc step note "…"` and `mc step blocked --on <decision-name> --reason "…"`;
    end there.
-5. **Land it.** Bare `mc gate` (the test files this branch changed), red
+5. **Land it.** `mc gate` (affected tests and command gates for the whole project branch), red
    fixed. Write the pull request's body for the project: the goal in one
    paragraph, what each step built, what you closed, how each criterion was
    measured. Commit, then `mc publish --title "<project>: <goal in a line>"

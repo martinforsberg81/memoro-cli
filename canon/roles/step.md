@@ -25,14 +25,13 @@ from starting the step again once it is answered.
 
 **Otherwise, build it and hand it to the merger:**
 
-1. Test what you changed, and only that: `mc gate <test files…>` — the files
-   you wrote or changed and the ones that test the code you touched, at most
-   30 (bare `mc gate` runs the test files your branch changed). It runs in
+1. Run `mc gate`: the repository selects tests and command gates from your
+   code changes, including local changes. Use `mc gate <test files…>` for a
+   focused rerun. There is no file-count cap. It runs in
    the gate lane and answers in one call: give the Bash call
    `timeout: 600000`. Red: fix, then run the same line again — `re-run:` in
-   the answer is it. There is no whole suite to run, and none of it is yours:
-   no `--full`, no `npm test`, no `node --test`. The merger measures the whole
-   selection once, after you.
+   the answer is it. Do not bypass its resource limits with `npm test` or `node --test`.
+   The merger verifies the candidate with the current base after you.
 2. Commit, then `mc publish --title "…" --body-file <file>` (file in
    `$MC_SCRATCH`). It pushes, opens the PR and queues it for the merger, in
    one call. A landed PR is a `done` step, so a part you cannot finish is

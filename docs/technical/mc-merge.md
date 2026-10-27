@@ -15,7 +15,7 @@ touches:
   command gates the same selection named run beside them, squash. This is what
   `mc repo merge` was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
-  without a suite, because there is nothing to run. A script is not a document,
+  after the repository selector's document tests and command gates pass. A script is not a document,
   under `docs/` or not: one is refused here and goes through the gate. The flag
   is not needed: `mc merge <repo> <pr>` reads GitHub's file list first
   (`prFiles`, `docsOnly` in [`src/mc/docs-merge.js`](../../src/mc/docs-merge.js)),
@@ -241,10 +241,12 @@ must not be able to make a code pull request look like documentation, and the
 one thing this form must never do is land a file the suite would have had an
 opinion about.
 
-What it does *not* do is as much of the design as what it does: no lease, no
-suite — one worktree, the selector's files — no model, no deploy pull, and no
-line in the repository's human merge log. A docs merge is a `gh` call with the
-documents' tests in front of it.
+The docs measurement reserves the repository's gate lane before creating or
+preparing its candidate and releases it after cleanup, including on failure.
+It uses one worktree and the selector's files and commands, with no model or
+deploy pull. Raw test and command output survives candidate cleanup under
+`~/.memoro/mc/gate-output/`. A failed result names the log, failing files,
+assertion locations and a focused rerun command; JSON retains the details.
 
 It does leave a line in the round log
 ([`src/mc/repo-round-log.js`](../../src/mc/repo-round-log.js)) with `mode: docs`,
@@ -453,11 +455,11 @@ or `heavy` runs after the standard batch, each class in its own `node --test`,
 against 770 s at one) — as memoro's own runner runs them — and the batches' TAP
 is read as one run. A session's
 `mc gate` runs in the lane too (ruling 52, [`src/mc/gate-lane-wait.js`](../../src/mc/gate-lane-wait.js)):
-its detached shell takes the lane's lock for its own pid, with `mode:
+its detached worker takes the lane's lock for its own pid, with `mode:
 'session-gate'`, waiting while a merge round, a deploy, an iOS build or another
 session's gate holds it, and gives it back after the tests. The merger waits
-for a session's run as for any round in its lane. A session's gate is named
-test files only, at most 30, so the wait either side is short.
+for a session's run as for any round in its lane. A session's gate uses affected selection or explicitly named files, with
+resource-class batching, bounded concurrency and timeouts.
 
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
@@ -542,13 +544,28 @@ In the last 300 memoro rounds before that it had hit 36 times. The code stays,
 read-only: `reused` in a round's `gate-rounds.jsonl` line still says when a
 recorded green was taken.
 
-**`mc gate` runs only test files** (ruling 52, [`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
-Named, at most 30, each a `….test.js`/`.mjs`/`.cjs`/`.ts` file and not a
-directory; with none named, the test files the branch adds or changes against
-`origin/main` (`changedAgainst` in [`src/mc/gate-fast.js`](../../src/mc/gate-fast.js):
-committed, staged, unstaged and untracked), and `NOTHING RUN — …` when there
-are none. `--full` is refused. The fast paths, `mc-gate-last.json`, the
-incremental run after a red and the recorded greens went with the whole gate.
+**`mc gate` selects from code changes** ([`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
+With no files named, the repository selector receives all paths changed against
+the merge base, including staged, unstaged and untracked paths and both sides
+of renames. Its tests and command gates run in the repository's lane. Newly
+added test files are included even before staging. Named files use the same
+bounded test runner and the selector's resource classes. There is no 30-file
+limit; `--full` remains refused. No changes is `NOTHING CHANGED`; a changed
+branch with no selected checks is not green. The merge still measures its
+candidate with the current base; local results do not bypass it.
+
+The detached worker owns both the lane and the test subprocesses. An interrupt
+stops its active test group before releasing the reservation. Unique log names
+prevent simultaneous worktrees from sharing output; the full output and
+structured failures remain available through `mc gate --wait` and `--json`.
+
+**Reservation is atomic.** Each lane uses a prepared nonempty claim directory
+published by rename, plus the existing JSON status file for readers and older
+running mc versions. A second claimant cannot replace a live claim. A dead
+owner is reclaimed by removing only its generation's marker and then the empty
+directory; an old cleanup cannot remove a successor's claim. A failed
+reservation stops the operation. During rollout, let already-running old
+workers finish: old code cannot enforce the new reservation protocol.
 
 **The command gates the selection names run beside the suite** (merge-throughput,
 ruling 34). Until then they ran after it: 65 s mean on top of every round that
