@@ -14,7 +14,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { CREDITS_AT_UTILIZATION } from '../../src/mc/billing.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { CLAUDE_MODELS, CODEX_MODELS, STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
@@ -33,10 +32,8 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.equal(Number(match[1]) * 60_000, QUOTA_SLEEP_MS);
   });
 
-  it('states the seven-day utilization at which auto moves to the credit', () => {
-    const match = /at or\s+above (\d+) % \(`CREDITS_AT_UTILIZATION`\)/u.exec(DOC);
-    assert.ok(match, 'the doc no longer states where auto moves to the credit');
-    assert.equal(Number(match[1]), CREDITS_AT_UTILIZATION * 100);
+  it('says auto is plan only, so no mode but credits moves a session to the credit', () => {
+    assert.match(DOC, /\*\*`auto`\*\* — plan only/u, 'the doc no longer says auto is plan only');
   });
 
   it('states the poll a lane held back by the total sleeps, and the bounds both numbers take', () => {
@@ -130,6 +127,18 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     // it with (`RETIRED_ROUNDS`, commands/run.js).
     assert.match(DOC, /`--rounds <n>` was retired with the round/u);
     assert.match(parseRunArgs(['--rounds', '2']).error, /a round no longer exists/u);
+  });
+
+  it('names the catalog verbs, that a class step is on the plan, and that Codex is read hourly without a turn', () => {
+    const text = DOC.replace(/\s+/gu, ' ');
+    for (const verb of ['mc model add fast|large <tool>:<model>:<effort>', 'mc model remove fast|large <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
+      assert.ok(text.includes(verb), `the doc no longer names \`${verb}\``);
+    }
+    assert.ok(text.includes('A class-routed step is on the plan under every mode'), 'the doc no longer says a class step is on the plan');
+    assert.ok(text.includes('read once an hour'), 'the doc no longer says Codex is read once an hour');
+    assert.ok(text.includes('It is never sent a thread or a turn'), 'the doc no longer says the Codex read starts no thread or turn');
+    assert.ok(text.includes('Subscription monitoring is not a hard guard against purchased ChatGPT credits'), 'the doc no longer says monitoring does not guard against purchased credits');
+    assert.ok(text.includes('Not verified live.'), 'the doc no longer says the Codex collector is not verified live');
   });
 
   it('names the four step models on the tool that runs them, and the codex flag and effort override the runner passes', () => {

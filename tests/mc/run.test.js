@@ -12,6 +12,8 @@ import { RUN_REFUSALS, TIDY_KIND, WORKAREA_BLOCKS, initSource } from '../../src/
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
+import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
+import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -26,13 +28,33 @@ const areaOf = (path) => { const parts = String(path).split('/'); return parts[2
  */
 const namingRepo = (text, repo) => (/^\s*\{/u.test(text) ? text.replace(/^\s*\{/u, `{\n  "repo": ${JSON.stringify(repo)},`) : text);
 
+/** The capacity snapshot a fixture holds in memory (ruling 59), read and written whole as model-capacity.js does on disk. */
+function capacityHandle(initial = null) {
+  let state = normaliseCapacity(initial);
+  return { read: () => state, write: (next) => { state = normaliseCapacity(next); } };
+}
+/** The instant a fixture's clock starts at, and the snapshots below are observed at. */
+const ROUTING_NOW = new Date('2026-08-29T10:00:00Z');
+const windowAt = (fraction) => ({ fraction_used: fraction, resets_at: '2026-08-29T13:00:00Z' });
+const LUNA = [{ id: 'gpt-6-luna', efforts: ['high'] }];
+/** What each provider was seen to have, as the runner holds it at ROUTING_NOW: its usage fraction, and a refusal until an instant. */
+function capacityWith({ claude = null, codex = null, refuse = {} } = {}) {
+  let state = normaliseCapacity(null);
+  if (claude !== null) state = applyObservation(state, 'claude', { windows: { five_hour: windowAt(claude), seven_day: windowAt(claude) } }, ROUTING_NOW);
+  if (codex !== null) state = applyObservation(state, 'codex', { windows: { primary: windowAt(codex), secondary: windowAt(codex) }, models: LUNA }, ROUTING_NOW);
+  for (const [provider, until] of Object.entries(refuse)) state = applyRefusal(state, provider, until);
+  return state;
+}
+/** A claude answer that refuses on the weekly limit, with no reset named. */
+const QUOTA_ANSWER = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit" }), stderr: '', timedOut: false };
+
 /**
  * A whole runner on fakes: a work root in memory, two repositories whose
  * plans (`plans`, per repository) are under `/w/programs/prog/`, git/gh/tmux
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }), capacity = null } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -165,6 +187,10 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     rmTree: (p) => { dirs.delete(p); calls.rmScratch.push(p); return true; },
     // The archive moves a done project's directory: recorded here, not moved, as the fixture's files are not the disk's.
     shelve: (dir, programme, project) => { calls.shelved.push([dir, programme, project]); return `/w/archive/projects/${programme}/${project}`; },
+    // The model catalog and the capacity snapshot (ruling 59): the defaults, and the snapshot a test
+    // starts from, read and written back through `deps.capacity`.
+    catalog: () => structuredClone(DEFAULT_CATALOG),
+    capacity: capacityHandle(capacity),
     pid: 4242,
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
@@ -768,8 +794,8 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   );
   assert.deepEqual(f.calls.rounds, [], 'the session landed it through mc merge itself; the runner lands nothing of a step\'s');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
-  assert.equal(rows[0].split('\t').length, 15);
-  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\topus');
+  assert.equal(rows[0].split('\t').length, 19);
+  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\topus\t-\tclaude\tmedium\tplan');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
   // The stream as it came, and the summed result beside it for measure-steps.py.
   assert.ok('/w/runner/log/alpha-20260829T100000Z.jsonl' in f.files);
@@ -1360,7 +1386,7 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   f.deps.sleep = async (ms) => { slept.push(ms); };
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\topus\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\topus\t-\tclaude\tmedium\tplan\n/u);
   assert.equal(f.calls.rounds.length, 0);
   // Thirty minutes, polled in `UPDATE_POLL_MS` slices so an UPDATE is seen.
   assert.equal(slept.reduce((a, b) => a + b, 0), 30 * 60 * 1000, `slept ${slept.join(',')}`);
@@ -1528,7 +1554,7 @@ test('a stalled session is logged as stalled with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: stalledSession });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\topus\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\topus\t-\tclaude\tmedium\tplan\n/u);
 });
 
 /**
@@ -1559,7 +1585,7 @@ test('a session that queued its pull request leaves the step landing, and the ro
   await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.rounds.length, 0, 'the session queued it; the runner queues nothing');
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,queued\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,queued\t-\t\w+\t-\tclaude\tmedium\tplan\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is in the merge queue — step 1 is landing/u);
 });
 
@@ -1579,7 +1605,7 @@ test('a session that ended success with its pull request open is queued by the r
   assert.equal(job.repo, 'memoro');
   assert.equal(job.holder.name, 'm', 'the round runs as the step\'s workarea');
   assert.deepEqual(job.step, { project: 'm', index: 0 });
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,queued-by-runner\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,queued-by-runner\t-\t\w+\t-\tclaude\tmedium\tplan\n/u);
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
@@ -1593,7 +1619,7 @@ test('the last step with an unmet criterion, found at the runner\'s door, is the
   assert.equal(step.attempts, 1);
   assert.equal(step.pr, 9);
   assert.equal(step.reason, 'unmet-criteria — step 1 is the plan\'s last');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\t-\tclaude\tmedium\tplan\n/u);
 });
 
 test('a step the merger sent back is handed out again, its own open pull request is not in flight, and the prompt says why', async () => {
@@ -1759,7 +1785,7 @@ test('a session that ended with its step built is logged ,built', async () => {
   await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.rounds.length, 0, 'nothing is queued');
   assert.equal(registerOf(f, 'm').steps[1].status, 'built');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,built\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,built\t-\t\w+\t-\tclaude\tmedium\tplan\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m: step 2 is built on p \(#9\) — the next step continues there/u);
 });
 
@@ -1771,7 +1797,7 @@ test('a middle step that ended success without publishing is booked built by the
   assert.equal(first.status, 'built');
   assert.equal(first.pr, 9);
   assert.equal(first.built.sha, 'tip-HEAD');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,built\t-\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,built\t-\t\w+\t-\tclaude\tmedium\tplan\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is open and the session ended success without publishing — step 1 is built/u);
 });
 
@@ -1948,7 +1974,7 @@ test('a step\'s own runner overrides the plan\'s, key by key, and the row says w
   assert.deepEqual(call.args.slice(1, 6), ['--model', 'opus', '--effort', 'high', '--permission-mode']);
   assert.equal(call.args.includes('--advisor'), false, '`off` on the step turns the default advisor off');
   assert.match(f.files['/w/runner/log/runner.log'], /own: step starting \(claude opus · effort high, check-in every 30 min, killed after 15 min silent\)/u);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\town\tstep\t.*\topus\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\town\tstep\t.*\topus\t-\tclaude\thigh\tplan\n/u);
 });
 
 test('a codex plan that names no model gets none, and the log says so', async () => {
@@ -1962,6 +1988,167 @@ test('a codex plan that names no model gets none, and the log says so', async ()
   assert.equal(call.args.includes('opus'), false);
   assert.match(f.files['/w/runner/log/runner.log'], /cx: step starting \(codex own default model, no check-in, no stall guard\)/u);
 });
+
+/* ------------------------------------------------- work classes (ruling 59) */
+
+/** A plan whose one step names a work class (`fast`, `large` or `review`) for its model, and no tool. */
+const classPlan = (cls) => plan({ steps: [{ title: 'Class step', status: 'ready', done_when: 'do x', instruction: ['Do it.'], pr: null, blocked_by: null, runner: { model: cls } }] });
+
+test('a fast step runs on the claude candidate the capacity says has the most headroom, at its own effort, and says so everywhere it is recorded', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1 }) });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.bin, '/bin/claude');
+  const at = call.args.indexOf('--model');
+  assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'haiku', '--effort', 'high']);
+  assert.match(f.files['/w/runner/log/runner.log'], /cls: step starting \(claude haiku · effort high, check-in every 60 min, killed after 20 min silent\) · class fast: known \(claude has 90 % headroom\)/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tplan\n/u);
+  // The register and the lane's current file, as they stood while the session ran.
+  const registered = JSON.parse(f.duringSession[0]['/w/runner/projects/cls.json']).steps[0].session;
+  assert.deepEqual([registered.class, registered.effort, registered.tool, registered.model, registered.billing], ['fast', 'high', 'claude', 'haiku', 'plan']);
+  const current = Object.entries(f.duringSession[0]).find(([path]) => /current/u.test(path));
+  assert.match(current[1], /"class": "fast"/u);
+});
+
+test('a claude refusal on a class step refuses claude alone: the next launch runs the step on codex, and no lane sleeps', async () => {
+  const slept = [];
+  const f = fixture({
+    plans: { 'memoro-cli': { cls: classPlan('fast') } },
+    session: (call) => (call.bin === '/bin/claude' ? QUOTA_ANSWER : okSession()()),
+    capacity: capacityWith({ claude: 0.1, codex: 0.1 }),
+  });
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const providers = f.deps.capacity.read().providers;
+  assert.ok(Date.parse(providers.claude.refusal_until) > ROUTING_NOW.getTime(), 'claude is refused until its reset');
+  assert.equal(providers.codex.refusal_until, null, 'codex is not refused');
+  assert.deepEqual(slept, [], 'a class step waits on nothing');
+  await runner.pass();
+  const [, second] = f.calls.sessions;
+  assert.equal(second.bin, '/bin/codex');
+  assert.equal(second.args.includes('--resume'), false, 'a session that ran on claude is not resumed on codex');
+  assert.match(f.files['/w/runner/log/runner.log'], /cls: step 1 left claude \(claude haiku\)/u);
+});
+
+test('a class step with no candidate that has capacity is a transient skip: no session, nothing written to the register, not blocked', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /cls: no fast candidate has capacity — claude:haiku:high: claude refused until 2026-08-29T13:00:00Z; codex:gpt-6-luna:high: codex is unobserved/u);
+  const registered = JSON.parse(f.files['/w/runner/projects/cls.json'] ?? 'null');
+  assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
+});
+
+const reviewPlan = () => plan({ steps: [{ title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null, runner: { model: 'review' } }] });
+
+test('a review class step runs on the catalog\'s review model whatever the usage says', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.bin, '/bin/claude');
+  const at = call.args.indexOf('--model');
+  assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'opus', '--effort', 'high']);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: pinned/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\treview\tclaude\thigh\tplan\n/u);
+});
+
+test('a review class step whose provider refused is a transient skip: no session, not moved to codex, not blocked', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.1, codex: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: the review model claude:opus:high: claude refused until 2026-08-29T13:00:00Z — skip/u);
+  const registered = JSON.parse(f.files['/w/runner/projects/m.json'] ?? 'null');
+  assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
+});
+
+test('a codex refusal on a class step is recorded against codex alone, and the step waits for capacity rather than failing', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { cls: classPlan('fast') } },
+    session: () => ({ status: 1, stdout: '', stderr: "You've hit your weekly limit", timedOut: false }),
+    capacity: capacityWith({ codex: 0.1 }),
+  });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(f.calls.sessions[0].bin, '/bin/codex');
+  const providers = f.deps.capacity.read().providers;
+  assert.ok(Date.parse(providers.codex.refusal_until) > ROUTING_NOW.getTime(), 'codex is refused until its reset');
+  assert.equal(providers.claude.refusal_until, null, 'claude is not refused');
+  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 1, 'no second session while codex is refused');
+});
+
+test('a class step is on the plan whatever the billing mode says: credits are not used by class routing', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1 }) });
+  f.deps.billing = { readMode: () => 'credits', readState: () => ({}), patchState: () => {} };
+  f.deps.creditKey = async () => ({ ok: true, key: 'sk-test' });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
+  assert.ok(call.unsetEnv.includes('ANTHROPIC_API_KEY'));
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tplan\n/u);
+});
+
+test('a concrete claude step is not routed: it runs on its own model under a refused claude, and waits out the quota as it always has', async () => {
+  const slept = [];
+  const f = fixture({ plans: { 'memoro-cli': { cc: ready } }, session: () => QUOTA_ANSWER, capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.bin, '/bin/claude');
+  assert.equal(call.args[call.args.indexOf('--model') + 1], 'opus');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\t-\tclaude\tmedium\tplan\n/u);
+  assert.equal(slept.reduce((a, b) => a + b, 0), 30 * 60 * 1000, 'the concrete step sleeps on the quota, as before');
+});
+
+test('codex is read when no snapshot exists, then once an hour from the chores, and a failed read is said and the chores go on', async () => {
+  let clock = ROUTING_NOW.getTime();
+  const f = fixture({ plans: {}, session: okSession() });
+  f.deps.now = () => new Date(clock);
+  const reads = [];
+  f.deps.refreshCodex = async () => {
+    reads.push(clock);
+    if (reads.length === 2) throw new Error('codex vanished');
+    const next = applyObservation(f.deps.capacity.read(), 'codex', { windows: { primary: windowAt(0.1), secondary: null }, models: LUNA }, new Date(clock));
+    f.deps.capacity.write(next);
+    return { ok: true, why: null, state: next };
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  assert.equal(reads.length, 1, 'no snapshot: read at start');
+  clock += 30 * 60 * 1000;
+  await runner.chores();
+  assert.equal(reads.length, 1, 'not again within the hour');
+  clock += 31 * 60 * 1000;
+  await runner.chores();
+  assert.equal(reads.length, 2, 'due again after the hour, and the read that throws does not stop the chores');
+  assert.match(f.files['/w/runner/log/runner.log'], /codex capacity not read: codex vanished — the chores go on/u);
+  clock += 60 * 1000;
+  await runner.chores();
+  assert.equal(reads.length, 3, 'a failed read is not kept for an hour: the next chore pass that finds it due reads again');
+});
+
+for (const [model, resumed] of [['haiku', true], ['sonnet', false]]) {
+  test(`an interrupted class session is resumed only on the model it ran on: ${model} ${resumed ? 'resumes' : 'starts cold'}`, async () => {
+    // The stream says which session it is from its first line, as claude's does, and ends on the limit.
+    const stream = [{ type: 'system', subtype: 'init', session_id: 'sid-1' }, { type: 'result', subtype: 'success', num_turns: 1, session_id: 'sid-1', result: "You've hit your weekly limit" }];
+    const limited = { status: 1, stdout: stream.map((line) => JSON.stringify(line)).join('\n'), stderr: '', timedOut: false };
+    const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: () => (f.calls.sessions.length === 1 ? limited : okSession()()), capacity: capacityWith({ claude: 0.1 }) });
+    const runner = createRunner({ deps: f.deps });
+    await runner.pass();
+    // The limit has passed and the catalog now routes the class to `model`.
+    f.deps.capacity.write(capacityWith({ claude: 0.1 }));
+    f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'claude', model, effort: 'high' }] });
+    await runner.pass();
+    const [, second] = f.calls.sessions;
+    assert.equal(second.args[second.args.indexOf('--model') + 1], model);
+    assert.equal(second.args.includes('--resume'), resumed);
+    if (resumed) assert.equal(second.args[second.args.indexOf('--resume') + 1], 'sid-1');
+  });
+}
 
 test('STOP file: the loop exits after the step it is in, and the next start removes the STOP it left', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
@@ -4609,6 +4796,12 @@ const CASES = [
       return f;
     },
   },
+  // A class step with no candidate that has capacity: a transient skip, which the reading does not choose.
+  {
+    reason: 'no-capacity',
+    what: 'a class step has no candidate with capacity',
+    make: () => fixture({ plans: { memoro: { m: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) }),
+  },
   // Not a machine word at all: the plan's own, which both readings take from
   // `chooseKind` — the round from the worktree's copy, the reading from main's.
   {
@@ -5367,52 +5560,24 @@ const streamed = (ended) => (call) => {
 const REFUSED_429 = streamed(apiEndedSession("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }));
 const CREDIT_LOW = streamed(apiEndedSession('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.', { api_error_status: 400 }));
 
-test('auto: a plan refusal writes refused_until and hands the step to credits without a quota sleep', async () => {
+test('auto is plan-only: a plan refusal is written and slept on as in plan, never handed to credits', async () => {
   const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z', 'the refusal\'s own reset');
-  assert.deepEqual(slept, [], 'no quota pause');
-  assert.equal(calls.length, 1, 'not resumed on the plan');
-  const step = registerOf(f, 'r').steps[0];
-  assert.equal(step.status, 'ready');
-  assert.equal(step.interrupted.billing, 'plan');
-  assert.equal(step.interrupted.count, 0, 'a hand-over is not counted');
-  assert.equal(step.interrupted.session_id, 'sid-1');
-  const [row] = runRows(f.files).filter((r) => r.kind === 'step');
-  assert.equal(row.note, 'quota,handed-to-credits');
+  assert.ok(slept.length > 0, 'the quota pause');
+  assert.equal(calls.length, 2, 'resumed on the plan');
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /r: step 1 handed from plan to credits — ready for the next pick/u);
-  assert.doesNotMatch(log, /every lane sleeping/u);
+  assert.match(log, /every lane sleeping/u);
+  assert.doesNotMatch(log, /handed/u);
 });
 
-test('auto: a refusal that named no reset is refused for QUOTA_SLEEP_MS', async () => {
-  const { f, billing } = onRefusal('auto', streamed(apiEndedSession('API Error: Request rejected (429)', { api_error_status: 429 })));
+test('auto: a refusal that named no reset is refused for QUOTA_SLEEP_MS, then resumed on the plan', async () => {
+  const { f, billing, calls } = onRefusal('auto', streamed(apiEndedSession('API Error: Request rejected (429)', { api_error_status: 429 })));
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 30 * 60_000).toISOString());
-  assert.equal(registerOf(f, 'r').steps[0].status, 'ready');
-});
-
-test('the pick after a hand-over resumes cold on the other billing, and a hand-over back keeps the count', async () => {
-  const { f, billing, calls } = onRefusal('auto', REFUSED_429);
-  await createRunner({ deps: f.deps }).pass();
-  assert.ok(billing.plan.refused_until);
-  // Two interruptions before this one: a third that counted would fail the step.
-  const entry = registerOf(f, 'r');
-  entry.steps[0].interrupted.count = 2;
-  f.files['/w/runner/projects/r.json'] = JSON.stringify(entry);
-  f.deps.session = (call) => { f.calls.sessions.push(call); calls.push({ call }); return CREDIT_LOW(call); };
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1].call.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
-  assert.equal(calls[1].call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /resuming claude session sid-1 \(billing changed plan→credits, cold/u);
-  assert.doesNotMatch(log, /\(warm,/u);
-  const step = registerOf(f, 'r').steps[0];
-  assert.equal(step.status, 'ready', 'INTERRUPT_LIMIT is not reached by a hand-over');
-  assert.equal(step.interrupted.count, 2);
-  assert.equal(step.interrupted.billing, 'credits');
-  assert.ok(billing.credits.unusable_until);
+  assert.equal(calls.length, 2, 'resumed on the plan');
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
 });
 
 test('credits: an exhausted credit marks it unusable for 24 h and hands the step back to the plan', async () => {

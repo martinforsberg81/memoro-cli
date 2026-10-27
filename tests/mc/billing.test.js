@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  BILLING_MODES, CREDITS_AT_UTILIZATION, CREDITS_RETRY_MS, DEFAULT_BILLING, billingFor, billingPath, billingStatePath,
+  BILLING_MODES, CREDITS_RETRY_MS, DEFAULT_BILLING, billingFor, billingPath, billingStatePath,
   patchBillingState, planWindows, readBillingMode, readBillingState, writeBillingMode,
 } from '../../src/mc/billing.js';
 
@@ -30,10 +30,9 @@ const EVENT = JSON.stringify({
   },
 });
 
-test('constants: three modes, plan the default, 80 % and a day', () => {
+test('constants: three modes, plan the default, a day', () => {
   assert.deepEqual(BILLING_MODES, ['plan', 'credits', 'auto']);
   assert.equal(DEFAULT_BILLING, 'plan');
-  assert.equal(CREDITS_AT_UTILIZATION, 0.8);
   assert.equal(CREDITS_RETRY_MS, 24 * 60 * 60 * 1000);
 });
 
@@ -119,19 +118,19 @@ test('planWindows: a stream without unifiedWindows is null, a broken line is pas
 const week = (utilization, resets_at = '2026-10-14T08:00:00Z') => ({ plan: { seven_day: { utilization, resets_at } } });
 const ask = (mode, state, toolId = 'claude-code') => billingFor({ mode, state, toolId, now: NOW });
 
-test('billingFor auto: 0.79 is plan, 0.80 is credits, a reset window is plan', () => {
+test('billingFor auto is plan-only: a week at or over 80 % and a plan refusal in force still read plan', () => {
   assert.equal(ask('auto', week(0.79)).billing, 'plan');
   const at = ask('auto', week(0.8));
-  assert.equal(at.billing, 'credits');
-  assert.match(at.why, /^seven-day 80 %, resets 2026-10-14T08:00:00Z$/u);
-  assert.equal(ask('auto', week(0.83)).billing, 'credits');
-  assert.equal(ask('auto', week(0.95, '2026-10-10T08:00:00Z')).billing, 'plan', 'a window whose reset has passed is unknown');
+  assert.equal(at.billing, 'plan');
+  assert.equal(at.why, 'mode auto is plan-only');
+  assert.equal(ask('auto', week(0.99)).billing, 'plan');
+  assert.equal(ask('auto', { plan: { refused_until: '2026-10-11T15:00:00Z' } }).billing, 'plan', 'a refusal in force');
   assert.equal(ask('auto', {}).billing, 'plan', 'nothing seen');
 });
 
-test('billingFor auto: a plan refusal that has not reset is credits', () => {
-  assert.equal(ask('auto', { plan: { refused_until: '2026-10-11T15:00:00Z' } }).billing, 'credits');
-  assert.equal(ask('auto', { plan: { refused_until: '2026-10-11T11:00:00Z' } }).billing, 'plan');
+test('billingFor credits: the credit only when Martin set the mode, whatever the windows say', () => {
+  assert.equal(ask('credits', week(0.1)).billing, 'credits');
+  assert.equal(ask('credits', { plan: { refused_until: '2026-10-11T11:00:00Z' } }).billing, 'credits');
 });
 
 test('billingFor: a credit marked unusable is plan in every mode', () => {
