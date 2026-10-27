@@ -9,7 +9,9 @@
  *
  * Only subscriptions are candidates: claude on the Max plan, codex on the
  * ChatGPT plan. No credit is a candidate in any billing mode. Review is not
- * chosen: it is the catalog's one review candidate, returned as it stands.
+ * chosen: it is the catalog's one review candidate, returned as it stands —
+ * unless its provider refused and the refusal has not passed, which is a
+ * transient no-capacity until it does, never another model.
  *
  * A candidate is judged at `now` as:
  *   - refused: its provider refused and the refusal has not passed. Never chosen.
@@ -85,6 +87,10 @@ const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls
  */
 export function chooseCandidate({ cls, catalog, capacity, now = new Date() }) {
   if (cls === REVIEW_CLASS) {
+    // Never routed, so its usage is not scored and its reserve not kept; but a
+    // provider that refused is refused for review too, and review waits for it.
+    const until = providerAt(capacity, catalog.review.tool, now).refusal_until;
+    if (until) return { ok: false, transient: true, class: cls, reason: `the review model ${candidateSpec(catalog.review)}: ${refused(catalog.review.tool, until).why}`, retry_at: until };
     return answer(cls, catalog.review, 'pinned', null, 'review is the catalog\'s review model, never routed');
   }
   if (!CLASSES.includes(cls)) throw new Error(`"${cls}" is not a class — fast, large or review`);

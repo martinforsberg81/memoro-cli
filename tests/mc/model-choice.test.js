@@ -55,13 +55,24 @@ test('large chooses from the large list', () => {
   assert.equal(won.spec, 'codex:gpt-6.1-sol:high');
 });
 
-test('review is pinned to the catalog review, whatever the capacity says', () => {
-  const refusedClaude = applyRefusal(empty(), 'claude', AHEAD);
-  const unread = choose(refusedClaude, 'review');
+test('review is pinned to the catalog review, whatever the usage says', () => {
+  const unread = choose(empty(), 'review');
   assert.equal(unread.ok, true);
   assert.equal(unread.spec, 'claude:opus:high');
   assert.equal(unread.basis, 'pinned');
-  assert.equal(choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review').spec, 'claude:opus:high', 'not outscored by the codex headroom');
+  const reserved = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review');
+  assert.equal(reserved.spec, 'claude:opus:high', 'not outscored by the codex headroom, and not held by the reserve');
+  assert.equal(choose(applyRefusal(empty(), 'codex', AHEAD), 'review').spec, 'claude:opus:high', 'the other provider\'s refusal is not review\'s');
+});
+
+test('review waits out its own provider\'s refusal, and is never moved to another model', () => {
+  const held = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(0.1)), 'review');
+  assert.equal(held.ok, false);
+  assert.equal(held.transient, true);
+  assert.equal(held.class, 'review');
+  assert.equal(held.retry_at, AHEAD);
+  assert.equal(held.reason, 'the review model claude:opus:high: claude refused until 2026-10-27T15:00:00.000Z');
+  assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review').spec, 'claude:opus:high', 'a passed refusal holds nothing');
 });
 
 test('a refusal in force makes its provider ineligible, and a passed one does not', () => {

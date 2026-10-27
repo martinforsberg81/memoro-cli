@@ -1673,7 +1673,10 @@ is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only the plan's
-review step names it, and it always takes the review candidate.
+review step names it, and it always takes the review candidate: its usage is
+not scored and no reserve holds it, but while that candidate's provider has
+refused, the review is skipped as `no-capacity` and is never moved to another
+model.
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:

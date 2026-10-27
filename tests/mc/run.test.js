@@ -2041,15 +2041,27 @@ test('a class step with no candidate that has capacity is a transient skip: no s
   assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
 });
 
-test('a review class step runs on the catalog\'s review model whatever the capacity says', async () => {
-  const review = plan({ steps: [{ title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null, runner: { model: 'review' } }] });
-  const f = fixture({ plans: { memoro: { m: review } }, session: okSession(), capacity: capacityWith({ claude: 0.99, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
+const reviewPlan = () => plan({ steps: [{ title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null, runner: { model: 'review' } }] });
+
+test('a review class step runs on the catalog\'s review model whatever the usage says', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
+  assert.equal(call.bin, '/bin/claude');
   const at = call.args.indexOf('--model');
   assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'opus', '--effort', 'high']);
   assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: pinned/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\treview\tclaude\thigh\tplan\n/u);
+});
+
+test('a review class step whose provider refused is a transient skip: no session, not moved to codex, not blocked', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.1, codex: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:no-capacity');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: the review model claude:opus:high: claude refused until 2026-08-29T13:00:00Z — skip/u);
+  const registered = JSON.parse(f.files['/w/runner/projects/m.json'] ?? 'null');
+  assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
 });
 
 test('a codex refusal on a class step is recorded against codex alone, and the step waits for capacity rather than failing', async () => {
