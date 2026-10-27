@@ -8,6 +8,7 @@
  *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>... [--tool codex]
  *                                                                 draft a plan, as DRAFT.json; --tool codex runs its steps on Codex, else on claude
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
+ *   mc project amend <project> --amendment-file <json> --reason "<authorization>"    amend a blocked sent plan without releasing it
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
  *   mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure, from a draft or a sent plan; the register's log records why
@@ -42,6 +43,7 @@ import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
+import { runAmend } from './project-amend.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope', '--tool'];
@@ -49,7 +51,7 @@ const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
 /** The words `mc project` takes as its verb. Any other single word is a project's name, for `mc project <name>`. */
-const VERB_WORDS = ['criterion', 'new', 'edit', 'step', 'send', 'archive', 'discard'];
+const VERB_WORDS = ['criterion', 'new', 'edit', 'amend', 'step', 'send', 'archive', 'discard'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -62,12 +64,17 @@ export async function run(argv, deps = {}) {
 
   const scanned = scanArgs(argv, {
     booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file'],
     repeatable: ['--contract', '--out-of-scope'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const [noun, verb, ...rest] = scanned.positional;
   if (scanned.flags.apply && noun !== 'discard') { stderr.write(usage()); return 2; }
+  if (noun === 'amend') {
+    const extra = onlyFlags(scanned, ['--amendment-file', '--reason']);
+    if (extra) { stderr.write(`mc: amend takes no ${extra}\n`); return 2; }
+    return runAmend(scanned, { ...deps, env, stdout, stderr, root, now, io });
+  }
   if (noun === 'send') {
     const extra = onlyFlags(scanned, []);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
@@ -1145,6 +1152,7 @@ export function usage() {
   return [
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>... [--tool codex]   draft a plan, as DRAFT.json; --tool codex runs its steps on Codex\n',
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
+    '        mc project amend <project> --amendment-file <json> --reason "<authorization>"  validate a sent plan amendment while its first unfinished step stays blocked\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
     '        mc project step add <project> <title> --model <model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
