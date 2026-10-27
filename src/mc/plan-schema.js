@@ -65,7 +65,7 @@ const KINDS = new Set(BLOCKER_KINDS);
 const STOPPED = new Set(['blocked']);
 
 const TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/u;
-const MODEL_RE = /^[a-z][a-z0-9._-]{0,63}$/u;
+export const MODEL_RE = /^[a-z][a-z0-9._-]{0,63}$/u;
 /**
  * What a blocker's name looks like when it is a name: a project or a decision
  * somebody can look up. Nothing refuses a blocker for failing it — `sql-goal1-

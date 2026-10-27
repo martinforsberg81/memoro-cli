@@ -583,6 +583,10 @@ IN FULL
   mc roles show <role>             One role whole: facts, then overlay text
   mc roles check [<role>]          What a launch would hand a session today,
                                     and any live session running other text
+  mc model [list] [--json]         The model catalog: the candidates a fast or
+                                    large step may run on, in order, and the
+                                    review model. Changed with mc model add,
+                                    mc model remove and mc model set review
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,
                                     bind, bindings, import, scan, audit,
