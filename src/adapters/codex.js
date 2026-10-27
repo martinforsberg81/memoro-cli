@@ -324,12 +324,7 @@ export function renderPolicy(policy = null) {
 function codexSandboxForWorkspace(workspace) {
   if (workspace === 'read-only') return { sandbox: 'read-only' };
   if (workspace === 'worktree') return { sandbox: 'workspace-write' };
-  if (workspace === 'full') {
-    return {
-      sandbox: 'workspace-write',
-      warning: 'workspace=full is not rendered; capped to workspace-write because mc never grants full tool access',
-    };
-  }
+  if (workspace === 'full') return { sandbox: 'danger-full-access' };
   return null;
 }
 

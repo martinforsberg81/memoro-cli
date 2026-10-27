@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { interactiveWorkspaceDirectories } from '../../src/mc/interactive-workspace.js';
-import { launchSpec } from '../../src/adapters/codex.js';
+import { launchSpec, renderPolicy } from '../../src/adapters/codex.js';
 import { openInWorkArea, startInBackground, respawnInBackground } from '../../src/mc/work-open.js';
 
 const ID = '3f9d2c81-0000-4000-8000-000000000001';
@@ -20,6 +20,7 @@ function fixture(t) {
   for (const path of [areaRoot, runtime, codex, join(mc, 'repos', 'memoro.git'), join(mc, 'repos', 'memoro-cli.git')]) mkdirSync(path, { recursive: true });
   const env = { ...process.env, MC_WORK_ROOT: mc, MC_HOME: runtime, CODEX_HOME: codex, CLAUDE_CONFIG_DIR: join(root, 'claude') };
   delete env.MC_REPOS_HOME;
+  delete env.MC_CODEX_WORKSPACE;
   return { root, mc, areaRoot, runtime, env, worktree: { path: areaRoot, is_git: false } };
 }
 
@@ -125,4 +126,72 @@ test('replacing a background Codex conversation retains the same grants', t => {
   assert.ok(command.includes(`'--add-dir' '${f.mc}'`));
   assert.ok(command.includes(`'--add-dir' '${f.runtime}'`));
   assert.ok(command.indexOf("'--add-dir'") < command.indexOf(`'${ID}'`));
+});
+
+
+for (const [workspace, sandbox] of [['full', 'danger-full-access'], ['worktree', 'workspace-write'], ['read-only', 'read-only']]) {
+  for (const approval of ['on-request', 'never', 'untrusted']) {
+    test(`explicit ${workspace} preserves independent ${approval} approval policy`, () => {
+      const policy = { permissions: { workspace, approval }, explicit_permissions: ['workspace', 'approval'] };
+      assert.deepEqual(renderPolicy(policy).launchArgs, ['--sandbox', sandbox, '--ask-for-approval', approval]);
+      assert.deepEqual(renderPolicy(policy).warnings, []);
+      const spec = launchSpec({ resolveBinary: () => 'codex' });
+      for (const base of [['PROMPT'], ['resume', ID, 'PROMPT']]) {
+        const args = spec.args(base, { effectivePolicy: policy });
+        assert.equal(args.at(-1), 'PROMPT');
+        assert.equal(args[args.indexOf('--sandbox') + 1], sandbox);
+        assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
+        if (base[0] === 'resume') assert.ok(args.indexOf('--sandbox') < args.indexOf(ID));
+      }
+    });
+  }
+  for (const resume of [false, true]) {
+    test(`${workspace} opt-in reaches foreground ${resume ? 'resume' : 'new'}`, async t => {
+      const f = fixture(t);
+      f.env.MC_CODEX_WORKSPACE = workspace;
+      if (resume) transcript(f);
+      let args;
+      await openInWorkArea({ ...f, tool: 'codex', pick: resume ? ID : 'new', register: () => () => {}, spawn: (_bin, argv) => {
+        args = argv;
+        return { error: new Error('fixture: no child launched') };
+      } });
+      assert.equal(args[args.indexOf('--sandbox') + 1], sandbox);
+      assert.ok(!args.includes('--ask-for-approval'));
+    });
+    test(`${workspace} opt-in reaches background ${resume ? 'resume' : 'new'}`, t => {
+      const f = fixture(t);
+      f.env.MC_CODEX_WORKSPACE = workspace;
+      let command;
+      const result = startInBackground({ ...f, name: 'fixture', tool: 'codex', conversation: resume ? { id: ID } : null, run: args => {
+        if (args[0] === 'has-session') return { status: 1 };
+        if (args[0] === 'new-session') command = args.at(-1);
+        return { status: 0 };
+      } });
+      assert.equal(result.ok, true);
+      assert.ok(command.includes(`'--sandbox' '${sandbox}'`));
+      assert.ok(!command.includes('--ask-for-approval'));
+    });
+  }
+  test(`${workspace} opt-in reaches background replacement`, t => {
+    const f = fixture(t);
+    f.env.MC_CODEX_WORKSPACE = workspace;
+    let command;
+    const result = respawnInBackground({ ...f, name: 'fixture', tool: 'codex', graceful: false, conversation: { id: ID }, run: args => {
+      if (args[0] === 'list-windows') return { status: 0, stdout: '1\n' };
+      if (args[0] === 'respawn-window') command = args.at(-1);
+      return { status: 0 };
+    } });
+    assert.equal(result.ok, true);
+    assert.ok(command.includes(`'--sandbox' '${sandbox}'`));
+  });
+}
+
+test('implicit full workspace never grants full execution', () => {
+  assert.deepEqual(renderPolicy({ permissions: { workspace: 'full' } }).launchArgs, []);
+});
+
+test('an invalid explicit profile refuses before spawning', async t => {
+  const f = fixture(t);
+  f.env.MC_CODEX_WORKSPACE = 'ful';
+  await assert.rejects(openInWorkArea({ ...f, tool: 'codex', pick: 'new', spawn: () => assert.fail('must not spawn') }), /MC_CODEX_WORKSPACE/);
 });

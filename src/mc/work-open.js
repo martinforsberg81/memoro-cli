@@ -345,6 +345,16 @@ function interactiveArgs(launch, args, context) {
   const options = launch.id === 'codex'
     ? { writableDirectories: interactiveWorkspaceDirectories(context) }
     : {};
+  const workspace = context.env?.MC_CODEX_WORKSPACE;
+  if (launch.id === 'codex' && workspace) {
+    if (!['read-only', 'worktree', 'full'].includes(workspace)) {
+      throw new Error('MC_CODEX_WORKSPACE must be read-only, worktree or full');
+    }
+    options.effectivePolicy = { permissions: { workspace }, explicit_permissions: ['workspace'] };
+    if (workspace === 'full') {
+      process.stderr.write('mc: explicit Codex workspace=full — unrestricted execution, not just browser access; approval policy unchanged\n');
+    }
+  }
   return launch.spec.args(args, options);
 }
 
