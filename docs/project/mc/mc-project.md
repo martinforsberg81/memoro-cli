@@ -100,6 +100,8 @@ mc project criterion edit <project> <n> --check "<command>"   a new check; a met
 mc project step add <project> "<title>" --model haiku|opus|gpt-6.1-sol|gpt-6.1-luna [--effort …] --done-when "…"
                                         [--after <repo>:<project>] --instruction-file <md>
 mc project step edit <project> <n> [any of the above]
+mc project amend <project> --amendment-file <json> --reason "<authorization>"
+                                        a validated exception while the project stays blocked
 mc project [<project>]                  the project as a person reads it; `mc status` becomes an alias
 mc project send <project>               the whole check, then `ready` for the runner. No branch, no PR
 mc project archive <project>            done: worktrees and branches go, plan and steps kept, results to the repo
@@ -117,7 +119,10 @@ What the verbs refuse, at the write, so that an invalid plan never exists:
 - a criterion without a `--check` command, or a check that needs the plan to have landed;
 - a dependency on another project written anywhere but `--after`. `--after` names `<repo>:<project>` across
   repositories, and mc resolves it over every project at once, archived ones included;
-- a change to a frozen field of a started project (today's `plan-merge.js` rules move into the verbs).
+- an ordinary edit to a frozen field of a started project. The explicit
+  `amend` exception is described in [the amendment contract](../../technical/mc-project-amend.md):
+  authorized contract/instruction/check changes, validated together while
+  the first unfinished step stays blocked, with no active session or open PR.
 
 ## Situations
 
