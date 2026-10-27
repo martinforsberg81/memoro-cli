@@ -1618,11 +1618,9 @@ Who pays for a claude step session is a mode Martin sets with
   5-hour budget. An absent, unreadable or unknown file reads as `plan`.
 - **`credits`** — every new claude step session on the plan's monthly API
   credit.
-- **`auto`** — the credit when the last seen seven-day utilization is at or
-  above 80 % (`CREDITS_AT_UTILIZATION`) or the plan has refused a session, and
-  the plan again once the seven-day window has reset. The last fifth of the
-  week is left for Martin's own interactive work, which the credit does not
-  cover.
+- **`auto`** — plan only: a claude step session runs on the plan's budget, as
+  under `plan`. No mode moves a session to the credit; `credits`, which Martin
+  sets, is the only one that does.
 
 Two files under `~/mc/runner/` (`src/mc/billing.js`): **`billing.json`** is
 Martin's — `{ mode, set }`, written by the verb, which also clears any credit

@@ -58,7 +58,7 @@ test('billing: nothing set prints plan, no window, and the next session on the p
   ]);
 });
 
-test('billing: auto at 83 % of the seven-day window says the next session runs on credits', async () => {
+test('billing: auto at 83 % of the seven-day window says the next session still runs on the plan', async () => {
   const mc = cli();
   writeBillingMode('auto', { root: mc.root, now: NOW });
   patchBillingState({ plan: {
@@ -69,7 +69,7 @@ test('billing: auto at 83 % of the seven-day window says the next session runs o
   const read = await mc.billing();
   assert.equal(read.out[0], 'billing auto');
   assert.match(read.out[1], /^plan: 5-hour 8 % \(resets \d{4}-\d\d-\d\d \d\d:\d\d\) · seven-day 83 % \(resets \d{4}-\d\d-\d\d \d\d:\d\d\) · seen 40m ago$/u);
-  assert.equal(read.out.at(-1), 'next claude step session: credits — seven-day 83 %, resets 2026-10-14T08:00:00Z');
+  assert.equal(read.out.at(-1), 'next claude step session: plan — mode auto is plan-only');
 });
 
 test('billing: a refusal and a credit mark in the future are printed', async () => {

@@ -32,12 +32,6 @@ export const BILLING_MODES = ['plan', 'credits', 'auto'];
 /** Today's behaviour: nothing in step-credits changes a runner until Martin picks another mode. */
 export const DEFAULT_BILLING = 'plan';
 /**
- * The seven-day utilization at which `auto` moves to the credit. The last
- * fifth of the weekly budget is left for Martin's own interactive work, which
- * the credit does not cover.
- */
-export const CREDITS_AT_UTILIZATION = 0.8;
-/**
  * How long an exhausted or rejected credit is left alone. There is no endpoint
  * that says the balance is back, so the only way to learn it is to try again;
  * once a day is often enough, and `mc run --billing <mode>` clears it sooner.
@@ -175,11 +169,9 @@ const after = (value, now) => {
  * Which billing a launch would get: `{ billing: 'plan'|'credits', why }`.
  *
  * In order: a tool that is not claude is plan; a credit marked unusable is
- * plan in every mode; then the mode — `plan` and `credits` are themselves, and
- * `auto` is credits after a plan refusal that has not reset, or at
- * `CREDITS_AT_UTILIZATION` of a seven-day window that has not reset. A window
- * whose reset has passed is stale and counts as unknown, which is plan: that
- * is the way back.
+ * plan in every mode; then the mode — `plan` and `credits` are themselves.
+ * `auto` is plan: no mode moves a session to the credit on its own, and the
+ * class router (model-choice.js) never chooses it (ruling 59).
  */
 export function billingFor({ mode = DEFAULT_BILLING, state, toolId, now = new Date() } = {}) {
   const read = normaliseBillingState(state);
@@ -188,14 +180,7 @@ export function billingFor({ mode = DEFAULT_BILLING, state, toolId, now = new Da
     return { billing: 'plan', why: `credits unusable until ${read.credits.unusable_until}${read.credits.why ? ` — ${read.credits.why}` : ''}` };
   }
   const chosen = BILLING_MODES.includes(mode) ? mode : DEFAULT_BILLING;
-  if (chosen === 'plan') return { billing: 'plan', why: 'mode plan' };
   if (chosen === 'credits') return { billing: 'credits', why: 'mode credits' };
-  if (after(read.plan.refused_until, now)) return { billing: 'credits', why: `the plan refused until ${read.plan.refused_until}` };
-  const week = read.plan.seven_day;
-  if (week && after(week.resets_at, now)) {
-    const percent = Math.round(week.utilization * 100);
-    if (week.utilization >= CREDITS_AT_UTILIZATION) return { billing: 'credits', why: `seven-day ${percent} %, resets ${week.resets_at}` };
-    return { billing: 'plan', why: `seven-day ${percent} %, under ${Math.round(CREDITS_AT_UTILIZATION * 100)} %` };
-  }
-  return { billing: 'plan', why: week ? 'the seven-day window seen has reset' : 'no seven-day window seen yet' };
+  if (chosen === 'auto') return { billing: 'plan', why: 'mode auto is plan-only' };
+  return { billing: 'plan', why: 'mode plan' };
 }
