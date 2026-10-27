@@ -1619,16 +1619,19 @@ keeps no parent process.
 ### Billing
 
 Who pays for a claude step session is a mode Martin sets with
-`mc run --billing plan|credits|auto` (project step-credits, ruling 38):
+`mc run --billing plan|credits` (project step-credits, ruling 38):
 
 - **`plan`** — the default, and today's behaviour: the Max plan's weekly and
   5-hour budget. An absent, unreadable or unknown file reads as `plan`.
 - **`credits`** — every new claude step session on the plan's monthly API
   credit.
-- **`auto`** — plan only: a claude step session runs on the plan's budget, as
-  under `plan`. No mode moves a session to the credit; `credits`, which Martin
-  sets, is the only one that does. A class-routed step is on the plan under
-  every mode (*Work classes and capacity*).
+`auto` is retired and reads as `plan` if an old settings file still names it.
+`credits` is selected manually. For a `fast` or `large` class it selects the
+first Anthropic candidate in that class, regardless of subscription headroom;
+review uses the configured Anthropic review model. If the class has no
+Anthropic candidate, the key cannot be read, or the credit is marked unusable,
+the step waits without starting a subscription session. The Anthropic Platform
+workspace limit is the spending bound; mc has no dollar cap.
 
 Two files under `~/mc/runner/` (`src/mc/billing.js`): **`billing.json`** is
 Martin's — `{ mode, set }`, written by the verb, which also clears any credit
@@ -1738,9 +1741,10 @@ If no candidate is known, the first claude candidate with unknown capacity is
 bootstrapped on the included plan. That is an unknown, not proven free quota:
 the choice's basis is `bootstrap`, and its reason says so.
 
-**Credits.** A class-routed session is on the plan under every billing mode, and
-the router never chooses a credit. This project does not enable Anthropic API
-credits; that is a later, deliberate decision with limits. Codex purchased
+**Credits.** A class-routed session uses subscriptions under `plan`. Under
+manually selected `credits`, every class selects its Anthropic model and runs
+on the API credit. An unavailable credit leaves the step ready to retry.
+Codex purchased
 ChatGPT credits are out of scope, and none is configured. Subscription
 monitoring is not a hard guard against purchased ChatGPT credits being added
 while a Codex session is active: the snapshot is read hourly and at each

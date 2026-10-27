@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runnerDir } from './paths.js';
 
-export const BILLING_MODES = ['plan', 'credits', 'auto'];
+export const BILLING_MODES = ['plan', 'credits'];
 /** Today's behaviour: nothing in step-credits changes a runner until Martin picks another mode. */
 export const DEFAULT_BILLING = 'plan';
 /**
@@ -170,8 +170,7 @@ const after = (value, now) => {
  *
  * In order: a tool that is not claude is plan; a credit marked unusable is
  * plan in every mode; then the mode — `plan` and `credits` are themselves.
- * `auto` is plan: no mode moves a session to the credit on its own, and the
- * class router (model-choice.js) never chooses it (ruling 59).
+ * Only an explicit `credits` mode moves a Claude session to the API credit.
  */
 export function billingFor({ mode = DEFAULT_BILLING, state, toolId, now = new Date() } = {}) {
   const read = normaliseBillingState(state);
@@ -181,6 +180,5 @@ export function billingFor({ mode = DEFAULT_BILLING, state, toolId, now = new Da
   }
   const chosen = BILLING_MODES.includes(mode) ? mode : DEFAULT_BILLING;
   if (chosen === 'credits') return { billing: 'credits', why: 'mode credits' };
-  if (chosen === 'auto') return { billing: 'plan', why: 'mode auto is plan-only' };
   return { billing: 'plan', why: 'mode plan' };
 }

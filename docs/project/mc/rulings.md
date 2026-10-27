@@ -2084,3 +2084,23 @@ launch uses one host-execution contract; adapters translate it or refuse
 unsupported access. Approval policy stays separate and external restrictions
 remain authoritative. A running session does not grant itself new access.
 Browser haptic evidence remains requests and timing, not physical sensation.
+
+## Manual Anthropic API credits for work classes
+
+`ruling · 2026-10-27` · raised by Martin after `subscription-model-routing`
+
+Martin: "mc behöver inte sätta tak, jag sätter tak i antropic platform per
+leverantör" and "jag vill själv kunna ändra till credits manuellt. Vi tar
+alltså bort auto-läget". When credits are selected, "varje steg [väljer] just
+en antropic modell fast/large".
+
+`mc run --billing` accepts only `plan` and `credits`. `plan` keeps the
+subscription router from ruling 59. `credits` selects the first Anthropic
+candidate of each work class, irrespective of subscription capacity, and uses
+the Anthropic API key. Review uses its configured Anthropic model. If a class
+has no Anthropic candidate or the key or workspace credit is unusable, it
+starts no session. The next launch may retry when the cause is fixed; it never
+silently spends the Anthropic subscription or selects Codex in credit mode.
+The Anthropic Platform workspace limit is the spending bound; mc does not
+maintain a second dollar cap. This supersedes ruling 59's temporary exclusion
+of credits from class routing and retires the `auto` billing mode.

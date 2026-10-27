@@ -1,5 +1,5 @@
 /**
- * `mc run --billing [plan|credits|auto]` — the mode, printed or set.
+ * `mc run --billing [plan|credits]` — the mode, printed or set.
  *
  * The files are real, in a temp root, so the write clearing the credit mark
  * is measured on the file the runner reads rather than on a stub of it.
@@ -39,12 +39,12 @@ function cli({ root = mkdtempSync(join(tmpdir(), 'mc-billing-verb-')) } = {}) {
 
 test('parseRunArgs: --billing and billing, with or without a mode, and nothing else beside it', () => {
   assert.deepEqual(parseRunArgs(['--billing']), { verb: 'billing', mode: null });
-  assert.deepEqual(parseRunArgs(['--billing', 'auto']), { verb: 'billing', mode: 'auto' });
+  assert.deepEqual(parseRunArgs(['--billing', 'credits']), { verb: 'billing', mode: 'credits' });
   assert.deepEqual(parseRunArgs(['billing']), { verb: 'billing', mode: null });
   assert.deepEqual(parseRunArgs(['billing', 'credits']), { verb: 'billing', mode: 'credits' });
   assert.match(parseRunArgs(['--billing', '--once']).error, /one order on its own/u);
   assert.match(parseRunArgs(['--once', '--billing']).error, /one order on its own/u);
-  assert.match(parseRunArgs(['--billing', 'auto', 'plan']).error, /one order on its own/u);
+  assert.match(parseRunArgs(['--billing', 'credits', 'plan']).error, /one order on its own/u);
 });
 
 test('billing: nothing set prints plan, no window, and the next session on the plan', async () => {
@@ -58,18 +58,18 @@ test('billing: nothing set prints plan, no window, and the next session on the p
   ]);
 });
 
-test('billing: auto at 83 % of the seven-day window says the next session still runs on the plan', async () => {
+test('billing: credits at 83 % of the seven-day window says the next Claude session uses credits', async () => {
   const mc = cli();
-  writeBillingMode('auto', { root: mc.root, now: NOW });
+  writeBillingMode('credits', { root: mc.root, now: NOW });
   patchBillingState({ plan: {
     five_hour: { utilization: 0.08, resets_at: '2026-10-11T15:00:00Z' },
     seven_day: { utilization: 0.83, resets_at: '2026-10-14T08:00:00Z' },
     seen: '2026-10-11T11:20:00Z',
   } }, { root: mc.root });
   const read = await mc.billing();
-  assert.equal(read.out[0], 'billing auto');
+  assert.equal(read.out[0], 'billing credits');
   assert.match(read.out[1], /^plan: 5-hour 8 % \(resets \d{4}-\d\d-\d\d \d\d:\d\d\) · seven-day 83 % \(resets \d{4}-\d\d-\d\d \d\d:\d\d\) · seen 40m ago$/u);
-  assert.equal(read.out.at(-1), 'next claude step session: plan — mode auto is plan-only');
+  assert.equal(read.out.at(-1), 'next claude step session: credits — mode credits');
 });
 
 test('billing: a refusal and a credit mark in the future are printed', async () => {
@@ -92,11 +92,14 @@ test('billing <mode>: writes, clears the credit mark, and says no restart is nee
   assert.deepEqual(readBillingState({ root: mc.root }).credits, { unusable_until: null, why: null });
 });
 
-test('billing <unknown>: refused with exit 2, naming the three, and nothing written', async () => {
+test('billing <unknown>: refused with exit 2, naming both modes, and nothing written', async () => {
   const mc = cli();
   const bad = await mc.billing('free');
   assert.equal(bad.code, 2);
   assert.deepEqual(bad.out, []);
-  assert.match(bad.err[0], /^mc: billing is plan, credits, auto, not "free"$/u);
+  assert.match(bad.err[0], /^mc: billing is plan, credits, not "free"$/u);
   assert.equal(readBillingMode({ root: mc.root }), 'plan');
+  const retired = await mc.billing('auto');
+  assert.equal(retired.code, 2);
+  assert.match(retired.err[0], /^mc: billing is plan, credits, not "auto"$/u);
 });
