@@ -111,6 +111,8 @@ export function detect() {
 export function launchSpec() {
   return {
     bin: CLAUDE_BIN,
+    // Claude already executes on the host; do not bypass its approval policy.
+    executionAccess: 'host',
     args: (argv = [], { startupMessage = null } = {}) => {
       const base = [...argv];
       if (!startupMessage) return base;

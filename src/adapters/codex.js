@@ -179,10 +179,16 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   try { bin = resolveBinary(); } catch { bin = null; }
   const buildArgs = (
     argv = [],
-    { startupMessage = null, effectivePolicy = null, gitCommonDir = null, writableDirectories = [] } = {},
+    { startupMessage = null, executionAccess = null, effectivePolicy = null, gitCommonDir = null, writableDirectories = [] } = {},
   ) => {
     const base = [...argv];
-    const policyArgs = renderPolicy(effectivePolicy).launchArgs;
+    // mc owns its execution boundary; approval policy remains independent.
+    const policy = executionAccess === 'host' ? {
+      ...effectivePolicy,
+      permissions: { ...effectivePolicy?.permissions, workspace: 'full' },
+      explicit_permissions: [...new Set([...(effectivePolicy?.explicit_permissions || []), 'workspace'])],
+    } : effectivePolicy;
+    const policyArgs = renderPolicy(policy).launchArgs;
     void startupMessage;
     const directories = [...new Set([gitCommonDir, ...writableDirectories].filter(Boolean))];
     const accessArgs = directories.flatMap(directory => ['--add-dir', directory]);
@@ -193,6 +199,7 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   };
   return {
     bin,
+    executionAccess: 'host',
     args: buildArgs,
     spawn: (argv = [], options = {}) => {
       const args = buildArgs(argv, options);
