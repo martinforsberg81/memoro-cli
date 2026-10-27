@@ -166,6 +166,10 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   let server = null;
   let staticBaseUrl = null;
   let staticServer = null;
+  // With `--url` stdout is the answer, read as `URL=$(mc test dev --here --url)`:
+  // the lines a person waits through go to stderr, or a wait for a slot ends
+  // up in the URL (measured 2026-10-27: the theme matrix navigated to it).
+  const progress = opts.url ? stderr : stdout;
   if (where === 'prod') {
     baseUrl = declaration.environments?.prod?.base_url || null;
     if (!baseUrl) {
@@ -176,7 +180,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     // The file server first: it is up in a second, and a round that is only
     // static suites is done with servers right here.
     if (wantsStatic) {
-      const ensured = await ensureDevServer(worktree, declaration, { ...deps, service: staticService });
+      const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, { ...deps, service: staticService });
       if (!ensured.ok) {
         stderr.write(`mc: ${ensured.error}\n`);
         return 1;
@@ -184,7 +188,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       staticServer = ensured.server;
       staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
       if (!opts.json) {
-        stdout.write(ensured.replacedHung
+        progress.write(ensured.replacedHung
           ? `mc: static tier — ${ensured.replacedHung} was alive but not answering — started a fresh one, ${staticBaseUrl} (${staticServer.instance_id})\n`
           : ensured.restartedFrom
           ? `mc: static tier — the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}), started a fresh one: ${staticBaseUrl} (${staticServer.instance_id})\n`
@@ -194,7 +198,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       }
     }
     if (wantsApp) {
-      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout, deps });
+      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout: progress, deps });
       if (!app.ok) {
         stderr.write(`mc: ${app.error}\n`);
         return 1;
