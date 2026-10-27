@@ -31,6 +31,7 @@ import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
 import { clearStopMark } from './work-stop-marker.js';
 import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
+import { interactiveAccessOptions } from './interactive-access.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -342,19 +343,7 @@ export function startInBackground({
 
 /** All interactive entry points pass through the adapter, including resumes. */
 function interactiveArgs(launch, args, context) {
-  const options = launch.id === 'codex'
-    ? { writableDirectories: interactiveWorkspaceDirectories(context) }
-    : {};
-  const workspace = context.env?.MC_CODEX_WORKSPACE;
-  if (launch.id === 'codex' && workspace) {
-    if (!['read-only', 'worktree', 'full'].includes(workspace)) {
-      throw new Error('MC_CODEX_WORKSPACE must be read-only, worktree or full');
-    }
-    options.effectivePolicy = { permissions: { workspace }, explicit_permissions: ['workspace'] };
-    if (workspace === 'full') {
-      process.stderr.write('mc: explicit Codex workspace=full — unrestricted execution, not just browser access; approval policy unchanged\n');
-    }
-  }
+  const options = interactiveAccessOptions(launch.spec, interactiveWorkspaceDirectories(context));
   return launch.spec.args(args, options);
 }
 
