@@ -14,6 +14,24 @@ and a file cited by name, never by path. See
 
 ---
 
+## 2026-10-27 · `blocked-plan-amendment`
+
+**Question.** A reviewed project cannot carry its authorized correction:
+ordinary verbs freeze both a sent contract and its blocked step. May mc add
+a bounded, validated amendment while the project stays blocked, rather than
+release old instructions or edit its JSON outside the verbs?
+
+**Answer.** Martin: “Ja, go.” This answers the recommendation for that mc
+change, followed by updating and releasing `docx-model`.
+
+**Carried by.** The in-session `plan/text-safe-plan-amendment` change,
+consuming proposal `2026-10-27-mc-amend-blocked-project-plan`, and then the
+existing `docx-model` plan. The verb preserves completed steps and execution
+history, refuses active sessions and open PRs, validates the whole result,
+records authorization and does not release the step. Ordinary edit freezes
+are unchanged. Its input and failure contract are in
+[Amending a blocked project](../../technical/mc-project-amend.md).
+
 ## 4 · `mc test` is one measurement with two runs
 
 `ruling · 2026-08-29` · raised as `mc-test-1`, owner `mc-test`

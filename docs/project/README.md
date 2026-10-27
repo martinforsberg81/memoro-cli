@@ -18,14 +18,25 @@ the same name that was once here is history: ruling 48 took every repository pla
 out, and they stay in git history.
 
 Since `project-verbs` a plan is written only through `mc project new`, `edit`,
-`criterion add`, `criterion edit`, `step add`, `step edit` and `send`. Until it is sent it is
+`criterion add`, `criterion edit`, `step add`, `step edit`, `send` and the
+explicit `amend` exception below. Until it is sent it is
 `DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
 `PLAN.json`. The verbs refuse a step whose `--model` its plan's tool does not
 run (`haiku` or `opus` on claude, `gpt-6.1-sol` or `gpt-6.1-luna` on codex,
 `--tool codex`), the words
 `Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
-dependency written anywhere but `--after <repo>:<project>`, and a change to a
+dependency written anywhere but `--after <repo>:<project>`, and an ordinary edit to a
 sent plan's goal, contract or out of scope, or to a step that has started.
+
+An authorized planning session can use `mc project amend <project>
+--amendment-file <json> --reason "..."` while the first unfinished step stays
+blocked on a decision or workarea. It validates the complete amended plan,
+audits the authorization and changes only the contract, remaining step
+instructions/model/checks and success criteria. Completed steps and the
+register are untouched; active sessions and open PRs refuse the write. It
+does not release the project: `mc step ready` remains a separate action.
+See [the amendment contract](../technical/mc-project-amend.md) for the input
+shape, evidence invalidation and failure behavior.
 
 A plan is instructions for a headless session that has read nothing else, with
 nobody watching. `mc run` hands it the step it is to do, and it opens a PR and
