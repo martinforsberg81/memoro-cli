@@ -144,9 +144,10 @@ describe('mc gate <test files…>', () => {
   });
 
   it('--test-name-pattern reaches node, and goes with named files only', async () => {
-    const named = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+    const named = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run(['a.test.js', '--test-name-pattern', 'adds up'], named.deps), 0);
     assert.equal(JSON.parse(named.files.get(`${LOG}.request.json`)).pattern, 'adds up');
+    assert.deepEqual(JSON.parse(named.files.get(`${LOG}.request.json`)).flags, ['--import', './tests/_isolate-home.mjs']);
 
     const bare = harness({ changed: ['tests/a.test.js'], tests: ['tests/a.test.js'] });
     assert.equal(await run(['--test-name-pattern', 'adds up'], bare.deps), 2);

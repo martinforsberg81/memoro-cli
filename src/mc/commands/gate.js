@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
-import { gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
+import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '../gate-local.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
@@ -181,7 +181,7 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: flags || [], pattern, select, base,
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: flags || testFlags(manifest?.scripts?.test), pattern, select, base,
         log: logPath, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
       const fd = io.open(logPath);
       // The worker owns the reservation, the test children and the result.
