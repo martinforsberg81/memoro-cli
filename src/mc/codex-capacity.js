@@ -32,6 +32,8 @@ import { applyFailure, applyObservation, readCapacity, writeCapacity } from './m
 import { runnerDir } from './paths.js';
 
 export const CODEX_TIMEOUT_MS = 20 * 1000;
+/** How often the runner reads Codex's windows and models: once an hour, from the chore pass (run.js `refreshCodexDue`). */
+export const CODEX_POLL_MS = 60 * 60 * 1000;
 export const CODEX_MAX_BYTES = 1 << 20;
 /** Pages of `model/list` read before the list is called incomplete. */
 export const MODEL_PAGES = 5;

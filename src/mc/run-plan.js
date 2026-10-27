@@ -18,7 +18,7 @@
  */
 import { parseRuns } from './brief-collect.js';
 import { redLines } from './merge-red.js';
-import { deliverableStep, EFFORT_LEVELS } from './plan-schema.js';
+import { deliverableStep, EFFORT_LEVELS, REVIEW_CLASS, WORK_CLASSES } from './plan-schema.js';
 import { estimateCost } from './prices.js';
 import { describePr, openPrsFor } from './project-prs.js';
 
@@ -31,9 +31,12 @@ import { describePr, openPrsFor } from './project-prs.js';
  * `close-workarea.js` decides whether a workarea may go by reading it.
  * `model` (step-cost, 2026-09-11) is appended after it for the same reason:
  * the alias the session was launched on, `-` on every row that is not a
- * session and on every row written before it.
+ * session and on every row written before it. `class`, `tool`, `effort` and
+ * `billing` (ruling 59) follow it for the same reason: what the session was
+ * routed to, the work class it was asked for (`-` for a concrete plan), and
+ * the billing it ran on. Rows written before them have no such cells.
  */
-export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model'];
+export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model', 'class', 'tool', 'effort', 'billing'];
 
 /**
  * What a session runs on when neither its step nor its plan says otherwise,
@@ -199,6 +202,7 @@ export const RUN_REFUSALS = Object.freeze([
   { reason: 'sync', read: false, why: 'the fetch and the merge of origin/main are the round\'s own writes, and their failure is what they returned' },
   { reason: 'role-missing', read: false, why: 'the kind is only known after the merge, and the role file is read out of the worktree the round has just synced' },
   { reason: 'tool-missing', read: false, why: 'whether the tool is on this machine is asked of the launch adapter, which spawns it' },
+  { reason: 'no-capacity', read: false, why: 'the candidate is chosen from the catalog and the capacity snapshot at the launch, and the snapshot is what a refusal writes; the reading makes no choice' },
 ].map((item) => Object.freeze(item)));
 
 /** The same words, by name, so a call site cannot invent one with a typo. */
@@ -1109,12 +1113,18 @@ const groupDigits = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g
  * A resume onto another billing than the session ran on (`billingNow`,
  * step-credits) is never warm: the prompt cache is per organisation and
  * workspace, and the plan's login and the key's workspace do not share one.
+ *
+ * `modelNow` is set only for a class-routed step (ruling 59): the model the
+ * launch would run on. A session is never resumed on another model than it
+ * ran on, so a different one is a cold start. A concrete plan passes none and
+ * is decided as it always was.
  */
-export function recoveryFor({ interrupted, toolNow, ttlMs, now, billingNow = null }) {
+export function recoveryFor({ interrupted, toolNow, ttlMs, now, billingNow = null, modelNow = null }) {
   const record = interrupted || {};
   if (!record.session_id) return { mode: 'fresh', why: 'no session id — fresh' };
   if (record.resume_failed) return { mode: 'fresh', why: 'the last resume did not start — fresh' };
   if (toolNow !== record.tool) return { mode: 'fresh', why: `the tool is ${toolNow} now, the session ran on ${record.tool || 'an unknown tool'} — fresh` };
+  if (modelNow != null && modelNow !== record.model) return { mode: 'fresh', why: `the model is ${modelNow} now, the session ran on ${record.model || 'an unknown model'} — fresh` };
   const ran = record.billing || 'plan';
   const changed = billingNow != null && ran !== billingNow ? `billing changed ${ran}→${billingNow}, ` : '';
   const last = record.last_activity ? Date.parse(record.last_activity) : NaN;
@@ -1612,13 +1622,13 @@ export function quotaResetAt(text, now = new Date()) {
 
 /* --------------------------------------------------------------------- log */
 
-export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model }) {
+export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing }) {
   const cell = (v) => String(v ?? '-').replace(/[\t\n]/gu, ' ');
   // `seconds` is the session; `land_seconds` is the gated round that followed
   // it. They are separate because the gate costs 20–35 minutes on memoro where
   // the old `gh pr merge` cost seconds, and a reader of runs.tsv asking where
   // a night went can only see that if the two are not added up here.
-  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model].map(cell).join('\t');
+  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing].map(cell).join('\t');
 }
 
 export function tsvHeader() {
@@ -1679,6 +1689,34 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
  * out rather than printed as `null`, and a tool that picks its own model says
  * so.
  */
+/**
+ * The work class a step names (ruling 59): `fast`, `large` or `review`, or null
+ * for a step that names a concrete model or none. Only a class is routed.
+ */
+export function workClassOf(step) {
+  const model = step?.runner?.model;
+  return WORK_CLASSES.includes(model) || model === REVIEW_CLASS ? model : null;
+}
+
+/**
+ * What a class-routed step runs on: `sessionSettings` for the candidate the
+ * router chose (`candidate` is `{ tool, model, effort }`, model-config.js). The
+ * tool and the model are the candidate's, and the plan's own tool, model and
+ * effort are not carried over — they name the plan's concrete choice, which a
+ * routed step does not make. A step's explicit effort still wins, as it does on
+ * a concrete step. The check-in, stall and advisor settings are the plan's, and
+ * `sessionSettings` gives each to the tool it applies to.
+ */
+export function routedSettings(planRunner, stepRunner, { kind = 'step', candidate }) {
+  const plan = planRunner || {};
+  const step = stepRunner || {};
+  return sessionSettings(
+    { ...plan, tool: candidate.tool, model: null, effort: null },
+    { ...step, model: candidate.model, effort: step.effort ?? candidate.effort },
+    { kind },
+  );
+}
+
 export function describeSettings(shortName, settings) {
   return [
     `${shortName} ${settings.model || 'own default model'}`,

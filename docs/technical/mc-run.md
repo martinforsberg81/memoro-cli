@@ -1255,7 +1255,7 @@ thing it writes into a repository: a blocked step (below).
 - **`log/runs.tsv`** — one row per step and per drained inbox file, and the
   history keeps the kinds the runner no longer produces (`repair`, `collect`):
   `ts name kind exit seconds pr turns input output cache_read cache_write
-  session note land_seconds model`. `seconds` is the session; `land_seconds` is the
+  session note land_seconds model class tool effort billing`. `seconds` is the session; `land_seconds` is the
   gate round that followed it, `-` when there was none. It is appended rather
   than placed beside `seconds` because the header is written once, when the
   file is created, and a column inserted would shift `note` one to the left for
@@ -1263,7 +1263,10 @@ thing it writes into a repository: a blocked step (below).
   the resolved `sessionSettings` model, `-` for the helper and intake turns and
   for a tool left to pick its own — appended last for the same reason, so a
   row can be read against the effort and advisor its session ran with (step-cost,
-  ruling 18). The file on this machine still has the thirteen-column header it
+  ruling 18). `class`, `tool`, `effort` and `billing` follow it for the same reason
+  (ruling 59): the work class the step names, `-` for a concrete plan, and the tool,
+  effort and billing the session ran on. For a class step those are the candidate it
+  was routed to, and its billing is `plan`. The file on this machine still has the thirteen-column header it
   was created with, so a reader that keys cells by the header sees neither of
   the last two; `archive-plan.js` reads by position and stops at `note`. What
   the session actually ran on is in its own json's `modelUsage`, which is what

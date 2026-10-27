@@ -134,7 +134,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy, scratchRe } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, archivedProjectsHome, planAreaRoot, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, archivedProjectsHome, planAreaRoot, programsHome, runnerDir, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -153,6 +153,10 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { CREDITS_RETRY_MS, billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
+import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
+import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
+import { chooseCandidate } from './model-choice.js';
+import { readModels } from './model-config.js';
 import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
@@ -165,7 +169,7 @@ import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
-  apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
+  apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -567,6 +571,12 @@ export function realDeps(env = process.env) {
     // credits and dropped once the session has it. A dependency so a test
     // never opens the vault.
     creditKey: () => readStepCreditKey(),
+    // The model catalog (`models.json`, model-config.js) and the capacity snapshot (`model-capacity.json`,
+    // model-capacity.js): local files, read at each class-routed launch (ruling 59). Codex's windows and
+    // models are read by `refreshCodex` from the chore pass, once an hour, and by nothing else.
+    catalog: () => readModels(env),
+    capacity: { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
+    refreshCodex: () => refreshCodexCapacity({ root: runnerDir(env) }),
     addWorktree,
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
@@ -798,13 +808,19 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const choice = chooseKind({ plan: applyEntry({ ...found, project: name }, entry) });
     const interrupted = STEP_KINDS.has(choice.kind) ? entry.steps?.[choice.index]?.interrupted : null;
     if (!interrupted) return null;
-    const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
+    // A class-routed step is decided against the candidate its launch would get (ruling 59).
+    const cls = workClassOf(choice.step);
+    const route = cls ? routeClass(cls) : null;
+    if (route && !route.ok) return null;
+    const { tool, model } = route
+      ? routedSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind, candidate: route.candidate })
+      : sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
     // The billing the next launch would get: a session moving between the
-    // plan's login and the key's workspace never finds its cache.
-    const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
+    // plan's login and the key's workspace never finds its cache. A routed step is on the plan.
+    const billingNow = route ? 'plan' : billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
     const cache = deps.role(choice.kind)?.cache || '1h';
-    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow });
+    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow, modelNow: route ? model : null });
     return { ...decided, interrupted, index: choice.index };
   }
 
@@ -1063,6 +1079,56 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try { await quotaSleep; } finally { quotaSleep = null; }
   }
   const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
+
+  /**
+   * The capacity snapshot (model-capacity.js) and what the runner does with it
+   * (ruling 59). A deps without one reads as nothing observed: a claude plan may
+   * be bootstrapped, codex is unavailable, and nothing is written.
+   */
+  const capacity = deps.capacity ?? { read: () => normaliseCapacity(null), write: () => {} };
+  /** One observation or refusal written to the snapshot; a write that fails is said, and the step goes on. */
+  function observeCapacity(change) {
+    try { capacity.write(change(capacity.read())); } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
+  }
+  /**
+   * A provider refused a session until the reset the refusal named, or the
+   * quota sleep from now when it named none. Only that provider is refused: the
+   * other is still a candidate, which is how a class step runs on codex the
+   * launch after claude refused.
+   */
+  function refuseProvider(provider, quotaReset) {
+    const nowMs = deps.now().getTime();
+    const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
+    observeCapacity((state) => applyRefusal(state, provider, until.toISOString()));
+    say(`${provider} refused until ${until.toISOString()}`);
+  }
+  /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
+  function routeClass(cls) {
+    try {
+      return chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+    } catch (error) {
+      return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
+    }
+  }
+  /**
+   * Codex's windows and models, read at most once an hour (`CODEX_POLL_MS`).
+   * Called by the chore pass, which is also the start: with no snapshot ever
+   * taken, the first call is due. Read-only, and no step asks it anything. A
+   * failed read is kept as the snapshot's failure and said; it never stops the
+   * chores.
+   */
+  async function refreshCodexDue() {
+    if (!deps.refreshCodex) return;
+    const codex = capacity.read().providers.codex;
+    const tried = [codex.observed_at, codex.failure?.at].map((at) => Date.parse(at || '')).filter(Number.isFinite);
+    if (tried.length && deps.now().getTime() - Math.max(...tried) < CODEX_POLL_MS) return;
+    try {
+      const got = await deps.refreshCodex();
+      say(got?.ok ? 'codex capacity read — its windows and models are noted' : `codex capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
+    } catch (error) {
+      say(`codex capacity not read: ${error?.message || error} — the chores go on`);
+    }
+  }
 
   /**
    * The plan the workarea carries, read off disk and nowhere else.
@@ -1999,7 +2065,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     // A quota answer in the other lane is this lane's answer too: wait it
     // out here, before a worktree is touched or a session is spent.
-    await quotaHold();
+    // A class-routed step is not held by it: a refusal is the capacity's, and the
+    // step is routed around it on its next launch (ruling 59).
+    if (!workClassOf(deliverableStep(plans.find((p) => p.project === name)?.plan ?? {}).step)) await quotaHold();
     const repo = repoOf(name, plans);
     // `no-plan` and not a word of its own: no workarea and no plan on main is
     // the same fact `kindFor` answers with, met one question later.
@@ -2184,8 +2252,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       abandonMerge(`canon/roles/${kind}.md is missing`);
       return block(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing on this machine`);
     }
-    // Step over plan over the kind's defaults (ruling 18).
-    const settings = sessionSettings(plan?.plan?.runner, choice.step?.runner, { kind });
+    // A step that names a work class is routed here, before a tool is launched,
+    // from the local catalog and capacity snapshot alone (ruling 59). The
+    // candidate it gets is where its tool, model and effort come from. No
+    // candidate with capacity is a transient skip, never a block.
+    const cls = workClassOf(choice.step);
+    const route = cls ? routeClass(cls) : null;
+    if (route && !route.ok) {
+      abandonMerge(`no ${cls} candidate has capacity`);
+      return refuse('no-capacity', `${route.reason} — skip`);
+    }
+    // Step over plan over the kind's defaults (ruling 18); a routed step's are the candidate's (`routedSettings`).
+    const settings = route
+      ? routedSettings(plan?.plan?.runner, choice.step?.runner, { kind, candidate: route.candidate })
+      : sessionSettings(plan?.plan?.runner, choice.step?.runner, { kind });
+    // An interrupted session is not resumed on another tool or model. If the route
+    // moved since the step was picked, the next pick decides what it resumes.
+    if (route && resuming && (settings.tool !== resuming.interrupted.tool || settings.model !== resuming.interrupted.model)) {
+      abandonMerge('the route moved since the step was picked');
+      return refuse('no-capacity', `${resuming.interrupted.tool} ${resuming.interrupted.model} is the session to resume, and ${settings.tool} ${settings.model} is the route now — skip`);
+    }
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) {
       abandonMerge(`${settings.tool} is not available`);
@@ -2197,6 +2283,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // flight: a bare `skipped`, because a slot that was not free at one
     // instant in this process is not a fact any file on this machine holds,
     // and `machineState` would have to guess at it.
+    // A concrete step waits out a quota in another lane, as it always has (quotaHold, above, names why it is not every step).
+    if (!cls) await quotaHold();
     const slot = await waitForSlot(name);
     if (slot !== 'ok') {
       abandonMerge(slot === 'stop' ? 'STOP is present' : 'an UPDATE is pending');
@@ -2246,6 +2334,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // alone; a key that cannot be read is a plan launch. codex is plan before
     // the vault is asked.
     const pickBilling = async () => {
+      // A class-routed session is on the plan whatever the mode says: the router
+      // never chooses a credit, and an explicit credits mode is not used by it (ruling 59).
+      if (route) return { billing: 'plan', why: 'class routing is on the plan (ruling 59)', key: null };
       const chosen = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: launch.id, now: deps.now() });
       if (chosen.billing !== 'credits') return { billing: 'plan', why: chosen.why, key: null };
       let got = null;
@@ -2298,7 +2389,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
     if (resuming) say(`${name}: resuming ${settings.tool} session ${resuming.interrupted.session_id} (${resuming.why})`);
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''}`);
+    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''}${route ? ` · class ${cls}: ${route.basis} (${route.why})` : ''}`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
@@ -2314,7 +2405,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
       kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), billing: picked.billing,
+      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), ...(cls ? { class: cls } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2339,7 +2430,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
         status: 'running', branch: stepBranch, pr: retry ? retry.pr : (resuming ? standingBefore?.pr ?? null : null), reason: null, stacked_on: stacked,
-        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out, billing: picked.billing },
+        session: { pid: null, started: stamp(), model: settings.model, effort: settings.effort, class: cls ?? null, lane, tool: settings.tool, log: out, billing: picked.billing },
       });
     }
     // A directory outside the worktree for whatever the session measures with:
@@ -2384,7 +2475,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ...(billing === 'credits' ? {} : { unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] }),
         onSpawn: (childPid) => {
           if (stepIndex == null) return;
-          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out, billing } });
+          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, effort: settings.effort, class: cls ?? null, lane, tool: settings.tool, log: out, billing } });
         },
       });
       picked = { ...picked, key: null };
@@ -2407,7 +2498,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       for (let resumes = 0; ; resumes += 1) {
         const last = readSessionOutput({ toolId: launch.id, stdout: attempt.stdout, stderr: attempt.stderr, exitCode: attempt.status, timedOut: attempt.timedOut, stalled: attempt.stalled, now: deps.now() });
         if (!last.interrupted || last.session === '-') break;
-        handOver = noteRefusal(last, picked.billing);
+        // A class-routed session does not wait out a refusal (ruling 59): it ends
+        // here, and the next pick routes around the refusal. A server error is
+        // still waited out in its own lane, on the same tool and model.
+        if (route && last.interrupted !== 'server') break;
+        handOver = route ? null : noteRefusal(last, picked.billing);
         noted = true;
         // A session that wrote its own end before the API cut it off has
         // ended; only one the register still calls `running` is resumed.
@@ -2470,6 +2565,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`${name}: the plan's windows were not recorded (${error.message})`);
       }
     }
+    // The same windows into the capacity snapshot, where the class router reads them (ruling 59).
+    if (launch.id === 'claude-code') observeCapacity((state) => observeClaudeStream(state, result.stdout, deps.now()));
 
     // The abort survives the kind it was written for, and for the reason it
     // was written: a merge the session did not commit leaves unmerged paths,
@@ -2510,8 +2607,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
     let { note } = read;
     // A refusal the resume loop did not see — no session id, or a quota
-    // read off the stream of a session that wrote no result.
-    if (!noted) handOver = noteRefusal(read, picked.billing);
+    // read off the stream of a session that wrote no result. A class-routed
+    // session has no billing hand-over: it is on the plan (ruling 59).
+    if (!noted && !route) handOver = noteRefusal(read, picked.billing);
+    // What the answer says about the provider it ran on, for every session (ruling
+    // 59): a quota, or a claude login that was lost. The next pick reads it.
+    const provider = launch.id === 'codex' ? 'codex' : 'claude';
+    const refused = read.quota || (provider === 'claude' && read.interrupted === 'login');
+    if (refused) refuseProvider(provider, read.quotaReset);
+    const rerouted = Boolean(route) && refused;
     if (result.lingered) say(`${name}: the process did not exit within ${Math.round(RESULT_GRACE_MS / 60_000)}m of its result — killed, the result stands`);
 
     // Where the step stands now is the register's word, not this process's
@@ -2562,6 +2666,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: handOver.from, counted: false });
       say(`${name}: step ${choice.index + 1} handed from ${handOver.from} to ${handOver.to} — ready for the next pick`);
       note = `${note},handed-to-${handOver.to}`;
+    } else if (rerouted && after?.status === 'running' && choice.index != null) {
+      // A class-routed session refused (ruling 59): interrupted and not counted, so
+      // the next pick routes it again. It resumes on the same tool and model if
+      // that is still the route, and starts cold if not (recoveryFor).
+      recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: 'plan', counted: false });
+      say(`${name}: step ${choice.index + 1} left ${provider} (${settings.tool} ${settings.model}) — ready for the next pick`);
+      note = `${note},rerouted`;
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
@@ -2589,9 +2700,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       note = `${note},failed`;
     }
 
-    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model, cls, tool: settings.tool, effort: settings.effort, billing: picked.billing });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
-    if (read.quota && !waited && !handOver) await quotaPause(read.quotaReset);
+    if (read.quota && !waited && !handOver && !route) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
     // either. They are still told apart because the row and the log line are
     // read by a person, and because a merged step is the one that leaves the
@@ -2994,6 +3105,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await reapOrphans();
     await sweepDockerChore();
     sweepScratch();
+    await refreshCodexDue();
     await runTidyDaily();
     // Last, and not beside the two chores above: it is the long one, and the
     // archive and the tidying should not wait twenty minutes behind it. The

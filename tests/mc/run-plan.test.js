@@ -8,7 +8,7 @@ import {
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, creditsResetAt, resumePrompt,
   COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionSpoke, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
-  tsvHeader, tsvRow, userMessageLine,
+  tsvHeader, tsvRow, userMessageLine, routedSettings, workClassOf,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
@@ -613,6 +613,34 @@ test('headlessArgs: subagents adds Agent and mc\'s own step-worker, claude only'
   assert.equal(codex.includes('--agents'), false);
 });
 
+test('workClassOf: a step names a class as its model, and nothing else is one', () => {
+  assert.equal(workClassOf({ runner: { model: 'fast' } }), 'fast');
+  assert.equal(workClassOf({ runner: { model: 'large' } }), 'large');
+  assert.equal(workClassOf({ kind: 'review', runner: { model: 'review' } }), 'review');
+  assert.equal(workClassOf({ runner: { model: 'opus' } }), null);
+  assert.equal(workClassOf({ runner: {} }), null);
+  assert.equal(workClassOf(null), null);
+});
+
+test('routedSettings: the candidate\'s tool, model and effort; the plan\'s own model and effort set aside; a step\'s explicit effort kept', () => {
+  const planRunner = { tool: 'claude', model: 'opus', effort: 'low', check_in_minutes: 30, stall_minutes: 15, subagents: 'on' };
+  const codex = routedSettings(planRunner, { model: 'fast' }, { candidate: { tool: 'codex', model: 'gpt-6-luna', effort: 'high' } });
+  assert.deepEqual([codex.tool, codex.model, codex.effort, codex.advisor, codex.subagents], ['codex', 'gpt-6-luna', 'high', null, false]);
+  assert.deepEqual([codex.checkInMinutes, codex.stallMinutes], [30, 15], 'the plan\'s watch intervals still apply');
+  const pinned = routedSettings(planRunner, { model: 'review', effort: 'xhigh' }, { kind: 'review', candidate: { tool: 'claude', model: 'opus', effort: 'high' } });
+  assert.deepEqual([pinned.tool, pinned.model, pinned.effort, pinned.subagents], ['claude', 'opus', 'xhigh', true]);
+});
+
+test('recoveryFor: a class-routed step is resumed only on the model it ran on; a concrete one is decided as before', () => {
+  const interrupted = { session_id: 'sid-1', tool: 'claude', model: 'haiku', last_activity: '2026-08-29T09:59:00Z', context_tokens: 1000 };
+  const now = new Date('2026-08-29T10:00:00Z');
+  assert.equal(recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now, modelNow: 'haiku' }).mode, 'resume');
+  const other = recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now, modelNow: 'sonnet' });
+  assert.equal(other.mode, 'fresh');
+  assert.match(other.why, /the model is sonnet now, the session ran on haiku — fresh/u);
+  assert.equal(recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now }).mode, 'resume');
+});
+
 test('sessionSettings: subagents is on only where a plan or step says so, step over plan', () => {
   assert.equal(sessionSettings({}).subagents, false);
   assert.equal(sessionSettings({ subagents: 'on' }).subagents, true);
@@ -862,12 +890,12 @@ test('readSessionOutput: codex events give what they give', () => {
  * the file is created, and the one on this machine still carries thirteen.
  */
 test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time, then the model', () => {
-  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel');
+  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel\tclass\ttool\teffort\tbilling');
   const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged', landSeconds: 1830, model: 'sonnet' });
-  assert.equal(row.split('\t').length, 15);
-  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830\tsonnet');
-  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 15);
-  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
+  assert.equal(row.split('\t').length, 19);
+  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830\tsonnet\t-\t-\t-\t-');
+  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 19);
+  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-\t-\t-\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
 });
 
 const wait = (checkInMinutes = 60, stallMinutes = 20) => ({ checkInMinutes, stallMinutes });
