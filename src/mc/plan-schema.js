@@ -127,6 +127,15 @@ export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'm
  */
 export const CLAUDE_MODELS = Object.freeze(['haiku', 'opus']);
 export const CODEX_MODELS = Object.freeze(['gpt-6.1-sol', 'gpt-6.1-luna']);
+/**
+ * The work classes (ruling 59) a step may name instead of a model: `fast` and
+ * `large` for an ordinary step, which mc resolves to a model when the step
+ * starts. `review` is the review step's class, and the one it names. A class
+ * names no tool, so the plan's `runner.tool` pairing does not apply to it; a
+ * concrete model keeps the pairing it always had.
+ */
+export const WORK_CLASSES = Object.freeze(['fast', 'large']);
+export const REVIEW_CLASS = 'review';
 const BLOCKER_KEYS = Object.freeze(['kind', 'name', 'at', 'step', 'hours']);
 
 /** The field a blocker carries beyond its name, and the one kind that may carry it. */
@@ -183,10 +192,11 @@ function positiveInteger(value) {
 }
 
 // The plan's `runner` and a step's own, by one function: `at` is where the
-// problem text says it is, `keys` what that level may carry. A plan-level key
+// problem text says it is, `keys` what that level may carry, and `classes` the
+// work classes it may name (none for a plan). A plan-level key
 // on a step is refused by name rather than as unknown, because the author who
 // wrote it meant something the step cannot say.
-function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, tool = runner?.tool ?? 'claude' } = {}) {
+function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, tool = runner?.tool ?? 'claude', classes = null } = {}) {
   if (runner === null || runner === undefined) return;
   if (!plain(runner)) { problems.push(`${at}: must be an object, or absent for the defaults`); return; }
   for (const key of unknownKeys(runner, keys)) {
@@ -195,11 +205,17 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, t
   if (runner.tool !== undefined && !TOOL_RE.test(String(runner.tool))) {
     problems.push(`${at}.tool: must name a tool mc can launch`);
   }
-  if (runner.model !== undefined && runner.model !== null && !MODEL_RE.test(String(runner.model))) {
-    problems.push(`${at}.model: must be a model name`);
+  if (runner.model !== undefined && runner.model !== null) {
+    const model = String(runner.model);
+    if (WORK_CLASSES.includes(model) || model === REVIEW_CLASS) {
+      if (!classes?.includes(model)) problems.push(`${at}.model: ${classProblem(model, classes)}`);
+    } else if (!MODEL_RE.test(model)) {
+      problems.push(`${at}.model: must be a model name`);
+    } else {
+      const paired = pairingProblem(model, tool);
+      if (paired) problems.push(`${at}.model: ${paired}`);
+    }
   }
-  const paired = runner.model !== undefined && runner.model !== null ? pairingProblem(runner.model, tool) : null;
-  if (paired) problems.push(`${at}.model: ${paired}`);
   if (runner.effort !== undefined && runner.effort !== null && !EFFORT_LEVELS.includes(runner.effort)) {
     problems.push(`${at}.effort: one of ${EFFORT_LEVELS.join(', ')}`);
   }
@@ -233,6 +249,16 @@ function pairingProblem(model, tool) {
     return `${model} is a Claude model — a codex plan names ${CODEX_MODELS.join(' or ')}`;
   }
   return null;
+}
+
+/**
+ * What is wrong with a work class named where it may not be: the classes that
+ * level takes, or — for a plan, which takes none — that a step names it.
+ */
+function classProblem(model, classes) {
+  return classes?.length
+    ? `${model} is not a class for this step — ${classes.join(' or ')}`
+    : `${model} is a work class, which a step names and a plan does not`;
 }
 
 function validateCriteria(list, problems) {
@@ -340,7 +366,7 @@ function validateSteps(steps, problems, tool) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
     validateBlocker(step, at, problems, index + 1);
-    validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS, tool });
+    validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS, tool, classes: step.kind === 'review' ? [REVIEW_CLASS] : WORK_CLASSES });
   });
 }
 

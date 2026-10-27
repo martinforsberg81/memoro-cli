@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { PLAN_FILE } from './plan-source.js';
-import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, validatePlan } from './plan-schema.js';
+import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, REVIEW_CLASS, validatePlan, WORK_CLASSES } from './plan-schema.js';
 
 /**
  * The file a plan is written to until `mc project send` renames it. It sits
@@ -29,18 +29,29 @@ import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, validatePlan } from '
 export const DRAFT_FILE = 'DRAFT.json';
 
 /**
- * The only models a step written by a verb may name (ruling 42, `mc-project.md`
+ * The concrete models a step written by a verb may name (ruling 42, `mc-project.md`
  * § Decisions): haiku and opus on claude, gpt-6.1-sol and gpt-6.1-luna on codex.
  * A step names its own model; the plan does not name one for it. Which of the
  * two a step may name is the plan's `runner.tool` (`validatePlan`).
  */
 export const MODELS = Object.freeze([...CLAUDE_MODELS, ...CODEX_MODELS]);
+/**
+ * What a step written by a verb may name (ruling 59): a work class, `fast` or
+ * `large`, which mc resolves to a model when the step starts, or one of `MODELS`.
+ * A class names no tool, so the plan's `runner.tool` does not apply to it.
+ * `review` is not in this list: `send` gives it to the review step alone.
+ */
+export const STEP_MODELS = Object.freeze([...WORK_CLASSES, ...MODELS]);
+/** `STEP_MODELS` in words, for the refusals that name what a step may be given. */
+export const STEP_MODEL_WORDS = 'fast, large, haiku, opus, gpt-6.1-sol or gpt-6.1-luna';
 
 /**
  * The review step `mc project send` adds, last, to every plan it sends (the
  * branch flow): it measures every success criterion by its check, holds the
  * branch to the goal, and lands the whole project as one pull request. Its
  * instruction names canon/roles/review.md, which is where the role is read.
+ * Its model is the `review` class (ruling 59): one configured model, chosen by
+ * mc, with no provider's name and no effort of its own, on either tool.
  * `mc project step add` writes the same fields for a step it adds, and no others.
  */
 export const REVIEW_STEP = Object.freeze({
@@ -49,25 +60,17 @@ export const REVIEW_STEP = Object.freeze({
   status: 'ready',
   done_when: 'Every success criterion is met in the register, measured by its check, and the branch does what the goal says within the contract and out of scope.',
   instruction: Object.freeze(['canon/roles/review.md is this step\'s instruction: measure every criterion, hold the diff to the goal, close the gaps, land the project as one pull request.']),
-  runner: Object.freeze({ model: 'opus', effort: 'high' }),
+  runner: Object.freeze({ model: REVIEW_CLASS }),
 });
-
-/**
- * The review step's runner on a codex plan: the same effort, on the codex model
- * that stands where opus does. A plan on codex has no opus to review it with
- * (`validatePlan` refuses a claude model there), so mc names this one, and says so.
- */
-export const CODEX_REVIEW_RUNNER = Object.freeze({ model: 'gpt-6.1-sol', effort: 'high' });
 
 /**
  * The plan with a copy of `REVIEW_STEP` appended, or the plan unchanged when it
  * is a branch-flow plan already. The copy is what the plan holds, never the
- * frozen constant itself. On a `codex` plan the copy runs on `CODEX_REVIEW_RUNNER`.
+ * frozen constant itself.
  */
 export function withReviewStep(plan) {
   if (branchFlow(plan)) return plan;
   const review = structuredClone(REVIEW_STEP);
-  if (plan?.runner?.tool === 'codex') review.runner = { ...CODEX_REVIEW_RUNNER };
   return { ...plan, steps: [...plan.steps, review] };
 }
 
@@ -237,7 +240,7 @@ function instructionOf(step) {
  * Everything that stops a draft from being sent, as strings a person can act
  * on: all of `validatePlan`'s problems, then what only a verb refuses — a plan
  * that names a model for itself rather than for each step (ruling 42), a step
- * whose model is not `MODELS`, a banned word in a step's `done_when` or a
+ * whose model is not `STEP_MODELS`, a banned word in a step's `done_when` or a
  * criterion's `check`, and a dependency in prose where `--after` belongs. An
  * empty array is a plan `mc project send` may rename to `PLAN.json`.
  */
@@ -250,7 +253,9 @@ export function sendProblems(plan) {
   steps.forEach((step, index) => {
     const n = index + 1;
     if (step && typeof step === 'object' && 'kind' in step) problems.push(`steps[${n}].kind: the review step is mc's — send adds it`);
-    if (!MODELS.includes(step?.runner?.model)) problems.push(`steps[${n}].runner.model: haiku, opus, gpt-6.1-sol or gpt-6.1-luna`);
+    // `review` is named by validatePlan, which says what it is for; this names the rest.
+    const model = step?.runner?.model;
+    if (!STEP_MODELS.includes(model) && model !== REVIEW_CLASS) problems.push(`steps[${n}].runner.model: ${STEP_MODEL_WORDS}`);
     const names = bannedWords(step?.done_when);
     if (names.length) problems.push(`steps[${n}].done_when: names ${names.join(', ')} — a step's end is a check, never a person's`);
     const prose = [step?.done_when, ...instructionOf(step)];

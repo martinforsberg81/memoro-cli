@@ -267,6 +267,33 @@ describe('the plan schema', () => {
     assert.match(validatePlan(plan({ runner: { tool: 'codex', model: 'opus' } })).problems.join('\n'), /runner\.model: opus is a Claude model/u);
   });
 
+  it('takes the work classes fast and large on an ordinary step, on either tool, and review only on the review step (ruling 59)', () => {
+    const [done, ready] = plan().steps;
+    const onPlan = (tool, model, kind) => validatePlan(plan({
+      ...(tool ? { runner: { tool } } : {}),
+      steps: [done, { ...ready, ...(kind ? { kind } : {}), runner: { model } }],
+    }));
+    for (const tool of [null, 'claude', 'codex']) {
+      for (const model of ['fast', 'large']) assert.deepEqual(onPlan(tool, model), { ok: true, problems: [] }, `${model} on ${tool}`);
+    }
+    assert.match(onPlan(null, 'review').problems.join('\n'), /steps\[1\]\.runner\.model: review is not a class for this step — fast or large/u);
+    assert.match(onPlan(null, 'fast', 'review').problems.join('\n'), /steps\[1\]\.runner\.model: fast is not a class for this step — review/u);
+    assert.deepEqual(onPlan('codex', 'review', 'review'), { ok: true, problems: [] }, 'review on a codex plan');
+    assert.match(validatePlan(plan({ runner: { model: 'fast' } })).problems.join('\n'), /runner\.model: fast is a work class, which a step names and a plan does not/u);
+  });
+
+  it('keeps sent concrete plans valid: a concrete review on opus or on a Codex model, and concrete steps on their own tool', () => {
+    const [done, ready] = plan().steps;
+    const review = { title: 'Review the project against its goal', kind: 'review', status: 'ready', done_when: 'Every criterion is met.', instruction: ['Review.'] };
+    const claude = plan({ steps: [done, { ...ready, runner: { model: 'haiku', effort: 'high' } }, { ...review, runner: { model: 'opus', effort: 'high' } }] });
+    assert.deepEqual(validatePlan(claude), { ok: true, problems: [] });
+    const codex = plan({
+      runner: { tool: 'codex' },
+      steps: [done, { ...ready, runner: { model: 'gpt-6.1-luna', effort: 'high' } }, { ...review, runner: { model: 'gpt-6.1-sol', effort: 'high' } }],
+    });
+    assert.deepEqual(validatePlan(codex), { ok: true, problems: [] });
+  });
+
   it('takes a runner with model, effort and advisor on a step, and nothing else there', () => {
     const [done, ready] = plan().steps;
     const onStep = (runner) => validatePlan(plan({ steps: [done, { ...ready, runner }] }));
