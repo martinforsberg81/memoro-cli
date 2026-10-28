@@ -23,6 +23,29 @@ unavailable command may retain its existing v1 gate verdict, but cannot mint a
 green receipt. An interrupted worker may leave no receipt; absence is not green.
 A command reporting `RUNNING` does not create a receipt on the worker's behalf.
 
+## Waiting and recovery
+
+The command's budget includes lane waiting. Budget expiry returns `RUNNING`
+(exit 3) and leaves the worktree lock in place; the detached worker continues
+holding its own lane and test children, not the short-lived command's. Another
+caller in that worktree is refused while it runs. `mc gate --wait` observes the
+same log/result and can itself time out without starting or releasing anything.
+An orderly worker interrupt stops the active child group before releasing the
+lane. Standard/sqlite batches retain the selected lane count; heavy batches
+remain exclusive. Evidence does not reserve additional resources.
+
+A worker that disappears without its exit marker is a red command, even if its
+log printed passing counts or its result file exists. A failure before receipt
+persistence leaves no discoverable green evidence. A failure after persistence
+but before the result/exit marker or reuse-cache update leaves the completed
+receipt intact: a later session can read that run's receipt idempotently through
+`readGreenReceipt` or the stricter `findPublicationReceipt`. Neither lookup
+reconstructs success from log output. Missing/truncated receipts are not green;
+start a fresh measurement with a new run ID rather than overwrite an attempt.
+An absent cache entry simply causes the merger to measure again.
+
+## Coverage and autonomous consumers
+
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
 unfiltered affected selection can populate the existing `gate-greens.jsonl`

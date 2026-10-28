@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
 import { captureWorktree, findPublicationReceipt, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
-import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, selectionHash } from '../../src/mc/gate-greens.js';
+import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { selectorCommand, runSessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, realTests, selectFiles } from '../../src/mc/repo-gate.js';
 
@@ -34,6 +34,56 @@ function fixture(t) {
 }
 const receiptOf = (result) => JSON.parse(readFileSync(result.evidence.path, 'utf8'));
 const quiet = { write: () => {} };
+
+it('recovery before and after receipt persistence never invents or loses a completed measurement', async (t) => {
+  for (const window of ['before', 'after']) {
+    const { request } = fixture(t);
+    const req = { ...request(), files: null, select: 'selector' };
+    const context = { root: req.reservation.root, repo: req.measurement.repo,
+      repository: req.measurement.candidate.repository, run: req.measurement.run,
+      sessionRun: req.measurement.session_run, goalRevision: req.measurement.goal_revision,
+      configuration: req.measurement.configuration };
+    const options = { ...quiet, select: async () => ({ ok: true, files: ['a.test.js'], commands: [] }),
+      tests: async () => ({ code: 0, tap: GREEN }) };
+    let saved;
+    await assert.rejects(runSessionGate(req, { ...options, persist: (args) => {
+      if (window === 'after') saved = persistGateReceipt(args);
+      throw new Error(`crash ${window} persistence`);
+    } }), /crash/u);
+    assert.equal(existsSync(join(req.reservation.root, 'gate-greens.jsonl')), false);
+    const recovered = readGreenReceipt(context);
+    if (window === 'before') {
+      assert.equal(recovered, null);
+      // A fresh attempt has a new run identity; the interrupted one stays absent.
+      req.measurement = { ...req.measurement, run: 'gate-restarted' };
+      assert.equal(receiptOf(await runSessionGate(req, options)).outcome, 'green');
+      assert.equal(readGreenReceipt(context), null);
+    } else {
+      assert.equal(recovered.outcome, 'green');
+      const bytes = readFileSync(saved, 'utf8');
+      assert.deepEqual(readGreenReceipt(context), recovered, 'the next session reads the same immutable result');
+      assert.equal(persistGateReceipt({ root: context.root, receipt: recovered }), saved);
+      assert.equal(readFileSync(saved, 'utf8'), bytes);
+      assert.equal(findGreen({ root: context.root, repo: context.repo, tree: recovered.tree,
+        selection: selectionHash(recovered.coverage) }), null, 'a crash before caching falls back to measurement');
+    }
+  }
+});
+
+it('a reuse-cache failure leaves a durable discoverable receipt and the completed verdict intact', async (t) => {
+  const { request } = fixture(t);
+  const req = { ...request(), files: null, select: 'selector' };
+  let output = '';
+  const result = await runSessionGate(req, {
+    write: (line) => { output += line; },
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [] }),
+    tests: async () => ({ code: 0, tap: GREEN }),
+    record: () => { throw new Error('cache unavailable'); },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(receiptOf(result).outcome, 'green');
+  assert.match(output, /reuse cache not updated: cache unavailable/u);
+});
 
 it('fingerprints staged, unstaged, deleted, executable, symlink and untracked bytes without changing the real index', (t) => {
   const { cwd } = fixture(t);
