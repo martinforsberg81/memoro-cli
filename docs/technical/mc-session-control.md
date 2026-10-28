@@ -49,8 +49,8 @@ sample's activity accounts for the intervening awake interval: `model`, `lane`,
 `tool` or `gate`, with a stable job ID except for model work. Wall minus awake is
 recorded sleep. Only model time consumes active/no-progress budgets; known waits
 consume their own bounds and total awake/closing time. Replacing one job with
-another cannot evade total awake time. The next adapter step must supply these
-normalized clocks honestly; this module does not infer sleep from silence.
+another cannot evade total awake time. The [observation boundary](mc-session-observation.md)
+requires the trusted runner to supply these clocks; this policy does not infer sleep from silence.
 
 `context` is either null or `{ fraction, at_ms, source, quality }`, where quality
 is `measured` or explicitly `estimated`. Missing/stale readings become `unknown`
@@ -79,9 +79,9 @@ the existing programme/project/register locks, active step-run ownership and
 expected state revision. Actions are returned only after the atomic write.
 Runner callers must verify measured references, reserve the run, reconcile prior
 workers/gate children before another start, and subsequently publish pending
-results to plan. These functions store durable results; they do not yet dispatch
-plan work or launch/terminate processes. Process supervision belongs to the next
-adapter step, not this policy.
+results to plan. These functions store durable results; they do not dispatch
+plan work or launch/terminate processes. The explicit inactive
+[transport seam](mc-session-observation.md) adds process supervision separately.
 
 Both tools can read the same durable signal without live stdin steering:
 
@@ -106,5 +106,6 @@ these commands activates execution or changes the v1 step/status commands.
 Verification: `mc gate tests/mc/session-control.test.js` uses fake clocks and
 isolated real state files for boundaries, reserves, bounded waits, machine sleep,
 unknown context, persistent stagnation/failures, command ownership, durable
-responses and failed atomic writes. Transport measurements and ignored-control
-process fixtures are explicitly not part of this step.
+responses and failed atomic writes. Synthetic transport events and ignored-control
+real process fixtures are covered separately by `tests/mc/session-observation.test.js`;
+no paid provider telemetry is inferred from those fixtures.

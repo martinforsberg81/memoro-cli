@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
 import { realLock } from './register.js';
 import { withPlanLock } from './plan-write.js';
-import { createSessionControl, decideSessionControl, controlResponse, validateControlState } from './session-control.js';
+import { createSessionControl, decideSessionControl, interruptSessionControl, controlResponse, validateControlState } from './session-control.js';
 import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
@@ -287,6 +287,13 @@ export function observeProjectSessionControl(root, programme, project, { actor, 
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation));
+    return save(paths.project, state, { ...state, session_control }, deps);
+  }, deps);
+}
+export function interruptProjectSessionControl(root, programme, project, { actor, revision, reason, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    const session_control = interruptSessionControl(ownedControl(state, actor), reason);
     return save(paths.project, state, { ...state, session_control }, deps);
   }, deps);
 }

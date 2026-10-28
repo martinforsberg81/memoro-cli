@@ -34,6 +34,13 @@ export function getAdapter(id) {
   throw err;
 }
 
+/** Headless lifecycle capabilities, distinct from interactive launch support. */
+export function sessionTransport(tool) {
+  const adapter = getAdapter(canonicalToolId(tool));
+  if (!adapter.SESSION_TRANSPORT) throw new Error('unsupported session transport');
+  return adapter.SESSION_TRANSPORT;
+}
+
 export function listAdapters() {
   return Object.values(ADAPTERS).map(a => ({ id: a.ID, label: a.LABEL, available: true }));
 }

@@ -118,6 +118,16 @@ export function createSessionControl({ binding, profile, observation, previous =
 export function decideSessionControl(previous, observation) {
   return decide(previous, observation, false);
 }
+
+/** Trusted supervisor only: unexpected exit and failed observation/preservation
+ * are incomplete attempts, even when a transport printed a successful result. */
+export function interruptSessionControl(previous, reason) {
+  validateControlState(previous);
+  if (!text(reason)) throw new Error('interruption reason required');
+  const state = structuredClone(previous);
+  if (!['incomplete', 'plan_pending'].includes(state.phase)) stop(state, 'incomplete', reason);
+  return state;
+}
 function decide(previous, observation, initial) {
   checkObservation(observation); validateControlState(previous);
   if (!initial && observation.sequence === previous.observation.sequence) {

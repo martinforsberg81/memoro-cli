@@ -28,6 +28,8 @@ const COMMAND_PREFIX = 'memoro-';
 
 export const ID = 'claude-code';
 export const LABEL = 'Claude Code';
+// New autonomous control uses durable callbacks, not additional conversation turns.
+export const SESSION_TRANSPORT = Object.freeze({ events: 'jsonl', prompt: 'stdin-jsonl', live_control: false, current_context: 'request-estimate' });
 // This adapter owns no instruction file. The constant remains so callers that
 // ask every adapter the same question get a truthful answer rather than an
 // exception.

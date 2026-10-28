@@ -31,6 +31,8 @@ const MEMORO_HOOK_ID = 'memoro-cli';
 
 export const ID = 'codex';
 export const LABEL = 'Codex CLI';
+// Headless exec, not app-server or an interactive PTY. No live stdin channel.
+export const SESSION_TRANSPORT = Object.freeze({ events: 'jsonl', prompt: 'argument', live_control: false, current_context: 'unavailable' });
 export const CONFIG_PATH = null;
 export const POLICY_SUPPORT = Object.freeze({
   permissions: Object.freeze({
