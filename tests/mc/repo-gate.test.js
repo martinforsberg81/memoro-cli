@@ -18,7 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,11 +28,13 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
+import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { redNames, tapTotals } from '../../src/mc/tap-red.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
-import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, gateConfiguration, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -1095,6 +1097,7 @@ describe('a repository that selects by diff', () => {
       suiteCommands,
       marks,
       mcHome,
+      repoPath,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
       report: (extra = {}) => runGate({
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
@@ -2339,6 +2342,83 @@ describe('a repository that selects by diff', () => {
         assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory' });
       } finally { fx.cleanup(); }
     });
+  });
+
+  describe('opt-in autonomous receipt reuse', () => {
+    const files = ['tests/a.test.js', 'tests/b.test.js'];
+    const commands = [{ packageScript: 'lint', passBaseRef: true }];
+    const tree = 'c'.repeat(40);
+    function receiptRound({ limited = false, record = true } = {}) {
+      let repository;
+      const fx = selecting({ files, commands, scripts: { lint: marking('lint'), required: marking('required') },
+        gitAlso: (args) => {
+          if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return { status: 0, stdout: repository };
+          if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') return { status: 0, stdout: tree };
+          if (args[0] === 'diff') return { status: 0, stdout: 'tests/a.test.js\n' };
+          return undefined;
+        },
+      });
+      mkdirSync(join(fx.repoPath, '.git'));
+      repository = realpathSync(join(fx.repoPath, '.git'));
+      const tablePath = join(fx.mcHome, 'repo-gates.json');
+      const table = JSON.parse(readFileSync(tablePath, 'utf8'));
+      table.repo.extra_gates = [{ name: 'required', command: 'npm run required' }];
+      writeJson(tablePath, table);
+      const declaration = declarationFor(fx.repoPath, { root: fx.mcHome }).declaration;
+      const evidence = { repository, run: 'gate-autonomous',
+        sessionRun: 'session-autonomous', goalRevision: 1 };
+      const candidate = { repository: evidence.repository, tree, fingerprint: 'raw-content' };
+      const receipt = gateReceipt({ measurement: { repo: 'repo', run: evidence.run, session_run: evidence.sessionRun,
+        goal_revision: evidence.goalRevision, configuration: gateConfiguration(declaration, declaration.pr_tests_flags),
+        base: 'a'.repeat(40), candidate }, before: candidate, after: candidate,
+        started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z', result: { ok: true, code: 0,
+          coverage: { kind: limited ? 'named' : 'affected', files, commands, pattern: null, flags: declaration.pr_tests_flags },
+          execution: { tests: { exit: 0, finished: true, totals: { tests: 2, pass: 2, fail: 0 } },
+            commands: [{ exit: 0, ok: true }] } } });
+      const path = persistGateReceipt({ root: fx.mcHome, receipt });
+      if (record) recordReceiptGreen({ root: fx.mcHome, receipt, path });
+      return { ...fx, evidence, path, tablePath, table };
+    }
+
+    it('reuses only the bound receipt while retaining PR-specific tests and required merge gates', async () => {
+      const fx = receiptRound();
+      try {
+        const report = await fx.report({ evidence: fx.evidence });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.equal(report.reused.mode, 'exact');
+        assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']]);
+        assert.equal(fx.mark('lint'), null);
+        assert.equal(fx.mark('required'), '', 'required merge gate still ran');
+      } finally { fx.cleanup(); }
+    });
+
+    for (const condition of ['missing', 'limited', 'legacy', 'wrong-run', 'wrong-repo', 'configuration', 'version']) {
+      it(`${condition} evidence measures the relevant selection instead`, async () => {
+        const fx = receiptRound({ limited: condition === 'limited', record: condition !== 'legacy' });
+        try {
+          let evidence = fx.evidence;
+          if (condition === 'missing') rmSync(fx.path);
+          if (condition === 'wrong-run') evidence = { ...evidence, run: 'other' };
+          if (condition === 'wrong-repo') evidence = { ...evidence, repository: '/another/repo/.git' };
+          if (condition === 'version') {
+            const receipt = JSON.parse(readFileSync(fx.path, 'utf8'));
+            writeJson(fx.path, { ...receipt, gate_version: GATE_MEASUREMENT_VERSION - 1 });
+          }
+          if (condition === 'configuration') {
+            fx.table.repo.pr_tests_flags.push('--conditions=changed');
+            writeJson(fx.tablePath, fx.table);
+          }
+          if (condition === 'legacy') recordGreen({ root: fx.mcHome, entry: {
+            repo: 'repo', tree, selection: selectionHash({ files, commands }), gate_version: GATE_MEASUREMENT_VERSION } });
+          const report = await fx.report({ evidence });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.equal(report.reused, null);
+          assert.deepEqual(fx.runs.map((run) => run.files), [files, ['tests/a.test.js']]);
+          assert.equal(fx.mark('lint'), '--base-ref base1111');
+          assert.equal(fx.mark('required'), '');
+        } finally { fx.cleanup(); }
+      });
+    }
   });
 
   describe('a green mc gate on the pull request\'s own head, main moved since (ruling 47)', () => {

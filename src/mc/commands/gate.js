@@ -47,7 +47,9 @@ import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '..
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
-import { repositoryDir } from '../repos.js';
+import { repoNameOf, repositoryDir } from '../repos.js';
+import { captureWorktree } from '../session-gate-evidence.js';
+import { gateConfiguration } from '../gate-greens.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
@@ -65,6 +67,7 @@ const SESSION_RUN = fileURLToPath(new URL('../session-gate-run.js', import.meta.
 /** The machine the verb runs on; a test hands in its own. */
 const SYSTEM = {
   git: tryGit,
+  snapshot: captureWorktree,
   read: readFileSync,
   write: writeFileSync,
   exists: existsSync,
@@ -119,18 +122,24 @@ export async function run(argv, deps = {}) {
   }
 
   const files = named;
-  const base = scanned.flags.base || 'origin/main';
+  const baseRef = scanned.flags.base || 'origin/main';
+  const frozenBase = io.git(root, ['rev-parse', `${baseRef}^{commit}`]);
+  const base = frozenBase || baseRef;
+  let candidate = null;
+  try { candidate = io.snapshot(root); } catch { /* v1 may run without reusable evidence */ }
   let select = null;
+  let declaration = null;
   let addedTests = [];
   if (!files.length) {
     const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
     const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
-    if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${base} — name the test files: mc gate <files…>\n`); return 2; }
+    if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${baseRef} — name the test files: mc gate <files…>\n`); return 2; }
     if (!changed.length) {
-      stdout.write(`NOTHING CHANGED — no changes against ${base}\n`);
+      stdout.write(`NOTHING CHANGED — no changes against ${baseRef}\n`);
       return 0;
     }
     const declared = primaryCheckoutDeclaration(io, { root, env });
+    declaration = declared?.declaration ?? null;
     if (!declared?.declaration.select) {
       stderr.write('mc: no repository test selector declared — name the tests explicitly; nothing was verified\n');
       return 2;
@@ -146,12 +155,15 @@ export async function run(argv, deps = {}) {
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
   const flags = declaredTestFlags(io, { root, env });
+  const effectiveFlags = flags || testFlags(manifest?.scripts?.test);
   if (files.length) {
     const declared = primaryCheckoutDeclaration(io, { root, env });
+    declaration = declared?.declaration ?? null;
     if (declared?.declaration.select) select = selectorCommand(declared.declaration.select, { base, changed: files });
   }
+  const configuration = gateConfiguration(declaration, effectiveFlags);
   const command = files.length ? namedCommand(manifest, files, { pattern, flags })
-    : { run: `affected tests and command gates against ${base}`, source: 'selection' };
+    : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
 
   const launchPath = `${lockPath}.launch`;
   const launch = io.claim(launchPath, { pid: process.pid });
@@ -176,13 +188,14 @@ export async function run(argv, deps = {}) {
     startedAt = io.now();
     const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
     const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
-    const logPath = join(dir, `gate-${stamp}-${io.id()}.log`);
+    const run = io.id();
+    const logPath = join(dir, `gate-${stamp}-${run}.log`);
     const requestPath = `${logPath}.request.json`;
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: flags || testFlags(manifest?.scripts?.test), pattern, select, base,
-        log: logPath, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
+        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate, configuration } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
       const fd = io.open(logPath);
       // The worker owns the reservation, the test children and the result.
       // A short-lived command or shell cannot release its lane early.
@@ -232,7 +245,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     `✖ ${test.name}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
   ]);
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
     stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
   }

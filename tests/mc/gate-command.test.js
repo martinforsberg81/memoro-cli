@@ -39,6 +39,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
     id: () => 'test',
     claim: () => ({ ok: true, marker: 'fixture' }),
     release: () => true,
+    snapshot: () => ({ repository: '/repo/memoro/.git', tree: 'tree', fingerprint: 'bytes' }),
     git: (cwd, args) => {
       if (args[0] === 'merge-base') return 'mb0000';
       if (args[0] === 'diff') return changed.join('\0');
@@ -292,4 +293,63 @@ describe('mc gate --wait', () => {
     assert.equal(out.stdout, `RUNNING — node --test a.test.js — 604s so far, still running (pid 111)\nlog: ${LOG} — mc gate --wait waits for it and prints the verdict\n`);
     assert.equal(files.has(LOCK), true);
   });
+});
+
+it('freezes the base and launch content for the worker; filtered requests remain explicitly named', async () => {
+  const h = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+  const original = h.deps.git;
+  const base = 'a'.repeat(40);
+  h.deps.git = (cwd, args) => args[0] === 'rev-parse' && args[1] === 'origin/main^{commit}' ? base : original(cwd, args);
+  assert.equal(await run(['a.test.js', '--test-name-pattern', 'one'], h.deps), 0);
+  const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+  assert.equal(request.base, base);
+  assert.equal(request.measurement.base, base);
+  assert.equal(request.measurement.run, 'test');
+  assert.equal(request.measurement.repo, 'memoro');
+  assert.match(request.measurement.configuration, /^[0-9a-f]{64}$/u);
+  assert.equal(request.measurement.candidate.tree, 'tree');
+  assert.deepEqual(request.files, ['a.test.js']);
+  assert.equal(request.pattern, 'one');
+  assert.match(request.select, new RegExp(base, 'u'));
+});
+
+it('concurrent callers launch only one worker, and repeated waits never launch another', async () => {
+  const h = harness({ tests: ['a.test.js'] });
+  const codes = await Promise.all([
+    run(['a.test.js', '--budget', '1'], h.deps),
+    run(['a.test.js', '--budget', '1'], h.deps),
+  ]);
+  assert.deepEqual(codes, [3, 2]);
+  assert.equal(h.out.spawned.length, 1);
+  assert.equal(await run(['--wait', '--budget', '1'], h.deps), 3);
+  assert.equal(h.files.has(LOCK), true);
+  h.files.set(LOG, GREEN);
+  h.files.set(`${LOG}.request.json.result`, JSON.stringify({ files: ['a.test.js'], evidence: { path: '/state/gate-evidence/test.json', outcome: 'green' } }));
+  h.files.set(EXIT, '0\n');
+  h.out.stdout = '';
+  assert.equal(await run(['--wait', '--json'], h.deps), 0);
+  assert.deepEqual(JSON.parse(h.out.stdout).evidence, { path: '/state/gate-evidence/test.json', outcome: 'green' });
+  assert.equal(h.files.has(LOCK), false);
+  assert.equal(await run(['--wait'], h.deps), 2);
+  assert.equal(h.out.spawned.length, 1);
+});
+
+it('a waiter cannot remove a successor lock when the old worker finishes', async () => {
+  const h = harness({ lock: { ...oldGate(111), log: LOG }, live: [111] });
+  h.deps.sleep = async () => {
+    h.files.set(LOG, GREEN);
+    h.files.set(EXIT, '0\n');
+    h.files.set(LOCK, JSON.stringify(oldGate(222)));
+  };
+  assert.equal(await run(['--wait'], h.deps), 0);
+  assert.equal(JSON.parse(h.files.get(LOCK)).pid, 222);
+  assert.deepEqual(h.out.removed, []);
+});
+
+it('a crash after a receipt result but before the exit marker is still a red command', async () => {
+  const h = harness({ lock: { ...oldGate(111), log: LOG, request: `${LOG}.request.json` }, log: GREEN });
+  h.files.set(`${LOG}.request.json.result`, JSON.stringify({ ok: true, code: 0, evidence: { outcome: 'green' } }));
+  assert.equal(await run(['--wait'], h.deps), 1);
+  assert.match(h.out.stdout, /ended without an exit code/u);
+  assert.doesNotMatch(h.out.stdout, /GREEN/u);
 });
