@@ -261,6 +261,35 @@ export function currentAutonomousEvidence(state) {
   return evidenceForRevision(state.contract, state.evidence);
 }
 
+/** Runner-only continuation door, after publication and worker reconciliation.
+ * Builder reports route work, never confirm a goal or authorize review/merge. */
+export function settleAutonomousBuild(root, programme, project, { actor, revision, handoff, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision); ownedControl(state, actor);
+    if (state.phase !== 'publishing' || state.publication?.run_id !== actor.run_id
+      || state.publication.phase !== 'handoff_committed' || state.current_handoff !== handoff.artifact
+      || !handoff.observed.normal_exit || handoff.observed.head !== state.publication.head
+      || handoff.handoff.run_id !== actor.run_id || handoff.handoff.goal_revision !== state.goal_revision
+      || handoff.handoff.programme_revision !== state.programme_revision
+      || !['continue', 'review-ready'].includes(handoff.outcome)) throw new Error('settled normal publication required');
+    const latest = new Map(currentAutonomousEvidence(state).builder.map(item => [item.criterion_id, item]));
+    const reported = new Map(handoff.handoff.evidence.map(item => [item.criterion_id, item]));
+    for (const item of reported.values()) {
+      const proof = latest.get(item.criterion_id);
+      if (proof?.status !== 'verified' || proof.reference !== item.reference) throw new Error('published criterion reports changed before continuation');
+    }
+    const done = state.contract.success_criteria.filter(item => item.verification === 'premerge').every(item => {
+      const proof = latest.get(item.id);
+      return proof?.status === 'verified' && reported.get(item.id)?.reference === proof.reference;
+    });
+    if (handoff.outcome === 'review-ready' && !done) throw new Error('review-ready requires all current premerge reports');
+    const phase = done ? 'review_ready' : 'ready';
+    return save(paths.project, state, { ...state, phase, active_run: null,
+      continuation: { run_id: actor.run_id, goal_revision: state.goal_revision,
+        programme_revision: state.programme_revision, handoff: handoff.artifact, phase } }, deps);
+  }, deps);
+}
+
 export const PUBLICATION_PHASES = Object.freeze(['started', 'gate_verified', 'committed', 'pushed', 'pr_resolved', 'handoff_committed']);
 
 /** Trusted publication seam, not a model-supplied state patch. The owner is

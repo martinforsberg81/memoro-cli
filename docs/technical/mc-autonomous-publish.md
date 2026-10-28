@@ -43,8 +43,9 @@ The first five phases run inside finish. A `pr_resolved` command response means
 **exit the session**, not a normal handoff already recorded. Only the runner can
 perform phase six after process completion. It rechecks current criteria, gate
 coverage/configuration/base, content, remote SHA and GitHub identity. The owner
-and `publishing` phase remain held: continuation/review routing and interrupted
-session reconciliation are separate work, not permission granted by publish.
+and `publishing` phase remain held until the runner's
+[continuation/recovery door](mc-autonomous-recovery.md) verifies and routes them;
+publication itself grants no continuation, review or merge permission.
 
 ## Retry and refusal
 

@@ -37,10 +37,10 @@ function criteria(state, result) {
     if (recorded?.status !== 'verified' || recorded.reference !== item.reference) throw new Error('handoff criterion updates require current verified builder evidence');
   }
 }
-function save(options, publication) {
+function save(options, publication, deps) {
   const { state } = owned(options);
   return saveAutonomousPublication(options.root, options.programme, options.project,
-    { actor: options.actor, revision: state.revision, publication }).publication;
+    { ...deps.stateDeps, actor: options.actor, revision: state.revision, publication }).publication;
 }
 function claim(options) {
   const path = join(sessionGitDir(options.cwd), 'mc-autonomous-finish.claim');
@@ -62,6 +62,7 @@ async function receiptFor(options, publication, deps) {
   }
   const settled = reconcileSessionGate(sessionGitDir(options.cwd));
   if (!settled.ok) throw new Error(`gate completion unknown: ${settled.reason}`);
+  if (settled.gate && settled.gate.code !== 0) throw new Error('latest settled gate did not complete green');
   return { receipt, requirements, content };
 }
 function assertCommit(options, publication) {
@@ -91,7 +92,7 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
     if (publication && !isDeepStrictEqual(publication.input, input)) throw new Error('publication intent cannot change during retry');
     if (!publication) publication = save(options, { run_id: options.actor.run_id, goal_revision: initial.goal_revision,
       programme_revision: initial.programme_revision, branch: initial.ownership.branch, pr: initial.ownership.pr,
-      phase: 'started', input });
+      phase: 'started', input }, deps);
     if (publication.phase === 'started') {
       let output = '';
       const status = await (deps.gate || gateCommand)(['--json'], { cwd: options.cwd, env: options.env,
@@ -104,7 +105,7 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
       if (path !== join(mcHome(options.env), 'gate-evidence', `${run}.json`)) throw new Error('gate evidence location is invalid');
       publication = { ...publication, gate_run: run };
       const checked = await receiptFor(options, publication, deps);
-      publication = save(options, { ...publication, phase: 'gate_verified', tree: checked.receipt.tree });
+      publication = save(options, { ...publication, phase: 'gate_verified', tree: checked.receipt.tree }, deps);
     }
     await receiptFor(options, publication, deps);
     if (publication.phase === 'gate_verified') {
@@ -117,14 +118,14 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
       }
       publication = { ...publication, head: git(options.cwd, ['rev-parse', 'HEAD']) };
       assertCommit(options, publication);
-      publication = save(options, { ...publication, phase: 'committed' });
+      publication = save(options, { ...publication, phase: 'committed' }, deps);
     }
     assertCommit(options, publication);
     await receiptFor(options, publication, deps);
     const marker = pr => markAutonomousPr({ root: options.root, repo: initial.contract.repo, branch: publication.branch,
       programme: options.programme, project: options.project, pr });
     const marked = marker(publication.pr);
-    if (publication.pr === null && marked.pr !== null) publication = save(options, { ...publication, pr: marked.pr });
+    if (publication.pr === null && marked.pr !== null) publication = save(options, { ...publication, pr: marked.pr }, deps);
     // Even retries go through mc publish's non-force push and observed remote
     // head/PR checks. Its existing-PR lookup prevents duplicate creation.
     const code = await (deps.publish || publishCommand)(['--title', input.title, '--body', input.body, '--no-merge'], {
@@ -134,15 +135,15 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
         async onPushed(head) {
           if (head !== publication.head) throw new Error('head changed before push confirmation');
           await receiptFor(options, publication, deps); assertCommit(options, publication);
-          if (publication.phase === 'committed') publication = save(options, { ...publication, phase: 'pushed' });
+          if (publication.phase === 'committed') publication = save(options, { ...publication, phase: 'pushed' }, deps);
         },
         async onLocated(number) {
           marker(number);
-          if (publication.pr === null) publication = save(options, { ...publication, pr: number });
+          if (publication.pr === null) publication = save(options, { ...publication, pr: number }, deps);
         },
         async onResolved(pr) {
           marker(pr.number);
-          if (publication.phase === 'pushed') publication = save(options, { ...publication, phase: 'pr_resolved', pr: pr.number });
+          if (publication.phase === 'pushed') publication = save(options, { ...publication, phase: 'pr_resolved', pr: pr.number }, deps);
         },
       },
     });
@@ -167,6 +168,7 @@ export async function completeAutonomousPublication(options, processResult, deps
     try {
       const manifest = JSON.parse(readFileSync(join(sessionGitDir(options.cwd), 'mc-autonomous-session.json'), 'utf8'));
       if (manifest.run_id !== options.actor.run_id || !isDeepStrictEqual(manifest.binding, state.session_control.binding)) throw new Error('process completion belongs to another run/assignment');
+      if (manifest.recovery?.gate && manifest.recovery.gate.code !== 0) throw new Error('supervisor observed a failed gate');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const { receipt, requirements } = await receiptFor(options, publication, deps);
     assertCommit(options, publication);
@@ -190,7 +192,7 @@ export async function completeAutonomousPublication(options, processResult, deps
     const handoff = persistSessionResult({ root: options.root, ...context, result, publication: evidence,
       ownership: state.ownership, expectedPreviousRun: previousRun, completion: { exit_code: 0, interrupted: false } }, deps.handoffDeps);
     if (publication.phase !== 'handoff_committed') publication = save(options, { ...publication,
-      phase: 'handoff_committed', handoff: handoff.artifact });
+      phase: 'handoff_committed', handoff: handoff.artifact }, deps);
     return publication;
   } finally { release(); }
 }

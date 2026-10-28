@@ -2942,7 +2942,8 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // (ruling 28).
     const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
     return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
-      autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs }) : null });
+      autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs,
+        worktree: join(areaPath(record.project), record.repo) }) : null });
   }
 
   /**

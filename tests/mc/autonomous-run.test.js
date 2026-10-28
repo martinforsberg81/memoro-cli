@@ -15,74 +15,7 @@ import { stateFixture, planner } from './autonomous-state-fixture.js';
 import { autonomousProject } from './autonomy-fixtures.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 
-const profile = { soft_active_ms: 100, upper_active_ms: 200, emergency_active_ms: 300, reserve_active_ms: 100,
-  soft_context: 0.5, upper_context: 0.7, emergency_context: 0.9, reserve_context: 0.1, context_stale_ms: 50,
-  closing_ms: 200, tool_wait_ms: 120, lane_wait_ms: 150, total_awake_ms: 1000,
-  no_progress_ms: 800, max_stagnant_sessions: 3, max_failures: 3 };
-const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-const completed = { status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, session_id: 'fixture-session' }), stderr: '',
-  normal_exit: true, recovery_ready: true, control_persisted: true };
-function git(cwd, ...args) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' } });
-  assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
-  return result.stdout.trim();
-}
-function fixture(t) {
-  const f = stateFixture(); t.after(f.cleanup);
-  f.setupProject();
-  const primaryHome = join(f.root, 'primary'); const primary = join(primaryHome, 'memoro-cli');
-  const remote = join(f.root, 'remote.git');
-  mkdirSync(primary, { recursive: true });
-  git(primary, 'init', '-q', '-b', 'main');
-  writeFileSync(join(primary, 'base.txt'), 'base\n');
-  git(primary, 'add', '.'); git(primary, 'commit', '-qm', 'Initial');
-  git(f.root, 'clone', '-q', '--bare', primary, remote);
-  git(primary, 'remote', 'add', 'origin', remote); git(primary, 'fetch', '-q', 'origin');
-  const env = { ...process.env, MC_WORK_ROOT: f.root, MC_REPOS_HOME: primaryHome };
-  delete env.MC_STEP;
-  const calls = []; const log = []; let capacity = normaliseCapacity(null); const sleeps = [];
-  const deps = { ...realDeps(env), now: () => new Date('2026-10-28T12:00:00Z'), log: line => log.push(line),
-    catalog: () => DEFAULT_CATALOG, capacity: { read: () => capacity, write: next => { capacity = next; } },
-    laneCount: () => ({ per_repo: 2, total: 2 }), billing: { readMode: () => 'plan' },
-    attachDeps: async () => ({ ok: true }),
-    launch: () => ({ ok: true, id: 'claude-code', shortName: 'Claude', spec: { bin: 'fixture' }, adapter: claudeAdapter }),
-    addWorktree: ({ name, branch, from }) => {
-      const cwd = join(f.root, name, 'memoro-cli'); mkdirSync(join(f.root, name), { recursive: true });
-      const existing = spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: primary }).status === 0;
-      git(primary, 'worktree', 'add', '-q', ...(existing ? [cwd, branch] : ['-b', branch, cwd, from]));
-      return { ok: true, path: cwd };
-    },
-    session: async call => { calls.push(call); return completed; },
-    gh: () => ({ ok: true, stdout: '[]', stderr: '' }),
-    // Tests control lane release explicitly, without polling a real clock.
-    sleep: () => { const wait = deferred(); sleeps.push(wait); return wait.promise; },
-  };
-  const capability = { profile, pollMs: 10, clock: () => ({ at_ms: 1000, awake_ms: 0 }),
-    gate: async (args, options) => { assert.deepEqual(args, []); assert.equal(options.env, env); return 0; } };
-  const state = (project = f.project) => readAutonomousState(f.root, f.programme, project);
-  const add = (project = f.project, overrides = {}) => {
-    let value;
-    if (project === f.project) value = state();
-    else value = createAutonomousDraft(f.root, f.programme, project, autonomousProject({ project_id: project, ...overrides }),
-      { actor: planner, revision: readProgrammeState(f.root, f.programme).revision });
-    sendAutonomousProject(f.root, f.programme, project, { actor: planner, revision: value.revision });
-    value = mutateAutonomousProject(f.root, f.programme, project, 'release', null, { actor: planner, revision: value.revision });
-    // The later planner/activation door is not implemented here. Only this
-    // isolated fixture supplies a ready assignment; no live command enables it.
-    value.phase = 'ready'; writeFileSync(autonomousPaths(f.root, f.programme, project).project, JSON.stringify(value));
-    return { project, programme: f.programme, repo: 'memoro-cli', path: join(f.paths.projectDir, 'PLAN.json'), plan: value.contract };
-  };
-  const record = add();
-  const world = (...records) => ({ names: records.map(r => r.project), plans: records, prs: [], prsFailed: [] });
-  const cwd = project => join(f.root, 'step', project, 'memoro-cli');
-  const advanceMain = text => {
-    writeFileSync(join(primary, 'base.txt'), text); git(primary, 'add', '.'); git(primary, 'commit', '-qm', 'Move main');
-    git(remote, 'fetch', '-q', primary, 'main:main');
-    return git(primary, 'rev-parse', 'HEAD');
-  };
-  return { ...f, deps, capability, primary, remote, calls, log, sleeps, record, world, state, add, cwd, advanceMain,
-    refuse: () => { capacity = applyRefusal(capacity, 'claude', '2026-10-29T12:00:00Z'); } };
-}
+import { runnerFixture as fixture, profile, deferred, completed, git } from './autonomous-run-fixture.js';
 
 function legacy(f) {
   const plan = { schema: 'mc-plan', version: 1, repo: 'memoro-cli', goal: ['Legacy goal.'], contract: ['Preserve fixed steps.'],
@@ -127,7 +60,7 @@ test('v1 and v2 execute concurrently through the same runner with one owner per 
   assert.ok(!fresh.args.join(' ').includes('Legacy work'));
   finish.resolve(); assert.equal(await v2, 'ran'); assert.equal(await old, 'ran');
   assert.equal(runner.claims.size, 0);
-  assert.equal(f.state().phase, 'running'); // exit 0 is not a green handoff
+  assert.equal(f.state().phase, 'plan_pending'); // exit 0 without publication is incomplete
   assert.equal(existsSync(runner.paths.currentFor('memoro-cli')), false);
 });
 

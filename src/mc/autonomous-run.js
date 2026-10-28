@@ -3,18 +3,19 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readAutonomousState, readProgrammeState, startAutonomousBuild, mutateAutonomousProject, observeProjectSessionControl } from './autonomous-state.js';
+import { readAutonomousState, readProgrammeState, startAutonomousBuild, observeProjectSessionControl } from './autonomous-state.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { buildSessionStart, readCurrentHandoff } from './session-handoff.js';
 import { projectSessionObserver } from './session-supervision.js';
-import { reconcilePreviousSession, sessionGitDir } from './session-recovery.js';
+import { reconcilePreviousSession, retirePreviousSession, sessionGitDir } from './session-recovery.js';
 import { instructionsFor, roleRecord, roleSourceOf } from './roles.js';
 import { headlessArgs, routedSettings } from './run-plan.js';
 import { profileArgs } from './portrait.js';
 import { run as gateCommand } from './commands/gate.js';
-import { completeAutonomousPublication } from './autonomous-publish.js';
+import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
+import { takeClaim, releaseClaim } from './resource-claim.js';
 
-export function autonomousChoice({ root, record, capability, openPrs = [] }) {
+export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
   const skip = (reason, text) => ({ kind: null, reason, skip: text });
   if (!capability) return skip('autonomous-disabled', 'autonomous execution is disabled');
   const assignment = record?.plan;
@@ -24,7 +25,11 @@ export function autonomousChoice({ root, record, capability, openPrs = [] }) {
   try {
     const state = readAutonomousState(root, record.programme, record.project);
     if (!isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
-    if (state.active_run) return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
+    if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
+    if (state.active_run) {
+      if (worktree && state.phase !== 'plan_pending' && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
+      return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
+    }
     if (state.phase !== 'ready') return skip('autonomous-not-ready', `autonomous project is ${state.phase}`);
     if (openPrs.some(pr => pr.number !== state.ownership.pr || pr.headRefName !== state.ownership.branch)) return skip('autonomous-pr-mismatch', 'an open PR does not match project ownership');
     return { kind: 'step', flavor: 'autonomous' };
@@ -33,9 +38,32 @@ export function autonomousChoice({ root, record, capability, openPrs = [] }) {
 
 export async function runAutonomousBuild({ root, record, repo, worktree, areaName, lane, pid, paths, deps, capability,
   openPrs, waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say, observeResult }) {
-  const choice = autonomousChoice({ root, record, capability, openPrs });
+  const choice = autonomousChoice({ root, record, capability, openPrs, worktree });
   if (!choice.kind) { say(`${record.project}: ${choice.skip}`); return `skipped:${choice.reason}`; }
   const name = record.project; const programme = record.programme;
+  if (choice.recovery) {
+    const slot = await waitForSlot(name);
+    if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped';
+    const path = autonomousBuildClaim({ root, programme, project: name });
+    const held = takeClaim(path, { pid, project: name });
+    const currentPath = paths.currentFor(repo.name, lane);
+    let currentWritten = false;
+    try {
+      if (!held.ok) return 'skipped:autonomous-owned';
+      const state = readAutonomousState(root, programme, name);
+      if (!state.active_run) return 'skipped:autonomous-reconciled';
+      writeJson(currentPath, { name, step: null, kind: 'step', flavor: 'autonomous-recovery', run_id: state.active_run.run_id,
+        repo: repo.name, lane, started: stamp(), pid, worktree });
+      currentWritten = true;
+      const recovered = await recoverAutonomousBuild({ root, programme, project: name, actor: state.active_run, cwd: worktree, env: deps.env }, capability.publication || {});
+      say(`${name}: recovered ${state.active_run.run_id}: ${recovered.phase}`);
+      return 'ran';
+    } finally {
+      if (currentWritten) remove(currentPath);
+      if (held.ok) releaseClaim(path, held.marker);
+      dropSlot();
+    }
+  }
   const route = routeClass('fast');
   if (!route.ok || route.basis === 'credits') return 'skipped:no-capacity';
   const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
@@ -51,6 +79,9 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   const actor = { run_id: `build-${randomUUID()}`, role: 'step' };
   const currentPath = paths.currentFor(repo.name, lane);
   const options = { root, programme, project: name, actor };
+  const claimPath = autonomousBuildClaim(options);
+  const held = takeClaim(claimPath, { pid, run_id: actor.run_id });
+  if (!held.ok) { dropSlot(); return 'skipped:autonomous-owned'; }
   let owned = false;
   let currentWritten = false;
   try {
@@ -97,6 +128,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     // or arbitrary earlier conversation is appended to this payload.
     const prompt = buildSessionStart({ assignment: state.contract, programme: agreement, runId: actor.run_id,
       previous: previousHandoff, previousRunId });
+    if (previousRunId) retirePreviousSession(sessionGitDir(worktree), previousRunId);
     const synced = syncMain(worktree, name, { resolveIgnore: false });
     if (synced.conflicts.length) {
       if (typeof capability.integrateConflicts !== 'function') throw new Error('main conflicts require step integration before building');
@@ -134,21 +166,19 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     if (!result.normal_exit || !result.recovery_ready || !result.control_persisted) throw new Error(result.reason || 'incomplete autonomous process');
     const closing = readAutonomousState(root, programme, name);
     if (closing.publication?.run_id === actor.run_id) {
-      await completeAutonomousPublication({ ...options, cwd: worktree, env: deps.env }, result, capability.publication || {});
-    }
-    // Publication/reconciliation owns the next transition. Even exit 0 leaves
-    // this durable owner in place; it cannot start a second builder or merge.
-    say(`${name}: ${actor.run_id} process ended; awaiting verified publication`);
+      const settled = await settlePublishedBuild({ ...options, cwd: worktree, env: deps.env }, result, capability.publication || {});
+      say(`${name}: ${actor.run_id} published: ${settled.phase}`);
+    } else throw new Error('process exit has no verified publication');
     return 'ran';
   } catch (error) {
     say(`${name}: autonomous build stopped: ${error.message}`);
     if (owned) {
-      const state = readAutonomousState(root, programme, name);
-      mutateAutonomousProject(root, programme, name, 'attempt', { id: actor.run_id, reason: error.message, commits: [], ...(state.current_handoff ? { handoff: state.current_handoff } : {}) }, { actor, revision: state.revision });
+      incompleteAutonomousBuild({ ...options, cwd: worktree }, error.message);
     }
     return owned ? 'ran' : 'skipped:autonomous-owned';
   } finally {
     if (currentWritten) remove(currentPath);
+    releaseClaim(claimPath, held.marker);
     dropSlot();
   }
 }

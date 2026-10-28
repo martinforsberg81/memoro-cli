@@ -67,9 +67,12 @@ Incomplete preparation/process results record `plan_pending` with the owner
 retained and existing handoff reference preserved. A normally closed process
 also retains its owner pending the verified publication/reconciliation boundary.
 When finish prepared a publication, the runner calls the
-[settled handoff boundary](mc-autonomous-publish.md); even a committed handoff
-retains ownership until continuation is reconciled separately. No automatic v2
-archive or legacy failed-to-person routing is introduced.
+[settled handoff boundary](mc-autonomous-publish.md) and then the
+[continuation/recovery door](mc-autonomous-recovery.md). Remaining premerge
+criteria yield a fresh build; all reported done yield review-ready without
+starting review. A process exit without publication is plan-pending, never a
+normal handoff. No automatic v2 archive or legacy failed-to-person routing is
+introduced.
 
 `tests/mc/autonomous-run.test.js` uses real temporary git repositories/worktrees
 and controlled gate/transport adapters. It measures mixed v1/v2 concurrency,
