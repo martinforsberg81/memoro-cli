@@ -16,15 +16,18 @@ const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0
 const alive = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
+// Liveness bounds, not speed limits: about 6 s idle, but the merger runs this
+// beside the other lane's round, where every git and node spawn is slower.
+const BOUNDARY_MS = 60_000;
 async function until(check) {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + BOUNDARY_MS;
   while (!check()) {
-    assert.ok(Date.now() < deadline, 'worker reached its expected boundary within 15 seconds');
+    assert.ok(Date.now() < deadline, `worker reached its expected boundary within ${BOUNDARY_MS / 1000} seconds`);
     await sleep(25);
   }
 }
 
-for (const interrupt of [false, true]) it(`a detached worker ${interrupt ? 'interrupts its children' : 'survives the command exit'} before releasing its lane`, { timeout: 30_000 }, async () => {
+for (const interrupt of [false, true]) it(`a detached worker ${interrupt ? 'interrupts its children' : 'survives the command exit'} before releasing its lane`, { timeout: 4 * BOUNDARY_MS }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'mc-worker-recovery-'));
   const cwd = join(root, 'repo');
   const state = join(root, 'state');
@@ -64,7 +67,7 @@ process.exitCode = await run(['--budget', '0.02'], {
   cwd: ${JSON.stringify(cwd)}, declaration: () => ({ ok: true, declaration: ${JSON.stringify(declaration)} }), lane: () => 'light',
 });`;
     const command = spawnSync(process.execPath, ['--input-type=module', '-e', launcher], {
-      cwd, encoding: 'utf8', timeout: 15_000,
+      cwd, encoding: 'utf8', timeout: BOUNDARY_MS,
       env: { ...process.env, MC_HOME: state, MC_SCRATCH: root, MC_TEST_LANES: '2' },
     });
     assert.equal(command.status, 3, command.stderr || command.error?.message);
