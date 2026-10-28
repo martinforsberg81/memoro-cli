@@ -67,3 +67,12 @@ it('selection replaces the old base and quotes every changed path', () => {
   assert.equal(selectorCommand('node select.js --base-ref origin/main', { base: 'origin/topic', changed: ["src/it's.js", 'src/new.js'] }),
     "node select.js --base-ref 'origin/topic' --changed-path 'src/it'\\''s.js' --changed-path 'src/new.js'");
 });
+
+it('unknown exits and zero-test summaries are not completed green tests', async () => {
+  for (const run of [{ code: null, tap: GREEN }, { tap: GREEN }, { code: 0, tap: '# tests 0\n# pass 0\n# fail 0\n' }]) {
+    const result = await runSessionGate({ cwd: '/work', files: ['a.test.js'] }, {
+      write: () => {}, tests: async () => run,
+    });
+    assert.equal(result.ok, false);
+  }
+});

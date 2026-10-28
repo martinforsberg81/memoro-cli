@@ -459,7 +459,10 @@ its detached worker takes the lane's lock for its own pid, with `mode:
 'session-gate'`, waiting while a merge round, a deploy, an iOS build or another
 session's gate holds it, and gives it back after the tests. The merger waits
 for a session's run as for any round in its lane. A session's gate uses affected selection or explicitly named files, with
-resource-class batching, bounded concurrency and timeouts.
+resource-class batching, bounded concurrency and timeouts. Completed local
+measurements now leave [immutable evidence](mc-gate-evidence.md): exact content,
+frozen base and check scope. Only complete, unchanged, unfiltered affected
+selections populate the existing green cache; named runs remain limited.
 
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,

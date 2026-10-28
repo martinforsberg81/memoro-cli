@@ -39,6 +39,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
     id: () => 'test',
     claim: () => ({ ok: true, marker: 'fixture' }),
     release: () => true,
+    snapshot: () => ({ repository: '/repo/memoro/.git', tree: 'tree', fingerprint: 'bytes' }),
     git: (cwd, args) => {
       if (args[0] === 'merge-base') return 'mb0000';
       if (args[0] === 'diff') return changed.join('\0');
@@ -292,4 +293,21 @@ describe('mc gate --wait', () => {
     assert.equal(out.stdout, `RUNNING — node --test a.test.js — 604s so far, still running (pid 111)\nlog: ${LOG} — mc gate --wait waits for it and prints the verdict\n`);
     assert.equal(files.has(LOCK), true);
   });
+});
+
+it('freezes the base and launch content for the worker; filtered requests remain explicitly named', async () => {
+  const h = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+  const original = h.deps.git;
+  const base = 'a'.repeat(40);
+  h.deps.git = (cwd, args) => args[0] === 'rev-parse' && args[1] === 'origin/main^{commit}' ? base : original(cwd, args);
+  assert.equal(await run(['a.test.js', '--test-name-pattern', 'one'], h.deps), 0);
+  const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+  assert.equal(request.base, base);
+  assert.equal(request.measurement.base, base);
+  assert.equal(request.measurement.run, 'test');
+  assert.equal(request.measurement.repo, 'memoro');
+  assert.equal(request.measurement.candidate.tree, 'tree');
+  assert.deepEqual(request.files, ['a.test.js']);
+  assert.equal(request.pattern, 'one');
+  assert.match(request.select, new RegExp(base, 'u'));
 });

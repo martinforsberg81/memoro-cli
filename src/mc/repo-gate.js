@@ -2180,20 +2180,23 @@ export function testBatches(files, classes = {}, lanes = 1) {
  * as one result: the TAP of each batch in order (`tapTotals` adds up one
  * summary per process), the first non-zero exit, and the time budget shared.
  */
-export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null } = {}) {
+export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, runBatch = runTestBatch } = {}) {
   const batches = testBatches(files, classes, lanes);
-  if (batches.length <= 1) return runTestBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal });
+  if (batches.length <= 1) return runBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal });
   const started = Date.now();
   let tap = '';
   let stderr = '';
   let code = 0;
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
-    const ran = await runTestBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal });
+    const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal });
     tap += ran.tap;
     stderr += ran.stderr || '';
     if (ran.error) return { code: -1, tap, stderr, error: ran.error };
-    if (!code && ran.code) code = ran.code;
+    // A batch with an unknown exit or no summary cannot disappear behind the
+    // passing totals of another resource class.
+    const totals = tapTotals(ran.tap);
+    if (!code && (ran.code !== 0 || !totals.finished || !totals.tests)) code = ran.code || -1;
     if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs };
     if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs };
   }

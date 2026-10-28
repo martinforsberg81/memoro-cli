@@ -4,8 +4,8 @@
  * A session runs `mc gate` on its tree before it publishes; the merger then
  * built the same tree and measured it again, the suite and every command gate
  * the selection named, minutes later and for nothing. Now a green `mc gate` on
- * a clean tree is written down here — the tree, the selection it measured as a
- * hash, and the version of what both sides measure — and a merge round whose
+ * an unchanged measured tree is written down here — the tree, the selection
+ * it measured as a hash, and the version of what both sides measure — and a merge round whose
  * candidate is that tree, with that selection, under that version, runs only
  * the pull request's own tests (`runGate`).
  *
@@ -25,7 +25,7 @@ import { mcHome } from './paths.js';
  * records, what the round's selection is, what the merger skips on a match —
  * so a green measured under the old meaning is never read under the new one.
  */
-export const GATE_MEASUREMENT_VERSION = 1;
+export const GATE_MEASUREMENT_VERSION = 2;
 
 /** How many greens the file keeps: the last ones, which are the ones still unmerged. */
 export const GATE_GREENS_KEPT = 2000;
