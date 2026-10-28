@@ -2,22 +2,27 @@
  * publish or merge. Limited runs never enter the merger's full-selection cache. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GATE_MEASUREMENT_VERSION, checksHash, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-/** Git's prospective commit tree plus raw worktree bytes. The disposable index
- * starts from HEAD, not the real index's stat/assume-unchanged cache. Ignored
- * untracked files (dependencies, scratch output) are deliberately excluded. */
+/** Git's prospective commit tree plus raw worktree bytes, in a disposable
+ * index. Ignored untracked files (dependencies, scratch output) are
+ * deliberately excluded. */
 export function captureWorktree(cwd) {
   const temp = mkdtempSync(join(tmpdir(), 'mc-gate-index-'));
+  const index = join(temp, 'index');
   const git = (args, isolated = false, input) => {
     const env = { ...process.env };
     delete env.GIT_INDEX_FILE;
-    if (isolated) env.GIT_INDEX_FILE = join(temp, 'index');
+    if (isolated) {
+      // A copied index's fsmonitor token and untracked cache are not trusted.
+      Object.assign(env, { GIT_INDEX_FILE: index, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.fsmonitor',
+        GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'core.untrackedCache', GIT_CONFIG_VALUE_1: 'false' });
+    }
     const run = spawnSync('git', args, { cwd, env, input, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 << 20 });
     if (run.error || run.status !== 0) throw new Error(`cannot fingerprint worktree: git ${args[0]} (${run.error?.code || run.status})`);
     return run.stdout;
@@ -26,10 +31,26 @@ export function captureWorktree(cwd) {
     const repository = realpathSync(git(['rev-parse', '--path-format=absolute', '--git-common-dir']).trim());
     const tracked = git(['ls-files', '--cached', '-z']);
     const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']);
-    git(['read-tree', 'HEAD'], true);
-    // Include staged additions even when .gitignore would now hide them. This
-    // also refreshes skip-worktree/assume-unchanged entries from actual bytes.
-    if (tracked) git(['add', '-A', '--force', '--pathspec-from-file=-', '--pathspec-file-nul'], true, tracked);
+    // The real index's stat cache spares rehashing every file: from HEAD, a
+    // 16k-file checkout took half a minute per fingerprint. Only a copy whose
+    // every entry is ordinary: assume-unchanged, skip-worktree or unmerged
+    // entries would hide bytes, so then the index starts from HEAD.
+    let seeded = false;
+    try {
+      const real = git(['rev-parse', '--path-format=absolute', '--git-path', 'index']).trim();
+      const { atimeMs, mtimeMs } = statSync(real);
+      copyFileSync(real, index);
+      // Git's racy-entry check compares against the index file's own mtime.
+      utimesSync(index, atimeMs / 1000, mtimeMs / 1000);
+      seeded = git(['ls-files', '-v', '-z'], true).split('\0').every((entry) => !entry || entry.startsWith('H '));
+    } catch { seeded = false; }
+    if (!seeded) {
+      rmSync(index, { force: true });
+      git(['read-tree', 'HEAD'], true);
+      // Include staged additions even when .gitignore would now hide them. This
+      // also refreshes skip-worktree/assume-unchanged entries from actual bytes.
+      if (tracked) git(['add', '-A', '--force', '--pathspec-from-file=-', '--pathspec-file-nul'], true, tracked);
+    }
     git(['add', '-A', '--', '.'], true);
     if (git(['ls-files', '--stage'], true).split('\n').some((line) => line.startsWith('160000 '))) {
       throw new Error('cannot fingerprint submodule worktree content');

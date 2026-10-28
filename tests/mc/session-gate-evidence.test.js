@@ -116,12 +116,40 @@ it('assume-unchanged does not hide mutations and staged ignored additions are me
   const before = captureWorktree(cwd);
   git(cwd, 'update-index', '--assume-unchanged', 'a.test.js');
   writeFileSync(join(cwd, 'a.test.js'), 'changed\n');
-  assert.equal(sameContent(before, captureWorktree(cwd)), false);
+  const hidden = captureWorktree(cwd);
+  assert.equal(sameContent(before, hidden), false);
+  assert.equal(git(cwd, 'rev-parse', `${hidden.tree}:a.test.js`), git(cwd, 'hash-object', 'a.test.js'), 'the tree holds the bytes, not the flagged entry');
+  git(cwd, 'update-index', '--no-assume-unchanged', 'a.test.js');
+  git(cwd, 'update-index', '--skip-worktree', 'a.test.js');
+  writeFileSync(join(cwd, 'a.test.js'), 'skipped\n');
+  assert.equal(git(cwd, 'rev-parse', `${captureWorktree(cwd).tree}:a.test.js`), git(cwd, 'hash-object', 'a.test.js'));
+  git(cwd, 'update-index', '--no-skip-worktree', 'a.test.js');
   mkdirSync(join(cwd, 'ignored'));
   writeFileSync(join(cwd, 'ignored/staged'), 'included\n');
   git(cwd, 'add', '-f', 'ignored/staged');
   const staged = captureWorktree(cwd);
   assert.match(git(cwd, 'ls-tree', '-r', staged.tree), /ignored\/staged/u);
+});
+
+it('an index seeded from the real stat cache measures the same tree as one rebuilt from HEAD', (t) => {
+  const { cwd } = fixture(t);
+  writeFileSync(join(cwd, 'b.txt'), 'staged\n');
+  git(cwd, 'add', 'b.txt');
+  writeFileSync(join(cwd, 'a.test.js'), 'export const x = 1;\n');
+  writeFileSync(join(cwd, 'c.txt'), 'untracked\n');
+  const seeded = captureWorktree(cwd);
+  // A flagged entry forces the HEAD rebuild; the flag hides nothing that matters here.
+  git(cwd, 'update-index', '--assume-unchanged', '.gitignore');
+  const rebuilt = captureWorktree(cwd);
+  git(cwd, 'update-index', '--no-assume-unchanged', '.gitignore');
+  assert.equal(seeded.tree, rebuilt.tree);
+  assert.equal(seeded.fingerprint, rebuilt.fingerprint);
+  // Same size, rewritten after the index was: the stat cache cannot hide it.
+  writeFileSync(join(cwd, 'b.txt'), 'STAGED\n');
+  assert.equal(git(cwd, 'rev-parse', `${captureWorktree(cwd).tree}:b.txt`), git(cwd, 'hash-object', 'b.txt'));
+  git(cwd, 'add', '-A');
+  git(cwd, 'commit', '-qm', 'measured');
+  assert.equal(git(cwd, 'rev-parse', 'HEAD^{tree}'), captureWorktree(cwd).tree);
 });
 
 it('raw mutations invalidate evidence even when git normalizes them to the same tree', (t) => {

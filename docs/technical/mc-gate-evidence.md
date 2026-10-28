@@ -3,7 +3,10 @@
 `mc gate` freezes the base commit and fingerprints the launch worktree before
 starting its lane-owning worker. The worker checks that content before selection
 and after all checks. A temporary Git index computes the prospective commit tree
-without changing the real index; a second fingerprint includes raw tracked and
+without changing the real index. It starts from a copy of the real index (its
+stat cache, with the original's mtime for Git's racy-entry check) when every
+entry is ordinary, and from `HEAD` when any is assume-unchanged, skip-worktree
+or unmerged; on memoro that is about 5 s rather than 27 s. A second fingerprint includes raw tracked and
 non-ignored untracked bytes, executable bits and symlink targets. Ignored
 untracked dependencies/output are excluded. Submodule content cannot currently
 be fingerprinted: those runs produce no reusable evidence.
