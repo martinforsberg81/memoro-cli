@@ -35,10 +35,11 @@ import { freshenBranchForLanding } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
-import { mcHome } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
+import { autonomousMergeDoor } from './autonomous-pr.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
@@ -162,6 +163,12 @@ export async function runMergeRound({
     report.duration_ms = ended - startedAt;
     return report;
   };
+
+  // Recheck resumed queue entries too, before taking a lease or measuring.
+  for (const number of numbers) {
+    const door = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, root: workRoot(env) });
+    if (!door.ok) return finish(door.stop, door.problems.join('; '));
+  }
 
   // One lease across the whole round. The gate would take its own and give it
   // straight back, which would open exactly the window this round must not have.

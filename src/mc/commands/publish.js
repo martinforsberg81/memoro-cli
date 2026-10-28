@@ -40,11 +40,19 @@ import { parseStepEnv, updateStep } from '../register.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
+import { AUTONOMOUS_PR_MARK, autonomousBranchHeld } from '../autonomous-pr.js';
+import { repoNameOf } from '../repos.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
+  const env = deps.env || process.env;
+  const autonomous = deps.autonomousPublication || null;
+  if ((env.MC_AUTONOMOUS_RUN || env.MC_AUTONOMOUS_ROLE) && !autonomous) {
+    stderr.write('mc: autonomous publication requires mc autonomous-project finish; ordinary publish cannot close this run\n');
+    return 1;
+  }
   const scanned = scanArgs(argv, { booleans: ['--json', '--no-merge'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
@@ -58,6 +66,7 @@ export async function run(argv, deps = {}) {
   if (flags.branch && current !== 'HEAD' && current !== flags.branch) { stderr.write(`mc: --branch ${flags.branch}, but this worktree is on ${current} — drop --branch\n`); return 2; }
   if (flags.branch && git(['check-ref-format', '--branch', flags.branch]) === null) { stderr.write(`mc: --branch ${flags.branch} is not a branch name\n`); return 2; }
   const branch = flags.branch || current;
+  if (autonomous && (flags.branch || branch !== autonomous.branch)) { stderr.write('mc: autonomous branch ownership mismatch\n'); return 1; }
   const detached = current === 'HEAD';
   const localHead = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
@@ -68,13 +77,32 @@ export async function run(argv, deps = {}) {
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
 
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
+  if (!autonomous && autonomousBranchHeld({ root: deps.root || workRoot(env), repo: repoNameOf(root), branch })) {
+    stderr.write('mc: known autonomous branch requires mc autonomous-project finish; nothing pushed or queued\n'); return 1;
+  }
+  let autonomousListed = null;
+  if (autonomous) {
+    autonomousListed = gh(['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state']);
+    let prs;
+    try { prs = JSON.parse(autonomousListed.stdout); } catch { prs = null; }
+    if (!autonomousListed.ok || !Array.isArray(prs) || prs.length > 1
+      || prs.some(pr => !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.state !== 'OPEN')
+      || (autonomous.pr !== null && (prs.length !== 1 || prs[0].number !== autonomous.pr))) {
+      stderr.write('mc: existing autonomous PR ownership could not be confirmed; nothing published\n'); return 1;
+    }
+  }
   const pushed = remoteHead !== localHead;
   if (pushed) {
     const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch, { detached });
     if (!push.ok) { stderr.write(`mc: ${detached ? 'git push' : 'git push -u'} origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
+  if (autonomous) {
+    const observed = (git(['ls-remote', '--heads', 'origin', branch]) || '').split(/\s+/u)[0];
+    if (observed !== localHead) { stderr.write('mc: autonomous push is unconfirmed\n'); return 1; }
+    await autonomous.onPushed(localHead);
+  }
 
-  const listed = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
+  const listed = autonomousListed || gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
   let open = null;
   try { open = JSON.parse(listed.stdout || '[]')[0] || null; } catch { open = null; }
   if (!listed.ok) { stderr.write(`mc: gh pr list failed: ${listed.text}\n`); return 1; }
@@ -83,6 +111,7 @@ export async function run(argv, deps = {}) {
   if (flags['body-file']) {
     try { bodyGiven = (deps.read || readFileSync)(flags['body-file'], 'utf8'); } catch (error) { stderr.write(`mc: --body-file ${flags['body-file']}: ${error.message}\n`); return 2; }
   }
+  if (autonomous) bodyGiven = `${bodyGiven ?? ''}\n\n${AUTONOMOUS_PR_MARK}`;
   const fromCommit = messageParts(git(['log', '-1', '--format=%B']));
   const title = flags.title || fromCommit.title;
   const body = bodyGiven ?? fromCommit.body;
@@ -113,7 +142,7 @@ export async function run(argv, deps = {}) {
     }
   } else {
     const base = flags.base || defaultBase(git);
-    const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', markedBody(body, localHead)]);
+    const made = gh(['pr', 'create', ...(autonomous ? ['--draft'] : []), '--base', base, '--head', branch, '--title', title, '--body', markedBody(body, localHead)]);
     if (!made.ok) { stderr.write(`mc: gh pr create failed: ${made.text}\n`); return 1; }
     created = true;
     const found = /\/pull\/(\d+)/u.exec(made.stdout || '');
@@ -124,11 +153,21 @@ export async function run(argv, deps = {}) {
     try { number = JSON.parse(again.stdout || '[]')[0]?.number ?? null; } catch { number = null; }
   }
   if (number == null) { stderr.write('mc: the pull request was not found after creating it — gh pr list --head ' + branch + '\n'); return 1; }
+  if (autonomous) await autonomous.onLocated(number);
 
-  const viewed = gh(['pr', 'view', String(number), '--json', 'number,url,headRefOid,baseRefName,mergeable,mergeStateStatus,state']);
+  const viewed = gh(['pr', 'view', String(number), '--json', `number,url,headRefOid,baseRefName,mergeable,mergeStateStatus,state${autonomous ? ',headRefName,body' : ''}`]);
   let pr = null;
   try { pr = JSON.parse(viewed.stdout || 'null'); } catch { pr = null; }
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
+  if (autonomous) {
+    if (pr.number !== number || pr.headRefOid !== localHead || pr.headRefName !== branch || pr.baseRefName !== 'main'
+      || pr.state !== 'OPEN' || !pr.body?.includes(AUTONOMOUS_PR_MARK)) {
+      stderr.write('mc: autonomous PR does not confirm the marked, pushed branch/head\n'); return 1;
+    }
+    await autonomous.onResolved(pr);
+    stdout.write(`mc: autonomous publication prepared in #${pr.number}; nothing queued; process completion and handoff remain required\n`);
+    return 0;
+  }
 
   if (flags.json) {
     stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);

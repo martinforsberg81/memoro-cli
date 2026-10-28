@@ -12,6 +12,7 @@ import { instructionsFor, roleRecord, roleSourceOf } from './roles.js';
 import { headlessArgs, routedSettings } from './run-plan.js';
 import { profileArgs } from './portrait.js';
 import { run as gateCommand } from './commands/gate.js';
+import { completeAutonomousPublication } from './autonomous-publish.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [] }) {
   const skip = (reason, text) => ({ kind: null, reason, skip: text });
@@ -131,6 +132,10 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     });
     observeResult(launch.id, result);
     if (!result.normal_exit || !result.recovery_ready || !result.control_persisted) throw new Error(result.reason || 'incomplete autonomous process');
+    const closing = readAutonomousState(root, programme, name);
+    if (closing.publication?.run_id === actor.run_id) {
+      await completeAutonomousPublication({ ...options, cwd: worktree, env: deps.env }, result, capability.publication || {});
+    }
     // Publication/reconciliation owns the next transition. Even exit 0 leaves
     // this durable owner in place; it cannot start a second builder or merge.
     say(`${name}: ${actor.run_id} process ended; awaiting verified publication`);

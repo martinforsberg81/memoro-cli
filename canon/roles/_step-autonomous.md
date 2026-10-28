@@ -16,3 +16,14 @@ commit and push to the same PR and a bounded handoff. Never queue merge yourself
 A focused check is not evidence of the whole relevant selection. Failed,
 interrupted or unknown attempts are incomplete, never a normal green handoff.
 Do not use legacy `mc step done`, fixed-step publication or project completion.
+
+To finish, call `mc autonomous-project finish <programme>/<project>
+--expected-revision <n> --input-file <json>`. The input has exactly
+`goal_revision`, `message` (commit message), `title`, `body` (PR description)
+and `result` (the bounded mc-session-result). Leave its handoff's
+`published_sha` null: mc observes and fills it. Handoff criterion references
+must match current verified builder progress. Finish runs the complete relevant
+gate, commits that content and publishes without queueing merge. A failed finish
+retains ownership; fix the cause and retry the identical input with the current
+state revision. After `pr_resolved`, exit: only the runner can record normal
+handoff after your process and tools have settled.

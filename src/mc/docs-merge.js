@@ -13,6 +13,8 @@
  * look like documentation.
  */
 import { spawnSync } from 'node:child_process';
+import { autonomousMergeDoor } from './autonomous-pr.js';
+import { workRoot } from './paths.js';
 
 import { measureDocs } from './docs-measure.js';
 import { isRepoPlanPath } from './plan-source.js';
@@ -73,6 +75,7 @@ export function prFiles(pr, { repoPath, gh = ghRunner(repoPath) } = {}) {
 
 export async function runDocsMerge({
   repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs,
+  env = process.env, root = workRoot(env),
 } = {}) {
   const started = now();
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
@@ -80,6 +83,8 @@ export async function runDocsMerge({
 
   const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,headRefName,body,files,headRefOid');
   if (!info) return finish('read', `gh could not read #${pr}`);
+  const door = await autonomousMergeDoor({ repoPath, pr, root, view: info });
+  if (!door.ok) return finish(door.stop, door.problems.join('; '));
   const head = info.headRefOid || null;
   report.head = head;
   if (!head) return finish('read', `gh gave no head for #${pr}`);

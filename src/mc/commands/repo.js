@@ -417,8 +417,9 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
 
   // The plan's last step lands only with every success criterion met
   // (Martin, 2026-10-18) — `criteriaDoor`.
-  if (step) {
-    const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, step: { project: step.project, index: step.index } });
+  {
+    const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, root, env,
+      step: step ? { project: step.project, index: step.index } : null });
     if (door.checked && !door.ok) {
       const now = deps.now ? deps.now() : new Date();
       recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });

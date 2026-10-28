@@ -261,6 +261,33 @@ export function currentAutonomousEvidence(state) {
   return evidenceForRevision(state.contract, state.evidence);
 }
 
+export const PUBLICATION_PHASES = Object.freeze(['started', 'gate_verified', 'committed', 'pushed', 'pr_resolved', 'handoff_committed']);
+
+/** Trusted publication seam, not a model-supplied state patch. The owner is
+ * retained through handoff; only the later reconciliation door can release it. */
+export function saveAutonomousPublication(root, programme, project, { actor, revision, publication, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    const control = ownedControl(state, actor);
+    if (control.phase !== 'closing' || !['running', 'closing', 'publishing'].includes(state.phase)) throw new Error('finish requires closing control');
+    if (publication.run_id !== actor.run_id || publication.goal_revision !== state.goal_revision
+      || publication.programme_revision !== state.programme_revision) throw new Error('publication assignment changed');
+    const previous = state.publication?.run_id === actor.run_id ? state.publication : null;
+    const index = PUBLICATION_PHASES.indexOf(publication.phase);
+    const before = previous ? PUBLICATION_PHASES.indexOf(previous.phase) : -1;
+    if (index < 0 || index < before || index > before + 1) throw new Error('invalid publication phase');
+    if (previous && (!isDeepStrictEqual(previous.input, publication.input)
+      || previous.branch !== publication.branch || previous.goal_revision !== publication.goal_revision)) throw new Error('publication intent cannot change');
+    if (publication.branch !== state.ownership.branch || (state.ownership.pr !== null && publication.pr != null
+      && publication.pr !== state.ownership.pr)) throw new Error('branch/PR ownership cannot change');
+    const next = { ...state, phase: 'publishing', publication,
+      ownership: { ...state.ownership, pr: publication.pr ?? state.ownership.pr } };
+    if (publication.head) next.commits = [...new Set([...state.commits, publication.head])];
+    if (publication.phase === 'handoff_committed') next.current_handoff = publication.handoff;
+    return save(paths.project, state, next, deps);
+  }, deps);
+}
+
 // Inactive trusted runner seams. No CLI operation accepts profiles, clocks or
 // measured progress. Keep control and project ownership in one atomic record.
 function controlBinding(state, actor) {

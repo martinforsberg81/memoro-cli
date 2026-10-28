@@ -306,11 +306,29 @@ it('freezes the base and launch content for the worker; filtered requests remain
   assert.equal(request.measurement.base, base);
   assert.equal(request.measurement.run, 'test');
   assert.equal(request.measurement.repo, 'memoro');
+  assert.equal(request.measurement.session_run, null);
+  assert.equal(request.measurement.goal_revision, null);
   assert.match(request.measurement.configuration, /^[0-9a-f]{64}$/u);
   assert.equal(request.measurement.candidate.tree, 'tree');
   assert.deepEqual(request.files, ['a.test.js']);
   assert.equal(request.pattern, 'one');
   assert.match(request.select, new RegExp(base, 'u'));
+});
+
+it('autonomous finish binds the existing affected gate worker to its reserved session and goal revision', async () => {
+  const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+  const original = h.deps.git;
+  const base = 'a'.repeat(40);
+  h.deps.git = (cwd, args) => args[0] === 'rev-parse' && args[1] === 'origin/main^{commit}' ? base : original(cwd, args);
+  h.deps.measurementBinding = { session_run: 'build-1', goal_revision: 3 };
+  assert.equal(await run(['--json'], h.deps), 0);
+  const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+  assert.equal(request.files, null);
+  assert.equal(request.pattern, null);
+  assert.match(request.select, /--changed-path 'implementation.js'/u);
+  assert.equal(request.measurement.session_run, 'build-1');
+  assert.equal(request.measurement.goal_revision, 3);
+  assert.equal(request.reservation.lane, 'heavy');
 });
 
 it('concurrent callers launch only one worker, and repeated waits never launch another', async () => {
