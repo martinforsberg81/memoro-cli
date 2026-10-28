@@ -26,11 +26,33 @@ A command reporting `RUNNING` does not create a receipt on the worker's behalf.
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
 unfiltered affected selection can populate the existing `gate-greens.jsonl`
-cache, after its receipt is durable. Version 2 of the shared measurement
+cache, after its receipt is durable. Version 3 of the shared measurement
 contract invalidates older cache entries. Added-test discovery, repository
 imports, resource batching and lane reservations remain the existing gate's.
 
 Receipts alone grant no autonomous execution, publication or merge authority.
-Committed/pushed-content lookup and autonomous admission belong to subsequent
-work; this change does not activate autonomous programmes or alter v1 project
-lifecycle dispatch.
+`findPublicationReceipt` is a lookup for the future autonomous finish operation,
+not an active publication hook. The caller supplies the frozen local commit and
+an independently observed remote SHA; both must be the current local HEAD. Its
+tree and current raw worktree content must match the receipt. An equal-tree
+commit after an uncommitted measurement is valid, including additions/deletions;
+post-gate edits, another repo/gate run/session/goal revision, missing evidence,
+and obsolete measurement versions are not. The required final relevant selection
+must match the full, unfiltered receipt, including test flags and command
+invocation semantics. Focused checks are never broadened into that selection.
+
+Receipts also retain a hash of the effective repository gate declaration and
+test flags, covering operator-table changes outside Git. Autonomous callers of
+`runGate` explicitly supply an `evidence` binding (`repository`, gate `run`,
+optional `sessionRun` and `goalRevision`). Exact reuse reads the durable receipt
+and checks the current declaration, content tree and complete selection. Delta
+reuse reads a compatible full receipt for the PR head, then asks the existing
+dependency-aware selector about main's movement and derived paths. Newly selected
+or newly configured commands/checks are measured; missing receipts, changed
+configuration, untraceable ancestry or uncertain selector output cause normal
+relevant measurement, never assumed green. Required merge gates and PR-specific
+tests still run. Legacy cache entries remain readable to v1 callers, not to
+opt-in receipt-bound callers.
+
+This does not activate autonomous programmes, wire the future finish operation,
+or alter v1 publication/admission lifecycle dispatch.

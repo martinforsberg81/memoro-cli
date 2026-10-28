@@ -537,15 +537,17 @@ An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
 
 **A green `mc gate` on the same tree is not measured again** (rulings 44 and
-47) — a rule with nothing left to read. A round looks up its candidate in
-`gate-greens.jsonl` ([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)):
-exactly by tree, selection hash and gate version, or by the pull request's head
-tree and only the delta main moved since. Only a session's whole `mc gate`
-wrote those lines, and since ruling 52 a session runs no whole gate, so the
-lookup misses and the round measures its selection itself, once, in its lane.
-In the last 300 memoro rounds before that it had hit 36 times. The code stays,
-read-only: `reused` in a round's `gate-rounds.jsonl` line still says when a
-recorded green was taken.
+47). Completed full, unfiltered affected gates now write durable
+[receipts](mc-gate-evidence.md) and populate `gate-greens.jsonl`
+([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)). A round can reuse exactly
+by tree, selection hash and measurement version, or use the PR head's receipt
+and ask the repository's dependency-aware selector what main's movement reaches.
+Missing or incompatible evidence means measuring the relevant selection. Named
+or filtered runs never enter this full-selection cache. Receipt-bound autonomous
+callers additionally require the matching repository/run/revision and current
+gate configuration; legacy v1 callers retain their existing admission path.
+Required merge gates and the PR's own tests still run. `reused` in the round log
+records the evidence taken, not a new measurement.
 
 **`mc gate` selects from code changes** ([`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
 With no files named, the repository selector receives all paths changed against

@@ -306,6 +306,7 @@ it('freezes the base and launch content for the worker; filtered requests remain
   assert.equal(request.measurement.base, base);
   assert.equal(request.measurement.run, 'test');
   assert.equal(request.measurement.repo, 'memoro');
+  assert.match(request.measurement.configuration, /^[0-9a-f]{64}$/u);
   assert.equal(request.measurement.candidate.tree, 'tree');
   assert.deepEqual(request.files, ['a.test.js']);
   assert.equal(request.pattern, 'one');

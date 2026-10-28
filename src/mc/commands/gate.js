@@ -49,6 +49,7 @@ import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
 import { repoNameOf, repositoryDir } from '../repos.js';
 import { captureWorktree } from '../session-gate-evidence.js';
+import { gateConfiguration } from '../gate-greens.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
@@ -127,6 +128,7 @@ export async function run(argv, deps = {}) {
   let candidate = null;
   try { candidate = io.snapshot(root); } catch { /* v1 may run without reusable evidence */ }
   let select = null;
+  let declaration = null;
   let addedTests = [];
   if (!files.length) {
     const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
@@ -137,6 +139,7 @@ export async function run(argv, deps = {}) {
       return 0;
     }
     const declared = primaryCheckoutDeclaration(io, { root, env });
+    declaration = declared?.declaration ?? null;
     if (!declared?.declaration.select) {
       stderr.write('mc: no repository test selector declared — name the tests explicitly; nothing was verified\n');
       return 2;
@@ -152,10 +155,13 @@ export async function run(argv, deps = {}) {
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
   const flags = declaredTestFlags(io, { root, env });
+  const effectiveFlags = flags || testFlags(manifest?.scripts?.test);
   if (files.length) {
     const declared = primaryCheckoutDeclaration(io, { root, env });
+    declaration = declared?.declaration ?? null;
     if (declared?.declaration.select) select = selectorCommand(declared.declaration.select, { base, changed: files });
   }
+  const configuration = gateConfiguration(declaration, effectiveFlags);
   const command = files.length ? namedCommand(manifest, files, { pattern, flags })
     : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
 
@@ -188,8 +194,8 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: flags || testFlags(manifest?.scripts?.test), pattern, select, base,
-        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
+        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate, configuration } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
       const fd = io.open(logPath);
       // The worker owns the reservation, the test children and the result.
       // A short-lived command or shell cannot release its lane early.

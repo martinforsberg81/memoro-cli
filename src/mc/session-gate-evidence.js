@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -43,10 +43,12 @@ export function captureWorktree(cwd) {
         if (!stat.isFile()) throw new Error(`cannot fingerprint non-file ${path}`);
         return [path, stat.mode & 0o111 ? 'executable' : 'file', hash(readFileSync(join(cwd, path)))];
       } catch (error) {
-        if (error.code === 'ENOENT') return [path, 'missing'];
+        // The tree records deletions. Raw missing-path markers would change
+        // merely because committing removes those paths from the real index.
+        if (error.code === 'ENOENT') return null;
         throw error;
       }
-    });
+    }).filter(Boolean);
     return Object.freeze({ repository, tree, fingerprint: hash(JSON.stringify(raw)) });
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
@@ -76,6 +78,7 @@ export function gateReceipt({ measurement, before, after, result, started, ended
     schema: 'mc-session-gate-evidence', version: 1, gate_version: GATE_MEASUREMENT_VERSION,
     repo: measurement.repo, repository: measurement.candidate.repository, run: measurement.run,
     session_run: measurement.session_run ?? null, goal_revision: measurement.goal_revision ?? null,
+    configuration: measurement.configuration ?? null,
     base: measurement.base, tree: measurement.candidate.tree, fingerprint: measurement.candidate.fingerprint,
     started, ended, outcome, coverage, execution, exit: result.code ?? null,
     stopped_at: result.stopped_at ?? null,
@@ -100,8 +103,7 @@ export function persistGateReceipt({ root, receipt }) {
 /** Only an entire unfiltered selector result is compatible with the existing
  * cache. Named files are still limited even if they happen to equal it. */
 export function recordReceiptGreen({ root, receipt, path }) {
-  if (receipt.outcome !== 'green' || receipt.coverage.kind !== 'affected' || receipt.coverage.pattern !== null
-    || receipt.coverage.flags.some((flag) => /^--test-(name-pattern|skip-pattern|only|shard)(=|$)/u.test(flag))) return false;
+  if (receipt.outcome !== 'green' || !fullCoverage(receipt.coverage)) return false;
   recordGreen({ root, entry: {
     repo: receipt.repo, tree: receipt.tree, head_tree: receipt.tree, base: receipt.base,
     selection: selectionHash(receipt.coverage), gate_version: receipt.gate_version,
@@ -118,4 +120,27 @@ function freeze(value) {
     Object.freeze(value);
   }
   return value;
+}
+
+/** Future autonomous finish boundary. The caller supplies a frozen local head
+ * and an independently observed pushed SHA (not a tracking-ref assumption).
+ * This lookup grants no publication/merge authority and performs no push. */
+export function findPublicationReceipt({ root, cwd, repo, run, sessionRun = null, goalRevision = null,
+  head, pushed, selection, configuration } = {}) {
+  if (!/^[0-9a-f]{40,64}$/u.test(head || '') || pushed !== head
+    || !Array.isArray(selection?.files) || !Array.isArray(selection.commands)) return null;
+  try {
+    const git = (ref) => {
+      const result = spawnSync('git', ['rev-parse', '--verify', ref], { cwd, encoding: 'utf8', timeout: 60_000 });
+      if (result.status !== 0 || result.error) throw new Error('commit unavailable');
+      return result.stdout.trim();
+    };
+    if (git('HEAD') !== head) return null;
+    const content = captureWorktree(cwd);
+    if (git(`${head}^{tree}`) !== content.tree) return null;
+    const receipt = readGreenReceipt({ root, repo, repository: content.repository, run, sessionRun, goalRevision, configuration });
+    if (!receipt || !sameContent(receipt, content) || !fullCoverage(receipt.coverage)
+      || checksHash(receipt.coverage) !== checksHash(selection)) return null;
+    return freeze(receipt);
+  } catch { return null; }
 }

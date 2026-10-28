@@ -4,10 +4,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
-import { captureWorktree, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
-import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, selectionHash } from '../../src/mc/gate-greens.js';
-import { runSessionGate } from '../../src/mc/session-gate-run.js';
-import { realTests } from '../../src/mc/repo-gate.js';
+import { captureWorktree, findPublicationReceipt, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
+import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, selectionHash } from '../../src/mc/gate-greens.js';
+import { selectorCommand, runSessionGate } from '../../src/mc/session-gate-run.js';
+import { deltaFromGreen, realTests, selectFiles } from '../../src/mc/repo-gate.js';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
 const git = (cwd, ...args) => {
@@ -29,7 +29,7 @@ function fixture(t) {
   git(cwd, 'commit', '-qm', 'initial');
   const base = git(cwd, 'rev-parse', 'HEAD');
   const request = () => ({ cwd, files: ['a.test.js'], reservation: { root: join(root, 'state') },
-    measurement: { repo: 'repo', run: 'gate-one', session_run: 'session-one', goal_revision: 3, base, candidate: captureWorktree(cwd) } });
+    measurement: { repo: 'repo', run: 'gate-one', session_run: 'session-one', goal_revision: 3, configuration: gateConfiguration({ select: 'selector' }), base, candidate: captureWorktree(cwd) } });
   return { cwd, root, base, request };
 }
 const receiptOf = (result) => JSON.parse(readFileSync(result.evidence.path, 'utf8'));
@@ -214,4 +214,183 @@ it('interruption during the final content observation cannot mint green', async 
   });
   assert.equal(result.ok, false);
   assert.equal(receiptOf(result).outcome, 'red');
+});
+
+async function measured(t, { files = null, pattern = null, flags = [], commands = [] } = {}) {
+  const fx = fixture(t);
+  const req = { ...fx.request(), files, pattern, flags, select: 'selector' };
+  const result = await runSessionGate(req, { ...quiet,
+    select: async () => ({ ok: true, files: ['a.test.js'], commands }),
+    tests: async () => ({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }),
+  });
+  const receipt = receiptOf(result);
+  const context = { root: req.reservation.root, repo: 'repo', repository: receipt.repository, run: req.measurement.run,
+    sessionRun: 'session-one', goalRevision: 3, configuration: req.measurement.configuration };
+  const lookup = (overrides = {}) => {
+    const head = git(fx.cwd, 'rev-parse', 'HEAD');
+    return findPublicationReceipt({ ...context, cwd: fx.cwd, head, pushed: head,
+      selection: { files: ['a.test.js'], commands, flags }, ...overrides });
+  };
+  return { ...fx, req, result, receipt, context, lookup };
+}
+
+it('publication accepts the measured uncommitted content after an equal-tree commit and observed push', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(join(fx.cwd, 'new.txt'), 'included before commit');
+  rmSync(join(fx.cwd, 'a.test.js'));
+  writeFileSync(join(fx.cwd, 'b.test.js'), 'export {};');
+  const req = { ...fx.request(), files: null, select: 'selector' };
+  const selected = { ok: true, files: ['b.test.js'], commands: [] };
+  const result = await runSessionGate(req, { ...quiet, select: async () => selected, tests: async () => ({ code: 0, tap: GREEN }) });
+  const receipt = receiptOf(result);
+  const args = { root: req.reservation.root, cwd: fx.cwd, repo: 'repo', run: 'gate-one', sessionRun: 'session-one',
+    goalRevision: 3, configuration: req.measurement.configuration, selection: selected };
+  const old = git(fx.cwd, 'rev-parse', 'HEAD');
+  assert.equal(findPublicationReceipt({ ...args, head: old, pushed: old }), null, 'uncommitted content is not published');
+  git(fx.cwd, 'add', '-A');
+  git(fx.cwd, 'commit', '-qm', 'measured content');
+  const head = git(fx.cwd, 'rev-parse', 'HEAD');
+  assert.equal(git(fx.cwd, 'rev-parse', 'HEAD^{tree}'), receipt.tree);
+  const remote = join(fx.root, 'remote.git');
+  git(fx.cwd, 'init', '--bare', '-q', remote);
+  git(fx.cwd, 'push', '-q', remote, 'HEAD:refs/heads/feature');
+  const pushed = git(fx.cwd, 'ls-remote', remote, 'refs/heads/feature').split(/\s/u)[0];
+  assert.equal(findPublicationReceipt({ ...args, head, pushed }).run, receipt.run);
+  assert.equal(findPublicationReceipt({ ...args, head, pushed: old }), null);
+  assert.equal(findPublicationReceipt({ ...args, head: old, pushed: old }), null, 'a different local HEAD is refused');
+});
+
+it('post-gate raw edits, untracked edits, and later changed commits are not the measured publication', async (t) => {
+  const fx = await measured(t);
+  assert.ok(fx.lookup());
+  writeFileSync(join(fx.cwd, 'a.test.js'), 'edited');
+  assert.equal(fx.lookup(), null);
+  git(fx.cwd, 'add', '.');
+  git(fx.cwd, 'commit', '-qm', 'later changed content');
+  assert.equal(fx.lookup(), null);
+  const clean = await measured(t);
+  writeFileSync(join(clean.cwd, 'new.txt'), 'new');
+  assert.equal(clean.lookup(), null);
+});
+
+it('publication is bound to repo, gate run, session, revision, measurement version and gate configuration', async (t) => {
+  const fx = await measured(t);
+  assert.ok(fx.lookup());
+  for (const override of [{ repo: 'other' }, { run: 'other' }, { sessionRun: 'other' }, { goalRevision: 4 },
+    { configuration: gateConfiguration({ select: 'changed' }) }, { configuration: null }]) {
+    assert.equal(fx.lookup(override), null, JSON.stringify(override));
+  }
+  const other = fixture(t);
+  assert.equal(fx.lookup({ cwd: other.cwd, head: git(other.cwd, 'rev-parse', 'HEAD'), pushed: git(other.cwd, 'rev-parse', 'HEAD') }), null);
+  writeFileSync(fx.result.evidence.path, JSON.stringify({ ...fx.receipt, gate_version: GATE_MEASUREMENT_VERSION - 1 }));
+  assert.equal(fx.lookup(), null);
+  rmSync(fx.result.evidence.path);
+  assert.equal(fx.lookup(), null);
+});
+
+it('publication requires the final full selection, including invocation semantics, not named or filtered coverage', async (t) => {
+  for (const limited of [{ files: ['a.test.js'] }, { pattern: 'works' }, { flags: ['--test-only'] }]) {
+    const fx = await measured(t, limited);
+    assert.equal(fx.receipt.outcome, 'green');
+    assert.equal(fx.lookup(), null);
+  }
+  const commands = [{ packageScript: 'lint', passBaseRef: true }];
+  const fx = await measured(t, { commands });
+  assert.ok(fx.lookup());
+  for (const selection of [
+    { files: ['a.test.js', 'new.test.js'], commands },
+    { files: ['a.test.js'], commands: [] },
+    { files: ['a.test.js'], commands: [{ packageScript: 'lint', passBaseRef: false }] },
+    { files: ['a.test.js'], commands, flags: ['--import', './other.mjs'] },
+  ]) assert.equal(fx.lookup({ selection }), null);
+});
+
+it('strict cache lookup reads durable full receipts and never accepts a legacy or missing receipt claim', async (t) => {
+  const fx = await measured(t);
+  const args = { root: fx.context.root, repo: 'repo', tree: fx.receipt.tree, selection: selectionHash(fx.receipt.coverage),
+    checks: fx.receipt.coverage, evidence: fx.context };
+  assert.ok(findGreen(args));
+  assert.ok(findGreenForHead({ ...args, headTree: fx.receipt.tree }));
+  assert.equal(findGreen({ ...args, evidence: { ...fx.context, run: 'other' } }), null);
+  rmSync(fx.result.evidence.path);
+  assert.equal(findGreen(args), null);
+  assert.equal(findGreenForHead({ ...args, headTree: fx.receipt.tree }), null);
+});
+
+it('real repository delta selection follows transitive dependencies, not just changed-file overlap', async (t) => {
+  for (const mainPath of ['src/unrelated.js', 'src/shared.js', 'package.json']) {
+    const fx = fixture(t);
+    mkdirSync(join(fx.cwd, 'src'));
+    mkdirSync(join(fx.cwd, 'scripts'));
+    writeFileSync(join(fx.cwd, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(fx.cwd, 'scripts/affected-tests.js'), readFileSync(new URL('../../scripts/affected-tests.js', import.meta.url)));
+    writeFileSync(join(fx.cwd, 'src/shared.js'), 'export const value = 1;');
+    writeFileSync(join(fx.cwd, 'src/unrelated.js'), 'export const other = 1;');
+    writeFileSync(join(fx.cwd, 'src/wrapper.js'), "export { value } from './shared.js';\n");
+    writeFileSync(join(fx.cwd, 'a.test.js'), "import { value } from './src/wrapper.js';\n");
+    writeFileSync(join(fx.cwd, 'b.test.js'), "import { other } from './src/unrelated.js';\n");
+    git(fx.cwd, 'add', '.');
+    git(fx.cwd, 'commit', '-qm', 'dependency graph');
+    git(fx.cwd, 'branch', '-M', 'main');
+    const base = git(fx.cwd, 'rev-parse', 'HEAD');
+    git(fx.cwd, 'switch', '-qc', 'feature');
+    writeFileSync(join(fx.cwd, 'src/wrapper.js'), "export { value } from './shared.js';\n// feature\n");
+    const command = 'node scripts/affected-tests.js';
+    const configuration = gateConfiguration({ select: command });
+    const req = { ...fx.request(), files: null, select: selectorCommand(command, { base }),
+      measurement: { ...fx.request().measurement, base, configuration } };
+    const result = await runSessionGate(req, { ...quiet, tests: async () => ({ code: 0, tap: GREEN }) });
+    const receipt = receiptOf(result);
+    assert.deepEqual(receipt.coverage.files, ['a.test.js']);
+    git(fx.cwd, 'add', '.');
+    git(fx.cwd, 'commit', '-qm', 'feature');
+    const headSha = git(fx.cwd, 'rev-parse', 'HEAD');
+    git(fx.cwd, 'switch', '-q', 'main');
+    writeFileSync(join(fx.cwd, mainPath), readFileSync(join(fx.cwd, mainPath), 'utf8') + '\n');
+    git(fx.cwd, 'add', '.');
+    git(fx.cwd, 'commit', '-qm', 'main moved');
+    const baseCommit = git(fx.cwd, 'rev-parse', 'HEAD');
+    git(fx.cwd, 'switch', '-q', 'feature');
+    git(fx.cwd, 'merge', '--no-edit', '-q', 'main');
+    const selection = await selectFiles({ cwd: fx.cwd, command: selectorCommand(command, { base: baseCommit }), env: process.env, say: () => {} });
+    const evidence = { repository: receipt.repository, run: receipt.run, sessionRun: 'session-one', goalRevision: 3, configuration };
+    const args = { git: (args, { cwd }) => spawnSync('git', args, { cwd, encoding: 'utf8' }), cwd: fx.cwd,
+      root: req.reservation.root, repo: 'repo', headSha, baseCommit, command, env: process.env, selection, evidence };
+    const delta = await deltaFromGreen(args);
+    assert.equal(delta.kind, 'reuse');
+    assert.deepEqual(delta.paths, [mainPath]);
+    assert.deepEqual(delta.files, mainPath === 'src/unrelated.js' ? [] : ['a.test.js']);
+    assert.equal((await deltaFromGreen({ ...args, evidence: { ...evidence, configuration: 'changed' } })).kind, 'none');
+    assert.equal((await deltaFromGreen({ ...args, command: 'false' })).kind, 'fallback');
+    assert.equal((await deltaFromGreen({ ...args, command: `printf '%s' '{"files":[],"commands":[{}]}'` })).kind, 'fallback');
+    rmSync(result.evidence.path);
+    assert.equal((await deltaFromGreen(args)).kind, 'none');
+  }
+});
+
+it('strict delta measures a changed command invocation even when main has no delta paths', async (t) => {
+  const fx = await measured(t, { commands: [{ packageScript: 'lint', passBaseRef: true }] });
+  const args = { git: (args, { cwd }) => spawnSync('git', args, { cwd, encoding: 'utf8' }), cwd: fx.cwd,
+    root: fx.context.root, repo: 'repo', headSha: fx.base, baseCommit: fx.base, command: 'unused', env: process.env,
+    evidence: fx.context, selection: { files: ['a.test.js'], commands: [{ packageScript: 'lint', passBaseRef: false }] } };
+  const delta = await deltaFromGreen(args);
+  assert.equal(delta.kind, 'reuse');
+  assert.deepEqual(delta.files, []);
+  assert.deepEqual(delta.commands, args.selection.commands);
+  assert.equal((await deltaFromGreen({ ...args, evidence: { ...fx.context, repository: '/other/repo/.git' } })).kind, 'none');
+});
+
+it('corrupt or incomplete durable evidence never authorizes reuse or publication', async (t) => {
+  const fx = await measured(t);
+  const args = { root: fx.context.root, repo: 'repo', tree: fx.receipt.tree,
+    selection: selectionHash(fx.receipt.coverage), checks: fx.receipt.coverage, evidence: fx.context };
+  for (const corrupt of ['{', 'null', JSON.stringify({ ...fx.receipt, exit: null }),
+    JSON.stringify({ ...fx.receipt, execution: { tests: null, commands: [] } }),
+    JSON.stringify({ ...fx.receipt, coverage: { ...fx.receipt.coverage, commands: [null] } }),
+    JSON.stringify({ ...fx.receipt, outcome: 'incomplete' })]) {
+    writeFileSync(fx.result.evidence.path, corrupt);
+    assert.equal(fx.lookup(), null);
+    assert.equal(findGreen(args), null);
+    assert.equal(findGreenForHead({ ...args, headTree: fx.receipt.tree }), null);
+  }
 });
