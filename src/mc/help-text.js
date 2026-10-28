@@ -70,6 +70,7 @@ THE PAGE
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
   mc programme show <programme>    Approved revisions and drafts; execution stays disabled
   mc autonomous-project show <p>/<g> Versioned goal state; no sessions are launched
+  mc session-control status <p>/<g> Durable next action for an owned v2 run; no execution activation
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
   mc work <name>                  Open that workarea, ~/mc/work/<name>

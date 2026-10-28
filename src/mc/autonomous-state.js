@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
 import { realLock } from './register.js';
 import { withPlanLock } from './plan-write.js';
+import { createSessionControl, decideSessionControl, controlResponse, validateControlState } from './session-control.js';
 import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
@@ -145,6 +146,7 @@ export function releaseProgrammeRun(root, programme, actor, revision, deps = {})
 export function mutateProgramme(root, programme, operation, input, { actor, revision, ...deps }) {
   return locked(root, programme, null, paths => {
     const state = programmeState(paths); expected(state, revision); owner(state, actor, ['foreground-plan']);
+    if (operation === 'progress' && state.session_control) ownedControl(state, actor);
     const next = structuredClone(state);
     if (operation === 'draft') {
       valid(validateProgrammeContract(input));
@@ -196,6 +198,7 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
     const state = projectState(paths); expected(state, revision);
     const roles = { revise: ['plan'], recover: ['plan'], confirm: ['plan'], progress: ['step'], report: ['review'], attempt: ['step', 'review', 'plan'], release: ['step', 'review', 'plan'] };
     owner(state, actor, roles[operation] || []);
+    if (operation === 'progress' && state.session_control) ownedControl(state, actor);
     const next = structuredClone(state);
     if (operation === 'revise' || operation === 'confirm' || operation === 'recover') {
       owner(programmeState(paths), actor, ['plan']);
@@ -256,4 +259,51 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
 }
 export function currentAutonomousEvidence(state) {
   return evidenceForRevision(state.contract, state.evidence);
+}
+
+// Inactive trusted runner seams. No CLI operation accepts profiles, clocks or
+// measured progress. Keep control and project ownership in one atomic record.
+function controlBinding(state, actor) {
+  return { programme_id: state.contract.programme.id, programme_revision: state.programme_revision,
+    project_id: state.contract.project_id, goal_revision: state.goal_revision, run_id: actor.run_id };
+}
+function controlObservation(state, observation) {
+  if (observation.progress?.criterion_id && !state.contract.success_criteria.some(item => item.id === observation.progress.criterion_id)) throw new Error('unknown measured criterion ID');
+  return observation;
+}
+function ownedControl(state, actor) {
+  owner(state, actor, ['step']);
+  if (!state.session_control || !isDeepStrictEqual(state.session_control.binding, controlBinding(state, actor))) throw new Error('no control for this run/revision');
+  return validateControlState(state.session_control);
+}
+export function startProjectSessionControl(root, programme, project, { actor, revision, profile, observation, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision); owner(state, actor, ['step']);
+    const session_control = createSessionControl({ binding: controlBinding(state, actor), profile, observation: controlObservation(state, observation), previous: state.session_control || null });
+    return save(paths.project, state, { ...state, session_control }, deps);
+  }, deps);
+}
+export function observeProjectSessionControl(root, programme, project, { actor, revision, observation, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation));
+    return save(paths.project, state, { ...state, session_control }, deps);
+  }, deps);
+}
+export function projectSessionCheckpoint(root, programme, project, operation, input, { actor, revision, ...deps }) {
+  return locked(root, programme, project, paths => {
+    let state = projectState(paths); expected(state, revision);
+    const control = ownedControl(state, actor);
+    if (!['status', 'checkpoint', 'criterion'].includes(operation)) throw new Error('unknown control callback');
+    const allowed = operation === 'criterion' ? ['reference', 'criterion_id'] : operation === 'checkpoint' ? ['reference'] : [];
+    if (!input || Object.keys(input).length !== allowed.length || Object.keys(input).some(key => !allowed.includes(key))) throw new Error('callback cannot supply observations or budgets');
+    if (allowed.length && (typeof input.reference !== 'string' || !input.reference.trim() || Buffer.byteLength(input.reference) > 2048)) throw new Error('checkpoint reference required');
+    if (operation === 'criterion' && !state.contract.success_criteria.some(item => item.id === input.criterion_id)) throw new Error('unknown criterion ID');
+    if (operation !== 'status') {
+      // A callback is a request for measurement, not measured progress itself.
+      const session_control = { ...control, request: { operation, ...input, observation_sequence: control.observation.sequence } };
+      state = save(paths.project, state, { ...state, session_control }, deps);
+    }
+    return { ...controlResponse(state.session_control), revision: state.revision };
+  }, deps);
 }
