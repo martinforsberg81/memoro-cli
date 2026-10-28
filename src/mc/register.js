@@ -423,6 +423,7 @@ export function reconcileEntry(entry, record, now = null) {
  */
 export function applyEntry(record, entry) {
   if (!record?.plan || !entry) return record;
+  if (record.plan.version !== undefined && record.plan.version !== 1) return record;
   const steps = record.plan.steps.map((step, index) => {
     const state = entry.steps[index];
     if (!state) return step;
@@ -654,7 +655,7 @@ export function overlayPlans(plans, {
 } = {}) {
   if (!root) return plans;
   return plans.map((record) => {
-    if (!record?.plan || record.legacy) return record;
+    if (!record?.plan || record.legacy || (record.plan.version !== undefined && record.plan.version !== 1)) return record;
     const path = registerPath(root, record.project, { read, exists, list });
     if (!path) return record;
     const settle = (entry) => {

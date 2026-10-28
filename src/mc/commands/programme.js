@@ -17,3 +17,9 @@ export async function run(argv, deps = {}) {
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
+
+export function usage() {
+  return 'usage — mc programme show <programme>\n'
+    + '        mc programme draft|approve <programme> --expected-revision <n> --input-file <json>\n'
+    + '        contracts only; programme start is not available\n';
+}

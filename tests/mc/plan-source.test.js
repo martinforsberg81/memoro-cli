@@ -39,12 +39,33 @@ describe('unsupported plans stay visible and inert', () => {
         const found = planIn(root, record.project, { programs });
         assert.notEqual(found, null, 'unsupported is a held plan, not missing work');
         assert.equal(found.legacy, false);
-        assert.equal(found.plan, null);
-        assert.match(found.problems[0], /unsupported/u);
-        assert.equal(kindFor(record.project, { plans: records }), 'skip:unparseable');
-        assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is invalid' });
+        if (record.project === 'v2-0') {
+          assert.deepEqual(found.plan, values[0]);
+          assert.deepEqual(found.problems, []);
+          assert.equal(kindFor(record.project, { plans: records }), 'skip:inactive');
+          assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is inactive' });
+        } else {
+          assert.equal(found.plan, null);
+          assert.match(found.problems.join('\n'), record.project === 'v2-1' ? /execution.kind/u : /unsupported/u);
+          assert.equal(kindFor(record.project, { plans: records }), 'skip:unparseable');
+          assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is invalid' });
+        }
         assert.equal(archiveDue({ record, entry: null, nowMs: Date.now() }).due, false);
       });
+      assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), []);
+    });
+  });
+
+  it('never hides or cleans a non-v1 plan because a legacy closeout is present', () => {
+    scratch(root => {
+      const home = join(root, 'programs');
+      for (const version of [2, 99, '2']) {
+        const dir = join(home, 'mc', `version-${version}-${typeof version}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, PLAN_FILE), JSON.stringify(autonomousProject({ version })));
+        writeFileSync(join(dir, CLOSEOUT_FILE), '{}');
+      }
+      assert.equal(programsPlans({ home }).length, 3);
       assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), []);
     });
   });

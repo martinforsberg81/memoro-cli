@@ -98,14 +98,17 @@ describe('explicit project contract dispatch and fixed-step admission', () => {
     }
   });
 
-  it('keeps even valid v2 contracts out of the legacy runtime until reader integration', () => {
+  it('reads valid v2 contracts explicitly while keeping fixed-step execution disabled', () => {
     const value = autonomousProject();
     assert.equal(validateProject(value).ok, true);
     assert.equal(validatePlan(value).ok, false);
-    assert.equal(readPlanText(JSON.stringify(value)).plan, null);
-    assert.match(readPlanText(JSON.stringify(value)).problems[0], /unsupported/u);
+    assert.deepEqual(readPlanText(JSON.stringify(value)), { plan: value, problems: [] });
     assert.equal(deliverableStep(value).step, null);
-    assert.equal(planState(value).status, 'unsupported');
+    assert.equal(deliverableStep(value).reason, 'inactive');
+    assert.match(deliverableStep(value).why, /execution is disabled/u);
+    assert.equal(planState(value).status, 'inactive');
+    assert.equal(planSummary(value).status, 'inactive');
+    assert.equal(branchFlow(value), false);
   });
 });
 

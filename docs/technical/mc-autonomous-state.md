@@ -1,10 +1,10 @@
 # Revisioned autonomous data (inactive)
 
 This is the persistence layer for explicitly opted-in v2 goals. It does not
-launch sessions, enable execution, send plans, publish or queue a merge. The
+launch sessions, enable execution, publish code or queue a merge. The
 legacy v1 register and its matching rules are unchanged. Command modules are
-implemented here; lazy CLI routing and v2 publication/display dispatch belong
-to the following integration step.
+lazily routed by `src/mc-cli.js`; v2 contract publication
+and display are described in [the contract integration](mc-autonomous-programmes.md).
 
 ## Storage and atomicity
 
@@ -22,10 +22,11 @@ confirmation/history, branch/PR ownership, commits, execution phase, current
 handoff reference, run ownership/history and append-only incomplete attempts.
 It is not a v1 `STATE.json` and must never pass through v1 normalization.
 
-Every mutation takes the programme's plan lock, the project's plan lock when
+Every mutation, including inactive send, takes the programme's plan lock, the project's plan lock when
 applicable, then the existing strict register lock. It checks the expected
-state revision and active run/role **after** taking those locks, then replaces
-one authoritative JSON file with `writeJsonAtomic`. A failed replacement leaves
+state revision and active run/role **after** taking those locks, then atomically replaces
+one authoritative JSON file with `writeJsonAtomic`. Send writes only the PLAN
+snapshot; it does not advance state revision or execution phase. A failed replacement leaves
 the previous state intact. No operation holds these locks across remote IO.
 
 `DRAFT.json` is a compatibility projection written **after** the authoritative
@@ -35,17 +36,18 @@ state. If the projection write fails, the mutation may already have committed:
 read the state revision; do not replay the old revision. The planner-owned
 `recover` operation reconstructs the projection without a new contract or state
 revision. `show` is read-only. Raw edits to the projection are never adopted.
-Sending/publishing this draft is deliberately not implemented here.
+Sending atomically writes the authoritative contract as an inactive `PLAN.json`;
+it never adopts the draft projection or launches work.
 
 ## Typed command operations
 
-The command modules take these argument vectors (routing is not installed yet):
+The routed command modules take these argument vectors:
 
 - `programme show <programme>`
 - `programme draft|approve <programme> --expected-revision <n> --input-file <json>`
 - `autonomous-project show <programme>/<project>`
 - `autonomous-project create|revise|progress|report|confirm|attempt <programme>/<project> --expected-revision <n> --input-file <json>`
-- `autonomous-project release|recover <programme>/<project> --expected-revision <n>`
+- `autonomous-project send|release|recover <programme>/<project> --expected-revision <n>`
 
 `draft` accepts a complete draft programme contract; `approve` accepts only
 `{by, at}` approval attribution and approves the exact stored draft. Only the

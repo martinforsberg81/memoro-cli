@@ -435,7 +435,7 @@ export function readPlanText(text) {
   } catch (err) {
     return { plan: null, problems: [`the file is not JSON: ${err.message}`] };
   }
-  const { ok, problems } = validatePlan(value);
+  const { ok, problems } = validateProject(value);
   return { plan: ok ? value : null, problems };
 }
 
@@ -484,6 +484,7 @@ export function planSummary(plan) {
  * half-built in an order nobody chose.
  */
 export function planState(plan) {
+  if (plan?.version === 2 && validateProject(plan).ok) return { status: 'inactive', index: -1, step: null };
   if (plan?.version !== undefined && plan.version !== PLAN_VERSION) return { status: 'unsupported', index: -1, step: null };
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   // A `landing` step is behind the plan, not in front of it: its pull request
@@ -548,6 +549,10 @@ function clip(text, max) {
  * admission test, in one place, before a session is spent.
  */
 export function deliverableStep(plan) {
+  if (plan?.version === 2 && validateProject(plan).ok) return {
+    step: null, index: -1, reason: 'inactive',
+    why: 'autonomous execution is disabled — programme start is not available', problems: [],
+  };
   const { ok, problems } = validatePlan(plan);
   if (!ok && problems[0]?.startsWith('unsupported:')) return { step: null, index: -1, reason: 'unsupported', why: problems[0], problems };
   if (!ok) return { step: null, index: -1, reason: 'unparseable', why: `the plan does not parse: ${problems[0]}`, problems };

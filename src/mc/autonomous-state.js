@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
 import { realLock } from './register.js';
 import { withPlanLock } from './plan-write.js';
+import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
 import { validateAutonomousProject, autonomousRevisionProblems, validateAutonomousEvidence, evidenceForRevision } from './autonomous-project.js';
@@ -106,6 +107,20 @@ export function readAutonomousState(root, programme, project, deps = {}) {
   }, deps);
 }
 
+/** Publish the authoritative contract as an inert PLAN; never reserve or launch work. */
+export function sendAutonomousProject(root, programme, project, { actor, revision, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision); owner(state, actor, ['plan']);
+    const agreement = programmeState(paths); owner(agreement, actor, ['plan']);
+    approved(agreement, state.contract);
+    const file = join(paths.projectDir, PLAN_FILE);
+    if (existsSync(file)) {
+      if (!isDeepStrictEqual(read(file), state.contract)) throw new Error('a different PLAN.json already exists');
+    } else (deps.writePlan || writeJsonAtomic)(file, state.contract);
+    return structuredClone(state.contract);
+  }, deps);
+}
+
 /** Trusted control-plane seam: reserve an owner, not a command or a launch. */
 export function reserveProgrammeRun(root, programme, actor, revision, deps = {}) {
   actorCheck(actor);
@@ -156,7 +171,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
     const state = programmeState(paths); expected(state, revision); owner(state, actor, ['plan']);
     approved(state, input);
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
-    if (['PLAN.json', 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
+    if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
     return projectSave(paths, null, {
       schema: 'mc-autonomous-state', version: 1, contract: input, contracts: [input], active_run: actor,
       phase: 'plan_pending', programme_revision: input.programme.revision, goal_revision: 1,
@@ -186,12 +201,12 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       owner(programmeState(paths), actor, ['plan']);
     }
     if (operation === 'recover') {
-      if (existsSync(join(paths.projectDir, 'PLAN.json'))) throw new Error('cannot recover a sent draft');
+      if (existsSync(join(paths.projectDir, PLAN_FILE))) throw new Error('cannot recover a sent draft');
       (deps.writeDraft || writeJsonAtomic)(paths.draft, state.contract);
       return structuredClone(state);
     }
     if (operation === 'revise') {
-      if (existsSync(join(paths.projectDir, 'PLAN.json'))) throw new Error('sent v2 revisions are not supported yet');
+      if (existsSync(join(paths.projectDir, PLAN_FILE))) throw new Error('sent v2 revisions are not supported yet');
       approved(programmeState(paths), input);
       const problems = autonomousRevisionProblems(state.contract, input);
       if (problems.length) throw new Error(problems.join('; '));

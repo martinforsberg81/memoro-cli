@@ -25,7 +25,7 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  const data = await (deps.collect || collectProject)(names[0], { offline: argv.includes('--offline') });
+  const data = await (deps.collect || collectProject)(names[0], { ...deps, offline: argv.includes('--offline') });
   if (!data) {
     stderr.write(`mc: no project or workarea "${names[0]}" — mc lists them\n`);
     return 1;

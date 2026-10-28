@@ -15,7 +15,7 @@
  * verbs in `commands/project.js` run against the real one.
  */
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { PLAN_FILE } from './plan-source.js';
@@ -69,6 +69,7 @@ export const REVIEW_STEP = Object.freeze({
  * frozen constant itself.
  */
 export function withReviewStep(plan) {
+  if (plan?.version !== undefined && plan.version !== 1) return plan;
   if (branchFlow(plan)) return plan;
   const review = structuredClone(REVIEW_STEP);
   return { ...plan, steps: [...plan.steps, review] };
@@ -347,13 +348,26 @@ export function withPlanLock(dir, fn, { alive = pidAlive, waitMs = 5000, pid = p
  * file and the parser's complaint, because the verb that asked cannot say
  * anything more useful about it than where it is and what is wrong.
  */
-export function readDraftOrPlan(file, { read = (path) => readFileSync(path, 'utf8') } = {}) {
+export function readDraftOrPlan(file, { read = (path) => readFileSync(path, 'utf8'), allowVersioned = false } = {}) {
   const text = read(file);
+  let plan;
   try {
-    return JSON.parse(text);
+    plan = JSON.parse(text);
   } catch (error) {
     throw new Error(`${file} is not JSON: ${error.message}`);
   }
+  if (!allowVersioned) {
+    const problem = legacyMutationProblem(file, plan);
+    if (problem) throw new Error(problem);
+  }
+  return plan;
+}
+
+/** Legacy verbs must not mutate a versioned contract or its draft projection. */
+export function legacyMutationProblem(file, plan) {
+  return (plan?.version !== undefined && plan.version !== 1) || existsSync(join(dirname(file), 'AUTONOMOUS_STATE.json'))
+    ? `unsupported: this is not a fixed-step v1 project — use mc autonomous-project for v2 operations`
+    : null;
 }
 
 /**

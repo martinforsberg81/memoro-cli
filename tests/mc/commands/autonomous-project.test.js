@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { run } from '../../../src/mc/commands/autonomous-project.js';
 import { autonomousProject } from '../autonomy-fixtures.js';
 import { stateFixture, planner, builder, reviewer, foreground } from '../autonomous-state-fixture.js';
-import { currentAutonomousEvidence, readAutonomousState, reserveProjectRun, mutateAutonomousProject } from '../../../src/mc/autonomous-state.js';
+import { currentAutonomousEvidence, readAutonomousState, reserveProjectRun, mutateAutonomousProject, releaseProgrammeRun, reserveProgrammeRun } from '../../../src/mc/autonomous-state.js';
+import { run as projectCommand } from '../../../src/mc/commands/project.js';
+import { runMcCli } from '../_helpers/mc-cli.js';
+import { collectProject, renderProject } from '../../../src/mc/status-project.js';
+import { programsPlans } from '../../../src/mc/plan-source.js';
+import { applyEntry, overlayPlans } from '../../../src/mc/register.js';
+import { kindFor } from '../../../src/mc/run-plan.js';
+import { withReviewStep } from '../../../src/mc/plan-write.js';
 
 const invoke = (f, operation, revision, input, deps = {}) => run([operation, `${f.programme}/${f.project}`, '--expected-revision', String(revision),
   ...(input === undefined ? [] : ['--input-file', f.file(input)])], { ...f.deps, ...deps });
@@ -13,6 +20,143 @@ const stateOf = f => f.json(f.paths.project);
 const progress = { id: 'schema-proof', criterion_id: 'schema', status: 'verified', reference: 'evidence/schema-proof.json' };
 const report = { id: 'review-proof', reference: 'reports/review-proof.json', findings: ['One gap.'], criteria: [{ criterion_id: 'schema', status: 'finding', reference: 'reports/review-proof.json#schema' }] };
 const sha = 'a'.repeat(40);
+
+test('real CLI routes guarded programme and v2 commands in a temporary root without launching sessions', () => {
+  const f = stateFixture();
+  try {
+    const env = { MC_WORK_ROOT: f.root, MC_HOME: f.root, MC_REPOS_HOME: join(f.root, 'repos'),
+      MC_STEP: '', MC_AUTONOMOUS_RUN: foreground.run_id, MC_AUTONOMOUS_ROLE: foreground.role };
+    const cli = (args, actor = foreground) => runMcCli(args, { ...env, MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: actor.role }, { cwd: f.root });
+    for (const verb of ['programme', 'autonomous-project']) {
+      const help = cli([verb, '--help']); assert.equal(help.status, 0, help.stderr); assert.match(help.stdout, /^usage/u);
+    }
+    let result = cli(['programme', 'draft', f.programme, '--expected-revision', '1', '--input-file', f.file(f.draft)]);
+    assert.equal(result.status, 0, result.stderr);
+    result = cli(['programme', 'approve', f.programme, '--expected-revision', '2', '--input-file', f.file({ by: 'Martin', at: '2026-10-28T12:00:00Z' })]);
+    assert.equal(result.status, 0, result.stderr);
+    result = cli(['programme', 'show', f.programme]);
+    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
+    // Only the trusted control plane reserves runs; no public command launches one.
+    releaseProgrammeRun(f.root, f.programme, foreground, 3);
+    reserveProgrammeRun(f.root, f.programme, planner, 4);
+    result = cli(['autonomous-project', 'create', `${f.programme}/${f.project}`, '--expected-revision', '5', '--input-file', f.file(autonomousProject())], planner);
+    assert.equal(result.status, 0, result.stderr);
+    result = cli(['autonomous-project', 'revise', `${f.programme}/${f.project}`, '--expected-revision', '1', '--input-file', f.file(autonomousProject({ goal_revision: 2 }))], planner);
+    assert.equal(result.status, 0, result.stderr);
+    result = cli(['project', f.project, '--json', '--offline'], planner);
+    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).goal_revision, 2);
+    result = cli(['project', 'send', f.project, '--expected-revision', '2'], planner);
+    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
+    assert.deepEqual(f.json(join(f.paths.projectDir, 'PLAN.json')), autonomousProject({ goal_revision: 2 }));
+    assert.equal('steps' in f.json(join(f.paths.projectDir, 'PLAN.json')), false);
+    const repo = join(env.MC_REPOS_HOME, 'memoro-cli'); mkdirSync(join(repo, '.git'), { recursive: true });
+    const before = readFileSync(f.paths.project, 'utf8');
+    result = cli(['status', f.project, '--json', '--offline']);
+    assert.equal(result.status, 0, result.stderr);
+    const status = JSON.parse(result.stdout); assert.equal(status.machine.runnable, false);
+    assert.equal(status.autonomous.phase, 'plan_pending'); assert.deepEqual(status.problems, []);
+    result = cli(['project', f.project, '--offline']);
+    assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /execution disabled/u); assert.doesNotMatch(result.stdout, /STEPS/u);
+    assert.equal(readFileSync(f.paths.project, 'utf8'), before, 'status cannot mutate autonomous state');
+    assert.equal(cli(['programme', 'start', f.programme]).status, 2);
+    assert.equal(cli(['autonomous-project', 'start', `${f.programme}/${f.project}`]).status, 2);
+    assert.deepEqual(readdirSync(f.paths.projectDir).sort(), ['AUTONOMOUS_STATE.json', 'DRAFT.json', 'PLAN.json']);
+    assert.equal(existsSync(join(f.root, 'runner', 'projects', `${f.project}.json`)), false);
+    assert.equal(existsSync(join(f.root, 'runner', 'log', 'runs.tsv')), false);
+  } finally { f.cleanup(); }
+});
+
+test('v2 send checks state, approved contract, ownership and expected revision under lock', async () => {
+  const f = stateFixture();
+  try {
+    f.setupProject(); const sent = join(f.paths.projectDir, 'PLAN.json');
+    const args = ['send', f.project, '--expected-revision', '1'];
+    const deps = { ...f.deps, home: join(f.root, 'programs') };
+    for (const actor of [builder, reviewer, foreground, { ...planner, run_id: 'stale-plan' }]) {
+      assert.equal(await projectCommand(args, { ...deps, actor }), 1); assert.equal(existsSync(sent), false);
+    }
+    assert.equal(await projectCommand(['send', f.project], deps), 2);
+    assert.equal(await projectCommand(['send', f.project, '--expected-revision', '0'], deps), 1);
+    const agreement = readFileSync(f.paths.programme, 'utf8');
+    const state = f.json(f.paths.programme); state.approved = []; writeFileSync(f.paths.programme, JSON.stringify(state));
+    assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
+    writeFileSync(f.paths.programme, agreement);
+    const before = readFileSync(f.paths.project, 'utf8');
+    const staleInsideLock = (_root, fn) => { const changed = f.json(f.paths.project); changed.revision++; writeFileSync(f.paths.project, JSON.stringify(changed)); return fn(); };
+    assert.equal(await projectCommand(args, { ...deps, lock: staleInsideLock }), 1); assert.equal(existsSync(sent), false);
+    writeFileSync(f.paths.project, before);
+    assert.equal(await projectCommand(args, { ...deps, writePlan: () => { throw new Error('atomic publication failed'); } }), 1);
+    assert.equal(existsSync(sent), false); assert.equal(readFileSync(f.paths.project, 'utf8'), before);
+    const contract = f.json(f.paths.project); contract.contract.execution = {}; writeFileSync(f.paths.project, JSON.stringify(contract));
+    assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
+    writeFileSync(f.paths.project, before);
+    // A damaged projection is never adopted; publication uses the locked state contract.
+    writeFileSync(f.paths.draft, '{');
+    for (const value of [null, autonomousProject({ version: 99 }), autonomousProject({ goal_revision: 2 })]) {
+      writeFileSync(sent, JSON.stringify(value));
+      assert.equal(await invoke(f, 'send', 1), 1);
+      assert.deepEqual(f.json(sent), value, 'a different or unsupported PLAN is never overwritten');
+      rmSync(sent);
+    }
+    assert.equal(await projectCommand(args, deps), 0, f.err.join(''));
+    assert.deepEqual(f.json(sent), autonomousProject()); assert.deepEqual(withReviewStep(f.json(sent)), autonomousProject());
+    assert.equal(await run(['send', `${f.programme}/${f.project}`, '--expected-revision', '1'], f.deps), 0, 'same publication is idempotent');
+    assert.equal(readFileSync(f.paths.project, 'utf8'), before, 'publishing does not change phase or reserve a run');
+  } finally { f.cleanup(); }
+});
+
+test('v2 status exposes revisioned observations read-only without seeding or applying a v1 register', async () => {
+  const f = stateFixture();
+  try {
+    f.setupProject();
+    assert.equal(await invoke(f, 'send', 1), 0);
+    const repo = join(f.root, 'repos', 'memoro-cli'); mkdirSync(join(repo, '.git'), { recursive: true });
+    const options = { env: { MC_WORK_ROOT: f.root }, repos: [{ name: 'memoro-cli', path: repo }], offline: true,
+      programs: () => programsPlans({ home: join(f.root, 'programs') }), merges: () => null };
+    const before = readFileSync(f.paths.project, 'utf8');
+    const status = await collectProject(f.project, options);
+    assert.deepEqual(status.plan, autonomousProject()); assert.equal(status.autonomous.confirmed, false);
+    assert.equal(status.machine.runnable, false); assert.equal(status.machine.reason, 'inactive');
+    assert.deepEqual(overlayPlans([{ plan: status.plan }], { root: f.root, write: () => assert.fail('v1 write') }), [{ plan: status.plan }]);
+    assert.deepEqual(applyEntry({ plan: status.plan }, { steps: [] }), { plan: status.plan });
+    assert.match(renderProject(status), /schema  unknown · premerge/u);
+    assert.equal(kindFor(f.project, { plans: [{ project: f.project, plan: status.plan }] }), 'skip:inactive');
+    assert.equal(readFileSync(f.paths.project, 'utf8'), before);
+    writeFileSync(f.paths.project, '{');
+    const broken = await collectProject(f.project, options);
+    assert.equal(broken.autonomous, null); assert.match(broken.problems.join(''), /autonomous state/u);
+    assert.equal(broken.machine.runnable, false);
+  } finally { f.cleanup(); }
+});
+
+test('legacy mutation and cleanup commands refuse v2 and unknown versions without side effects', async () => {
+  const f = stateFixture();
+  try {
+    f.setupProject();
+    const deps = { ...f.deps, home: join(f.root, 'programs'), repos: [], rm: () => assert.fail('must not remove'), gh: () => assert.fail('must not call GitHub') };
+    writeFileSync(f.input, 'Build the assigned goal.');
+    for (const version of [2, 99, '2']) {
+      writeFileSync(f.paths.draft, JSON.stringify(autonomousProject({ version })));
+      const before = readFileSync(f.paths.draft, 'utf8');
+      for (const args of [['edit', f.project, '--goal', 'Changed'], ['criterion', 'add', f.project, 'Changed', '--check', 'check'],
+        ['criterion', 'edit', f.project, '1', '--check', 'check'], ['criterion', 'drop', f.project, '1', '--reason', 'no'],
+        ['step', 'add', f.project, 'Build', '--model', 'fast', '--done-when', 'Tests pass.', '--instruction-file', f.input],
+        ['step', 'edit', f.project, '1', '--title', 'Changed'],
+        ['criterion', 'met', f.project, '1'], ['archive', f.project], ['discard', f.project, '--apply']]) {
+        assert.equal(await projectCommand(args, deps), 1, args.join(' '));
+        assert.equal(readFileSync(f.paths.draft, 'utf8'), before);
+      }
+    }
+    rmSync(f.paths.project);
+    for (const version of [99, '2']) {
+      writeFileSync(f.paths.draft, JSON.stringify(autonomousProject({ version })));
+      assert.equal(await projectCommand(['send', f.project], deps), 1);
+      assert.equal(await projectCommand(['discard', f.project, '--apply'], deps), 1);
+      assert.equal(existsSync(join(f.paths.projectDir, 'PLAN.json')), false);
+      assert.match(f.err.join(''), /unsupported/u);
+    }
+  } finally { f.cleanup(); }
+});
 
 test('v2 creation is planner-owned, validates an approved programme and creates only a draft', async () => {
   const f = stateFixture();

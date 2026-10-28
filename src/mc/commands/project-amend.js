@@ -7,7 +7,7 @@ import { defaultRepos } from '../brief-collect.js';
 import { writeJsonAtomic } from '../atomic-write.js';
 import { amendedPlan, amendmentStanding } from '../plan-amend.js';
 import { NAME_RE } from '../plan-schema.js';
-import { findProjectDir, withPlanLock, writePlanFile } from '../plan-write.js';
+import { findProjectDir, legacyMutationProblem, withPlanLock, writePlanFile } from '../plan-write.js';
 import { readEntry, realLock, whoAmI } from '../register.js';
 import { programsHome } from '../paths.js';
 
@@ -53,6 +53,8 @@ export function runAmend(scanned, deps) {
     if (existsSync(closed)) throw new Error('an archived project cannot be amended');
     const beforeText = readText(found.file);
     const before = JSON.parse(beforeText);
+    const unsupported = legacyMutationProblem(found.file, before);
+    if (unsupported) throw new Error(unsupported);
     const entry = readState();
     amendmentStanding(before, entry);
     if (entry.project !== project || entry.repo !== before.repo) throw new Error('the register project and repository must match the plan');
