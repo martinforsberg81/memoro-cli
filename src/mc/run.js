@@ -107,6 +107,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { streamAutonomousSession } from './session-supervision.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import { logRows } from './archive-plan.js';
@@ -306,7 +307,8 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * its billing follows the mode and nothing else (step-credits, ruling 38).
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null }) {
+  if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
   return new Promise((resolve) => {
     const piped = prompt != null;
     let childEnv = env;

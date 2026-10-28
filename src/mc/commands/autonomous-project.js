@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { workRoot } from '../paths.js';
 import { createAutonomousDraft, mutateAutonomousProject, readAutonomousState, sendAutonomousProject } from '../autonomous-state.js';
+import { controlResponse } from '../session-control.js';
 import { scanArgs } from './flags.js';
 
 export function autonomousCommandContext(deps) {
@@ -35,7 +36,9 @@ export async function run(argv, deps = {}) {
       : args.operation === 'create' ? createAutonomousDraft(root, programme, project, input, options)
         : args.operation === 'send' ? sendAutonomousProject(root, programme, project, options)
         : mutateAutonomousProject(root, programme, project, args.operation, input, options);
-    stdout.write(`${JSON.stringify(args.operation === 'send' ? { contract: result, execution_enabled: false } : result, null, 2)}\n`);
+    const response = result.session_control && ['show', 'progress'].includes(args.operation)
+      ? { ...result, control: controlResponse(result.session_control) } : result;
+    stdout.write(`${JSON.stringify(args.operation === 'send' ? { contract: result, execution_enabled: false } : response, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
