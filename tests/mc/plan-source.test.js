@@ -12,6 +12,43 @@ import {
   CLOSEOUT_FILE, LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, isRepoPlanPath, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree,
   programsArchived, programsPlans,
 } from '../../src/mc/plan-source.js';
+import { listPlans } from '../../src/mc/brief-collect.js';
+import { closable } from '../../src/mc/close-workarea.js';
+import { archiveDue } from '../../src/mc/project-archive.js';
+import { overlayPlans } from '../../src/mc/register.js';
+import { kindFor } from '../../src/mc/run-plan.js';
+import { autonomousProject } from './autonomy-fixtures.js';
+
+describe('unsupported plans stay visible and inert', () => {
+  it('retains valid, malformed and unknown v2 plans, without v1, unplanned or archive fallback', () => {
+    scratch((root) => {
+      const home = join(root, 'programs');
+      const values = [autonomousProject(), autonomousProject({ execution: {} }), autonomousProject({ version: 99 })];
+      values.forEach((value, i) => {
+        const dir = join(home, 'mc', `v2-${i}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, PLAN_FILE), JSON.stringify(value));
+      });
+      const programs = () => programsPlans({ home });
+      assert.equal(programs().length, values.length);
+      const records = listPlans({ name: 'memoro-cli' }, { programs });
+      assert.equal(records.length, values.length);
+      const overlaid = overlayPlans(records, { root, write: () => assert.fail('must not seed a v1 register for v2') });
+      assert.deepEqual(overlaid, records);
+      records.forEach((record) => {
+        const found = planIn(root, record.project, { programs });
+        assert.notEqual(found, null, 'unsupported is a held plan, not missing work');
+        assert.equal(found.legacy, false);
+        assert.equal(found.plan, null);
+        assert.match(found.problems[0], /unsupported/u);
+        assert.equal(kindFor(record.project, { plans: records }), 'skip:unparseable');
+        assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is invalid' });
+        assert.equal(archiveDue({ record, entry: null, nowMs: Date.now() }).due, false);
+      });
+      assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), []);
+    });
+  });
+});
 
 /** A listing as `git ls-tree` prints it: one path a line, a newline at the end. */
 const TREE = [

@@ -18,11 +18,13 @@ import {
   planState,
   planSummary,
   validatePlan,
+  validateProject,
   PLAN_SCHEMA,
   PLAN_VERSION,
   BLOCKER_KINDS,
 } from '../../src/mc/plan-schema.js';
 import { WORKAREA_BLOCK_NAMES } from '../../src/mc/run-plan.js';
+import { autonomousProject } from './autonomy-fixtures.js';
 
 function plan(overrides = {}) {
   return {
@@ -57,6 +59,55 @@ function plan(overrides = {}) {
     ...overrides,
   };
 }
+
+describe('explicit project contract dispatch and fixed-step admission', () => {
+  it('keeps v1 as the default with unchanged validation and runtime interpretation', () => {
+    assert.equal(PLAN_VERSION, 1);
+    const value = plan();
+    const before = structuredClone(value);
+    assert.deepEqual(validateProject(value), validatePlan(value));
+    assert.equal(deliverableStep(value).index, 1);
+    assert.equal(planState(value).status, 'ready');
+    assert.equal(planSummary(value).step, 2);
+    assert.deepEqual(value, before);
+    assert.equal(validateProject(plan({ steps: [] })).ok, false, 'empty v1 steps never opt into autonomy');
+    assert.equal(validateProject(plan({ execution: { kind: 'autonomous' } })).ok, false);
+    assert.equal(validateProject(plan({ version: undefined })).ok, false, 'existing v1 version requirement stays unchanged');
+  });
+
+  it('dispatches v2 to its own validator, without fixed steps or v1 met fields', () => {
+    assert.deepEqual(validateProject(autonomousProject()), { ok: true, problems: [] });
+    for (const patch of [{ execution: undefined }, { execution: { kind: 'fixed' } }, { programme: undefined }, { goal_revision: undefined }]) {
+      const result = validateProject(autonomousProject(patch));
+      assert.equal(result.ok, false);
+      assert.equal(result.problems.some((p) => p.startsWith('steps:')), false, 'never tries v1 as a fallback');
+    }
+    const v1WithV2Version = plan({ version: 2 });
+    assert.equal(validateProject(v1WithV2Version).ok, false);
+    assert.match(validateProject(v1WithV2Version).problems.join('\n'), /execution.kind/u);
+  });
+
+  it('refuses unsupported versions, including string versions, rather than interpreting v1-looking steps', () => {
+    for (const version of [2, 3, '2', null, -1]) {
+      const value = plan({ version });
+      assert.equal(validateProject(value).ok, false);
+      assert.equal(readPlanText(JSON.stringify(value)).plan, null);
+      assert.equal(deliverableStep(value).reason, 'unsupported');
+      assert.equal(planState(value).status, 'unsupported');
+      assert.equal(planSummary(value).status, 'unsupported');
+    }
+  });
+
+  it('keeps even valid v2 contracts out of the legacy runtime until reader integration', () => {
+    const value = autonomousProject();
+    assert.equal(validateProject(value).ok, true);
+    assert.equal(validatePlan(value).ok, false);
+    assert.equal(readPlanText(JSON.stringify(value)).plan, null);
+    assert.match(readPlanText(JSON.stringify(value)).problems[0], /unsupported/u);
+    assert.equal(deliverableStep(value).step, null);
+    assert.equal(planState(value).status, 'unsupported');
+  });
+});
 
 describe('the plan schema', () => {
   it('accepts a well-formed plan', () => {

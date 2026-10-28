@@ -13,6 +13,8 @@
 // state. Prose fields are arrays of paragraphs rather than one string, so a
 // diff stays line-oriented for the person reading the PR.
 
+import { validateAutonomousProject } from './autonomous-project.js';
+
 export const PLAN_SCHEMA = 'mc-plan';
 export const PLAN_VERSION = 1;
 
@@ -381,6 +383,15 @@ export function validatePlan(value) {
   const problems = [];
 
   if (!plain(value)) return { ok: false, problems: ['the plan must be a JSON object'] };
+  // This is the fixed-step reader's validator. Contract-level dispatch accepts
+  // v2 through validateProject below; runtime admission stays deliberately off.
+  if (value.version !== undefined && value.version !== PLAN_VERSION) {
+    return {
+      ok: false,
+      problems: [`unsupported: mc-plan version ${String(value.version)} is not supported by the fixed-step reader`,
+        ...(value.version === 2 ? validateAutonomousProject(value).problems : [])],
+    };
+  }
   for (const key of unknownKeys(value, PLAN_KEYS)) problems.push(`${key}: unknown key`);
 
   if (value.schema !== PLAN_SCHEMA) problems.push(`schema: must be "${PLAN_SCHEMA}"`);
@@ -403,6 +414,12 @@ export function validatePlan(value) {
   validateSteps(value.steps, problems, plain(value.runner) && value.runner.tool !== undefined ? value.runner.tool : 'claude');
 
   return { ok: problems.length === 0, problems };
+}
+
+/** Explicit contract dispatch. Never retry an invalid/unknown version as v1. */
+export function validateProject(value, options = {}) {
+  if (plain(value) && value.version === 2) return validateAutonomousProject(value, options);
+  return validatePlan(value);
 }
 
 /**
@@ -467,6 +484,7 @@ export function planSummary(plan) {
  * half-built in an order nobody chose.
  */
 export function planState(plan) {
+  if (plan?.version !== undefined && plan.version !== PLAN_VERSION) return { status: 'unsupported', index: -1, step: null };
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   // A `landing` step is behind the plan, not in front of it: its pull request
   // is the merger's, and the next step starts on top of it (ruling 30, A).
@@ -531,6 +549,7 @@ function clip(text, max) {
  */
 export function deliverableStep(plan) {
   const { ok, problems } = validatePlan(plan);
+  if (!ok && problems[0]?.startsWith('unsupported:')) return { step: null, index: -1, reason: 'unsupported', why: problems[0], problems };
   if (!ok) return { step: null, index: -1, reason: 'unparseable', why: `the plan does not parse: ${problems[0]}`, problems };
 
   const state = planState(plan);
