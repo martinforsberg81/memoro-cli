@@ -101,6 +101,10 @@ function localObserver(tool = 'codex') {
   return { control, observe: o => (control = decideSessionControl(control, o)),
     interrupt: reason => (control = interruptSessionControl(control, reason)) };
 }
+// These tests measure exit outcomes, not budgets. Synthetic clock: wall time is
+// real but awake time stays frozen, so cold fixture startup under lane load
+// cannot reach the closing/emergency boundary and kill the fixture before it
+// prints the events under test. Budgets are exercised in the policy tests.
 function shortSession(work, observer, extra = {}) {
   const began = Date.now();
   return streamSession({ bin: process.execPath,
@@ -108,7 +112,7 @@ function shortSession(work, observer, extra = {}) {
     cwd: work.cwd, env: process.env, prompt: extra.tool === 'claude' ? 'fixture' : null,
     ...extra.session,
     autonomous: { version: 1, tool: extra.tool || 'codex', ...observer,
-      clock: () => { const ms = Date.now() - began; return { at_ms: ms, awake_ms: ms }; },
+      clock: () => ({ at_ms: Date.now() - began, awake_ms: 0 }),
       directory: join(work.directory, 'attempt'), pollMs: 20, termMs: 100, ...extra.autonomous } });
 }
 for (const tool of ['codex', 'claude']) it(`${tool}: observed cooperative process exit is distinct from green publication evidence`, async t => {

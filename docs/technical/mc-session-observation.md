@@ -124,6 +124,9 @@ exercise cooperative exit, unknown context, persistence/preservation failure,
 gate/resource reconciliation and unchanged legacy streams.
 The ignored-control fixture's synthetic awake clock starts at protocol readiness,
 not cold module/git startup, so machine load cannot consume its closing window
-before it has a chance to read the control command. Policy thresholds are unchanged.
+before it has a chance to read the control command. The exit-outcome fixtures
+(cooperative, unexpected, pending-tool, persistence and gate cases) keep awake
+time frozen, so slow startup cannot reach a boundary and kill them before they
+print the events under test. Policy thresholds are unchanged.
 
 Verification: `mc gate tests/mc/session-observation.test.js tests/mc/session-control.test.js tests/mc/run-session.test.js tests/mc/run-plan.test.js`.
