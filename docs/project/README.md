@@ -12,6 +12,32 @@ projects that do not serve that do not belong under it.
 
 ## What a PLAN.json is
 
+### Explicit versions
+
+The fixed-step contract below is **mc-plan v1**, still the default. Its `send`
+validation, appended final review, register, publish, merge and recovery rules
+are unchanged. Empty v1 steps never opt into autonomous execution.
+
+Explicit `mc-plan` **version 2** requires `execution.kind: "autonomous"`, an
+approved programme revision, a goal revision and stable criterion IDs instead
+of fixed steps. Use `mc programme` for agreement drafts/approval and
+`mc autonomous-project` for guarded goal operations, not legacy v1 edit verbs
+or raw PLAN edits. Mutations check the active role/run and expected state
+revision under lock. Approved programme revisions remain immutable and separate
+from drafts; only plan revises goals or confirms completion, and independent
+review records findings rather than implementing repairs.
+
+`mc project send <v2-project> --expected-revision <n>` validates the authoritative
+contract and approved reference, then publishes an **inactive** PLAN without
+appending v1's mutating review step. It cannot start sessions; programme start
+is not available. `mc project <name>` and `mc status <name>` expose this inactive
+state and revisioned evidence read-only. Invalid v2 and unknown versions are
+reported, never reinterpreted as v1/unplanned work or automatically archived.
+No existing project is migrated. See [the implemented v2 contract and CLI](../technical/mc-autonomous-programmes.md)
+and [revisioned storage and ownership](../technical/mc-autonomous-state.md).
+
+### Fixed-step v1
+
 Since `plans-in-mc` a plan lives under `~/mc/programs/<programme>/<project>/PLAN.json`,
 with a top-level `repo` field naming the repository its steps run in. A plan of
 the same name that was once here is history: ruling 48 took every repository plan

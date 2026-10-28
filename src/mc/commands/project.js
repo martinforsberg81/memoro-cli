@@ -34,9 +34,11 @@ import { defaultRepos, listArchived, listPlans } from '../brief-collect.js';
 import { closable, closeArea } from '../close-workarea.js';
 import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
-import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
+import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan, validateProject } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, readDraftOrPlan, sendProblems, STEP_MODELS, STEP_MODEL_WORDS, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
+import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, legacyMutationProblem, readDraftOrPlan, sendProblems, STEP_MODELS, STEP_MODEL_WORDS, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
+import { readAutonomousState } from '../autonomous-state.js';
+import { autonomousCommandContext, run as autonomousProject } from './autonomous-project.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -64,7 +66,7 @@ export async function run(argv, deps = {}) {
 
   const scanned = scanArgs(argv, {
     booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file', '--expected-revision'],
     repeatable: ['--contract', '--out-of-scope'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -76,9 +78,9 @@ export async function run(argv, deps = {}) {
     return runAmend(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'send') {
-    const extra = onlyFlags(scanned, []);
+    const extra = onlyFlags(scanned, ['--expected-revision']);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
-    return sendPlan(scanned, { ...deps, env, stdout, stderr });
+    return sendPlan(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun === 'archive') {
     const extra = onlyFlags(scanned, []);
@@ -140,6 +142,8 @@ export async function run(argv, deps = {}) {
   const [project, number] = rest.length === 2 ? rest : [parseStepEnv(env.MC_STEP)?.project, rest[0]];
   if (!project) { stderr.write('mc: which project? mc project criterion met <project> <n>, or MC_STEP in a runner session\n'); return 2; }
   if (!/^\d+$/u.test(number)) { stderr.write(`mc: ${number} is not a criterion number — 1 is the plan's first\n`); return 2; }
+  const fixedProblem = projectMutationProblem(findProjectDir(deps.home || programsHome(env), project));
+  if (fixedProblem) { stderr.write(`mc: ${fixedProblem}\n`); return 1; }
   const entry = readEntry(root, project, io);
   if (!entry) { stderr.write(`mc: ${project} is not in the register\n`); return 1; }
 
@@ -171,6 +175,16 @@ function sendPlan(scanned, deps) {
   if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
   if (found.sent) { stderr.write(`mc: ${project} is sent already — ${found.file}\n`); return 1; }
   const sentFile = join(found.dir, PLAN_FILE);
+
+  try {
+    const held = existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'));
+    const filed = held ? null : readDraftOrPlan(found.file, { allowVersioned: true });
+    if (held || filed?.version === 2) {
+      const revision = scanned.flags['expected-revision'];
+      return autonomousProject(['send', `${found.programme}/${project}`, ...(revision === null ? [] : ['--expected-revision', revision])], deps);
+    }
+    if (scanned.flags['expected-revision'] !== null) { stderr.write('mc: v1 send takes no --expected-revision\n'); return 2; }
+  } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 
   let outcome;
   try {
@@ -219,14 +233,21 @@ async function showProject(name, flags, deps) {
   if (!found || found.sent) {
     const argv = [name, ...(flags.json ? ['--json'] : []), ...(flags.offline ? ['--offline'] : [])];
     const statusProject = deps.statusProject || (async (args, opts) => (await import('./status-project.js')).run(args, opts));
-    return statusProject(argv, { stdout, stderr });
+    return statusProject(argv, { ...deps, stdout, stderr });
   }
-  const given = ['--json', '--offline'].filter((flag) => flags[flag.slice(2)]);
-  if (given.length) { stderr.write(`mc: ${name} is a draft — it has no ${given[0]}\n`); return 2; }
-
   let plan;
   try {
-    plan = readDraftOrPlan(found.file);
+    const held = existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'));
+    plan = held ? null : readDraftOrPlan(found.file, { allowVersioned: true });
+    if (held || plan?.version === 2) {
+      const { root } = autonomousCommandContext(deps);
+      const state = readAutonomousState(root, found.programme, name);
+      if (flags.json) { stdout.write(`${JSON.stringify(state, null, 2)}\n`); return 0; }
+      plan = state.contract;
+    } else {
+      const given = ['--json', '--offline'].filter((flag) => flags[flag.slice(2)]);
+      if (given.length) { stderr.write(`mc: ${name} is a draft — it has no ${given[0]}\n`); return 2; }
+    }
   } catch (error) {
     stderr.write(`mc: ${error?.message || error}\n`);
     return 1;
@@ -238,6 +259,11 @@ async function showProject(name, flags, deps) {
 /** The lines `mc project <name>` prints for a draft: what it is, its criteria and steps, and whether `send` would take it. */
 function draftLines(name, found, plan) {
   const lines = [`${name} — draft · ${plan.repo} · ${found.programme}`, `  file   ${found.file}`, ''];
+  if (plan.version === 2) return [...lines, '  autonomous execution is disabled',
+    `  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision}`,
+    ...plan.success_criteria.map(criterion => `  ${criterion.id}  ${criterion.criterion} (${criterion.verification})`),
+    ...validateProject(plan).problems.map(problem => `  ${problem}`),
+    `send: mc project send ${name} --expected-revision <state-revision> (inactive publication)`];
   const goal = Array.isArray(plan.goal) ? plan.goal[0] : undefined;
   if (goal) lines.push(goal, '');
 
@@ -927,6 +953,8 @@ async function archiveProject(scanned, deps) {
 
   const found = findProjectDir(home, project);
   if (!found) { stderr.write(`mc: ${project} is not a project under ~/mc/programs/\n`); return 1; }
+  const fixedProblem = projectMutationProblem(found);
+  if (fixedProblem) { stderr.write(`mc: ${fixedProblem}\n`); return 1; }
   if (!found.sent) { stderr.write(`mc: ${project} is a draft — mc project discard ${project} removes it\n`); return 1; }
   if (existsSync(closeoutFileOf(found.file))) { stderr.write(`mc: ${project} is already archived\n`); return 1; }
 
@@ -1058,6 +1086,8 @@ function discardProject(scanned, deps) {
   const [project] = target;
   const found = findProjectDir(home, project);
   if (!found) { stderr.write(`mc: ${project} is not a project under ~/mc/programs/\n`); return 1; }
+  const fixedProblem = projectMutationProblem(found);
+  if (fixedProblem) { stderr.write(`mc: ${fixedProblem}\n`); return 1; }
   if (existsSync(closeoutFileOf(found.file))) { stderr.write(`mc: ${project} is archived — archive is the way out it took\n`); return 1; }
 
   // A draft never ran a step, so its directory is all there is to it.
@@ -1112,6 +1142,14 @@ function discardProject(scanned, deps) {
   return 0;
 }
 
+/** Unknown versions are held, never discarded or changed by legacy verbs. */
+function projectMutationProblem(found) {
+  if (!found) return null;
+  let plan;
+  try { plan = JSON.parse(readFileSync(found.file, 'utf8')); } catch { /* legacy malformed files retain their existing handling */ }
+  return legacyMutationProblem(found.file, plan);
+}
+
 /**
  * The open pull requests of `project` in `repo`, as `{ list }`: those whose head
  * branch is `<project>` or `<project>-<n>`, the branches mc names for its steps.
@@ -1159,6 +1197,7 @@ export function usage() {
     '        mc project step edit <project> <n> [--title <text>] [--model fast|large|<model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        <model> is haiku or opus (claude), or gpt-6.1-sol or gpt-6.1-luna (codex: the plan needs --tool codex)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
+    '        mc project send <v2-project> --expected-revision <n>   publish the guarded v2 contract, inactive and without a legacy review step\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
