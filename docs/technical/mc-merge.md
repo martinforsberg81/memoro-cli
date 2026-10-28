@@ -563,6 +563,14 @@ The detached worker owns both the lane and the test subprocesses. An interrupt
 stops its active test group before releasing the reservation. Unique log names
 prevent simultaneous worktrees from sharing output; the full output and
 structured failures remain available through `mc gate --wait` and `--json`.
+Budget expiry is `RUNNING` (exit 3), never green evidence: waiting again observes
+the same worker without starting tests or releasing its lane. A dead worker
+without an exit marker is red. Completed immutable receipts survive command
+exit and can be rediscovered by run ID even if a crash prevented updating the
+reuse cache; missing evidence falls back to measurement. The
+[receipt recovery and coverage contract](mc-gate-evidence.md#waiting-and-recovery)
+defines the future autonomous consumer boundary, not a new v1 publication or
+merge permission.
 
 **Reservation is atomic.** Each lane uses a prepared nonempty claim directory
 published by rename, plus the existing JSON status file for readers and older
