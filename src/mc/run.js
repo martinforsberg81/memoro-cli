@@ -120,6 +120,7 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
+import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
@@ -648,7 +649,7 @@ export function realDeps(env = process.env) {
 
 /* --------------------------------------------------------------- runner */
 
-export function createRunner({ merge = true, deps = realDeps() } = {}) {
+export function createRunner({ merge = true, deps = realDeps(), autonomous = null } = {}) {
   const root = workRoot(deps.env);
   // A project's runner area, by name relative to the root and as a path:
   // `step/<project>`, or `<project>` for an area from before `step/` that is
@@ -1174,12 +1175,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `detail` is what git said, for the block's comment — the one thing a person
    * opening the workarea has to go on.
    */
-  function syncMain(worktree, name) {
+  function syncMain(worktree, name, { resolveIgnore = true } = {}) {
     if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [], why: 'fetch' };
     const merge = deps.git(worktree, ['merge', '-q', '--no-edit', 'origin/main']);
     if (merge.ok) return { ok: true, conflicts: [] };
     const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
-    if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
+    if (resolveIgnore && conflicts.length === 1 && conflicts[0] === '.gitignore') {
       if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
     }
     const left = conflicts;
@@ -2059,6 +2060,24 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   async function runStepClaimed(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
+    const record = plans.find(item => item.project === name);
+    if (record?.plan?.version === 2) {
+      if (stopRequested()) return 'stop';
+      if (!autonomous) return 'skipped:autonomous-disabled';
+      if (prsFailed.includes(record.repo)) return 'skipped:prs-unknown';
+      const repo = repoOf(name, plans);
+      if (!repo) return 'skipped:no-plan';
+      return runAutonomousBuild({ root, record, repo, worktree: join(areaPath(name), repo.name), areaName: areaName(name),
+        lane, pid, paths, deps, capability: autonomous,
+        openPrs: openPrsFor({ prs, name, names: plans.map(item => item.project), repo: repo.name }),
+        waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
+        observeResult: (toolId, result) => {
+          if (toolId === 'claude-code') observeCapacity(state => observeClaudeStream(state, result.stdout, deps.now()));
+          const read = readSessionOutput({ toolId, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, now: deps.now() });
+          if (read.quota || read.interrupted === 'login') refuseProvider(toolId === 'codex' ? 'codex' : 'claude', read.quotaReset);
+        },
+      });
+    }
     // Every way out of this round that is not a session goes through here, so
     // that what the round refused on is a word and not only a line in the log.
     // `machineState` answers `mc status` in the same words, and the agreement
@@ -2922,7 +2941,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // fresh pick of the same name would start that step a second time
     // (ruling 28).
     const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
-    return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed });
+    return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
+      autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs }) : null });
   }
 
   /**

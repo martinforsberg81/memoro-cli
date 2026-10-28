@@ -314,3 +314,23 @@ export function projectSessionCheckpoint(root, programme, project, operation, in
     return { ...controlResponse(state.session_control), revision: state.revision };
   }, deps);
 }
+
+/** Runner-only admission. Reservation, branch binding and fresh control commit
+ * together before git or a worker can mutate the checkout. No CLI calls this. */
+export function startAutonomousBuild(root, programme, project, { actor, revision, assignment, branch, profile, observation, ...deps }) {
+  actorCheck(actor);
+  if (actor.role !== 'step') throw new Error('autonomous builds use the step role');
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    if (state.active_run || state.phase !== 'ready') throw new Error('project is not ready or already has an owner');
+    if (!isDeepStrictEqual(state.contract, assignment) || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), assignment)) throw new Error('assignment changed or is not sent');
+    approved(programmeState(paths), assignment);
+    if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
+    if (typeof branch !== 'string' || !branch.trim() || ['main', 'master'].includes(branch)
+      || (state.ownership.branch !== null && state.ownership.branch !== branch)) throw new Error('branch ownership cannot change');
+    const session_control = createSessionControl({ binding: controlBinding(state, actor), profile, observation,
+      previous: state.session_control || null });
+    return save(paths.project, state, { ...state, phase: 'running', active_run: actor,
+      runs: [...state.runs, actor], ownership: { ...state.ownership, branch }, session_control }, deps);
+  }, deps);
+}
