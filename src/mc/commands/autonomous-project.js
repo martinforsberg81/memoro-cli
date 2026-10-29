@@ -23,7 +23,7 @@ export function operationArguments(argv, verbs) {
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
   let args;
-  try { args = operationArguments(argv, ['show', 'create', 'revise', 'progress', 'report', 'confirm', 'attempt', 'release', 'recover', 'send']); }
+  try { args = operationArguments(argv, ['show', 'create', 'revise', 'progress', 'report', 'confirm', 'attempt', 'release', 'recover', 'send', 'finish']); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }
   try {
     const parts = args.target.split('/');
@@ -32,6 +32,14 @@ export async function run(argv, deps = {}) {
     const { root, actor } = autonomousCommandContext(deps);
     const input = args.file ? JSON.parse((deps.readInput || (file => readFileSync(file, 'utf8')))(args.file)) : null;
     const options = { ...deps, actor, revision: args.revision };
+    if (args.operation === 'finish') {
+      const { finishAutonomousPublication } = await import('../autonomous-publish.js');
+      const publication = await finishAutonomousPublication({ root, programme, project, actor, revision: args.revision,
+        cwd: deps.cwd || process.cwd(), env: deps.env || process.env }, input, { ...deps, stdout, stderr });
+      stdout.write(`${JSON.stringify({ phase: publication.phase, head: publication.head, pr: publication.pr,
+        next_action: 'exit-session', normal_exit: false, queued: false })}\n`);
+      return 0;
+    }
     const result = args.operation === 'show' ? readAutonomousState(root, programme, project, deps)
       : args.operation === 'create' ? createAutonomousDraft(root, programme, project, input, options)
         : args.operation === 'send' ? sendAutonomousProject(root, programme, project, options)
@@ -45,7 +53,7 @@ export async function run(argv, deps = {}) {
 
 export function usage() {
   return 'usage — mc autonomous-project show <programme>/<project>\n'
-    + '        mc autonomous-project create|revise|progress|report|confirm|attempt <programme>/<project> --expected-revision <n> --input-file <json>\n'
+    + '        mc autonomous-project create|revise|progress|report|confirm|attempt|finish <programme>/<project> --expected-revision <n> --input-file <json>\n'
     + '        mc autonomous-project send|release|recover <programme>/<project> --expected-revision <n>\n'
     + '        send publishes an inactive contract; autonomous execution is disabled\n';
 }

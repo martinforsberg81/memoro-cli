@@ -50,7 +50,7 @@ import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
 import { repoNameOf, repositoryDir } from '../repos.js';
 import { captureWorktree } from '../session-gate-evidence.js';
 import { gateConfiguration } from '../gate-greens.js';
-import { testLanes } from '../repo-gate.js';
+import { selectFiles, testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
 
@@ -88,6 +88,27 @@ const SYSTEM = {
   declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
   lane: (repoPath, { env }) => gateLaneOf(repoPath, { root: mcHome(env) }),
 };
+
+/** Read-only re-selection for the autonomous publication boundary. Use the
+ * same declaration, diff, added tests and flags as the lane-owning gate. */
+export async function publicationGateSelection(cwd, env = process.env, deps = {}) {
+  const io = { ...SYSTEM, ...deps };
+  const base = io.git(cwd, ['rev-parse', 'origin/main^{commit}']);
+  const mergeBase = base && io.git(cwd, ['merge-base', 'HEAD', base]);
+  const changed = mergeBase && changedAgainst(io, cwd, mergeBase);
+  const declared = primaryCheckoutDeclaration(io, { root: cwd, env });
+  if (!changed || !declared?.declaration.select) throw new Error('publication selection is unknown');
+  const selector = selectorCommand(declared.declaration.select, { base, changed });
+  const selection = await (deps.select || selectFiles)({ command: selector, cwd, env, say: () => {} });
+  if (!selection.ok) throw new Error('publication selection failed');
+  const manifest = JSON.parse(io.read(join(cwd, 'package.json'), 'utf8'));
+  const flags = declaredTestFlags(io, { root: cwd, env }) || testFlags(manifest.scripts?.test);
+  const added = changed.filter(file => TEST_FILE.test(file) && io.exists(join(cwd, file)));
+  return { base, configuration: gateConfiguration(declared.declaration, flags), selection: {
+    kind: 'affected', files: [...new Set([...selection.files, ...added])], commands: selection.commands || [],
+    flags, pattern: null, selector,
+  } };
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -195,7 +216,8 @@ export async function run(argv, deps = {}) {
     try {
       io.mkdir(dir);
       io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
-        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate, configuration } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
+        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate, configuration,
+          session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
       const fd = io.open(logPath);
       // The worker owns the reservation, the test children and the result.
       // A short-lived command or shell cannot release its lane early.

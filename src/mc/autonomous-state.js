@@ -261,6 +261,62 @@ export function currentAutonomousEvidence(state) {
   return evidenceForRevision(state.contract, state.evidence);
 }
 
+/** Runner-only continuation door, after publication and worker reconciliation.
+ * Builder reports route work, never confirm a goal or authorize review/merge. */
+export function settleAutonomousBuild(root, programme, project, { actor, revision, handoff, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision); ownedControl(state, actor);
+    if (state.phase !== 'publishing' || state.publication?.run_id !== actor.run_id
+      || state.publication.phase !== 'handoff_committed' || state.current_handoff !== handoff.artifact
+      || !handoff.observed.normal_exit || handoff.observed.head !== state.publication.head
+      || handoff.handoff.run_id !== actor.run_id || handoff.handoff.goal_revision !== state.goal_revision
+      || handoff.handoff.programme_revision !== state.programme_revision
+      || !['continue', 'review-ready'].includes(handoff.outcome)) throw new Error('settled normal publication required');
+    const latest = new Map(currentAutonomousEvidence(state).builder.map(item => [item.criterion_id, item]));
+    const reported = new Map(handoff.handoff.evidence.map(item => [item.criterion_id, item]));
+    for (const item of reported.values()) {
+      const proof = latest.get(item.criterion_id);
+      if (proof?.status !== 'verified' || proof.reference !== item.reference) throw new Error('published criterion reports changed before continuation');
+    }
+    const done = state.contract.success_criteria.filter(item => item.verification === 'premerge').every(item => {
+      const proof = latest.get(item.id);
+      return proof?.status === 'verified' && reported.get(item.id)?.reference === proof.reference;
+    });
+    if (handoff.outcome === 'review-ready' && !done) throw new Error('review-ready requires all current premerge reports');
+    const phase = done ? 'review_ready' : 'ready';
+    return save(paths.project, state, { ...state, phase, active_run: null,
+      continuation: { run_id: actor.run_id, goal_revision: state.goal_revision,
+        programme_revision: state.programme_revision, handoff: handoff.artifact, phase } }, deps);
+  }, deps);
+}
+
+export const PUBLICATION_PHASES = Object.freeze(['started', 'gate_verified', 'committed', 'pushed', 'pr_resolved', 'handoff_committed']);
+
+/** Trusted publication seam, not a model-supplied state patch. The owner is
+ * retained through handoff; only the later reconciliation door can release it. */
+export function saveAutonomousPublication(root, programme, project, { actor, revision, publication, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    const control = ownedControl(state, actor);
+    if (control.phase !== 'closing' || !['running', 'closing', 'publishing'].includes(state.phase)) throw new Error('finish requires closing control');
+    if (publication.run_id !== actor.run_id || publication.goal_revision !== state.goal_revision
+      || publication.programme_revision !== state.programme_revision) throw new Error('publication assignment changed');
+    const previous = state.publication?.run_id === actor.run_id ? state.publication : null;
+    const index = PUBLICATION_PHASES.indexOf(publication.phase);
+    const before = previous ? PUBLICATION_PHASES.indexOf(previous.phase) : -1;
+    if (index < 0 || index < before || index > before + 1) throw new Error('invalid publication phase');
+    if (previous && (!isDeepStrictEqual(previous.input, publication.input)
+      || previous.branch !== publication.branch || previous.goal_revision !== publication.goal_revision)) throw new Error('publication intent cannot change');
+    if (publication.branch !== state.ownership.branch || (state.ownership.pr !== null && publication.pr != null
+      && publication.pr !== state.ownership.pr)) throw new Error('branch/PR ownership cannot change');
+    const next = { ...state, phase: 'publishing', publication,
+      ownership: { ...state.ownership, pr: publication.pr ?? state.ownership.pr } };
+    if (publication.head) next.commits = [...new Set([...state.commits, publication.head])];
+    if (publication.phase === 'handoff_committed') next.current_handoff = publication.handoff;
+    return save(paths.project, state, next, deps);
+  }, deps);
+}
+
 // Inactive trusted runner seams. No CLI operation accepts profiles, clocks or
 // measured progress. Keep control and project ownership in one atomic record.
 function controlBinding(state, actor) {
@@ -312,5 +368,25 @@ export function projectSessionCheckpoint(root, programme, project, operation, in
       state = save(paths.project, state, { ...state, session_control }, deps);
     }
     return { ...controlResponse(state.session_control), revision: state.revision };
+  }, deps);
+}
+
+/** Runner-only admission. Reservation, branch binding and fresh control commit
+ * together before git or a worker can mutate the checkout. No CLI calls this. */
+export function startAutonomousBuild(root, programme, project, { actor, revision, assignment, branch, profile, observation, ...deps }) {
+  actorCheck(actor);
+  if (actor.role !== 'step') throw new Error('autonomous builds use the step role');
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    if (state.active_run || state.phase !== 'ready') throw new Error('project is not ready or already has an owner');
+    if (!isDeepStrictEqual(state.contract, assignment) || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), assignment)) throw new Error('assignment changed or is not sent');
+    approved(programmeState(paths), assignment);
+    if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
+    if (typeof branch !== 'string' || !branch.trim() || ['main', 'master'].includes(branch)
+      || (state.ownership.branch !== null && state.ownership.branch !== branch)) throw new Error('branch ownership cannot change');
+    const session_control = createSessionControl({ binding: controlBinding(state, actor), profile, observation,
+      previous: state.session_control || null });
+    return save(paths.project, state, { ...state, phase: 'running', active_run: actor,
+      runs: [...state.runs, actor], ownership: { ...state.ownership, branch }, session_control }, deps);
   }, deps);
 }

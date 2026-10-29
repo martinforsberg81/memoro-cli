@@ -57,8 +57,8 @@ contract invalidates older cache entries. Added-test discovery, repository
 imports, resource batching and lane reservations remain the existing gate's.
 
 Receipts alone grant no autonomous execution, publication or merge authority.
-`findPublicationReceipt` is a lookup for the future autonomous finish operation,
-not an active publication hook. The caller supplies the frozen local commit and
+`findPublicationReceipt` is used by the inactive autonomous finish boundary,
+not by v1 publication. The caller supplies the frozen local commit and
 an independently observed remote SHA; both must be the current local HEAD. Its
 tree and current raw worktree content must match the receipt. An equal-tree
 commit after an uncommitted measurement is valid, including additions/deletions;
@@ -80,5 +80,8 @@ relevant measurement, never assumed green. Required merge gates and PR-specific
 tests still run. Legacy cache entries remain readable to v1 callers, not to
 opt-in receipt-bound callers.
 
-This does not activate autonomous programmes, wire the future finish operation,
-or alter v1 publication/admission lifecycle dispatch.
+The [autonomous finish operation](mc-autonomous-publish.md) binds its complete
+session gate to the reserved run/goal revision and revalidates this evidence at
+publication and settled process completion. Evidence lives under mc home;
+handoff artifacts remain under work root. This does not activate autonomous
+programmes or alter v1 publication/admission lifecycle dispatch.

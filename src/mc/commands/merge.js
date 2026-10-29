@@ -16,6 +16,7 @@ import { writeJsonAtomic } from '../atomic-write.js';
 import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { criteriaDoor } from '../merge-boundary.js';
+import { autonomousMergeDoor } from '../autonomous-pr.js';
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
 import { bookBuilt, landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
@@ -60,7 +61,7 @@ export async function run(argv, deps = {}) {
   // merger as before.
   if (!opts.docs) {
     const files = (deps.prFiles || prFiles)(opts.pr, { repoPath, gh: deps.gh });
-    if (!docsOnly(files)) return (deps.gate || gate)(opts, { stdout, stderr, resolveRepo: async () => repoPath });
+    if (!docsOnly(files)) return (deps.gate || gate)(opts, { ...deps, stdout, stderr, resolveRepo: async () => repoPath });
     stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, after the tests that read documents\n`);
   }
   // The door `mc merge` has for the plan's last step (`criteriaDoor`), here
@@ -69,12 +70,13 @@ export async function run(argv, deps = {}) {
   const root = deps.root || workRoot(deps.env || process.env);
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
-  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, gh: deps.gh, git: deps.git, env: deps.env || process.env, entries: listEntries(root, io) });
+  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, gh: deps.gh, git: deps.git, root, env: deps.env || process.env, entries: listEntries(root, io) });
   if (door.checked && !door.ok) {
     for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
     return 1;
   }
-  const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
+  const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, root, env: deps.env || process.env,
+    measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
   const { body = null } = report;
   delete report.body;
@@ -140,6 +142,10 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
   if (!view) {
     stderr.write(`mc: gh could not read #${opts.pr}\n`);
     return 1;
+  }
+  if (view.state === 'OPEN') {
+    const door = await autonomousMergeDoor({ repoPath, pr: opts.pr, root: deps.root || workRoot(deps.env || process.env), view });
+    if (!door.ok) { stderr.write(`mc: ${door.stop} — ${door.problems.join('; ')}\n`); return 1; }
   }
   if (view.state !== 'OPEN' && view.state !== 'MERGED') {
     stderr.write(`mc: #${opts.pr} is closed, not merged — nothing to land\n`);

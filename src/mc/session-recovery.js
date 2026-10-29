@@ -78,7 +78,7 @@ export function preserveSession({ cwd, directory, control, telemetry, process: p
   return target;
 }
 
-export function reconcilePreviousSession(gitDir) {
+export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
   const path = join(gitDir, 'mc-autonomous-session.json');
   if (!existsSync(path)) return reconcileSessionGate(gitDir);
   try {
@@ -97,8 +97,34 @@ export function reconcilePreviousSession(gitDir) {
     }
     // A gate still running when the snapshot was taken might subsequently
     // change code. Do not recover from an older snapshot without noticing.
-    if (!sameContent(checkpoint.content, captureWorktree(previous.cwd))
-      || checkpoint.head !== sessionGit(previous.cwd, ['rev-parse', 'HEAD']).trim()) return { ok: false, reason: 'previous-worktree-changed' };
+    const head = sessionGit(previous.cwd, ['rev-parse', 'HEAD']).trim();
+    if (!sameContent(checkpoint.content, captureWorktree(previous.cwd))) return { ok: false, reason: 'previous-worktree-changed' };
+    if (checkpoint.head !== head) {
+      // Recovery may have committed the already measured bytes, then crashed
+      // before refreshing its snapshot. This exception permits only that tree
+      // on the same run/revision and descendant history, never new content.
+      if (!publication || publication.run_id !== previous.run_id
+        || publication.goal_revision !== previous.binding.goal_revision || publication.programme_revision !== previous.binding.programme_revision
+        || publication.tree !== checkpoint.content.tree || (publication.head && publication.head !== head)
+        || sessionGit(previous.cwd, ['rev-parse', 'HEAD^{tree}']).trim() !== publication.tree
+        || sessionGit(previous.cwd, ['status', '--porcelain']).trim()) return { ok: false, reason: 'previous-worktree-changed' };
+      sessionGit(previous.cwd, ['merge-base', '--is-ancestor', checkpoint.head, head]);
+    }
     return reconcileSessionGate(gitDir);
   } catch { return { ok: false, reason: 'previous-session-unreadable' }; }
+}
+
+/** The prior normal run was reconciled before fresh main integration. Keep its
+ * manifest with its immutable snapshot so the new supervisor does not mistake
+ * deliberate main integration for changes by a still-running predecessor. */
+export function retirePreviousSession(gitDir, runId) {
+  const path = join(gitDir, 'mc-autonomous-session.json');
+  if (!existsSync(path)) return;
+  const bytes = readFileSync(path, 'utf8');
+  const manifest = JSON.parse(bytes);
+  if (manifest.run_id !== runId || !reconcilePreviousSession(gitDir).ok) throw new Error('previous normal session is not reconciled');
+  const archived = join(dirname(manifest.snapshot), 'retired-manifest.json');
+  try { writeFileSync(archived, bytes, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error.code !== 'EEXIST' || readFileSync(archived, 'utf8') !== bytes) throw error; }
+  rmSync(path);
 }

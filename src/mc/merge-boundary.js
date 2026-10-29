@@ -16,6 +16,7 @@ import { projectForBranch } from './project-prs.js';
 import { applyEntry, readEntry } from './register.js';
 import { workRoot } from './paths.js';
 import { programsPlans } from './plan-source.js';
+import { autonomousMergeDoor } from './autonomous-pr.js';
 
 function run(tool) {
   return (args, options = {}) => spawnSync(tool, args, { cwd: options.cwd, encoding: 'utf8' });
@@ -63,11 +64,12 @@ export function projectPlan({ project = null, head = null, programs = programsPl
  */
 export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
   const askGh = gh || run('gh');
-
-  const asked = askGh(['pr', 'view', String(pr), '--json', 'headRefName,baseRefName'], { cwd: repoPath });
-  if (asked?.status !== 0) return notChecked;
+  const asked = await askGh(['pr', 'view', String(pr), '--json', 'headRefName,baseRefName,body'], { cwd: repoPath });
   let raw = null;
-  try { raw = JSON.parse(asked.stdout); } catch { return notChecked; }
+  if (asked?.status === 0 || asked?.ok === true) { try { raw = JSON.parse(asked.stdout); } catch { /* unknown below */ } }
+  const autonomous = await autonomousMergeDoor({ repoPath, pr, root, view: raw });
+  if (!autonomous.ok) return autonomous;
+  if (!raw) return notChecked;
   const head = raw?.headRefName;
   const base = raw?.baseRefName;
   if (!head || !base) return notChecked;

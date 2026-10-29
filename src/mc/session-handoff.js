@@ -197,13 +197,13 @@ export function persistSessionResult({ root, result, publication = null, complet
     if (!publication || publication.head !== result.handoff.published_sha) throw new Error('published SHA does not match the handoff');
     const branch = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: publication.cwd, encoding: 'utf8', timeout: 60_000 });
     if (branch.error || branch.status !== 0 || branch.stdout.trim() !== ownership.branch) throw new Error('branch ownership mismatch');
-    const receipt = findPublicationReceipt({ ...publication, root, repo: context.assignment.repo,
+    const receipt = findPublicationReceipt({ ...publication, root: publication.evidenceRoot || root, repo: context.assignment.repo,
       sessionRun: expected.run_id, goalRevision: expected.goal_revision });
     if (!receipt) throw new Error('normal result requires matching committed/pushed content and a relevant green receipt for this run/revision');
     // Recheck content after receipt lookup; no inferred remote tracking ref.
     if (!sameContent(captureWorktree(publication.cwd), receipt)) throw new Error('publication content changed');
     observed = { ...observed, head: publication.head, pushed: publication.pushed, tree: receipt.tree,
-      gate: join(root, 'gate-evidence', `${receipt.run}.json`), completion: { ...completion }, normal_exit: true };
+      gate: join(publication.evidenceRoot || root, 'gate-evidence', `${receipt.run}.json`), completion: { ...completion }, normal_exit: true };
   }
   return realLock(root, () => {
     const files = paths(root, expected);

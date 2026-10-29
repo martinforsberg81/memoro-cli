@@ -21,13 +21,13 @@ export function stateFixture() {
     json: path => JSON.parse(readFileSync(path, 'utf8')),
     file: value => { writeFileSync(input, JSON.stringify(value)); return input; },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
-    setupProject: () => {
+    setupProject: (overrides = {}) => {
       mutateProgramme(root, programme, 'draft', draft, { actor: foreground, revision: 1 });
       mutateProgramme(root, programme, 'approve', { by: 'Martin', at: '2026-10-28T12:00:00Z' }, { actor: foreground, revision: 2 });
       releaseProgrammeRun(root, programme, foreground, 3);
       reserveProgrammeRun(root, programme, planner, 4);
       f.deps.actor = planner;
-      return createAutonomousDraft(root, programme, project, autonomousProject(), { actor: planner, revision: 5 });
+      return createAutonomousDraft(root, programme, project, autonomousProject(overrides), { actor: planner, revision: 5 });
     },
     switchProject: actor => {
       let state = readAutonomousState(root, programme, project);
