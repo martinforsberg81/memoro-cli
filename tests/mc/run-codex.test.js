@@ -266,8 +266,8 @@ test('a fast step on a refused claude runs on codex: the row and the log name th
   assert.deepEqual(argv.slice(4, 6), ['-m', 'gpt-6-luna']);
 });
 
-test('an interrupted codex step on gpt-6.1-luna at medium effort resumes with the same model and effort',async (t) => {
-  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6.1-luna', effort: 'medium' } }] };
+test('an interrupted codex step on gpt-6-luna at medium effort resumes with the same model and effort',async (t) => {
+  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6-luna', effort: 'medium' } }] };
   const { env, work, argvFile } = codexWorld(t, plan);
   mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
   writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
@@ -284,7 +284,7 @@ test('an interrupted codex step on gpt-6.1-luna at medium effort resumes with th
   assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
 
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6.1-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
+  assert.deepEqual(argv.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
   assert.equal(argv.includes('--effort'), false);
   assert.equal(argv.at(-2), '019a0c0d-0000-7000-8000-00000000c0de');
 });

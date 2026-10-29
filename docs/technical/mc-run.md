@@ -672,7 +672,7 @@ configures, on either tool.
   that default belongs to claude alone. A class step (`fast` or `large`) names
   no model: the candidate it is routed to sets its model (*Work classes and
   capacity*). The names are per tool: `haiku` and
-  `opus` on claude, `gpt-6.1-sol` and `gpt-6.1-luna` on codex. The schema
+  `opus` on claude, `gpt-6.1-sol` and `gpt-6-luna` on codex. The schema
   refuses a name on the other tool (`pairingProblem`), so a claude alias never
   reaches `codex -m`. A codex name is passed as `codex exec -m <name>`, and
   whether the installed, signed-in codex CLI has it is codex's to decide. A
