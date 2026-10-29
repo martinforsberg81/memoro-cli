@@ -1,3 +1,4 @@
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc merge <repo> <pr>` — the one door through which a pull request lands.
  *
@@ -32,6 +33,8 @@ import { repoNameOf } from '../repos.js';
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const reviewRefusal = reviewCommandRefusal(['merge', ...argv], deps);
+  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   // No repository can be called `watch` in `mc repo status`, so the word is free.
   if (argv[0] === 'watch') return runWatch(argv.slice(1), { stdout, stderr, ...deps });
   const opts = parseMergeArgs(argv, { docs: true, watch: true, admin: true });
@@ -75,6 +78,9 @@ export async function run(argv, deps = {}) {
     for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
     return 1;
   }
+  // Autonomous documentation uses the normal leased merger and its receipt
+  // delta rules too. The docs shortcut is deliberately not another authority.
+  if (door.autonomous && !opts.docs) return (deps.gate || gate)(opts, { ...deps, stdout, stderr, resolveRepo: async () => repoPath });
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, root, env: deps.env || process.env,
     measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
@@ -144,7 +150,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     return 1;
   }
   if (view.state === 'OPEN') {
-    const door = await autonomousMergeDoor({ repoPath, pr: opts.pr, root: deps.root || workRoot(deps.env || process.env), view });
+    const door = await autonomousMergeDoor({ repoPath, pr: opts.pr, root: deps.root || workRoot(deps.env || process.env), view, route: 'admin', env: deps.env || process.env });
     if (!door.ok) { stderr.write(`mc: ${door.stop} — ${door.problems.join('; ')}\n`); return 1; }
   }
   if (view.state !== 'OPEN' && view.state !== 'MERGED') {

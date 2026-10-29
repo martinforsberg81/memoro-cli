@@ -417,6 +417,7 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
 
   // The plan's last step lands only with every success criterion met
   // (Martin, 2026-10-18) — `criteriaDoor`.
+  let autonomous;
   {
     const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, root, env,
       step: step ? { project: step.project, index: step.index } : null });
@@ -435,12 +436,13 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
       for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
       return 1;
     }
+    autonomous = door.autonomous;
   }
 
   let queued;
   try {
     queued = queueMerge({
-      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent,
+      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent, autonomous,
       now: deps.now ? deps.now() : new Date(), env, ...io,
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });

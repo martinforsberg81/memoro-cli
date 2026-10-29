@@ -6,6 +6,8 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { realLock } from './register.js';
 import { withPlanLock } from './plan-write.js';
 import { createSessionControl, decideSessionControl, interruptSessionControl, controlResponse, validateControlState } from './session-control.js';
+import { autonomousModelIdentity, independentModel, builderModels } from './autonomous-models.js';
+import { reviewDigest, reviewInputProblems, cleanReviewInput } from './autonomous-review-report.js';
 import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
@@ -198,6 +200,7 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
     const state = projectState(paths); expected(state, revision);
     const roles = { revise: ['plan'], recover: ['plan'], confirm: ['plan'], progress: ['step'], report: ['review'], attempt: ['step', 'review', 'plan'], release: ['step', 'review', 'plan'] };
     owner(state, actor, roles[operation] || []);
+    if (state.review_session?.run_id === actor.run_id && operation !== 'report') throw new Error('independent review may only submit its report');
     if (operation === 'progress' && state.session_control) ownedControl(state, actor);
     const next = structuredClone(state);
     if (operation === 'revise' || operation === 'confirm' || operation === 'recover') {
@@ -227,6 +230,15 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
         if (!ids.has(record.criterion_id)) throw new Error('unknown criterion ID');
         next.evidence.builder.push(record);
       } else if (operation === 'report') {
+        if (state.review_session) {
+          if (state.review_session.run_id !== actor.run_id || state.phase !== 'reviewing') throw new Error('active independent review session required');
+          const problems = reviewInputProblems(input, state.review_session.assignment);
+          if (problems.length) throw new Error(problems.join('; '));
+          if (state.review_submission) throw new Error('review submission is immutable');
+          next.review_submission = structuredClone(input);
+          return save(paths.project, state, next, deps);
+        }
+        if (!Array.isArray(record.criteria) || record.criteria.length !== ids.size || new Set(record.criteria.map(item => item.criterion_id)).size !== ids.size) throw new Error('review must cover every criterion exactly once');
         if (record.criteria?.some(item => !ids.has(item.criterion_id))) throw new Error('unknown criterion ID');
         next.evidence.reviews.push(record);
       } else {
@@ -373,7 +385,7 @@ export function projectSessionCheckpoint(root, programme, project, operation, in
 
 /** Runner-only admission. Reservation, branch binding and fresh control commit
  * together before git or a worker can mutate the checkout. No CLI calls this. */
-export function startAutonomousBuild(root, programme, project, { actor, revision, assignment, branch, profile, observation, ...deps }) {
+export function startAutonomousBuild(root, programme, project, { actor, revision, assignment, branch, profile, observation, model, reviewer, ...deps }) {
   actorCheck(actor);
   if (actor.role !== 'step') throw new Error('autonomous builds use the step role');
   return locked(root, programme, project, paths => {
@@ -384,9 +396,110 @@ export function startAutonomousBuild(root, programme, project, { actor, revision
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
     if (typeof branch !== 'string' || !branch.trim() || ['main', 'master'].includes(branch)
       || (state.ownership.branch !== null && state.ownership.branch !== branch)) throw new Error('branch ownership cannot change');
+    autonomousModelIdentity(model); autonomousModelIdentity(reviewer);
+    if (state.reviewer_model && !isDeepStrictEqual(state.reviewer_model, reviewer)) throw new Error('reviewer reservation cannot change');
+    if (!independentModel(reviewer, [model])) throw new Error('reviewer model is reserved from builders');
     const session_control = createSessionControl({ binding: controlBinding(state, actor), profile, observation,
       previous: state.session_control || null });
     return save(paths.project, state, { ...state, phase: 'running', active_run: actor,
+      reviewer_model: reviewer, model_history: [...(state.model_history || []), { run_id: actor.run_id, model, goal_revision: state.goal_revision }],
       runs: [...state.runs, actor], ownership: { ...state.ownership, branch }, session_control }, deps);
+  }, deps);
+}
+
+/** Trusted review reservation: fixed assignment, publication, base and model. */
+export function startAutonomousReview(root, programme, project, { actor, revision, session, ...deps }) {
+  actorCheck(actor);
+  if (actor.role !== 'review') throw new Error('review role required');
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision);
+    if (state.active_run || state.phase !== 'review_ready') throw new Error('project is not review ready');
+    if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
+    approved(programmeState(paths), state.contract);
+    if (!isDeepStrictEqual(state.contract, read(join(paths.projectDir, PLAN_FILE)))
+      || !isDeepStrictEqual(session.assignment, state.contract)) throw new Error('review assignment changed');
+    if (session.assignment_digest !== reviewDigest(state.contract)
+      || session.criteria_digest !== reviewDigest(state.contract.success_criteria)) throw new Error('review revision binding changed');
+    if (session.run_id !== actor.run_id || session.head !== state.publication?.head
+      || state.publication.phase !== 'handoff_committed' || session.pr !== state.ownership.pr
+      || session.branch !== state.ownership.branch || !session.base || !session.checkout) throw new Error('review requires settled published head and comparison base');
+    if (!isDeepStrictEqual(session.model, state.reviewer_model) || !independentModel(session.model, builderModels(state))) throw new Error('review model must be independent of all historical builders');
+    return save(paths.project, state, { ...state, phase: 'reviewing', active_run: actor,
+      runs: [...state.runs, actor], review_session: session, review_submission: null }, deps);
+  }, deps);
+}
+
+/** Persist the complete immutable result for plan. No build job or merge is created. */
+export function recordAutonomousReview(root, programme, project, { actor, revision, report, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths);
+    const previous = (state.review_reports || []).find(item => item.id === report.id);
+    if (previous) {
+      const { reference: ignored, ...stored } = previous;
+      if (!isDeepStrictEqual(stored, report)) throw new Error('review report is immutable');
+      return structuredClone(state);
+    }
+    expected(state, revision); owner(state, actor, ['review']);
+    const session = state.review_session;
+    if (!session || session.run_id !== actor.run_id || state.phase !== 'reviewing' || report.id !== actor.run_id || report.session_digest !== reviewDigest(session)
+      || !isDeepStrictEqual(report.session, session)) throw new Error('review session binding changed');
+    if (report.schema !== 'mc-autonomous-review-report' || report.version !== 1
+      || !Array.isArray(report.invalid_reasons) || !report.invalid_reasons.every(item => typeof item === 'string' && item.trim())
+      || report.clean !== (!report.invalid_reasons.length && cleanReviewInput(report.result, session.assignment))) throw new Error('invalid review verdict');
+    const problems = reviewInputProblems(report.result, session.assignment);
+    if (problems.length) throw new Error(problems.join('; '));
+    const reference = `${paths.project}#review_reports/${report.id}`;
+    const observation = { id: report.id, run_id: actor.run_id, project_id: project, programme_id: programme,
+      goal_revision: session.assignment.goal_revision, programme_revision: session.assignment.programme.revision,
+      reference, findings: [...report.result.defects, ...report.invalid_reasons, ...report.result.uncertainty,
+        ...report.result.criteria.flatMap(item => item.uncertainty.map(text => `${item.criterion_id}: ${text}`))],
+      criteria: report.result.criteria.map(item => ({ criterion_id: item.criterion_id, status: item.status, reference: item.evidence.join('\n') })) };
+    const next = { ...state, phase: 'plan_pending', active_run: null,
+      plan_events: [...(state.plan_events || []), { id: `review-${reviewDigest(report)}`, type: 'review-reported',
+        report_id: report.id, reference, goal_revision: session.assignment.goal_revision,
+        programme_revision: session.assignment.programme.revision, clean: report.clean }],
+      review_reports: [...(state.review_reports || []), { ...report, reference }],
+      evidence: { ...state.evidence, reviews: [...state.evidence.reviews, observation] } };
+    valid(validateAutonomousEvidence(next.evidence));
+    return save(paths.project, state, next, deps);
+  }, deps);
+}
+
+/** Trusted outcome writer. Events precede queue cleanup; replay never confirms
+ * a goal, resurrects an answered handoff or rewrites a later assignment. */
+export function recordAutonomousMergeEvent(root, programme, project, { binding, type, details = {}, ticket = null, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths);
+    if (!['merge-queued', 'merge-refused', 'merge-failed', 'merge-unknown', 'merge-landed'].includes(type)) throw new Error('unknown autonomous merge event');
+    const report = state.review_reports?.find(item => item.id === binding.report_id);
+    const bound = !!report && reviewDigest(report) === binding.report_digest
+      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision
+      && report.session.assignment.programme.revision === binding.programme_revision;
+    if (state.ownership.pr !== binding.pr || state.ownership.branch !== binding.branch
+      || (!bound && ['merge-queued', 'merge-landed'].includes(type))) throw new Error('merge event report/ownership binding changed');
+    // Missing/damaged evidence can carry a refusal to plan, never permission
+    // to queue or attribute a successful landing to that evidence.
+    const event = { id: `${type}-${reviewDigest({ binding, details })}`, type, binding, binding_verified: bound, details };
+    const previous = state.plan_events || [];
+    if (previous.some(item => item.id === event.id)) return structuredClone(state);
+    const current = state.goal_revision === binding.goal_revision && state.programme_revision === binding.programme_revision
+      && state.publication?.head === binding.head && (!state.review_reports?.length || state.review_reports.at(-1).id === binding.report_id);
+    const next = { ...state, plan_events: [...previous, event] };
+    if (type === 'merge-queued') {
+      if (!current || state.active_run || state.confirmed || !['plan_pending', 'landing'].includes(state.phase)
+        || (state.merge_handoff?.status === 'answered' && isDeepStrictEqual(state.merge_handoff.binding, binding))) throw new Error('autonomous merge handoff is no longer pending');
+      if (!ticket || ticket.head !== binding.head || ticket.review_id !== binding.report_id
+        || ticket.review_digest !== binding.report_digest) throw new Error('merge ticket does not match report');
+      next.phase = 'landing'; next.merge_handoff = { binding, ticket, status: 'pending' };
+    } else if (current) {
+      next.merge_handoff = { binding, ticket: ticket || state.merge_handoff?.ticket || null, status: 'answered' };
+      // A late failure cannot undo a read-back landing or a planner decision.
+      if (type === 'merge-landed') next.landing = { ...details, binding };
+      if (!state.confirmed && !state.active_run) {
+        if (type === 'merge-landed') next.phase = 'landed';
+        else if (state.phase !== 'landed') next.phase = 'plan_pending';
+      }
+    }
+    return save(paths.project, state, next, deps);
   }, deps);
 }

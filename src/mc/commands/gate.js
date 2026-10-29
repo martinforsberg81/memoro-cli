@@ -93,7 +93,7 @@ const SYSTEM = {
  * same declaration, diff, added tests and flags as the lane-owning gate. */
 export async function publicationGateSelection(cwd, env = process.env, deps = {}) {
   const io = { ...SYSTEM, ...deps };
-  const base = io.git(cwd, ['rev-parse', 'origin/main^{commit}']);
+  const base = deps.baseCommit || io.git(cwd, ['rev-parse', 'origin/main^{commit}']);
   const mergeBase = base && io.git(cwd, ['merge-base', 'HEAD', base]);
   const changed = mergeBase && changedAgainst(io, cwd, mergeBase);
   const declared = primaryCheckoutDeclaration(io, { root: cwd, env });

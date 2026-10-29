@@ -41,6 +41,7 @@ export function fixture(t, { close = true, existing = null, assignment = {} } = 
   if (existing !== null) state.ownership.pr = existing;
   writeFileSync(f.paths.project, JSON.stringify(state));
   state = startAutonomousBuild(f.root, f.programme, f.project, { actor: builder, revision: state.revision,
+    model: { tool: 'claude', model: 'haiku', effort: 'high' }, reviewer: { tool: 'claude', model: 'opus', effort: 'high' },
     assignment: state.contract, branch: f.project, profile,
     observation: { sequence: 0, at_ms: 1000, awake_ms: 0, activity: { kind: 'model', id: null }, context: null, progress: null, failure: null } });
   state = mutateAutonomousProject(f.root, f.programme, f.project, 'progress', { id: 'schema-proof', criterion_id: 'schema',

@@ -20,6 +20,10 @@ It holds the authoritative draft contract and contract history, programme and
 goal revisions, stable criterion observations, independent reports, planner
 confirmation/history, branch/PR ownership, commits, execution phase, current
 handoff reference, run ownership/history and append-only incomplete attempts.
+Independent completion and merge routing additionally append idempotent
+`plan_events`, retain the pending/answered `merge_handoff` intent and record
+`landing` facts separately from confirmation; see
+[autonomous outcomes](mc-autonomous-merge.md#reports-and-outcomes-for-plan).
 It is not a v1 `STATE.json` and must never pass through v1 normalization.
 
 Every mutation, including inactive send, takes the programme's plan lock, the project's plan lock when

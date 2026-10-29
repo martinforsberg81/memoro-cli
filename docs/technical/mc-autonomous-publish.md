@@ -67,7 +67,7 @@ publication; they do not get folded into an unchecked push. Unknown process or
 gate ownership also prevents normal handoff. Failures retain ownership and
 commits, never queue merge or start another builder.
 
-## Nonmergeable until independent review exists
+## Persistent ownership and independent merge admission
 
 Before publication, a durable branch marker is written under
 `<work root>/runner/autonomous-prs/`. It binds repository, branch, programme,
@@ -76,11 +76,12 @@ New PRs are drafts and their bodies contain
 `<!-- mc-autonomous: review-required -->`. Subsequent publication preserves it.
 Ordinary publish refuses a known autonomous branch even without runner env.
 
-The normal merge door, docs shortcut, lower-level docs merger and resumed merge
-round all refuse these PRs. The admin entrypoint also refuses them while the
-independent review door is absent; its existing v1 behavior is unchanged.
+The [independent merge door](mc-autonomous-merge.md) validates these PRs at
+queueing and again at landing. Docs and admin shortcuts still refuse them;
+automatic docs-only routing sends an admitted autonomous PR to the leased
+merger instead. Existing v1 behavior is unchanged.
 Missing/corrupt project state cannot downgrade a marked PR to unchecked v1.
-There is deliberately no way here to clear the marker or authorize v2 merge.
+Publication cannot clear the marker or authorize merge by itself.
 
 `tests/mc/autonomous-publish.test.js` uses real temporary repositories/bare
 remotes and stubbed GitHub, with synthetic completed execution observations for

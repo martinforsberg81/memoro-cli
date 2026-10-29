@@ -136,6 +136,7 @@ test('remaining criteria launch a fresh bounded session on the same branch/PR; a
   let state = await recover(f); assert.equal(state.phase, 'ready');
   const next = { run_id: 'build-2', role: 'step' };
   state = startAutonomousBuild(f.root, f.programme, f.project, { actor: next, revision: state.revision,
+    model: { tool: 'claude', model: 'haiku', effort: 'high' }, reviewer: { tool: 'claude', model: 'opus', effort: 'high' },
     assignment: state.contract, branch: f.project, profile,
     observation: { sequence: 0, at_ms: 2000, awake_ms: 0, activity: { kind: 'model', id: null }, context: null, progress: null, failure: null } });
   state = mutateAutonomousProject(f.root, f.programme, f.project, 'progress', { id: 'continuation-proof', criterion_id: 'continuation',

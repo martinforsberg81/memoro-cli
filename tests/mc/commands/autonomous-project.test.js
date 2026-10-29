@@ -18,7 +18,10 @@ const invoke = (f, operation, revision, input, deps = {}) => run([operation, `${
   ...(input === undefined ? [] : ['--input-file', f.file(input)])], { ...f.deps, ...deps });
 const stateOf = f => f.json(f.paths.project);
 const progress = { id: 'schema-proof', criterion_id: 'schema', status: 'verified', reference: 'evidence/schema-proof.json' };
-const report = { id: 'review-proof', reference: 'reports/review-proof.json', findings: ['One gap.'], criteria: [{ criterion_id: 'schema', status: 'finding', reference: 'reports/review-proof.json#schema' }] };
+const report = { id: 'review-proof', reference: 'reports/review-proof.json', findings: ['One gap.'], criteria: [
+  { criterion_id: 'schema', status: 'finding', reference: 'reports/review-proof.json#schema' },
+  { criterion_id: 'integration', status: 'deferred', reference: 'Requires integration before verification.' },
+] };
 const sha = 'a'.repeat(40);
 
 test('real CLI routes guarded programme and v2 commands in a temporary root without launching sessions', () => {
@@ -249,6 +252,7 @@ test('step and review may record only their own observations, not scope or confi
     for (const input of [progress, { ...progress, id: 'other-proof', criterion_id: 'missing' }, { ...progress, id: 'other-proof', reference: null }, { ...progress, id: 'other-proof', branch: 'forged' }]) assert.equal(await invoke(f, 'progress', state.revision, input), 1);
     state = f.switchProject(reviewer); f.deps.actor = reviewer;
     for (const [operation, input] of [['revise', autonomousProject({ goal_revision: 2 })], ['confirm', { id: 'not-plan', reference: 'no' }], ['progress', progress]]) assert.equal(await invoke(f, operation, state.revision, input), 1);
+    assert.equal(await invoke(f, 'report', state.revision, { ...report, criteria: report.criteria.slice(0, 1) }), 1, 'missing criterion observations are refused');
     assert.equal(await invoke(f, 'report', state.revision, report), 0);
     assert.equal(await invoke(f, 'report', stateOf(f).revision, report), 1, 'reports are immutable, not upserts');
     assert.equal(stateOf(f).confirmed, false);

@@ -1,3 +1,4 @@
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc step` — where a step stands, said by the one who knows.
  *
@@ -51,6 +52,8 @@ const STATES = new Set(['failed', 'blocked', 'ready', 'done', 'note']);
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const reviewRefusal = reviewCommandRefusal(['step', ...argv], deps);
+  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   const env = deps.env || process.env;
   const root = deps.root || workRoot(env);
   const now = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');

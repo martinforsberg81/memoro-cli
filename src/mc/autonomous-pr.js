@@ -1,5 +1,4 @@
-/** Durable refusal, independent of readable PLAN/STATE. No review door exists
- * yet: these PRs cannot enter either the merger or the docs shortcut. */
+/** Durable ownership, independent of readable PLAN/STATE. */
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +8,7 @@ import { repoNameOf } from './repos.js';
 import { workRoot } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { projectForBranch } from './project-prs.js';
+import { STABLE_ID_RE } from './programme-contract.js';
 
 export const AUTONOMOUS_PR_MARK = '<!-- mc-autonomous: review-required -->';
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -43,7 +43,7 @@ export function markAutonomousPr({ root, repo, branch, programme, project, pr = 
   }, { strict: true });
 }
 
-export async function autonomousMergeDoor({ repoPath, pr, gh, root = workRoot(), view = null }) {
+export function autonomousPrOwner({ repoPath, pr, root = workRoot(), view = null }) {
   const refused = reason => ({ checked: true, ok: false, stop: 'autonomous-review-required', problems: [reason] });
   let known = [];
   const repo = repoNameOf(repoPath);
@@ -51,21 +51,41 @@ export async function autonomousMergeDoor({ repoPath, pr, gh, root = workRoot(),
     const dir = directory(root, repo);
     known = readdirSync(dir).filter(file => file.endsWith('.json')).map(file => JSON.parse(readFileSync(join(dir, file), 'utf8')));
     if (known.some(item => item?.schema !== 'mc-autonomous-pr' || item.version !== 1 || item.repo !== repo
-      || typeof item.branch !== 'string' || !item.branch || (item.pr !== null && (!Number.isSafeInteger(item.pr) || item.pr < 1)))) throw new Error('invalid marker');
+      || typeof item.branch !== 'string' || !item.branch || !STABLE_ID_RE.test(item.programme || '') || !STABLE_ID_RE.test(item.project || '')
+      || (item.pr !== null && (!Number.isSafeInteger(item.pr) || item.pr < 1)))) throw new Error('invalid marker');
   } catch (error) {
     if (error.code !== 'ENOENT') return refused('autonomous PR registry is unreadable; merge authority is unknown');
   }
-  if (known.some(item => item.pr === Number(pr))) return refused('autonomous PR awaits the independent review door; nothing may merge');
-  if (!view && gh) {
-    try {
-      const response = await gh(['pr', 'view', String(pr), '--json', 'headRefName,body'], { cwd: repoPath });
-      if (response?.status === 0 || response?.ok === true) view = JSON.parse(response.stdout);
-    } catch { /* legacy unknown PRs retain their old behavior */ }
-  }
-  if (view?.body?.includes(AUTONOMOUS_PR_MARK) || known.some(item => item.branch === view?.headRefName)
+  const owners = known.filter(item => item.pr === Number(pr) || (view?.headRefName && item.branch === view.headRefName));
+  if (owners.length > 1) return refused('autonomous PR ownership is ambiguous');
+  if (owners.length) return { checked: true, ok: true, problems: [], owner: owners[0] };
+  if (view?.body?.includes(AUTONOMOUS_PR_MARK)
     || (view?.headRefName && autonomousBranchHeld({ root, repo, branch: view.headRefName }))) {
-    return refused('autonomous PR awaits the independent review door; nothing may merge');
+    return refused('autonomous PR ownership metadata is missing; independent review authority is unknown');
   }
   if (!view?.headRefName && known.some(item => item.pr === null)) return refused('an autonomous publication is unresolved and GitHub ownership is unknown');
   return { checked: false, ok: true, problems: [] };
+}
+
+export async function autonomousMergeDoor({ repoPath, pr, gh, root = workRoot(), view = null, ...options }) {
+  // Read durable PR identity first, even when GitHub or the plan is unreadable.
+  const known = autonomousPrOwner({ repoPath, pr, root, view });
+  if (!known.ok) return known;
+  if (!view && gh) {
+    try {
+      const fields = known.checked ? 'number,state,headRefName,headRefOid,baseRefName,body' : 'headRefName,body';
+      const response = await gh(['pr', 'view', String(pr), '--json', fields], { cwd: repoPath });
+      if (response?.status === 0 || response?.ok === true) view = JSON.parse(response.stdout);
+    } catch { /* legacy unknown PRs retain their old behavior */ }
+  }
+  const identity = autonomousPrOwner({ repoPath, pr, root, view });
+  if (!identity.ok || !identity.checked) return identity;
+  if (gh && (!view?.headRefOid || view.number == null)) {
+    try {
+      const response = await gh(['pr', 'view', String(pr), '--json', 'number,state,headRefName,headRefOid,baseRefName,body'], { cwd: repoPath });
+      if (response?.status === 0 || response?.ok === true) view = JSON.parse(response.stdout);
+    } catch { /* the autonomous door refuses unknown metadata */ }
+  }
+  const { autonomousAdmission } = await import('./autonomous-merge.js');
+  return autonomousAdmission({ repoPath, pr, root, view, owner: identity.owner, ...options });
 }
