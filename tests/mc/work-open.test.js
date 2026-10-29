@@ -19,6 +19,8 @@ import { describe, it } from 'node:test';
 
 import { sessionArgs } from '../../src/adapters/claude-code.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
+import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
+import { runnerDir } from '../../src/mc/paths.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
@@ -71,6 +73,17 @@ describe('openInWorkArea and --model', () => {
     await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(calls[0].spawnOptions.env.ANTHROPIC_API_KEY, undefined);
     assert.equal(calls[0].spawnOptions.env.OPENAI_API_KEY, undefined);
+  });
+  it('an API launch grants every model of its provider, so /model inside the session is not refused', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    env.MC_WORK_ROOT = mkdtempSync(join(tmpdir(), 'mc-work-root-'));
+    writeCapacity(applyRefusal({}, 'claude', new Date(Date.now() + 3_600_000).toISOString()), { root: runnerDir(env) });
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, model: 'fable', ...options });
+    assert.equal(calls[0].bin, process.execPath);
+    assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
+    assert.deepEqual(calls[0].args.slice(1, 3), ['claude', '*']);
+    assert.ok(calls[0].args.includes('fable'), 'the tool still starts on the chosen model');
   });
   // An ordinary area has no role, and a new conversation there is handed no
   // instructions at all — there is no Coding Profile in front any more.
