@@ -68,7 +68,7 @@ function moveMain(f, path) {
 
 // Real leased merge round; adapters stand in for GitHub and gate execution,
 // not for git ancestry, content, ownership, reports or gate receipt validation.
-function round(f, { duringGate = () => {}, ticket = undefined } = {}) {
+function round(f, { duringGate = () => {}, ticket = undefined, measuredHead = undefined, unadmitted = false } = {}) {
   let merged = false; const calls = []; const head = f.stateNow().publication.head;
   const gh = (args, options) => {
     calls.push(args);
@@ -82,9 +82,10 @@ function round(f, { duringGate = () => {}, ticket = undefined } = {}) {
     const report = await runMergeRound({ repoPath: f.cwd, pr: 42, root: f.env.MC_HOME, env: f.env, gh,
       autonomous: ticket, holder: { name: 'fixture-merger' }, installs: () => [], mergeLog: null,
       gate: async call => {
-        assert.equal(call.evidence.run, 'admission-gate'); assert.equal(call.evidence.sessionRun, f.stateNow().publication.run_id);
+        if (unadmitted) assert.equal(call.evidence, undefined);
+        else { assert.equal(call.evidence.run, 'admission-gate'); assert.equal(call.evidence.sessionRun, f.stateNow().publication.run_id); }
         await duringGate(call);
-        return { ok: true, stopped_at: null, reason: null, pr: { number: 42, base: 'main', head: f.project, head_sha: head },
+        return { ok: true, stopped_at: null, reason: null, pr: { number: 42, base: 'main', head: f.project, head_sha: measuredHead === undefined ? head : measuredHead },
           base: { commit: base }, candidate: { red: [], totals: { tests: 1, fail: 0 } }, extra_gates: [] };
       }, sleep: async () => {} });
     return { report, merged, calls };
@@ -112,6 +113,50 @@ test('current clean review, premerge evidence and full gate enter the existing q
   const outcome = await round(f, { ticket: restarted.autonomous });
   assert.equal(outcome.report.ok, true, outcome.report.reason); assert.equal(outcome.merged, true);
   assert.equal(f.stateNow().confirmed, false, 'admission never confirms a goal');
+});
+
+test('editing an issued ticket to match newer state does not manufacture a fresh admission', async t => {
+  const f = await ready(t); const admitted = await f.door(); assert.equal(admitted.ok, true);
+  f.patch(s => { s.review_reports[0].result.criteria[0].evidence.push('Replacement observation.'); });
+  const owner = autonomousPrOwner({ root: f.root, repoPath: f.cwd, pr: 42 }).owner;
+  Object.assign(admitted.autonomous, autonomousProof({ root: f.root, owner, pr: 42 }).ticket);
+  assert.throws(() => queue(f, admitted.autonomous), /fresh complete/u);
+  const renewed = await f.door(); assert.equal(renewed.ok, true); queue(f, renewed.autonomous);
+});
+
+for (const measuredHead of [null, '', 'a'.repeat(40)]) test(`incomplete or wrong measured head (${measuredHead}) never permits an unpinned autonomous squash`, async t => {
+  const f = await ready(t); const admitted = await f.door();
+  const outcome = await round(f, { ticket: admitted.autonomous, measuredHead });
+  assert.equal(outcome.merged, false); assert.equal(outcome.report.stopped_at, 'autonomous-review-required');
+  assert.equal(outcome.calls.some(args => args[1] === 'merge'), false);
+});
+
+// Simulate a PR acquiring durable ownership during a legacy measurement.
+// The final read must discover it even when the initial metadata was v1.
+function temporarilyLegacy(f) {
+  const dir = join(f.root, 'runner', 'autonomous-prs');
+  const repository = join(dir, readdirSync(dir)[0]);
+  const path = join(repository, readdirSync(repository)[0]);
+  const marker = readFileSync(path); rmSync(path);
+  const pr = f.pr(); const original = { body: pr.body, headRefName: pr.headRefName };
+  pr.body = ''; pr.headRefName = 'legacy';
+  return () => { writeFileSync(path, marker); Object.assign(pr, original); };
+}
+
+test('ownership acquired during a legacy gate requires a new admitted leased round', async t => {
+  const f = await ready(t); const restore = temporarilyLegacy(f);
+  const outcome = await round(f, { unadmitted: true, duringGate: restore });
+  assert.equal(outcome.merged, false); assert.equal(outcome.report.stopped_at, 'autonomous-review-required');
+  assert.match(outcome.report.reason, /appeared after measurement/u);
+});
+
+test('ownership acquired during document measurement cannot use the lease-free squash', async t => {
+  const f = await ready(t); const restore = temporarilyLegacy(f);
+  Object.assign(f.pr(), { files: [{ path: 'docs/note.md' }], mergeable: 'MERGEABLE' });
+  const report = await runDocsMerge({ repoPath: f.cwd, pr: 42, root: f.root, env: f.env,
+    gh: args => { assert.notEqual(args[1], 'merge'); return f.gh(args); },
+    measure: async () => { restore(); return { ok: true }; } });
+  assert.equal(report.merged, false); assert.equal(report.stopped_at, 'autonomous-review-required');
 });
 
 for (const mutation of ['plan-missing', 'plan-corrupt', 'state-missing', 'state-corrupt', 'report-missing', 'report-corrupt',

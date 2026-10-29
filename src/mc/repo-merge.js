@@ -306,6 +306,9 @@ export async function runMergeRound({
       // the branch was freshened to when that was needed. A round that cannot
       // say which head it means squashes none — and says so.
       let pin = batch ? (verdict.prs || []).find((item) => item.number === number)?.head_sha : verdict.pr.head_sha;
+      if (admissions.has(number) && pin !== admissions.get(number).autonomous.head) {
+        return finish('autonomous-review-required', 'autonomous gate must identify exactly the published reviewed head before landing');
+      }
       // Freshened before its squash: every later branch of a batch, because
       // the squash before it is a commit the branch does not have; and any
       // branch at all when the gate had to regenerate derived artifacts after
@@ -344,6 +347,7 @@ export async function runMergeRound({
         expected: admission?.autonomous ?? autonomous, base: expected, head: pin });
       if (!finalDoor.ok) return finish(finalDoor.stop, finalDoor.problems.join('; '));
       if (admission && !finalDoor.checked) return finish('autonomous-review-required', 'autonomous ownership disappeared during measurement');
+      if (finalDoor.checked && !admission) return finish('autonomous-review-required', 'autonomous ownership appeared after measurement started; a new admitted round is required');
       if (admission) {
         const lease = readLease(repoPath, { root });
         if (!lease.held || lease.holder !== holder.name) return finish('lease', 'the lease was lost during autonomous admission — nothing was merged');

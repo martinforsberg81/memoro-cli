@@ -21,8 +21,10 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value);
 // required there; deserialised queue tickets are revalidated by the async door.
 const issued = new WeakMap();
 export function assertAutonomousQueueAdmission({ root, owner, pr, ticket }) {
-  const at = ticket && issued.get(ticket);
-  requireThat(at !== undefined && Date.now() >= at && Date.now() - at <= 30_000
+  const measured = ticket && issued.get(ticket);
+  requireThat(measured && measured.root === root && isDeepStrictEqual(measured.owner, owner)
+    && Date.now() >= measured.at && Date.now() - measured.at <= 30_000
+    && isDeepStrictEqual(measured.ticket, ticket)
     && isDeepStrictEqual(autonomousProof({ root, owner, pr }).ticket, ticket),
     'fresh complete autonomous admission required before queueing');
   issued.delete(ticket);
@@ -138,7 +140,9 @@ export async function autonomousAdmission({ root, repoPath, pr, owner, view, env
     'complete relevant published green gate evidence is missing, stale or insufficient');
     // State may have moved while git/selector ran. No stale result is returned.
     requireThat(isDeepStrictEqual(autonomousProof({ root, owner, pr }).ticket, ticket), 'autonomous evidence changed during admission');
-    issued.set(ticket, Date.now());
+    // Bind the actual measured value, not only the caller-owned object's
+    // identity: changing a ticket cannot manufacture a fresh measurement.
+    issued.set(ticket, { at: Date.now(), root, owner: structuredClone(owner), ticket: structuredClone(ticket) });
     return { checked: true, ok: true, problems: [], autonomous: ticket,
       evidence: { repository: receipt.repository, run: receipt.run, sessionRun: p.run_id, goalRevision: state.goal_revision } };
   } catch (error) {

@@ -136,6 +136,10 @@ export async function runDocsMerge({
   // The tests take a minute, so the head is read again, as the check above reads it.
   const headAfterTests = view(gh, pr, 'headRefOid')?.headRefOid || null;
   if (headAfterTests !== head) return drifted(headAfterTests);
+  // A publication may have acquired durable autonomous ownership while the
+  // document checks ran. A legacy admission is not authority for that PR.
+  const finalDoor = await autonomousMergeDoor({ repoPath, pr, root, view: info, route: 'docs', env });
+  if (!finalDoor.ok) return finish(finalDoor.stop, finalDoor.problems.join('; '));
 
   const merged = gh(['pr', 'merge', String(pr), '--squash', '--subject', `${info.title} (#${info.number})`, '--match-head-commit', head]);
   const after = view(gh, pr, 'state,mergeCommit');

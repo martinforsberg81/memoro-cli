@@ -29,8 +29,10 @@ frozen base, compares configuration, exact selection, content tree/fingerprint,
 successful execution and run/revision bindings, and rechecks the remote and PR.
 
 The synchronous queue API accepts only a freshly checked single-use in-process
-admission (at most 30 seconds old),
-then stores its project/revision, head, report ID/digest, gate run, criterion
+admission (at most 30 seconds old), bound to a private snapshot of the measured
+evidence and ownership. Editing an issued ticket to match newer state is not a
+measurement and refuses queueing. The queue stores its project/revision, head,
+report ID/digest, gate run, criterion
 evidence IDs and handoff reference. Reconstructing IDs is not a check. Queue
 normalisation preserves damaged autonomous metadata rather than dropping it.
 Restarted jobs must present matching persisted evidence and pass the full door
@@ -39,7 +41,11 @@ gate lane, gate and head-pinned squash; there is no separate merge executor.
 
 Immediately before squash the leased round rereads admission and compares its
 initial evidence IDs, measured head and live base. Gate green is not permission
-to land changed review/evidence. Derived regeneration that pushes a different
+to omit the measured head, land without a head pin or land changed review/evidence.
+A PR acquiring
+autonomous ownership during a legacy round requires a new admitted round;
+the docs shortcut also rereads ownership after document checks.
+Derived regeneration that pushes a different
 head needs a new publication/review. Docs and admin shortcuts refuse autonomous
 PRs even with a clean report. Automatic docs-only routing uses the normal merger
 instead of the lease-free docs shortcut.
