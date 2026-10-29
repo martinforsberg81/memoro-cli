@@ -6,9 +6,10 @@
  * responsible for keeping this process outside model-directed execution and
  * for expiring grants when their sessions end.
  */
-import { createServer } from 'node:http';
+import { createServer, STATUS_CODES } from 'node:http';
 import { Readable } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
+import { WebSocket, WebSocketServer } from 'ws';
 
 const ROUTES = Object.freeze({
   '/claude/v1/messages': { provider: 'claude', upstream: '/v1/messages', methods: ['POST'] },
@@ -18,6 +19,10 @@ const ROUTES = Object.freeze({
   '/codex/v1/models': { provider: 'codex', upstream: '/v1/models', methods: ['GET'] },
 });
 const UPSTREAM = Object.freeze({ claude: 'https://api.anthropic.com', codex: 'https://api.openai.com' });
+// Codex with websockets upgrades on its HTTP path and then sends only what is
+// new since the previous response on the open connection.
+const WEBSOCKET_ROUTE = '/codex/v1/responses';
+export const UPSTREAM_WEBSOCKET = 'wss://api.openai.com/v1/responses';
 const FORWARD_REQUEST_HEADERS = Object.freeze(['content-type', 'anthropic-version', 'anthropic-beta']);
 const FORWARD_RESPONSE_HEADERS = Object.freeze(['content-type', 'retry-after', 'request-id', 'x-request-id', 'anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']);
 // Codex without websockets sends the whole thread on every request: a
@@ -69,10 +74,30 @@ function json(res, status, message) {
   res.end(JSON.stringify({ error: { message } }));
 }
 
+// An upgrade is refused on the raw socket, before any handshake.
+function refuseUpgrade(socket, status, message) {
+  const body = JSON.stringify({ error: { message } });
+  socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+}
+
+// 1005, 1006 and 1015 are only ever observed, never sent.
+const sendable = (code) => [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011].includes(code) || (code >= 3000 && code <= 4999);
+
+function closeSocket(socket, code, reason) {
+  if (socket.readyState === WebSocket.OPEN) socket.close(code, reason);
+  else if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+}
+
 /** Create a loopback-only gateway. Keys and grants are never serialized by it. */
-export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Date.now, maxBodyBytes = MAX_GATEWAY_BODY_BYTES } = {}) {
+export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Date.now, maxBodyBytes = MAX_GATEWAY_BODY_BYTES, websocketUpstream = UPSTREAM_WEBSOCKET } = {}) {
   if (!keys || !Array.isArray(grants)) throw new TypeError('gateway keys and grants required');
   const requests = new Map();
+  const admit = (grant) => {
+    const used = requests.get(grant.token) || 0;
+    if (!Number.isSafeInteger(grant.maxRequests) || grant.maxRequests < 1 || used >= grant.maxRequests) return false;
+    requests.set(grant.token, used + 1);
+    return true;
+  };
   const server = createServer(async (req, res) => {
     const path = new URL(req.url || '/', 'http://localhost').pathname;
     const route = ROUTES[path];
@@ -88,9 +113,7 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
       let payload;
       try { payload = JSON.parse(body.toString('utf8')); } catch { return json(res, 400, 'invalid request body'); }
       if (!modelAllowed(grant, payload?.model)) return json(res, 403, 'model unavailable for session');
-      const used = requests.get(grant.token) || 0;
-      if (!Number.isSafeInteger(grant.maxRequests) || grant.maxRequests < 1 || used >= grant.maxRequests) return json(res, 429, 'session request limit reached');
-      requests.set(grant.token, used + 1);
+      if (!admit(grant)) return json(res, 429, 'session request limit reached');
     }
     const headers = new Headers();
     for (const name of FORWARD_REQUEST_HEADERS) {
@@ -115,6 +138,71 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
       else res.destroy();
     }
   });
+
+  // One upstream socket per session socket, opened with the key here. Session
+  // frames are checked like HTTP bodies; provider frames pass through unread.
+  const relays = new Set();
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: maxBodyBytes });
+  const relay = (client, grant, key, beta) => {
+    const headers = { authorization: `Bearer ${key}` };
+    if (beta) headers['openai-beta'] = String(beta);
+    const upstream = new WebSocket(websocketUpstream, { headers, maxPayload: maxBodyBytes });
+    const pending = [];
+    let done = false;
+    const entry = { client, upstream };
+    const shut = (code, reason = '') => {
+      if (done) return;
+      done = true;
+      clearTimeout(expiry);
+      relays.delete(entry);
+      closeSocket(client, code, reason);
+      closeSocket(upstream, code, reason);
+    };
+    const left = Date.parse(grant.expiresAt) - now();
+    const expiry = setTimeout(() => shut(1008, 'session grant expired'), Math.max(0, Math.min(left, 2 ** 31 - 1)));
+    expiry.unref?.();
+    relays.add(entry);
+    client.on('message', (data, isBinary) => {
+      if (isBinary) return shut(1003, 'text frames only');
+      let frame;
+      try { frame = JSON.parse(data.toString('utf8')); } catch { return shut(1007, 'invalid frame'); }
+      if (frame?.type === 'response.create') {
+        if (!(Date.parse(grant.expiresAt) > now())) return shut(1008, 'session grant expired');
+        if (!modelAllowed(grant, frame.model)) return shut(1008, 'model unavailable for session');
+        if (!admit(grant)) return shut(1008, 'session request limit reached');
+      }
+      if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: false });
+      else pending.push(data);
+    });
+    upstream.on('open', () => {
+      for (const data of pending.splice(0)) upstream.send(data, { binary: false });
+    });
+    upstream.on('message', (data, isBinary) => {
+      if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+    });
+    // A refused handshake upstream is an error; its body is never relayed.
+    upstream.on('error', () => shut(1011, 'provider unavailable'));
+    upstream.on('close', (code, reason) => shut(sendable(code) ? code : 1011, reason.toString()));
+    client.on('error', () => shut(1011));
+    client.on('close', (code, reason) => shut(sendable(code) ? code : 1000, reason.toString()));
+  };
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => socket.destroy());
+    const path = new URL(req.url || '/', 'http://localhost').pathname;
+    if (path !== WEBSOCKET_ROUTE) return refuseUpgrade(socket, 404, 'route unavailable');
+    const grant = grantFor(req, grants, 'codex', now);
+    if (!grant) return refuseUpgrade(socket, 401, 'session grant unavailable');
+    const key = keys.codex;
+    if (typeof key !== 'string' || !key) return refuseUpgrade(socket, 503, 'provider key unavailable');
+    sockets.handleUpgrade(req, socket, head, (client) => relay(client, grant, key, req.headers['openai-beta']));
+  });
+  // An upgraded socket keeps server.close() waiting, so closing the gateway
+  // ends every relay.
+  const close = server.close.bind(server);
+  server.close = (callback) => {
+    for (const { client, upstream } of relays) { client.terminate(); upstream.terminate(); }
+    return close(callback);
+  };
   return server;
 }
 

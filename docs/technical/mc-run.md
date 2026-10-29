@@ -1660,10 +1660,23 @@ permissions from Keychain or the vault. The grant can be used by the session
 until it exits, expires after 12 hours, or reaches 500 requests. The gateway
 binds only to `127.0.0.1` and exposes no management or key-reading endpoint.
 
-Codex reaches the gateway without websockets, so every request carries the
-whole thread: a 205k-token thread measured 8.3 MB on 2026-10-29, and the first
-API request of a thread started on the plan took 114 s to its first byte (the
-plan's prompt cache does not carry over). The body limit is 64 MiB; a larger
+Codex reaches the gateway over a websocket (`supports_websockets=true`), so a
+request on an open connection carries only what is new since the previous
+response. Over HTTP every request carried the whole thread: a 205k-token thread
+measured 8.3 MB on 2026-10-29, and the first API request of a thread started on
+the plan took 114 s to its first byte. The upgrade arrives on
+`/codex/v1/responses` with the grant, which is checked before the handshake (401
+or 404 on the raw socket otherwise). Each session socket gets its own upstream
+socket to `wss://api.openai.com/v1/responses`, opened with the key inside the
+wrapper and the session's `OpenAI-Beta` value. Every `response.create` frame is
+checked for the session's model and counts one request against the same 500;
+a refused frame closes the socket with 1008 and is not forwarded. Provider
+frames pass through unread, and a refused upstream handshake closes the session
+with 1011 without relaying its body. Codex first sends a `prewarm`
+`response.create` with `generate: false` on a socket of its own (recorded
+2026-10-29, codex-cli 0.165.0); it counts like any other. HTTP stays for
+`responses/compact`, `models`, and Codex's fallback. The body limit is 64 MiB,
+also per websocket frame; a larger
 body is read to its end and answered 413. Codex's remote compaction has its own
 route, `/codex/v1/responses/compact`. Off a terminal the wrapper gives the tool
 pipes of its own rather than its own stdout: codex sharing it panicked with
