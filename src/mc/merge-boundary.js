@@ -62,13 +62,13 @@ export function projectPlan({ project = null, head = null, programs = programsPl
  * `{ checked, ok, problems }`, and `unmet` (1-based) and `stop` on a refusal:
  * `before-review` (a step before a branch flow's review) or `unmet-criteria`.
  */
-export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
+export async function criteriaDoor({ repoPath, pr, gh, git, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
   const askGh = gh || run('gh');
-  const asked = await askGh(['pr', 'view', String(pr), '--json', 'headRefName,baseRefName,body'], { cwd: repoPath });
+  const asked = await askGh(['pr', 'view', String(pr), '--json', 'number,state,headRefName,headRefOid,baseRefName,body'], { cwd: repoPath });
   let raw = null;
   if (asked?.status === 0 || asked?.ok === true) { try { raw = JSON.parse(asked.stdout); } catch { /* unknown below */ } }
-  const autonomous = await autonomousMergeDoor({ repoPath, pr, root, view: raw });
-  if (!autonomous.ok) return autonomous;
+  const autonomous = await autonomousMergeDoor({ repoPath, pr, root, view: raw, env, git });
+  if (autonomous.checked) return autonomous;
   if (!raw) return notChecked;
   const head = raw?.headRefName;
   const base = raw?.baseRefName;

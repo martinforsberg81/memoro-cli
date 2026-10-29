@@ -78,6 +78,9 @@ export async function run(argv, deps = {}) {
     for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
     return 1;
   }
+  // Autonomous documentation uses the normal leased merger and its receipt
+  // delta rules too. The docs shortcut is deliberately not another authority.
+  if (door.autonomous && !opts.docs) return (deps.gate || gate)(opts, { ...deps, stdout, stderr, resolveRepo: async () => repoPath });
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, root, env: deps.env || process.env,
     measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
@@ -147,7 +150,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     return 1;
   }
   if (view.state === 'OPEN') {
-    const door = await autonomousMergeDoor({ repoPath, pr: opts.pr, root: deps.root || workRoot(deps.env || process.env), view });
+    const door = await autonomousMergeDoor({ repoPath, pr: opts.pr, root: deps.root || workRoot(deps.env || process.env), view, route: 'admin', env: deps.env || process.env });
     if (!door.ok) { stderr.write(`mc: ${door.stop} — ${door.problems.join('; ')}\n`); return 1; }
   }
   if (view.state !== 'OPEN' && view.state !== 'MERGED') {

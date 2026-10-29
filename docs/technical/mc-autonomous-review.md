@@ -89,10 +89,9 @@ with no active owner, no new build job and no confirmation. A runner interrupted
 before completion preserves its reservation/checkout/submission; it is never
 silently treated as successful or relaunched by the picker.
 
-The later admission/outcome steps consume this evidence and connect clean
-reports to the existing merger and programme plan events. Until those steps,
-even a clean report is only plan input and the existing autonomous PR refusal
-stays closed.
+The [autonomous merge door](mc-autonomous-merge.md) now consumes this evidence.
+Review itself still neither queues nor merges; automatic outcome routing to
+programme plan is a separate step. Execution remains inactive.
 
 ## Verification
 

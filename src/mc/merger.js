@@ -54,6 +54,8 @@ import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
+import { autonomousPrOwner } from './autonomous-pr.js';
+import { assertAutonomousQueueAdmission } from './autonomous-merge.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { tsvHeader, tsvRow } from './run-plan.js';
@@ -229,11 +231,19 @@ function sameCommit(a, b) {
  * merger is landing this very pull request now.
  */
 export function queueMerge({
-  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null,
+  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null, autonomous = undefined,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, start = startMerger,
 } = {}) {
+  const identity = autonomousPrOwner({ root, repoPath, pr, view: { headRefName: branch } });
+  if (!identity.ok) throw new Error(identity.problems.join('; '));
+  if (identity.checked || autonomous !== undefined) {
+    if (!identity.owner || repo !== identity.owner.repo || branch !== identity.owner.branch || step || parent) {
+      throw new Error('current autonomous admission is required; repository/branch must match and legacy step/stack ownership is not allowed');
+    }
+    assertAutonomousQueueAdmission({ root, owner: identity.owner, pr, ticket: autonomous });
+  }
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
   if (step) {
     updateStep({ root, project: step.project, index: step.index, patch: landingPatch({ pr, branch }), now: stamp, read, write, lock });
@@ -242,6 +252,7 @@ export function queueMerge({
     repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
     step: step ? { project: step.project, index: step.index } : null,
     parent,
+    ...(autonomous !== undefined ? { autonomous } : {}),
   };
   const entries = lock(root, () => {
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
@@ -619,6 +630,8 @@ export async function landJob(batch, {
     try {
       report = await mergeRound({
         repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge', signals: false,
+        autonomous: job.autonomous ?? null,
+        env: { ...process.env, MC_WORK_ROOT: root },
         ...(job.holder ? { holder: job.holder } : {}),
         onProgress: (message) => say(`${label}: ${message}`),
         signal: controller.signal,

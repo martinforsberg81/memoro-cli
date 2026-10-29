@@ -99,6 +99,8 @@ export async function runMergeRound({
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
+  // Undefined for a direct round; queued jobs must carry their original IDs.
+  autonomous = undefined,
 } = {}) {
   const startedAt = clock();
   // Kept as well as printed — see the note on the gate's own `say`. This is
@@ -165,9 +167,14 @@ export async function runMergeRound({
   };
 
   // Recheck resumed queue entries too, before taking a lease or measuring.
+  const admissions = new Map();
   for (const number of numbers) {
-    const door = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, root: workRoot(env) });
+    const door = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, git: askGit, env, root: workRoot(env), expected: autonomous });
     if (!door.ok) return finish(door.stop, door.problems.join('; '));
+    if (door.checked) {
+      if (batch) return finish('autonomous-review-required', 'autonomous admission requires one PR per leased gate round');
+      admissions.set(number, door);
+    } else if (autonomous) return finish('autonomous-review-required', 'queued autonomous PR ownership metadata is missing');
   }
 
   // One lease across the whole round. The gate would take its own and give it
@@ -186,6 +193,7 @@ export async function runMergeRound({
   try {
     const verdict = await gate({
       repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals, signal,
+      ...(admissions.size ? { evidence: admissions.get(numbers[0]).evidence } : {}),
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
@@ -328,6 +336,18 @@ export async function runMergeRound({
         }
       } else {
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
+      }
+      // The gate is not review authority. Re-read current assignment, head,
+      // review and receipt under this same lease immediately before landing.
+      const admission = admissions.get(number);
+      const finalDoor = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, git: askGit, env, root: workRoot(env),
+        expected: admission?.autonomous ?? autonomous, base: expected, head: pin });
+      if (!finalDoor.ok) return finish(finalDoor.stop, finalDoor.problems.join('; '));
+      if (admission && !finalDoor.checked) return finish('autonomous-review-required', 'autonomous ownership disappeared during measurement');
+      if (admission) {
+        const lease = readLease(repoPath, { root });
+        if (!lease.held || lease.holder !== holder.name) return finish('lease', 'the lease was lost during autonomous admission — nothing was merged');
+        if (signal?.aborted) return finish('gone', String(signal.reason?.message || signal.reason || 'the round was stopped'));
       }
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {

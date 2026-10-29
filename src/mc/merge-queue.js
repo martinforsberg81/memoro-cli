@@ -60,6 +60,8 @@ function normalise(entry) {
     branch: entry.branch ?? null,
     holder: plain(entry.holder) ? { ...entry.holder } : (typeof entry.holder === 'string' ? { name: entry.holder } : null),
     step,
+    // Never normalise damaged v2 evidence into an unmarked legacy job.
+    ...(entry.autonomous !== undefined ? { autonomous: structuredClone(entry.autonomous) } : {}),
     // The job this one is built on (ruling 30, A): `{ project, index, pr,
     // sha }`. It is not taken until that one has landed; see `nextJob`.
     parent: plain(entry.parent) && Number.isFinite(Number(entry.parent.pr)) && typeof entry.parent.sha === 'string'

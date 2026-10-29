@@ -83,7 +83,7 @@ export async function runDocsMerge({
 
   const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,headRefName,body,files,headRefOid');
   if (!info) return finish('read', `gh could not read #${pr}`);
-  const door = await autonomousMergeDoor({ repoPath, pr, root, view: info });
+  const door = await autonomousMergeDoor({ repoPath, pr, root, view: info, route: 'docs', env });
   if (!door.ok) return finish(door.stop, door.problems.join('; '));
   const head = info.headRefOid || null;
   report.head = head;
