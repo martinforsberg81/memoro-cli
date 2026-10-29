@@ -10,7 +10,7 @@ start to finish, and know when it is done? If not, it is not a step
   --goal … --contract … --out-of-scope … [--tool codex]`, then `mc project criterion add` per
   criterion (`mc project criterion drop <project> <n> --reason "…"` takes one
   out that nobody can measure), `mc project step add` per step (`--model`: `fast`
-  or `large` for an ordinary step, or a concrete model below; `--done-when`,
+  or `large`, never a concrete model; `--done-when`,
   `--instruction-file <md>` with the step's paragraphs,
   `--after <repo>:<project>` for a dependency), then `mc project send
   <project>`, which checks the whole plan and hands it to the runner.
@@ -67,11 +67,15 @@ start to finish, and know when it is done? If not, it is not a step
   - Unsure? Write it `fast`. If you cannot write the instruction precisely
     enough for a `fast` step, the investigation is not done: do it here, not in
     a `large` step.
-  - **Concrete models still work.** A step may name a model instead of a class:
-    `haiku` and `opus` on claude, `gpt-6.1-sol` and `gpt-6-luna` on codex. It
-    runs on that model as it always has. A sent plan keeps its meaning: a catalog
-    edit never rewrites it, and `mc plan` remains the tool Martin chooses when
-    starting a plan.
+  - **A step never names a concrete model.** `mc project step add`, `step edit`,
+    `send` and `amend` refuse `haiku` and `opus` on claude, `gpt-6.1-sol` and
+    `gpt-6-luna` on codex:
+    a step pinned to one model waits whenever that model's usage is spent,
+    where a class takes the next candidate, and whether a session runs on the
+    plan or the API is billing's to decide, not the step's. A plan sent before
+    this rule keeps its concrete models and runs on them. A catalog edit never
+    rewrites a plan, and `mc plan` remains the tool Martin chooses when starting
+    a plan.
   - **Review is not a class a step names.** `mc project send` adds the review
     step last. It runs the one review model Martin configures with
     `mc model set review` (Claude Opus at high effort at launch), on either tool,

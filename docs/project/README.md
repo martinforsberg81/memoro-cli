@@ -148,12 +148,12 @@ carries:
   from the catalog (`mc model list`; changed with `mc model add|remove fast|large`
   and `mc model set review`) and from the subscription capacity it has seen, on
   included subscriptions only. The candidate's tool, model and effort are the
-  session's, and a catalog edit never rewrites a plan. A step may name a concrete
-  model instead: `haiku` at `high` for a narrow step with a checkable `done_when`,
-  or `opus` for one that needs judgement, on claude; on a codex plan (`tool: codex`)
-  `gpt-6.1-sol` or `gpt-6-luna`, which are Codex's models, not stand-ins for
-  `haiku` or `opus`, and the installed, signed-in codex CLI decides whether it
-  has them. Concrete models run as written (ruling 42, `canon/roles/_plan-writing.md`).
+  session's, and a catalog edit never rewrites a plan. A step written now names a
+  class and nothing else: the verbs refuse a concrete model, so no step waits on
+  one model's spent usage while another candidate is free. A plan sent before
+  that may still carry one — `haiku` and `opus` on claude; on a codex plan
+  (`tool: codex`) `gpt-6.1-sol` and `gpt-6-luna` on codex — and runs on it as
+  written (ruling 42, ruling 59, `canon/roles/_plan-writing.md`).
   The routing is in [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *Work classes and capacity*. Each key overrides the plan's `runner` on its own.
   `tool`, `check_in_minutes` and `stall_minutes` are the plan's alone and

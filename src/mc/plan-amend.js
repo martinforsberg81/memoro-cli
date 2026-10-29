@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { planState, validatePlan } from './plan-schema.js';
 import { applyEntry, stepKey } from './register.js';
-import { dependencyWords, sendProblems, testDirectories } from './plan-write.js';
+import { dependencyWords, sendProblems, STEP_MODEL_WORDS, STEP_MODELS, testDirectories } from './plan-write.js';
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -72,7 +72,9 @@ export function amendedPlan(plan, entry, amendment) {
   // added. Validate the intact plan, then the authored portion with send's rules.
   const problems = [...new Set([
     ...validatePlan(next).problems,
-    ...sendProblems({ ...next, steps: next.steps.filter(step => step.kind !== 'review') }),
+    ...sendProblems({ ...next, steps: next.steps.filter(step => step.kind !== 'review') }, { models: false }),
+    ...(amendment.steps || []).filter(change => own(change, 'model') && !STEP_MODELS.includes(change.model))
+      .map(change => `step ${change.number}: model ${STEP_MODEL_WORDS}`),
   ])];
   for (const [index, criterion] of next.success_criteria.entries()) {
     if (next.success_criteria.findIndex(other => other.criterion === criterion.criterion) !== index) {

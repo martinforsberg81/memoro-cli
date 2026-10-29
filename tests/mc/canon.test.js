@@ -40,9 +40,10 @@ describe('canon/roles/_plan-writing.md names the step models and their tool', ()
   // The pairing as the role writes it, e.g. "`haiku` and `opus` on claude".
   const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;
 
-  it('pairs the claude models with claude and the codex models with codex', () => {
+  it('names each tool\'s concrete models as what a step never names', () => {
     assert.ok(role.includes(onTool(CLAUDE_MODELS, 'claude')), 'the role no longer pairs haiku and opus with claude');
     assert.ok(role.includes(onTool(CODEX_MODELS, 'codex')), 'the role no longer pairs the Codex names with codex');
+    assert.ok(role.includes('A step never names a concrete model.'), 'the role no longer says a step names a class only');
   });
 
   it('states the flag the Codex name goes to and the effort override codex gets', () => {

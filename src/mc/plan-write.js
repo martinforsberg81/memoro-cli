@@ -29,21 +29,24 @@ import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, REVIEW_CLASS, validat
 export const DRAFT_FILE = 'DRAFT.json';
 
 /**
- * The concrete models a step written by a verb may name (ruling 42, `mc-project.md`
+ * The concrete models a sent plan's step may still carry (ruling 42, `mc-project.md`
  * § Decisions): haiku and opus on claude, gpt-6.1-sol and gpt-6-luna on codex.
- * A step names its own model; the plan does not name one for it. Which of the
- * two a step may name is the plan's `runner.tool` (`validatePlan`).
+ * `validatePlan` accepts them, so a plan sent before ruling 59 keeps its meaning;
+ * a verb no longer writes one (`STEP_MODELS`).
  */
 export const MODELS = Object.freeze([...CLAUDE_MODELS, ...CODEX_MODELS]);
 /**
  * What a step written by a verb may name (ruling 59): a work class, `fast` or
- * `large`, which mc resolves to a model when the step starts, or one of `MODELS`.
- * A class names no tool, so the plan's `runner.tool` does not apply to it.
+ * `large`, which mc resolves to a model when the step starts. A concrete model
+ * is refused: a step pinned to one model waits whenever that model's usage is
+ * spent, where a class takes another candidate, and plan or API is billing's
+ * to decide, not the step's (2026-10-29: autonomy-operations, pinned to
+ * gpt-6.1-sol, retried against a Codex limit six days from its reset).
  * `review` is not in this list: `send` gives it to the review step alone.
  */
-export const STEP_MODELS = Object.freeze([...WORK_CLASSES, ...MODELS]);
+export const STEP_MODELS = WORK_CLASSES;
 /** `STEP_MODELS` in words, for the refusals that name what a step may be given. */
-export const STEP_MODEL_WORDS = 'fast, large, haiku, opus, gpt-6.1-sol or gpt-6-luna';
+export const STEP_MODEL_WORDS = 'fast or large';
 
 /**
  * The review step `mc project send` adds, last, to every plan it sends (the
@@ -244,8 +247,10 @@ function instructionOf(step) {
  * whose model is not `STEP_MODELS`, a banned word in a step's `done_when` or a
  * criterion's `check`, and a dependency in prose where `--after` belongs. An
  * empty array is a plan `mc project send` may rename to `PLAN.json`.
+ * `models: false` leaves the steps' models to the caller: an amendment judges
+ * only the model it writes, so a plan sent before ruling 59 stays amendable.
  */
-export function sendProblems(plan) {
+export function sendProblems(plan, { models = true } = {}) {
   const problems = [...validatePlan(plan).problems];
   if (plan?.runner?.model) {
     problems.push('runner.model: a plan names no model — each step names its own (ruling 42)');
@@ -256,7 +261,7 @@ export function sendProblems(plan) {
     if (step && typeof step === 'object' && 'kind' in step) problems.push(`steps[${n}].kind: the review step is mc's — send adds it`);
     // `review` is named by validatePlan, which says what it is for; this names the rest.
     const model = step?.runner?.model;
-    if (!STEP_MODELS.includes(model) && model !== REVIEW_CLASS) problems.push(`steps[${n}].runner.model: ${STEP_MODEL_WORDS}`);
+    if (models && !STEP_MODELS.includes(model) && model !== REVIEW_CLASS) problems.push(`steps[${n}].runner.model: ${STEP_MODEL_WORDS}`);
     const names = bannedWords(step?.done_when);
     if (names.length) problems.push(`steps[${n}].done_when: names ${names.join(', ')} — a step's end is a check, never a person's`);
     const prose = [step?.done_when, ...instructionOf(step)];
