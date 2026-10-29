@@ -5,6 +5,7 @@
  * no model is called, no provider key is read and no real project is touched.
  * The adapter GitHub really squashes the pinned head into the origin's main,
  * so a landing is an observable tree, not a flag. */
+import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -419,10 +420,11 @@ function reviewer(w, result, project, after) {
     const state = w.state(project); const actor = state.active_run;
     assert.equal(actor.role, 'review'); assert.equal(call.env.MC_AUTONOMOUS_ROLE, 'review');
     assert.notEqual(call.cwd, w.cwd(project), 'review never works in the builder checkout');
+    reviewSpawn(call.reviewProcess.options);
     w.reviews.push({ run_id: actor.run_id, model: state.review_session.model, checkout: call.cwd, head: state.review_session.head });
     mutateAutonomousProject(w.root, PROGRAMME, project, 'report', result, { actor, revision: state.revision });
     if (after) await after(call);
-    return { status: 0, stdout: '', stderr: '' };
+    return { ...reviewCompletion, stdout: '', stderr: '' };
   };
 }
 

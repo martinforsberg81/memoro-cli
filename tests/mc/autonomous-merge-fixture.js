@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git, completion } from './autonomous-publication-fixture.js';
+import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { reviewer } from './autonomous-state-fixture.js';
 import { settlePublishedBuild } from '../../src/mc/autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview } from '../../src/mc/autonomous-review.js';
@@ -42,9 +43,9 @@ export async function ready(t, { result = clean(), beforeReview = null, review =
   const options = { root: f.root, programme: f.programme, project: f.project, actor: reviewer, cwd: f.cwd,
     model: f.stateNow().reviewer_model };
   if (review) {
-    prepareAutonomousReview(options);
+    prepareAutonomousReview(options); reviewSpawn(options);
     mutateAutonomousProject(f.root, f.programme, f.project, 'report', result, { actor: reviewer, revision: f.stateNow().revision });
-    completeAutonomousReview(options, { status: 0 });
+    completeAutonomousReview(options, reviewCompletion);
   }
   const door = extra => autonomousMergeDoor({ root: f.root, repoPath: f.cwd, pr: 42, env: f.env, gh: f.gh, ...extra });
   const patch = change => { const state = f.stateNow(); change(state); writeFileSync(f.paths.project, JSON.stringify(state)); };

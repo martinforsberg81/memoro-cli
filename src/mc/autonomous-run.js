@@ -16,6 +16,7 @@ import { profileArgs } from './portrait.js';
 import { run as gateCommand } from './commands/gate.js';
 import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-review.js';
+import { beginReviewProcess } from './autonomous-review-process.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
@@ -229,6 +230,9 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
   if (!launch?.ok) return 'skipped:tool-missing';
   const slot = await waitForSlot(name);
   if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped';
+  const claimPath = autonomousBuildClaim({ root, programme, project: name });
+  const held = takeClaim(claimPath, { pid, project: name });
+  if (!held.ok) { dropSlot(); return 'skipped:autonomous-owned'; }
   const actor = { run_id: `review-${randomUUID()}`, role: 'review' };
   const options = { root, programme, project: name, actor, cwd: deps.exists(worktree) ? worktree : repo.path, model: route.candidate };
   const currentPath = paths.currentFor(repo.name, lane);
@@ -255,7 +259,9 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     currentWritten = true;
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
     const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    beginReviewProcess(options);
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: session.checkout, prompt,
+      reviewProcess: { options, tool: launch.id },
       env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'review', MC_PROJECT: name,
         MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
       unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'] });
@@ -268,10 +274,14 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     return 'ran';
   } catch (error) {
     say(`${name}: independent review stopped: ${error.message}`);
-    if (reserved) completeAutonomousReview(options, { status: 1 }, { invalidReasons: [error.message] });
+    if (reserved) {
+      try { completeAutonomousReview(options, null, { invalidReasons: [error.message] }); }
+      catch (failure) { say(`${name}: ${failure.message}`); }
+    }
     return reserved ? 'ran' : 'skipped:review-wait';
   } finally {
     if (currentWritten) remove(currentPath);
+    releaseClaim(claimPath, held.marker);
     dropSlot();
   }
 }

@@ -101,6 +101,7 @@
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
  */
+import { streamReviewSession } from './autonomous-review-process.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
@@ -311,7 +312,8 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0 }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0, reviewProcess = null }) {
+  if (reviewProcess !== null) return streamReviewSession({ bin, args, cwd, env, unsetEnv, prompt, spawn: spawnFn, reviewProcess });
   if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
   return new Promise((resolve) => {
     const piped = prompt != null;

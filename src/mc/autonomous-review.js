@@ -4,11 +4,12 @@ import { lstatSync, mkdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree } from './session-gate-evidence.js';
-import { sessionGit } from './session-recovery.js';
+import { sessionGit, sessionGitDir } from './session-recovery.js';
 import { readAutonomousState, startAutonomousReview, recordAutonomousReview } from './autonomous-state.js';
 import { STABLE_ID_RE } from './programme-contract.js';
 import { builderModels, independentModel } from './autonomous-models.js';
 import { reviewDigest, reviewInputProblems, cleanReviewInput, unknownReviewInput } from './autonomous-review-report.js';
+import { prepareReviewProcess, readReviewProcess, recordReviewTerminal, reviewProcessStatus, withReviewProcessClaim, writeReviewFact } from './autonomous-review-process.js';
 const git = (cwd, ...args) => sessionGit(cwd, args).trim();
 const read = o => readAutonomousState(o.root, o.programme, o.project);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -54,22 +55,38 @@ export function prepareAutonomousReview(options) {
     branch: state.ownership.branch, pr: state.ownership.pr, model: options.model,
     builders: builderModels(state), verification: structuredClone(state.evidence.builder), gate_run: state.publication.gate_run, checkout,
     fingerprint: reviewCheckoutFingerprint(checkout) };
+  prepareReviewProcess(options, session, reviewCheckoutFingerprint(options.cwd));
   return startAutonomousReview(options.root, options.programme, options.project,
     { actor: options.actor, revision: state.revision, session });
 }
 
 /** A missing/broken/interrupted result is still a durable criterion-complete
  * report for plan, not success and never a request to a repair role. */
-export function completeAutonomousReview(options, processResult, { invalidReasons = [] } = {}) {
+export function completeAutonomousReview(options, processResult, { invalidReasons = [], record = recordAutonomousReview } = {}) {
   const state = read(options);
   const previous = state.review_reports?.find(report => report.id === options.actor.run_id);
   if (previous) return state;
   const session = state.review_session;
   if (!session || session.run_id !== options.actor.run_id || state.phase !== 'reviewing' || !isDeepStrictEqual(state.active_run, options.actor)) throw new Error('active review ownership required');
-  const invalid = [...invalidReasons];
-  if (processResult?.status !== 0 || processResult.interrupted || processResult.signal || processResult.error) invalid.push('review process did not complete successfully');
+  let attempt = readReviewProcess(options);
+  if (!isDeepStrictEqual(attempt.manifest.session, session)) throw new Error('review process session binding changed');
+  if (!attempt.terminal) {
+    // Before spawn intent, no child could have been launched by this protocol.
+    // Afterwards only explicit native supervisor closure can settle ownership.
+    if (!attempt.spawn_intent) recordReviewTerminal(options, { status: 1, not_spawned: true,
+      process_closed: true, group_dead: true, tools_closed: true, normal_exit: false, interrupted: true });
+    else if (processResult?.process_closed === true) recordReviewTerminal(options, processResult);
+  }
+  const observed = reviewProcessStatus(options);
+  if (!['completed', 'incomplete'].includes(observed.kind)) throw new Error(`review process ${observed.kind}; ownership retained`);
+  attempt = observed.attempt;
+  processResult = attempt.terminal.result;
+  const invalid = [...(attempt.report?.report.invalid_reasons || []), ...invalidReasons];
+  if (observed.kind !== 'completed') invalid.push('review process did not complete successfully');
   if (!isDeepStrictEqual(state.contract, session.assignment)) invalid.push('review assignment changed');
   try {
+    if (sessionGitDir(options.cwd) !== attempt.manifest.source_git_dir || sessionGitDir(session.checkout) !== attempt.manifest.checkout_git_dir) invalid.push('review checkout identity changed');
+    if (reviewCheckoutFingerprint(options.cwd) !== attempt.manifest.source_fingerprint) invalid.push('review source checkout changed');
     if (reviewCheckoutFingerprint(session.checkout) !== session.fingerprint) invalid.push('review checkout changed');
     if (publishedReviewHead(options.cwd, state) !== session.head) invalid.push('review publication changed');
     if (!independentModel(session.model, builderModels(state))) invalid.push('reviewer built reviewed changes');
@@ -82,7 +99,13 @@ export function completeAutonomousReview(options, processResult, { invalidReason
   }
   const report = { schema: 'mc-autonomous-review-report', version: 1, id: options.actor.run_id,
     session_digest: reviewDigest(session), session, result,
-    invalid_reasons: invalid, clean: !invalid.length && cleanReviewInput(result, session.assignment) };
-  return recordAutonomousReview(options.root, options.programme, options.project,
-    { actor: options.actor, revision: state.revision, report });
+    invalid_reasons: [...new Set(invalid)], clean: !invalid.length && cleanReviewInput(result, session.assignment) };
+  return withReviewProcessClaim(options, () => {
+    // Report first, owner release second. A retry must reproduce the same report;
+    // changed checkout/publication after report persistence retains ownership.
+    writeReviewFact(attempt.paths.report, { generation: attempt.manifest.generation,
+      manifest_digest: reviewDigest(attempt.manifest), report });
+    return record(options.root, options.programme, options.project,
+      { actor: options.actor, revision: state.revision, report });
+  });
 }
