@@ -121,6 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
+import { reconcileProgrammeQueue } from './programme-jobs.js';
 import { chooseAutonomousModel } from './autonomous-models.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
@@ -2908,7 +2909,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         write: writeJson,
       });
     } catch { /* the page says how old its cache is */ }
-    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed };
+    const programmeJobs = autonomous?.programmeJobs
+      ? reconcileProgrammeQueue(root, { now: deps.now().getTime(), say }) : [];
+    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed, ...(autonomous?.programmeJobs ? { programmeJobs } : {}) };
   }
 
   /**

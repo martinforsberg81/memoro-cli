@@ -13,7 +13,8 @@ work root. `PROGRAMME_STATE.json` is a versioned `mc-programme-state` record:
 its `approved` array contains immutable approved contract snapshots; `draft`
 is separate and cannot change an approved snapshot. Its mutation `revision`
 is distinct from a contract revision. It also holds the reserved plan owner
-and run history. `execution_enabled` remains false.
+and run history. An optional [durable planner outbox](mc-programme-jobs.md)
+holds pending events, leases and operation receipts. `execution_enabled` remains false.
 
 Each project has `AUTONOMOUS_STATE.json` (`mc-autonomous-state`, version 1).
 It holds the authoritative draft contract and contract history, programme and

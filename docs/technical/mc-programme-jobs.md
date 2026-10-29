@@ -1,0 +1,85 @@
+# Durable programme jobs (inactive)
+
+`src/mc/programme-jobs.js` adds a planner outbox to the existing
+`PROGRAMME_STATE.json`, not another service or a replacement v1 register.
+Normal execution remains disabled. There is no start command, production
+launcher or automatic activation in this change. Opening `mc plan` is unchanged.
+
+## Events, ownership and restart
+
+The optional `planner_jobs` record starts inactive. It retains immutable event
+IDs and references, one coalesced pending job, a leased event snapshot,
+operation intents/results and recovery history. Activation commits its event
+before a claim can be made. Review, landing, failure, dependency and idle events
+use the same queue. Repeated IDs must have identical content and are deduplicated
+even after acknowledgement. Events arriving during a lease remain pending for
+another delivery; finishing acknowledges only the claimed snapshot.
+
+All mutations check an expected **state revision** inside the existing programme
+plan lock and strict register lock, then use the existing atomic JSON writer.
+Claims reserve `active_run` and a unique lease generation together. Another plan
+or foreground owner cannot claim concurrently. Independent project builders keep
+their own reservations and existing shared resource accounting; the planner
+lease is not a repository or gate resource reservation.
+
+Leases are bounded to five minutes and require renewal. Reconciliation detects
+an expired lease or dead owner, records why, clears only that planner reservation
+and preserves pending events and unacknowledged intents. Run IDs cannot be reused;
+old writers are rejected by active ownership and expiry checks. Reconciliation
+never signals a process or rewrites a project's builder ownership.
+
+`reconcileProgrammeJobs` scans durable project review/merge events and incomplete
+attempts. Dependencies can be supplied as immutable trigger records (automatic
+dependency/failure follow-up policy belongs to the later recovery step). Active
+programmes without a next action receive an idle trigger, deduplicated for the
+same project-state snapshot rather than spinning up planners on unchanged work.
+Broken source records refuse reconciliation rather than becoming empty results.
+The optional, injected runner capability `autonomous.programmeJobs` enables this
+scan during `queue()` and returns pending programme IDs. It does not launch them;
+without the capability the v1 queue and its return shape remain unchanged.
+
+## Effects, not exactly-once processes
+
+A durable operation ID identifies a decision across planner sessions. Its intent
+binds the project, expected target revision, approved programme revision and
+complete input. Intent persistence precedes the effect. Reusing an ID for a
+different decision is refused. A stale agreement cannot authorize a new effect.
+
+The implemented concrete effect is **create-project** with expected target
+revision zero. `createProgrammeJobProject` first journals its intent, then uses
+`createAutonomousDraft` to atomically commit the new project and an operation
+receipt together. Receipt identity canonicalizes object keys, not array order.
+The compatibility DRAFT projection and the programme acknowledgement follow.
+A receipt-created draft has no active project reservation: it records the
+creating run in its immutable receipt but does not strand its ownership after a planner crash.
+A planner must reserve that project before further guarded goal operations.
+
+On repeated delivery, the matching receipt reconciles a committed creation and
+repairs a missing DRAFT projection. It never creates another project or silently
+adopts an unrelated existing one. A crash after acknowledgement returns the same
+result. Pending effects prevent job acknowledgement. Goal revision, send and
+confirmation will require their own operation receipts/readback in the guarded
+planner step; this module does not pretend arbitrary external effects are
+exactly-once or infer success from process exit.
+
+## Explicit dispatch holds
+
+Pause preserves the queue and stops new claims/effects. Quota, network and
+resource waits require a retry instant; an external dependency may instead have
+no retry instant and stays explicitly waiting. Timed waits become eligible at
+reconciliation. Existing atomic effects can still be acknowledged while held.
+A reached stop must name an approved planned stop. Its acknowledgement is
+idempotent, subsequent events remain visible, and neither reconciliation nor a
+plain resume dispatches beyond it. Foreground agreement handling is a later
+activation responsibility. `execution_enabled` stays false throughout.
+
+## Verification
+
+`mc gate tests/mc/programme-jobs.test.js` covers trigger coalescing, late delivery,
+competing processes, failed atomic persistence, lease renewal/expiry/dead owners,
+stale-writer fencing, independent builders, source reconciliation, explicit
+holds/stops, the capability-only runner seam and immutable operation effects.
+Real child-process crash fixtures exit after claim, intent, project-state commit,
+DRAFT projection and acknowledgement. Recovery checks one project/contract,
+one receipt, repaired projection and retained continuation under repeated delivery.
+No model calls, live programme changes or new test-resource paths are involved.
