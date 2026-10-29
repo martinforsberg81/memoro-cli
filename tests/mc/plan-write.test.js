@@ -48,8 +48,8 @@ function complete(overrides = {}) {
   return draft({
     success_criteria: [{ met: false, criterion: 'It runs.', check: 'true' }],
     steps: [
-      { title: 'One', status: 'ready', done_when: 'it runs', instruction: ['Do the thing.'], runner: { model: 'haiku', effort: 'high' } },
-      { title: 'Two', status: 'ready', done_when: 'it runs again', instruction: ['Do the other thing.'], runner: { model: 'opus' } },
+      { title: 'One', status: 'ready', done_when: 'it runs', instruction: ['Do the thing.'], runner: { model: 'fast', effort: 'high' } },
+      { title: 'Two', status: 'ready', done_when: 'it runs again', instruction: ['Do the other thing.'], runner: { model: 'large' } },
     ],
     ...overrides,
   });
@@ -59,7 +59,7 @@ test('DRAFT_FILE, MODELS and the two word patterns are what the verbs share', ()
   assert.equal(DRAFT_FILE, 'DRAFT.json');
   assert.deepEqual(MODELS, ['haiku', 'opus', 'gpt-6.1-sol', 'gpt-6-luna']);
   assert.ok(Object.isFrozen(MODELS));
-  assert.deepEqual(STEP_MODELS, ['fast', 'large', 'haiku', 'opus', 'gpt-6.1-sol', 'gpt-6-luna']);
+  assert.deepEqual(STEP_MODELS, ['fast', 'large']);
   assert.ok(BANNED_WORDS.test('Martin'));
   assert.ok(DEPENDENCY_WORDS.test('--on-project x'));
 });
@@ -150,11 +150,11 @@ test('sendProblems is empty for a complete plan, and names each thing that stops
 
   const noModel = complete();
   delete noModel.steps[0].runner;
-  assert.deepEqual(sendProblems(noModel), ['steps[1].runner.model: fast, large, haiku, opus, gpt-6.1-sol or gpt-6-luna']);
+  assert.deepEqual(sendProblems(noModel), ['steps[1].runner.model: fast or large']);
 
   const sonnet = complete();
   sonnet.steps[1].runner.model = 'sonnet';
-  assert.deepEqual(sendProblems(sonnet), ['steps[2].runner.model: fast, large, haiku, opus, gpt-6.1-sol or gpt-6-luna']);
+  assert.deepEqual(sendProblems(sonnet), ['steps[2].runner.model: fast or large']);
 
   const planModel = complete({ runner: { model: 'haiku' } });
   assert.deepEqual(sendProblems(planModel), ['runner.model: a plan names no model — each step names its own (ruling 42)']);
@@ -172,14 +172,13 @@ test('sendProblems is empty for a complete plan, and names each thing that stops
   assert.deepEqual(sendProblems(onProject), ['steps[2]: a dependency goes in --after <repo>:<project>']);
 });
 
-test('sendProblems takes a codex plan with its Codex models, and refuses a Claude model on it', () => {
-  const codexPlan = complete({ runner: { tool: 'codex' } });
-  codexPlan.steps[0].runner.model = 'gpt-6-luna';
-  codexPlan.steps[1].runner.model = 'gpt-6.1-sol';
-  assert.deepEqual(sendProblems(codexPlan), []);
-
-  codexPlan.steps[1].runner.model = 'opus';
-  assert.deepEqual(sendProblems(codexPlan), ['steps[1].runner.model: opus is a Claude model — a codex plan names gpt-6.1-sol or gpt-6-luna']);
+test('sendProblems refuses a concrete model on either tool: a step names a class (ruling 59)', () => {
+  for (const [tool, model] of [[undefined, 'haiku'], [undefined, 'opus'], ['codex', 'gpt-6.1-sol'], ['codex', 'gpt-6-luna']]) {
+    const plan = complete(tool ? { runner: { tool } } : {});
+    plan.steps[1].runner.model = model;
+    assert.ok(sendProblems(plan).includes('steps[2].runner.model: fast or large'), `${tool || 'claude'} ${model}`);
+    assert.ok(!sendProblems(plan, { models: false }).includes('steps[2].runner.model: fast or large'), 'models: false leaves it to the caller');
+  }
 });
 
 test('sendProblems takes the work classes fast and large on either tool, and leaves review to validatePlan', () => {

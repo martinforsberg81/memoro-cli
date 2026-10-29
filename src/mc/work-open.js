@@ -114,7 +114,11 @@ export async function openInWorkArea({
   const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
   const billing = billingRouteNow(provider, { env });
-  const toolLaunch = gatewayLaunch({ provider, model: chosenModel, bin: launch.spec.bin, args, billing: billing.billing });
+  // An interactive session's grant names no model: `/model` inside it changes
+  // the model, and a grant on the launch model answered every request after
+  // that switch `403 model unavailable for session` (2026-10-29). The grant
+  // still names the provider, expires and counts requests.
+  const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin, args, billing: billing.billing });
 
   log('work.open', {
     area: areaRoot,
@@ -406,7 +410,8 @@ function launchCommand(launch, {
   if (task) baseArgs.push(task);
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
   const billing = billingRouteNow(provider, { env });
-  const toolLaunch = gatewayLaunch({ provider, model: conversation?.model || model || roleDefault, bin: launch.spec.bin, args: interactiveArgs(launch, baseArgs, { areaRoot, cwd, env }), billing: billing.billing });
+  // No model on the grant, as in `openInWorkArea`: `/model` must keep working.
+  const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin, args: interactiveArgs(launch, baseArgs, { areaRoot, cwd, env }), billing: billing.billing });
   const args = [toolLaunch.bin, ...toolLaunch.args];
   // tmux runs its command through a shell, so the instructions — kilobytes of
   // prose, with quotes and newlines in it — has to survive

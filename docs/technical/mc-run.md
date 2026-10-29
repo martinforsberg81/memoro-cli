@@ -1640,6 +1640,9 @@ The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
 wrapper process. The coding tool receives an expiring, request-limited loopback
 grant, and requests only the chosen model through the provider-specific route.
+An interactive session (`mc plan`, `mc work`) is the exception: its grant names
+no model, because `/model` inside the session changes it, and a grant on the
+launch model refused every request after the switch.
 The runner never reads or places the key in a session's environment or argv.
 The vault must be unlocked and the relevant record configured before an API
 reserve can run. A missing or unreadable key fails the API launch visibly.
