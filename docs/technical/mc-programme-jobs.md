@@ -31,8 +31,9 @@ Programme-wide fencing of planner project claims, attempts and releases applies
 once the outbox is present; pre-outbox v2 reservation behavior is preserved.
 
 `reconcileProgrammeJobs` scans durable project review/merge events and incomplete
-attempts. Dependencies can be supplied as immutable trigger records (automatic
-dependency/failure follow-up policy belongs to the later recovery step). Active
+attempts. Dependencies can also be supplied as immutable trigger records.
+[Programme recovery](mc-programme-recovery.md) automatically observes confirmed
+dependencies, selected releases and shared-main failures. Active
 programmes without a next action receive an idle trigger, deduplicated for the
 same project-state snapshot rather than spinning up planners on unchanged work.
 Broken source records refuse reconciliation rather than becoming empty results.

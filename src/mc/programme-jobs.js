@@ -8,7 +8,9 @@ import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, read
 import { STABLE_ID_RE } from './programme-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
-import { processAlive } from './resource-claim.js';
+import { processAlive, readClaim } from './resource-claim.js';
+import { writeJsonAtomic } from './atomic-write.js';
+import { observeMainIncidentLocked, reconcileMainRepairsLocked, cancelMainRepairLocked, mainIncidentHold, assertProjectRecovery, boundedRecoveryWait, RECOVERY_ATTEMPT_LIMIT } from './programme-recovery.js';
 import { planOperationProblems } from './programme-plan-contract.js';
 
 export const PROGRAMME_JOB_TRIGGERS = Object.freeze(['activation', 'review', 'landed', 'failure', 'dependency', 'idle']);
@@ -30,13 +32,14 @@ const expected = (state, revision) => {
 const empty = () => ({ version: 1, mode: 'inactive', wait: null, stop: null, events: [], pending: null, lease: null, operations: [], recoveries: [] });
 function jobs(state) {
   const value = state.planner_jobs === undefined ? empty() : state.planner_jobs;
-  if (!value || value.version !== 1 || !['inactive', 'active', 'paused', 'waiting', 'stopped'].includes(value.mode)
+  if (!value || value.version !== 1 || !['inactive', 'active', 'paused', 'waiting', 'stopped', 'exception'].includes(value.mode)
     || !['events', 'operations', 'recoveries'].every(key => Array.isArray(value[key]))
     || (value.pending !== null && (!stable(value.pending.id) || !Array.isArray(value.pending.event_ids) || !value.pending.event_ids.length))
     || (value.lease !== null && (!stable(value.lease.token) || !positive(value.lease.pid) || !positive(value.lease.expires_at)
       || !stable(value.lease.actor?.run_id) || value.lease.actor.role !== 'plan'
       || !Array.isArray(value.lease.event_ids) || value.lease.job_id !== value.pending?.id
       || !isDeepStrictEqual(value.lease.actor, state.active_run)))
+    || (value.mode === 'exception' && (!value.exception || typeof value.exception.reason !== 'string' || !value.exception.reason.trim()))
     || (value.mode === 'waiting' && !validWait(value.wait))
     || (value.mode === 'stopped' && !state.approved.at(-1)?.planned_stops.some(item => item.id === value.stop))) {
     throw new Error('invalid programme planner jobs; preserve state for recovery');
@@ -97,6 +100,7 @@ export function setProgrammeJobMode(options, { mode, wait = null, stop = null, e
     if (mode !== 'waiting' && wait !== null || mode !== 'stopped' && stop !== null) throw new Error('wait/stop must match mode');
     if (event) enqueue(state, journal, event);
     journal.mode = mode; journal.wait = wait; journal.stop = stop;
+    if (mode === 'active') journal.exception = null;
   });
 }
 function owned(state, journal, options) {
@@ -145,8 +149,14 @@ export function finishProgrammeJob(options) {
 
 /** Read immutable project outboxes under the same programme lock that every
  * project mutation takes. A damaged record is not an empty/successful result. */
-function projectTriggers(paths) {
-  const events = []; const identities = []; let hasNextAction = false;
+function projectClaimHeld(root, programme, project) {
+  const path = join(root, 'runner', 'autonomous-builds', programme, `${project}.claim`);
+  if (!existsSync(path)) return false;
+  const claim = readClaim(path);
+  return !claim || processAlive(claim.pid);
+}
+function projectTriggers(paths, options, state, journal) {
+  const events = []; const identities = []; const projects = new Map(); let hasNextAction = false;
   for (const entry of readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && stable(item.name)).sort((a, b) => a.name.localeCompare(b.name))) {
     const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
     if (!existsSync(file)) continue;
@@ -155,6 +165,7 @@ function projectTriggers(paths) {
       || project.contract?.programme.id !== paths.id || !positive(project.revision)
       || !validateAutonomousProject(project.contract).ok || !AUTONOMOUS_PHASES.includes(project.phase)
       || !Array.isArray(project.attempts) || (project.plan_events !== undefined && !Array.isArray(project.plan_events))) throw new Error(`invalid autonomous trigger source: ${file}`);
+    projects.set(entry.name, { state: project, file });
     identities.push([entry.name, project.revision]);
     hasNextAction ||= !!project.active_run || ['ready', 'running', 'review_ready', 'reviewing', 'publishing', 'landing'].includes(project.phase);
     const sourceIds = new Set();
@@ -166,7 +177,9 @@ function projectTriggers(paths) {
     };
     for (const source of project.plan_events || []) {
       sourceId(source);
-      const type = source.type === 'review-reported' ? 'review' : source.type === 'merge-landed' ? 'landed'
+      const failures = source.details?.main_failures;
+      if (failures !== undefined && (!Array.isArray(failures) || failures.some(item => typeof item !== 'string' || !item.trim()) || new Set(failures).size !== failures.length)) throw new Error(`invalid main failure source: ${file}`);
+      const type = source.type === 'review-reported' ? 'review' : source.type === 'merge-landed' ? 'landed' : source.type === 'dependency-released' ? 'dependency'
         : ['merge-refused', 'merge-failed', 'merge-unknown'].includes(source.type) ? 'failure' : null;
       if (!type) continue;
       events.push({ id: `evt-${digest([entry.name, source.id]).slice(0, 60)}`, type,
@@ -180,6 +193,47 @@ function projectTriggers(paths) {
         type: 'failure', programme_revision: attempt.programme_revision, reference: `${file}#attempts/${attempt.id}` });
     }
   }
+  // Sources were validated before committing any recoverable cross-file effect.
+  for (const [name, { state: project, file }] of projects) {
+    for (const source of project.plan_events || []) {
+      for (const failure of source.details?.main_failures || []) observeMainIncidentLocked(options.root, {
+        programme: paths.id, project: name, repo: project.contract.repo, failure,
+        source: `${paths.id}/${name}/${source.id}/${failure}`, reference: `${file}#plan_events/${source.id}` });
+    }
+  }
+  const incidents = reconcileMainRepairsLocked(options.root);
+  for (const incident of incidents) {
+    if (incident.owner === paths.id) events.push({ id: `incident-${digest([incident.id, state.approved.at(-1).revision]).slice(0, 55)}`, type: 'failure', programme_revision: state.approved.at(-1).revision,
+      reference: `${options.root}/runner/programme-incidents.json#${incident.id}` });
+    if (incident.status === 'resolved' && incident.dependents.some(item => item.programme === paths.id)) events.push({
+      id: `resolved-${digest([incident.id, state.approved.at(-1).revision]).slice(0, 55)}`, type: 'dependency', programme_revision: state.approved.at(-1).revision,
+      reference: `${options.root}/runner/programme-incidents.json#${incident.id}/confirmation` });
+  }
+  for (const [name, { state: project, file }] of projects) {
+    const dependencies = project.plan_dependencies || [];
+    if (!dependencies.length) continue;
+    const available = dependencies.every(item => {
+      const dependency = projects.get(item.project)?.state;
+      return dependency?.confirmed && dependency.goal_revision === item.goal_revision;
+    });
+    if (!available) continue;
+    const id = `dep-${digest([name, project.goal_revision, project.programme_revision, dependencies]).slice(0, 60)}`;
+    events.push({ id, type: 'dependency', programme_revision: project.programme_revision, reference: `${file}#plan_dependencies` });
+    const release = project.dependency_release;
+    if (journal.mode !== 'active' || !release || release.status !== 'waiting' || release.goal_revision !== project.goal_revision
+      || release.programme_revision !== state.approved.at(-1).revision || project.programme_revision !== release.programme_revision
+      || project.phase !== 'plan_pending' || project.active_run || projectClaimHeld(options.root, paths.id, name) || mainIncidentHold(options.root, paths.id, name)) continue;
+    assertProjectRecovery(project);
+    const sent = join(paths.dir, name, 'PLAN.json');
+    if (!existsSync(sent) || !isDeepStrictEqual(JSON.parse(readFileSync(sent, 'utf8')), project.contract)) continue;
+    // The release and its outcome share one authoritative write. The next scan
+    // repairs a programme acknowledgement lost after this write.
+    const source = { id: `released-${digest([name, release.operation]).slice(0, 60)}`, type: 'dependency-released', programme_revision: project.programme_revision };
+    project.revision++; project.phase = 'ready'; project.dependency_release.status = 'released';
+    project.plan_events = [...(project.plan_events || []), source];
+    writeJsonAtomic(file, project); hasNextAction = true;
+    events.push({ id: `evt-${digest([name, source.id]).slice(0, 60)}`, type: 'dependency', programme_revision: project.programme_revision, reference: `${file}#plan_events/${source.id}` });
+  }
   return { events, identities, hasNextAction };
 }
 
@@ -190,14 +244,18 @@ export function reconcileProgrammeJobs(options, { dependencies = [] } = {}) {
     const now = instant(options);
     const lease = journal.lease;
     if (lease && (lease.expires_at <= now || !(options.alive || processAlive)(lease.pid))) {
-      journal.recoveries.push({ token: lease.token, run_id: lease.actor.run_id, at: now,
+      journal.recoveries.push({ token: lease.token, run_id: lease.actor.run_id, job_id: lease.job_id, at: now,
         reason: lease.expires_at <= now ? 'lease-expired' : 'owner-gone' });
       journal.lease = null; state.active_run = null;
+      if (journal.mode === 'active' && journal.recoveries.filter(item => item.job_id === lease.job_id).length >= RECOVERY_ATTEMPT_LIMIT) {
+        journal.mode = 'exception'; journal.exception = { code: 'planner-no-progress', reason: 'Repeated expired or orphaned planner deliveries without completing this job.', job_id: lease.job_id };
+      }
     }
     if (journal.mode === 'waiting' && journal.wait.until !== null && journal.wait.until <= now) {
+      if (journal.wait.operation) enqueue(state, journal, { id: `wait-${digest(journal.wait.operation).slice(0, 59)}`, type: 'failure', programme_revision: state.approved.at(-1).revision, reference: `${paths.programme}#planner_jobs/wait_history/${journal.wait.operation}` });
       journal.mode = 'active'; journal.wait = null;
     }
-    const sources = projectTriggers(paths);
+    const sources = projectTriggers(paths, options, state, journal);
     for (const event of [...sources.events, ...dependencies]) enqueue(state, journal, event);
     if (journal.mode === 'active' && !state.active_run && !journal.pending && !sources.hasNextAction) {
       // Stable across repeated scans of unchanged work, including after ack.
@@ -225,17 +283,18 @@ export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = (
 }
 
 function operationCheck(state, lease, intent) {
-  if (intent.kind !== 'create-project') {
+  if (!['create-project', 'main-repair'].includes(intent.kind)) {
     const problems = planOperationProblems(intent, state.approved.at(-1));
     if (problems.length) throw new Error(problems.join('; '));
     if (intent.programme_revision !== lease.programme_revision) throw new Error('programme revision changed; replan pending effects');
     return;
   }
-  if (!stable(intent.id) || intent.kind !== 'create-project' || !stable(intent.project) || intent.expected_revision !== 0
+  if (!stable(intent.id) || !['create-project', 'main-repair'].includes(intent.kind) || !stable(intent.project) || intent.expected_revision !== 0
     || !positive(intent.programme_revision) || intent.input?.project_id !== intent.project
     || intent.input?.programme.id !== state.approved.at(-1).id || intent.input?.programme.revision !== intent.programme_revision
-    || Object.keys(intent).some(key => !['id', 'kind', 'project', 'expected_revision', 'programme_revision', 'input'].includes(key))) throw new Error('invalid planner operation intent');
+    || Object.keys(intent).some(key => !['id', 'kind', 'project', 'expected_revision', 'programme_revision', 'input', ...(intent.kind === 'main-repair' ? ['incident', 'basis'] : [])].includes(key))) throw new Error('invalid planner operation intent');
   if (intent.programme_revision !== lease.programme_revision || intent.programme_revision !== state.approved.at(-1).revision) throw new Error('programme revision changed; replan pending effects');
+  if (intent.kind === 'main-repair' && (!stable(intent.incident) || !intent.basis?.reference?.trim() || !Array.isArray(intent.basis.criteria) || !intent.basis.criteria.length || intent.basis.criteria.some(id => !state.approved.at(-1).success_criteria.some(item => item.id === id)))) throw new Error('main repair needs approved criteria and a scope authority reference');
   const validation = validateAutonomousProject(intent.input, { programme: state.approved.at(-1) });
   if (!validation.ok) throw new Error(`invalid planner goal: ${validation.problems.join('; ')}`);
 }
@@ -266,8 +325,8 @@ export function completeProgrammeOperation(options, intent, result) {
     const file = autonomousPaths(options.root, options.programme, intent.project).project;
     const effect = JSON.parse(readFileSync(file, 'utf8'));
     const receipt = effect.operation_receipts?.find(receipt => receipt.id === intent.id && receipt.kind === intent.kind
-      && receipt.digest === autonomousOperationDigest(intent.kind === 'create-project' ? intent.input : intent));
-    if (!receipt || result.project !== intent.project || (intent.kind === 'create-project' ? result.revision !== 1 : !isDeepStrictEqual(result, receipt.result))) throw new Error('matching committed project effect receipt required');
+      && receipt.digest === autonomousOperationDigest(['create-project', 'main-repair'].includes(intent.kind) ? intent.input : intent));
+    if (!receipt || result.project !== intent.project || (['create-project', 'main-repair'].includes(intent.kind) ? result.revision !== 1 : !isDeepStrictEqual(result, receipt.result))) throw new Error('matching committed project effect receipt required');
     operation.status = 'applied'; operation.result = structuredClone(result);
   });
 }
@@ -282,6 +341,7 @@ export function cancelProgrammeOperation(options, { id, reason }) {
     if (operation.status !== 'pending') throw new Error('only pending decisions can be cancelled');
     const file = join(paths.dir, operation.intent.project, AUTONOMOUS_STATE_FILE);
     if (existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).operation_receipts?.some(item => item.id === id)) throw new Error('committed effect must be reconciled, not cancelled');
+    cancelMainRepairLocked(options.root, options.programme, id, reason);
     operation.status = 'cancelled'; operation.result = { reason };
   });
 }
@@ -299,10 +359,18 @@ export function completeProgrammePlan(options, input) {
 }
 
 /** Failed/incomplete sessions retain the same job and operation identities. */
-export function yieldProgrammeJob(options, reason) {
+export function yieldProgrammeJob(options, reason, { retry = false } = {}) {
   return transact(options, (state, journal) => {
     const lease = owned(state, journal, options);
-    journal.recoveries.push({ token: lease.token, run_id: lease.actor.run_id, at: instant(options), reason });
+    journal.recoveries.push({ token: lease.token, run_id: lease.actor.run_id, job_id: lease.job_id, at: instant(options), reason });
+    if (retry && journal.mode === 'active') {
+      const failures = journal.recoveries.filter(item => item.job_id === lease.job_id).length;
+      if (failures >= RECOVERY_ATTEMPT_LIMIT) {
+        journal.mode = 'exception'; journal.exception = { code: 'planner-no-progress', reason, attempts: failures, job_id: lease.job_id };
+      } else {
+        journal.mode = 'waiting'; journal.wait = { kind: 'resource', reason, until: instant(options) + failures * 30_000 };
+      }
+    }
     journal.lease = null;
     return { ...state, active_run: null, planner_jobs: journal };
   });
@@ -354,9 +422,41 @@ export function createProgrammeJobProject(options, intent) {
     if (state.planner_jobs.mode !== 'active') throw new Error('programme waits before applying planner effect');
   }
   createAutonomousDraft(options.root, options.programme, intent.project, intent.input,
-    { actor: options.actor, revision: state.revision, operationId: intent.id, now: () => instant(options), ...options.deps });
+    { actor: options.actor, revision: state.revision, operationId: intent.id, operationKind: intent.kind, ...(intent.kind === 'main-repair' ? { mainIncident: intent.incident } : {}), now: () => instant(options), ...options.deps });
   state = readProgrammeState(options.root, options.programme);
   const result = { project: intent.project, revision: 1 };
   completeProgrammeOperation({ ...options, revision: state.revision }, intent, result);
   return result;
+}
+
+/** Planner-owned external waits and precise exceptions, not design checkpoints.
+ * Intent and hold commit together; expiry creates another durable delivery. */
+export function holdProgrammePlan(options, intent) {
+  return transact(options, (state, journal) => {
+    const lease = owned(state, journal, options);
+    const previous = journal.operations.find(item => item.intent.id === intent?.id);
+    if (previous) {
+      if (!isDeepStrictEqual(previous.intent, intent)) throw new Error('planner operation ID already used with different content');
+      return;
+    }
+    if (!stable(intent?.id) || !['wait-programme', 'exception-programme'].includes(intent.kind)
+      || Object.keys(intent).some(key => !['id', 'kind', 'programme_revision', 'reference', 'condition', 'wait', 'exception'].includes(key))
+      || !intent.reference?.trim() || journal.mode !== 'active' || lease.completion
+      || intent.programme_revision !== lease.programme_revision || intent.programme_revision !== state.approved.at(-1).revision) throw new Error('hold needs current planner authority and a diagnosis reference');
+    if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before waiting');
+    if (intent.kind === 'wait-programme') {
+      if (!stable(intent.condition) || !boundedRecoveryWait(intent.wait, instant(options)) || intent.exception !== undefined) throw new Error('external wait needs a condition and a bounded retry within 24 hours, or explicit external dependency');
+      journal.wait_history = [...(journal.wait_history || []), { ...intent, run_id: lease.actor.run_id }];
+      const count = journal.wait_history.filter(item => item.condition === intent.condition).length;
+      if (count >= RECOVERY_ATTEMPT_LIMIT) {
+        journal.mode = 'exception'; journal.exception = { code: 'wait-exhausted', condition: intent.condition, reason: intent.wait.reason, reference: intent.reference, attempts: count };
+      } else {
+        journal.mode = 'waiting'; journal.wait = { ...intent.wait, operation: intent.id };
+      }
+    } else {
+      if (!stable(intent.exception?.code) || !intent.exception.reason?.trim() || Object.keys(intent.exception).some(key => !['code', 'reason'].includes(key)) || intent.wait !== undefined || intent.condition !== undefined) throw new Error('exception needs its precise code and reason');
+      journal.mode = 'exception'; journal.exception = { ...intent.exception, reference: intent.reference };
+    }
+    journal.operations.push({ intent: structuredClone(intent), status: 'applied', result: { mode: journal.mode } });
+  });
 }

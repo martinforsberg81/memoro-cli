@@ -61,6 +61,10 @@ locks**. Independent projects retain their own running reservations.
 | `dependencies` | `{projects: [{project, goal_revision}]}`. Selects same-programme dependencies; rejects unknown/stale goals, duplicates, self-links and cycles. Leaves work pending. |
 | `resume-project` | Empty input. Requires a sent pending goal and planner-confirmed dependencies at their selected revisions. Sets ready only inside the injected execution seam. |
 | `confirm-project` | `{id, reference, criteria: [{criterion_id, reference}]}`. Requires landed, current independently reviewed delivery on main and explicit evidence references for every criterion, including after-integration checks. |
+| `diagnose-project` | Exact attempt IDs, technical diagnosis and a different retry approach, or a precise exception. |
+| `await-dependencies` | Empty input. Arms confirmed-dependency release of this exact sent goal revision. |
+| `main-repair` | Creation envelope plus incident and approved scope basis. Reserves the one ordinary shared repair project. |
+| `wait-programme` / `exception-programme` | Durable bounded external condition or precise exception; see recovery policy. |
 | `reach-stop` | `{id, kind, programme_revision, stop, reference}` names an approved stop. Intent and stopped mode commit together after affected runs close. New dispatch is forbidden beyond it. |
 
 Project operations other than creation carry `id`, `kind`, `project`,
@@ -105,7 +109,8 @@ the job. The completion reference remains in the programme's result history.
 Events arriving during the session remain pending for the next owner. Failure,
 deadline, missing completion or lease loss retains the job and pending intents;
 ordinary exit code zero is not a completed planning delivery. Failure/dependency
-policy and automatic recovery progression belong to the following project step.
+policy and automatic recovery progression are described in
+[programme recovery](mc-programme-recovery.md).
 
 Headless command guards admit programme show/decide/complete/cancel, read-only
 goal inspection, status/help and hooks. They refuse agreement edits, legacy

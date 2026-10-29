@@ -1,15 +1,17 @@
 /** Guarded headless plan facade. No production activation or model launch. */
 import { applyProgrammeProjectOperation, readProgrammePlanSnapshot, readProgrammeState } from './autonomous-state.js';
-import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammePlanStop } from './programme-jobs.js';
+import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammePlanStop, holdProgrammePlan } from './programme-jobs.js';
+import { projectRecovery, readProgrammeIncidents } from './programme-recovery.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { isDeepStrictEqual } from 'node:util';
 
 export function decideProgrammePlan(options, intent) {
+  if (['wait-programme', 'exception-programme'].includes(intent?.kind)) return holdProgrammePlan(options, intent);
   if (intent?.kind === 'reach-stop') {
     const { kind, ...input } = intent;
     return reachProgrammePlanStop(options, input);
   }
-  if (intent?.kind === 'create-project') return createProgrammeJobProject(options, intent);
+  if (['create-project', 'main-repair'].includes(intent?.kind)) return createProgrammeJobProject(options, intent);
   const state = prepareProgrammeOperation(options, intent);
   const operation = state.planner_jobs.operations.find(item => item.intent.id === intent.id);
   if (operation.status === 'applied') return operation.result;
@@ -36,6 +38,9 @@ export function programmePlanContext(options) {
     state_revision: state.revision, job: { id: lease.job_id, event_ids: lease.event_ids,
       events: state.planner_jobs.events.filter(item => lease.event_ids.includes(item.id)), token: lease.token },
     pending_operations: state.planner_jobs.operations.filter(item => item.status === 'pending'),
+    recovery: { mode: state.planner_jobs.mode, wait: state.planner_jobs.wait, exception: state.planner_jobs.exception || null },
+    main_incidents: readProgrammeIncidents(options.root).filter(item => item.owner === options.programme || item.dependents.some(item => item.programme === options.programme))
+      .map(item => ({ id: item.id, repo: item.repo, failure: item.failure, owner: item.owner, status: item.status, repair: item.repair, dependent_count: item.dependents.length, reference: `${options.root}/runner/programme-incidents.json#${item.id}` })),
     goals: goals.map(goal => {
       if (goal.legacy) return { project: goal.project, version: 1, repo: goal.plan.repo, goal: short(goal.plan.goal?.[0]),
         status: goal.register?.steps?.map(item => item.status) || goal.plan.steps.map(item => item.status), reference: goal.reference, authority: 'read-only legacy goal' };
@@ -44,7 +49,7 @@ export function programmePlanContext(options) {
       return { project: goal.project, version: 2, repo: value.contract.repo, goal: short(value.contract.goal[0]),
         state_revision: value.revision, goal_revision: value.goal_revision, programme_revision: value.programme_revision,
         phase: value.phase, active_run: value.active_run, ownership: value.ownership, confirmed: value.confirmed,
-        dependencies: value.plan_dependencies || [],
+        dependencies: value.plan_dependencies || [], dependency_release: value.dependency_release || null, recovery: projectRecovery(value),
         criteria: value.contract.success_criteria.map(item => ({ id: item.id, verification: item.verification,
           status: value.evidence.builder.filter(record => record.goal_revision === value.goal_revision && record.programme_revision === value.programme_revision && record.criterion_id === item.id).at(-1)?.status || 'unknown' })),
         latest_review: review ? { id: review.id, clean: review.clean,

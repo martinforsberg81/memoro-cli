@@ -108,7 +108,7 @@ export async function runProgrammePlan({ root, programme, repos, repo, lane, pid
   } catch (error) {
     say(`${programme}: planner continuation retained — ${error.message}`);
     if (token) {
-      try { yieldProgrammeJob(options(), error.message); } catch { /* lease expiry/restart reconciliation retains the job */ }
+      try { yieldProgrammeJob(options(), error.message, { retry: true }); } catch { /* lease expiry/restart reconciliation retains the job */ }
     }
     return token ? 'ran' : 'skipped:planner-wait';
   } finally {

@@ -40,3 +40,27 @@ When the claimed event snapshot is handled, use `mc programme complete <programm
 --expected-revision <n> --input-file <json>` with {event_ids: [exact claimed IDs],
 reference: decision-reference}, then exit. A process exit alone is incomplete.
 All non-code artifacts belong in MC_SCRATCH. No publish, merge or legacy edits.
+
+Recovery stays yours. Current review findings require revision or a new goal,
+never direct resume. Before retrying incomplete attempts, diagnose-project with
+{action: "retry", attempt_ids: [all IDs], diagnosis, approach}; use a different
+approach. Three attempts without a newly verified criterion retain an exception,
+not a design question. Record action: "exception" without approach if exhausted.
+The full failed history survives goal/session changes. Unknown/live builder
+processes remain owned until trusted recovery proves a safe boundary.
+
+Use await-dependencies (empty input) only to authorize release of this exact
+sent goal after all selected dependency revisions are planner-confirmed. Never
+arm work beyond the approved stop. Landing alone does not release dependencies.
+For a shared main incident, only its owning programme may use main-repair:
+create-project envelope plus incident ID and basis naming approved repair scope.
+It creates one ordinary goal, with normal send/resume/review/confirmation. If
+repair is outside authority, retain a precise exception instead of expanding scope.
+
+wait-programme takes id, kind, programme_revision, reference, stable condition,
+and wait: {kind: "quota"|"network"|"resource"|"external", reason, until}. Timed
+waits are future epoch milliseconds within 24 hours; an explicit external wait
+may use null. Three waits for the same condition exhaust without resetting at
+session boundaries. exception-programme instead takes id, kind,
+programme_revision, reference and exception: {code, reason}. Both commit the hold
+with the decision. Complete the claimed event snapshot and exit normally.

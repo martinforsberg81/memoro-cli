@@ -1,9 +1,10 @@
 /** Machine-checkable goal decision envelope. Prose scope remains plan's
  * responsibility; these decisions reference approved criteria and rationale. */
 import { STABLE_ID_RE } from './programme-contract.js';
+import { recoveryDiagnosisProblems } from './programme-recovery.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 
-export const PLAN_PROJECT_OPERATIONS = Object.freeze(['send-project', 'revise-project', 'dependencies', 'resume-project', 'confirm-project']);
+export const PLAN_PROJECT_OPERATIONS = Object.freeze(['send-project', 'revise-project', 'dependencies', 'resume-project', 'confirm-project', 'diagnose-project', 'await-dependencies']);
 const stable = value => typeof value === 'string' && STABLE_ID_RE.test(value);
 const text = value => typeof value === 'string' && !!value.trim();
 export function planOperationProblems(intent, agreement) {
@@ -19,7 +20,8 @@ export function planOperationProblems(intent, agreement) {
     || basis.criteria.some(id => !agreement.success_criteria.some(criterion => criterion.id === id))) problems.push('decision needs approved programme criteria and a scope rationale reference');
   const input = intent.input;
   if (!input || typeof input !== 'object' || Array.isArray(input)) return [...problems, 'planner input must be an object'];
-  if (intent.kind === 'revise-project') problems.push(...validateAutonomousProject(input, { programme: agreement }).problems);
+  if (intent.kind === 'diagnose-project') problems.push(...recoveryDiagnosisProblems(input));
+  else if (intent.kind === 'revise-project') problems.push(...validateAutonomousProject(input, { programme: agreement }).problems);
   else if (intent.kind === 'dependencies') {
     if (Object.keys(input).join(',') !== 'projects' || !Array.isArray(input.projects)
       || input.projects.some(item => !item || Object.keys(item).sort().join(',') !== 'goal_revision,project'

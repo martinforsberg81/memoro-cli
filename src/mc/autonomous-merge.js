@@ -1,5 +1,6 @@
 /** Current autonomous admission, shared by queueing and the leased merger.
  * Reports remain observations; this module neither repairs nor confirms goals. */
+import { mainIncidentHold } from './programme-recovery.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -35,6 +36,7 @@ export function assertAutonomousQueueAdmission({ root, owner, pr, ticket }) {
 export function autonomousProof({ root, owner, pr }) {
   requireThat(owner.pr === Number(pr), 'autonomous publication has no resolved PR ownership');
   const state = readAutonomousState(root, owner.programme, owner.project);
+  requireThat(!mainIncidentHold(root, owner.programme, owner.project), 'shared main repair awaits its owning programme plan');
   const assignment = state.contract;
   const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, 'PLAN.json'), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');

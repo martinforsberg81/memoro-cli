@@ -14,6 +14,7 @@ import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
 import { validateAutonomousProject, autonomousRevisionProblems, validateAutonomousEvidence, evidenceForRevision } from './autonomous-project.js';
 import { planOperationProblems } from './programme-plan-contract.js';
+import { assertProjectRecovery, projectRecovery, recoveryProgress, reserveMainRepairLocked, mainIncidentHold } from './programme-recovery.js';
 import { readClaim, processAlive } from './resource-claim.js';
 
 export const PROGRAMME_STATE_FILE = 'PROGRAMME_STATE.json';
@@ -174,7 +175,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
       next.programme_revision = intent.input.programme.revision;
       next.evidence.confirmation = null; next.current_handoff = null; next.phase = 'plan_pending';
       // Immutable reports, evidence, attempts, commits and old contracts remain.
-      for (const field of ['publication', 'review_session', 'review_submission', 'merge_handoff', 'landing', 'continuation', 'session_control']) delete next[field];
+      for (const field of ['publication', 'review_session', 'review_submission', 'merge_handoff', 'landing', 'continuation', 'session_control', 'dependency_release']) delete next[field];
     } else if (intent.kind === 'send-project') {
       next.plan_sent = true;
     } else if (intent.kind === 'dependencies') {
@@ -191,13 +192,24 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
         walk(item.project);
       }
       next.plan_dependencies = intent.input.projects; next.phase = 'plan_pending';
-      delete next.publication; delete next.merge_handoff;
+      delete next.publication; delete next.merge_handoff; delete next.dependency_release;
+    } else if (intent.kind === 'diagnose-project') {
+      const recovery = projectRecovery(state);
+      if (!isDeepStrictEqual(intent.input.attempt_ids, recovery.attempt_ids)) throw new Error('diagnosis must account for every incomplete attempt');
+      if (intent.input.action === 'retry' && (recovery.exception || state.recovery_diagnoses?.some(item => item.approach === intent.input.approach))) throw new Error('recovery exception or repeated unsuccessful approach; retain a precise diagnosis');
+      next.recovery_diagnoses = [...(state.recovery_diagnoses || []), { ...intent.input, goal_revision: state.goal_revision, programme_revision: state.programme_revision, run_id: actor.run_id }];
+    } else if (intent.kind === 'await-dependencies') {
+      if (state.phase !== 'plan_pending' || !state.plan_dependencies?.length || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('dependency release needs a sent pending goal and selected dependencies');
+      assertProjectRecovery(state);
+      next.dependency_release = { goal_revision: state.goal_revision, programme_revision: state.programme_revision, status: 'waiting', operation: intent.id };
     } else if (intent.kind === 'resume-project') {
       if (state.phase !== 'plan_pending' || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('resume needs a sent, pending goal');
       assertProgrammeDispatch(root, programme, state, agreement);
+      assertProjectRecovery(state);
       next.phase = 'ready';
-      delete next.publication; delete next.merge_handoff;
+      delete next.publication; delete next.merge_handoff; delete next.dependency_release;
     } else if (intent.kind === 'confirm-project') {
+      if (mainIncidentHold(root, programme, intent.project)) throw new Error('confirmation waits for the shared main repair');
       const report = state.review_reports?.at(-1);
       const binding = state.landing?.binding;
       if (state.phase !== 'landed' || !report?.clean || !binding || binding.report_id !== report.id
@@ -228,6 +240,8 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
 /** Called under the programme lock by every dispatch admission, not just plan. */
 function assertProgrammeDispatch(root, programme, state, agreement) {
   if (agreement.planner_jobs && agreement.planner_jobs.mode !== 'active') throw new Error('programme is paused, waiting or stopped');
+  const incident = mainIncidentHold(root, programme, state.contract.project_id);
+  if (incident) throw new Error(`shared main incident ${incident.id} awaits its owning programme plan`);
   for (const item of state.plan_dependencies || []) {
     const dependency = projectState(autonomousPaths(root, programme, item.project));
     if (!dependency.confirmed || dependency.goal_revision !== item.goal_revision) throw new Error(`dependency ${item.project} awaits planner confirmation`);
@@ -324,7 +338,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
     const state = programmeState(paths); expected(state, revision); owner(state, actor, ['plan'], deps.now?.());
     // The receipt commits with the effect, not with its later programme journal
     // acknowledgement. A restarted planner can read it without creating twice.
-    const receipt = deps.operationId ? { id: name(deps.operationId), kind: 'create-project',
+    const receipt = deps.operationId ? { id: name(deps.operationId), kind: deps.operationKind || 'create-project',
       digest: autonomousOperationDigest(input) } : null;
     if (receipt && existsSync(paths.project)) {
       const current = projectState(paths);
@@ -337,6 +351,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
     approved(state, input);
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
     if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
+    if (deps.mainIncident) reserveMainRepairLocked(root, { incident: deps.mainIncident, programme, project, operation: deps.operationId, repo: input.repo });
     return projectSave(paths, null, {
       schema: 'mc-autonomous-state', version: 1, contract: input, contracts: [input], active_run: receipt ? null : actor,
       phase: 'plan_pending', programme_revision: input.programme.revision, goal_revision: 1,
@@ -431,8 +446,8 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       if (input.handoff !== undefined && (typeof input.handoff !== 'string' || !input.handoff.trim())) throw new Error('handoff must be a reference');
       next.commits = [...new Set([...state.commits, ...input.commits])];
       next.current_handoff = input.handoff || null;
-      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, programme_revision: state.programme_revision, goal_revision: state.goal_revision, outcome: 'incomplete' });
-      next.phase = 'plan_pending'; next.confirmed = false; next.evidence.confirmation = null;
+      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, programme_revision: state.programme_revision, goal_revision: state.goal_revision, outcome: 'incomplete', progress: recoveryProgress(state) });
+      next.phase = 'plan_pending'; next.confirmed = false; next.evidence.confirmation = null; delete next.dependency_release;
     } else if (operation === 'release') next.active_run = null;
     else throw new Error('unknown autonomous project operation');
     return operation === 'revise' ? projectSave(paths, state, next, deps) : save(paths.project, state, next, deps);
