@@ -155,12 +155,12 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { CREDITS_RETRY_MS, billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
+import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingState } from './billing.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
 import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
-import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
+import { billingRoute, gatewayLaunch } from './billing-route.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
@@ -307,7 +307,7 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `unsetEnv` names variables taken out of `env` before the child sees it: a
  * step session on the plan is started without `ANTHROPIC_API_KEY` and
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
- * its billing follows the mode and nothing else (step-credits, ruling 38).
+ * an ambient provider API key cannot change its billing.
  */
 export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null }) {
   if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
@@ -567,14 +567,9 @@ export function realDeps(env = process.env) {
     // mode Martin set and the plan's windows the runner has seen. A dependency
     // so a test never reads or writes the machine's own.
     billing: {
-      readMode: () => readBillingMode(),
-      readState: () => readBillingState(),
-      patchState: (patch) => patchBillingState(patch),
+      readState: () => readBillingState({ root: runnerDir(env) }),
+      patchState: (patch) => patchBillingState(patch, { root: runnerDir(env) }),
     },
-    // The step-credit key (`mc-api-key` in the vault), read for one launch on
-    // credits and dropped once the session has it. A dependency so a test
-    // never opens the vault.
-    creditKey: () => readStepCreditKey(),
     // The model catalog (`models.json`, model-config.js) and the capacity snapshot (`model-capacity.json`,
     // model-capacity.js): local files, read at each class-routed launch (ruling 59). Codex's windows and
     // models are read by `refreshCodex` from the chore pass, once an hour, and by nothing else.
@@ -819,9 +814,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     const { tool, model } = route
       ? routedSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind, candidate: route.candidate })
       : sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
-    // The billing the next launch would get: a session moving between the
-    // The plan login and the API key use separate prompt caches.
-    const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
+    // The billing the next launch would get. The plan login and the API
+    // workspace use separate prompt caches.
+    const billingNow = route?.billing === 'credits' ? 'credits' : billingRoute({ provider: tool === 'codex' ? 'codex' : 'claude', capacity: deps.capacity?.read(), state: deps.billing?.readState?.(), now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
     const cache = deps.role(choice.kind)?.cache || '1h';
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow, modelNow: route ? model : null });
@@ -1110,7 +1105,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
   function routeClass(cls, autonomousState = null, role = 'step') {
     try {
       const choose = autonomousState ? chooseAutonomousModel : chooseCandidate;
-      return choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), credits: deps.billing?.readMode?.() === 'credits' });
+      return choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
     } catch (error) {
       return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
     }
@@ -2351,25 +2346,12 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
 
-    // Who pays for a launch, chosen at each launch and never during one
-    // (step-credits, ruling 38): `billingFor` over the mode and the plan's
-    // windows. Credits carries the key read from the vault for this launch
-    // alone. A key that cannot be read falls back to plan for a legacy
-    // concrete step; a class step waits. Codex is plan before the vault is asked.
-    const pickBilling = async () => {
-      const mode = deps.billing?.readMode?.();
-      if (route && (route.basis === 'credits') !== (mode === 'credits')) return { billing: 'unavailable', why: 'billing mode changed since routing', key: null };
-      const chosen = billingFor({ mode, state: deps.billing?.readState?.(), toolId: launch.id, now: deps.now() });
-      if (route?.basis === 'credits' && chosen.billing !== 'credits') return { billing: 'unavailable', why: chosen.why, key: null };
-      if (chosen.billing !== 'credits') return { billing: 'plan', why: chosen.why, key: null };
-      let got = null;
-      try { got = deps.creditKey ? await deps.creditKey() : { ok: false, reason: 'no key reader' }; } catch { got = { ok: false, reason: 'key-unreadable' }; }
-      if (!got?.ok || !got.key) {
-        say(`${name}: credits wanted (${chosen.why}) but the key could not be read (${got?.reason || 'key-unreadable'}) — ${route ? 'skip' : 'plan'}`);
-        return { billing: route ? 'unavailable' : 'plan', why: got?.reason || 'key-unreadable', key: null };
-      }
-      return { billing: 'credits', why: chosen.why, key: got.key };
-    };
+    // At each launch, use the provider's plan until a window is full or the
+    // plan has refused. The gateway wrapper opens the key for API sessions.
+    const pickBilling = async () => route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
+      provider: launch.id === 'codex' ? 'codex' : 'claude',
+      capacity: capacity.read(), state: deps.billing?.readState?.(), now: deps.now(),
+    });
     // The billing of the launch in hand, and of the last one once it is over.
     let picked = await pickBilling();
     if (picked.billing === 'unavailable') {
@@ -2379,7 +2361,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     }
     // What a refusal says about the billing it came on: a plan refusal is
     // `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
-    // named none; an exhausted or
+    // named none — which moves the next launch to the API; an exhausted or
     // rejected credit is unusable for `CREDITS_RETRY_MS`, or until the date a
     // spent workspace limit names (`creditsUntil`, ruling 45 § 1). A 429 on a
     // credits session is the API's own rate limit and touches neither. Returns
@@ -2400,14 +2382,14 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
           const until = reset.toISOString();
           const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : kind === 'key' ? 'API key rejected' : 'API rate limit reached';
           deps.billing.patchState({ credits: { unusable_until: until, why } });
-          say(`${name}: the step credit is unusable until ${until} (${why}) — \`mc run --billing ${deps.billing.readMode?.() || 'plan'}\` clears it sooner`);
+          say(`${name}: API reserve refused (${why}); recorded retry time ${until}`);
         } else {
           return null;
         }
       } catch (error) {
         say(`${name}: the refusal was not recorded (${error.message})`);
       }
-      const next = billingFor({ mode: deps.billing.readMode?.(), state: deps.billing.readState?.(), toolId: launch.id, now: deps.now() });
+      const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), now: deps.now() });
       return next.billing === billing ? null : { from: billing, to: next.billing };
     };
     // Set when a refusal hands the step to the other billing; `noted` when the
@@ -2482,14 +2464,15 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // the logs and the register see one session — the streams joined, the
     // results summed by `sessionResult` as a check-in's already are.
     //
-    // Each launch runs on `picked`: credits puts the key in the session's
-    // environment, plan takes both Anthropic credentials out of it. The key
-    // is let go of as soon as the session has been handed it.
+    // Credits starts the trusted local gateway; the coding tool receives its
+    // session grant, never the provider key.
     const launchOnce = async (resume, text) => {
       const { billing } = picked;
+      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args: sessionArgs, billing });
       const running = deps.session({
-        bin: launch.spec.bin,
-        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args,
+        bin: tool.bin,
+        args: tool.args,
         cwd: worktree,
         // The stream reaches disk as it arrives; a resume appends to the same
         // file, which is the joined stream the logs keep.
@@ -2501,19 +2484,17 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         env: {
           ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
           ...scratchEnv,
-          ...(billing === 'credits' ? { ANTHROPIC_API_KEY: picked.key } : {}),
         },
-        ...(billing === 'credits' ? {} : { unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] }),
+        unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
         onSpawn: (childPid) => {
           if (stepIndex == null) return;
           recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, effort: settings.effort, class: cls ?? null, lane, tool: settings.tool, log: out, billing } });
         },
       });
-      picked = { ...picked, key: null };
       const attempt = await running;
       // What claude says it was paid by, against what it was started on.
       const source = launch.id === 'claude-code' ? initSource(attempt?.stdout) : null;
-      if (source && (billing === 'credits') !== (source === 'ANTHROPIC_API_KEY')) say(`${name}: session ran on ${source}, not ${billing}`);
+      if (source && billing === 'plan' && source === 'ANTHROPIC_API_KEY') say(`${name}: session unexpectedly used an API key`);
       return attempt;
     };
     let result;

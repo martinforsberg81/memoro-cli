@@ -340,11 +340,9 @@ export async function getStatus({
 // into ~/.claude/.credentials.json or an environment variable. The shred
 // function remains only for cleanup of artifacts created by older mc versions.
 //
-// The single exception (step-credits ruling, rulings.md § 38): the vault
-// record labelled `mc-api-key`, read by `readStepCreditKey`
-// (src/vault/engine/step-credit-key.js), becomes `ANTHROPIC_API_KEY` in the
-// environment of a runner step session (`runStep`, src/mc/run.js) whose
-// billing is `credits`. Nothing else, and nowhere else.
+// API-billed MC sessions use billing-gateway-session.js. It reads the fixed
+// vault record and keeps the provider key in the gateway process. Claude gets
+// a bounded loopback grant, never ANTHROPIC_API_KEY from MC.
 // ─────────────────────────────────────────────────────────────
 
 /**

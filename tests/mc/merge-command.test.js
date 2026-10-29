@@ -217,7 +217,7 @@ describe('mc merge makes the step landing', () => {
 
   it('a pull request that is nobody\'s step is queued and the register is left alone', async () => {
     register();
-    const d = deps({ head: 'plan/mc' });
+    const d = deps({ head: 'unrelated-feature' });
     assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
     assert.equal(entryNow().steps[1].status, 'running');
     assert.equal(queue()[0].step, null);

@@ -30,12 +30,9 @@
  *                          both. No argument prints both and what is running.
  *                          Both read live, so a running runner takes new
  *                          counts without `--update`
- *   mc run --billing [plan|credits]
- *                          who pays for claude step sessions (billing.js);
- *                          no argument prints the mode, the plan's windows
- *                          and what the next session would run on
- *                          (`mc run billing` is the same). Read at every new
- *                          session, so nothing to restart
+ *   mc run --billing      plan usage and next billing for Claude and Codex
+ *                          (`mc run billing` is the same). Billing is chosen
+ *                          automatically at each new session.
  *
  * The three orders are files under `~/mc/runner/` read between two picks,
  * not signals: a runner ninety minutes into a headless session is given the
@@ -49,13 +46,14 @@
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
-import { billingFor, readBillingFile, readBillingState, writeBillingMode } from '../billing.js';
+import { readBillingState } from '../billing.js';
+import { billingRoute, billingStatus } from '../billing-route.js';
+import { readCapacity } from '../model-capacity.js';
 import { LANES_MAX, laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
 import { runnerDir } from '../paths.js';
 import { IF_WAS_RUNNING, requestUpdate, startRunner, stopRunner } from '../run-control.js';
 import { REPO_NAMES, runLoop } from '../run.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
-import { ago } from '../step-release.js';
 import { scanArgs } from './flags.js';
 
 const USAGE = [
@@ -71,9 +69,7 @@ const USAGE = [
   `        mc run lanes [<n>] [--total <n>|none]`,
   `                                    steps in flight: <n> per repository, --total across every`,
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
-  '        mc run --billing [plan|credits]',
-  '                                    who pays for claude step sessions; no argument prints the mode,',
-  '                                    the plan\'s windows and what the next session would run on',
+  '        mc run --billing             plan usage and next billing for Claude and Codex',
 ].join('\n');
 
 export function usage() {
@@ -156,52 +152,19 @@ function lanes(opts, deps) {
   };
 }
 
-/**
- * `mc run --billing [plan|credits]` — the mode, what the runner has seen
- * of the plan's windows, any refusal or credit mark, and what the next claude
- * step session would run on; with a mode, written first.
- *
- * The last line is `billingFor`'s own answer for a claude launch now, so the
- * verb and the runner cannot disagree about it.
- */
+/** Read-only billing status for both providers. */
 function billing(opts, deps) {
   const now = (deps.now || (() => new Date()))();
-  const readMode = deps.readBilling || readBillingFile;
-  const readState = deps.readBillingState || readBillingState;
-  const write = deps.writeBilling || writeBillingMode;
-
-  let set = null;
-  if (opts.mode !== null) {
-    const written = write(opts.mode, { now });
-    if (!written.ok) return { ok: false, code: 2, lines: [written.reason] };
-    set = written.set;
-  }
-  const { mode } = readMode();
+  const readState = deps.readBillingState || (() => readBillingState({ root: runnerDir(deps.env || process.env) }));
+  if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve'] };
+  const capacity = (deps.readCapacity || (() => readCapacity({ root: runnerDir(deps.env || process.env) })))();
   const state = readState();
-  const { plan, credits } = state;
-  const lines = [`billing ${mode}${set ? ` — set ${set}` : ''}`];
-  if (plan.five_hour || plan.seven_day) {
-    const one = (label, w) => (w ? `${label} ${Math.round(w.utilization * 100)} % (resets ${localTime(w.resets_at)})` : `${label} not seen`);
-    lines.push(`plan: ${one('5-hour', plan.five_hour)} · ${one('seven-day', plan.seven_day)} · seen ${ago(plan.seen, now.getTime())}`);
-  } else {
-    lines.push('plan: no window seen yet');
+  const lines = [`billing ${billingStatus({ capacity, state, now })}`];
+  for (const provider of ['claude', 'codex']) {
+    const next = billingRoute({ provider, capacity, state, now });
+    lines.push(`next ${provider} session: ${next.billing === 'credits' ? 'API' : 'plan'} — ${next.why}`);
   }
-  if (afterNow(plan.refused_until, now)) lines.push(`plan refused until ${localTime(plan.refused_until)}`);
-  if (afterNow(credits.unusable_until, now)) lines.push(`credits unusable until ${localTime(credits.unusable_until)} — ${credits.why || 'no reason recorded'}`);
-  const next = billingFor({ mode, state, toolId: 'claude-code', now });
-  lines.push(`next claude step session: ${next.billing} — ${next.why}`);
-  if (set) lines.push('read at the next session — no restart needed');
   return { ok: true, code: 0, lines };
-}
-
-const afterNow = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.parse(value) > now.getTime();
-
-/** `2026-10-14 10:00` in this machine's own time zone: a reset is read to know when to look again. */
-function localTime(value) {
-  const at = new Date(value);
-  if (!Number.isFinite(at.getTime())) return '?';
-  const two = (n) => String(n).padStart(2, '0');
-  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
 }
 
 /**
@@ -291,18 +254,15 @@ export function parseRunArgs(argv) {
     };
   }
 
-  // The billing mode, read or set: `mc run --billing` prints it with what the
-  // next claude step session would run on, `mc run --billing <mode>` writes it
-  // first. An order on its own, as `--update` is, and `mc run billing` is the
-  // same order. The mode is read at every new session, so there is nothing to
-  // hand a running runner.
+  // Billing is read-only: the next provider route is automatic at each launch.
+  // `mc run billing` and `mc run --billing` ask the same question.
   if (head === 'billing') argv = ['--billing', ...argv.slice(1)];
   if (argv.includes('--billing')) {
     const at = argv.indexOf('--billing');
     const rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
     const mode = rest.length === 1 && !String(rest[0]).startsWith('-') && at === 0 ? rest[0] : null;
     if (rest.length > 1 || (rest.length === 1 && mode === null)) {
-      return { error: '--billing is one order on its own: mc run --billing [plan|credits]' };
+      return { error: '--billing is one order on its own: mc run --billing' };
     }
     return { verb: 'billing', mode };
   }

@@ -1555,6 +1555,7 @@ export function renderPageLines(data, {
   nextLines(lines, c, wide, data.next);
   lines.push('');
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
+  if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
   mergesLines(lines, c, wide, data.merges);
   lines.push('');

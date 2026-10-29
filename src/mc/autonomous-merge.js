@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runTool } from './child-async.js';
 import { mcHome } from './paths.js';
+import { PLAN_FILE } from './plan-source.js';
 import { readAutonomousState, readProgrammeState, currentAutonomousEvidence } from './autonomous-state.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { builderModels, independentModel } from './autonomous-models.js';
@@ -36,7 +37,7 @@ export function autonomousProof({ root, owner, pr }) {
   requireThat(owner.pr === Number(pr), 'autonomous publication has no resolved PR ownership');
   const state = readAutonomousState(root, owner.programme, owner.project);
   const assignment = state.contract;
-  const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, 'PLAN.json'), 'utf8'));
+  const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, PLAN_FILE), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
   const programme = readProgrammeState(root, owner.programme).approved.find(item => item.revision === state.programme_revision);
   requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'approved programme revision is missing or invalid');

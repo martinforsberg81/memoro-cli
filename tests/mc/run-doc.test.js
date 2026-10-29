@@ -32,9 +32,9 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.equal(Number(match[1]) * 60_000, QUOTA_SLEEP_MS);
   });
 
-  it('says credits are manual and auto is retired', () => {
-    assert.match(DOC, /`auto` is retired and reads as `plan`/u);
-    assert.match(DOC, /`credits` is selected manually/u);
+  it('says billing is plan first through 100 %, then API', () => {
+    assert.match(DOC, /below 100% remains eligible/u);
+    assert.match(DOC, /the next launch uses its API key through the local billing gateway/u);
   });
 
   it('states the poll a lane held back by the total sleeps, and the bounds both numbers take', () => {
@@ -130,15 +130,14 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(parseRunArgs(['--rounds', '2']).error, /a round no longer exists/u);
   });
 
-  it('names the catalog verbs, manual credits for classes, and hourly Codex reads without a turn', () => {
+  it('names the catalog verbs, API reserve, and Codex hourly reading', () => {
     const text = DOC.replace(/\s+/gu, ' ');
     for (const verb of ['mc model add fast|large <tool>:<model>:<effort>', 'mc model remove fast|large <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
       assert.ok(text.includes(verb), `the doc no longer names \`${verb}\``);
     }
-    assert.ok(text.includes('Under manually selected `credits`, every class selects its Anthropic model'), 'the doc no longer says credits choose Anthropic');
+    assert.ok(text.includes('When no candidate has eligible plan capacity, the first catalog candidate uses its provider\'s API key'), 'the doc no longer says how a class uses API reserve');
     assert.ok(text.includes('read once an hour'), 'the doc no longer says Codex is read once an hour');
     assert.ok(text.includes('It is never sent a thread or a turn'), 'the doc no longer says the Codex read starts no thread or turn');
-    assert.ok(text.includes('Subscription monitoring is not a hard guard against purchased ChatGPT credits'), 'the doc no longer says monitoring does not guard against purchased credits');
     assert.ok(text.includes('Not verified live.'), 'the doc no longer says the Codex collector is not verified live');
   });
 

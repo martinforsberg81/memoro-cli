@@ -63,6 +63,15 @@ function opening(overrides = {}) {
 }
 
 describe('openInWorkArea and --model', () => {
+  it('does not pass ambient provider API keys to a plan session', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    env.ANTHROPIC_API_KEY = 'ambient-anthropic-key';
+    env.OPENAI_API_KEY = 'ambient-openai-key';
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, ...options });
+    assert.equal(calls[0].spawnOptions.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(calls[0].spawnOptions.env.OPENAI_API_KEY, undefined);
+  });
   // An ordinary area has no role, and a new conversation there is handed no
   // instructions at all — there is no Coding Profile in front any more.
   it('a new conversation gets the model and no instructions', async () => {
@@ -342,6 +351,17 @@ describe('startInBackground and --model', () => {
     assert.ok(found, 'expected a tmux new-session call');
     return found[found.length - 1];
   }
+
+  it('removes ambient provider API keys from the tmux child command', () => {
+    const { areaRoot, worktree, env } = fixture();
+    env.ANTHROPIC_API_KEY = 'ambient-anthropic-key';
+    env.OPENAI_API_KEY = 'ambient-openai-key';
+    const { calls, run } = tmux();
+    startInBackground({ name: 'x', areaRoot, worktree, env, run });
+    const command = creation(calls);
+    assert.match(command, /^'env' '-u' 'ANTHROPIC_API_KEY' '-u' 'OPENAI_API_KEY' 'claude'/u);
+    assert.doesNotMatch(command, /ambient-(?:anthropic|openai)-key/u);
+  });
 
   it('the model survives the shell, quoting and all', () => {
     const { areaRoot, worktree, env } = fixture();

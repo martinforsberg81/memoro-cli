@@ -21,14 +21,17 @@ test('independence ignores effort and conservatively resolves Claude moving alia
 test('reviewer is reserved from every autonomous build class without mutating legacy catalog', () => {
   const before = JSON.stringify(DEFAULT_CATALOG);
   const routed = choose({ role: 'step', cls: 'large' });
-  assert.equal(routed.ok, false, 'reserved Opus is excluded; unobserved Codex cannot start');
+  assert.equal(routed.ok, true, 'reserved Opus is excluded; Codex can use API reserve');
+  assert.equal(routed.candidate.tool, 'codex');
+  assert.equal(routed.billing, 'credits');
   assert.equal(chooseCandidate({ cls: 'large', catalog: DEFAULT_CATALOG, capacity: normaliseCapacity(null), now }).candidate.model, 'opus');
   assert.equal(JSON.stringify(DEFAULT_CATALOG), before);
 });
 test('configured reviewer and persisted reservation survive catalog changes', () => {
   const catalog = { ...DEFAULT_CATALOG, review: builder };
   const route = choose({ role: 'step', state: { runs: [] }, catalog });
-  assert.equal(route.ok, false, 'Haiku cannot be both builder and configured reviewer');
+  assert.equal(route.ok, true, 'Haiku is reserved, so another provider uses API reserve');
+  assert.equal(route.candidate.tool, 'codex');
   const review = choose({ state: { ...history, reviewer_model: reviewer }, catalog });
   assert.equal(review.candidate.model, 'opus', 'existing reservation wins over a later catalog edit');
 });
@@ -39,12 +42,12 @@ test('all historical builders count, including earlier goal revisions, with no c
   assert.equal(result.ok, false); assert.equal(result.transient, true); assert.match(result.reason, /built reviewed changes/u);
   assert.equal(choose({ state: { runs: history.runs } }).ok, false, 'missing builder identity waits, never claims independence');
 });
-test('review capacity refusal and interactive reserve wait, never choose an available builder', () => {
+test('review keeps its independent model and uses API after a plan refusal', () => {
   const refused = choose({ capacity: applyRefusal(normaliseCapacity(null), 'claude', '2026-10-29T12:00:00Z') });
-  assert.equal(refused.ok, false); assert.equal(refused.transient, true); assert.match(refused.reason, /refused/u);
+  assert.equal(refused.ok, true); assert.equal(refused.billing, 'credits'); assert.equal(refused.candidate.model, 'opus');
   const window = { fraction_used: 0.9, resets_at: '2026-10-29T12:00:00Z' };
   const capacity = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: window, seven_day: window } }, now);
-  assert.equal(choose({ capacity }).ok, false, 'unlike legacy pinned review, autonomous review keeps interactive reserve');
+  assert.equal(choose({ capacity }).billing, undefined, '90 % remains on the included plan');
   assert.equal(chooseCandidate({ cls: 'review', catalog: DEFAULT_CATALOG, capacity, now }).ok, true, 'legacy behavior unchanged');
 });
 test('real inactive runner persists actual builder identity and reviewer reservation before launching', async t => {
