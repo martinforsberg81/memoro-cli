@@ -236,6 +236,7 @@ test('fresh publication on the next reserved run keeps the same branch/PR and av
   writeFileSync(f.paths.project, JSON.stringify(state));
   const next = { run_id: 'build-2', role: 'step' };
   state = startAutonomousBuild(f.root, f.programme, f.project, { actor: next, revision: state.revision,
+    model: { tool: 'claude', model: 'haiku', effort: 'high' }, reviewer: { tool: 'claude', model: 'opus', effort: 'high' },
     assignment: state.contract, branch: f.project, profile,
     observation: { sequence: 0, at_ms: 2000, awake_ms: 0, activity: { kind: 'model', id: null }, context: null, progress: null, failure: null } });
   state = observeProjectSessionControl(f.root, f.programme, f.project, { actor: next, revision: state.revision,

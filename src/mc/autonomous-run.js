@@ -13,6 +13,8 @@ import { headlessArgs, routedSettings } from './run-plan.js';
 import { profileArgs } from './portrait.js';
 import { run as gateCommand } from './commands/gate.js';
 import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
+import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-review.js';
+import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
@@ -30,6 +32,7 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
       if (worktree && state.phase !== 'plan_pending' && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
     }
+    if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };
     if (state.phase !== 'ready') return skip('autonomous-not-ready', `autonomous project is ${state.phase}`);
     if (openPrs.some(pr => pr.number !== state.ownership.pr || pr.headRefName !== state.ownership.branch)) return skip('autonomous-pr-mismatch', 'an open PR does not match project ownership');
     return { kind: 'step', flavor: 'autonomous' };
@@ -40,6 +43,8 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   openPrs, waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say, observeResult }) {
   const choice = autonomousChoice({ root, record, capability, openPrs, worktree });
   if (!choice.kind) { say(`${record.project}: ${choice.skip}`); return `skipped:${choice.reason}`; }
+  if (choice.kind === 'review') return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+    waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult });
   const name = record.project; const programme = record.programme;
   if (choice.recovery) {
     const slot = await waitForSlot(name);
@@ -64,7 +69,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
       dropSlot();
     }
   }
-  const route = routeClass('fast');
+  const route = routeClass('fast', readAutonomousState(root, programme, name));
   if (!route.ok || route.basis === 'credits') return 'skipped:no-capacity';
   const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
   // The autonomous flavor deliberately excludes v1's fixed-step/merge overlay.
@@ -90,7 +95,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const branchOwned = state.ownership.branch !== null;
     const branch = state.ownership.branch || name;
     state = startAutonomousBuild(root, programme, name, { actor, revision: state.revision, assignment: record.plan,
-      branch, profile: capability.profile, observation: { sequence: 0, ...capability.clock(),
+      branch, model: route.candidate, reviewer: route.reviewer, profile: capability.profile, observation: { sequence: 0, ...capability.clock(),
         activity: { kind: 'tool', id: 'main-integration' }, context: null, progress: null, failure: null } });
     owned = true;
     writeJson(currentPath, { name, step: null, kind: 'step', flavor: 'autonomous', run_id: actor.run_id,
@@ -179,6 +184,65 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   } finally {
     if (currentWritten) remove(currentPath);
     releaseClaim(claimPath, held.marker);
+    dropSlot();
+  }
+}
+
+/** Same lane/slot accounting as builders; never the builder checkout or overlay. */
+export async function runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+  waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult }) {
+  const name = record.project; const programme = record.programme;
+  const state = readAutonomousState(root, programme, name);
+  const route = routeClass('fast', state, 'review');
+  if (!route.ok || route.basis === 'credits') { say(`${name}: review waits: ${route.reason || 'subscription capacity required'}`); return 'skipped:no-capacity'; }
+  const role = deps.role('review');
+  if (!role?.overlay) return 'skipped:role-missing';
+  const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
+  const launch = deps.launch(settings.tool);
+  if (!launch?.ok) return 'skipped:tool-missing';
+  const slot = await waitForSlot(name);
+  if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped';
+  const actor = { run_id: `review-${randomUUID()}`, role: 'review' };
+  const options = { root, programme, project: name, actor, cwd: deps.exists(worktree) ? worktree : repo.path, model: route.candidate };
+  const currentPath = paths.currentFor(repo.name, lane);
+  let reserved = false; let currentWritten = false;
+  const verifyPr = async session => {
+    const response = await deps.gh(['pr', 'view', String(session.pr), '--json', 'headRefOid,headRefName,baseRefName,state'], { cwd: options.cwd });
+    if (!(response?.ok === true || response?.status === 0)) throw new Error('published PR head is unknown');
+    const pr = JSON.parse(response.stdout);
+    if (pr.headRefOid !== session.head || pr.headRefName !== session.branch || pr.baseRefName !== 'main' || pr.state !== 'OPEN') throw new Error('published PR head changed or is not open on main');
+  };
+  try {
+    const started = prepareAutonomousReview(options); reserved = true;
+    const session = started.review_session;
+    await verifyPr(session);
+    const overlay = '@include _review-autonomous.md';
+    const instructions = instructionsFor(settings.tool, overlay);
+    const agreement = readProgrammeState(root, programme).approved.find(item => item.revision === started.programme_revision);
+    const prompt = JSON.stringify({ programme: agreement, session, target: `${programme}/${name}`, state_revision: started.revision });
+    if (Buffer.byteLength(prompt) > SESSION_START_MAX_BYTES) throw new Error('review assignment exceeds bounded start context');
+    const directory = join(root, 'runner', 'reviews', actor.run_id, 'artifacts'); deps.mkdir(directory);
+    writeJson(currentPath, { name, step: null, kind: 'review', flavor: 'autonomous-review', run_id: actor.run_id,
+      repo: repo.name, lane, ...settings, started: stamp(), pid, worktree: session.checkout,
+      role: roleRecord({ name: 'review', source: 'canon', overlay, instructions }) });
+    currentWritten = true;
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
+    const result = await deps.session({ bin: launch.spec.bin, args, cwd: session.checkout, prompt,
+      env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'review', MC_PROJECT: name,
+        MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
+      unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'MC_STEP'] });
+    observeResult(launch.id, result);
+    const invalidReasons = [];
+    try { await verifyPr(session); } catch (error) { invalidReasons.push(error.message); }
+    const finished = completeAutonomousReview(options, result, { invalidReasons });
+    say(`${name}: independent review recorded for plan (${finished.review_reports.at(-1).clean ? 'clean' : 'findings or unknown'}); nothing queued`);
+    return 'ran';
+  } catch (error) {
+    say(`${name}: independent review stopped: ${error.message}`);
+    if (reserved) completeAutonomousReview(options, { status: 1 }, { invalidReasons: [error.message] });
+    return reserved ? 'ran' : 'skipped:review-wait';
+  } finally {
+    if (currentWritten) remove(currentPath);
     dropSlot();
   }
 }

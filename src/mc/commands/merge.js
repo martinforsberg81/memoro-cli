@@ -1,3 +1,4 @@
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc merge <repo> <pr>` — the one door through which a pull request lands.
  *
@@ -32,6 +33,8 @@ import { repoNameOf } from '../repos.js';
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const reviewRefusal = reviewCommandRefusal(['merge', ...argv], deps);
+  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   // No repository can be called `watch` in `mc repo status`, so the word is free.
   if (argv[0] === 'watch') return runWatch(argv.slice(1), { stdout, stderr, ...deps });
   const opts = parseMergeArgs(argv, { docs: true, watch: true, admin: true });

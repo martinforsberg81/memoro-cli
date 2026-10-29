@@ -383,7 +383,7 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', '_session-work.md', '_step-autonomous.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_review-autonomous.md', '_session-work.md', '_step-autonomous.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
     ]);
   });
 });

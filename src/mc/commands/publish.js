@@ -1,3 +1,4 @@
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc publish` — push the branch you stand on and open (or find) its pull
  * request, in one call.
@@ -46,6 +47,8 @@ import { repoNameOf } from '../repos.js';
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const reviewRefusal = reviewCommandRefusal(['publish', ...argv], deps);
+  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   const cwd = deps.cwd || process.cwd();
   const env = deps.env || process.env;
   const autonomous = deps.autonomousPublication || null;

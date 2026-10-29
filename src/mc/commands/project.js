@@ -1,3 +1,4 @@
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc project` — mc's own verbs over a project (ruling 48, `docs/project/mc/mc-project.md`).
  *
@@ -58,6 +59,8 @@ const VERB_WORDS = ['criterion', 'new', 'edit', 'amend', 'step', 'send', 'archiv
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const reviewRefusal = reviewCommandRefusal(['project', ...argv], deps);
+  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   const env = deps.env || process.env;
   const root = deps.root || workRoot(env);
   const now = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');

@@ -121,6 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
+import { chooseAutonomousModel } from './autonomous-models.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
@@ -1106,9 +1107,10 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls) {
+  function routeClass(cls, autonomousState = null, role = 'step') {
     try {
-      return chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), credits: deps.billing?.readMode?.() === 'credits' });
+      const choose = autonomousState ? chooseAutonomousModel : chooseCandidate;
+      return choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), credits: deps.billing?.readMode?.() === 'credits' });
     } catch (error) {
       return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
     }
