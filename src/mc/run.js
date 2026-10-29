@@ -101,7 +101,6 @@
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
  */
-import { streamReviewSession } from './autonomous-review-process.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
@@ -109,6 +108,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { streamAutonomousSession } from './session-supervision.js';
+import { streamReviewSession } from './autonomous-review-process.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import { logRows } from './archive-plan.js';

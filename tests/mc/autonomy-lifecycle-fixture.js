@@ -5,7 +5,6 @@
  * no model is called, no provider key is read and no real project is touched.
  * The adapter GitHub really squashes the pinned head into the origin's main,
  * so a landing is an observable tree, not a flag. */
-import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +27,7 @@ import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { readClaim } from '../../src/mc/resource-claim.js';
 import { landJob } from '../../src/mc/merger.js';
 import { parseQueue, mergesPath } from '../../src/mc/merge-queue.js';
+import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { archiveProgramme } from '../../src/mc/archive-programme.js';
 import { normaliseCapacity } from '../../src/mc/model-capacity.js';
