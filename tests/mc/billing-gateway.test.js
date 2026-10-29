@@ -57,6 +57,27 @@ test('gateway refuses cross-provider grants, unknown paths, model changes and ex
   assert.equal(calls.length, 1, 'refused requests never reach a provider');
 });
 
+test('a Claude grant on a family alias admits that family\'s model ids, fable among them', async (t) => {
+  const calls = [];
+  const gateway = createBillingGateway({
+    keys: { claude: 'anthropic-secret-canary' },
+    grants: [{ provider: 'claude', token: 'fable-grant', models: ['fable'], maxRequests: 5, expiresAt: '2026-10-29T13:00:00Z' }],
+    now: () => NOW,
+    fetchImpl: async (url, options) => { calls.push({ url, options }); return new Response('{}', { status: 200 }); },
+  });
+  const base = await listenBillingGateway(gateway);
+  t.after(() => gateway.close());
+  const send = (model) => fetch(`${base}/claude/v1/messages`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer fable-grant', 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: [] }),
+  });
+  assert.equal((await send('claude-fable-5-1')).status, 200);
+  assert.equal((await send('claude-opus-5-5')).status, 403);
+  assert.equal((await send('fable-claude-5')).status, 403);
+  assert.equal(calls.length, 1);
+});
+
 test('gateway never sends upstream credentials back to a session', async (t) => {
   const { calls, base } = await fixture(t);
   const response = await fetch(`${base}/codex/v1/models`, { headers: { authorization: 'Bearer codex-session-grant' } });
