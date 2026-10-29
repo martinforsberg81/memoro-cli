@@ -120,10 +120,12 @@ for (const code of [1, 2, 3]) test(`starting gate exit ${code} is not permission
   assert.equal(f.state().attempts[0].outcome, 'incomplete'); assert.ok(f.state().active_run);
 });
 
-test('capacity refusal is shared with v1 routing and does not reserve a run', async t => {
+test('capacity refusal uses the same API reserve as v1 routing', async t => {
   const f = fixture(t); f.refuse();
-  assert.equal(await createRunner({ deps: f.deps, autonomous: f.capability }).runStep(f.project, f.world(f.record)), 'skipped:no-capacity');
-  assert.equal(f.state().active_run, null); assert.equal(f.calls.length, 0);
+  assert.equal(await createRunner({ deps: f.deps, autonomous: f.capability }).runStep(f.project, f.world(f.record)), 'ran');
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].bin, process.execPath);
+  assert.ok(f.calls[0].args.includes('claude'));
 });
 
 test('explicit version dispatch allows only the owned PR and leaves v1 selection unchanged', t => {

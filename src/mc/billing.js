@@ -1,7 +1,7 @@
 /**
- * Which account pays for a claude step session — the plan's weekly and 5-hour
- * budget, or the Max plan's monthly API credit — and what the runner has seen
- * of the plan's windows (project step-credits, ruling 38).
+ * Legacy billing mode storage and Claude stream usage observations.
+ * Session routing now lives in billing-route.js. The old mode file is retained
+ * for existing installations but is no longer read to choose a session.
  *
  * Two files under `~/mc/runner/`, written the way `lanes.json` is:
  *

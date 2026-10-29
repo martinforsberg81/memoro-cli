@@ -71,6 +71,9 @@ import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
 import { watcherState } from './repo-watch.js';
+import { billingStatus } from './billing-route.js';
+import { readCapacity } from './model-capacity.js';
+import { readBillingState } from './billing.js';
 import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
@@ -1686,6 +1689,7 @@ export async function collectPage({
 
   return {
     runner,
+    billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
     sessions,
     next: nextSection({
       queueText,

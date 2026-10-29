@@ -149,8 +149,10 @@ const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
 // `src/vault/engine/c1-claude-lease.js` spawns the C1 child by path and pins
 // its SHA-256, so the child belongs to vault's cost. No import graph can see
 // that edge.
+// API billing launches this wrapper by absolute path; it opens the gateway
+// only in that child process, so a static import from the page would be wrong.
 const kept = reach(seed(LIVE).concat(seed(KEPT))
-  .concat(vault).concat(seed(['runtime/broker/c1-child.js'])));
+  .concat(vault).concat(seed(['runtime/broker/c1-child.js', 'mc/billing-gateway-session.js'])));
 const dead = all.filter((f) => !kept.has(f));
 
 const row = (label, files) => `${String(files.length).padStart(4)} filer ${String(sum(files)).padStart(6)} rader  ${label}`;

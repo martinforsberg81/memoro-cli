@@ -1270,7 +1270,7 @@ thing it writes into a repository: a blocked step (below).
   ruling 18). `class`, `tool`, `effort` and `billing` follow it for the same reason
   (ruling 59): the work class the step names, `-` for a concrete plan, and the tool,
   effort and billing the session ran on. For a class step those are the candidate it
-  was routed to, and its billing is `plan`. The file on this machine still has the thirteen-column header it
+  was routed to, and its billing is `plan` or `credits`. The file on this machine still has the thirteen-column header it
   was created with, so a reader that keys cells by the header sees neither of
   the last two; `archive-plan.js` reads by position and stops at `note`. What
   the session actually ran on is in its own json's `modelUsage`, which is what
@@ -1618,55 +1618,45 @@ keeps no parent process.
 
 ### Billing
 
-Who pays for a claude step session is a mode Martin sets with
-`mc run --billing plan|credits` (project step-credits, ruling 38):
+Every MC session starts on its selected provider's subscription. A current plan
+window below 100% remains eligible. At 100%, or after that provider refuses a
+plan request, the next launch uses its API key through the local billing gateway.
+This applies to every current MC session path: step, review, mend, helper, and
+interactive sessions. An ordinary interactive `mc plan` still lets Martin
+choose the tool and model; billing follows that choice. The retired headless
+planning path starts no session, so there is no active headless plan launch to
+route. `mc run --billing` is read-only and
+shows both providers' next routes. The MC page shows one billing line.
 
-- **`plan`** — the default, and today's behaviour: the Max plan's weekly and
-  5-hour budget. An absent, unreadable or unknown file reads as `plan`.
-- **`credits`** — every new claude step session on the plan's monthly API
-  credit.
-`auto` is retired and reads as `plan` if an old settings file still names it.
-`credits` is selected manually. For a `fast` or `large` class it selects the
-first Anthropic candidate in that class, regardless of subscription headroom;
-review uses the configured Anthropic review model. If the class has no
-Anthropic candidate, the key cannot be read, or the credit is marked unusable,
-the step waits without starting a subscription session. The Anthropic Platform
-workspace limit is the spending bound; mc has no dollar cap.
+The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
+`mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
+wrapper process. The coding tool receives an expiring, request-limited loopback
+grant, and requests only the chosen model through the provider-specific route.
+The runner never reads or places the key in a session's environment or argv.
+The vault must be unlocked and the relevant record configured before an API
+reserve can run. A missing or unreadable key fails the API launch visibly.
+Set the two records with hidden prompts:
 
-Two files under `~/mc/runner/` (`src/mc/billing.js`): **`billing.json`** is
-Martin's — `{ mode, set }`, written by the verb, which also clears any credit
-mark — and **`billing-state.json`** is the runner's: the 5-hour and seven-day
-windows (`utilization`, `resets_at`) from the last `rate_limit_event` that
-carried `unifiedWindows` in a claude session's stream, recorded after every
-claude step session, with `refused_until` and the credit's `unusable_until`.
-`billingFor` is the one answer to which billing a launch would get; codex is
-always `plan`. The mode is read at every new session, so a running runner
-needs no restart. `mc run --billing` with no mode prints the mode, the
-windows, any refusal or credit mark, and what the next claude step session
-would run on.
+```sh
+mc vault unlock
+mc vault set mc-anthropic-api-key --type api_token --provider anthropic
+mc vault set mc-openai-api-key --type api_token --provider openai
+```
 
-**A refusal hands the step over instead of sleeping.** A refusal on a plan
-session (the quota, 429) writes `plan.refused_until` — the refusal's reset, or
-`QUOTA_SLEEP_MS` from now when it named none — in every mode. An exhausted
-credit (`Your credit balance is too low …`, `apiInterruption` kind `credits`)
-or a rejected key (`Invalid API key`, kind `key`) on a credits session writes
-`credits.unusable_until` 24 h out (`CREDITS_RETRY_MS`) with its `why` — or, for a
-spent workspace limit (`… workspace API usage limits …`, also kind `credits`),
-the instant the refusal names, with `why` `workspace API usage limit reached` — and a
-`runner.log` line that names `mc run --billing <mode>` as the way to clear it
-sooner. Then `billingFor` is asked for the next launch: when it is the other
-billing, the session is not waited on or resumed — the step goes back `ready`
-with an `interrupted` record whose `billing` is the one it ran on, its `count`
-unchanged (a hand-over is not a death and never reaches `INTERRUPT_LIMIT`),
-and the row's note ends `,handed-to-credits` or `,handed-to-plan`. When it is
-the same billing — mode `plan`, a credits session's own 429, or the other side
-unusable too — everything is as before: the quota sleeps, a server error waits
-five minutes, and the session is resumed.
+Unlock once on the device. Do not use a token flag or a plaintext binding.
 
-The next pick resumes or restarts the step on the new billing, and that resume
-is never warm: the prompt cache is per organisation and workspace, so
-`recoveryFor` treats any billing change as cold (`billing changed plan→credits,
-cold, …`) and `COLD_RESUME_MAX_TOKENS` decides resume or fresh.
+This first version keeps the same macOS user for the wrapper and coding tool.
+It prevents accidental key exposure through session environment, arguments,
+files, and logs; it does not isolate a malicious process with the user's OS
+permissions from Keychain or the vault. The grant can be used by the session
+until it exits, expires after 12 hours, or reaches 500 requests. The gateway
+binds only to `127.0.0.1` and exposes no management or key-reading endpoint.
+
+`billing.json` and its old manual plan/credits/auto mode are no longer read for
+routing. `billing-state.json` retains Claude's observed plan windows and
+refusals. The provider snapshot in `model-capacity.json` supplies both
+providers' plan usage. A plan refusal is written for the next launch; crossing
+billing boundaries starts a cold cache context.
 
 ## Work classes and capacity (ruling 59)
 
@@ -1677,9 +1667,8 @@ is decided locally, before a tool is launched, from the catalog
 account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only the plan's
 review step names it, and it always takes the review candidate: its usage is
-not scored and no reserve holds it, but while that candidate's provider has
-refused, the review is skipped as `no-capacity` and is never moved to another
-model.
+not scored against other models. At its provider's plan limit, review
+keeps its pinned model and uses that provider's API reserve.
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
@@ -1728,9 +1717,9 @@ never zero.
 at that instant:
 
 - *refused* — its provider refused, and the refusal has not passed. Never chosen.
-- *reserved* — a window in force is at 80 % or more. The last fifth is kept for
-  Martin's interactive work. Never chosen until that window resets.
-- *known* — every window in force has a read, each under 80 %. Its headroom is
+- *exhausted* — a window in force is at 100 % or more. Never chosen until that
+  window resets.
+- *known* — every window in force has a read, each under 100 %. Its headroom is
   what remains of its tightest window. The most headroom wins, and the first in
   catalog order wins a tie.
 - *unknown* — no usable read, or a claude read more than 3 h old. Usage only
@@ -1741,28 +1730,24 @@ If no candidate is known, the first claude candidate with unknown capacity is
 bootstrapped on the included plan. That is an unknown, not proven free quota:
 the choice's basis is `bootstrap`, and its reason says so.
 
-**Credits.** A class-routed session uses subscriptions under `plan`. Under
-manually selected `credits`, every class selects its Anthropic model and runs
-on the API credit. An unavailable credit leaves the step ready to retry.
-Codex purchased
-ChatGPT credits are out of scope, and none is configured. Subscription
-monitoring is not a hard guard against purchased ChatGPT credits being added
-while a Codex session is active: the snapshot is read hourly and at each
-session's end, so it would not see such a purchase in between. No such credits
-are currently configured.
+**API reserve.** When no candidate has eligible plan capacity, the first
+catalog candidate uses its provider's API key through the gateway. A pinned
+review uses its provider's API without changing model. The API model must be
+available to that provider's API account; MC does not maintain a separate API
+model catalog in this version.
 
 **Refusals and the wait.** A class-routed session is never switched to another
 provider while it runs. If its provider refuses it, the session is interrupted
 and not counted (its row's note ends `,rerouted`), and the next pick routes the
 step again. It resumes on the same tool and model only if that is still the
-route, and starts cold otherwise. If no candidate in the class has capacity, the
+route, and starts cold otherwise. If the catalog has no candidate for the class, the
 step is skipped as `no-capacity`: it stays `ready`, it is not blocked on the
 project, and the next pick routes it again. The reason names each candidate and
 why. The chooser also returns `retry_at`, the earliest instant an answer can
 change; the runner does not act on it yet.
 
 **Audit.** A class step's `runs.tsv` row carries `class`, `tool`, `effort`, and
-`billing` (always `plan`), and `model` is the model of the candidate it was
+`billing` (`plan` or `credits`), and `model` is the model of the candidate it was
 routed to. The session's `.json` `modelUsage` is the exact record of which models
 ran and what they used.
 

@@ -32,6 +32,8 @@ import { registerForeground } from './foreground.js';
 import { clearStopMark } from './work-stop-marker.js';
 import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
+import { billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -110,6 +112,9 @@ export async function openInWorkArea({
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(prompt ? [prompt] : [])];
 
   const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
+  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const billing = billingRouteNow(provider, { env });
+  const toolLaunch = gatewayLaunch({ provider, model: chosenModel, bin: launch.spec.bin, args, billing: billing.billing });
 
   log('work.open', {
     area: areaRoot,
@@ -153,7 +158,7 @@ export async function openInWorkArea({
   });
   let result;
   try {
-    result = spawn(launch.spec.bin, args, { cwd: worktree.path, stdio: 'inherit', env });
+    result = spawn(toolLaunch.bin, toolLaunch.args, { cwd: worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(env) });
   } finally {
     release();
   }
@@ -399,12 +404,16 @@ function launchCommand(launch, {
   // stopped — which is what somebody asking for both at once is asking for.
   // Nothing combined them before this, so no existing launch changes shape.
   if (task) baseArgs.push(task);
-  const args = [launch.spec.bin, ...interactiveArgs(launch, baseArgs, { areaRoot, cwd, env })];
+  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const billing = billingRouteNow(provider, { env });
+  const toolLaunch = gatewayLaunch({ provider, model: conversation?.model || model || roleDefault, bin: launch.spec.bin, args: interactiveArgs(launch, baseArgs, { areaRoot, cwd, env }), billing: billing.billing });
+  const args = [toolLaunch.bin, ...toolLaunch.args];
   // tmux runs its command through a shell, so the instructions — kilobytes of
   // prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
   // --append-system-prompt-file to point at instead.
-  return args.map(shellQuote).join(' ');
+  const unset = PROVIDER_API_ENV_NAMES.filter((name) => Object.hasOwn(env, name));
+  return [...(unset.length ? ['env', ...unset.flatMap((name) => ['-u', name])] : []), ...args].map(shellQuote).join(' ');
 }
 
 /**

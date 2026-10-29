@@ -20,6 +20,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { runTool } from './child-async.js';
 import { profileArgs } from './portrait.js';
 import { gateRedFiles, redHandoff, redLines } from './merge-red.js';
@@ -278,8 +280,11 @@ export async function runMend({ root, job, report, deps = {} }) {
       toolId: launch.id, adapter: launch.adapter, model: role.model, effort: 'medium',
       instructions: instructionsFor(launch.id, role.overlay), prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
     });
+    const provider = launch.id === 'codex' ? 'codex' : 'claude';
+    const billing = (deps.billingRoute || billingRouteNow)(provider, { now: now(), env });
+    const tool = gatewayLaunch({ provider, model: role.model, bin: launch.spec.bin, args, billing: billing.billing });
     const result = await (deps.session || realSession)({
-      bin: launch.spec.bin, args, cwd: dir, timeoutMs: (deps.minutes ?? MEND_MINUTES) * 60_000, env, onPid: deps.onPid || (() => {}),
+      bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: (deps.minutes ?? MEND_MINUTES) * 60_000, env: scrubProviderApiKeysFromEnv(env), onPid: deps.onPid || (() => {}),
     });
     const said = readSessionOutput({
       toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now: now(),
