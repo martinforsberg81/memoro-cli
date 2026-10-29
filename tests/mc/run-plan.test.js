@@ -881,6 +881,17 @@ test('readSessionOutput: codex events give what they give', () => {
   assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
 });
 
+test('readSessionOutput: a codex crash whose work mentions quota is a failure, a refusal event is quota', () => {
+  const work = JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', aggregated_output: 'Keep pause, quota, external waits and planned stops explicit.' } });
+  const crashed = readSessionOutput({ toolId: 'codex', stdout: work, stderr: "thread 'codex-main' panicked: failed printing to stdout: Resource temporarily unavailable (os error 35)", exitCode: 101 });
+  assert.equal(crashed.note, 'failed');
+  assert.equal(crashed.quota, false);
+  const refused = [work, JSON.stringify({ type: 'turn.failed', error: { message: 'You’ve hit your usage limit. Try again at Nov 4th, 2026 7:35 AM.' } })].join('\n');
+  const limit = readSessionOutput({ toolId: 'codex', stdout: refused, exitCode: 1 });
+  assert.equal(limit.note, 'quota');
+  assert.equal(limit.quota, true);
+});
+
 /**
  * The shell runner's thirteen, and `land_seconds` appended after them: the
  * gate costs 20–35 minutes on memoro where the old `gh pr merge` cost

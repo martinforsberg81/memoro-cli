@@ -1396,7 +1396,10 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   if (stalled) return { ...dash, note: 'stalled', quota: false };
   if (timedOut) return { ...dash, note: 'timeout', quota: false };
   if (toolId === 'codex') {
-    const text = `${stdout}\n${stderr}`;
+    // Codex's own refusals are its `error` and `turn.failed` events; the rest
+    // of the stream is the session's work, which may well say "quota" — on
+    // 2026-10-29 a crashed step read as one and every lane slept 30 min.
+    const text = `${codexErrors(stdout)}\n${stderr}`;
     const quota = exitCode !== 0 && quotaSeen(text);
     return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
@@ -1447,6 +1450,19 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     quota,
     quotaReset: quota ? quotaResetAt(text, now) : null,
   };
+}
+
+/** The messages of a `codex exec --json` stream's `error` and `turn.failed` events, one per line. */
+export function codexErrors(stdout) {
+  const said = [];
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"error"') && !line.includes('"turn.failed"')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'error' && typeof event.message === 'string') said.push(event.message);
+    if (event?.type === 'turn.failed' && typeof event.error?.message === 'string') said.push(event.error.message);
+  }
+  return said.join('\n');
 }
 
 function readCodexEvents(stdout) {

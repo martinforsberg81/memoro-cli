@@ -78,9 +78,31 @@ export function writeBillingMode(value, { root = runnerDir(), now = new Date() }
     return { ok: false, reason: `billing is ${BILLING_MODES.join(', ')}, not ${JSON.stringify(value)}` };
   }
   const set = now.toISOString();
-  writeJsonAtomic(billingPath(root), { mode, set }, { mode: 0o600 });
+  writeJsonAtomic(billingPath(root), { ...(readJson(billingPath(root)) || {}), mode, set }, { mode: 0o600 });
   patchBillingState({ credits: { unusable_until: null, why: null } }, { root });
   return { ok: true, mode, set };
+}
+
+export const BILLING_PROVIDERS = Object.freeze(['claude', 'codex']);
+
+/**
+ * Whether each provider may fall over to its API key once its plan is spent:
+ * `{ claude, codex }`, true unless `billing.json`'s `api` says `false` — the
+ * behaviour before the switch existed. Never throws.
+ */
+export function readBillingApi({ root = runnerDir() } = {}) {
+  const api = readJson(billingPath(root))?.api;
+  return Object.fromEntries(BILLING_PROVIDERS.map((provider) => [provider, api?.[provider] !== false]));
+}
+
+/** Turn one provider's API fallback on or off; the mode and the other provider are kept. */
+export function writeBillingApi(provider, enabled, { root = runnerDir() } = {}) {
+  if (!BILLING_PROVIDERS.includes(provider)) return { ok: false, reason: `API is switched per provider — ${BILLING_PROVIDERS.join(' or ')}, not ${JSON.stringify(provider)}` };
+  if (typeof enabled !== 'boolean') return { ok: false, reason: 'API is on or off' };
+  const raw = readJson(billingPath(root)) || {};
+  const api = { ...readBillingApi({ root }), [provider]: enabled };
+  writeJsonAtomic(billingPath(root), { ...raw, api }, { mode: 0o600 });
+  return { ok: true, api };
 }
 
 /** An ISO time, or null for anything that does not parse as one. */

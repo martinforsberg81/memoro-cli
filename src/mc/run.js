@@ -157,7 +157,7 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingState } from './billing.js';
+import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
 import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
@@ -580,6 +580,7 @@ export function realDeps(env = process.env) {
     // so a test never reads or writes the machine's own.
     billing: {
       readState: () => readBillingState({ root: runnerDir(env) }),
+      readApi: () => readBillingApi({ root: runnerDir(env) }),
       patchState: (patch) => patchBillingState(patch, { root: runnerDir(env) }),
     },
     // The model catalog (`models.json`, model-config.js) and the capacity snapshot (`model-capacity.json`,
@@ -828,7 +829,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       : sessionSettings(found.plan.runner, choice.step?.runner, { kind: choice.kind });
     // The billing the next launch would get. The plan login and the API
     // workspace use separate prompt caches.
-    const billingNow = route?.billing === 'credits' ? 'credits' : billingRoute({ provider: tool === 'codex' ? 'codex' : 'claude', capacity: deps.capacity?.read(), state: deps.billing?.readState?.(), now: deps.now() }).billing;
+    const billingNow = route?.billing === 'credits' ? 'credits' : billingRoute({ provider: tool === 'codex' ? 'codex' : 'claude', capacity: deps.capacity?.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
     const cache = deps.role(choice.kind)?.cache || '1h';
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow, modelNow: route ? model : null });
@@ -1117,7 +1118,13 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
   function routeClass(cls, autonomousState = null, role = 'step') {
     try {
       const choose = autonomousState ? chooseAutonomousModel : chooseCandidate;
-      return choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      // A class sent to the API reserve waits instead when that provider's API is off.
+      const tool = chosen?.candidate?.tool;
+      if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
+        return { ok: false, transient: true, class: cls, reason: `${chosen.why}; ${tool} API off`, retry_at: null };
+      }
+      return chosen;
     } catch (error) {
       return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
     }
@@ -2362,7 +2369,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // plan has refused. The gateway wrapper opens the key for API sessions.
     const pickBilling = async () => route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
       provider: launch.id === 'codex' ? 'codex' : 'claude',
-      capacity: capacity.read(), state: deps.billing?.readState?.(), now: deps.now(),
+      capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
     });
     // The billing of the launch in hand, and of the last one once it is over.
     let picked = await pickBilling();
@@ -2401,7 +2408,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       } catch (error) {
         say(`${name}: the refusal was not recorded (${error.message})`);
       }
-      const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), now: deps.now() });
+      const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
       return next.billing === billing ? null : { from: billing, to: next.billing };
     };
     // Set when a refusal hands the step to the other billing; `noted` when the

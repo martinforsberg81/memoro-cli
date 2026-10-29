@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createBillingGateway } from '../../src/mc/billing-gateway.js';
 import { gatewayToolConfig, runGatewaySession } from '../../src/mc/billing-gateway-session.js';
@@ -38,7 +39,34 @@ process.exit(res.status === 200 ? 0 : 3);
     provider: 'claude', model: 'opus', bin, args: [],
     env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: 'provider-secret', MC_VAULT_PASSPHRASE: 'vault-secret' },
     readKey: async () => ({ ok: true, key: 'provider-secret' }),
+    readApi: () => ({ claude: true, codex: true }),
     createGateway: ({ keys, grants }) => createBillingGateway({ keys, grants, fetchImpl: async () => new Response('ok') }),
   });
   assert.equal(result, 0, 'the fake tool received no key and the gateway accepted its Claude model');
+});
+
+test('API off: the key is never opened and the tool never starts', async () => {
+  let opened = false;
+  let spawned = false;
+  const result = await runGatewaySession({
+    provider: 'codex', model: 'gpt-6-astra', bin: '/bin/false', args: [],
+    readKey: async () => { opened = true; return { ok: true, key: 'k' }; },
+    readApi: () => ({ claude: true, codex: false }),
+    spawnTool: () => { spawned = true; throw new Error('must not spawn'); },
+  });
+  assert.equal(result, 1);
+  assert.equal(opened, false);
+  assert.equal(spawned, false);
+});
+
+test('off a terminal the tool gets pipes of its own, not this process\'s stdout', async () => {
+  let stdio = null;
+  const result = await runGatewaySession({
+    provider: 'claude', model: 'opus', bin: process.execPath, args: ['-e', ''], terminal: false,
+    readKey: async () => ({ ok: true, key: 'k' }),
+    readApi: () => ({}),
+    spawnTool: (bin, args, options) => { stdio = options.stdio; return spawn(bin, ['-e', ''], options); },
+  });
+  assert.equal(result, 0);
+  assert.deepEqual(stdio, ['inherit', 'pipe', 'pipe']);
 });
