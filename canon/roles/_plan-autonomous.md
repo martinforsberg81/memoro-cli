@@ -27,7 +27,9 @@ programme_revision and input (complete v2 goal). It creates an inert draft;
 send and resume are separate decisions. The agreed contract always bounds it.
 reach-stop takes id, kind, programme_revision, stop (approved stop ID) and
 reference. Never dispatch beyond an agreed stop. Opening mc plan is foreground
-and does not activate this mode.
+and does not activate this mode; only the operator's `mc programme start` does.
+Start, pause and resume are the operator's, never yours. V1 projects in the
+programme keep their fixed steps, review and mend; never decide on them.
 
 Persisted intents and receipts survive retries. Retry the same ID and exact
 input to reconcile a committed effect; never adopt a stale version or rotate

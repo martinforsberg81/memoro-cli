@@ -177,12 +177,24 @@ export function readCurrentHandoff({ root, ...context }) {
   return continuation;
 }
 
+/** A predecessor is read against the assignment and agreement it was built
+ * for: a plan revision between two sessions changes the revisions, never the
+ * finished attempt. `history` is `{ assignments, programmes }`, the goal's
+ * contracts and the approved agreements; without it, the current ones. */
+function predecessorContext(dir, runId, context, history) {
+  const attempt = read(join(dir, `${runId}.json`), ARTIFACT_MAX_BYTES);
+  const result = plain(attempt) ? attempt.result : null;
+  return { ...context,
+    assignment: history?.assignments?.find(item => item.goal_revision === result?.goal_revision) || context.assignment,
+    programme: history?.programmes?.find(item => item.revision === result?.programme_revision) || context.programme };
+}
+
 /** Trusted, inactive runner seam. Publication observations come from Git and the
  * existing receipt reader, never fields supplied by the model. Callers must own
  * the reserved run and supply process completion, independently observed remote
  * HEAD and PR identity.
  * This stores data only: no push, provider call, state transition or launch. */
-export function persistSessionResult({ root, result, publication = null, completion = null, ownership, expectedPreviousRun = null, ...context }, { writeCurrent = writeJsonAtomic } = {}) {
+export function persistSessionResult({ root, result, publication = null, completion = null, ownership, expectedPreviousRun = null, history = null, ...context }, { writeCurrent = writeJsonAtomic } = {}) {
   const expected = binding(context);
   requireValid(validateSessionResult(result, context));
   if (expectedPreviousRun !== null && (!id(expectedPreviousRun) || expectedPreviousRun === expected.run_id)) throw new Error('invalid previous run');
@@ -210,7 +222,7 @@ export function persistSessionResult({ root, result, publication = null, complet
     const current = pointer(files.current);
     if ((current?.run_id ?? null) !== expectedPreviousRun && current?.run_id !== expected.run_id) throw new Error('stale predecessor; current handoff was replaced');
     if (current && current.run_id !== expected.run_id) {
-      const predecessor = readCurrentHandoff({ root, ...context, runId: current.run_id });
+      const predecessor = readCurrentHandoff({ root, ...predecessorContext(files.dir, current.run_id, context, history), runId: current.run_id });
       if (predecessor.observed.branch !== ownership.branch || predecessor.observed.pr !== ownership.pr) throw new Error('branch/PR ownership cannot change between runs');
     }
     const attempt = { previous_run_id: expectedPreviousRun, result, observed };

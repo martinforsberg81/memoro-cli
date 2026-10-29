@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readAutonomousState, recordAutonomousMergeEvent } from './autonomous-state.js';
+import { readAutonomousState, readProgrammeState, recordAutonomousMergeEvent } from './autonomous-state.js';
 import { reviewDigest } from './autonomous-review-report.js';
 import { autonomousMergeDoor, autonomousPrOwner } from './autonomous-pr.js';
 import { mergesPath, parseQueue, queuedFor } from './merge-queue.js';
@@ -77,6 +77,9 @@ export async function routeAutonomousReview({ root, programme, project, repoPath
   try {
     const state = readAutonomousState(root, programme, project);
     if (!reviewRoutePending(root, state)) return { queued: false, reason: 'report has no pending automatic route' };
+    // Pause holds a new submission without answering it: the route stays
+    // pending and continues on resume, rather than becoming a refusal for plan.
+    if (readProgrammeState(root, programme).planner_jobs?.mode === 'paused') return { queued: false, reason: 'programme is paused; the clean review is submitted on resume' };
     const report = state.review_reports.at(-1); const binding = reportBinding(report);
     const refuse = reason => {
       recordAutonomousMergeEvent(root, programme, project, { binding, type: 'merge-refused', details: { reason } });

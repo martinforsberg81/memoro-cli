@@ -27,7 +27,9 @@
  *
  * Refused, with nothing touched, while any plan under the programme is still
  * on main in either repository (a done one is the runner's to archive first),
- * or while release would keep anything — uncommitted work, commits main
+ * while an autonomous (v2) goal is not confirmed by plan or the programme's
+ * autonomous work is anything but not started or resting at a reached planned
+ * stop (`autonomousArchiveFacts`), or while release would keep anything — uncommitted work, commits main
  * lacks, a shell standing in the directory, a file somebody put there. Main
  * goes first because it is the half that can fail on the network; a planning
  * session left behind by a failed PR is the state this command started from,
@@ -40,7 +42,8 @@ import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
-import { archivedProgramsHome, programsHome } from './paths.js';
+import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
+import { autonomousPaths, readAutonomousState, readProgrammeState } from './autonomous-state.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 import { tilde } from './status-project.js';
@@ -75,13 +78,25 @@ export function programmeRow({ programme, date, pointer }) {
  * looked up, so the verdict reads no directory — not even the user's ~/mc.
  */
 export function archiveVerdict({
-  programme, plans = [], homes = [], areaExists = false, forecast = null, area,
+  programme, plans = [], homes = [], areaExists = false, forecast = null, area, autonomy = null,
 }) {
   const lines = [];
   for (const plan of plans) {
+    // An autonomous goal is never the runner's to archive: its confirmation decides, below.
+    if (plan.plan?.version === 2) continue;
     lines.push(`${plan.repo} ${programme}/${plan.project} is still on main (${plan.status || 'no status'})`
       + (plan.status === 'done' ? ' — mc run archives it first' : ''));
   }
+  for (const goal of autonomy?.goals || []) {
+    if (goal.confirmed) continue;
+    lines.push(`${goal.repo} ${programme}/${goal.project} is an autonomous goal `
+      + (goal.problem ? `whose state is unreadable (${goal.problem})` : `not confirmed by plan (${goal.phase})`)
+      + ' — its records stay with the programme');
+  }
+  if (autonomy?.problem) lines.push(`${programme}'s autonomous state is unreadable (${autonomy.problem}) — kept for recovery`);
+  else if (autonomy?.mode && !['inactive', 'stopped'].includes(autonomy.mode)) {
+    lines.push(`${programme} is ${autonomy.mode} — an autonomous programme is archived before its start or at a reached planned stop`);
+  } else if (autonomy?.planner) lines.push(`${programme}'s plan session ${autonomy.planner} still holds its lease`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
   for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
@@ -114,8 +129,9 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;
+  const autonomy = autonomousArchiveFacts({ root: workRoot(env), programme, plans });
 
-  const verdict = archiveVerdict({ programme, plans, homes, areaExists, forecast, area: tilde(areaPath) });
+  const verdict = archiveVerdict({ programme, plans, homes, areaExists, forecast, area: tilde(areaPath), autonomy });
   if (!verdict.ok) {
     stderr.write(`mc: ${programme} is not archived — nothing was touched:\n`);
     for (const line of verdict.lines) stderr.write(`  ${line}\n`);
@@ -174,6 +190,36 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     const pr = r.ok ? r.stdout.trim().split('\n').filter(Boolean)[0] : null;
     if (pr) say(`${repo.name}: #${pr} is still open from an earlier attempt — landing that one`);
     return pr || null;
+  }
+}
+
+/**
+ * What the archive needs to know about a programme's autonomous work, read
+ * under the state locks and never written: each v2 goal among `plans` with
+ * whether plan has confirmed it (landing is not confirmation), and the
+ * programme's job mode and planner lease. `{ goals: [], mode: null }` for a
+ * programme without `PROGRAMME_STATE.json`. Unreadable state is a `problem`,
+ * never an absent goal.
+ */
+export function autonomousArchiveFacts({ root, programme, plans = [] }) {
+  const goals = plans.filter((plan) => plan.plan?.version === 2).map((plan) => {
+    try {
+      const state = readAutonomousState(root, programme, plan.project);
+      return { repo: plan.repo, project: plan.project, phase: state.phase,
+        confirmed: state.confirmed === true && state.phase === 'confirmed' && state.evidence.confirmation?.role === 'plan' };
+    } catch (error) {
+      return { repo: plan.repo, project: plan.project, phase: null, confirmed: false, problem: error.message };
+    }
+  });
+  // A name that is no stable ID has no autonomous state at all.
+  let file;
+  try { file = autonomousPaths(root, programme).programme; } catch { return { goals, mode: null }; }
+  if (!existsSync(file)) return { goals, mode: null };
+  try {
+    const journal = readProgrammeState(root, programme).planner_jobs;
+    return { goals, mode: journal?.mode || 'inactive', planner: journal?.lease?.actor.run_id || null };
+  } catch (error) {
+    return { goals, mode: null, problem: error.message };
   }
 }
 

@@ -3,7 +3,8 @@ The bounded session-start payload is your assignment and compact predecessor
 handoff, not a fixed step list. Only plan revises goals or confirms completion;
 review is independent and does not implement repairs. Stay within programme
 scope and planned stops. Read referenced detail only when needed, never load
-prior conversations. Preserve the project's one branch and PR.
+prior conversations. Preserve the project's one branch and PR. This is mc-plan
+v2; v1's fixed steps, appended review and mend do not apply to it.
 
 The runner integrates current main and checks the starting gate before building.
 An integration request is resolve-conflicts-only: keep both intents, regenerate

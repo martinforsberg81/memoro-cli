@@ -29,11 +29,19 @@ review records findings rather than implementing repairs.
 
 `mc project send <v2-project> --expected-revision <n>` validates the authoritative
 contract and approved reference, then publishes an **inactive** PLAN without
-appending v1's mutating review step. It cannot start sessions; programme start
-is not available. `mc project <name>` and `mc status <name>` expose this inactive
-state and revisioned evidence read-only. Invalid v2 and unknown versions are
-reported, never reinterpreted as v1/unplanned work or automatically archived.
-No existing project is migrated. See [the implemented v2 contract and CLI](../technical/mc-autonomous-programmes.md)
+appending v1's mutating review step. It cannot start sessions. Only the
+operator's `mc programme start <programme>` activates a programme, naming an
+approved planned stop and the build and review profiles, and it refuses on an
+installation that does not support every control capability — today every
+installed mc: `mc programme capabilities` says what is built, proven and
+missing. `mc programme status|pause|resume` show and hold a programme; status
+lists the v1 projects in it as unchanged. `mc project <name>` and
+`mc status <name>` expose v2 state and revisioned evidence read-only. Invalid
+v2 and unknown versions are reported, never reinterpreted as v1/unplanned work
+or automatically archived; a v2 goal is archived only with its programme, after
+plan confirmed it. No existing project is migrated. See
+[the v2 contract, its v1 boundaries and rollout state](../technical/mc-autonomous-programmes.md),
+[programme operations](../technical/mc-programme-operations.md)
 and [revisioned storage and ownership](../technical/mc-autonomous-state.md).
 
 ### Fixed-step v1

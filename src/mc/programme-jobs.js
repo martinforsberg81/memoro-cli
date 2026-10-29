@@ -8,6 +8,7 @@ import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, read
 import { STABLE_ID_RE } from './programme-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
+import { PLAN_FILE } from './plan-source.js';
 import { processAlive, readClaim } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { observeMainIncidentLocked, reconcileMainRepairsLocked, cancelMainRepairLocked, mainIncidentHold, assertProjectRecovery, boundedRecoveryWait, RECOVERY_ATTEMPT_LIMIT } from './programme-recovery.js';
@@ -56,9 +57,11 @@ function jobs(state) {
   }
   return value;
 }
+// `anyRevision` is only for idempotent holds (pause): no read-modify-write of
+// an operator's view, so a renewed lease must not turn it into a stale refusal.
 function transact(options, change) {
   return updateProgrammeRegister(options.root, options.programme, (state, paths) => {
-    expected(state, options.revision);
+    if (!options.anyRevision) expected(state, options.revision);
     const journal = jobs(state);
     const next = change(state, journal, paths);
     return next || { ...state, planner_jobs: journal };
@@ -78,6 +81,9 @@ function enqueue(state, journal, event) {
   journal.pending ??= { id: `job-${randomUUID()}`, event_ids: [] };
   journal.pending.event_ids.push(event.id);
 }
+
+/** Operator control (programme-control.js) shares this journal transaction. */
+export { transact as updateProgrammeJobs, enqueue as enqueueProgrammeEvent };
 
 /** Persist before any launch. Duplicate immutable events do not advance state. */
 export function recordProgrammeTrigger(options, event) {
@@ -227,7 +233,7 @@ function projectTriggers(paths, options, state, journal) {
       || release.programme_revision !== state.approved.at(-1).revision || project.programme_revision !== release.programme_revision
       || project.phase !== 'plan_pending' || project.active_run || projectClaimHeld(options.root, paths.id, name) || mainIncidentHold(options.root, paths.id, name)) continue;
     assertProjectRecovery(project);
-    const sent = join(paths.dir, name, 'PLAN.json');
+    const sent = join(paths.dir, name, PLAN_FILE);
     if (!existsSync(sent) || !isDeepStrictEqual(JSON.parse(readFileSync(sent, 'utf8')), project.contract)) continue;
     // The release and its outcome share one authoritative write. The next scan
     // repairs a programme acknowledgement lost after this write.

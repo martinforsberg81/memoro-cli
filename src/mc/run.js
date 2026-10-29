@@ -2083,8 +2083,10 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       if (prsFailed.includes(record.repo)) return 'skipped:prs-unknown';
       const repo = repoOf(name, plans);
       if (!repo) return 'skipped:no-plan';
+      // The runner's gh is `(cwd, args)`; the review, routing and merge doors ask `(args, { cwd })`.
+      const gh = (args, options = {}) => deps.gh(options.cwd || repo.path, args);
       return runAutonomousBuild({ root, record, repo, worktree: join(areaPath(name), repo.name), areaName: areaName(name),
-        lane, pid, paths, deps, capability: autonomous,
+        lane, pid, paths, deps: { ...deps, gh }, capability: autonomous,
         openPrs: openPrsFor({ prs, name, names: plans.map(item => item.project), repo: repo.name }),
         waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
         observeResult: (toolId, result) => {

@@ -1403,6 +1403,25 @@ function programmesLines(lines, c, wide, programmes, expand) {
 }
 
 /**
+ * AUTONOMY — one line per programme that keeps autonomous state: its mode, how
+ * many goals and started operations it has, and what happens next without
+ * anybody typing. Drawn only when such a programme exists, so a page of v1
+ * projects is the page it was; `mc programme status <name>` has the detail.
+ */
+function autonomyLines(lines, c, wide, autonomy) {
+  const list = autonomy?.programmes || [];
+  if (!list.length) return false;
+  heading(lines, c, wide, 'AUTONOMY', `${list.length} programme${list.length === 1 ? '' : 's'}`, 'mc programme status <name>');
+  for (const item of list) {
+    const tone = item.problem || item.mode === 'exception' ? ['red'] : item.mode === 'active' ? ['green'] : ['grey'];
+    const counts = item.problem ? `problem: ${item.problem}`
+      : `${item.goals} goal${item.goals === 1 ? '' : 's'} · ${item.in_flight} in flight${item.stop ? ` · stops at ${item.stop}` : ''}`;
+    say(lines, c, wide, 4, `${item.programme} · ${item.mode} · ${counts} · next: ${item.next_action}`, tone);
+  }
+  return true;
+}
+
+/**
  * MC — mc itself, in one line: how long the runner has been up and on which
  * commit, and whether there is newer code than it is running.
  *
@@ -1546,6 +1565,7 @@ export function renderPageLines(data, {
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
+  if (autonomyLines(lines, c, wide, data.autonomy)) lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
   lines.push('');
   helperLines(lines, c, wide, sessions.desks?.helper, data.intake);

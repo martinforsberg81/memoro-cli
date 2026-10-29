@@ -216,6 +216,15 @@ never triggered.
    `~/mc/plan/<programme>/`: uncommitted work, commits main lacks, a process
    standing in it (the session itself, if run from inside), a file somebody
    put there. A name that is neither on main nor being planned is refused too.
+   An autonomous (v2) goal is never the runner's to archive: the programme
+   archive is its only door (`autonomousArchiveFacts`). It refuses while any v2
+   goal is not confirmed by plan — landed is not confirmed — or its state is
+   unreadable, while the programme's job mode is anything but not started or
+   resting at a reached planned stop (active, paused, waiting, exception), and
+   while a plan session holds its lease. Until then the programme's records —
+   `PROGRAMME_STATE.json`, each goal's `AUTONOMOUS_STATE.json`, plans and
+   drafts — stay in `~/mc/programs/<programme>/`; after, they move with the
+   directory to `~/mc/archive/programs/<programme>/`.
 2. **Main first.** In each repository whose `docs/project/` holds the
    programme: a throwaway worktree from `origin/main` on
    `mc-programme-archive-<programme>-<stamp>` (never `mc-archive-`, which the
