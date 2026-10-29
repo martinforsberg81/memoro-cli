@@ -4,7 +4,7 @@ The v1 review role still closes gaps, measures criteria and publishes. V2 has
 an examine-and-report flavor, `_review-autonomous.md`, selected only through
 `createRunner`'s injected autonomous capability with `review: true`. No CLI or
 environment flag activates it; normal execution remains disabled. This step
-does not open the autonomous merge door or automatically schedule repairs.
+does not activate live programmes or automatically schedule repairs.
 
 ## Models and admission
 
@@ -90,8 +90,12 @@ before completion preserves its reservation/checkout/submission; it is never
 silently treated as successful or relaunched by the picker.
 
 The [autonomous merge door](mc-autonomous-merge.md) now consumes this evidence.
-Review itself still neither queues nor merges; automatic outcome routing to
-programme plan is a separate step. Execution remains inactive.
+Review itself still neither queues nor merges. After its process exits, the
+trusted runner automatically routes a complete current clean report through
+that door to the existing merger. Findings/unknowns remain with plan, as do
+all merge outcomes. Routing crash recovery never launches another builder or
+reviewer. Landed remains distinct from planner-confirmed. Execution remains
+inactive; see the merge document for event identities and recovery.
 
 ## Verification
 

@@ -15,6 +15,7 @@ import { run as gateCommand } from './commands/gate.js';
 import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-review.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
+import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
@@ -32,6 +33,7 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
       if (worktree && state.phase !== 'plan_pending' && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
     }
+    if (capability.review && reviewRoutePending(root, state)) return { kind: 'review', flavor: 'autonomous', routing: true };
     if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };
     if (state.phase !== 'ready') return skip('autonomous-not-ready', `autonomous project is ${state.phase}`);
     if (openPrs.some(pr => pr.number !== state.ownership.pr || pr.headRefName !== state.ownership.branch)) return skip('autonomous-pr-mismatch', 'an open PR does not match project ownership');
@@ -43,6 +45,12 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   openPrs, waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say, observeResult }) {
   const choice = autonomousChoice({ root, record, capability, openPrs, worktree });
   if (!choice.kind) { say(`${record.project}: ${choice.skip}`); return `skipped:${choice.reason}`; }
+  if (choice.routing) {
+    const routed = await routeAutonomousReview({ root, programme: record.programme, project: record.project,
+      repoPath: repo.path, env: deps.env, gh: deps.gh, start: deps.startMerger });
+    say(`${record.project}: independent review continuation: ${routed.queued ? 'queued for merger' : routed.reason}`);
+    return 'ran';
+  }
   if (choice.kind === 'review') return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
     waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult });
   const name = record.project; const programme = record.programme;
@@ -235,7 +243,8 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     const invalidReasons = [];
     try { await verifyPr(session); } catch (error) { invalidReasons.push(error.message); }
     const finished = completeAutonomousReview(options, result, { invalidReasons });
-    say(`${name}: independent review recorded for plan (${finished.review_reports.at(-1).clean ? 'clean' : 'findings or unknown'}); nothing queued`);
+    const routed = await routeAutonomousReview({ root, programme, project: name, repoPath: repo.path, env: deps.env, gh: deps.gh, start: deps.startMerger });
+    say(`${name}: independent review recorded for plan (${finished.review_reports.at(-1).clean ? 'clean' : 'findings or unknown'}); ${routed.queued ? 'queued for merger' : `nothing queued: ${routed.reason}`}`);
     return 'ran';
   } catch (error) {
     say(`${name}: independent review stopped: ${error.message}`);

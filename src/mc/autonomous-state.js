@@ -455,9 +455,51 @@ export function recordAutonomousReview(root, programme, project, { actor, revisi
         ...report.result.criteria.flatMap(item => item.uncertainty.map(text => `${item.criterion_id}: ${text}`))],
       criteria: report.result.criteria.map(item => ({ criterion_id: item.criterion_id, status: item.status, reference: item.evidence.join('\n') })) };
     const next = { ...state, phase: 'plan_pending', active_run: null,
+      plan_events: [...(state.plan_events || []), { id: `review-${reviewDigest(report)}`, type: 'review-reported',
+        report_id: report.id, reference, goal_revision: session.assignment.goal_revision,
+        programme_revision: session.assignment.programme.revision, clean: report.clean }],
       review_reports: [...(state.review_reports || []), { ...report, reference }],
       evidence: { ...state.evidence, reviews: [...state.evidence.reviews, observation] } };
     valid(validateAutonomousEvidence(next.evidence));
+    return save(paths.project, state, next, deps);
+  }, deps);
+}
+
+/** Trusted outcome writer. Events precede queue cleanup; replay never confirms
+ * a goal, resurrects an answered handoff or rewrites a later assignment. */
+export function recordAutonomousMergeEvent(root, programme, project, { binding, type, details = {}, ticket = null, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths);
+    if (!['merge-queued', 'merge-refused', 'merge-failed', 'merge-unknown', 'merge-landed'].includes(type)) throw new Error('unknown autonomous merge event');
+    const report = state.review_reports?.find(item => item.id === binding.report_id);
+    const bound = !!report && reviewDigest(report) === binding.report_digest
+      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision
+      && report.session.assignment.programme.revision === binding.programme_revision;
+    if (state.ownership.pr !== binding.pr || state.ownership.branch !== binding.branch
+      || (!bound && ['merge-queued', 'merge-landed'].includes(type))) throw new Error('merge event report/ownership binding changed');
+    // Missing/damaged evidence can carry a refusal to plan, never permission
+    // to queue or attribute a successful landing to that evidence.
+    const event = { id: `${type}-${reviewDigest({ binding, details })}`, type, binding, binding_verified: bound, details };
+    const previous = state.plan_events || [];
+    if (previous.some(item => item.id === event.id)) return structuredClone(state);
+    const current = state.goal_revision === binding.goal_revision && state.programme_revision === binding.programme_revision
+      && state.publication?.head === binding.head && (!state.review_reports?.length || state.review_reports.at(-1).id === binding.report_id);
+    const next = { ...state, plan_events: [...previous, event] };
+    if (type === 'merge-queued') {
+      if (!current || state.active_run || state.confirmed || !['plan_pending', 'landing'].includes(state.phase)
+        || (state.merge_handoff?.status === 'answered' && isDeepStrictEqual(state.merge_handoff.binding, binding))) throw new Error('autonomous merge handoff is no longer pending');
+      if (!ticket || ticket.head !== binding.head || ticket.review_id !== binding.report_id
+        || ticket.review_digest !== binding.report_digest) throw new Error('merge ticket does not match report');
+      next.phase = 'landing'; next.merge_handoff = { binding, ticket, status: 'pending' };
+    } else if (current) {
+      next.merge_handoff = { binding, ticket: ticket || state.merge_handoff?.ticket || null, status: 'answered' };
+      // A late failure cannot undo a read-back landing or a planner decision.
+      if (type === 'merge-landed') next.landing = { ...details, binding };
+      if (!state.confirmed && !state.active_run) {
+        if (type === 'merge-landed') next.phase = 'landed';
+        else if (state.phase !== 'landed') next.phase = 'plan_pending';
+      }
+    }
     return save(paths.project, state, next, deps);
   }, deps);
 }

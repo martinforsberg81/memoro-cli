@@ -55,6 +55,8 @@ export function autonomousProof({ root, owner, pr }) {
   'current durable normal handoff is missing or invalid');
   const report = state.review_reports?.at(-1);
   const session = report?.session;
+  requireThat(!(state.merge_handoff?.status === 'answered' && state.merge_handoff.binding.report_id === report?.id),
+    'autonomous merge outcome requires plan and renewed evidence');
   requireThat(report?.schema === 'mc-autonomous-review-report' && report.version === 1 && report.clean === true
     && Array.isArray(report.invalid_reasons) && report.invalid_reasons.length === 0
     && session?.schema === 'mc-autonomous-review-session' && session.version === 1

@@ -40,6 +40,8 @@ import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
 import { autonomousMergeDoor } from './autonomous-pr.js';
+import { recordAutonomousMergeEvent, readAutonomousState } from './autonomous-state.js';
+import { recordMergeOutcome, reportBinding } from './autonomous-outcomes.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
@@ -156,6 +158,7 @@ export async function runMergeRound({
     duration_ms: null,
   };
 
+  const outcomeJob = { repo_path: repoPath, pr: numbers[0], ...(autonomous != null ? { autonomous } : {}) };
   const finish = (stoppedAt, reason) => {
     report.stopped_at = stoppedAt;
     report.reason = reason;
@@ -163,6 +166,10 @@ export async function runMergeRound({
     const ended = clock();
     report.finished_at = new Date(ended).toISOString();
     report.duration_ms = ended - startedAt;
+    if (!batch && mode === 'merge') {
+      try { recordMergeOutcome({ root: workRoot(env), job: outcomeJob, report }); }
+      catch (error) { report.outcome_error = error.message; } // queue owner retains/replays if persistence is unavailable
+    }
     return report;
   };
 
@@ -174,6 +181,13 @@ export async function runMergeRound({
     if (door.checked) {
       if (batch) return finish('autonomous-review-required', 'autonomous admission requires one PR per leased gate round');
       admissions.set(number, door);
+      outcomeJob.autonomous = door.autonomous;
+      if (mode === 'merge') {
+        const ticket = door.autonomous;
+        const state = readAutonomousState(workRoot(env), ticket.programme, ticket.project);
+        recordAutonomousMergeEvent(workRoot(env), ticket.programme, ticket.project,
+          { binding: reportBinding(state.review_reports.at(-1)), type: 'merge-queued', ticket });
+      }
     } else if (autonomous) return finish('autonomous-review-required', 'queued autonomous PR ownership metadata is missing');
   }
 
