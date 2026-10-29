@@ -122,7 +122,9 @@ read: it takes the same locks as other readers and writes nothing. It shows:
 A missing reading is `unknown`: a session without a fresh context reading shows
 `context unknown`, an unpublished goal `gate none recorded` or `not yet
 measured`, never green. Damaged programme or goal state is reported as a
-problem with `unknown` next action, and is left as it is for recovery.
+problem with `unknown` next action, and is left as it is for recovery. A name
+with no `PROGRAMME_STATE.json` — mistyped, or a programme of v1 projects only —
+is mode `none`, "not an autonomous programme", exit 1: absence, not damage.
 
 `mc status <project>` for a v2 project adds the programme's mode and the goal's
 next action. The page (`mc`) draws an `AUTONOMY` block after PROGRAMMES, one line

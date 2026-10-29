@@ -289,6 +289,13 @@ test('unknown and damaged state stays unknown, and v1 projects in the programme 
   assert.equal(status.mode, 'unknown'); assert.match(status.next_action, /^unknown/u);
   assert.equal(await f.cli(['status', f.programme]), 1); assert.match(f.out(), /problem/u);
   assert.equal(readFileSync(f.paths.programme, 'utf8'), '{');
+  // A name without autonomous state is no programme, not damage to preserve.
+  for (const name of ['no-such-programme', 'Not An Id']) {
+    status = programmeStatus(f.root, name);
+    assert.equal(status.mode, 'none'); assert.match(status.problem, /not an autonomous programme/u);
+    assert.equal(status.next_action, 'none — nothing autonomous to run');
+  }
+  assert.equal(await f.cli(['status', 'no-such-programme']), 1); assert.doesNotMatch(f.out(), /recovery/u);
 });
 
 test('the page draws AUTONOMY only for programmes with autonomous state and mc status says the mode', async t => {

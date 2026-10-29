@@ -157,6 +157,11 @@ export function programmeStatus(root, programme, deps = {}) {
   const report = installationCapabilities(deps);
   const missing = missingCapabilities(report);
   const execution = { supported: !missing.length, missing, reason: missing.length ? report.reason || null : null };
+  // No state file is no autonomous programme — a mistyped name or v1 only — never damage.
+  if (!STABLE_ID_RE.test(programme) || !existsSync(join(root, PROGRAMS_HOME, programme, PROGRAMME_STATE_FILE))) {
+    return { programme, mode: 'none', problem: `no ${PROGRAMME_STATE_FILE} — not an autonomous programme; v1 projects are in mc status`,
+      execution, goals: [], legacy: [], in_flight: [], next_action: 'none — nothing autonomous to run' };
+  }
   let state;
   try { state = readProgrammeState(root, programme); }
   catch (error) { return { programme, mode: UNKNOWN, problem: error.message, execution, goals: [], legacy: [], in_flight: [], next_action: `${UNKNOWN} — programme state preserved for recovery` }; }
