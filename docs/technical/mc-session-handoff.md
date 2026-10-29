@@ -65,7 +65,11 @@ mc observations. `CURRENT.json` atomically replaces only the prompt pointer,
 identifying the current run and artifact digest. Writes use the existing strict
 register lock and compare the expected predecessor; a stale writer cannot replace
 a newer handoff. Slow Git observations happen before that shared lock; the
-reserved run must own a quiescent checkout. Branch/PR identity cannot change across runs. A retry may reuse
+reserved run must own a quiescent checkout. Branch/PR identity cannot change across runs: the predecessor is
+read back to compare it, against the goal and programme revisions it was built
+for (`history: { assignments, programmes }`, the goal's contracts and the
+approved agreements), so a session after plan revised the goal can still
+publish on the same branch and PR. A retry may reuse
 an identical artifact, never replace it or relabel an old run as a new attempt.
 
 The immutable artifact is written before the pointer. A crash between them leaves

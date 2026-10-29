@@ -116,6 +116,17 @@ problem with `unknown` next action, and is left as it is for recovery.
 next action. The page (`mc`) draws an `AUTONOMY` block after PROGRAMMES, one line
 per programme that has `PROGRAMME_STATE.json`; with none, the page is unchanged.
 
+## Archive
+
+A programme with autonomous goals ends the way every programme does, with
+`mc plan <programme> --archive` ([mc-plan.md](mc-plan.md#archiving-a-programme)),
+and only then: the runner never archives a v2 goal on its own. The archive is
+refused while any goal is not confirmed by plan (a landed goal is not), while
+the programme is active, paused, waiting or in an exception, or while a plan
+session holds its lease. Before that every programme record stays where it is;
+after, the programme's directory, its `PROGRAMME_STATE.json` and every goal's
+state with it, moves whole to `~/mc/archive/programs/<programme>/`.
+
 ## Verification
 
 `mc gate tests/mc/programme-status.test.js` covers the inactive default and
@@ -124,3 +135,29 @@ rendered status of a building, reviewed and revised goal, a claimed planner,
 pause/resume with in-flight work, held merge submission, restored waits and
 exceptions, reached stops, damaged state, v1 projects in the programme, the
 page block and the `mc status` lines.
+
+The acceptance scenarios run end to end on real temporary repositories:
+a bare origin and its primary clone, the real runner, planner journal,
+independent review, merge admission, leased merger round and archive. GitHub
+(a PR store that squashes the pinned head into the origin's main), the model
+sessions and the merge round's gate are deterministic adapters
+(`tests/mc/autonomy-lifecycle-fixture.js`); no model is called.
+
+- `mc gate tests/mc/autonomy-lifecycle.test.js`: one goal from a deliberate
+  start through fresh bounded sessions, a main conflict integrated by the next
+  session, review findings to plan only, a plan revision on the same branch and
+  PR, a clean review, the exact-head landing, after-integration confirmation,
+  the planned stop and the programme archive; a closing mid-criterion with a red
+  gate or a forced exit; a real process that ignores closure (and SIGTERM) and
+  one that loses its clock; a long gate that keeps its lane and its builder; a
+  crash after the push, after PR creation, after the review report, after the
+  merge intent, after the merge and after plan's confirmation, each recovered to
+  one PR, one merge and one confirmation; main or head movement and damaged
+  ownership after review; one red main shared by two goals becoming one
+  incident and one repair, a quota wait, and stagnation counted across sessions.
+- `mc gate tests/mc/autonomy-coexistence.test.js`: a v1 project beside a v2
+  goal in one runner under one lane cap, with its prompt, plan and merge door
+  unchanged; no activation by status, reconciliation, the installed runner or
+  an unsupported start; pause and resume with work in flight while v1 runs; the
+  planned stop with v1 running on and a foreground draft that changes no active
+  work.

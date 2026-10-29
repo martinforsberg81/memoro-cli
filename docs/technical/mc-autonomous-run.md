@@ -20,6 +20,9 @@ manual credits are not launched through this inactive seam. Both execution modes
 use the runner's project claims, repository lanes, predecessor current files and
 machine-wide `waitForSlot`/`dropSlot` accounting. Gate selection and resource
 reservations remain those of `mc gate`; there is no new direct test runner.
+The runner's own `gh` is `(cwd, args)`; the review, routing and merge doors it
+hands work to ask `(args, { cwd })`, so `runStepClaimed` passes them an adapter
+that defaults the cwd to the repository's primary checkout.
 
 A strict atomic state mutation reserves a new UUID-based build run, its branch
 and fresh session control together. Competing runners cannot reserve the same

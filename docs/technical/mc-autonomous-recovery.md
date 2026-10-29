@@ -4,7 +4,9 @@ The injected v2 runner reconciles a published build before releasing its owner.
 This does not enable a live programme, launch independent review, confirm a goal
 or queue merge. V1's step selection, failed-to-person and archive behavior remain
 separate. V2 cannot enter the legacy project archive, even when a legacy register
-entry says done. Plan confirmation and the later archive door are still required.
+entry says done. Its records stay until plan has confirmed it and the
+programme itself is archived with `mc plan <programme> --archive`
+([mc-plan.md](mc-plan.md#archiving-a-programme)).
 
 ## Continuation states
 

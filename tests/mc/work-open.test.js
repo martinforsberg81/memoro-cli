@@ -21,6 +21,7 @@ import { sessionArgs } from '../../src/adapters/claude-code.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
+import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
@@ -50,7 +51,9 @@ function fixture({ entries = null } = {}) {
   return {
     areaRoot,
     worktree: { repo: null, path: areaRoot, is_git: false },
-    env: { ...process.env, CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome },
+    // The ambient provider keys are the session's, not the fixture's: a gate
+    // run under a gateway grant must build the same argv as one without.
+    env: { ...scrubProviderApiKeysFromEnv(process.env), CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome },
   };
 }
 

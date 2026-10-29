@@ -190,7 +190,9 @@ export async function completeAutonomousPublication(options, processResult, deps
     if (!findPublicationReceipt({ ...evidence, root: evidence.evidenceRoot, repo: state.contract.repo,
       sessionRun: options.actor.run_id, goalRevision: state.goal_revision })) throw new Error('publication evidence changed');
     const previousRun = state.runs.filter(run => run.role === 'step' && run.run_id !== options.actor.run_id).at(-1)?.run_id ?? null;
-    const handoff = persistSessionResult({ root: options.root, ...context, result, publication: evidence,
+    // A predecessor built before plan revised the goal is read against its own revision.
+    const history = { assignments: state.contracts, programmes: readProgrammeState(options.root, options.programme).approved };
+    const handoff = persistSessionResult({ root: options.root, ...context, result, publication: evidence, history,
       ownership: state.ownership, expectedPreviousRun: previousRun, completion: { exit_code: 0, interrupted: false } }, deps.handoffDeps);
     if (publication.phase !== 'handoff_committed') publication = save(options, { ...publication,
       phase: 'handoff_committed', handoff: handoff.artifact }, deps);
