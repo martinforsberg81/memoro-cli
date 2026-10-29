@@ -49,7 +49,7 @@ function grantFor(req, grants, provider, now) {
 function modelAllowed(grant, model) {
   if (typeof model !== 'string' || !Array.isArray(grant.models)) return false;
   return grant.models.some((allowed) => allowed === '*' || allowed === model
-    || (grant.provider === 'claude' && ['opus', 'sonnet', 'haiku'].includes(allowed)
+    || (grant.provider === 'claude' && ['opus', 'fable', 'sonnet', 'haiku'].includes(allowed)
       && model.startsWith(`claude-${allowed}-`)));
 }
 
