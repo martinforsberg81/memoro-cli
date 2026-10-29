@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { programmeJobsFixture } from './programme-jobs-fixture.js';
 import { autonomousProject } from './autonomy-fixtures.js';
@@ -16,6 +16,7 @@ import { readProgrammeIncidents, mainIncidentHold, projectRecovery, mainRepairPr
 import { recordMergeOutcome, reportBinding, routeAutonomousReview } from '../../src/mc/autonomous-outcomes.js';
 import { autonomousChoice } from '../../src/mc/autonomous-run.js';
 import { recoverAutonomousBuild } from '../../src/mc/autonomous-recovery.js';
+import { takeClaim, releaseClaim } from '../../src/mc/resource-claim.js';
 
 const basis = { criteria: ['contracts'], reference: 'decisions/approved-cli-repair-scope' };
 function fixture(t) {
@@ -341,4 +342,112 @@ test('malformed main-red source data refuses reconciliation before creating inci
   f.patch(state => { state.plan_events = [{ id: 'malformed-main', type: 'merge-failed', binding: { programme_revision: 1 }, details: { main_failures: 'tests/not-an-array.test.js' } }]; });
   assert.throws(() => f.scan(), /invalid main failure source/u);
   assert.deepEqual(f.read(), before); assert.deepEqual(readProgrammeIncidents(f.root), []);
+});
+
+test('a repair observing its assigned main failure again never waits on itself or allocates another repair', t => {
+  const f = fixture(t);
+  const failure = project => f.patch(state => {
+    state.plan_events = [{ id: `failure-${project}`, type: 'merge-failed', binding: { programme_revision: 1 },
+      details: { main_failures: ['tests/shared.test.js'] } }];
+  }, project);
+  failure(f.project); f.scan();
+  const [incident] = readProgrammeIncidents(f.root);
+  f.apply({ id: 'repair-observed-main', kind: 'main-repair', project: 'repair', expected_revision: 0,
+    programme_revision: 1, incident: incident.id, basis, input: autonomousProject({ project_id: 'repair' }) });
+  f.send('repair'); failure('repair'); f.scan(); f.scan();
+  assert.equal(readProgrammeIncidents(f.root).length, 1);
+  assert.equal(readProgrammeIncidents(f.root)[0].repair.project, 'repair');
+  assert.equal(readProgrammeIncidents(f.root)[0].dependents.length, 2);
+  assert.equal(mainIncidentHold(f.root, f.programme, 'repair'), null);
+  f.apply(f.intent('resume-project', {}, { project: 'repair', expected_revision: f.state('repair').revision }));
+  assert.equal(f.state('repair').phase, 'ready');
+  assert.equal(mainIncidentHold(f.root, f.programme, f.project).id, incident.id);
+  f.send(f.project);
+  assert.throws(() => f.apply(f.intent('resume-project')), /shared main incident/u);
+});
+
+test('reaching a planned stop waits for live or unreadable builder claims even without a recorded active run', t => {
+  const f = fixture(t);
+  const path = join(f.root, 'runner', 'autonomous-builds', f.programme, `${f.project}.claim`);
+  const held = takeClaim(path, { pid: process.pid }); assert.equal(held.ok, true);
+  t.after(() => releaseClaim(path, held.marker));
+  const stop = { id: 'stop-after-claims', kind: 'reach-stop', programme_revision: 1, stop: 'design-review', reference: 'decisions/safe-stop' };
+  assert.throws(() => f.apply(stop), /affected runs must close/u);
+  assert.equal(f.read().planner_jobs.mode, 'active');
+  releaseClaim(path, held.marker);
+  writeFileSync(path, '{');
+  assert.throws(() => f.apply(stop), /affected runs must close/u);
+  rmSync(path);
+  f.apply(stop); f.apply(stop); acknowledge(f); f.scan();
+  assert.equal(f.read().planner_jobs.mode, 'stopped');
+  assert.equal(f.read().planner_jobs.operations.filter(item => item.intent.id === stop.id).length, 1);
+});
+
+test('an agreement change with ready work creates one planner continuation and fences direct dispatch until alignment', t => {
+  const f = fixture(t); f.send(f.project); f.apply(f.intent('resume-project'));
+  const before = f.state(); acknowledge(f);
+  const actor = { ...foreground, run_id: 'ready-successor-agreement' };
+  reserveProgrammeRun(f.root, f.programme, actor, f.read().revision);
+  mutateProgramme(f.root, f.programme, 'draft', { ...f.draft, revision: 2, based_on: 1 }, { actor, revision: f.read().revision });
+  mutateProgramme(f.root, f.programme, 'approve', { by: 'Martin', at: '2026-10-29T12:00:00Z' }, { actor, revision: f.read().revision });
+  releaseProgrammeRun(f.root, f.programme, actor, f.read().revision);
+  f.scan(); const pending = f.read().planner_jobs.pending; f.scan();
+  assert.deepEqual(f.read().planner_jobs.pending, pending);
+  assert.equal(pending.event_ids.length, 1);
+  assert.match(f.read().planner_jobs.events.at(-1).reference, /#programme_revision$/u);
+  assert.throws(() => startAutonomousBuild(f.root, f.programme, f.project, { actor: builder, revision: before.revision }), /programme revision changed/u);
+  const record = { plan: before.contract, project: f.project, programme: f.programme, repo: 'memoro-cli' };
+  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).reason, 'programme-revision');
+  const next = decorate(f, f.claim({ actor: { role: 'plan', run_id: 'align-ready-work' } }));
+  next.apply(next.intent('revise-project', { ...before.contract, goal_revision: 2, programme: { id: f.programme, revision: 2 } }));
+  next.apply(next.intent('resume-project'));
+  assert.equal(next.state().phase, 'ready'); assert.equal(next.state().programme_revision, 2);
+  assert.deepEqual(next.state().ownership, before.ownership); assert.deepEqual(next.state().attempts, before.attempts);
+});
+
+test('a successor agreement fences even a clean reviewed merge and sends the preserved delivery back to plan', async t => {
+  const f = await ready(t); const read = () => readProgrammeState(f.root, f.programme);
+  releaseProgrammeRun(f.root, f.programme, planner, read().revision);
+  setProgrammeJobMode({ root: f.root, programme: f.programme, revision: read().revision }, {
+    mode: 'active', event: { id: 'activation', type: 'activation', programme_revision: 1, reference: 'approval' } });
+  const actor = { ...foreground, run_id: 'review-successor-agreement' };
+  reserveProgrammeRun(f.root, f.programme, actor, read().revision);
+  const { approval: ignored, ...draft } = read().approved[0];
+  mutateProgramme(f.root, f.programme, 'draft', { ...draft, status: 'draft', revision: 2, based_on: 1 }, { actor, revision: read().revision });
+  mutateProgramme(f.root, f.programme, 'approve', { by: 'Martin', at: '2026-10-29T12:00:00Z' }, { actor, revision: read().revision });
+  releaseProgrammeRun(f.root, f.programme, actor, read().revision);
+  const before = f.stateNow(); const door = await f.door();
+  assert.equal(door.ok, false); assert.match(door.problems.join('; '), /programme revision changed/u);
+  reconcileProgrammeJobs({ root: f.root, programme: f.programme, revision: read().revision });
+  assert.deepEqual(f.stateNow(), before, 'revision fencing preserves the PR, reviewed head and all evidence');
+  assert.ok(read().planner_jobs.events.some(item => item.reference.endsWith('#programme_revision')));
+});
+
+test('a real clean landing releases the next selected goal only after planner confirmation covers after-integration verification', async t => {
+  const base = await ready(t); const read = () => readProgrammeState(base.root, base.programme);
+  releaseProgrammeRun(base.root, base.programme, planner, read().revision);
+  const options = extra => ({ root: base.root, programme: base.programme, revision: read().revision, ...extra });
+  setProgrammeJobMode(options(), { mode: 'active', event: { id: 'activation', type: 'activation', programme_revision: 1, reference: 'approval' } });
+  const actor = { role: 'plan', run_id: 'next-goal-plan' };
+  const lease = claimProgrammeJob(options({ actor, pid: process.pid })).planner_jobs.lease;
+  const f = decorate({ ...base, read, options }, () => options({ actor, token: lease.token }));
+  f.create('next-goal'); f.send('next-goal');
+  const next = (kind, input = {}) => f.intent(kind, input, { project: 'next-goal', expected_revision: f.state('next-goal').revision });
+  f.apply(next('dependencies', { projects: [{ project: f.project, goal_revision: 1 }] }));
+  f.apply(next('await-dependencies'));
+  const report = f.state().review_reports.at(-1);
+  recordAutonomousMergeEvent(f.root, f.programme, f.project, { binding: reportBinding(report), type: 'merge-landed',
+    details: { merge_commit: report.session.head, merged_into: 'main' } });
+  f.scan(); assert.equal(f.state().confirmed, false); assert.equal(f.state('next-goal').phase, 'plan_pending');
+  const input = { id: 'confirm-delivery', reference: 'decisions/verified-integration', criteria: [
+    { criterion_id: 'schema', reference: 'reports/schema' }, { criterion_id: 'integration', reference: 'integration/observed' } ] };
+  const rejected = f.intent('confirm-project', { ...input, criteria: input.criteria.slice(0, 1) });
+  assert.throws(() => f.apply(rejected), /including after-integration/u);
+  cancelProgrammeOperation(f.owner(), { id: rejected.id, reason: 'Wait for the after-integration observation.' });
+  f.apply(f.intent('confirm-project', input)); f.scan();
+  const released = f.state('next-goal');
+  assert.equal(f.state().confirmed, true); assert.equal(released.phase, 'ready');
+  f.scan(); assert.equal(f.state('next-goal').revision, released.revision);
+  assert.equal(released.plan_events.filter(item => item.type === 'dependency-released').length, 1);
+  assert.equal(f.read().execution_enabled, false);
 });

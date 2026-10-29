@@ -31,7 +31,8 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
   if (assignment.project_id !== record.project || assignment.programme.id !== record.programme || assignment.repo !== record.repo) return skip('assignment-mismatch', 'project identity does not match its location');
   try {
     const state = readAutonomousState(root, record.programme, record.project);
-    const journal = readProgrammeState(root, record.programme).planner_jobs;
+    const agreement = readProgrammeState(root, record.programme);
+    const journal = agreement.planner_jobs;
     const mode = journal?.mode;
     if (mode && mode !== 'active') return skip('programme-held', 'programme is paused, waiting or stopped');
     if (!isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
@@ -40,6 +41,7 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
       if (worktree && (state.phase !== 'plan_pending' || journal) && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
     }
+    if (journal && state.programme_revision !== agreement.approved.at(-1).revision) return skip('programme-revision', 'programme revision changed; plan must align the goal before dispatch');
     if (mainIncidentHold(root, record.programme, record.project)) return skip('main-incident', 'shared main repair awaits its owning programme plan');
     if (capability.review && reviewRoutePending(root, state)) return { kind: 'review', flavor: 'autonomous', routing: true };
     if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };

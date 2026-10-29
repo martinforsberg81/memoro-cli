@@ -240,6 +240,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
 /** Called under the programme lock by every dispatch admission, not just plan. */
 function assertProgrammeDispatch(root, programme, state, agreement) {
   if (agreement.planner_jobs && agreement.planner_jobs.mode !== 'active') throw new Error('programme is paused, waiting or stopped');
+  if (agreement.planner_jobs && state.programme_revision !== agreement.approved.at(-1).revision) throw new Error('programme revision changed; plan must align the goal before dispatch');
   const incident = mainIncidentHold(root, programme, state.contract.project_id);
   if (incident) throw new Error(`shared main incident ${incident.id} awaits its owning programme plan`);
   for (const item of state.plan_dependencies || []) {

@@ -43,6 +43,7 @@ export function autonomousProof({ root, owner, pr }) {
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
   const agreement = readProgrammeState(root, owner.programme);
   requireThat(!agreement.planner_jobs || agreement.planner_jobs.mode === 'active', 'programme is paused, waiting or stopped');
+  requireThat(!agreement.planner_jobs || state.programme_revision === agreement.approved.at(-1).revision, 'programme revision changed; plan must align the goal before dispatch');
   const programme = agreement.approved.find(item => item.revision === state.programme_revision);
   requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'approved programme revision is missing or invalid');
   requireThat(!state.active_run && ['plan_pending', 'landing'].includes(state.phase) && !state.confirmed,

@@ -167,6 +167,9 @@ function projectTriggers(paths, options, state, journal) {
       || !Array.isArray(project.attempts) || (project.plan_events !== undefined && !Array.isArray(project.plan_events))) throw new Error(`invalid autonomous trigger source: ${file}`);
     projects.set(entry.name, { state: project, file });
     identities.push([entry.name, project.revision]);
+    if (!project.confirmed && project.programme_revision !== state.approved.at(-1).revision) events.push({
+      id: `agreement-${digest([entry.name, project.goal_revision, state.approved.at(-1).revision]).slice(0, 54)}`,
+      type: 'failure', programme_revision: state.approved.at(-1).revision, reference: `${file}#programme_revision` });
     hasNextAction ||= !!project.active_run || ['ready', 'running', 'review_ready', 'reviewing', 'publishing', 'landing'].includes(project.phase);
     const sourceIds = new Set();
     const sourceId = source => {
@@ -396,7 +399,8 @@ export function reachProgrammePlanStop(options, input) {
       const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
       if (!existsSync(file)) continue;
       const project = JSON.parse(readFileSync(file, 'utf8'));
-      if (project.active_run || ['running', 'closing', 'publishing', 'reviewing', 'landing'].includes(project.phase)) throw new Error('affected runs must close before reaching the planned stop');
+      if (project.active_run || ['running', 'handoff_requested', 'closing', 'publishing', 'reviewing', 'landing'].includes(project.phase)
+        || projectClaimHeld(options.root, options.programme, entry.name)) throw new Error('affected runs must close before reaching the planned stop');
     }
     journal.operations.push({ intent, status: 'applied', result: { stop: input.stop } });
     journal.mode = 'stopped'; journal.stop = input.stop;

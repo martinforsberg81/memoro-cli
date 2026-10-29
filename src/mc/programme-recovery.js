@@ -142,6 +142,9 @@ export function reconcileMainRepairsLocked(root) {
 }
 export function mainIncidentHold(root, programme, project) {
   return readProgrammeIncidents(root).find(item => item.status === 'open'
+    // The ordinary repair may observe the same red again. Its own incident
+    // must not become a dependency on its not-yet-confirmed self.
+    && !(item.owner === programme && item.repair?.project === project)
     && item.dependents.some(item => item.programme === programme && item.project === project)) || null;
 }
 

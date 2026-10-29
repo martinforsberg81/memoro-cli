@@ -57,6 +57,14 @@ an interrupted programme acknowledgement cannot release twice. Changed goal or
 approved programme revisions fence the selection; plan must align/reselect it.
 An approved reached stop prevents release as well as build, review and merge.
 Plan must never select work beyond the approved stopping boundary.
+Reaching it also waits for live or unreadable builder claims, not merely the
+project's recorded active run. An orphaned claim is not proof of a safe boundary.
+
+With programme jobs in use, a successor approved agreement fences new build,
+review and merge dispatch for goals on the previous revision. Reconciliation
+coalesces a revision-mismatch event into the owning planner job even when the
+goal was already ready. Plan aligns remaining work at its safe boundary; the
+old PR, evidence and attempts are preserved. Pre-outbox behavior is unchanged.
 
 ## One shared-main incident and repair
 
@@ -89,6 +97,9 @@ Dependents remain held through repair landing and after-integration verification
 Only current planner confirmation resolves the shared incident. Resolution emits
 durable dependency events for affected programmes; plan then authorizes any
 failed work to resume. No branch/PR, failed history or publication is discarded.
+The designated ordinary repair can observe its own assigned failure again without
+waiting on itself or allocating another repair. Its other incident dependencies,
+the dependents' holds and the final green publication/merge requirements remain.
 
 ## External waits and exhausted continuations
 
@@ -120,3 +131,6 @@ programme writes, shared-main repair projection replay, confirmed-only release,
 bounded quota/network/resource waits, exceptions and a stop reached once. Real
 Git fixtures and controlled adapters cover review/merge recording without hosted
 model calls, live programme activation or deployment.
+The recovery suite also follows a clean reviewed landing through complete
+after-integration confirmation to exactly one selected next-goal release, and
+checks revision fencing, repair self-observation and unknown/live stop claims.

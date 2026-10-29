@@ -169,6 +169,7 @@ it('a gate still running after cooperative transport exit blocks the next builde
   const result = await shortSession(work, localObserver(), { session: { onSpawn: () => writeFileSync(join(work.gitDir, 'mc-gate.json'), JSON.stringify({ pid: process.pid })) } });
   assert.equal(result.status, 1); assert.equal(result.normal_exit, false); assert.equal(result.recovery_ready, false);
   assert.equal(result.control.reason, 'gate-worker-alive'); assert.equal(reconcilePreviousSession(work.gitDir).ok, false);
+  assert.equal(result.recovery.reason, 'gate-worker-alive', JSON.stringify(result));
   assert.equal(JSON.parse(readFileSync(join(work.directory, 'attempt', 'snapshot', 'checkpoint.json'), 'utf8')).control.phase, 'incomplete');
 });
 it('supervision refuses missing clocks, terminal control or in-worktree artifacts before spawning', async t => {
