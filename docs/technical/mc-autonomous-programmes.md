@@ -1,9 +1,25 @@
-# Autonomous programme contracts (inactive)
+# Autonomous programmes (opt-in, not supported by the installed runner)
 
-This is the versioned contract and inactive publication layer. Typed commands
-can store and display contracts but grant no session launch, merge permission
-or deployment authority. Existing `mc-plan` v1 validation, fixed steps and register matching remain unchanged.
-`PLAN_VERSION` remains 1. No existing project or programme is migrated.
+This is the versioned contract, its CLI and the rollout state of the whole
+autonomous mode. Typed commands store and display contracts but grant no
+session launch, merge permission or deployment authority. Existing `mc-plan` v1
+validation, fixed steps and register matching remain unchanged. `PLAN_VERSION`
+remains 1. No existing project or programme is migrated.
+
+## V1 and v2 boundaries
+
+| | mc-plan v1 (default) | mc-plan v2, `execution.kind: "autonomous"` |
+| --- | --- | --- |
+| Work unit | fixed `steps[]`, one session each | one goal with stable criterion IDs, as many fresh sessions as it needs |
+| Who changes it | `mc project` verbs and `amend` | plan only (`mc programme decide`), within the approved programme |
+| Review | v1's appended final review step, which may mend | independent review on another model, report only ([review](mc-autonomous-review.md)) |
+| Failure | `mend`, retries, failed-to-person | incomplete attempt to plan ([recovery](mc-autonomous-recovery.md)); no repair role |
+| Merge | `mc publish` / `mc merge`, the legacy door | runner queues a clean reviewed head; the autonomous door rechecks it ([merge](mc-autonomous-merge.md)) |
+| Done | register `done`, automatic archive | plan's confirmation; only `mc plan <programme> --archive` |
+| Runs when | sent and ready | sent, and the programme started by the operator on an installation that supports it |
+
+Each reader dispatches on the plan's version: a v1 plan never reaches a v2
+path and a v2 contract never falls through to v1's. Nothing below changes v1.
 
 ## Version dispatch
 
@@ -103,10 +119,10 @@ The lazy route table used by `src/mc-cli.js` exposes `mc programme` and
 `mc autonomous-project`; both support `--help`. Their `show` operations are
 read-only, and mutations require the reserved role/run and expected state
 revision. There is no public reservation command. `mc programme
-status|start|pause|resume` are the operator's
+capabilities|status|start|pause|resume` are the operator's
 [programme operations](mc-programme-operations.md); start refuses on an
 installation that does not support every control capability, which is every
-installation until activation lands.
+installed mc today (see *Rollout state* below).
 
 `mc autonomous-project send <programme>/<project> --expected-revision <n>`
 (or `mc project send <project> --expected-revision <n>`) checks the authoritative
@@ -134,3 +150,87 @@ review, register interpretation and publication/merge/recovery behavior are
 unchanged. This independent v2 review evidence is not that v1 review step;
 it reports findings without implementing repairs. Plan alone revises goals
 or records confirmation, within approved programme authority and planned stops.
+
+## Programme authorization and deliberate activation
+
+Authority comes from three separate acts, none implied by another:
+
+1. **Agreement.** The foreground plan with Martin drafts the programme
+   (`mc programme draft`) and approves it (`mc programme approve`). The
+   approved revision is immutable; its scope, criteria, authority and planned
+   stops bound everything after it. A draft is never in force.
+2. **Start.** The operator runs `mc programme start` naming the approved
+   revision's planned stop and the build class, control profile and reviewer.
+   Nothing else activates a programme: not installing mc, opening `mc plan`,
+   reading status, the runner's reconciliation scan or sending a goal.
+3. **Plan's decisions.** Within the started programme, headless plan creates,
+   sends, revises, resumes and confirms goals and reaches the planned stop
+   ([programme plan](mc-programme-plan.md)). It cannot change the agreement.
+
+Pause and resume are the operator's too. Headless plan, step and review
+sessions are refused start, pause and resume.
+
+## Closure budgets and unknown context
+
+The session budgets are the `build.profile` given at start, validated by
+`validateControlProfile` and stored in the activation; there is no default
+profile and no universal minute or token value. A profile sets soft, upper and
+emergency active time and context fractions, the closing reserve for gate,
+fixes, commit, push and handoff, tool and lane waits, total awake time,
+no-progress time and the stagnation and failure ceilings
+([session control](mc-session-control.md)).
+
+A soft limit asks a session to finish after a newly measured criterion; an
+upper limit asks even mid-criterion; an emergency limit stops it and records an
+incomplete attempt. Context that cannot be read is `unknown`, never zero: the
+time and checkpoint limits still close the session. Codex reports no current
+context at all; Claude's is an estimate (see the capability report below).
+
+## Non-green recovery
+
+A red gate, a forced or unexpected exit, a crash, missing observations or
+unknown child processes are incomplete attempts: the work is preserved outside
+the checkout, ownership stays held and the attempt goes to plan, never into a
+green handoff ([recovery](mc-autonomous-recovery.md),
+[programme recovery](mc-programme-recovery.md)). Plan diagnoses and retries with
+a different approach, waits, or records an exception; repeated failure and
+stagnation are counted across sessions. Main moving after review, a stale
+report, a changed head or broken ownership refuses merge and reports to plan.
+
+## Rollout state
+
+`mc programme capabilities [--json]` is the installation's own report
+(`installationCapabilities`, `src/mc/programme-control.js`). Every control
+capability is built and proven by tests with fixtures, and none is supported:
+
+| Capability | Proven by | Missing for support |
+| --- | --- | --- |
+| `programme-jobs`, `programme-plan`, `review` | temporary state, real temporary repositories, scripted sessions | the installed runner (`runLoop`) passes no autonomous capability |
+| `build` | the same | that, and a production awake clock that excludes machine suspend |
+| `control-signals` | real fixture processes in both prompt shapes reading the durable `mc session-control status` | observation with a provider process |
+| `interrupt` | a real fixture process ignoring finish-session and SIGTERM, closed with its child | observation with a provider process; the production clock |
+
+Transport, from the 2026-10-28 version and help probes only
+([observation](mc-session-observation.md#what-was-actually-measured)):
+
+| Tool | Prompt | Live control | Current context |
+| --- | --- | --- | --- |
+| Codex exec JSONL (`codex-cli 0.164.0`) | positional argument, stdin ignored | none; durable `mc session-control` | unavailable: usage is cumulative |
+| Claude print stream-json (`2.1.312`) | first stdin user message | none added; durable `mc session-control` | estimate from the last request input |
+
+Not proven with actual provider output: live context telemetry for either tool,
+native live-control delivery, a provider session reading the durable control,
+interruption of a provider process group, a production suspend-aware clock and
+any paid model behaviour. No live model pilot has been run. So `start` refuses
+on every installed mc, `execution_enabled` and `AUTONOMOUS_EXECUTION_ENABLED`
+stay false, and no existing programme can be activated. Supporting it needs the
+runner wiring and clock above and a measured provider pilot; then the report is
+what changes, not the start door.
+
+## Verification
+
+- `mc gate tests/mc/programme-cli-smoke.test.js`: the documented commands as
+  real processes on a disposable programme (see
+  [operations](mc-programme-operations.md#verification)).
+- `mc gate tests/mc/autonomy-lifecycle.test.js tests/mc/autonomy-coexistence.test.js tests/mc/programme-status.test.js`:
+  the acceptance scenarios beside a v1 project.

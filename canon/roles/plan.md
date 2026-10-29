@@ -27,6 +27,11 @@ already decided.
 Read the code first. Where a plan cannot be written until Martin chooses, ask
 him the one thing.
 
+A plan is mc-plan v1, fixed steps, unless Martin agrees an autonomous
+programme: that agreement is `mc programme draft|approve`, and only his
+`mc programme start` sets it running. This session never starts, pauses or
+resumes one.
+
 @include _session-work.md
 
 @include _plan-writing.md

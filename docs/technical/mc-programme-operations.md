@@ -1,7 +1,8 @@
 # Programme status, start, pause and resume
 
 `mc programme status|start|pause|resume` are the operator's view and controls
-for one autonomous programme. They sit beside the existing contract verbs
+for one autonomous programme, and `mc programme capabilities` says what this
+installation can run. They sit beside the existing contract verbs
 (`show`, `draft`, `approve`) and the planner's guarded verbs (`decide`,
 `complete`, `cancel`). Existing v1 projects, their rows on the page, their
 `mc status` output and the runner's default selection are unchanged.
@@ -34,12 +35,23 @@ Start refuses, writing nothing, unless:
   Headless plan, step and review sessions are refused; plan is also refused by
   `reviewCommandRefusal`.
 
-**No installation supports these capabilities yet.** `installationCapabilities`
-returns an empty report with the reason *autonomous execution is not activated
-in this installation*. Tests inject a report; fixtures are not support. So, as
-landed, `start` always refuses on a real machine, and the runner still launches
-v2 work only through `createRunner`'s injected `autonomous` capability, which
-production never passes. `execution_enabled` stays `false`.
+**No installed mc supports these capabilities.** `installationCapabilities`
+reports none supported, with the reason *autonomous execution is not activated
+in this installation*, and says per capability what is built, what proved it
+and what is missing ([rollout state](mc-autonomous-programmes.md#rollout-state)).
+Tests inject a report; fixtures are not support. So `start` refuses on a real
+machine, and the runner launches v2 work only through `createRunner`'s
+injected `autonomous` capability, which `mc run` never passes.
+`execution_enabled` stays `false`.
+
+```
+mc programme capabilities [--json]
+```
+
+prints that report: whether start can succeed here, the missing capabilities,
+and for each capability and each tool's transport (prompt path, live control,
+context source, what was measured) the facts above. It reads no programme and
+writes nothing; review and plan sessions may read it.
 
 A successful start is one write under the programme and register locks: the
 `activation` trigger event, mode `active`, and `planner_jobs.activation` —
@@ -128,6 +140,20 @@ after, the programme's directory, its `PROGRAMME_STATE.json` and every goal's
 state with it, moves whole to `~/mc/archive/programs/<programme>/`.
 
 ## Verification
+
+`mc gate tests/mc/programme-cli-smoke.test.js` runs the commands above as real
+processes against a disposable programme in a temporary work root: the
+agreement drafted and approved with `mc programme draft|approve`, a v1 project
+beside it, and fake `codex` and `claude` binaries first on PATH that record
+every invocation. The installed `mc` reports what it lacks, shows the programme
+inactive and refuses start, pause and resume without writing. A fixture
+installation (`tests/mc/fixtures/programme-installation.js`, a test driver that
+injects a full report) starts it once; the installed `mc` then shows it active
+with no automatic action, pauses it (a repeated pause writes nothing) and
+refuses resume; the fixture installation resumes it. Fake headless step, review
+and plan sessions driving `pause` or `resume` are refused. mc launches no tool
+process and the v1 plan is untouched. This proves the commands and their
+refusals, not a provider: no model session runs.
 
 `mc gate tests/mc/programme-status.test.js` covers the inactive default and
 the refusal on an unsupporting installation, every start precondition, the

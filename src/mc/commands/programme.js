@@ -8,11 +8,20 @@ import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 import { decideProgrammePlan } from '../programme-plan.js';
 import { completeProgrammePlan, cancelProgrammeOperation } from '../programme-jobs.js';
 import { operatorRefusal, pauseProgramme, resumeProgramme, startProgramme } from '../programme-control.js';
-import { programmeStatus, renderProgrammeStatus } from '../programme-status.js';
+import { capabilityReport, programmeStatus, renderCapabilities, renderProgrammeStatus } from '../programme-status.js';
 import { readModels } from '../model-config.js';
 import { scanArgs } from './flags.js';
 
 const CONTROL = ['status', 'start', 'pause', 'resume'];
+
+/** `capabilities [--json]`: a read of this installation, no programme. */
+function capabilities(argv, deps, { stdout, stderr }) {
+  const scanned = scanArgs(argv, { booleans: ['--json'] });
+  if (scanned.error || scanned.positional.length) { stderr.write(`mc: ${scanned.error || 'capabilities takes only --json'}\n`); return 2; }
+  const report = capabilityReport(deps);
+  stdout.write(scanned.flags.json ? `${JSON.stringify(report, null, 2)}\n` : renderCapabilities(report));
+  return 0;
+}
 
 /** `status [--json]`, `start --expected-revision --stop --input-file`,
  * `pause [--expected-revision]`, `resume --expected-revision`. */
@@ -38,6 +47,7 @@ export async function run(argv, deps = {}) {
   const refusal = reviewCommandRefusal(['programme', ...argv], deps);
   if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   const env = deps.env || process.env;
+  if (argv[0] === 'capabilities') return capabilities(argv.slice(1), deps, { stdout, stderr });
   if (CONTROL.includes(argv[0])) return control(argv, deps, { stdout, stderr, env });
   let args;
   try { args = operationArguments(argv, ['show', 'draft', 'approve', 'decide', 'complete', 'cancel']); }
@@ -89,6 +99,7 @@ async function control(argv, deps, { stdout, stderr, env }) {
 
 export function usage() {
   return 'usage — mc programme show <programme>\n'
+    + '        mc programme capabilities [--json]\n'
     + '        mc programme status <programme> [--json]\n'
     + '        mc programme start <programme> --expected-revision <n> --stop <planned stop> --input-file <json>\n'
     + '        mc programme pause <programme> [--expected-revision <n>] [--by <name>]\n'
@@ -96,5 +107,6 @@ export function usage() {
     + '        mc programme draft|approve <programme> --expected-revision <n> --input-file <json>\n'
     + '        mc programme decide|complete|cancel <programme> --expected-revision <n> --input-file <json> (active planner lease only)\n'
     + '        start input: { "by", "build": { "class", "profile" }, "review": { "model" } }; start refuses\n'
-    + '        unless this installation supports every control capability — none do until activation lands\n';
+    + '        unless this installation supports every control capability — mc programme capabilities says\n'
+    + '        what it has and lacks; the installed runner supports none\n';
 }

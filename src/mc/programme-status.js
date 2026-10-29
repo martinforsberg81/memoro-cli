@@ -209,12 +209,39 @@ export function autonomySection({ root, deps = {} } = {}) {
   }) };
 }
 
+/** `mc programme capabilities`: whether start can succeed here and, per
+ * control capability and tool transport, what is built, proven and missing. */
+export function capabilityReport(deps = {}) {
+  const report = installationCapabilities(deps);
+  const missing = missingCapabilities(report);
+  return { supported: !missing.length, missing, reason: missing.length ? report.reason || null : null,
+    capabilities: report.capabilities || [], transport: report.transport || [] };
+}
+
 /* ------------------------------------------------------------------ render */
 
 const clip = (value, max) => {
   const one = String(value ?? '').replace(/\s+/gu, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
+
+export function renderCapabilities(report) {
+  const out = [report.supported ? 'autonomous execution — supported by this installation'
+    : `autonomous execution — not supported here: ${report.reason || 'unsupported'}`];
+  if (!report.supported) out.push(`  start refuses — missing ${report.missing.join(', ')}`);
+  const sub = (key, value) => out.push(`    ${key.padEnd(9)} ${value}`);
+  if (report.capabilities.length) { out.push(''); out.push('CAPABILITIES'); }
+  for (const item of report.capabilities) {
+    out.push(`  ${item.name}`);
+    sub('built', item.built); sub('proven', item.proven); if (item.missing) sub('missing', item.missing);
+  }
+  if (report.transport.length) { out.push(''); out.push('TRANSPORT (version and help probes, 2026-10-28)'); }
+  for (const item of report.transport) {
+    out.push(`  ${item.tool}`);
+    sub('prompt', item.prompt); sub('control', item.live_control); sub('context', item.context); sub('measured', item.measured);
+  }
+  return `${out.join('\n')}\n`;
+}
 
 export function renderProgrammeStatus(status) {
   const out = [`programme ${status.programme} — autonomous · ${status.mode}`];

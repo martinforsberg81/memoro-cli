@@ -1,6 +1,7 @@
-/** Operator start/pause/resume of one programme. Recording an activation is not
- * a launch: the runner still dispatches v2 only through its injected capability,
- * and this installation reports none. Headless roles cannot change the mode. */
+/** Operator start/pause/resume of one programme, and the installation's
+ * capability report. Recording an activation is not a launch: the runner still
+ * dispatches v2 only through its injected capability, and this installation
+ * supports none. Headless roles cannot change the mode. */
 import { createHash } from 'node:crypto';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
 import { validateControlProfile } from './session-control.js';
@@ -8,14 +9,51 @@ import { autonomousModelIdentity, independentModel } from './autonomous-models.j
 import { CLASSES, DEFAULT_CATALOG } from './model-config.js';
 
 export const CONTROL_CAPABILITIES = Object.freeze(['programme-jobs', 'programme-plan', 'build', 'review', 'control-signals', 'interrupt']);
-const UNSUPPORTED = Object.freeze({ supported: Object.freeze([]), reason: 'autonomous execution is not activated in this installation' });
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
-/** What this installation can control. Nothing until the activation work
- * supplies a verified report; tests inject one. Fixtures are not support. */
+// The installed runner is `runLoop`'s `createRunner({ merge, deps })`: no
+// autonomous capability, so it skips every v2 goal.
+const NOT_WIRED = 'the installed runner (runLoop, src/mc/run.js) passes no autonomous capability';
+const NO_CLOCK = 'no production awake clock that excludes machine suspend';
+const NO_PROVIDER = 'not observed with a provider (model) process';
+
+/** What this installation has, capability by capability: what is built, what
+ * proved it and what is still missing. Built and proven by fixtures is not
+ * supported, so `supported` is empty and start refuses. Transport facts are
+ * the 2026-10-28 version/help probes (docs/technical/mc-session-observation.md);
+ * no model session was launched to measure them. */
+const INSTALLATION = Object.freeze({
+  supported: Object.freeze([]),
+  reason: 'autonomous execution is not activated in this installation',
+  capabilities: Object.freeze([
+    { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
+      proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+    { name: 'programme-plan', built: 'headless plan sessions and their decisions (src/mc/programme-plan-run.js, src/mc/programme-plan.js)',
+      proven: 'scripted plan sessions: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+    { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
+      proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_CLOCK}` },
+    { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',
+      proven: 'scripted review sessions: tests/mc/autonomous-review.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+    { name: 'control-signals', built: 'durable mc session-control status|checkpoint|criterion, the one path both tools read',
+      proven: 'real fixture processes in both prompt shapes read the actual status command (tests/mc/session-observation.test.js)', missing: NO_PROVIDER },
+    { name: 'interrupt', built: 'process-group SIGTERM, then SIGKILL after a bounded grace (src/mc/session-supervision.js)',
+      proven: 'a real fixture process that ignores finish-session and SIGTERM is closed with its child (tests/mc/session-observation.test.js)', missing: `${NO_PROVIDER}; ${NO_CLOCK}` },
+  ].map(Object.freeze)),
+  transport: Object.freeze([
+    { tool: 'codex', prompt: 'positional argument; stdin ignored', live_control: 'none; durable session-control only',
+      context: 'unavailable: turn usage is cumulative, so context reads unknown and time/checkpoint limits apply',
+      measured: 'codex-cli 0.164.0 --version and exec --help; no model session' },
+    { tool: 'claude', prompt: 'first stream-json user message on stdin', live_control: 'none added; durable session-control only',
+      context: 'estimated from the last request input, a fraction only with a trusted window size; otherwise unknown',
+      measured: 'Claude Code 2.1.312 --version and --help; no model session' },
+  ].map(Object.freeze)),
+});
+
+/** What this installation can control: the report above. Tests inject one;
+ * fixtures are not support. */
 export function installationCapabilities(deps = {}) {
-  return deps.capabilities || UNSUPPORTED;
+  return deps.capabilities || INSTALLATION;
 }
 export function missingCapabilities(report) {
   const supported = Array.isArray(report?.supported) ? report.supported : [];
