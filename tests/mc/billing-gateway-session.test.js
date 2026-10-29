@@ -18,7 +18,7 @@ test('tool settings carry only a bounded gateway grant, never a provider key', (
   const codex = gatewayToolConfig({ provider: 'codex', base: 'http://127.0.0.1:1234', grant: 'session-grant', args: ['exec', '--json'], env });
   assert.equal(codex.env.OPENAI_API_KEY, undefined);
   assert.equal(codex.env.MC_GATEWAY_GRANT, 'session-grant');
-  assert.ok(codex.args.includes('model_providers.mc_api.supports_websockets=false'));
+  assert.ok(codex.args.includes('model_providers.mc_api.supports_websockets=true'));
   assert.equal(codex.args.at(-2), 'exec');
 });
 

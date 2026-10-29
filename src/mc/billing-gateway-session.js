@@ -36,7 +36,7 @@ export function gatewayToolConfig({ provider, base, grant, args, env = process.e
         '-c', 'model_providers.mc_api.env_key="MC_GATEWAY_GRANT"',
         '-c', 'model_providers.mc_api.wire_api="responses"',
         '-c', 'model_providers.mc_api.requires_openai_auth=false',
-        '-c', 'model_providers.mc_api.supports_websockets=false',
+        '-c', 'model_providers.mc_api.supports_websockets=true',
         ...args,
       ],
       env: { ...clean, MC_GATEWAY_GRANT: grant },

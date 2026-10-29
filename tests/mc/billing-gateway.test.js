@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createBillingGateway, listenBillingGateway } from '../../src/mc/billing-gateway.js';
 
 const NOW = Date.parse('2026-10-29T12:00:00Z');
@@ -85,4 +87,135 @@ test('codex remote compaction is a route of its own', async (t) => {
   const { calls, send } = await fixture(t);
   assert.equal((await send('/codex/v1/responses/compact', 'codex-session-grant', 'gpt-6.1-sol')).status, 200);
   assert.equal(calls[0].url, 'https://api.openai.com/v1/responses/compact');
+});
+
+// A local server stands in for wss://api.openai.com/v1/responses.
+async function socketFixture(t, { maxRequests = 2 } = {}) {
+  const provider = { headers: null, frames: [], sockets: [] };
+  const fake = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise((resolve) => fake.once('listening', resolve));
+  fake.on('connection', (socket, req) => {
+    provider.headers = req.headers;
+    provider.sockets.push(socket);
+    socket.on('message', (data) => {
+      provider.frames.push(JSON.parse(data.toString()));
+      socket.send(JSON.stringify({ type: 'response.completed', response: { id: `resp_${provider.frames.length}` } }));
+    });
+  });
+  const gateway = createBillingGateway({
+    keys: { codex: 'openai-secret-canary' },
+    grants: [{ provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests, expiresAt: '2026-10-29T13:00:00Z' }],
+    now: () => NOW,
+    fetchImpl: async () => new Response('{}'),
+    websocketUpstream: `ws://127.0.0.1:${fake.address().port}/v1/responses`,
+  });
+  const base = await listenBillingGateway(gateway);
+  t.after(async () => {
+    await new Promise((resolve) => gateway.close(resolve));
+    await new Promise((resolve) => fake.close(resolve));
+  });
+  const connect = (path = '/codex/v1/responses', grant = 'codex-session-grant') => {
+    const socket = new WebSocket(`${base.replace('http', 'ws')}${path}`, {
+      headers: { authorization: `Bearer ${grant}`, 'openai-beta': 'responses_websockets=2026-02-06' },
+    });
+    const received = [];
+    socket.on('message', (data) => received.push(data.toString()));
+    socket.on('error', () => {});
+    return {
+      socket,
+      received,
+      opened: new Promise((resolve) => socket.once('open', resolve)),
+      closed: new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }))),
+      refused: new Promise((resolve) => socket.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); })),
+    };
+  };
+  return { provider, connect };
+}
+
+const create = (model) => JSON.stringify({ type: 'response.create', model, input: [] });
+const until = async (check) => { while (!check()) await new Promise((resolve) => setTimeout(resolve, 5)); };
+
+test('a Codex websocket is carried to the provider with the key, which never comes back', async (t) => {
+  const { provider, connect } = await socketFixture(t);
+  const session = connect();
+  await session.opened;
+  session.socket.send(create('gpt-6.1-sol'));
+  await until(() => session.received.length === 1);
+  assert.equal(provider.headers.authorization, 'Bearer openai-secret-canary');
+  assert.equal(provider.headers['openai-beta'], 'responses_websockets=2026-02-06');
+  assert.equal(provider.frames[0].type, 'response.create');
+  assert.equal(JSON.parse(session.received[0]).type, 'response.completed');
+  assert.doesNotMatch(session.received.join(''), /secret-canary/u);
+});
+
+test('an upgrade without a grant, or on another path, is refused before the handshake', async (t) => {
+  const { provider, connect } = await socketFixture(t);
+  assert.equal(await connect('/codex/v1/responses', 'wrong-grant').refused, 401);
+  assert.equal(await connect('/codex/v1/models').refused, 404);
+  assert.equal(await connect('/claude/v1/messages').refused, 404);
+  assert.equal(provider.sockets.length, 0, 'nothing reached the provider');
+});
+
+test('a response.create for another model closes the socket with 1008 and is not forwarded', async (t) => {
+  const { provider, connect } = await socketFixture(t);
+  const session = connect();
+  await session.opened;
+  session.socket.send(create('gpt-6.1-luna'));
+  assert.deepEqual(await session.closed, { code: 1008, reason: 'model unavailable for session' });
+  assert.equal(provider.frames.length, 0);
+});
+
+test('each response.create counts against the session request limit, across sockets', async (t) => {
+  const { provider, connect } = await socketFixture(t, { maxRequests: 2 });
+  const first = connect();
+  await first.opened;
+  first.socket.send(create('gpt-6.1-sol'));
+  first.socket.send(JSON.stringify({ type: 'other.event' }));
+  await until(() => first.received.length === 2);
+  const second = connect();
+  await second.opened;
+  second.socket.send(create('gpt-6.1-sol'));
+  await until(() => second.received.length === 1);
+  second.socket.send(create('gpt-6.1-sol'));
+  assert.deepEqual(await second.closed, { code: 1008, reason: 'session request limit reached' });
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 2);
+  assert.equal(provider.frames.length, 3, 'other session frames are forwarded unchanged');
+});
+
+test('closing either side closes the other', async (t) => {
+  const { provider, connect } = await socketFixture(t);
+  const session = connect();
+  await session.opened;
+  await until(() => provider.sockets.length === 1);
+  const providerClosed = new Promise((resolve) => provider.sockets[0].once('close', (code) => resolve(code)));
+  session.socket.close(1000, 'done');
+  assert.equal(await providerClosed, 1000);
+
+  const again = connect();
+  await again.opened;
+  await until(() => provider.sockets.length === 2);
+  provider.sockets[1].close(4000, 'provider closed');
+  assert.deepEqual(await again.closed, { code: 4000, reason: 'provider closed' });
+});
+
+test('a provider that refuses the upstream handshake closes the session with 1011, relaying nothing', async (t) => {
+  const refusing = createServer((req, res) => { res.writeHead(401); res.end('{"error":"openai-secret-canary"}'); });
+  await new Promise((resolve) => refusing.listen(0, '127.0.0.1', resolve));
+  const gateway = createBillingGateway({
+    keys: { codex: 'openai-secret-canary' },
+    grants: [{ provider: 'codex', token: 'g', models: ['gpt-6.1-sol'], maxRequests: 5, expiresAt: '2026-10-29T13:00:00Z' }],
+    now: () => NOW,
+    websocketUpstream: `ws://127.0.0.1:${refusing.address().port}/v1/responses`,
+  });
+  const base = await listenBillingGateway(gateway);
+  t.after(async () => {
+    await new Promise((resolve) => gateway.close(resolve));
+    await new Promise((resolve) => refusing.close(resolve));
+  });
+  const socket = new WebSocket(`${base.replace('http', 'ws')}/codex/v1/responses`, { headers: { authorization: 'Bearer g' } });
+  const received = [];
+  socket.on('message', (data) => received.push(data.toString()));
+  const closed = await new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
+  assert.deepEqual(closed, { code: 1011, reason: 'provider unavailable' });
+  assert.deepEqual(received, []);
 });
