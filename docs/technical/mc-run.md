@@ -1625,8 +1625,16 @@ This applies to every current MC session path: step, review, mend, helper, and
 interactive sessions. An ordinary interactive `mc plan` still lets Martin
 choose the tool and model; billing follows that choice. The retired headless
 planning path starts no session, so there is no active headless plan launch to
-route. `mc run --billing` is read-only and
-shows both providers' next routes. The MC page shows one billing line.
+route. `mc run --billing` shows both providers' next routes. The MC page shows
+one billing line.
+
+The API reserve is switched per provider:
+`mc run --billing <claude|codex> <on|off>`. Off, a spent plan stays the plan —
+the session meets the plan's own refusal and the runner waits it out — and a
+class step routed to the reserve waits instead of starting. The wrapper reads
+the switch again before it opens the key, so a launch decided before the switch
+was turned off never reaches the API. A running session keeps its billing.
+Absent, both are on.
 
 The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
@@ -1652,8 +1660,17 @@ permissions from Keychain or the vault. The grant can be used by the session
 until it exits, expires after 12 hours, or reaches 500 requests. The gateway
 binds only to `127.0.0.1` and exposes no management or key-reading endpoint.
 
-`billing.json` and its old manual plan/credits/auto mode are no longer read for
-routing. `billing-state.json` retains Claude's observed plan windows and
+Codex reaches the gateway without websockets, so every request carries the
+whole thread: a 205k-token thread measured 8.3 MB on 2026-10-29, and the first
+API request of a thread started on the plan took 114 s to its first byte (the
+plan's prompt cache does not carry over). The body limit is 64 MiB; a larger
+body is read to its end and answered 413. Codex's remote compaction has its own
+route, `/codex/v1/responses/compact`. Off a terminal the wrapper gives the tool
+pipes of its own rather than its own stdout: codex sharing it panicked with
+EAGAIN (`os error 35`) on 2026-10-29.
+
+`billing.json` holds the API switch (`api: { claude, codex }`); its old manual
+plan/credits/auto mode is no longer read for routing. `billing-state.json` retains Claude's observed plan windows and
 refusals. The provider snapshot in `model-capacity.json` supplies both
 providers' plan usage. A plan refusal is written for the next launch; crossing
 billing boundaries starts a cold cache context.

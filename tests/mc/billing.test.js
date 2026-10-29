@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 import {
   BILLING_MODES, CREDITS_RETRY_MS, DEFAULT_BILLING, billingFor, billingPath, billingStatePath,
-  patchBillingState, planWindows, readBillingMode, readBillingState, writeBillingMode,
+  patchBillingState, planWindows, readBillingApi, readBillingMode, readBillingState, writeBillingApi, writeBillingMode,
 } from '../../src/mc/billing.js';
 
 const fresh = () => mkdtempSync(join(tmpdir(), 'mc-billing-'));
@@ -145,4 +145,18 @@ test('billingFor: plan and credits are themselves, an unknown mode is plan, code
   const codex = ask('credits', week(0.99), 'codex');
   assert.equal(codex.billing, 'plan');
   assert.match(codex.why, /codex/u);
+});
+
+test('readBillingApi/writeBillingApi: both on by default, one switched, the mode kept and kept by a mode write', () => {
+  const root = fresh();
+  assert.deepEqual(readBillingApi({ root }), { claude: true, codex: true });
+  writeBillingMode('plan', { root, now: NOW });
+  assert.deepEqual(writeBillingApi('codex', false, { root }), { ok: true, api: { claude: true, codex: false } });
+  assert.equal(readBillingMode({ root }), 'plan');
+  writeBillingMode('plan', { root, now: NOW });
+  assert.deepEqual(readBillingApi({ root }), { claude: true, codex: false });
+  assert.equal(statSync(billingPath(root)).mode & 0o777, 0o600);
+  assert.equal(writeBillingApi('gemini', false, { root }).ok, false);
+  writeFileSync(billingPath(root), '{broken');
+  assert.deepEqual(readBillingApi({ root }), { claude: true, codex: true });
 });

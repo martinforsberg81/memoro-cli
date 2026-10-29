@@ -15,12 +15,19 @@ function cli() {
   const root = mkdtempSync(join(tmpdir(), 'mc-billing-verb-'));
   const out = [];
   const err = [];
+  const api = { claude: true, codex: true };
   const deps = {
     stdout: { write: (text) => out.push(text.trimEnd()) },
     stderr: { write: (text) => err.push(text.trimEnd()) },
     now: () => NOW,
     readCapacity: () => normaliseCapacity(null),
     readBillingState: () => ({}),
+    readBillingApi: () => ({ ...api }),
+    writeBillingApi: (provider, enabled) => {
+      if (!['claude', 'codex'].includes(provider)) return { ok: false, reason: `API is switched per provider — claude or codex, not "${provider}"` };
+      api[provider] = enabled;
+      return { ok: true, api: { ...api } };
+    },
   };
   return {
     root, deps,
@@ -61,4 +68,24 @@ test('old manual modes are refused because routing is automatic', async () => {
   assert.match(read.err[0], /billing mode is automatic/u);
   assert.deepEqual(parseRunArgs(['--billing']), { verb: 'billing', mode: null });
   assert.match(parseRunArgs(['--billing', '--once']).error, /one order on its own/u);
+});
+
+test('billing switches one provider\'s API off and on, and says what the next session gets', async () => {
+  const mc = cli();
+  const full = applyObservation(normaliseCapacity(null), 'codex', { windows: { primary: { fraction_used: 1, resets_at: reset } } }, NOW);
+  mc.deps.readCapacity = () => full;
+  const off = await mc.billing('codex', 'off');
+  assert.equal(off.code, 0);
+  assert.deepEqual(off.out, [
+    'codex API off — applies from the next session; a running one keeps its billing',
+    'billing claude ? plan · codex 100% plan (API off)',
+    'next claude session: plan — plan status unknown',
+    'next codex session: plan — plan reached 100 %; API off',
+  ]);
+  const on = await mc.billing('codex', 'on');
+  assert.equal(on.out[1], 'billing claude ? plan · codex 100% API');
+  assert.deepEqual(parseRunArgs(['--billing', 'claude', 'off']), { verb: 'billing', mode: null, api: { provider: 'claude', enabled: false } });
+  const wrong = await mc.billing('gemini', 'off');
+  assert.equal(wrong.code, 2);
+  assert.match(wrong.err[0], /claude or codex/u);
 });

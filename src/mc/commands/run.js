@@ -33,6 +33,9 @@
  *   mc run --billing      plan usage and next billing for Claude and Codex
  *                          (`mc run billing` is the same). Billing is chosen
  *                          automatically at each new session.
+ *   mc run --billing <claude|codex> <on|off>
+ *                          whether that provider falls over to its API key
+ *                          once its plan is spent; off keeps it on the plan
  *
  * The three orders are files under `~/mc/runner/` read between two picks,
  * not signals: a runner ninety minutes into a headless session is given the
@@ -46,7 +49,7 @@
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
-import { readBillingState } from '../billing.js';
+import { readBillingApi, readBillingState, writeBillingApi } from '../billing.js';
 import { billingRoute, billingStatus } from '../billing-route.js';
 import { readCapacity } from '../model-capacity.js';
 import { LANES_MAX, laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
@@ -70,6 +73,8 @@ const USAGE = [
   `                                    steps in flight: <n> per repository, --total across every`,
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
   '        mc run --billing             plan usage and next billing for Claude and Codex',
+  '        mc run --billing <claude|codex> <on|off>',
+  '                                    whether that provider uses its API key once its plan is spent',
 ].join('\n');
 
 export function usage() {
@@ -152,16 +157,25 @@ function lanes(opts, deps) {
   };
 }
 
-/** Read-only billing status for both providers. */
+/** Billing status for both providers, after the API switch when one was given. */
 function billing(opts, deps) {
   const now = (deps.now || (() => new Date()))();
-  const readState = deps.readBillingState || (() => readBillingState({ root: runnerDir(deps.env || process.env) }));
-  if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve'] };
-  const capacity = (deps.readCapacity || (() => readCapacity({ root: runnerDir(deps.env || process.env) })))();
+  const root = runnerDir(deps.env || process.env);
+  const readState = deps.readBillingState || (() => readBillingState({ root }));
+  const readApi = deps.readBillingApi || (() => readBillingApi({ root }));
+  if (opts.mode !== null) return { ok: false, code: 2, lines: ['billing mode is automatic: plan through 100 %, then API reserve — mc run --billing <claude|codex> <on|off> switches the API reserve'] };
+  const lines = [];
+  if (opts.api) {
+    const written = (deps.writeBillingApi || ((provider, enabled) => writeBillingApi(provider, enabled, { root })))(opts.api.provider, opts.api.enabled);
+    if (!written.ok) return { ok: false, code: 2, lines: [written.reason] };
+    lines.push(`${opts.api.provider} API ${opts.api.enabled ? 'on' : 'off'} — applies from the next session; a running one keeps its billing`);
+  }
+  const capacity = (deps.readCapacity || (() => readCapacity({ root })))();
   const state = readState();
-  const lines = [`billing ${billingStatus({ capacity, state, now })}`];
+  const api = readApi();
+  lines.push(`billing ${billingStatus({ capacity, state, api, now })}`);
   for (const provider of ['claude', 'codex']) {
-    const next = billingRoute({ provider, capacity, state, now });
+    const next = billingRoute({ provider, capacity, state, api, now });
     lines.push(`next ${provider} session: ${next.billing === 'credits' ? 'API' : 'plan'} — ${next.why}`);
   }
   return { ok: true, code: 0, lines };
@@ -254,15 +268,19 @@ export function parseRunArgs(argv) {
     };
   }
 
-  // Billing is read-only: the next provider route is automatic at each launch.
+  // The next provider route is automatic at each launch; the one thing set by
+  // hand is whether a provider may fall over to its API key.
   // `mc run billing` and `mc run --billing` ask the same question.
   if (head === 'billing') argv = ['--billing', ...argv.slice(1)];
   if (argv.includes('--billing')) {
     const at = argv.indexOf('--billing');
     const rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
+    if (at === 0 && rest.length === 2 && ['on', 'off'].includes(rest[1])) {
+      return { verb: 'billing', mode: null, api: { provider: rest[0], enabled: rest[1] === 'on' } };
+    }
     const mode = rest.length === 1 && !String(rest[0]).startsWith('-') && at === 0 ? rest[0] : null;
     if (rest.length > 1 || (rest.length === 1 && mode === null)) {
-      return { error: '--billing is one order on its own: mc run --billing' };
+      return { error: '--billing is one order on its own: mc run --billing [<claude|codex> <on|off>]' };
     }
     return { verb: 'billing', mode };
   }

@@ -6,9 +6,11 @@
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import { readBillingApiKey } from '../vault/engine/step-credit-key.js';
+import { readBillingApi } from './billing.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { createBillingGateway, listenBillingGateway } from './billing-gateway.js';
 
@@ -44,8 +46,14 @@ export function gatewayToolConfig({ provider, base, grant, args, env = process.e
 }
 
 /** Runs until the coding tool exits; never returns the provider key. */
-export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, spawnTool = spawn, createGateway = createBillingGateway } = {}) {
+export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1) } = {}) {
   if (!['claude', 'codex'].includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
+  // The switch is read again here, where the key is opened: a launch decided
+  // before `mc run --billing <provider> off` still never reaches the API.
+  if (readApi()?.[provider] === false) {
+    process.stderr.write(`mc: ${provider} API is off (mc run --billing ${provider} on)\n`);
+    return 1;
+  }
   const opened = await readKey(provider);
   if (!opened?.ok || !opened.key) {
     process.stderr.write(`mc: ${provider} API reserve unavailable (${opened?.reason || 'key-unreadable'})\n`);
@@ -63,8 +71,13 @@ export async function runGatewaySession({ provider, model, bin, args, env = proc
     const base = await listenBillingGateway(gateway);
     const tool = gatewayToolConfig({ provider, base, grant, args, env });
     return await new Promise((resolve) => {
-      child = spawnTool(bin, tool.args, { env: tool.env, stdio: 'inherit' });
+      // A terminal is handed over whole. Otherwise (the runner's pipes) the tool
+      // gets pipes of its own: codex sharing this process's stdout panicked
+      // with EAGAIN on 2026-10-29 (os error 35) and the step was lost.
+      child = spawnTool(bin, tool.args, { env: tool.env, stdio: terminal ? 'inherit' : ['inherit', 'pipe', 'pipe'] });
       activeChild = child;
+      child.stdout?.pipe(process.stdout);
+      child.stderr?.pipe(process.stderr);
       child.once('error', () => resolve(1));
       child.once('close', (code, signal) => resolve(signal ? 128 + (signal === 'SIGTERM' ? 15 : 2) : code ?? 1));
     });
