@@ -68,7 +68,7 @@ start to finish, and know when it is done? If not, it is not a step
     enough for a `fast` step, the investigation is not done: do it here, not in
     a `large` step.
   - **Concrete models still work.** A step may name a model instead of a class:
-    `haiku` and `opus` on claude, `gpt-6.1-sol` and `gpt-6.1-luna` on codex. It
+    `haiku` and `opus` on claude, `gpt-6.1-sol` and `gpt-6-luna` on codex. It
     runs on that model as it always has. A sent plan keeps its meaning: a catalog
     edit never rewrites it, and `mc plan` remains the tool Martin chooses when
     starting a plan.
@@ -79,7 +79,7 @@ start to finish, and know when it is done? If not, it is not a step
     add` refuses `review`.
   - Never put `model` in the plan's own `runner`: it makes every step that
     model. The model is named on each step, never left to the default.
-- **Codex.** `gpt-6.1-sol` and `gpt-6.1-luna` are Codex's models, not stand-ins
+- **Codex.** `gpt-6.1-sol` and `gpt-6-luna` are Codex's models, not stand-ins
   for `haiku` or `opus`. A concrete Codex name goes on a `--tool codex` plan, and
   a Claude name is refused there. A class names no tool, so the plan's
   `runner.tool` does not apply to it. `effort` takes the same five levels on

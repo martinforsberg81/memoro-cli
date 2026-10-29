@@ -30,7 +30,7 @@ export const DRAFT_FILE = 'DRAFT.json';
 
 /**
  * The concrete models a step written by a verb may name (ruling 42, `mc-project.md`
- * § Decisions): haiku and opus on claude, gpt-6.1-sol and gpt-6.1-luna on codex.
+ * § Decisions): haiku and opus on claude, gpt-6.1-sol and gpt-6-luna on codex.
  * A step names its own model; the plan does not name one for it. Which of the
  * two a step may name is the plan's `runner.tool` (`validatePlan`).
  */
@@ -43,7 +43,7 @@ export const MODELS = Object.freeze([...CLAUDE_MODELS, ...CODEX_MODELS]);
  */
 export const STEP_MODELS = Object.freeze([...WORK_CLASSES, ...MODELS]);
 /** `STEP_MODELS` in words, for the refusals that name what a step may be given. */
-export const STEP_MODEL_WORDS = 'fast, large, haiku, opus, gpt-6.1-sol or gpt-6.1-luna';
+export const STEP_MODEL_WORDS = 'fast, large, haiku, opus, gpt-6.1-sol or gpt-6-luna';
 
 /**
  * The review step `mc project send` adds, last, to every plan it sends (the

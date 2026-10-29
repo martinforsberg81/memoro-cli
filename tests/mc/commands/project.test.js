@@ -443,7 +443,7 @@ test('new --tool codex drafts a plan that names codex, and a step on a Codex mod
     assert.deepEqual(f.out, ['mc: alpha step 1 — One (gpt-6.1-sol, high)\n', 'next: mc project send alpha\n']);
     f.err.length = 0;
     assert.equal(await run(['step', 'add', 'alpha', 'Two', '--model', 'haiku', '--done-when', 'It runs.', '--instruction-file', md], f.deps), 1);
-    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: haiku is a Claude model — a codex plan names gpt-6\.1-sol or gpt-6\.1-luna/u);
+    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: haiku is a Claude model — a codex plan names gpt-6\.1-sol or gpt-6-luna/u);
     assert.equal(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps.length, 1);
   } finally { f.cleanup(); }
 });
@@ -458,8 +458,8 @@ test('new --tool names only codex, and a step on a Codex model on a claude plan 
     assert.equal(await run(NEW, f.deps), 0);
     assert.equal('runner' in JSON.parse(readFileSync(f.draft('alpha'), 'utf8')), false, 'a plan without --tool names no runner, as before');
     assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
-    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6.1-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 1);
-    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: gpt-6\.1-luna is a Codex model — it needs runner\.tool codex \(haiku and opus are Claude's\)/u);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 1);
+    assert.match(f.err.join(''), /steps\[\d\]\.runner\.model: gpt-6-luna is a Codex model — it needs runner\.tool codex \(haiku and opus are Claude's\)/u);
   } finally { f.cleanup(); }
 });
 
@@ -468,7 +468,7 @@ test('send on a codex plan appends the review on the review class, with no effor
   try {
     assert.equal(await run([...NEW, '--tool', 'codex'], f.deps), 0);
     assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
-    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6.1-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'gpt-6-luna', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
     f.out.length = 0;
     assert.equal(await run(['send', 'alpha'], f.deps), 0);
     const text = readFileSync(join(f.home, 'mc', 'alpha', 'PLAN.json'), 'utf8');
@@ -519,8 +519,8 @@ test('step add without --model, with a model that is no work class or concrete m
     assert.equal(await run(NEW, f.deps), 0);
     const md = instructionFile(f);
     const cases = [
-      [['step', 'add', 'alpha', 'One', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna \(ruling 42\) — no default/u],
-      [['step', 'add', 'alpha', 'One', '--model', 'sonnet', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna/u],
+      [['step', 'add', 'alpha', 'One', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6-luna \(ruling 42\) — no default/u],
+      [['step', 'add', 'alpha', 'One', '--model', 'sonnet', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6-luna/u],
       [['step', 'add', 'alpha', 'One', '--model', 'review', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model fast, large, haiku, opus/u],
       [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--instruction-file', md], /a step needs --done-when/u],
       [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'It runs.'], /a step needs --instruction-file/u],
@@ -755,7 +755,7 @@ test('step edit with a step number out of range, no field, or a model that is no
     assert.equal(await run(['step', 'edit', 'alpha', '1'], f.deps), 2);
     assert.match(f.err.at(-1), /^mc: step edit needs --title, --model, --effort, --done-when or --instruction-file\n$/u);
     assert.equal(await run(['step', 'edit', 'alpha', '1', '--model', 'sonnet'], f.deps), 2);
-    assert.match(f.err.at(-1), /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna \(ruling 42\) — no default/u);
+    assert.match(f.err.at(-1), /a step names --model fast, large, haiku, opus, gpt-6\.1-sol or gpt-6-luna \(ruling 42\) — no default/u);
     assert.equal(await run(['step', 'edit', 'alpha', '1', '--after', 'memoro-cli:other', '--model', 'opus'], f.deps), 2);
     assert.equal(f.err.at(-1), 'mc: step edit takes no --after\n');
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
@@ -915,7 +915,7 @@ test('send refuses a plan that names a model for itself, or a step model that is
     plan.steps[0].runner.model = 'sonnet';
     writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
     assert.equal(await run(['send', 'alpha'], f.deps), 1);
-    assert.match(f.err.join(''), /steps\[1\]\.runner\.model: fast, large, haiku, opus, gpt-6\.1-sol or gpt-6\.1-luna/u);
+    assert.match(f.err.join(''), /steps\[1\]\.runner\.model: fast, large, haiku, opus, gpt-6\.1-sol or gpt-6-luna/u);
     assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
   } finally { f.cleanup(); }
 });

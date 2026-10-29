@@ -48,7 +48,7 @@ Since `project-verbs` a plan is written only through `mc project new`, `edit`,
 explicit `amend` exception below. Until it is sent it is
 `DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
 `PLAN.json`. The verbs refuse a concrete step whose `--model` its plan's tool does not
-run (`haiku` or `opus` on claude, `gpt-6.1-sol` or `gpt-6.1-luna` on codex,
+run (`haiku` or `opus` on claude, `gpt-6.1-sol` or `gpt-6-luna` on codex,
 `--tool codex`), the words
 `Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
 dependency written anywhere but `--after <repo>:<project>`, and an ordinary edit to a
@@ -98,7 +98,7 @@ the door.
   Only what the runner actually reads; there is no field here that nothing
   enforces. `tool` is `claude`, the default, or `codex`, and it picks the
   provider the step models run on: `haiku` and `opus` on claude, `gpt-6.1-sol`
-  and `gpt-6.1-luna` on codex. `effort` is one of `low`, `medium`, `high`,
+  and `gpt-6-luna` on codex. `effort` is one of `low`, `medium`, `high`,
   `xhigh`, `max`; it reaches claude as `--effort` and codex as
   `-c model_reasoning_effort=<level>`. What a key leaves unsaid is the
   runner's default for the session's kind — a claude step runs on `opus` at
@@ -151,7 +151,7 @@ carries:
   session's, and a catalog edit never rewrites a plan. A step may name a concrete
   model instead: `haiku` at `high` for a narrow step with a checkable `done_when`,
   or `opus` for one that needs judgement, on claude; on a codex plan (`tool: codex`)
-  `gpt-6.1-sol` or `gpt-6.1-luna`, which are Codex's models, not stand-ins for
+  `gpt-6.1-sol` or `gpt-6-luna`, which are Codex's models, not stand-ins for
   `haiku` or `opus`, and the installed, signed-in codex CLI decides whether it
   has them. Concrete models run as written (ruling 42, `canon/roles/_plan-writing.md`).
   The routing is in [`docs/technical/mc-run.md`](../technical/mc-run.md)

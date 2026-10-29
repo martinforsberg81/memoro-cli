@@ -583,8 +583,8 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
   assert.deepEqual(fresh.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=high']);
   assert.equal(fresh.at(-1), 'do it');
 
-  const resumed = headlessArgs({ toolId: 'codex', adapter: codexAdapter, model: 'gpt-6.1-luna', effort: 'medium', advisor: 'opus', instructions: null, resume: 'sess-1', prompt: 'go on', profileArgs });
-  assert.deepEqual(resumed.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6.1-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
+  const resumed = headlessArgs({ toolId: 'codex', adapter: codexAdapter, model: 'gpt-6-luna', effort: 'medium', advisor: 'opus', instructions: null, resume: 'sess-1', prompt: 'go on', profileArgs });
+  assert.deepEqual(resumed.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
   assert.deepEqual(resumed.slice(-2), ['sess-1', 'go on']);
 
   for (const argv of [fresh, resumed]) {
@@ -961,7 +961,7 @@ test('sessionSettings: the step defaults, plan and step overrides, advisor off, 
   // even when one is named. Effort is the plan's word on either tool.
   assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, subagents: false, ...wait() });
   assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus', subagents: 'on' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: 'high', advisor: null, subagents: false, ...wait() });
-  assert.deepEqual(sessionSettings({ tool: 'codex' }, { model: 'gpt-6.1-luna', effort: 'medium' }), { tool: 'codex', model: 'gpt-6.1-luna', effort: 'medium', advisor: null, subagents: false, ...wait() });
+  assert.deepEqual(sessionSettings({ tool: 'codex' }, { model: 'gpt-6-luna', effort: 'medium' }), { tool: 'codex', model: 'gpt-6-luna', effort: 'medium', advisor: null, subagents: false, ...wait() });
   assert.equal(sessionSettings({ tool: 'codex' }, { model: 'gpt-6.1-sol' }).effort, null, 'no effort named, none passed');
 });
 

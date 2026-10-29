@@ -308,15 +308,15 @@ describe('the plan schema', () => {
   it('pairs each model with its tool: the Codex names on a codex plan, haiku and opus on a claude one', () => {
     const [done, ready] = plan().steps;
     const onPlan = (runner, model) => validatePlan(plan({ ...(runner ? { runner } : {}), steps: [done, { ...ready, runner: { model } }] }));
-    for (const model of ['gpt-6.1-sol', 'gpt-6.1-luna']) {
+    for (const model of ['gpt-6.1-sol', 'gpt-6-luna']) {
       assert.deepEqual(onPlan({ tool: 'codex' }, model), { ok: true, problems: [] }, model);
-      assert.match(onPlan(null, model).problems.join('\n'), /steps\[1\]\.runner\.model: gpt-6\.1-(?:sol|luna) is a Codex model — it needs runner\.tool codex/u);
+      assert.match(onPlan(null, model).problems.join('\n'), /steps\[1\]\.runner\.model: (?:gpt-6\.1-sol|gpt-6-luna) is a Codex model — it needs runner\.tool codex/u);
       assert.match(onPlan({ tool: 'claude' }, model).problems.join('\n'), /is a Codex model/u);
     }
     for (const model of ['haiku', 'opus']) {
       assert.deepEqual(onPlan(null, model), { ok: true, problems: [] }, model);
       assert.deepEqual(onPlan({ tool: 'claude' }, model), { ok: true, problems: [] }, model);
-      assert.match(onPlan({ tool: 'codex' }, model).problems.join('\n'), new RegExp(`steps\\[1\\]\\.runner\\.model: ${model} is a Claude model — a codex plan names gpt-6\\.1-sol or gpt-6\\.1-luna`, 'u'));
+      assert.match(onPlan({ tool: 'codex' }, model).problems.join('\n'), new RegExp(`steps\\[1\\]\\.runner\\.model: ${model} is a Claude model — a codex plan names gpt-6\\.1-sol or gpt-6-luna`, 'u'));
     }
     assert.match(validatePlan(plan({ runner: { tool: 'codex', model: 'opus' } })).problems.join('\n'), /runner\.model: opus is a Claude model/u);
   });
@@ -343,7 +343,7 @@ describe('the plan schema', () => {
     assert.deepEqual(validatePlan(claude), { ok: true, problems: [] });
     const codex = plan({
       runner: { tool: 'codex' },
-      steps: [done, { ...ready, runner: { model: 'gpt-6.1-luna', effort: 'high' } }, { ...review, runner: { model: 'gpt-6.1-sol', effort: 'high' } }],
+      steps: [done, { ...ready, runner: { model: 'gpt-6-luna', effort: 'high' } }, { ...review, runner: { model: 'gpt-6.1-sol', effort: 'high' } }],
     });
     assert.deepEqual(validatePlan(codex), { ok: true, problems: [] });
   });
