@@ -47,7 +47,7 @@ function fixture({ review = false } = {}) {
   };
   const amendment = {
     contract: ['Keep preservation guarantees while correcting the implementation.'],
-    steps: [{ number: 2, instruction: ['Read and expose the next style without rewriting it.'], done_when: 'The heading test passes.', model: 'haiku', effort: 'high' },
+    steps: [{ number: 2, instruction: ['Read and expose the next style without rewriting it.'], done_when: 'The heading test passes.', model: 'fast', effort: 'high' },
       { number: 3, instruction: ['Retain history when acknowledging a save.'] }],
     success_criteria: [{ criterion: 'The bytes and next style are preserved.', check: 'mc gate tests/bytes.test.js tests/styles.test.js' }],
   };
@@ -134,6 +134,7 @@ test('amend validates the complete proposed plan and refuses protected fields an
     nullStep: { steps: [null] },
     badInstruction: { steps: [{ number: 2, instruction: [] }] },
     wrongModel: { steps: [{ number: 2, model: 'gpt-6.1-sol' }] },
+    concreteModel: { steps: [{ number: 2, model: 'opus' }] },
     wrongEffort: { steps: [{ number: 2, effort: 'unlimited' }] },
     person: { steps: [{ number: 2, done_when: 'Martin approves.' }] },
     proseDependency: { steps: [{ number: 2, instruction: ['Set blocked_by later.'] }] },

@@ -13,9 +13,9 @@ import { reviewCommandRefusal } from '../autonomous-review-guard.js';
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
  *   mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure, from a draft or a sent plan; the register's log records why
- *   mc project step add <project> <title> --model fast|large|<model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
+ *   mc project step add <project> <title> --model fast|large --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
  *                                                                 add a step, after the others, to a draft; to a sent plan, before its review
- *   mc project step edit <project> <n> [--title <text>] [--model fast|large|<model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
+ *   mc project step edit <project> <n> [--title <text>] [--model fast|large] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project send <project>                    check a draft whole, add the review step (last, mc's) and rename it to PLAN.json: the handover to the runner
  *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its directory moved to ~/mc/archive/projects/, its step area closed
@@ -840,8 +840,8 @@ function editStep(scanned, deps) {
 }
 
 /**
- * What is wrong with a step's model, or null: a step names a work class or a concrete model (ruling 42, ruling 59), so `step add` and `step edit`
- * refuse any other. Whether it pairs with the plan's tool is `validatePlan`'s to say, once the plan is read.
+ * What is wrong with a step's model, or null: a step names a work class (ruling 59), so `step add` and `step edit`
+ * refuse any other, a concrete model among them. Whether it pairs with the plan's tool is `validatePlan`'s to say, once the plan is read.
  */
 function modelProblem(model) {
   return STEP_MODELS.includes(model) ? null : `a step names --model ${STEP_MODEL_WORDS} (ruling 42) — no default`;
@@ -1196,9 +1196,9 @@ export function usage() {
     '        mc project amend <project> --amendment-file <json> --reason "<authorization>"  validate a sent plan amendment while its first unfinished step stays blocked\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
-    '        mc project step add <project> <title> --model fast|large|<model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
-    '        mc project step edit <project> <n> [--title <text>] [--model fast|large|<model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
-    '        <model> is haiku or opus (claude), or gpt-6.1-sol or gpt-6-luna (codex: the plan needs --tool codex)\n',
+    '        mc project step add <project> <title> --model fast|large --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
+    '        mc project step edit <project> <n> [--title <text>] [--model fast|large] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
+    '        a step names a work class; mc picks the model when the step starts (ruling 59)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
     '        mc project send <v2-project> --expected-revision <n>   publish the guarded v2 contract, inactive and without a legacy review step\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
