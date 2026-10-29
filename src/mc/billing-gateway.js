@@ -14,12 +14,16 @@ const ROUTES = Object.freeze({
   '/claude/v1/messages': { provider: 'claude', upstream: '/v1/messages', methods: ['POST'] },
   '/claude/v1/messages/count_tokens': { provider: 'claude', upstream: '/v1/messages/count_tokens', methods: ['POST'] },
   '/codex/v1/responses': { provider: 'codex', upstream: '/v1/responses', methods: ['POST'] },
+  '/codex/v1/responses/compact': { provider: 'codex', upstream: '/v1/responses/compact', methods: ['POST'] },
   '/codex/v1/models': { provider: 'codex', upstream: '/v1/models', methods: ['GET'] },
 });
 const UPSTREAM = Object.freeze({ claude: 'https://api.anthropic.com', codex: 'https://api.openai.com' });
 const FORWARD_REQUEST_HEADERS = Object.freeze(['content-type', 'anthropic-version', 'anthropic-beta']);
 const FORWARD_RESPONSE_HEADERS = Object.freeze(['content-type', 'retry-after', 'request-id', 'x-request-id', 'anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']);
-export const MAX_GATEWAY_BODY_BYTES = 8 * 1024 * 1024;
+// Codex without websockets sends the whole thread on every request: a
+// 205k-token thread measured 8.3 MB on 2026-10-29, so 8 MiB refused the
+// sessions that most needed the reserve.
+export const MAX_GATEWAY_BODY_BYTES = 64 * 1024 * 1024;
 
 const equal = (left, right) => {
   if (typeof left !== 'string' || typeof right !== 'string') return false;
@@ -44,15 +48,20 @@ function modelAllowed(grant, model) {
       && model.startsWith(`claude-${allowed}-`)));
 }
 
-async function bodyOf(req, limit) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) return null;
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
+// Past the limit the rest is read and dropped rather than the stream torn
+// down, so the client hears the 413 instead of a reset mid-upload. A client
+// that goes away mid-upload is `undefined`: there is nobody to answer.
+function bodyOf(req, limit) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size <= limit) chunks.push(chunk);
+    });
+    req.once('end', () => resolve(size > limit ? null : Buffer.concat(chunks)));
+    req.once('error', () => resolve(undefined));
+  });
 }
 
 function json(res, status, message) {
@@ -73,6 +82,7 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
     const key = keys[route.provider];
     if (typeof key !== 'string' || !key) return json(res, 503, 'provider key unavailable');
     const body = req.method === 'POST' ? await bodyOf(req, maxBodyBytes) : undefined;
+    if (req.method === 'POST' && body === undefined) return res.destroy();
     if (req.method === 'POST' && body === null) return json(res, 413, 'request too large');
     if (req.method === 'POST') {
       let payload;

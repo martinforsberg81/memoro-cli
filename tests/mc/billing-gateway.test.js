@@ -62,3 +62,27 @@ test('gateway never sends upstream credentials back to a session', async (t) => 
   assert.doesNotMatch(await response.text(), /secret-canary/u);
   assert.equal(calls.at(-1).options.headers.get('authorization'), 'Bearer openai-secret-canary');
 });
+
+test('an oversized body is answered 413 after it is read, and nothing reaches the provider', async (t) => {
+  const calls = [];
+  const gateway = createBillingGateway({
+    keys: { codex: 'openai-secret-canary' },
+    grants: [{ provider: 'codex', token: 'g', models: ['gpt-6-astra'], maxRequests: 5, expiresAt: '2026-10-29T13:00:00Z' }],
+    now: () => NOW, maxBodyBytes: 1024,
+    fetchImpl: async (url) => { calls.push(url); return new Response('{}'); },
+  });
+  const base = await listenBillingGateway(gateway);
+  t.after(() => gateway.close());
+  const send = (body) => fetch(`${base}/codex/v1/responses`, { method: 'POST', headers: { authorization: 'Bearer g', 'content-type': 'application/json' }, body });
+  const big = await send(JSON.stringify({ model: 'gpt-6-astra', input: 'x'.repeat(256 * 1024) }));
+  assert.equal(big.status, 413);
+  assert.equal(calls.length, 0);
+  const small = await send(JSON.stringify({ model: 'gpt-6-astra', input: [] }));
+  assert.equal(small.status, 200, 'the gateway still answers after a refusal');
+});
+
+test('codex remote compaction is a route of its own', async (t) => {
+  const { calls, send } = await fixture(t);
+  assert.equal((await send('/codex/v1/responses/compact', 'codex-session-grant', 'gpt-6.1-sol')).status, 200);
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/responses/compact');
+});
