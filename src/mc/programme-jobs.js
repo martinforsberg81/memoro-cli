@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, readProgrammeState, updateProgrammeRegister, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
+import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, readProgrammeState, updateProgrammeRegister, AUTONOMOUS_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
 import { STABLE_ID_RE } from './programme-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
@@ -150,10 +150,20 @@ function projectTriggers(paths) {
     if (!existsSync(file)) continue;
     const project = JSON.parse(readFileSync(file, 'utf8'));
     if (project.schema !== 'mc-autonomous-state' || project.version !== 1 || project.contract?.project_id !== entry.name
-      || project.contract?.programme.id !== paths.id || !positive(project.revision)) throw new Error(`invalid autonomous trigger source: ${file}`);
+      || project.contract?.programme.id !== paths.id || !positive(project.revision)
+      || !validateAutonomousProject(project.contract).ok || !AUTONOMOUS_PHASES.includes(project.phase)
+      || !Array.isArray(project.attempts) || (project.plan_events !== undefined && !Array.isArray(project.plan_events))) throw new Error(`invalid autonomous trigger source: ${file}`);
     identities.push([entry.name, project.revision]);
     hasNextAction ||= !!project.active_run || ['ready', 'running', 'review_ready', 'reviewing', 'publishing', 'landing'].includes(project.phase);
+    const sourceIds = new Set();
+    const sourceId = source => {
+      // Review/merge IDs include a full digest and exceed the user-ID limit.
+      if (typeof source?.id !== 'string' || !/^[a-z0-9][a-z0-9-]*$/u.test(source.id)
+        || sourceIds.has(source.id)) throw new Error(`invalid autonomous trigger source identity: ${file}`);
+      sourceIds.add(source.id);
+    };
     for (const source of project.plan_events || []) {
+      sourceId(source);
       const type = source.type === 'review-reported' ? 'review' : source.type === 'merge-landed' ? 'landed'
         : ['merge-refused', 'merge-failed', 'merge-unknown'].includes(source.type) ? 'failure' : null;
       if (!type) continue;
@@ -161,8 +171,12 @@ function projectTriggers(paths) {
         programme_revision: source.programme_revision ?? source.binding?.programme_revision,
         reference: `${file}#plan_events/${source.id}` });
     }
-    for (const attempt of project.attempts || []) events.push({ id: `evt-${digest([entry.name, 'attempt', attempt.id]).slice(0, 60)}`,
-      type: 'failure', programme_revision: attempt.programme_revision, reference: `${file}#attempts/${attempt.id}` });
+    sourceIds.clear();
+    for (const attempt of project.attempts) {
+      sourceId(attempt);
+      events.push({ id: `evt-${digest([entry.name, 'attempt', attempt.id]).slice(0, 60)}`,
+        type: 'failure', programme_revision: attempt.programme_revision, reference: `${file}#attempts/${attempt.id}` });
+    }
   }
   return { events, identities, hasNextAction };
 }

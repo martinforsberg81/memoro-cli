@@ -194,7 +194,7 @@ export function autonomousOperationDigest(value) {
 }
 export function createAutonomousDraft(root, programme, project, input, { actor, revision, ...deps }) {
   return locked(root, programme, project, paths => {
-    const state = programmeState(paths); owner(state, actor, ['plan'], deps.now?.());
+    const state = programmeState(paths); expected(state, revision); owner(state, actor, ['plan'], deps.now?.());
     // The receipt commits with the effect, not with its later programme journal
     // acknowledgement. A restarted planner can read it without creating twice.
     const receipt = deps.operationId ? { id: name(deps.operationId), kind: 'create-project',
@@ -207,7 +207,6 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
       (deps.writeDraft || writeJsonAtomic)(paths.draft, current.contract);
       return structuredClone(current);
     }
-    expected(state, revision);
     approved(state, input);
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
     if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
@@ -226,7 +225,10 @@ export function reserveProjectRun(root, programme, project, actor, revision, dep
   if (!['plan', 'step', 'review'].includes(actor.role)) throw new Error('project runs belong to plan, step or review');
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
-    if (actor.role === 'plan') owner(programmeState(paths), actor, ['plan'], deps.now?.());
+    if (actor.role === 'plan') {
+      const agreement = programmeState(paths);
+      if (agreement.planner_jobs) owner(agreement, actor, ['plan'], deps.now?.());
+    }
     if (state.active_run) throw new Error('the project already has an active run');
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
     return save(paths.project, state, { ...state, active_run: actor, runs: [...state.runs, actor] }, deps);
@@ -241,7 +243,10 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
     if (operation === 'progress' && state.session_control) ownedControl(state, actor);
     const next = structuredClone(state);
     if (actor.role === 'plan') {
-      owner(programmeState(paths), actor, ['plan'], deps.now?.());
+      const agreement = programmeState(paths);
+      // Preserve pre-outbox reservation/release behavior. Once jobs are in use,
+      // every planner write is fenced, including attempts and releases.
+      if (agreement.planner_jobs || ['revise', 'confirm', 'recover'].includes(operation)) owner(agreement, actor, ['plan'], deps.now?.());
     }
     if (operation === 'recover') {
       if (existsSync(join(paths.projectDir, PLAN_FILE))) throw new Error('cannot recover a sent draft');

@@ -27,6 +27,8 @@ an expired lease or dead owner, records why, clears only that planner reservatio
 and preserves pending events and unacknowledged intents. Run IDs cannot be reused;
 old writers are rejected by active ownership and expiry checks. Reconciliation
 never signals a process or rewrites a project's builder ownership.
+Programme-wide fencing of planner project claims, attempts and releases applies
+once the outbox is present; pre-outbox v2 reservation behavior is preserved.
 
 `reconcileProgrammeJobs` scans durable project review/merge events and incomplete
 attempts. Dependencies can be supplied as immutable trigger records (automatic
@@ -34,6 +36,8 @@ dependency/failure follow-up policy belongs to the later recovery step). Active
 programmes without a next action receive an idle trigger, deduplicated for the
 same project-state snapshot rather than spinning up planners on unchanged work.
 Broken source records refuse reconciliation rather than becoming empty results.
+Missing or repeated source IDs cannot silently coalesce distinct outcomes;
+failed scans preserve both the programme journal and the damaged source.
 The optional, injected runner capability `autonomous.programmeJobs` enables this
 scan during `queue()` and returns pending programme IDs. It does not launch them;
 without the capability the v1 queue and its return shape remain unchanged.
@@ -61,6 +65,8 @@ result. Pending effects prevent job acknowledgement. Goal revision, send and
 confirmation will require their own operation receipts/readback in the guarded
 planner step; this module does not pretend arbitrary external effects are
 exactly-once or infer success from process exit.
+Receipt readback checks the expected programme state revision before repairing
+the projection, just like a new effect checks it before writing project state.
 
 ## Explicit dispatch holds
 

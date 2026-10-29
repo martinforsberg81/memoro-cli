@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
@@ -88,7 +88,7 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
     const owner = f.claim();
     assert.throws(() => finishProgrammeJob(owner({ token: 'wrong-token' })), /ownership/u);
     assert.throws(() => renewProgrammeJob(owner({ actor: planner })), /ownership/u);
-    const old = owner(); renewProgrammeJob(owner());
+    const old = owner(); renewProgrammeJob(owner({ now: Date.now() + 1000 }));
     assert.throws(() => finishProgrammeJob(old), /stale/u);
   });
 
@@ -111,6 +111,20 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
 });
 
 describe('planner leases, restart reconciliation and explicit waits', () => {
+  it('renews a live lease without losing its event snapshot or expiring at the old deadline', t => {
+    const f = fixture(t); f.activate();
+    const now = Date.now(); const owner = f.claim({ now, leaseMs: 1000 });
+    const original = f.read().planner_jobs.lease;
+    renewProgrammeJob(owner({ now: now + 500, leaseMs: 1000 }));
+    scan(f, { now: original.expires_at, alive: () => true });
+    const renewed = f.read().planner_jobs.lease;
+    assert.equal(renewed.token, original.token);
+    assert.deepEqual(renewed.event_ids, original.event_ids);
+    assert.equal(renewed.expires_at, now + 1500);
+    assert.deepEqual(f.read().planner_jobs.recoveries, []);
+    finishProgrammeJob(owner({ now: now + 1100 }));
+  });
+
   it('recovers a dead owner before expiry, retains events and fences its old writer', t => {
     const f = fixture(t); f.activate(); const owner = f.claim();
     const lease = f.read().planner_jobs.lease;
@@ -213,6 +227,33 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     assert.equal(readProgrammeState(f.root, f.programme).execution_enabled, false);
   });
 
+  it('refuses damaged trigger sources atomically instead of losing failures behind a deduplicated ID', t => {
+    const f = fixture(t); f.activate(); f.claim();
+    const original = f.json(f.paths.project); const before = f.read();
+    const event = { id: `review-${'a'.repeat(64)}`, type: 'review-reported', programme_revision: 1 };
+    const attempt = { id: 'attempt-1', programme_revision: 1 };
+    const damagedSources = [
+      { ...original, plan_events: [{ ...event, id: undefined }] },
+      { ...original, plan_events: [event, event] },
+      { ...original, plan_events: null },
+      { ...original, attempts: [{ programme_revision: 1 }] },
+      { ...original, attempts: [attempt, attempt] },
+      { ...original, attempts: null },
+      { ...original, phase: 'unknown' },
+      { ...original, contract: { ...original.contract, execution: { kind: 'unknown' } } },
+    ];
+    for (const source of damagedSources) {
+      writeFileSync(f.paths.project, JSON.stringify(source));
+      assert.throws(() => scan(f, { alive: () => false }), /invalid autonomous trigger source/u);
+      assert.deepEqual(f.read(), before, 'even orphan recovery waits until source records can be read');
+      assert.deepEqual(f.json(f.paths.project), JSON.parse(JSON.stringify(source)));
+    }
+    writeFileSync(f.paths.project, JSON.stringify({ ...original, plan_events: [event] }));
+    scan(f, { alive: () => false });
+    assert.equal(f.read().planner_jobs.recoveries.length, 1);
+    assert.equal(f.read().planner_jobs.events.at(-1).type, 'review');
+  });
+
   it('exposes only explicit active pending programmes, and reports corruption without discarding it', t => {
     const f = fixture(t);
     assert.deepEqual(reconcileProgrammeQueue(f.root), []);
@@ -228,6 +269,35 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
 });
 
 describe('durable planner operations and exactly-once project effects', () => {
+  it('checks the expected programme revision even before repairing a committed effect projection', t => {
+    const f = fixture(t); f.activate(); const owner = f.claim(); const intent = f.intent();
+    createProgrammeJobProject(owner(), intent);
+    const stale = f.read().revision;
+    recordProgrammeTrigger(f.options(), f.event('new-review', 'review'));
+    const paths = autonomousPaths(f.root, f.programme, intent.project);
+    rmSync(paths.draft);
+    const retry = revision => createAutonomousDraft(f.root, f.programme, intent.project, intent.input,
+      { actor: owner().actor, revision, operationId: intent.id });
+    assert.throws(() => retry(stale), /stale state revision/u);
+    assert.equal(existsSync(paths.draft), false, 'stale readback must not write a projection');
+    const before = f.read();
+    const project = retry(before.revision);
+    assert.equal(project.revision, 1);
+    assert.equal(project.operation_receipts.length, 1);
+    assert.deepEqual(f.json(paths.draft), intent.input);
+    assert.deepEqual(f.read(), before);
+  });
+
+  it('never adopts an unrelated existing project as a completed creation', t => {
+    const f = fixture(t); f.activate(); const owner = f.claim();
+    const before = readFileSync(f.paths.project, 'utf8');
+    const intent = { ...f.intent(), project: f.project, input: autonomousProject() };
+    assert.throws(() => createProgrammeJobProject(owner(), intent), /project effect does not match/u);
+    assert.equal(readFileSync(f.paths.project, 'utf8'), before);
+    assert.equal(f.read().planner_jobs.operations[0].status, 'pending');
+    assert.throws(() => finishProgrammeJob(owner()), /pending planner effects/u);
+  });
+
   it('reconciles repeated delivery from the atomic project receipt, not from process success', t => {
     const f = fixture(t); f.activate(); const owner = f.claim(); const intent = f.intent();
     assert.throws(() => prepareProgrammeOperation(owner(), { ...intent, input: { ...intent.input, success_criteria: [] } }), /invalid planner goal/u);
