@@ -40,7 +40,7 @@ let ended = false;
 log('mc.start', { ...shape, cwd: process.cwd(), holder: await holderName() });
 
 try {
-  const reviewRefusal = process.env.MC_AUTONOMOUS_ROLE === 'review'
+  const reviewRefusal = ['review', 'plan'].includes(process.env.MC_AUTONOMOUS_ROLE)
     ? (await import('./mc/autonomous-review-guard.js')).reviewCommandRefusal(argv) : null;
   if (reviewRefusal) {
     console.error(`mc: ${reviewRefusal}`);

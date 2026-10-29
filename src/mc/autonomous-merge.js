@@ -38,7 +38,9 @@ export function autonomousProof({ root, owner, pr }) {
   const assignment = state.contract;
   const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, 'PLAN.json'), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
-  const programme = readProgrammeState(root, owner.programme).approved.find(item => item.revision === state.programme_revision);
+  const agreement = readProgrammeState(root, owner.programme);
+  requireThat(!agreement.planner_jobs || agreement.planner_jobs.mode === 'active', 'programme is paused, waiting or stopped');
+  const programme = agreement.approved.find(item => item.revision === state.programme_revision);
   requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'approved programme revision is missing or invalid');
   requireThat(!state.active_run && ['plan_pending', 'landing'].includes(state.phase) && !state.confirmed,
     'autonomous work is incomplete, active or already confirmed');

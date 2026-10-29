@@ -1,6 +1,14 @@
-/** Workflow authority, not an OS sandbox. Unknown commands fail closed for review. */
+/** Workflow authority, not an OS sandbox. Headless flavors fail closed. */
 export function reviewCommandRefusal(argv, { env = process.env, actor = null } = {}) {
-  if ((actor?.role || env.MC_AUTONOMOUS_ROLE) !== 'review') return null;
+  const role = actor?.role || env.MC_AUTONOMOUS_ROLE;
+  if (role === 'plan' && env.MC_PROGRAMME_LEASE) {
+    const [verb, operation] = argv;
+    if (['--help', '-h', 'help', '--version', 'status', 'hook'].includes(verb)) return null;
+    if (verb === 'programme' && ['show', 'decide', 'complete', 'cancel'].includes(operation)) return null;
+    if (verb === 'autonomous-project' && operation === 'show') return null;
+    return 'autonomous plan may only decide within its programme; agreement edits, legacy mutations, build, publish and merge are denied';
+  }
+  if (role !== 'review') return null;
   const [verb, operation] = argv;
   if (['--help', '-h', 'help', '--version', 'status', 'gate'].includes(verb)) return null;
   if (verb === 'autonomous-project' && ['show', 'report'].includes(operation)) return null;

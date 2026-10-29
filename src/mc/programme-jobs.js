@@ -1,5 +1,5 @@
 /** Durable, inactive planner outbox. Delivery can repeat; effects have receipts.
- * Trusted runner seams only: no CLI, model launch, new lane or activation flag. */
+ * Lease reservation stays runner-owned; guarded plan decisions use this journal. */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { STABLE_ID_RE } from './programme-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { processAlive } from './resource-claim.js';
+import { planOperationProblems } from './programme-plan-contract.js';
 
 export const PROGRAMME_JOB_TRIGGERS = Object.freeze(['activation', 'review', 'landed', 'failure', 'dependency', 'idle']);
 export const MAX_PLANNER_LEASE_MS = 5 * 60 * 1000;
@@ -47,7 +48,7 @@ function jobs(state) {
     || new Set(value.pending?.event_ids).size !== (value.pending?.event_ids.length || 0)
     || value.lease?.event_ids.some(id => !value.pending.event_ids.includes(id))
     || new Set(value.operations.map(item => item.intent.id)).size !== value.operations.length
-    || value.operations.some(item => !stable(item.intent.id) || !['pending', 'applied'].includes(item.status))) {
+    || value.operations.some(item => !stable(item.intent.id) || !['pending', 'applied', 'cancelled'].includes(item.status))) {
     throw new Error('invalid programme planner journal');
   }
   return value;
@@ -134,6 +135,7 @@ export function finishProgrammeJob(options) {
   return transact(options, (state, journal) => {
     const lease = owned(state, journal, options);
     if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before completion');
+    if (lease.completion) journal.results = [...(journal.results || []), { run_id: lease.actor.run_id, job_id: lease.job_id, ...lease.completion }];
     journal.pending.event_ids = journal.pending.event_ids.filter(id => !lease.event_ids.includes(id));
     if (!journal.pending.event_ids.length) journal.pending = null;
     journal.lease = null;
@@ -205,7 +207,7 @@ export function reconcileProgrammeJobs(options, { dependencies = [] } = {}) {
   });
 }
 
-/** Opt-in scheduling read/repair only. Step 2 supplies the headless launcher.
+/** Opt-in scheduling read/repair only. programme-plan-run supplies the launcher.
  * V1 and normal (capability-less) runners never enter this path. */
 export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = () => {} } = {}) {
   const directory = join(root, PROGRAMS_HOME);
@@ -223,6 +225,12 @@ export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = (
 }
 
 function operationCheck(state, lease, intent) {
+  if (intent.kind !== 'create-project') {
+    const problems = planOperationProblems(intent, state.approved.at(-1));
+    if (problems.length) throw new Error(problems.join('; '));
+    if (intent.programme_revision !== lease.programme_revision) throw new Error('programme revision changed; replan pending effects');
+    return;
+  }
   if (!stable(intent.id) || intent.kind !== 'create-project' || !stable(intent.project) || intent.expected_revision !== 0
     || !positive(intent.programme_revision) || intent.input?.project_id !== intent.project
     || intent.input?.programme.id !== state.approved.at(-1).id || intent.input?.programme.revision !== intent.programme_revision
@@ -241,6 +249,7 @@ export function prepareProgrammeOperation(options, intent) {
       return;
     }
     if (journal.mode !== 'active') throw new Error('new planner effects require an active programme');
+    if (lease.completion) throw new Error('completed planner must exit before new decisions');
     operationCheck(state, lease, intent);
     journal.operations.push({ intent: structuredClone(intent), status: 'pending', result: null });
   });
@@ -256,19 +265,84 @@ export function completeProgrammeOperation(options, intent, result) {
     }
     const file = autonomousPaths(options.root, options.programme, intent.project).project;
     const effect = JSON.parse(readFileSync(file, 'utf8'));
-    if (!effect.operation_receipts?.some(receipt => receipt.id === intent.id && receipt.kind === intent.kind && receipt.digest === autonomousOperationDigest(intent.input))
-      || result.project !== intent.project || result.revision !== 1) throw new Error('matching committed project effect receipt required');
+    const receipt = effect.operation_receipts?.find(receipt => receipt.id === intent.id && receipt.kind === intent.kind
+      && receipt.digest === autonomousOperationDigest(intent.kind === 'create-project' ? intent.input : intent));
+    if (!receipt || result.project !== intent.project || (intent.kind === 'create-project' ? result.revision !== 1 : !isDeepStrictEqual(result, receipt.result))) throw new Error('matching committed project effect receipt required');
     operation.status = 'applied'; operation.result = structuredClone(result);
   });
 }
 
+/** A stale uncommitted decision is explicitly superseded, never silently rebased.
+ * A committed receipt must be reconciled instead of being discarded. */
+export function cancelProgrammeOperation(options, { id, reason }) {
+  return transact(options, (state, journal, paths) => {
+    owned(state, journal, options);
+    const operation = journal.operations.find(item => item.intent.id === id);
+    if (!operation || typeof reason !== 'string' || !reason.trim()) throw new Error('a known operation and cancellation reason are required');
+    if (operation.status !== 'pending') throw new Error('only pending decisions can be cancelled');
+    const file = join(paths.dir, operation.intent.project, AUTONOMOUS_STATE_FILE);
+    if (existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).operation_receipts?.some(item => item.id === id)) throw new Error('committed effect must be reconciled, not cancelled');
+    operation.status = 'cancelled'; operation.result = { reason };
+  });
+}
+
+/** A process exit alone never acknowledges a planner delivery. */
+export function completeProgrammePlan(options, input) {
+  return transact(options, (state, journal) => {
+    const lease = owned(state, journal, options);
+    if (!input || Object.keys(input).sort().join(',') !== 'event_ids,reference' || typeof input.reference !== 'string' || !input.reference.trim()
+      || !isDeepStrictEqual(input.event_ids, lease.event_ids)) throw new Error('completion must account for the claimed event snapshot and name its decision reference');
+    if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before completion');
+    if (lease.completion && !isDeepStrictEqual(lease.completion, input)) throw new Error('planner completion is immutable');
+    lease.completion = structuredClone(input);
+  });
+}
+
+/** Failed/incomplete sessions retain the same job and operation identities. */
+export function yieldProgrammeJob(options, reason) {
+  return transact(options, (state, journal) => {
+    const lease = owned(state, journal, options);
+    journal.recoveries.push({ token: lease.token, run_id: lease.actor.run_id, at: instant(options), reason });
+    journal.lease = null;
+    return { ...state, active_run: null, planner_jobs: journal };
+  });
+}
+
+/** Stop intent and effect fit in one authoritative write. No agreement edits. */
+export function reachProgrammePlanStop(options, input) {
+  return transact(options, (state, journal, paths) => {
+    const lease = owned(state, journal, options);
+    if (!input || Object.keys(input).sort().join(',') !== 'id,programme_revision,reference,stop' || !stable(input.id)
+      || typeof input.reference !== 'string' || !input.reference.trim()) throw new Error('stop decision needs identity and evidence reference');
+    const previous = journal.operations.find(item => item.intent.id === input.id);
+    const intent = { ...input, kind: 'reach-stop' };
+    if (previous) {
+      if (!isDeepStrictEqual(previous.intent, intent)) throw new Error('planner operation ID already used with different content');
+      return;
+    }
+    if (lease.completion) throw new Error('completed planner must exit before new decisions');
+    if (journal.mode !== 'active' || input.programme_revision !== lease.programme_revision || input.programme_revision !== state.approved.at(-1).revision
+      || !state.approved.at(-1).planned_stops.some(item => item.id === input.stop)) throw new Error('stop must belong to the current approved programme');
+    if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before stopping');
+    for (const entry of readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && stable(item.name))) {
+      const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
+      if (!existsSync(file)) continue;
+      const project = JSON.parse(readFileSync(file, 'utf8'));
+      if (project.active_run || ['running', 'closing', 'publishing', 'reviewing', 'landing'].includes(project.phase)) throw new Error('affected runs must close before reaching the planned stop');
+    }
+    journal.operations.push({ intent, status: 'applied', result: { stop: input.stop } });
+    journal.mode = 'stopped'; journal.stop = input.stop;
+  });
+}
+
 /** Concrete idempotent effect, not an exactly-once process claim. A crash after
- * AUTONOMOUS_STATE but before DRAFT/ack reads the same receipt on retry. Later
- * goal operations must supply their own atomic receipts before joining here. */
+ * AUTONOMOUS_STATE but before DRAFT/ack reads the same receipt on retry. Other
+ * goal effects use their own atomic receipts through programme-plan. */
 export function createProgrammeJobProject(options, intent) {
   let state = prepareProgrammeOperation(options, intent);
   const operation = state.planner_jobs.operations.find(item => item.intent.id === intent.id);
   if (operation.status === 'applied') return operation.result;
+  if (operation.status === 'cancelled') throw new Error('planner decision was cancelled; use a new operation ID');
   // Read back committed effects even when the approved revision/mode changed.
   // A missing effect still needs current authority before any new write.
   const path = autonomousPaths(options.root, options.programme, intent.project).project;

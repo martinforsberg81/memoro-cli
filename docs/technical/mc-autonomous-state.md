@@ -62,7 +62,10 @@ revision, the planner's reservation and the referenced approved contract.
 Other project operations check the **project state** revision.
 
 Only the active `plan` run, also owning the programme reservation, may revise
-or confirm a project. A revision advances the goal revision exactly once,
+or confirm a project. A revision advances the goal revision exactly once.
+The [guarded programme planner](mc-programme-plan.md) adds a durable path for
+sent open-PR goals without amending v1 plans or editing the programme agreement.
+The original pre-outbox typed data operations remain compatible. A revision
 keeps project/repository/programme identity and preserves commits, branch/PR,
 reports, attempts and old contracts. All earlier-revision evidence is retained
 but excluded from current evidence; current handoff and confirmation are

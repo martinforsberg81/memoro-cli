@@ -41,6 +41,9 @@ failed scans preserve both the programme journal and the damaged source.
 The optional, injected runner capability `autonomous.programmeJobs` enables this
 scan during `queue()` and returns pending programme IDs. It does not launch them;
 without the capability the v1 queue and its return shape remain unchanged.
+The additional injected `programmePlan` capability connects those IDs to the
+[guarded headless launcher](mc-programme-plan.md); neither capability has a
+production activation command.
 
 ## Effects, not exactly-once processes
 
@@ -62,9 +65,11 @@ On repeated delivery, the matching receipt reconciles a committed creation and
 repairs a missing DRAFT projection. It never creates another project or silently
 adopts an unrelated existing one. A crash after acknowledgement returns the same
 result. Pending effects prevent job acknowledgement. Goal revision, send and
-confirmation will require their own operation receipts/readback in the guarded
-planner step; this module does not pretend arbitrary external effects are
-exactly-once or infer success from process exit.
+confirmation now have their own operation receipts/readback in the
+[guarded planner facade](mc-programme-plan.md). The original creation seam stays
+compatible. Explicit uncommitted cancellation is journaled; committed effects
+must be reconciled. No arbitrary external effects are claimed exactly-once,
+and process exit alone never establishes success.
 Receipt readback checks the expected programme state revision before repairing
 the projection, just like a new effect checks it before writing project state.
 

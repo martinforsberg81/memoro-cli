@@ -27,6 +27,8 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
   if (assignment.project_id !== record.project || assignment.programme.id !== record.programme || assignment.repo !== record.repo) return skip('assignment-mismatch', 'project identity does not match its location');
   try {
     const state = readAutonomousState(root, record.programme, record.project);
+    const mode = readProgrammeState(root, record.programme).planner_jobs?.mode;
+    if (mode && mode !== 'active') return skip('programme-held', 'programme is paused, waiting or stopped');
     if (!isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
     if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
     if (state.active_run) {
