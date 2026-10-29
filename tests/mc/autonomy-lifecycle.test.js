@@ -22,6 +22,9 @@ import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { autonomousMergeDoor } from '../../src/mc/autonomous-pr.js';
 import { recordAutonomousMergeEvent } from '../../src/mc/autonomous-state.js';
 import { reportBinding } from '../../src/mc/autonomous-outcomes.js';
+import { completeAutonomousReview } from '../../src/mc/autonomous-review.js';
+import { recordReviewTerminal } from '../../src/mc/autonomous-review-process.js';
+import { reviewCompletion } from './autonomous-review-process-fixture.js';
 import { programmeWorld, cleanReview, findings, goal, git, closedSession, deferred, never,
   PROGRAMME, PROJECT, CRITERIA, COMPLETION } from './autonomy-lifecycle-fixture.js';
 
@@ -294,7 +297,30 @@ const dieAt = phase => ({ write(file, state) {
   if (state.publication?.phase === phase) throw new Error(`process died at ${phase}`);
   writeJsonAtomic(file, state);
 } });
+async function reviewCrash(w, boundary) {
+  w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready' });
+  assert.equal(await w.run(), 'ran');
+  const died = deferred();
+  w.review(cleanReview(SHORT), { after: call => {
+    const options = call.reviewProcess.options;
+    recordReviewTerminal(options, reviewCompletion);
+    if (boundary === 'report') assert.throws(() => completeAutonomousReview(options, null,
+      { record: () => { throw new Error('review state write lost'); } }), /review state write lost/u);
+    died.resolve(); return never();
+  } });
+  w.run(); await died.promise;
+  assert.equal(w.state().phase, 'reviewing'); assert.ok(w.state().active_run);
+  w.restart(); assert.equal(await w.run(), 'ran');
+  const state = w.state();
+  assert.equal(state.review_reports.length, 1); assert.equal(state.evidence.reviews.length, 1);
+  assert.equal(state.plan_events.filter(e => e.type === 'review-reported').length, 1);
+  assert.equal(state.plan_events.filter(e => e.type === 'merge-queued').length, 1); assert.equal(w.jobs().length, 1);
+  w.restart(); assert.equal(w.next(w.record()), null);
+  assert.match(await w.run(), /^skipped:/u); assert.deepEqual(w.state(), state); assert.equal(w.jobs().length, 1);
+}
 const CRASHES = {
+  'after review terminal persistence': w => reviewCrash(w, 'terminal'),
+  'after report persistence before review owner release': w => reviewCrash(w, 'report'),
   // The model's finish dies after the push, before it is recorded; then the runner dies.
   'after push': async w => {
     const died = deferred();
@@ -392,6 +418,23 @@ describe('a crash at each external and persistence boundary', { concurrency: 3 }
     if (w.state().phase === 'landed') confirm(w);
     deliveredOnce(w);
   });
+});
+
+test('an unknown abandoned review is delivered to plan once across runner restarts and retains its checkout owner', async t => {
+  const w = await opened(t);
+  w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready' }); assert.equal(await w.run(), 'ran');
+  const died = deferred();
+  w.review(cleanReview(SHORT), { after: () => { died.resolve(); return never(); } });
+  w.run(); await died.promise;
+  const owner = w.state().active_run; const checkout = w.state().review_session.checkout;
+  w.restart(); assert.equal(await w.run(), 'ran');
+  const state = w.state();
+  assert.equal(state.phase, 'plan_pending'); assert.deepEqual(state.active_run, owner);
+  assert.equal(state.attempts.length, 1); assert.equal(state.attempts[0].role, 'review');
+  assert.equal(state.review_reports?.length || 0, 0); assert.equal(w.jobs().length, 0);
+  w.restart(); assert.equal(await w.run(), 'ran'); assert.deepEqual(w.state(), state);
+  assert.equal(w.state().review_session.checkout, checkout); assert.equal(w.reviews.length, 1);
+  w.scan(); assert.ok(w.plan('plan-review-recovery').events().includes('failure'));
 });
 
 const MOVES = {

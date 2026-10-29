@@ -54,6 +54,7 @@ export function readReviewProcess(options) {
     if (fact && (fact.generation !== manifest.generation || fact.manifest_digest !== reviewDigest(manifest))) throw new Error('review process generation changed');
     facts[name] = fact;
   }
+  if ((facts.launch || facts.spawned) && !facts.spawn_intent) throw new Error('review spawn ownership facts are incomplete');
   return { paths, manifest, ...facts };
 }
 function fact(options, name, value) {
@@ -63,13 +64,13 @@ function fact(options, name, value) {
 function takeReviewClaim({ paths, manifest }) {
   const previous = readClaim(paths.claim);
   if (existsSync(paths.claim) && (!previous || previous.generation !== manifest.generation
-    || previous.run_id !== manifest.actor.run_id)) return { ok: false };
+    || previous.run_id !== manifest.actor.run_id || !Number.isSafeInteger(previous.pid) || previous.pid <= 0)) return { ok: false };
   return takeClaim(paths.claim, { pid: process.pid, generation: manifest.generation, run_id: manifest.actor.run_id }, {
     alive: pid => {
       const current = readClaim(paths.claim);
       // A successor can arrive between the initial read and claim reclamation.
       return !current || current.generation !== manifest.generation || current.run_id !== manifest.actor.run_id
-        || current.pid !== pid || processAlive(pid);
+        || current.pid !== pid || !Number.isSafeInteger(current.pid) || current.pid <= 0 || processAlive(pid);
     },
   });
 }
@@ -77,7 +78,7 @@ export function withReviewProcessClaim(options, operation) {
   const attempt = readReviewProcess(options); const { paths } = attempt;
   const held = takeReviewClaim(attempt);
   if (!held.ok) throw new Error('review process is owned or unknown');
-  try { return operation(); } finally { releaseClaim(paths.claim, held.marker); }
+  try { return operation(held.marker); } finally { releaseClaim(paths.claim, held.marker); }
 }
 export function beginReviewProcess(options) {
   return withReviewProcessClaim(options, () => {
@@ -95,19 +96,23 @@ export function recordReviewSpawn(options, pid) {
 export function recordReviewTerminal(options, result) {
   const attempt = readReviewProcess(options);
   if (!attempt.spawn_intent && !result.not_spawned) throw new Error('review spawn intent required');
-  if (result.not_spawned && (attempt.spawn_intent || attempt.spawned)) throw new Error('review spawn outcome is unknown');
+  if (result.not_spawned && (attempt.spawn_intent || attempt.launch || attempt.spawned)) throw new Error('review spawn outcome is unknown');
   return fact(options, 'terminal', { result });
 }
-export function reviewProcessStatus(options, { alive = processAlive, group = groupAlive } = {}) {
+export function reviewProcessStatus(options, { alive = processAlive, group = groupAlive, claimMarker = null } = {}) {
   const attempt = readReviewProcess(options); const held = readClaim(attempt.paths.claim);
   if (existsSync(attempt.paths.claim)) {
-    if (!held || held.generation !== attempt.manifest.generation || held.run_id !== attempt.manifest.actor.run_id) return { kind: 'unknown', attempt };
-    if (alive(held.pid)) return { kind: 'live', attempt };
+    if (!held || held.generation !== attempt.manifest.generation || held.run_id !== attempt.manifest.actor.run_id
+      || !Number.isSafeInteger(held.pid) || held.pid <= 0) return { kind: 'unknown', attempt };
+    if (!(held.marker === claimMarker && held.pid === process.pid) && alive(held.pid)) return { kind: 'live', attempt };
   }
+  if (attempt.spawned && (!Number.isSafeInteger(attempt.spawned.pid) || attempt.spawned.pid <= 0
+    || attempt.spawned.process_group !== attempt.spawned.pid)) return { kind: 'unknown', attempt };
   if (attempt.spawned && (alive(attempt.spawned.pid) || group(attempt.spawned.process_group))) return { kind: 'live', attempt };
   const result = attempt.terminal?.result;
   if (result?.status === 0 && !attempt.spawned) return { kind: 'unknown', attempt };
-  if (!result || result.process_closed !== true || result.group_dead !== true || result.tools_closed !== true) return { kind: 'unknown', attempt };
+  if (!result || result.process_closed !== true || result.group_dead !== true || result.tools_closed !== true
+    || (result.active_jobs !== undefined && (!Array.isArray(result.active_jobs) || result.active_jobs.length))) return { kind: 'unknown', attempt };
   return { kind: result.status === 0 && result.normal_exit === true && result.interrupted === false
     && result.transport_completed === true && result.signal === null && result.error === null && !result.not_spawned ? 'completed' : 'incomplete', attempt };
 }
