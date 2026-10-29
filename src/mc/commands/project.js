@@ -327,7 +327,7 @@ function newPlan(scanned, deps) {
   if (absent.length) { stderr.write(`mc: new needs ${absent.join(', ')}\n`); return 2; }
   // Codex is the only tool a draft names: a plan without one runs on claude, as it always has.
   if (flags.tool !== null && flags.tool !== 'codex') {
-    stderr.write(`mc: --tool ${flags.tool} is not a tool a draft names — codex, or none for claude (haiku and opus are claude's; gpt-6.1-sol and gpt-6.1-luna are codex's)\n`);
+    stderr.write(`mc: --tool ${flags.tool} is not a tool a draft names — codex, or none for claude (haiku and opus are claude's; gpt-6.1-sol and gpt-6-luna are codex's)\n`);
     return 2;
   }
   const repoNames = repos.map((repo) => repo.name);
@@ -1198,7 +1198,7 @@ export function usage() {
     '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
     '        mc project step add <project> <title> --model fast|large|<model> --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
     '        mc project step edit <project> <n> [--title <text>] [--model fast|large|<model>] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
-    '        <model> is haiku or opus (claude), or gpt-6.1-sol or gpt-6.1-luna (codex: the plan needs --tool codex)\n',
+    '        <model> is haiku or opus (claude), or gpt-6.1-sol or gpt-6-luna (codex: the plan needs --tool codex)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
     '        mc project send <v2-project> --expected-revision <n>   publish the guarded v2 contract, inactive and without a legacy review step\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',

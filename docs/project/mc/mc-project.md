@@ -35,8 +35,8 @@ Prose keeps only what needs judgement.
   own business and can change without a single instruction changing. (Not back to Markdown: *"Vi har bytt från md
   till json en gång redan. Jag tror lösningen är någon helt annan än att byta tillbaka. Jag tror lösningen kan ligga
   i mc."*)
-- Every step names `--model`: `fast` or `large` (work classes, ruling 59), or a concrete `haiku|opus|gpt-6.1-sol|gpt-6.1-luna`. Required, no default, no other value. `review` is the review step's alone. No `why_opus`.
-- Later, for a plan drafted with `--tool codex`: a step names `gpt-6.1-sol` or `gpt-6.1-luna` instead, and a Claude name is refused on that plan. The rule above is the claude plan's. (Added by the codex-models project; not a ruling from Martin.)
+- Every step names `--model`: `fast` or `large` (work classes, ruling 59), or a concrete `haiku|opus|gpt-6.1-sol|gpt-6-luna`. Required, no default, no other value. `review` is the review step's alone. No `why_opus`.
+- Later, for a plan drafted with `--tool codex`: a step names `gpt-6.1-sol` or `gpt-6-luna` instead, and a Claude name is refused on that plan. The rule above is the claude plan's. (Added by the codex-models project; not a ruling from Martin.)
 - Plans live in mc, not in the product repositories: *"Med ett smart 'mc project' system så kommer det synas även om
   det ligger lokalt i mc."*
 - The programme session (`mc plan <programme>`, as today) is the foundation. It creates and drives its programme's
@@ -97,7 +97,7 @@ never an area.**
 mc project new <programme>/<project> --repo <repo>[,<repo>] --goal "…" [--tool codex]
 mc project criterion add <project> "…" --check "<command>"
 mc project criterion edit <project> <n> --check "<command>"   a new check; a met criterion goes back to not met
-mc project step add <project> "<title>" --model fast|large|haiku|opus|gpt-6.1-sol|gpt-6.1-luna [--effort …] --done-when "…"
+mc project step add <project> "<title>" --model fast|large|haiku|opus|gpt-6.1-sol|gpt-6-luna [--effort …] --done-when "…"
                                         [--after <repo>:<project>] --instruction-file <md>
 mc project step edit <project> <n> [any of the above]
 mc project amend <project> --amendment-file <json> --reason "<authorization>"
@@ -113,7 +113,7 @@ mc project discard <project> [--apply]  gone: the whole directory. Without --app
 `mc project archive` and `mc project discard` are the two ways a project under `~/mc/programs/` leaves. `archive` takes a sent project its register says is done and not yet archived: its row goes to the repository's `project_log.md` through a docs-only pull request, `CLOSEOUT.json` is written beside its `PLAN.json`, and its step area is closed unless a worktree in it has an uncommitted change or its session is live (the archive stands either way). The runner does the same by itself for a project done for 24 hours. `discard` removes a project that is not archived (its directory, step area, register file and open pull requests); without `--apply` it says only what would go, and with `--apply` it refuses a step that is running or landing, a live session or a worktree in use. Neither reaches a plan in a repository, and neither archives a programme.
 
 What the verbs refuse, at the write, so that an invalid plan never exists:
-- a concrete step whose `--model` its plan's tool does not run: `haiku` and `opus` on claude, `gpt-6.1-sol` and `gpt-6.1-luna` on codex (`--tool codex`), so either tool's name on the other's plan (a class, `fast` or `large`, names no tool and is never refused for it);
+- a concrete step whose `--model` its plan's tool does not run: `haiku` and `opus` on claude, `gpt-6.1-sol` and `gpt-6-luna` on codex (`--tool codex`), so either tool's name on the other's plan (a class, `fast` or `large`, names no tool and is never refused for it);
 - `Martin`, `by hand`, `manually`, `a person` in `--done-when` or `--check`. Narrow on purpose: "review", "show" and
   "decide" have legitimate uses (App Store review). Elsewhere these are warnings, not refusals;
 - a criterion without a `--check` command, or a check that needs the plan to have landed;
