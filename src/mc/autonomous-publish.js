@@ -12,6 +12,7 @@ import { AUTONOMOUS_PR_MARK, markAutonomousPr } from './autonomous-pr.js';
 import { runTool } from './child-async.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
 import { mcHome } from './paths.js';
+import { PLAN_FILE } from './plan-source.js';
 import { run as gateCommand, publicationGateSelection } from './commands/gate.js';
 import { run as publishCommand } from './commands/publish.js';
 
@@ -26,7 +27,7 @@ function owned(options) {
     || binding.programme_revision !== state.programme_revision) throw new Error('finish requires closing control on the current assignment');
   if (git(options.cwd, ['branch', '--show-current']) !== state.ownership.branch) throw new Error('branch ownership mismatch');
   const agreement = readProgrammeState(options.root, options.programme).approved.find(item => item.revision === state.programme_revision);
-  const assignmentPath = join(options.root, 'programs', options.programme, options.project, 'PLAN.json');
+  const assignmentPath = join(options.root, 'programs', options.programme, options.project, PLAN_FILE);
   if (!isDeepStrictEqual(JSON.parse(readFileSync(assignmentPath, 'utf8')), state.contract)) throw new Error('sent assignment changed');
   return { state, context: { assignment: state.contract, programme: agreement, runId: options.actor.run_id } };
 }

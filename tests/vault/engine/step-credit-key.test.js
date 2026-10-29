@@ -1,5 +1,5 @@
 /**
- * readStepCreditKey — the one vault record `mc-api-key`, read with the cached
+ * readStepCreditKey — the one vault record `mc-anthropic-api-key`, read with the cached
  * vault key, for runner step sessions on credits (ruling 38).
  */
 
@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import * as StepCreditKey from '../../../src/vault/engine/step-credit-key.js';
-import { readStepCreditKey, STEP_CREDIT_KEY_LABEL } from '../../../src/vault/engine/step-credit-key.js';
+import { BILLING_KEY_LABELS, readBillingApiKey, readStepCreditKey, STEP_CREDIT_KEY_LABEL } from '../../../src/vault/engine/step-credit-key.js';
 import { encryptSecretPayload, importVaultKey } from '../../../src/vault/engine/client-crypto.js';
 import { encryptEnvelopeSecret, mintCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
 import { buildSecretPayload } from '../../../src/vault/engine/types.js';
@@ -80,14 +80,32 @@ const apiToken = (token = KEY) => buildSecretPayload({ kind: 'api_token', token,
 describe('readStepCreditKey', () => {
   beforeEach(() => setup());
 
-  it('the label is the constant mc-api-key', () => {
-    assert.equal(STEP_CREDIT_KEY_LABEL, 'mc-api-key');
+  it('the Anthropic label is the constant mc-anthropic-api-key', () => {
+    assert.equal(STEP_CREDIT_KEY_LABEL, 'mc-anthropic-api-key');
+    assert.equal(BILLING_KEY_LABELS.codex, 'mc-openai-api-key');
+  });
+
+  it('reads a fixed OpenAI billing key only for Codex', async () => {
+    await addEnvelope(BILLING_KEY_LABELS.codex, buildSecretPayload({ kind: 'api_token', token: 'sk-openai-test', provider: 'openai' }));
+    assert.deepEqual(await readBillingApiKey('codex', { deps: { readCachedVaultKey: cacheStub(), portal } }), { ok: true, key: 'sk-openai-test' });
+    assert.deepEqual(await read(), { ok: false, reason: 'no-key' });
+  });
+
+  it('refuses an OpenAI label carrying another provider', async () => {
+    await addEnvelope(BILLING_KEY_LABELS.codex, apiToken());
+    assert.deepEqual(await readBillingApiKey('codex', { deps: { readCachedVaultKey: cacheStub(), portal } }), { ok: false, reason: 'key-unreadable' });
+    assert.deepEqual(await readBillingApiKey('other'), { ok: false, reason: 'unknown-provider' });
   });
 
   it('finds the key in an envelope row', async () => {
     await addEnvelope('other', apiToken('sk-other'));
     await addEnvelope(STEP_CREDIT_KEY_LABEL, apiToken());
     assert.deepEqual(await read(), { ok: true, key: KEY });
+  });
+
+  it('does not read the retired generic label', async () => {
+    await addEnvelope('mc-api-key', apiToken());
+    assert.deepEqual(await read(), { ok: false, reason: 'no-key' });
   });
 
   it('finds the key in a legacy row', async () => {
@@ -169,10 +187,10 @@ describe('readStepCreditKey', () => {
   });
 });
 
-describe('readStepCreditKey takes no label', () => {
-  it('its only parameter is the options object, and no export takes a label', () => {
+describe('billing key readers take no caller-selected label', () => {
+  it('the step reader keeps its fixed-label API, and the provider reader has only fixed providers', () => {
     assert.equal(readStepCreditKey.length, 0);
-    assert.deepEqual(Object.keys(StepCreditKey).sort(), ['STEP_CREDIT_KEY_LABEL', 'readStepCreditKey']);
+    assert.deepEqual(Object.keys(StepCreditKey).sort(), ['BILLING_KEY_LABELS', 'STEP_CREDIT_KEY_LABEL', 'readBillingApiKey', 'readStepCreditKey']);
   });
 
   it('deps accepts only the test seams', () => {

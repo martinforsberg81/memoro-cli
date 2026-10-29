@@ -31,10 +31,7 @@ THE PAGE
                                     Already draining: the drain, and the steps it waits on
   mc run lanes [<n>] [--total <n>] Steps in flight: <n> per repository, --total across
                                     every repository at once; no argument prints both
-  mc run --billing [plan|credits]
-                                    Who pays for claude step sessions: the plan or the API
-                                    credit. Credits selects Anthropic for every work class; no
-                                    argument prints the mode and the next session's billing
+  mc run --billing                  Plan usage and next billing for Claude and Codex
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc test dev | prod               The app running, measured — locally or live
   mc gate <test files…>            The tests a change reaches, in the gate lane, in 2 KB

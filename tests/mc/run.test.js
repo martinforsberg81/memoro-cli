@@ -2031,14 +2031,13 @@ test('a claude refusal on a class step refuses claude alone: the next launch run
   assert.match(f.files['/w/runner/log/runner.log'], /cls: step 1 left claude \(claude haiku\)/u);
 });
 
-test('a class step with no candidate that has capacity is a transient skip: no session, nothing written to the register, not blocked', async () => {
+test('a class step uses API reserve when no candidate has plan capacity', async () => {
   const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
   const runner = createRunner({ deps: f.deps });
-  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /cls: no fast candidate has capacity — claude:haiku:high: claude refused until 2026-08-29T13:00:00Z; codex:gpt-6-luna:high: codex is unobserved/u);
-  const registered = JSON.parse(f.files['/w/runner/projects/cls.json'] ?? 'null');
-  assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
+  assert.equal(await runner.runStep('cls', runner.queue()), 'ran');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.calls.sessions[0].bin, process.execPath);
+  assert.ok(f.calls.sessions[0].args.includes('claude'));
 });
 
 const reviewPlan = () => plan({ steps: [{ title: 'Review', kind: 'review', status: 'ready', done_when: 'three', instruction: ['Review.'], pr: null, blocked_by: null, runner: { model: 'review' } }] });
@@ -2054,17 +2053,16 @@ test('a review class step runs on the catalog\'s review model whatever the usage
   assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\treview\tclaude\thigh\tplan\n/u);
 });
 
-test('a review class step whose provider refused is a transient skip: no session, not moved to codex, not blocked', async () => {
+test('a review class step keeps its pinned model on API reserve when its plan refuses', async () => {
   const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.1, codex: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
   const runner = createRunner({ deps: f.deps });
-  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: the review model claude:opus:high: claude refused until 2026-08-29T13:00:00Z — skip/u);
-  const registered = JSON.parse(f.files['/w/runner/projects/m.json'] ?? 'null');
-  assert.ok(registered === null || registered.steps[0].status === 'ready', 'the step is neither blocked nor failed');
+  assert.equal(await runner.runStep('m', runner.queue()), 'ran');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.calls.sessions[0].bin, process.execPath);
+  assert.ok(f.calls.sessions[0].args.includes('opus'));
 });
 
-test('a codex refusal on a class step is recorded against codex alone, and the step waits for capacity rather than failing', async () => {
+test('a codex plan refusal routes the next class step to Codex API', async () => {
   const f = fixture({
     plans: { 'memoro-cli': { cls: classPlan('fast') } },
     session: () => ({ status: 1, stdout: '', stderr: "You've hit your weekly limit", timedOut: false }),
@@ -2077,48 +2075,31 @@ test('a codex refusal on a class step is recorded against codex alone, and the s
   const providers = f.deps.capacity.read().providers;
   assert.ok(Date.parse(providers.codex.refusal_until) > ROUTING_NOW.getTime(), 'codex is refused until its reset');
   assert.equal(providers.claude.refusal_until, null, 'claude is not refused');
-  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 1, 'no second session while codex is refused');
+  assert.equal(await runner.runStep('cls', runner.queue()), 'ran');
+  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(f.calls.sessions[1].bin, process.execPath);
 });
 
-test('manual credits select Anthropic for a class step and pass its API key', async () => {
+test('retired manual credits mode cannot override an available plan', async () => {
   const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1 }) });
   f.deps.billing = { readMode: () => 'credits', readState: () => ({}), patchState: () => {} };
-  f.deps.creditKey = async () => ({ ok: true, key: 'sk-test' });
+  f.deps.creditKey = async () => { throw new Error('the runner must not decrypt a key'); };
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
-  assert.equal(call.env.ANTHROPIC_API_KEY, 'sk-test');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tcredits\n/u);
+  assert.equal(call.bin, '/bin/claude');
+  assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\thaiku\tfast\tclaude\thigh\tplan\n/u);
 });
 
-test('manual credits skip a class step when the key cannot be read', async () => {
-  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
-  f.deps.billing = { readMode: () => 'credits', readState: () => ({}), patchState: () => {} };
-  f.deps.creditKey = async () => ({ ok: false, reason: 'vault-locked' });
-  const runner = createRunner({ deps: f.deps });
-  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 0);
-});
-
-test('manual credits do not launch a class step while the Anthropic workspace limit is in force', async () => {
-  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('large') } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
-  f.deps.billing = { readMode: () => 'credits', readState: () => ({ credits: { unusable_until: '2026-11-01T00:00:00Z', why: 'workspace API usage limit reached' } }), patchState: () => {} };
-  f.deps.creditKey = async () => { throw new Error('key should not be read while credits are blocked'); };
-  const runner = createRunner({ deps: f.deps });
-  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 0);
-});
-
-test('a concrete claude step is not routed: it runs on its own model under a refused claude, and waits out the quota as it always has', async () => {
+test('a concrete claude step keeps its model and uses API when its plan refused', async () => {
   const slept = [];
   const f = fixture({ plans: { 'memoro-cli': { cc: ready } }, session: () => QUOTA_ANSWER, capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) });
   f.deps.sleep = async (ms) => { slept.push(ms); };
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
-  assert.equal(call.bin, '/bin/claude');
+  assert.equal(call.bin, process.execPath);
   assert.equal(call.args[call.args.indexOf('--model') + 1], 'opus');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\t-\tclaude\tmedium\tplan\n/u);
-  assert.equal(slept.reduce((a, b) => a + b, 0), 30 * 60 * 1000, 'the concrete step sleeps on the quota, as before');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\t-\tclaude\tmedium\tcredits\n/u);
 });
 
 test('codex is read when no snapshot exists, then once an hour from the chores, and a failed read is said and the chores go on', async () => {
@@ -4813,11 +4794,15 @@ const CASES = [
       return f;
     },
   },
-  // A class step with no candidate that has capacity: a transient skip, which the reading does not choose.
+  // A catalog with no candidates cannot route even to an API reserve.
   {
     reason: 'no-capacity',
-    what: 'a class step has no candidate with capacity',
-    make: () => fixture({ plans: { memoro: { m: classPlan('fast') } }, session: okSession(), capacity: capacityWith({ claude: 0.1, refuse: { claude: '2026-08-29T13:00:00Z' } }) }),
+    what: 'a class has no candidate in the catalog',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: classPlan('fast') } }, session: okSession() });
+      f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), fast: [] });
+      return f;
+    },
   },
   // Not a machine word at all: the plan's own, which both readings take from
   // `chooseKind` — the round from the worktree's copy, the reading from main's.
@@ -5450,7 +5435,6 @@ test('a codex session records no plan windows, and neither does a claude stream 
 
 test('realDeps carries the billing files the runner reads and writes', () => {
   const deps = realDeps({});
-  assert.equal(typeof deps.billing.readMode, 'function');
   assert.equal(typeof deps.billing.readState, 'function');
   assert.equal(typeof deps.billing.patchState, 'function');
 });
@@ -5473,65 +5457,48 @@ function onBilling(mode, { runner, key = { ok: true, key: 'sk-ant-test-key' }, s
 
 const INIT = (apiKeySource) => `${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid', apiKeySource })}\n`;
 
-test('billing credits: the session gets the key from the vault, and the register and the lane file say credits', async () => {
-  const { f, reads, calls } = onBilling('credits', { stdout: INIT('ANTHROPIC_API_KEY') });
+test('a full Claude plan launches through the gateway without exposing its key', async () => {
+  const { f, reads, calls } = onBilling('plan');
+  f.deps.capacity.read = () => capacityWith({ claude: 1 });
   await createRunner({ deps: f.deps }).pass();
-  assert.equal(reads.length, 1);
-  assert.equal(calls.length, 1);
+  assert.equal(reads.length, 0, 'the runner never decrypts the key');
   const [{ call, register, current }] = calls;
-  assert.equal(call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
-  assert.equal(call.unsetEnv, undefined);
+  assert.equal(call.bin, process.execPath);
+  assert.ok(call.args.some((arg) => arg.endsWith('/billing-gateway-session.js')));
+  assert.deepEqual(call.args.slice(1, 4), ['claude', 'opus', '/bin/claude']);
+  assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(register.session.billing, 'credits');
   assert.equal(current.billing, 'credits');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /r: step starting \([^\n]*\) · on credits \(mode credits\)/u);
-  assert.doesNotMatch(log, /sk-ant-test-key/u, 'the key is never said');
-  assert.doesNotMatch(log, /session ran on/u);
-  assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u, 'the key is in no file');
+  assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u);
 });
 
-test('billing plan: no key, both Anthropic credentials unset, and the vault is never asked', async () => {
-  const { f, reads, calls } = onBilling('plan');
+test('an available plan launches directly and removes ambient provider keys', async () => {
+  const { f, reads, calls } = onBilling('credits');
   f.deps.env = { ...f.deps.env, ANTHROPIC_API_KEY: 'from-the-runner' };
   await createRunner({ deps: f.deps }).pass();
   assert.equal(reads.length, 0);
   const [{ call, register, current }] = calls;
+  assert.equal(call.bin, '/bin/claude');
   assert.equal('ANTHROPIC_API_KEY' in call.env, false);
-  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY']);
   assert.equal(register.session.billing, 'plan');
   assert.equal(current.billing, 'plan');
-  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /on credits/u);
 });
 
-test('billing credits with a key that cannot be read is a plan launch, and the runner says why', async () => {
-  const { f, reads, calls } = onBilling('credits', { key: { ok: false, reason: 'vault-locked' } });
+test('a full Codex plan uses the same gateway route', async () => {
+  const { f, calls } = onBilling('plan', { runner: { tool: 'codex' } });
+  f.deps.capacity.read = () => capacityWith({ codex: 1 });
   await createRunner({ deps: f.deps }).pass();
-  assert.equal(reads.length, 1);
-  const [{ call, register }] = calls;
-  assert.equal('ANTHROPIC_API_KEY' in call.env, false);
-  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
-  assert.equal(register.session.billing, 'plan');
-  assert.match(f.files['/w/runner/log/runner.log'], /r: credits wanted \(mode credits\) but the key could not be read \(vault-locked\) — plan/u);
+  assert.equal(calls[0].call.bin, process.execPath);
+  assert.ok(calls[0].call.args.includes('codex'));
+  assert.equal(calls[0].register.session.billing, 'credits');
+  assert.equal(calls[0].call.env.OPENAI_API_KEY, undefined);
 });
 
-test('billing credits on a codex plan never reads the key', async () => {
-  const { f, reads, calls } = onBilling('credits', { runner: { tool: 'codex' } });
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(reads.length, 0);
-  assert.equal('ANTHROPIC_API_KEY' in calls[0].call.env, false);
-  assert.equal(calls[0].register.session.billing, 'plan');
-});
-
-test('a session whose init line names another key source than its billing is said', async () => {
-  const credits = onBilling('credits', { stdout: INIT('none') });
-  await createRunner({ deps: credits.f.deps }).pass();
-  assert.match(credits.f.files['/w/runner/log/runner.log'], /r: session ran on none, not credits/u);
+test('a plan session reports an unexpected ambient API source', async () => {
   const plan_ = onBilling('plan', { stdout: INIT('ANTHROPIC_API_KEY') });
   await createRunner({ deps: plan_.f.deps }).pass();
-  assert.match(plan_.f.files['/w/runner/log/runner.log'], /r: session ran on ANTHROPIC_API_KEY, not plan/u);
-  const fine = onBilling('plan', { stdout: INIT('none') });
-  await createRunner({ deps: fine.f.deps }).pass();
-  assert.doesNotMatch(fine.f.files['/w/runner/log/runner.log'], /session ran on/u);
+  assert.match(plan_.f.files['/w/runner/log/runner.log'], /r: session unexpectedly used an API key/u);
 });
 
 test('a running step on credits whose session is gone is interrupted with billing credits', () => {
@@ -5577,114 +5544,23 @@ const streamed = (ended) => (call) => {
 const REFUSED_429 = streamed(apiEndedSession("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }));
 const CREDIT_LOW = streamed(apiEndedSession('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.', { api_error_status: 400 }));
 
-test('a class step on manual credits stays on Anthropic and waits after the workspace limit', async () => {
-  const state = { plan: {}, credits: {} };
-  const f = fixture({ plans: { 'memoro-cli': { cls: classPlan('fast') } }, session: streamed(apiEndedSession('API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.', { api_error_status: 400 })), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
-  f.deps.billing = {
-    readMode: () => 'credits', readState: () => state,
-    patchState: (patch) => { state.plan = { ...state.plan, ...(patch.plan || {}) }; state.credits = { ...state.credits, ...(patch.credits || {}) }; },
-  };
-  f.deps.creditKey = async () => ({ ok: true, key: 'sk-test' });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
-  assert.equal(state.credits.unusable_until, '2026-11-01T00:00:00.000Z');
-  assert.equal(registerOf(f, 'cls').steps[0].interrupted.billing, 'credits');
-  assert.equal(f.calls.sessions.length, 1);
-  assert.equal(await runner.runStep('cls', runner.queue()), 'skipped:no-capacity');
-  assert.equal(f.calls.sessions.length, 1, 'no fallback to Codex or the subscription');
-});
-
-test('retired auto value behaves as plan: a refusal is written and slept on', async () => {
-  const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429);
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z', 'the refusal\'s own reset');
-  assert.ok(slept.length > 0, 'the quota pause');
-  assert.equal(calls.length, 2, 'resumed on the plan');
-  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /every lane sleeping/u);
-  assert.doesNotMatch(log, /handed/u);
-});
-
-test('retired auto value: a refusal without a reset uses QUOTA_SLEEP_MS', async () => {
-  const { f, billing, calls } = onRefusal('auto', streamed(apiEndedSession('API Error: Request rejected (429)', { api_error_status: 429 })));
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(billing.plan.refused_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 30 * 60_000).toISOString());
-  assert.equal(calls.length, 2, 'resumed on the plan');
-  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
-});
-
-test('credits: an exhausted credit marks it unusable for 24 h and hands the step back to the plan', async () => {
-  for (const [first, why] of [[CREDIT_LOW, 'credit balance too low'], [streamed(apiEndedSession('Invalid API key · Fix external API key')), 'API key rejected']]) {
-    const { f, billing, slept, calls } = onRefusal('credits', first);
-    await createRunner({ deps: f.deps }).pass();
-    assert.equal(calls[0].call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
-    assert.equal(billing.credits.unusable_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 24 * 60 * 60_000).toISOString(), why);
-    assert.equal(billing.credits.why, why);
-    assert.equal(billing.plan.refused_until, undefined, 'the plan is not touched');
-    assert.deepEqual(slept, []);
-    assert.equal(calls.length, 1);
-    const step = registerOf(f, 'r').steps[0];
-    assert.equal(step.status, 'ready');
-    assert.equal(step.interrupted.billing, 'credits');
-    assert.equal(step.interrupted.count, 0);
-    const [row] = runRows(f.files).filter((r) => r.kind === 'step');
-    assert.equal(row.note, 'interrupted,handed-to-plan');
-    const log = f.files['/w/runner/log/runner.log'];
-    assert.match(log, new RegExp(`r: the step credit is unusable until [^\\n]* \\(${why}\\) — \`mc run --billing credits\` clears it sooner`, 'u'));
-    assert.doesNotMatch(log, /sk-ant-test-key/u);
-  }
-});
-
-test('credits: a spent workspace limit is unusable until the date it names, and handed to the plan without a quota pause', async () => {
-  const limit = streamed(apiEndedSession('API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.', { api_error_status: 400 }));
-  const { f, billing, slept, calls } = onRefusal('credits', limit);
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(billing.credits.unusable_until, '2026-11-01T00:00:00.000Z');
-  assert.equal(billing.credits.why, 'workspace API usage limit reached');
-  assert.equal(billing.plan.refused_until, undefined, 'the plan is not touched');
-  assert.deepEqual(slept, [], 'no quota pause');
-  assert.equal(calls.length, 1, 'not resumed on the credit');
-  const step = registerOf(f, 'r').steps[0];
-  assert.equal(step.status, 'ready');
-  assert.equal(step.interrupted.billing, 'credits');
-  assert.equal(step.interrupted.count, 0);
-  const [row] = runRows(f.files).filter((r) => r.kind === 'step');
-  assert.equal(row.note, 'interrupted,handed-to-plan');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /r: the step credit is unusable until 2026-11-01T00:00:00\.000Z \(workspace API usage limit reached\)/u);
-  assert.match(log, /r: step 1 handed from credits to plan/u);
-  assert.doesNotMatch(log, /every lane sleeping/u);
-});
-
-test('plan: the same 429 is today\'s quota pause and resume, with the refusal written', async () => {
+test('a plan refusal is recorded and hands the next launch to the API reserve', async () => {
   const { f, billing, slept, calls } = onRefusal('plan', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
-  assert.ok(slept.length > 0, 'the quota pause');
-  assert.match(f.files['/w/runner/log/runner.log'], /every lane sleeping/u);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1].call.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
-  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(slept, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /handed from plan to credits/u);
 });
 
-test('credits: a 429 on a credits session leaves the plan alone and is waited out as today', async () => {
-  const { f, billing, slept, calls } = onRefusal('credits', REFUSED_429);
+test('an API credit refusal is recorded without exposing the key', async () => {
+  const { f, billing, calls } = onRefusal('credits', CREDIT_LOW);
+  f.deps.capacity.read = () => capacityWith({ claude: 1 });
   await createRunner({ deps: f.deps }).pass();
-  assert.equal(billing.plan.refused_until, undefined);
-  assert.equal(billing.credits.unusable_until, undefined);
-  assert.ok(slept.length > 0);
-  assert.equal(calls.length, 2);
-  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
-});
-
-test('retired auto value with credit unusable: a plan refusal is slept on', async () => {
-  const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429, { state: { credits: { unusable_until: '2026-08-30T10:00:00Z', why: 'credit balance too low' } } });
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
-  assert.ok(slept.length > 0);
-  assert.equal(calls.length, 2);
-  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+  assert.equal(calls[0].call.bin, process.execPath);
+  assert.equal(calls[0].call.env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(billing.credits.why, 'credit balance too low');
+  assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u);
 });
 
 test('initSource reads apiKeySource off the first init line only', () => {

@@ -19,6 +19,8 @@ import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
+import { gatewayLaunch } from './billing-route.js';
+import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
   const skip = (reason, text) => ({ kind: null, reason, skip: text });
@@ -84,7 +86,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     }
   }
   const route = routeClass('fast', readAutonomousState(root, programme, name));
-  if (!route.ok || route.basis === 'credits') return 'skipped:no-capacity';
+  if (!route.ok) return 'skipped:no-capacity';
   const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
   // The autonomous flavor deliberately excludes v1's fixed-step/merge overlay.
   const role = deps.role('step');
@@ -114,7 +116,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     owned = true;
     writeJson(currentPath, { name, step: null, kind: 'step', flavor: 'autonomous', run_id: actor.run_id,
       repo: repo.name, lane, tool: settings.tool, model: settings.model, effort: settings.effort, class: 'fast',
-      started: stamp(), pid, worktree, role: roleRecord({ name: 'step', source: roleSourceOf(role) || 'canon', overlay, instructions }) });
+      billing: route.billing || 'plan', started: stamp(), pid, worktree, role: roleRecord({ name: 'step', source: roleSourceOf(role) || 'canon', overlay, instructions }) });
     currentWritten = true;
     const existingTree = deps.exists(worktree);
     if (existingTree && !branchOwned) throw new Error('unowned worktree already exists');
@@ -181,10 +183,11 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const directory = join(paths.scratch, actor.run_id);
     deps.mkdir(paths.scratch);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
-    const result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, prompt,
+    const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, prompt,
       env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
         MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: directory },
-      unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'MC_STEP'],
+      unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'],
       autonomous: { version: 1, tool: launch.id, ...observer, clock: capability.clock,
         directory, pollMs: capability.pollMs },
     });
@@ -216,7 +219,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
   const name = record.project; const programme = record.programme;
   const state = readAutonomousState(root, programme, name);
   const route = routeClass('fast', state, 'review');
-  if (!route.ok || route.basis === 'credits') { say(`${name}: review waits: ${route.reason || 'subscription capacity required'}`); return 'skipped:no-capacity'; }
+  if (!route.ok) { say(`${name}: review waits: ${route.reason || 'no model candidate'}`); return 'skipped:no-capacity'; }
   const role = deps.role('review');
   if (!role?.overlay) return 'skipped:role-missing';
   const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
@@ -245,14 +248,15 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     if (Buffer.byteLength(prompt) > SESSION_START_MAX_BYTES) throw new Error('review assignment exceeds bounded start context');
     const directory = join(root, 'runner', 'reviews', actor.run_id, 'artifacts'); deps.mkdir(directory);
     writeJson(currentPath, { name, step: null, kind: 'review', flavor: 'autonomous-review', run_id: actor.run_id,
-      repo: repo.name, lane, ...settings, started: stamp(), pid, worktree: session.checkout,
+      repo: repo.name, lane, ...settings, billing: route.billing || 'plan', started: stamp(), pid, worktree: session.checkout,
       role: roleRecord({ name: 'review', source: 'canon', overlay, instructions }) });
     currentWritten = true;
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
-    const result = await deps.session({ bin: launch.spec.bin, args, cwd: session.checkout, prompt,
+    const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: session.checkout, prompt,
       env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'review', MC_PROJECT: name,
         MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
-      unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'MC_STEP'] });
+      unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'] });
     observeResult(launch.id, result);
     const invalidReasons = [];
     try { await verifyPr(session); } catch (error) { invalidReasons.push(error.message); }

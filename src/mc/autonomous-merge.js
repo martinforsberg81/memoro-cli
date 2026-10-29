@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runTool } from './child-async.js';
 import { mcHome } from './paths.js';
+import { PLAN_FILE } from './plan-source.js';
 import { readAutonomousState, readProgrammeState, currentAutonomousEvidence } from './autonomous-state.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { builderModels, independentModel } from './autonomous-models.js';
@@ -38,7 +39,7 @@ export function autonomousProof({ root, owner, pr }) {
   const state = readAutonomousState(root, owner.programme, owner.project);
   requireThat(!mainIncidentHold(root, owner.programme, owner.project), 'shared main repair awaits its owning programme plan');
   const assignment = state.contract;
-  const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, 'PLAN.json'), 'utf8'));
+  const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, PLAN_FILE), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
   const agreement = readProgrammeState(root, owner.programme);
   requireThat(!agreement.planner_jobs || agreement.planner_jobs.mode === 'active', 'programme is paused, waiting or stopped');

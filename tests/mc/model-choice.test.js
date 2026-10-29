@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyFailure, applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
-import { RESERVE_UTILIZATION, chooseCandidate } from '../../src/mc/model-choice.js';
+import { PLAN_LIMIT_UTILIZATION, chooseCandidate } from '../../src/mc/model-choice.js';
 
 const NOW = new Date('2026-10-27T12:00:00Z');
 const AHEAD = '2026-10-27T15:00:00.000Z';
@@ -26,8 +26,8 @@ const codex = (state, primary, secondary = null, { models = LISTED, at = NOW } =
 const choose = (capacity, cls = 'fast', catalog = DEFAULT_CATALOG) => chooseCandidate({ cls, catalog, capacity, now: NOW });
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
 
-test('the reserve is the last fifth of a window', () => {
-  assert.equal(RESERVE_UTILIZATION, 0.8);
+test('the automatic plan limit is the full window', () => {
+  assert.equal(PLAN_LIMIT_UTILIZATION, 1);
 });
 
 test('fast: either provider is chosen, the one with more headroom', () => {
@@ -55,15 +55,13 @@ test('large chooses from the large list', () => {
   assert.equal(won.spec, 'codex:gpt-6.1-sol:high');
 });
 
-test('manual credits choose Anthropic for fast and large regardless of subscription capacity', () => {
+test('a retired manual credits flag cannot override plan-first routing', () => {
   const capacity = codex(claude(empty(), win(0.95), win(0.95)), win(0.1));
   for (const cls of ['fast', 'large']) {
     const result = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity, now: NOW, credits: true });
-    assert.equal(result.candidate.tool, 'claude');
-    assert.equal(result.basis, 'credits');
+    assert.equal(result.candidate.tool, 'codex');
+    assert.equal(result.basis, 'known');
   }
-  const noClaude = { ...DEFAULT_CATALOG, fast: [DEFAULT_CATALOG.fast[1]] };
-  assert.match(chooseCandidate({ cls: 'fast', catalog: noClaude, capacity, now: NOW, credits: true }).reason, /no Anthropic candidate/u);
 });
 
 test('review is pinned to the catalog review, whatever the usage says', () => {
@@ -71,18 +69,26 @@ test('review is pinned to the catalog review, whatever the usage says', () => {
   assert.equal(unread.ok, true);
   assert.equal(unread.spec, 'claude:opus:high');
   assert.equal(unread.basis, 'pinned');
-  const reserved = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review');
-  assert.equal(reserved.spec, 'claude:opus:high', 'not outscored by the codex headroom, and not held by the reserve');
+  const nearLimit = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review');
+  assert.equal(nearLimit.spec, 'claude:opus:high', 'not outscored by the codex headroom');
   assert.equal(choose(applyRefusal(empty(), 'codex', AHEAD), 'review').spec, 'claude:opus:high', 'the other provider\'s refusal is not review\'s');
 });
 
-test('review waits out its own provider\'s refusal, and is never moved to another model', () => {
+test('review uses its pinned plan through 99 % and API reserve at 100 %', () => {
+  const nearLimit = choose(claude(empty(), win(0.99)), 'review');
+  assert.equal(nearLimit.spec, 'claude:opus:high');
+  const full = choose(claude(empty(), win(1)), 'review');
+  assert.equal(full.ok, true);
+  assert.equal(full.spec, 'claude:opus:high');
+  assert.equal(full.billing, 'credits');
+});
+
+test('review uses its own provider API reserve on a plan refusal', () => {
   const held = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(0.1)), 'review');
-  assert.equal(held.ok, false);
-  assert.equal(held.transient, true);
+  assert.equal(held.ok, true);
   assert.equal(held.class, 'review');
-  assert.equal(held.retry_at, AHEAD);
-  assert.equal(held.reason, 'the review model claude:opus:high: claude refused until 2026-10-27T15:00:00.000Z');
+  assert.equal(held.spec, 'claude:opus:high');
+  assert.equal(held.billing, 'credits');
   assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review').spec, 'claude:opus:high', 'a passed refusal holds nothing');
 });
 
@@ -94,26 +100,24 @@ test('a refusal in force makes its provider ineligible, and a passed one does no
   assert.equal(choose(codex(passed, win(0.5))).spec, 'claude:haiku:high');
 });
 
-test('a refused claude is never the bootstrap, and no capacity carries the refusal\'s instant', () => {
+test('a refused claude is never the bootstrap and selects API reserve', () => {
   const result = choose(applyRefusal(empty(), 'claude', AHEAD));
-  assert.equal(result.ok, false);
-  assert.equal(result.transient, true);
+  assert.equal(result.ok, true);
   assert.equal(result.class, 'fast');
-  assert.equal(result.retry_at, AHEAD);
-  assert.match(result.reason, /claude:haiku:high: claude refused until 2026-10-27T15:00:00\.000Z/u);
+  assert.equal(result.billing, 'credits');
+  assert.equal(result.spec, 'claude:haiku:high');
 });
 
-test('reserve: a window at 80 % is not known, the claude bootstrap takes over, and a known candidate beats the bootstrap', () => {
-  const reserved = choose(codex(empty(), win(0.8, LATER)));
-  assert.equal(reserved.ok, true);
-  assert.equal(reserved.spec, 'claude:haiku:high');
-  assert.equal(reserved.basis, 'bootstrap');
-  assert.equal(reserved.headroom, null);
+test('a plan stays eligible below 100 % and is exhausted at 100 %', () => {
+  const full = choose(codex(empty(), win(1, LATER)));
+  assert.equal(full.ok, true);
+  assert.equal(full.spec, 'claude:haiku:high');
+  assert.equal(full.basis, 'bootstrap');
 
-  const under = choose(codex(empty(), win(0.79)));
+  const under = choose(codex(empty(), win(0.99)));
   assert.equal(under.spec, 'codex:gpt-6-luna:high');
   assert.equal(under.basis, 'known');
-  near(under.headroom, 0.21);
+  near(under.headroom, 0.01);
 });
 
 test('an expired claude window is not free capacity: it bootstraps, and a known candidate beats it', () => {
@@ -124,16 +128,17 @@ test('an expired claude window is not free capacity: it bootstraps, and a known 
   assert.equal(choose(codex(expired, win(0.5))).spec, 'codex:gpt-6-luna:high');
 });
 
-test('a claude read older than three hours is not current: a low reading bootstraps, a high one still holds', () => {
+test('a claude read older than three hours is not current unless it reached 100 %', () => {
   const old = claude(empty(), win(0.1), win(0.1), FOUR_HOURS_AGO);
   assert.equal(choose(old).basis, 'bootstrap');
   assert.equal(choose(codex(old, win(0.5))).spec, 'codex:gpt-6-luna:high');
 
   const high = claude(empty(), win(0.9), win(0.1), FOUR_HOURS_AGO);
-  const held = choose(high);
-  assert.equal(held.ok, false);
-  assert.equal(held.retry_at, AHEAD);
-  assert.match(held.reason, /claude:haiku:high: claude is at 90 % — its last fifth is kept/u);
+  assert.equal(choose(high).basis, 'bootstrap');
+  const full = claude(empty(), win(1), win(0.1), FOUR_HOURS_AGO);
+  const held = choose(full);
+  assert.equal(held.ok, true);
+  assert.equal(held.billing, 'credits');
 });
 
 test('codex needs a fresh successful rate-limit read, a model listed at the effort, and no failure', () => {
@@ -141,20 +146,19 @@ test('codex needs a fresh successful rate-limit read, a model listed at the effo
 
   const failed = applyFailure(empty(), 'codex', { why: 'account/rateLimits/read failed: ChatGPT login required' }, NOW);
   const noEntitlement = choose(applyRefusal(failed, 'claude', AHEAD));
-  assert.equal(noEntitlement.ok, false);
-  assert.match(noEntitlement.reason, /codex:gpt-6-luna:high: the last codex poll failed: account\/rateLimits\/read failed: ChatGPT login required/u);
+  assert.equal(noEntitlement.billing, 'credits');
 
   const stale = choose(applyRefusal(codex(empty(), win(0.1), null, { at: FOUR_HOURS_AGO }), 'claude', AHEAD));
-  assert.match(stale.reason, /codex:gpt-6-luna:high: codex is stale/u);
+  assert.equal(stale.billing, 'credits');
 
   const unlisted = choose(applyRefusal(codex(empty(), win(0.1), null, { models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }] }), 'claude', AHEAD));
-  assert.match(unlisted.reason, /gpt-6-luna is not in the codex model list/u);
+  assert.equal(unlisted.billing, 'credits');
 
   const lowEffort = choose(applyRefusal(codex(empty(), win(0.1), null, { models: [{ id: 'gpt-6-luna', efforts: ['medium'] }] }), 'claude', AHEAD));
-  assert.match(lowEffort.reason, /gpt-6-luna does not offer effort high/u);
+  assert.equal(lowEffort.billing, 'credits');
 
   const reset = choose(applyRefusal(codex(empty(), win(0.1, PAST), win(0.1, PAST)), 'claude', AHEAD));
-  assert.match(reset.reason, /codex:gpt-6-luna:high: codex usage is unknown/u, 'codex windows that reset are not bootstrap capacity');
+  assert.equal(reset.billing, 'credits');
 });
 
 test('a tie on headroom keeps catalog order', () => {
@@ -164,22 +168,18 @@ test('a tie on headroom keeps catalog order', () => {
   assert.equal(choose(tied, 'fast', DEFAULT_CATALOG).spec, 'claude:haiku:high');
 });
 
-test('no capacity is transient, names the reason, and the earliest instant something resets', () => {
-  const none = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(0.9, LATER)));
-  assert.equal(none.ok, false);
-  assert.equal(none.transient, true);
-  assert.equal(none.retry_at, AHEAD, 'the claude refusal passes before the codex window resets');
-  assert.equal(
-    none.reason,
-    'no fast candidate has capacity — claude:haiku:high: claude refused until 2026-10-27T15:00:00.000Z; codex:gpt-6-luna:high: codex is at 90 % — its last fifth is kept for interactive use',
-  );
+test('no plan capacity selects the first catalog API reserve', () => {
+  const none = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(1, LATER)));
+  assert.equal(none.ok, true);
+  assert.equal(none.spec, 'claude:haiku:high');
+  assert.equal(none.billing, 'credits');
 });
 
-test('no capacity with no instant to wait for has no retry_at', () => {
+test('an unavailable plan may still use the provider API reserve', () => {
   const codexOnly = { ...DEFAULT_CATALOG, fast: [DEFAULT_CATALOG.fast[1]] };
   const none = choose(applyFailure(empty(), 'codex', { why: 'codex did not start: spawn codex ENOENT' }, NOW), 'fast', codexOnly);
-  assert.equal(none.ok, false);
-  assert.equal(none.retry_at, null);
+  assert.equal(none.ok, true);
+  assert.equal(none.billing, 'credits');
 });
 
 test('a class is fast, large or review', () => {

@@ -46,6 +46,17 @@ export const RUNTIME_SECRET_ENV_NAMES = Object.freeze([
   'NETRC',
 ]);
 
+export const PROVIDER_API_ENV_NAMES = Object.freeze([
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY',
+  'OPENAI_API_KEY', 'MC_CODEX_API_KEY',
+]);
+
+export function scrubProviderApiKeysFromEnv(env = process.env) {
+  const next = { ...(env || {}) };
+  for (const name of PROVIDER_API_ENV_NAMES) delete next[name];
+  return next;
+}
+
 export function scrubRuntimeSecretsFromEnv(env = process.env) {
   const next = { ...(env || {}) };
   for (const name of RUNTIME_SECRET_ENV_NAMES) {
