@@ -33,6 +33,7 @@ import { gitDirOf } from './repos.js';
 import { listEntries, overlayPlans, realLock } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 import { currentAutonomousEvidence, readAutonomousState } from './autonomous-state.js';
+import { programmeStatus } from './programme-status.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -146,11 +147,13 @@ export function renderProject({
 
     if (plan?.version === 2) {
       out.push('AUTONOMOUS');
-      out.push('  execution disabled — programme start is not available');
-      out.push(`  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision}`);
+      const control = autonomous?.programme;
+      out.push(control?.execution_supported ? '  execution supported by this installation' : '  execution disabled — this installation does not run autonomous work');
+      out.push(`  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision} · programme ${control?.mode || 'unknown'}`);
       if (autonomous) {
         out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · planner confirmed: ${autonomous.confirmed}`);
         out.push(`  branch ${autonomous.ownership.branch || 'none'} · PR ${autonomous.ownership.pr ? `#${autonomous.ownership.pr}` : 'none'}`);
+        if (control) out.push(`  next ${control.next_action}${control.mode === 'active' ? '' : ` (held while ${control.mode})`} · mc programme status ${plan.programme.id}`);
       }
       for (const criterion of plan.success_criteria) {
         const latest = autonomous?.evidence.builder.filter(item => item.criterion_id === criterion.id).at(-1);
@@ -278,6 +281,9 @@ export async function collectProject(name, {
       if (!isDeepStrictEqual(state.contract, plan)) throw new Error('published contract differs from authoritative autonomous state');
       autonomous = { revision: state.revision, phase: state.phase, confirmed: state.confirmed,
         ownership: state.ownership, evidence: currentAutonomousEvidence(state) };
+      const overview = programmeStatus(root, programme);
+      autonomous.programme = { mode: overview.mode, execution_supported: overview.execution.supported,
+        next_action: overview.goals.find((goal) => goal.project === name)?.next_action || 'unknown' };
     } catch (error) { problems.push(`autonomous state: ${error.message}`); }
   }
 

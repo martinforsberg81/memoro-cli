@@ -102,7 +102,11 @@ confirmation. Phase selection supplies no new permission to deploy.
 The lazy route table used by `src/mc-cli.js` exposes `mc programme` and
 `mc autonomous-project`; both support `--help`. Their `show` operations are
 read-only, and mutations require the reserved role/run and expected state
-revision. There is no public reservation or `start` command.
+revision. There is no public reservation command. `mc programme
+status|start|pause|resume` are the operator's
+[programme operations](mc-programme-operations.md); start refuses on an
+installation that does not support every control capability, which is every
+installation until activation lands.
 
 `mc autonomous-project send <programme>/<project> --expected-revision <n>`
 (or `mc project send <project> --expected-revision <n>`) checks the authoritative
@@ -117,7 +121,8 @@ Sent goal revision is deliberately unsupported until execution integration.
 
 `mc project <name>` reads a v2 draft from authoritative state, not raw draft
 edits; `--json` exposes that state. For sent contracts, `mc status <name>` and
-`mc project <name>` show inactive execution, programme/goal/state revisions,
+`mc project <name>` show whether this installation executes autonomous work,
+the programme's mode and the goal's next action, programme/goal/state revisions,
 phase, branch/PR ownership, separately recorded planner confirmation and current
 builder observations by stable criterion ID. Missing evidence is `unknown`;
 missing, malformed or mismatched state is reported rather than guessed. JSON

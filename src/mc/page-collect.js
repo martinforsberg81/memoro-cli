@@ -93,6 +93,7 @@ import {
 } from './project-prs.js';
 import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
+import { autonomySection } from './programme-status.js';
 import {
   REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
   readCurrents,
@@ -1721,6 +1722,8 @@ export async function collectPage({
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
+    // Only programmes that keep autonomous state; absent on a v1-only machine.
+    ...(() => { const autonomy = autonomySection({ root }); return autonomy ? { autonomy } : {}; })(),
     // File reads only, as DEPLOY's are: the page never runs a read.
     language: languageState(env),
     mc: mcSection({

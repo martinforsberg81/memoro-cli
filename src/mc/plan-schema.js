@@ -551,7 +551,7 @@ function clip(text, max) {
 export function deliverableStep(plan) {
   if (plan?.version === 2 && validateProject(plan).ok) return {
     step: null, index: -1, reason: 'inactive',
-    why: 'autonomous execution is disabled — programme start is not available', problems: [],
+    why: 'autonomous execution is disabled outside a started programme on a supporting installation — mc programme status', problems: [],
   };
   const { ok, problems } = validatePlan(plan);
   if (!ok && problems[0]?.startsWith('unsupported:')) return { step: null, index: -1, reason: 'unsupported', why: problems[0], problems };

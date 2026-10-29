@@ -2,8 +2,10 @@
 
 `src/mc/programme-jobs.js` adds a planner outbox to the existing
 `PROGRAMME_STATE.json`, not another service or a replacement v1 register.
-Normal execution remains disabled. There is no start command, production
-launcher or automatic activation in this change. Opening `mc plan` is unchanged.
+Normal execution remains disabled. There is no production launcher or automatic
+activation. `mc programme start` ([programme operations](mc-programme-operations.md))
+is the only door from `inactive`, and it refuses on an installation without every
+control capability. Opening `mc plan` is unchanged.
 
 ## Events, ownership and restart
 
