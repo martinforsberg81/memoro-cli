@@ -2104,3 +2104,49 @@ silently spends the Anthropic subscription or selects Codex in credit mode.
 The Anthropic Platform workspace limit is the spending bound; mc does not
 maintain a second dollar cap. This supersedes ruling 59's temporary exclusion
 of credits from class routing and retires the `auto` billing mode.
+
+## 60 · A goal is the unit of autonomous work, beside unchanged projects; headless plan is goal-driven, not a decision catalogue
+
+`ruling · 2026-10-29` · raised in the `mc` planning session after the seven
+`autonomy-*` projects landed (#1157–#1162, #1170) with every control
+capability built but none wired into the installed runner
+
+**Question.** The implementation plan of 2026-10-28 made the autonomous mode
+a second system: an approved programme contract as a precondition, `start`
+taking build class, control profile and reviewer, goals created only by the
+headless plan through a `decide` envelope under a lease, and `landed` kept
+apart from `confirmed`. Before activating it: is that the model, and how does
+it sit beside projects with fixed steps?
+
+**Answer.** Martin, 2026-10-29:
+
+- On keeping both ways of working, against a split by domain: "Uppdelningen i
+  sig är meningslös. Att spara båda sätten har förstås värde."
+- On the control profile: "Profil är inget som planeras per projekt. Det vi
+  tar fram är hur det ska fungera."
+- On class and authority: "Klass sätts av någon (interaktiv plan eller
+  headless) som är den som skapar mål; det får inte finnas någonting som
+  hindrar en interaktiv plan från att göra allt. Fördelen med headless plan är
+  att den ska kunna vakna till och fixa till saker som fastnar på ett
+  strukturerat sätt."
+- On the planner's envelope verb: "Verbet decide saknar värde. Ta bort."
+- On the unit: "Ett färdigt goal (ie project) - jag föreslår det som koncept
+  för att skilja det från projekt så vi inte påverkar det som redan fungerar.
+  Är också en trigger för headless session: den ser 'ah goal är klart', då
+  kan den kolla på program-mål och ta fram/starta nästa del-mål."
+- On concurrency and shape: "Vi kan köra parallella goals om vi vill att det
+  ska gå fortare för då är det en session per goal eller så samlar man många
+  punkter under en. Vi kan ju också tänka oss att ett program omfattar faser:
+  1 grunden: goal x, goal y, goal z."
+- On the headless plan: "headless session ska inte hårdkodas som du tänkt dig
+  med exakt beskrivna steg. den ska vara målstyrd utifrån programmets
+  beskrivning."
+
+**Carried by.** The brief [`autonomy-goals.md`](autonomy-goals.md): a
+programme holds ordered phases of goals beside its projects; a goal has
+criteria, a class and no steps and is created, sent, revised and closed with
+`mc goal` verbs by whichever plan session is at hand; the control profile and
+the review model are system configuration; `mc programme autonomy on|off`
+lets a headless plan session consume the programme's event queue, guided by
+the programme's brief and phases; `decide` and the programme contract
+ceremony go. Plans to follow from that brief.
