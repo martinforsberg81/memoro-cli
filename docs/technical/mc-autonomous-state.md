@@ -13,7 +13,8 @@ work root. `PROGRAMME_STATE.json` is a versioned `mc-programme-state` record:
 its `approved` array contains immutable approved contract snapshots; `draft`
 is separate and cannot change an approved snapshot. Its mutation `revision`
 is distinct from a contract revision. It also holds the reserved plan owner
-and run history. `execution_enabled` remains false.
+and run history. An optional [durable planner outbox](mc-programme-jobs.md)
+holds pending events, leases and operation receipts. `execution_enabled` remains false.
 
 Each project has `AUTONOMOUS_STATE.json` (`mc-autonomous-state`, version 1).
 It holds the authoritative draft contract and contract history, programme and
@@ -61,7 +62,10 @@ revision, the planner's reservation and the referenced approved contract.
 Other project operations check the **project state** revision.
 
 Only the active `plan` run, also owning the programme reservation, may revise
-or confirm a project. A revision advances the goal revision exactly once,
+or confirm a project. A revision advances the goal revision exactly once.
+The [guarded programme planner](mc-programme-plan.md) adds a durable path for
+sent open-PR goals without amending v1 plans or editing the programme agreement.
+The original pre-outbox typed data operations remain compatible. A revision
 keeps project/repository/programme identity and preserves commits, branch/PR,
 reports, attempts and old contracts. All earlier-revision evidence is retained
 but excluded from current evidence; current handoff and confirmation are

@@ -40,6 +40,9 @@ export function runnerFixture(t, { assignment = {} } = {}) {
   delete env.MC_STEP;
   const calls = []; const log = []; let capacity = normaliseCapacity(null); const sleeps = [];
   const deps = { ...realDeps(env), now: () => new Date('2026-10-28T12:00:00Z'), log: line => log.push(line),
+    // Admission scenarios use fixture capacity, never the host's current disk
+    // or memory pressure. Resource-refusal tests can override these readings.
+    freeBytes: () => 100 * 2 ** 30, freeMemoryPercent: () => 50,
     catalog: () => DEFAULT_CATALOG, capacity: { read: () => capacity, write: next => { capacity = next; } },
     laneCount: () => ({ per_repo: 2, total: 2 }), billing: { readMode: () => 'plan' },
     attachDeps: async () => ({ ok: true }),

@@ -4,6 +4,7 @@ import { workRoot } from '../paths.js';
 import { createAutonomousDraft, mutateAutonomousProject, readAutonomousState, sendAutonomousProject } from '../autonomous-state.js';
 import { controlResponse } from '../session-control.js';
 import { scanArgs } from './flags.js';
+import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 
 export function autonomousCommandContext(deps) {
   const env = deps.env || process.env;
@@ -22,6 +23,10 @@ export function operationArguments(argv, verbs) {
 }
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
+  if ((deps.env || process.env).MC_AUTONOMOUS_ROLE === 'plan') {
+    const refusal = reviewCommandRefusal(['autonomous-project', ...argv], deps);
+    if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
+  }
   let args;
   try { args = operationArguments(argv, ['show', 'create', 'revise', 'progress', 'report', 'confirm', 'attempt', 'release', 'recover', 'send', 'finish']); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }

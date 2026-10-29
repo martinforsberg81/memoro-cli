@@ -1,5 +1,6 @@
 /** Revisioned v2 data only. No scheduler, launcher or v1 register interpretation. */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
@@ -12,6 +13,9 @@ import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE, validateProgrammeContract, programmeRevisionProblems } from './programme-contract.js';
 import { validateAutonomousProject, autonomousRevisionProblems, validateAutonomousEvidence, evidenceForRevision } from './autonomous-project.js';
+import { planOperationProblems } from './programme-plan-contract.js';
+import { assertProjectRecovery, projectRecovery, recoveryProgress, reserveMainRepairLocked, mainIncidentHold } from './programme-recovery.js';
+import { readClaim, processAlive } from './resource-claim.js';
 
 export const PROGRAMME_STATE_FILE = 'PROGRAMME_STATE.json';
 export const AUTONOMOUS_STATE_FILE = 'AUTONOMOUS_STATE.json';
@@ -27,9 +31,14 @@ const actorCheck = actor => {
   if (Object.keys(actor).some(key => !['run_id', 'role'].includes(key))) throw new Error('run ownership takes only run_id and role');
   if (!['foreground-plan', 'plan', 'step', 'review'].includes(actor.role)) throw new Error('an explicit active role is required');
 };
-function owner(state, actor, roles) {
+function owner(state, actor, roles, now = Date.now()) {
   actorCheck(actor);
   if (!roles.includes(actor.role) || !isDeepStrictEqual(state.active_run, actor)) throw new Error('active run/role ownership required');
+  if (state.schema === 'mc-programme-state' && state.planner_jobs?.lease) {
+    const lease = state.planner_jobs.lease;
+    if (!isDeepStrictEqual(lease.actor, actor) || !Number.isSafeInteger(lease.expires_at)) throw new Error('invalid planner lease ownership');
+    if (lease.expires_at <= now) throw new Error('planner lease expired; reconcile before writing');
+  }
 }
 function expected(state, revision) {
   if (!Number.isSafeInteger(revision) || revision < 0 || revision !== (state?.revision ?? 0)) throw new Error('stale state revision — read the current state');
@@ -100,8 +109,156 @@ function projectSave(paths, previous, next, deps) {
   (deps.writeDraft || writeJsonAtomic)(paths.draft, result.contract);
   return result;
 }
+
+/** One locked snapshot, never concatenated session transcripts. Detail is read
+ * on demand through these references. Damaged goals are not omitted. */
+export function readProgrammePlanSnapshot(root, programme, deps = {}) {
+  return locked(root, programme, null, paths => {
+    const state = programmeState(paths);
+    const goals = readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name))
+      .sort((a, b) => a.name.localeCompare(b.name)).flatMap(item => {
+        const goalPaths = autonomousPaths(root, programme, item.name);
+        if (existsSync(goalPaths.project)) return [{ project: item.name, state: projectState(goalPaths), reference: goalPaths.project }];
+        const file = existsSync(join(goalPaths.projectDir, PLAN_FILE)) ? join(goalPaths.projectDir, PLAN_FILE) : goalPaths.draft;
+        if (!existsSync(file)) return [];
+        const plan = read(file);
+        if (plan?.version !== 1 || !Array.isArray(plan.steps)) throw new Error(`unreadable programme goal: ${file}`);
+        return [{ project: item.name, legacy: true, plan, register: read(join(goalPaths.projectDir, 'STATE.json')), reference: file }];
+      });
+    return structuredClone({ state, goals });
+  }, deps);
+}
+
+function plannerBoundary(root, programme, state) {
+  const claimPath = join(root, 'runner', 'autonomous-builds', programme, `${state.contract.project_id}.claim`);
+  const claim = existsSync(claimPath) ? readClaim(claimPath) : null;
+  if (state.active_run || ['running', 'handoff_requested', 'closing', 'publishing', 'reviewing', 'landing'].includes(state.phase)
+    || existsSync(claimPath) && (!claim || processAlive(claim.pid))) {
+    throw new Error('affected runs must close at a safe boundary; preserve the open PR and retry with a fresh revision');
+  }
+}
+
+/** Runner-backed plan effects. Receipt and authoritative effect commit together;
+ * PLAN/DRAFT projections and the programme acknowledgement are replayable. */
+export function applyProgrammeProjectOperation(root, programme, intent, { actor, revision, token, ...deps }) {
+  return locked(root, programme, intent.project, paths => {
+    const agreement = programmeState(paths); expected(agreement, revision); owner(agreement, actor, ['plan'], deps.now?.());
+    const journal = agreement.planner_jobs; const lease = journal?.lease;
+    if (!lease || lease.token !== token) throw new Error('active planner lease ownership required');
+    const operation = journal.operations.find(item => item.intent.id === intent.id);
+    if (!operation || operation.status !== 'pending' || !isDeepStrictEqual(operation.intent, intent)) throw new Error('persisted planner intent required');
+    const state = projectState(paths);
+    const digest = autonomousOperationDigest(intent);
+    const receipt = state.operation_receipts?.find(item => item.id === intent.id);
+    const project = () => {
+      (deps.writeDraft || writeJsonAtomic)(paths.draft, state.contract);
+      if (state.plan_sent) (deps.writePlan || writeJsonAtomic)(join(paths.projectDir, PLAN_FILE), state.contract);
+    };
+    if (receipt) {
+      if (receipt.kind !== intent.kind || receipt.digest !== digest) throw new Error('project effect does not match planner intent');
+      project(); return structuredClone(receipt.result);
+    }
+    if (journal.mode !== 'active' || lease.programme_revision !== agreement.approved.at(-1).revision) throw new Error('programme waits or changed before applying planner effect');
+    const problems = planOperationProblems(intent, agreement.approved.at(-1));
+    if (problems.length) throw new Error(problems.join('; '));
+    expected(state, intent.expected_revision);
+    if (state.programme_revision !== intent.programme_revision && intent.kind !== 'revise-project') throw new Error('goal must reference the current approved programme');
+    plannerBoundary(root, programme, state);
+    const next = structuredClone(state);
+    if (state.confirmed) throw new Error('confirmed goals are immutable; create remaining work as another goal');
+    if (state.phase === 'landed' && intent.kind !== 'confirm-project') throw new Error('delivered scope is immutable; create remaining work as another goal');
+    if (intent.kind === 'revise-project') {
+      const invalid = autonomousRevisionProblems(state.contract, intent.input);
+      if (invalid.length) throw new Error(invalid.join('; '));
+      rejectRetiredCriteria(state.contracts, state.contract, intent.input);
+      next.contract = intent.input; next.contracts.push(intent.input); next.goal_revision = intent.input.goal_revision;
+      next.programme_revision = intent.input.programme.revision;
+      next.evidence.confirmation = null; next.current_handoff = null; next.phase = 'plan_pending';
+      // Immutable reports, evidence, attempts, commits and old contracts remain.
+      for (const field of ['publication', 'review_session', 'review_submission', 'merge_handoff', 'landing', 'continuation', 'session_control', 'dependency_release']) delete next[field];
+    } else if (intent.kind === 'send-project') {
+      next.plan_sent = true;
+    } else if (intent.kind === 'dependencies') {
+      const walk = (project, seen = new Set()) => {
+        if (project === intent.project) throw new Error('programme dependencies cannot form a cycle');
+        if (seen.has(project)) return;
+        seen.add(project);
+        const dependency = projectState(autonomousPaths(root, programme, project));
+        for (const item of dependency.plan_dependencies || []) walk(item.project, seen);
+      };
+      for (const item of intent.input.projects) {
+        const dependency = projectState(autonomousPaths(root, programme, item.project));
+        if (dependency.goal_revision !== item.goal_revision) throw new Error('stale dependency goal revision');
+        walk(item.project);
+      }
+      next.plan_dependencies = intent.input.projects; next.phase = 'plan_pending';
+      delete next.publication; delete next.merge_handoff; delete next.dependency_release;
+    } else if (intent.kind === 'diagnose-project') {
+      const recovery = projectRecovery(state);
+      if (!isDeepStrictEqual(intent.input.attempt_ids, recovery.attempt_ids)) throw new Error('diagnosis must account for every incomplete attempt');
+      if (intent.input.action === 'retry' && (recovery.exception || state.recovery_diagnoses?.some(item => item.approach === intent.input.approach))) throw new Error('recovery exception or repeated unsuccessful approach; retain a precise diagnosis');
+      next.recovery_diagnoses = [...(state.recovery_diagnoses || []), { ...intent.input, goal_revision: state.goal_revision, programme_revision: state.programme_revision, run_id: actor.run_id }];
+    } else if (intent.kind === 'await-dependencies') {
+      if (state.phase !== 'plan_pending' || !state.plan_dependencies?.length || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('dependency release needs a sent pending goal and selected dependencies');
+      assertProjectRecovery(state);
+      next.dependency_release = { goal_revision: state.goal_revision, programme_revision: state.programme_revision, status: 'waiting', operation: intent.id };
+    } else if (intent.kind === 'resume-project') {
+      if (state.phase !== 'plan_pending' || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('resume needs a sent, pending goal');
+      assertProgrammeDispatch(root, programme, state, agreement);
+      assertProjectRecovery(state);
+      next.phase = 'ready';
+      delete next.publication; delete next.merge_handoff; delete next.dependency_release;
+    } else if (intent.kind === 'confirm-project') {
+      if (mainIncidentHold(root, programme, intent.project)) throw new Error('confirmation waits for the shared main repair');
+      const report = state.review_reports?.at(-1);
+      const binding = state.landing?.binding;
+      if (state.phase !== 'landed' || !report?.clean || !binding || binding.report_id !== report.id
+        || binding.report_digest !== reviewDigest(report) || binding.goal_revision !== state.goal_revision
+        || binding.programme_revision !== state.programme_revision || binding.head !== state.publication?.head
+        || report.session.assignment.goal_revision !== state.goal_revision || report.session.head !== binding.head
+        || !/^[a-f0-9]{40}$/u.test(state.landing.merge_commit || '') || state.landing.merged_into !== 'main') throw new Error('confirmation requires the current independently reviewed delivery on main');
+      const ids = state.contract.success_criteria.map(item => item.id);
+      if (intent.input.criteria.length !== ids.length || new Set(intent.input.criteria.map(item => item.criterion_id)).size !== ids.length
+        || intent.input.criteria.some(item => !ids.includes(item.criterion_id))) throw new Error('confirmation must account for every criterion, including after-integration evidence');
+      if (state.confirmations.some(item => item.id === intent.input.id)) throw new Error('confirmation ID already used');
+      const record = { id: intent.input.id, reference: intent.input.reference, role: 'plan', run_id: actor.run_id, project_id: intent.project,
+        programme_id: programme, programme_revision: state.programme_revision, goal_revision: state.goal_revision };
+      next.evidence.confirmation = record; next.confirmations.push(record); next.confirmed = true; next.phase = 'confirmed';
+    }
+    next.plan_sent ||= existsSync(join(paths.projectDir, PLAN_FILE));
+    next.plan_decisions = [...(state.plan_decisions || []), { intent, run_id: actor.run_id,
+      previous: Object.fromEntries(['publication', 'review_session', 'merge_handoff', 'landing', 'continuation', 'session_control', 'current_handoff'].filter(key => state[key] !== undefined).map(key => [key, state[key]])) }];
+    const result = { project: intent.project, revision: state.revision + 1 };
+    next.operation_receipts = [...(state.operation_receipts || []), { id: intent.id, kind: intent.kind, digest, result, run_id: actor.run_id }];
+    valid(validateAutonomousEvidence(next.evidence));
+    const saved = projectSave(paths, state, next, deps);
+    if (saved.plan_sent) (deps.writePlan || writeJsonAtomic)(join(paths.projectDir, PLAN_FILE), saved.contract);
+    return result;
+  }, deps);
+}
+
+/** Called under the programme lock by every dispatch admission, not just plan. */
+function assertProgrammeDispatch(root, programme, state, agreement) {
+  if (agreement.planner_jobs && agreement.planner_jobs.mode !== 'active') throw new Error('programme is paused, waiting or stopped');
+  if (agreement.planner_jobs && state.programme_revision !== agreement.approved.at(-1).revision) throw new Error('programme revision changed; plan must align the goal before dispatch');
+  const incident = mainIncidentHold(root, programme, state.contract.project_id);
+  if (incident) throw new Error(`shared main incident ${incident.id} awaits its owning programme plan`);
+  for (const item of state.plan_dependencies || []) {
+    const dependency = projectState(autonomousPaths(root, programme, item.project));
+    if (!dependency.confirmed || dependency.goal_revision !== item.goal_revision) throw new Error(`dependency ${item.project} awaits planner confirmation`);
+  }
+}
 export function readProgrammeState(root, programme, deps = {}) {
   return locked(root, programme, null, paths => structuredClone(programmeState(paths)), deps);
+}
+/** Trusted scheduler transaction, sharing the programme/strict register locks.
+ * Returning unchanged data is a read, not a new revision. Never exposed by CLI. */
+export function updateProgrammeRegister(root, programme, update, deps = {}) {
+  return locked(root, programme, null, paths => {
+    const state = programmeState(paths);
+    const next = update(structuredClone(state), paths);
+    return isDeepStrictEqual(state, next) ? structuredClone(state) : save(paths.programme, state, next, deps);
+  }, deps);
 }
 export function readAutonomousState(root, programme, project, deps = {}) {
   return locked(root, programme, project, paths => {
@@ -114,7 +271,7 @@ export function readAutonomousState(root, programme, project, deps = {}) {
 export function sendAutonomousProject(root, programme, project, { actor, revision, ...deps }) {
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision); owner(state, actor, ['plan']);
-    const agreement = programmeState(paths); owner(agreement, actor, ['plan']);
+    const agreement = programmeState(paths); owner(agreement, actor, ['plan'], deps.now?.());
     approved(agreement, state.contract);
     const file = join(paths.projectDir, PLAN_FILE);
     if (existsSync(file)) {
@@ -142,6 +299,7 @@ export function reserveProgrammeRun(root, programme, actor, revision, deps = {})
 export function releaseProgrammeRun(root, programme, actor, revision, deps = {}) {
   return locked(root, programme, null, paths => {
     const state = programmeState(paths); expected(state, revision); owner(state, actor, ['foreground-plan', 'plan']);
+    if (state.planner_jobs?.lease) throw new Error('finish the planner job before releasing its reservation');
     return save(paths.programme, state, { ...state, active_run: null }, deps);
   }, deps);
 }
@@ -170,17 +328,37 @@ export function mutateProgramme(root, programme, operation, input, { actor, revi
     return save(paths.programme, state, next, deps);
   }, deps);
 }
+// Object key ordering is not operation identity; array order remains significant.
+export function autonomousOperationDigest(value) {
+  const canonical = item => Array.isArray(item) ? item.map(canonical)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])])) : item;
+  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+}
 export function createAutonomousDraft(root, programme, project, input, { actor, revision, ...deps }) {
   return locked(root, programme, project, paths => {
-    const state = programmeState(paths); expected(state, revision); owner(state, actor, ['plan']);
+    const state = programmeState(paths); expected(state, revision); owner(state, actor, ['plan'], deps.now?.());
+    // The receipt commits with the effect, not with its later programme journal
+    // acknowledgement. A restarted planner can read it without creating twice.
+    const receipt = deps.operationId ? { id: name(deps.operationId), kind: deps.operationKind || 'create-project',
+      digest: autonomousOperationDigest(input) } : null;
+    if (receipt && existsSync(paths.project)) {
+      const current = projectState(paths);
+      const previous = current.operation_receipts?.find(item => item.id === receipt.id);
+      const { run_id: ignoredCreator, ...identity } = previous || {};
+      if (!previous || !isDeepStrictEqual(identity, receipt)) throw new Error('project effect does not match operation intent');
+      (deps.writeDraft || writeJsonAtomic)(paths.draft, current.contract);
+      return structuredClone(current);
+    }
     approved(state, input);
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
     if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
+    if (deps.mainIncident) reserveMainRepairLocked(root, { incident: deps.mainIncident, programme, project, operation: deps.operationId, repo: input.repo });
     return projectSave(paths, null, {
-      schema: 'mc-autonomous-state', version: 1, contract: input, contracts: [input], active_run: actor,
+      schema: 'mc-autonomous-state', version: 1, contract: input, contracts: [input], active_run: receipt ? null : actor,
       phase: 'plan_pending', programme_revision: input.programme.revision, goal_revision: 1,
       ownership: { branch: null, pr: null }, commits: [], current_handoff: null,
-      attempts: [], runs: [actor], evidence: { builder: [], reviews: [], confirmation: null }, confirmations: [], confirmed: false,
+      attempts: [], runs: receipt ? [] : [actor], evidence: { builder: [], reviews: [], confirmation: null }, confirmations: [], confirmed: false,
+      ...(receipt ? { operation_receipts: [{ ...receipt, run_id: actor.run_id }] } : {}),
     }, deps);
   }, deps);
 }
@@ -190,6 +368,10 @@ export function reserveProjectRun(root, programme, project, actor, revision, dep
   if (!['plan', 'step', 'review'].includes(actor.role)) throw new Error('project runs belong to plan, step or review');
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
+    if (actor.role === 'plan') {
+      const agreement = programmeState(paths);
+      if (agreement.planner_jobs) owner(agreement, actor, ['plan'], deps.now?.());
+    }
     if (state.active_run) throw new Error('the project already has an active run');
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
     return save(paths.project, state, { ...state, active_run: actor, runs: [...state.runs, actor] }, deps);
@@ -203,8 +385,11 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
     if (state.review_session?.run_id === actor.run_id && operation !== 'report') throw new Error('independent review may only submit its report');
     if (operation === 'progress' && state.session_control) ownedControl(state, actor);
     const next = structuredClone(state);
-    if (operation === 'revise' || operation === 'confirm' || operation === 'recover') {
-      owner(programmeState(paths), actor, ['plan']);
+    if (actor.role === 'plan') {
+      const agreement = programmeState(paths);
+      // Preserve pre-outbox reservation/release behavior. Once jobs are in use,
+      // every planner write is fenced, including attempts and releases.
+      if (agreement.planner_jobs || ['revise', 'confirm', 'recover'].includes(operation)) owner(agreement, actor, ['plan'], deps.now?.());
     }
     if (operation === 'recover') {
       if (existsSync(join(paths.projectDir, PLAN_FILE))) throw new Error('cannot recover a sent draft');
@@ -262,8 +447,8 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       if (input.handoff !== undefined && (typeof input.handoff !== 'string' || !input.handoff.trim())) throw new Error('handoff must be a reference');
       next.commits = [...new Set([...state.commits, ...input.commits])];
       next.current_handoff = input.handoff || null;
-      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, programme_revision: state.programme_revision, goal_revision: state.goal_revision, outcome: 'incomplete' });
-      next.phase = 'plan_pending'; next.confirmed = false; next.evidence.confirmation = null;
+      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, programme_revision: state.programme_revision, goal_revision: state.goal_revision, outcome: 'incomplete', progress: recoveryProgress(state) });
+      next.phase = 'plan_pending'; next.confirmed = false; next.evidence.confirmation = null; delete next.dependency_release;
     } else if (operation === 'release') next.active_run = null;
     else throw new Error('unknown autonomous project operation');
     return operation === 'revise' ? projectSave(paths, state, next, deps) : save(paths.project, state, next, deps);
@@ -391,6 +576,7 @@ export function startAutonomousBuild(root, programme, project, { actor, revision
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     if (state.active_run || state.phase !== 'ready') throw new Error('project is not ready or already has an owner');
+    assertProgrammeDispatch(root, programme, state, programmeState(paths));
     if (!isDeepStrictEqual(state.contract, assignment) || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), assignment)) throw new Error('assignment changed or is not sent');
     approved(programmeState(paths), assignment);
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
@@ -414,6 +600,7 @@ export function startAutonomousReview(root, programme, project, { actor, revisio
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     if (state.active_run || state.phase !== 'review_ready') throw new Error('project is not review ready');
+    assertProgrammeDispatch(root, programme, state, programmeState(paths));
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
     approved(programmeState(paths), state.contract);
     if (!isDeepStrictEqual(state.contract, read(join(paths.projectDir, PLAN_FILE)))

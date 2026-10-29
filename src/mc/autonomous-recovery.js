@@ -48,7 +48,7 @@ export async function recoverAutonomousBuild(options, deps = {}) {
   const state = read(options);
   if (state.continuation?.run_id === options.actor.run_id && !state.active_run) return state;
   if (!isDeepStrictEqual(state.active_run, options.actor) || options.actor.role !== 'step') throw new Error('active step ownership required');
-  if (state.phase === 'plan_pending') return state;
+  if (state.phase === 'plan_pending' && !readProgrammeState(options.root, options.programme).planner_jobs) return state;
   // A surviving supervisor/finish operation is not ours to replace. Unknown
   // claims remain held; dead claims are generation-safely reclaimed.
   const claims = [];
@@ -63,6 +63,7 @@ export async function recoverAutonomousBuild(options, deps = {}) {
     const quiet = reconcilePreviousSession(gitDir, { publication: state.publication });
     if (!quiet.ok && ['previous-process-group-alive', 'gate-worker-alive'].includes(quiet.reason)) return state;
     if (!quiet.ok) throw new Error(`recovery required: ${quiet.reason}`);
+    if (state.phase === 'plan_pending') return mutateAutonomousProject(options.root, options.programme, options.project, 'release', null, { actor: options.actor, revision: read(options).revision });
     if (quiet.gate && quiet.gate.code !== 0) throw new Error('previous gate did not complete green');
     const path = join(gitDir, 'mc-autonomous-session.json');
     if (!existsSync(path)) throw new Error('durable supervisor completion is missing');

@@ -1,5 +1,6 @@
 /** Current autonomous admission, shared by queueing and the leased merger.
  * Reports remain observations; this module neither repairs nor confirms goals. */
+import { mainIncidentHold } from './programme-recovery.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -36,10 +37,14 @@ export function assertAutonomousQueueAdmission({ root, owner, pr, ticket }) {
 export function autonomousProof({ root, owner, pr }) {
   requireThat(owner.pr === Number(pr), 'autonomous publication has no resolved PR ownership');
   const state = readAutonomousState(root, owner.programme, owner.project);
+  requireThat(!mainIncidentHold(root, owner.programme, owner.project), 'shared main repair awaits its owning programme plan');
   const assignment = state.contract;
   const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, PLAN_FILE), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
-  const programme = readProgrammeState(root, owner.programme).approved.find(item => item.revision === state.programme_revision);
+  const agreement = readProgrammeState(root, owner.programme);
+  requireThat(!agreement.planner_jobs || agreement.planner_jobs.mode === 'active', 'programme is paused, waiting or stopped');
+  requireThat(!agreement.planner_jobs || state.programme_revision === agreement.approved.at(-1).revision, 'programme revision changed; plan must align the goal before dispatch');
+  const programme = agreement.approved.find(item => item.revision === state.programme_revision);
   requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'approved programme revision is missing or invalid');
   requireThat(!state.active_run && ['plan_pending', 'landing'].includes(state.phase) && !state.confirmed,
     'autonomous work is incomplete, active or already confirmed');

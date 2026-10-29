@@ -121,6 +121,8 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
+import { reconcileProgrammeQueue } from './programme-jobs.js';
+import { runProgrammePlan } from './programme-plan-run.js';
 import { chooseAutonomousModel } from './autonomous-models.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
@@ -309,7 +311,7 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0 }) {
   if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
   return new Promise((resolve) => {
     const piped = prompt != null;
@@ -354,6 +356,8 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     let stallTimer = null;
     let graceTimer = null;
     let checkInTimer = null;
+    let deadlineTimer = null;
+    let deadlineKill = null;
     let count = 0;
     // The background tasks claude last reported, and whether this silence has
     // already been asked about them.
@@ -370,7 +374,7 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
       lastBeat = now;
       if (gap > SLEEP_GAP_MS) slept += gap - SLEEP_TICK_MS;
     };
-    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); clearInterval(beatTimer); };
+    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); clearInterval(beatTimer); clearTimeout(deadlineTimer); clearTimeout(deadlineKill); };
     const send = (text) => {
       if (!piped || resultSeen || settled || !child.stdin?.writable) return;
       child.stdin.write(userMessageLine(text));
@@ -464,6 +468,14 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     }
     if (stallMs) beatTimer = setInterval(beat, SLEEP_TICK_MS);
     armStall();
+    // Explicit bounded planner sessions only. Signal the child started above,
+    // never a process discovered by name; wait for close before releasing it.
+    if (Number.isSafeInteger(maxRunMs) && maxRunMs > 0) deadlineTimer = setTimeout(() => {
+      if (settled) return;
+      stalled = true;
+      deadlineKill = setTimeout(() => { if (!settled) child.kill('SIGKILL'); }, 1000);
+      child.kill('SIGTERM');
+    }, maxRunMs);
     child.on('error', (error) => {
       failure = error;
       if (!child.pid) { closeLog(); done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false, stalled: false }); }
@@ -2896,7 +2908,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         write: writeJson,
       });
     } catch { /* the page says how old its cache is */ }
-    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed };
+    const programmeJobs = autonomous?.programmeJobs
+      ? reconcileProgrammeQueue(root, { now: deps.now().getTime(), say }) : [];
+    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed, ...(autonomous?.programmeJobs ? { programmeJobs } : {}) };
   }
 
   /**
@@ -3020,6 +3034,14 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       return { ran: 0, waited: 'skipped:disk' };
     }
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
+    if (autonomous?.programmePlan) for (const programme of known.programmeJobs || []) {
+      const name = `programme:${programme}`;
+      if (last?.name === name || passed.has(name) || stopRequested() || updateRequested()) continue;
+      const outcome = await runProgrammePlan({ root, programme, repos, repo: repos.find(item => item.name === repo), lane, pid,
+        paths, deps, capability: autonomous, waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'ran') return { ran: 1, name, step: null };
+    }
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
       // A runner that has handed over finishes the pass it is in and picks

@@ -47,9 +47,10 @@ export function recordMergeOutcome({ root, job, report }) {
   const verified = !!matched && isDeepStrictEqual(reportBinding(matched), binding);
   const landed = report?.ok && report.merged && report.merged_into === 'main' && !report.off_default && report.merge_commit;
   const type = landed && verified ? 'merge-landed' : landed || ['merge-unknown', 'autonomous-landing-unknown'].includes(report?.stopped_at) ? 'merge-unknown' : 'merge-failed';
+  const mainFailures = report?.main_red?.red_on_main || report?.gate?.main_red?.red_on_main || [];
   const details = landed ? { merge_commit: report.merge_commit, merged_into: 'main',
     ...(!verified ? { reason: 'landing readback has no matching immutable review evidence' } : {}) }
-    : { stopped_at: report?.stopped_at || 'unknown', reason: report?.reason || 'the round said nothing' };
+    : { stopped_at: report?.stopped_at || 'unknown', reason: report?.reason || 'the round said nothing', ...(mainFailures.length ? { main_failures: [...new Set(mainFailures)].sort() } : {}) };
   return recordAutonomousMergeEvent(root, owner.programme, owner.project, { binding, type, details });
 }
 

@@ -1,5 +1,7 @@
 /** Inactive dynamic step dispatcher. Only createRunner's injected capability
  * admits v2. A process exit is not publication, continuation or completion. */
+import { mainIncidentHold, mainRepairPreflight, readProgrammeIncidents } from './programme-recovery.js';
+import { captureWorktree } from './session-gate-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -29,12 +31,18 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
   if (assignment.project_id !== record.project || assignment.programme.id !== record.programme || assignment.repo !== record.repo) return skip('assignment-mismatch', 'project identity does not match its location');
   try {
     const state = readAutonomousState(root, record.programme, record.project);
+    const agreement = readProgrammeState(root, record.programme);
+    const journal = agreement.planner_jobs;
+    const mode = journal?.mode;
+    if (mode && mode !== 'active') return skip('programme-held', 'programme is paused, waiting or stopped');
     if (!isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
     if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
     if (state.active_run) {
-      if (worktree && state.phase !== 'plan_pending' && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
+      if (worktree && (state.phase !== 'plan_pending' || journal) && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
     }
+    if (journal && state.programme_revision !== agreement.approved.at(-1).revision) return skip('programme-revision', 'programme revision changed; plan must align the goal before dispatch');
+    if (mainIncidentHold(root, record.programme, record.project)) return skip('main-incident', 'shared main repair awaits its owning programme plan');
     if (capability.review && reviewRoutePending(root, state)) return { kind: 'review', flavor: 'autonomous', routing: true };
     if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };
     if (state.phase !== 'ready') return skip('autonomous-not-ready', `autonomous project is ${state.phase}`);
@@ -154,7 +162,9 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     await deps.attachDeps(worktree);
     // The capability uses the existing mc gate command and its affected-test
     // selection/reservations, never an unbounded direct test runner.
-    const output = { write: text => say(`${name}: starting gate: ${text.trimEnd()}`) };
+    const repair = readProgrammeIncidents(root).some(item => item.status === 'open' && item.owner === programme && item.repair?.project === name);
+    let startingOutput = '';
+    const output = { write: text => { startingOutput += text; say(`${name}: starting gate: ${text.trimEnd()}`); } };
     const observeActivity = activity => {
       const current = readAutonomousState(root, programme, name);
       return observeProjectSessionControl(root, programme, name, { actor, revision: current.revision,
@@ -162,8 +172,13 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
           activity, context: null, progress: null, failure: null } });
     };
     observeActivity({ kind: 'gate', id: 'starting-gate' });
-    const gate = await (capability.gate || gateCommand)([], { cwd: worktree, env: deps.env, stdout: output, stderr: output });
-    if (gate !== 0) throw new Error('starting gate did not complete successfully');
+    const gate = await (capability.gate || gateCommand)(repair ? ['--json'] : [], { cwd: worktree, env: deps.env, stdout: output, stderr: output });
+    if (gate !== 0) {
+      let allowed = false;
+      try { allowed = repair && mainRepairPreflight({ root, programme, project: name, summary: JSON.parse(startingOutput), content: captureWorktree(worktree), base: git(['rev-parse', 'origin/main']) }); } catch { /* unknown is not a diagnosed red */ }
+      if (!allowed) throw new Error('starting gate did not complete successfully');
+      say(`${name}: starting gate remains red on the assigned main incident; repair must still publish a complete green gate`);
+    }
     observeActivity({ kind: 'model', id: null });
     const observer = projectSessionObserver({ ...options, verify: capability.verify });
     if (observer.control.phase !== 'running') throw new Error('starting integration/gate exhausted the session budget');
@@ -190,6 +205,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     say(`${name}: autonomous build stopped: ${error.message}`);
     if (owned) {
       incompleteAutonomousBuild({ ...options, cwd: worktree }, error.message);
+      if (readProgrammeState(root, programme).planner_jobs) await recoverAutonomousBuild({ ...options, cwd: worktree }, capability.publication || {});
     }
     return owned ? 'ran' : 'skipped:autonomous-owned';
   } finally {
