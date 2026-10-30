@@ -83,6 +83,12 @@ mc programme autonomy <programme> on|off [--stop "<condition>"]
 mc programme status <programme>
 ```
 
+Sending an assignment makes the current goal revision ready for a build when
+its selected dependencies have verified landings. Otherwise it remains
+pending, and the dependency scanner releases it when those exact revisions
+land. A revised assignment is sent again to make it ready. Sending never
+starts a session or enables the production autonomous runner.
+
 The same verbs serve the interactive plan session and the headless one. A
 headless session differs only in that it runs under the runner's lease and
 its effects are recorded in the programme's job queue, where idempotency

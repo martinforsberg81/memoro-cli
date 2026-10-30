@@ -17,7 +17,7 @@ function workspace(f) {
   return { cli, newGoal, criterion };
 }
 
-test('foreground goal authoring needs no lease and sends an inert assignment with guarded revisions', t => {
+test('foreground goal authoring needs no lease and send makes an unblocked assignment ready', t => {
   const f = stateFixture(); t.after(f.cleanup); releaseProgrammeRun(f.root, f.programme, foreground, 1); const w = workspace(f);
   assert.equal(VERB_MODULES['autonomous-project'], undefined);
   assert.equal(VERB_MODULES.goal, './mc/commands/goal.js');
@@ -28,6 +28,7 @@ test('foreground goal authoring needs no lease and sends an inert assignment wit
   assert.equal(JSON.parse(result.stdout).goal_revision, 2);
   result = w.cli(['goal', 'send', `${f.programme}/ordinary`]);
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
+  assert.equal(readAutonomousState(f.root, f.programme, 'ordinary').phase, 'ready');
   result = w.cli(['goal', 'done', `${f.programme}/ordinary`]);
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).done, false);
   const plan = join(autonomousPaths(f.root, f.programme, 'ordinary').projectDir, 'PLAN.json');

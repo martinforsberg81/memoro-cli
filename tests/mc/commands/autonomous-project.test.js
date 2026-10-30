@@ -56,7 +56,7 @@ test('real CLI routes programme and ordinary goal commands without launching ses
     assert.equal(result.status, 0, result.stderr);
     const status = JSON.parse(result.stdout); assert.equal(status.machine.runnable, false);
     assert.ok(status.autonomous, JSON.stringify(status));
-    assert.equal(status.autonomous.phase, 'plan_pending'); assert.deepEqual(status.problems, []);
+    assert.equal(status.autonomous.phase, 'ready'); assert.deepEqual(status.problems, []);
     result = cli(['project', f.project, '--offline']);
     assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /execution disabled/u); assert.doesNotMatch(result.stdout, /STEPS/u);
     assert.equal(readFileSync(f.paths.project, 'utf8'), before, 'status cannot mutate autonomous state');

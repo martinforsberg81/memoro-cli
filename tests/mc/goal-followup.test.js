@@ -144,6 +144,7 @@ test('archive discovers unlisted goals and waits for follow-ups, owners, claims 
 
 test('selected dependencies release on verified landing despite open follow-ups, never on an unverified or stale landing', t => {
   const f = unit(t); const project = 'next-goal';
+  const source = f.read(); f.patch(state => { delete state.landing; });
   createAutonomousDraft(f.root, f.programme, project, autonomousProject({ project_id: project }), {
     env: {}, revision: readProgrammeState(f.root, f.programme).revision,
   });
@@ -151,13 +152,13 @@ test('selected dependencies release on verified landing despite open follow-ups,
   const path = join(f.paths.dir, project, 'AUTONOMOUS_STATE.json');
   const read = () => readAutonomousState(f.root, f.programme, project);
   const dependent = read();
-  dependent.dependency_release = { goal_revision: 1, status: 'waiting', operation: 'selected-dependencies' };
+  assert.equal(dependent.phase, 'plan_pending');
+  assert.deepEqual(dependent.dependency_release, { goal_revision: 1, status: 'waiting', operation: 'goal-send-1' });
   dependent.plan_dependencies[0].goal_revision = 2;
   writeFileSync(path, JSON.stringify(dependent));
   const scan = () => reconcileProgrammeJobs({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision });
   scan(); assert.equal(read().phase, 'plan_pending', 'wrong selected revision stays pending');
   dependent.plan_dependencies[0].goal_revision = 1; writeFileSync(path, JSON.stringify(dependent));
-  const source = f.read(); f.patch(state => { delete state.landing; });
   scan(); assert.equal(read().phase, 'plan_pending', 'a landed phase label alone is not proof');
   writeFileSync(f.paths.project, JSON.stringify(source));
   scan(); assert.equal(read().phase, 'ready');

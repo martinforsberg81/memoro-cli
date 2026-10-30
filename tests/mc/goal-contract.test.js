@@ -161,16 +161,27 @@ test('retired criterion IDs cannot be recycled, while rewording and reordering r
 test('sent revisions stay on the same branch and PR and invalidate current execution projections, not history', t => {
   const f = fixture(t); f.init(); f.create();
   sendAutonomousProject(f.root, f.programme, f.project, { ...f.options, revision: f.state().revision });
+  assert.equal(f.state().phase, 'ready');
   const history = [{ id: 'old-review', reference: 'immutable/report.json' }];
   f.patchState({ ownership: { branch: 'goal-owned', pr: 42 }, commits: ['a'.repeat(40)], review_reports: history,
     publication: { head: 'a'.repeat(40) }, merge_handoff: { old: true }, session_control: { old: true } });
   const state = f.revise(assignment({ goal_revision: 2 }));
+  assert.equal(state.phase, 'plan_pending');
   assert.deepEqual(state.ownership, { branch: 'goal-owned', pr: 42 });
   assert.deepEqual(state.commits, ['a'.repeat(40)]);
   assert.deepEqual(state.review_reports, history);
   for (const key of ['publication', 'merge_handoff', 'session_control']) assert.equal(key in state, false);
   assert.deepEqual(f.json(join(f.paths.projectDir, 'PLAN.json')), state.contract);
   assert.deepEqual(f.json(f.paths.draft), state.contract);
+});
+
+test('sending a revised goal makes its current assignment ready again', t => {
+  const f = fixture(t); f.init(); f.create();
+  sendAutonomousProject(f.root, f.programme, f.project, { ...f.options, revision: 1 });
+  const revised = f.revise(assignment({ goal_revision: 2 }));
+  assert.equal(revised.phase, 'plan_pending');
+  sendAutonomousProject(f.root, f.programme, f.project, { ...f.options, revision: revised.revision });
+  assert.equal(f.state().phase, 'ready');
 });
 
 test('active build, review and merge phases refuse revision even without a recorded owner', t => {

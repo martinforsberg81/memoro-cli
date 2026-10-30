@@ -285,7 +285,7 @@ export function readAutonomousState(root, programme, project, deps = {}) {
   }, deps);
 }
 
-/** Publish the authoritative contract as an inert PLAN; never reserve or launch work. */
+/** Publish an assignment and make an unblocked goal eligible for dispatch. */
 export function sendAutonomousProject(root, programme, project, { actor, revision, ...deps }) {
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
@@ -312,11 +312,24 @@ export function sendAutonomousProject(root, programme, project, { actor, revisio
     if (existsSync(file) && !isDeepStrictEqual(read(file), state.contract)) throw new Error('a different PLAN.json already exists');
     if (state.plan_sent && existsSync(file)) {
       if (!isDeepStrictEqual(state.plan_dependencies || [], dependencies)) throw new Error('sent goal dependencies are immutable; revise the goal before changing them');
-      return structuredClone(state.contract);
+      if (state.phase !== 'plan_pending') return structuredClone(state.contract);
     }
     const next = structuredClone(state);
     next.plan_sent = true;
     if (dependencies.length || state.plan_dependencies) next.plan_dependencies = dependencies;
+    if (state.phase === 'plan_pending') {
+      assertProjectRecovery(state);
+      const waiting = dependencies.some(item => {
+        const dependency = projectState(autonomousPaths(root, programme, item.project));
+        return !reviewedLanding(dependency) || dependency.goal_revision !== item.goal_revision;
+      });
+      if (waiting) {
+        next.dependency_release = { goal_revision: state.goal_revision, status: 'waiting', operation: `goal-send-${state.goal_revision}` };
+      } else {
+        next.phase = 'ready';
+        delete next.dependency_release;
+      }
+    }
     recordPlanningOperation(next, operationActor, 'send', revision);
     const saved = projectSave(paths, state, next, deps);
     (deps.writePlan || writeJsonAtomic)(file, saved.contract);

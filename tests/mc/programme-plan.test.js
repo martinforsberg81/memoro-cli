@@ -227,7 +227,7 @@ test('confirmation cannot fabricate delivery and only explicit valid stops can h
   assert.throws(() => f.apply(f.intent('confirm-project', { id: 'fake-confirmation', reference: 'none', criteria: [] })), /obsolete/u);
   cancelProgrammeOperation(f.options(), { id: 'confirm-project-1', reason: 'Not delivered.' });
   assert.throws(() => f.apply({ id: 'unplanned-stop', kind: 'reach-stop', stop: '../invalid-stop', reference: 'none' }), /stable ID/u);
-  f.apply(f.intent('resume-project'));
+  assert.equal(f.state().phase, 'ready', 'ordinary send already made the goal ready');
   const stop = { id: 'agreed-stop', kind: 'reach-stop', stop: 'design-review', reference: 'decisions/stop-reached' };
   f.apply(stop); f.apply(stop);
   assert.equal(f.read().planner_jobs.operations.filter(item => item.intent.id === stop.id).length, 1);

@@ -98,7 +98,7 @@ test('nothing activates an existing programme: status, reconciliation, a capabil
   assert.equal(await installed.runStep('legacy', world, { lane: 1 }), 'ran');
   assert.equal(w.legacy.length, 1); assert.equal(w.builds.length, 0);
   assert.equal(existsSync(w.cwd()), false); assert.equal(w.hub.created(), 0);
-  assert.equal(w.programme().planner_jobs?.mode ?? 'inactive', 'inactive'); assert.equal(w.state().phase, 'plan_pending');
+  assert.equal(w.programme().planner_jobs?.mode ?? 'inactive', 'inactive'); assert.equal(w.state().phase, 'ready');
 });
 
 test('pause disables only planner claims; sent build, review and merge continue beside unchanged v1', async t => {
