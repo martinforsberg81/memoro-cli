@@ -17,6 +17,7 @@ import { claimProgrammeJob, completeProgrammePlan, finishProgrammeJob, reconcile
 import { decideProgrammePlan } from '../../src/mc/programme-plan.js';
 import { CONTROL_CAPABILITIES } from '../../src/mc/programme-control.js';
 import { run as programmeCommand } from '../../src/mc/commands/programme.js';
+import { run as goalCommand } from '../../src/mc/commands/goal.js';
 import { finishAutonomousPublication } from '../../src/mc/autonomous-publish.js';
 import { captureWorktree, gateReceipt, persistGateReceipt } from '../../src/mc/session-gate-evidence.js';
 import { publicationGateSelection } from '../../src/mc/commands/gate.js';
@@ -245,13 +246,19 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
       stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) }, ...extra });
     return { code, out: out.join(''), err: err.join('') };
   };
+  w.goal = async argv => {
+    const out = []; const err = [];
+    const code = await goalCommand(argv, { root, env: {}, stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) } });
+    assert.equal(code, 0, err.join(''));
+    return out.join('');
+  };
   w.start = (extra = {}) => {
     const input = join(root, 'start.json');
     writeFileSync(input, JSON.stringify({ by: 'Martin', build: { class: 'fast', profile }, review: { model: { tool: 'claude', model: 'opus', effort: 'high' } } }));
     return w.cli(['start', PROGRAMME, '--expected-revision', String(w.programme().revision), '--stop', 'design-review', '--input-file', input], extra);
   };
 
-  /** One headless plan delivery: claims the pending job, decides, acknowledges. */
+  /** Test-only simulated queue lease for later lifecycle/recovery measurements. */
   w.plan = (runId, { now } = {}) => {
     const actor = { run_id: runId, role: 'plan' };
     const lease = claimProgrammeJob({ root, programme: PROGRAMME, revision: w.programme().revision, actor, pid: process.pid, ...(now ? { now } : {}) }).planner_jobs.lease;
@@ -270,11 +277,17 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
       stop: () => decideProgrammePlan(owner(), { id: `${runId}-stop`, kind: 'reach-stop', stop: 'design-review', reference: 'decisions/planned-stop' }),
       finish: (reference = `decisions/${runId}`) => { completeProgrammePlan(owner(), { event_ids: lease.event_ids, reference }); finishProgrammeJob(owner()); } };
   };
-  /** Plan creates the goal, sends it and makes it ready, in one delivery. */
-  w.open = (project = PROJECT, overrides = {}, runId = `plan-open-${project}`) => {
-    const plan = w.plan(runId);
-    plan.create(project, overrides); plan.decide('send-project', project); plan.decide('resume-project', project); plan.finish();
-    return plan;
+  /** Ordinary foreground goal authoring; no legacy planner envelope or lease. */
+  w.open = async (project = PROJECT, overrides = {}) => {
+    const assignment = goal(project, overrides);
+    const target = `${PROGRAMME}/${project}`;
+    await w.goal(['new', target, '--phase', String(assignment.programme_phase), '--repo', assignment.repo, '--class', assignment.work_class,
+      ...assignment.goal.flatMap(value => ['--goal', value]), ...assignment.contract.flatMap(value => ['--contract', value]),
+      ...assignment.out_of_scope.flatMap(value => ['--out-of-scope', value])]);
+    for (const criterion of assignment.success_criteria) await w.goal(['criterion', 'add', target, '--id', criterion.id,
+      '--criterion', criterion.criterion, '--instruction', criterion.instruction[0], '--check', criterion.check, '--verify', criterion.verification]);
+    await w.goal(['send', target]);
+    return w.state(project);
   };
 
   w.build = (spec = {}) => { w.scripts.step.push(builder(w, spec)); };

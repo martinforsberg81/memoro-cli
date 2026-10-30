@@ -13,7 +13,7 @@ import { PLAN_FILE } from './plan-source.js';
 import { processAlive, readClaim } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { observeMainIncidentLocked, reconcileMainRepairsLocked, cancelMainRepairLocked, mainIncidentHold, assertProjectRecovery, boundedRecoveryWait, RECOVERY_ATTEMPT_LIMIT } from './programme-recovery.js';
-import { planOperationProblems } from './programme-plan-contract.js';
+import { planOperationProblems } from './autonomous-state.js';
 
 export const PROGRAMME_JOB_TRIGGERS = Object.freeze(['activation', 'review', 'landed', 'failure', 'dependency', 'idle']);
 export const MAX_PLANNER_LEASE_MS = 5 * 60 * 1000;
@@ -269,8 +269,8 @@ export function reconcileProgrammeJobs(options, { dependencies = [] } = {}) {
   });
 }
 
-/** Opt-in scheduling read/repair only. programme-plan-run supplies the launcher.
- * V1 and normal (capability-less) runners never enter this path. */
+/** Opt-in event reconciliation only. No headless planner queue consumer is
+ * installed; V1 and normal (capability-less) runners never enter this path. */
 export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = () => {} } = {}) {
   const directory = join(root, PROGRAMS_HOME);
   if (!existsSync(directory)) return [];

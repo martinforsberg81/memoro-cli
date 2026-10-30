@@ -32,7 +32,7 @@ function legacy(w) {
 async function started(t) {
   const w = programmeWorld(t);
   assert.equal((await w.start()).code, 0);
-  w.open(PROJECT, { success_criteria: SHORT });
+  await w.open(PROJECT, { success_criteria: SHORT });
   return w;
 }
 const pause = w => w.cli(['pause', PROGRAMME, '--by', 'Martin']);

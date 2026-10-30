@@ -18,6 +18,7 @@ const plain = value => !!value && typeof value === 'object' && !Array.isArray(va
 const NOT_WIRED = 'the installed runner (runLoop, src/mc/run.js) passes no autonomous capability';
 const NO_CLOCK = 'no production awake clock that excludes machine suspend';
 const NO_PROVIDER = 'not observed with a provider (model) process';
+const NO_PLANNER = 'headless planner queue consumption is not implemented';
 
 /** What this installation has, capability by capability: what is built, what
  * proved it and what is still missing. Built and proven by fixtures is not
@@ -30,8 +31,8 @@ const INSTALLATION = Object.freeze({
   capabilities: Object.freeze([
     { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
       proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
-    { name: 'programme-plan', built: 'headless plan sessions and their decisions (src/mc/programme-plan-run.js, src/mc/programme-plan.js)',
-      proven: 'scripted plan sessions: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+    { name: 'programme-plan', built: 'durable planner journal and event queue; no queue consumer',
+      proven: 'journal effects and recovery: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NO_PLANNER },
     { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
       proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_CLOCK}` },
     { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',

@@ -69,11 +69,12 @@ function goalAction(root, state, holds) {
     if (!completion.done) return 'unknown — landing evidence is incomplete';
     return completion.pending_follow_ups.length ? `measure follow-ups: ${completion.pending_follow_ups.join(', ')}` : 'none — done on main';
   }
+  if (state.phase === 'plan_pending') return 'planner unavailable — headless queue consumption is not implemented';
   let route = false;
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';
   if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to land`;
-  return 'plan decides the next step for this goal';
+  return 'planner unavailable — headless queue consumption is not implemented';
 }
 
 /** One autonomous goal. An unreadable state is reported, not skipped. */
@@ -141,18 +142,18 @@ function legacyGoals(root, programme) {
 
 function programmeAction(status, journal) {
   const mode = status.mode;
-  if (mode === 'inactive') return 'no new headless plan — not started; sent goals continue';
+  if (mode === 'inactive') return 'planner unavailable — not started; sent goals continue';
   if (mode === 'paused') return status.in_flight.length
     ? `none new — paused; ${status.in_flight.length} started operation${status.in_flight.length === 1 ? '' : 's'} finishing`
     : 'none — paused; mc programme resume';
   if (mode === 'stopped') return `none — planned stop ${journal.stop} reached; new headless planning is stopped`;
   if (mode === 'exception') return `none — exception ${journal.exception.code || ''}: ${journal.exception.reason}`.replace(' :', ':');
   if (mode === 'waiting') return journal.wait.until === null ? `wait for external ${journal.wait.reason}` : `retry after ${iso(journal.wait.until)} (${journal.wait.kind})`;
-  if (!status.execution.supported) return 'none — this installation cannot run autonomous work';
-  if (status.plan.lease) return `plan session ${status.plan.lease.run_id} running`;
-  if (status.plan.pending_events) return `plan session for ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'}`;
-  const goal = status.goals.find(item => !/^(none|plan decides)/u.test(item.next_action));
-  return goal ? `${goal.project}: ${goal.next_action}` : 'plan reviews the programme (idle check)';
+  if (!status.execution.supported) return 'planner unavailable — this installation cannot run autonomous work';
+  if (status.plan.lease) return `planner unavailable — lease ${status.plan.lease.run_id} requires recovery`;
+  if (status.plan.pending_events) return `planner unavailable — ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'} ${status.plan.pending_events === 1 ? 'awaits' : 'await'} headless queue consumption`;
+  const goal = status.goals.find(item => !item.next_action.startsWith('none'));
+  return goal ? `${goal.project}: ${goal.next_action}` : 'planner unavailable — headless queue consumption is not implemented';
 }
 
 /** Everything `mc programme status` says. `capabilities` defaults to what this
@@ -259,7 +260,7 @@ export function renderProgrammeStatus(status) {
     : `not supported here — ${status.execution.reason || 'unsupported'} (missing ${status.execution.missing.join(', ')})`);
   row('programme', `${status.metadata.brief} · state revision ${status.state_revision}`);
   if (status.activation) row('started', `${status.activation.at} by ${status.activation.by} · build ${status.activation.build.class} · review ${status.activation.review.model}`);
-  else row('started', 'no headless planner — sent goals continue');
+  else row('started', 'planner unavailable — sent goals continue');
   row('stop', status.planned_stop.target ? `runs to ${status.planned_stop.target} — ${clip(status.planned_stop.condition, 70)}${status.planned_stop.reached ? ' · reached' : ''}`
     : `none chosen · agreed stops: ${status.planned_stop.agreed.join(', ') || 'none'}`);
   const plan = status.plan;
@@ -271,7 +272,7 @@ export function renderProgrammeStatus(status) {
   row('next', status.next_action);
   out.push('');
   out.push('GOALS');
-  if (!status.goals.length) out.push('  none yet — plan creates them once the programme runs');
+  if (!status.goals.length) out.push('  none yet — create assignments with mc goal new');
   for (const goal of status.goals) {
     if (goal.problem) { out.push(`  ${goal.project}  problem: ${goal.problem}`); out.push(`    next       ${goal.next_action}`); continue; }
     out.push(`  ${goal.project}  ${goal.phase} · goal r${goal.goal_revision} · ${goal.work_class} · phase ${goal.programme_phase} · branch ${goal.branch || 'none'} · PR ${goal.pr ? `#${goal.pr}` : 'none'}`);

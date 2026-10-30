@@ -41,18 +41,15 @@ revision. `show` is read-only. Raw edits to the projection are never adopted.
 Sending atomically writes the authoritative contract as an inactive `PLAN.json`;
 it never adopts the draft projection or launches work.
 
-## Typed command operations
+## Public assignment operations
 
-The routed command modules take these argument vectors:
-
-- `programme show <programme>`
-- `programme metadata <programme> --expected-revision <n> --input-file <json>`
-- `autonomous-project show <programme>/<project>`
-- `autonomous-project create|revise|progress|report|attempt <programme>/<project> --expected-revision <n> --input-file <json>`
-- `autonomous-project send|release|recover <programme>/<project> --expected-revision <n>`
-
-These are transitional entry points pending ordinary `goal` verbs. The old
-`draft`/`approve` routes remain present but refuse: they grant no authority.
+Programme context is read with `mc programme show <programme>` and updated with
+`mc programme metadata <programme> --expected-revision <n> --input-file <json>`.
+Goal authoring and lifecycle operations use `mc goal new`, `criterion add`,
+`send`, `revise`, `show`, `done`, `finish`, `report`, `attempt`, `release` and
+`recover`. The retired `mc autonomous-project` and programme planner envelope
+routes are not public commands. Durable queue effects below remain internal;
+they do not authorize a headless planner to run.
 Foreground planning obtains an operation actor internally and needs no lease.
 Headless planning must prove the exact programme reservation, token and live
 lease. Builders/reviewers cannot author assignments. Creation CAS checks the

@@ -15,16 +15,17 @@ import { STABLE_ID_RE } from './goal-contract.js';
 import { reviewedLanding, goalCompletion, followUpObservationProblems } from './goal-followup.js';
 import { validateProgrammeMetadata } from './programme-metadata.js';
 import { validateAutonomousProject, autonomousRevisionProblems, validateAutonomousEvidence, evidenceForRevision } from './autonomous-project.js';
-import { planOperationProblems } from './programme-plan-contract.js';
-import { assertProjectRecovery, projectRecovery, recoveryProgress, reserveMainRepairLocked, mainIncidentHold } from './programme-recovery.js';
+import { assertProjectRecovery, projectRecovery, recoveryProgress, recoveryDiagnosisProblems, reserveMainRepairLocked, mainIncidentHold } from './programme-recovery.js';
 import { readClaim, processAlive } from './resource-claim.js';
 
 export const GOAL_STATE_VERSION = 2;
 export const PROGRAMME_STATE_FILE = 'PROGRAMME_STATE.json';
 export const AUTONOMOUS_STATE_FILE = 'AUTONOMOUS_STATE.json';
 export const AUTONOMOUS_PHASES = Object.freeze(['ready', 'running', 'handoff_requested', 'closing', 'publishing', 'review_ready', 'reviewing', 'plan_pending', 'landing', 'landed']);
+const PLAN_PROJECT_OPERATIONS = Object.freeze(['send-project', 'revise-project', 'dependencies', 'resume-project', 'confirm-project', 'diagnose-project', 'await-dependencies']);
 const valid = result => { if (!result.ok) throw new Error(result.problems.join('; ')); };
 const name = value => { if (typeof value !== 'string' || !STABLE_ID_RE.test(value)) throw new Error('a stable lower-case ID is required'); return value; };
+const text = value => typeof value === 'string' && !!value.trim();
 const read = file => {
   try { return JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -139,6 +140,31 @@ function rejectRetiredCriteria(history, current, next) {
 }
 function assignmentInProgramme(state, project) {
   valid(validateAutonomousProject(project, { programme: state.metadata }));
+}
+/** Internal durable journal validation for the ordinary goal operations. */
+export function planOperationProblems(intent) {
+  if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return ['planner intent must be an object'];
+  const problems = [];
+  if (Object.keys(intent).some(key => !['id', 'kind', 'project', 'expected_revision', 'input'].includes(key))) problems.push('unknown planner intent field');
+  if (typeof intent.id !== 'string' || !STABLE_ID_RE.test(intent.id) || !PLAN_PROJECT_OPERATIONS.includes(intent.kind)
+    || typeof intent.project !== 'string' || !STABLE_ID_RE.test(intent.project)
+    || !Number.isSafeInteger(intent.expected_revision) || intent.expected_revision < 1) problems.push('planner intent needs operation, project and expected state revision');
+  const input = intent.input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return [...problems, 'planner input must be an object'];
+  if (intent.kind === 'diagnose-project') problems.push(...recoveryDiagnosisProblems(input));
+  else if (intent.kind === 'revise-project') problems.push(...validateAutonomousProject(input).problems);
+  else if (intent.kind === 'dependencies') {
+    if (Object.keys(input).join(',') !== 'projects' || !Array.isArray(input.projects)
+      || input.projects.some(item => !item || Object.keys(item).sort().join(',') !== 'goal_revision,project'
+        || typeof item.project !== 'string' || !STABLE_ID_RE.test(item.project) || item.project === intent.project
+        || !Number.isSafeInteger(item.goal_revision) || item.goal_revision < 1)
+      || new Set(input.projects.map(item => item.project)).size !== input.projects.length) problems.push('dependencies need distinct programme projects and goal revisions');
+  } else if (intent.kind === 'confirm-project') {
+    if (Object.keys(input).sort().join(',') !== 'criteria,id,reference' || typeof input.id !== 'string' || !STABLE_ID_RE.test(input.id) || !text(input.reference)
+      || !Array.isArray(input.criteria) || input.criteria.some(item => !item || Object.keys(item).sort().join(',') !== 'criterion_id,reference'
+        || typeof item.criterion_id !== 'string' || !STABLE_ID_RE.test(item.criterion_id) || !text(item.reference))) problems.push('confirmation needs an ID, decision reference and explicit criterion evidence');
+  } else if (Object.keys(input).length) problems.push('this planner operation takes empty input');
+  return problems;
 }
 // DRAFT is a compatibility projection, never a second authority. A crash after
 // the state commit is recovered explicitly; readers always use state.contract.

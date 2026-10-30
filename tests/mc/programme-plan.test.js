@@ -8,10 +8,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateFixture, planner, builder, reviewer, foreground } from './autonomous-state-fixture.js';
 import { autonomousProject, autonomousEvidence } from './autonomy-fixtures.js';
-import { runnerFixture, git } from './autonomous-run-fixture.js';
+import { runnerFixture } from './autonomous-run-fixture.js';
 import { ready } from './autonomous-merge-fixture.js';
 import { decideProgrammePlan, programmePlanContext } from '../../src/mc/programme-plan.js';
-import { ensureProgrammePlanWorkspace, PLAN_SESSION_MAX_MS } from '../../src/mc/programme-plan-run.js';
+import { ensureProgrammePlanWorkspace, runProgrammePlan } from '../../src/mc/programme-plan-run.js';
 import { autonomousPlanRole, instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import { reviewCommandRefusal } from '../../src/mc/autonomous-review-guard.js';
 import { readAutonomousState, readProgrammeState, sendAutonomousProject, releaseProgrammeRun, reserveProjectRun,
@@ -20,7 +20,8 @@ import { claimProgrammeJob, setProgrammeJobMode, cancelProgrammeOperation, compl
   prepareProgrammeOperation, reconcileProgrammeJobs, yieldProgrammeJob } from '../../src/mc/programme-jobs.js';
 import { reportBinding } from '../../src/mc/autonomous-outcomes.js';
 import { autonomousChoice } from '../../src/mc/autonomous-run.js';
-import { createRunner, streamSession } from '../../src/mc/run.js';
+import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
+import { streamSession } from '../../src/mc/run.js';
 import { run as programmeCommand } from '../../src/mc/commands/programme.js';
 import { run as foregroundPlan } from '../../src/mc/commands/plan.js';
 
@@ -110,7 +111,7 @@ test('only plan with the active lease can decide; stale state and altered goal r
   const out = []; const err = [];
   const code = await programmeCommand(['approve', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ by: 'headless' })],
     { root: f.root, actor: f.options().actor, stdout: { write: line => out.push(line) }, stderr: { write: line => err.push(line) } });
-  assert.equal(code, 1); assert.match(err.join(''), /ownership|draft\/approve/u);
+  assert.notEqual(code, 0); assert.match(err.join(''), /operation and target are required/u);
   assert.equal(f.read().metadata.id, f.programme); assert.equal(f.state().goal_revision, 1);
 });
 
@@ -253,7 +254,7 @@ test('headless flavor replaces foreground authority and command guards deny lega
   const role = autonomousPlanRole(readCanonRole('plan'));
   assert.equal(role.name, 'plan');
   const instructions = instructionsFor('codex', role.overlay);
-  assert.match(instructions, /headless autonomous flavor/u); assert.doesNotMatch(instructions, /with Martin at the terminal/u);
+  assert.match(instructions, /headless plan role/u); assert.doesNotMatch(instructions, /with Martin at the terminal/u);
   for (const argv of [['programme', 'approve'], ['project', 'amend'], ['step', 'ready'], ['publish'], ['merge'], ['plan']]) {
     assert.match(reviewCommandRefusal(argv, { actor: { role: 'plan' }, env: { MC_PROGRAMME_LEASE: 'test-lease' } }), /denied/u);
   }
@@ -263,19 +264,20 @@ test('headless flavor replaces foreground authority and command guards deny lega
   for (const argv of [['programme', 'decide'], ['programme', 'complete'], ['goal', 'show']]) assert.equal(reviewCommandRefusal(argv, { actor: { role: 'plan' } }), null);
 });
 
-test('the real headless CLI exposes guarded decisions/completion and denies agreement edits', t => {
+test('the real CLI rejects planner envelopes and exposes ordinary guarded goal revisions', t => {
   const f = fixture(t); const options = f.options();
   const env = { ...process.env, MC_WORK_ROOT: f.root, MC_HOME: join(f.root, 'mc-home'), MC_PROGRAMME: f.programme,
     MC_AUTONOMOUS_RUN: options.actor.run_id, MC_AUTONOMOUS_ROLE: 'plan', MC_PROGRAMME_LEASE: options.token };
   delete env.MC_STEP;
   const cli = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('../../src/mc-cli.js', import.meta.url)), ...args], { env, encoding: 'utf8' });
-  const decide = f.intent('revise-project', { ...f.state().contract, goal_revision: 2 });
-  let reply = cli('programme', 'decide', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file(decide));
+  for (const operation of ['draft', 'approve', 'decide', 'complete', 'cancel']) {
+    const reply = cli('programme', operation, f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({}));
+    assert.notEqual(reply.status, 0); assert.match(reply.stderr, /denied|operation and target are required/u);
+  }
+  const revision = { ...f.state().contract, goal_revision: 2 };
+  const reply = cli('goal', 'revise', `${f.programme}/${f.project}`, '--expected-revision', String(f.state().revision), '--input-file', f.file(revision));
   assert.equal(reply.status, 0, reply.stderr); assert.equal(f.state().goal_revision, 2);
-  reply = cli('programme', 'approve', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ by: 'headless' }));
-  assert.equal(reply.status, 1); assert.match(reply.stderr, /agreement edits.*denied/u); assert.equal(f.read().metadata.id, f.programme);
-  reply = cli('programme', 'complete', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ event_ids: ['activate'], reference: 'decisions/cli-complete' }));
-  assert.equal(reply.status, 0, reply.stderr); assert.equal(f.read().planner_jobs.lease.completion.reference, 'decisions/cli-complete');
+  assert.equal(f.read().metadata.id, f.programme); assert.equal(f.read().planner_jobs.lease.token, options.token);
 });
 
 test('opening mc plan remains foreground and does not reserve or start autonomous work', async t => {
@@ -286,35 +288,18 @@ test('opening mc plan remains foreground and does not reserve or start autonomou
   assert.equal(code, 0); assert.equal(opened, true); assert.deepEqual(f.read(), before);
 });
 
-for (const changeCheckout of [false, true]) test(`runner launches an isolated headless plan and validates explicit completion (changed checkout: ${changeCheckout})`, async t => {
-  const f = runnerFixture(t); f.deps.now = () => new Date();
+test('runner reports planner unavailable and retains pending events without launching a session', async t => {
+  const f = runnerFixture(t);
   f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
-    event: { id: 'runner-activation', type: 'activation', reference: 'approval' } });
-  let call;
-  f.deps.session = async value => {
-    call = value;
-    if (changeCheckout) git(join(value.cwd, 'memoro-cli'), 'commit', '--allow-empty', '-qm', 'Unexpected planner implementation');
-    const actor = { role: 'plan', run_id: value.env.MC_AUTONOMOUS_RUN };
-    const state = readProgrammeState(f.root, f.programme);
-    completeProgrammePlan({ root: f.root, programme: f.programme, actor, token: value.env.MC_PROGRAMME_LEASE, revision: state.revision },
-      { event_ids: state.planner_jobs.lease.event_ids, reference: 'decisions/runner-complete' });
-    return { status: 0 };
-  };
-  const runner = createRunner({ deps: f.deps, autonomous: { ...f.capability, programmeJobs: true, programmePlan: true } });
-  const world = { ...f.world(f.record), programmeJobs: [f.programme] };
-  assert.equal((await runner.pass({ world })).name, `programme:${f.programme}`, f.log.join('\n'));
-  assert.equal(call.env.MC_AUTONOMOUS_ROLE, 'plan'); assert.equal(call.maxRunMs, PLAN_SESSION_MAX_MS);
-  assert.equal(call.cwd, join(f.root, 'runner', 'plans', f.programme));
-  assert.equal(git(join(call.cwd, 'memoro-cli'), 'branch', '--show-current'), '');
-  assert.equal(existsSync(f.cwd(f.project)), false, 'builder workspace was not created or borrowed');
-  const result = readProgrammeState(f.root, f.programme).planner_jobs;
-  if (changeCheckout) {
-    assert.ok(result.pending); assert.match(result.recoveries.at(-1).reason, /changed an inspection checkout/u);
-    assert.throws(() => ensureProgrammePlanWorkspace({ root: f.root, programme: f.programme, repos: [{ name: 'memoro-cli', path: f.primary }], git: f.deps.git }), /inspection head changed/u);
-  } else {
-    assert.equal(result.pending, null); assert.equal(result.results.length, 1);
-  }
+    event: { id: 'runner-activation', type: 'activation', reference: 'operator-start' } });
+  const before = readProgrammeState(f.root, f.programme);
+  assert.equal(await runProgrammePlan(), 'skipped:planner-unavailable');
+  const after = readProgrammeState(f.root, f.programme);
+  assert.deepEqual(after, before, 'no lease, acknowledgement, or recovery write is fabricated');
+  assert.deepEqual(after.planner_jobs.pending.event_ids, ['runner-activation']);
+  assert.equal(after.active_run, null);
+  assert.equal(existsSync(f.cwd(f.project)), false, 'no planner workspace or builder checkout is created');
 });
 
 test('workspace refresh preserves dirty inspection trees and refuses foreground/branch adoption', t => {
@@ -326,16 +311,15 @@ test('workspace refresh preserves dirty inspection trees and refuses foreground/
   assert.equal(readFileSync(join(workspace.repos[0].path, 'unfinished'), 'utf8'), 'Do not discard.');
 });
 
-test('zero exit without durable planner completion retains events and ownership is released for reconciliation', async t => {
+test('planner unavailability leaves queue events durable for a future consumer', async t => {
   const f = runnerFixture(t); f.deps.now = () => new Date();
   f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
     event: { id: 'incomplete', type: 'activation', reference: 'approval' } });
-  const runner = createRunner({ deps: f.deps, autonomous: { ...f.capability, programmeJobs: true, programmePlan: true } });
-  await runner.pass({ world: { ...f.world(f.record), programmeJobs: [f.programme] } });
+  assert.equal(await runProgrammePlan(), 'skipped:planner-unavailable');
   const state = readProgrammeState(f.root, f.programme);
   assert.equal(state.active_run, null); assert.deepEqual(state.planner_jobs.pending.event_ids, ['incomplete']);
-  assert.match(state.planner_jobs.recoveries.at(-1)?.reason || f.log.join('\n'), /no durable event completion/u);
+  assert.equal(state.planner_jobs.recoveries.length, 0);
   assert.equal(state.execution_enabled, false);
 });
 

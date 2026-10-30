@@ -101,11 +101,11 @@ test('foreground ownership refusal is checked inside the write lock', async t =>
   assert.equal(f.json(f.paths.programme).metadata_history, undefined);
 });
 
-test('obsolete draft and approve entry points cannot recreate programme approval authority', async t => {
+test('obsolete planner envelope verbs are not public programme commands', async t => {
   const f = fixture(t); const before = readFileSync(f.paths.programme, 'utf8');
-  for (const verb of ['draft', 'approve']) {
-    assert.equal(await invoke(f, verb, 2, f.draft), 1);
-    assert.match(f.err.join(''), /draft\/approve/);
+  for (const verb of ['draft', 'approve', 'decide', 'complete', 'cancel']) {
+    assert.notEqual(await invoke(f, verb, 2, f.draft), 0);
+    assert.match(f.err.join(''), /operation and target are required/u);
     assert.equal(readFileSync(f.paths.programme, 'utf8'), before);
   }
 });

@@ -1,6 +1,6 @@
 # Autonomous finish and publication (inactive)
 
-V2's autonomous step uses `mc autonomous-project finish <programme>/<project>
+V2's goal step uses `mc goal finish <programme>/<goal>
 --expected-revision <n> --input-file <json>`, not ordinary `mc publish`.
 Neither command activates a programme. V1 publication still pushes and queues
 its PR, or books a branch-flow step built, as before.

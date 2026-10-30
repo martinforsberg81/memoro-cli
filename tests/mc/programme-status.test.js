@@ -80,8 +80,7 @@ test('a programme is inactive until an explicit start; status, reconciliation an
   const before = f.raw();
   assert.equal(await f.cli(['status', f.programme]), 0, f.err());
   assert.match(f.out(), /autonomous · inactive/u);
-  assert.match(f.out(), /started {5}no headless planner — sent goals continue/u);
-  assert.match(f.out(), /next {8}no new headless plan — not started; sent goals continue/u);
+  assert.match(f.out(), /started {5}planner unavailable — sent goals continue/u);
   assert.match(f.out(), /not supported here — autonomous execution is not activated in this installation/u);
   assert.equal(await f.cli(['status', f.programme, '--json']), 0);
   const status = JSON.parse(f.out());
@@ -124,7 +123,7 @@ test('start requires metadata, an explicit stop, valid profiles, supported capab
 
   assert.equal(await f.start(), 0, f.err());
   const reply = JSON.parse(f.out());
-  assert.equal(reply.mode, 'active'); assert.equal(reply.next_action, 'plan session for 1 pending event');
+  assert.equal(reply.mode, 'active'); assert.match(reply.next_action, /^planner unavailable — 1 pending event awaits headless queue consumption$/u);
   const journal = f.read().planner_jobs;
   assert.equal(journal.activation.stop, 'design-review'); assert.equal('programme_revision' in journal.activation, false);
   assert.deepEqual(journal.activation.profiles.review.model, opus);
@@ -163,7 +162,7 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.equal(goal.evidence.quality, 'review findings for plan');
   assert.deepEqual(goal.review.findings, ['Pause can lose a queued merge.']); assert.equal(goal.review.current, true);
   assert.equal(goal.models.reviewer_actual, 'claude:opus');
-  assert.equal(goal.next_action, 'plan decides the next step for this goal');
+  assert.equal(goal.next_action, 'planner unavailable — headless queue consumption is not implemented');
   assert.equal(status.plan.owner, 'plan'); assert.equal(status.plan.pending_events, 1);
   text = renderProgrammeStatus(status);
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);
@@ -188,7 +187,7 @@ test('a revised goal ignores older evidence and a claimed planner is visible as 
   assert.equal(goal.evidence.gate, 'none recorded');
   claimProgrammeJob(f.options({ actor: { run_id: 'job-plan-1', role: 'plan' }, pid: process.pid, now: NOW }));
   const status = programmeStatus(f.root, f.programme, { capabilities: supported });
-  assert.equal(status.next_action, 'plan session job-plan-1 running');
+  assert.equal(status.next_action, 'planner unavailable — lease job-plan-1 requires recovery');
   assert.match(status.in_flight[0], /^plan job-plan-1 \(lease until 2026-10-29T12:05:00\.000Z\)$/u);
   goal = status.goals[0];
   assert.equal(goal.programme_phase, 1); assert.equal(goal.work_class, 'fast');

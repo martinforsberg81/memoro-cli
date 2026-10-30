@@ -1,5 +1,5 @@
 /** The documented operator commands against a disposable programme, each a real
- * process: an agreement drafted and approved with `mc programme draft|approve`,
+ * process: ordinary goal assignment creation without programme approval,
  * then `capabilities`, `status`, `start`, `pause` and `resume`. The installed
  * `mc` refuses to start it; a fixture installation that reports every
  * capability (`fixtures/programme-installation.js`, never a production switch)
@@ -119,14 +119,14 @@ test('on a fixture installation start, pause and resume drive the disposable pro
   const w = disposable(t);
   const start = w.start(w.fixture);
   assert.equal(start.code, 0, start.err);
-  assert.equal(start.json().mode, 'active'); assert.match(start.json().next_action, /plan session for 1 pending event/u);
+  assert.equal(start.json().mode, 'active'); assert.match(start.json().next_action, /planner unavailable/u);
   assert.equal(w.start(w.fixture).code, 1, 'a start applies once');
 
   // The installed mc reads the recorded start, and says it runs nothing.
   const status = w.mc(['status', PROGRAMME, '--json']).json();
   assert.equal(status.mode, 'active'); assert.equal(status.activation.by, 'Martin'); assert.equal(status.activation.build.class, 'fast');
   assert.equal(status.planned_stop.target, 'design-review'); assert.equal(status.execution.supported, false);
-  assert.equal(status.next_action, 'none — this installation cannot run autonomous work');
+  assert.equal(status.next_action, 'planner unavailable — this installation cannot run autonomous work');
 
   // Headless sessions, as fake tool processes, may read the report but cannot change the mode.
   const started = w.bytes();

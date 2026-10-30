@@ -44,9 +44,10 @@ failed scans preserve both the programme journal and the damaged source.
 The optional, injected runner capability `autonomous.programmeJobs` enables this
 scan during `queue()` and returns pending programme IDs. It does not launch them;
 without the capability the v1 queue and its return shape remain unchanged.
-The additional injected `programmePlan` capability connects those IDs to the
-[guarded headless launcher](mc-programme-plan.md); neither capability has a
-production activation command.
+The former `programmePlan` launcher no longer consumes those IDs. This
+installation reports the planner unavailable; the pending events and journal
+remain durable for a future consumer. The public planner envelope commands are
+removed, and no capability launches a headless planner here.
 
 ## Effects, not exactly-once processes
 

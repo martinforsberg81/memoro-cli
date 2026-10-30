@@ -39,8 +39,8 @@ head, branch and main target before and after the separate review session.
 The full start context is bounded by the existing session-start byte limit.
 
 The public command dispatcher refuses unknown commands and mutations for
-`MC_AUTONOMOUS_ROLE=review`. Only help/status, gate, hooks and autonomous-project
-show/report are available. Publish, merge (including admin), legacy project and
+`MC_AUTONOMOUS_ROLE=review`. Only help/status, gate, hooks and goal show/report
+are available. Publish, merge (including admin), legacy project and
 step commands also guard their imported command entrypoints. Autonomous state
 writes check expected revision and exact active run/role under lock; a bound
 review can only submit its report, not release itself, change scope, mark
@@ -49,7 +49,7 @@ not OS isolation against a malicious process changing its environment/files.
 
 ## Report lifecycle
 
-Submit `mc autonomous-project report <programme>/<project>
+Submit `mc goal report <programme>/<goal>
 --expected-revision <n> --input-file <json>` from the active review. Input is:
 
 ```json

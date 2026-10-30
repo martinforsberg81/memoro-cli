@@ -39,7 +39,7 @@ const FIRST = { 'first.js': 'export const first = 1;\n' };
 async function opened(t, options) {
   const w = programmeWorld(t, options);
   assert.equal((await w.start()).code, 0);
-  w.open(PROJECT, { success_criteria: SHORT });
+  await w.open(PROJECT, { success_criteria: SHORT });
   return w;
 }
 /** A measured follow-up on landed main, without a confirmation transition. */
@@ -76,7 +76,7 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.equal(w.programme().planner_jobs.mode, 'active');
 
   // Plan alone creates the goal: criteria, no prescribed steps.
-  w.open();
+  await w.open();
   assert.equal(w.state().phase, 'ready'); assert.equal(w.state().contract.steps, undefined);
 
   // Session 1 completes a criterion past the soft bound: it closes, gates green,
@@ -124,14 +124,14 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   let status = programmeStatus(w.root, PROGRAMME, supported);
   assert.equal(status.goals[0].evidence.quality, 'review findings for plan');
   assert.deepEqual(status.goals[0].review.findings, ['second() ignores the first behaviour.']);
-  assert.equal(status.goals[0].next_action, 'plan decides the next step for this goal');
+  assert.equal(status.goals[0].next_action, 'planner unavailable — headless queue consumption is not implemented');
   assert.ok(status.plan.pending_events >= 1);
   let plan = w.plan('plan-review');
   assert.ok(plan.events().includes('review'));
   const resume = plan.intent('resume-project');
   assert.throws(() => plan.apply(resume), /review findings require/u);
   plan.cancel(resume.id, 'Revise the goal with the review finding.');
-  plan.decide('revise-project', PROJECT, { ...w.state().contract, goal_revision: 2,
+  plan.decide('revise-project', PROJECT, { ...w.state().contract, goal_revision: w.state().goal_revision + 1,
     instruction: ['Repair second() so it keeps the first behaviour, and remeasure every criterion.'] });
   plan.decide('resume-project'); plan.finish();
   assert.equal(w.state().phase, 'ready'); assert.deepEqual(w.state().ownership, { branch: PROJECT, pr: 1 });
