@@ -1,7 +1,7 @@
 /** A v1 project with fixed steps beside an autonomous programme, in one runner
  * on one real repository (`autonomy-lifecycle-fixture.js`). V1 keeps its
- * selection, prompt, plan and merge door; the programme runs only after a
- * deliberate start, and pause or a planned stop never touches v1 work. */
+ * selection, prompt, plan and merge door; the headless planner runs only after
+ * a deliberate autonomy on, and off or a planned stop never touches v1 work. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,8 +35,7 @@ async function started(t) {
   await w.open(PROJECT, { success_criteria: SHORT });
   return w;
 }
-const pause = w => w.cli(['pause', PROGRAMME, '--by', 'Martin']);
-const resume = w => w.cli(['resume', PROGRAMME, '--expected-revision', String(w.programme().revision), '--by', 'Martin']);
+const off = w => w.cli(['autonomy', PROGRAMME, 'off', '--by', 'Martin']);
 
 test('a v1 project and a v2 goal share one runner and its lane cap; v1 keeps its prompt, plan and merge door', async t => {
   const w = await started(t); const v1 = legacy(w);
@@ -79,7 +78,7 @@ test('nothing activates an existing programme: status, reconciliation, a capabil
 
   const status = await w.cli(['status', PROGRAMME, '--json'], { capabilities: undefined });
   assert.equal(status.code, 0, status.err);
-  assert.equal(JSON.parse(status.out).mode, 'inactive'); assert.equal(JSON.parse(status.out).execution.supported, false);
+  assert.equal(JSON.parse(status.out).mode, 'off'); assert.equal(JSON.parse(status.out).execution.supported, false);
   // The runner's opt-in scan reads the programme and starts nothing.
   assert.deepEqual(reconcileProgrammeQueue(w.root), []);
   assert.equal(w.programme().planner_jobs?.mode ?? 'inactive', 'inactive');
@@ -101,11 +100,11 @@ test('nothing activates an existing programme: status, reconciliation, a capabil
   assert.equal(w.programme().planner_jobs?.mode ?? 'inactive', 'inactive'); assert.equal(w.state().phase, 'ready');
 });
 
-test('pause disables only planner claims; sent build, review and merge continue beside unchanged v1', async t => {
+test('autonomy off disables only planner claims; sent build, review and merge continue beside unchanged v1', async t => {
   const w = await started(t); const v1 = legacy(w);
-  w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready', during: async () => assert.equal((await pause(w)).code, 0) });
+  w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready', during: async () => assert.equal((await off(w)).code, 0) });
   assert.equal(await w.run(), 'ran');
-  assert.equal(w.programme().planner_jobs.mode, 'paused');
+  assert.equal(w.programme().autonomy.enabled, false);
   assert.equal(w.state().phase, 'review_ready'); assert.equal(w.state().publication.phase, 'handoff_committed');
   const head = git(w.cwd(), 'rev-parse', 'HEAD'); const status = git(w.cwd(), 'status', '--porcelain');
   assert.deepEqual(reconcileProgrammeQueue(w.root), [], 'new headless planner claims stay off');
@@ -118,9 +117,9 @@ test('pause disables only planner claims; sent build, review and merge continue 
   assert.equal((await w.land()).landed, true);
   assert.deepEqual(w.hub.merges.map(item => [item.pr, item.head]), [[1, head]]);
   assert.equal(w.hub.created(), 1); assert.equal(w.reviews.length, 1); assert.equal(w.builds.length, 1); assert.equal(w.legacy.length, 1);
-  assert.equal(w.programme().planner_jobs.mode, 'paused');
-  assert.equal((await resume(w)).code, 0);
-  assert.deepEqual(w.programme().planner_jobs.control.map(item => item.operation), ['start', 'pause', 'resume']);
+  assert.equal(w.programme().autonomy.enabled, false);
+  assert.equal((await w.start()).code, 0);
+  assert.deepEqual(w.programme().planner_jobs.control.map(item => item.operation), ['autonomy-on', 'autonomy-off', 'autonomy-on']);
 });
 
 test('at a planner stop unresolved findings remain pending, v1 runs on, and foreground metadata changes no goal', async t => {
@@ -142,7 +141,7 @@ test('at a planner stop unresolved findings remain pending, v1 runs on, and fore
   assert.equal(await w.run(), 'skipped:autonomous-not-ready');
   assert.equal(w.next(w.record(), v1).name, 'legacy');
   assert.equal(await w.runner.runStep('legacy', w.world(w.record(), v1), { lane: 1 }), 'ran');
-  assert.equal((await pause(w)).code, 1, 'a reached stop is not paused away');
+  assert.equal((await off(w)).code, 0); assert.equal(w.programme().planner_jobs.mode, 'stopped', 'off leaves a reached stop reached');
   // Programme context is not a new source of goal assignment authority.
   mutateProgramme(w.root, PROGRAMME, 'metadata', programmeMetadata({ brief: 'docs/project/next/' }), { env: {}, revision: w.programme().revision });
   assert.equal(w.programme().metadata.brief, 'docs/project/next/');

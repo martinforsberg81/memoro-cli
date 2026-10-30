@@ -3,7 +3,7 @@
 `src/mc/programme-jobs.js` adds a planner outbox to the existing
 `PROGRAMME_STATE.json`, not another service or a replacement v1 register.
 Normal execution remains disabled. There is no production launcher or automatic
-activation. `mc programme start` ([programme operations](mc-programme-operations.md))
+activation. `mc programme autonomy on` ([programme operations](mc-programme-operations.md))
 is the only door from `inactive`, and it refuses on an installation without every
 control capability. Opening `mc plan` is unchanged.
 
@@ -81,7 +81,8 @@ the projection, just like a new effect checks it before writing project state.
 
 ## Explicit dispatch holds
 
-Pause preserves the queue and stops new claims/effects. Quota, network and
+Autonomy off preserves the queue and refuses only new claims; a held lease keeps
+its effects. Quota, network and
 resource waits require a retry instant; an external dependency may instead have
 no retry instant and stays explicitly waiting. Timed waits become eligible at
 reconciliation. Existing atomic effects can still be acknowledged while held.

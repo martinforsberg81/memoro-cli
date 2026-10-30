@@ -5,7 +5,7 @@ import { captureWorktree } from './session-gate-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readAutonomousState, readProgrammeState, startAutonomousBuild, observeProjectSessionControl } from './autonomous-state.js';
+import { programmePhaseHold, readAutonomousState, readProgrammeState, startAutonomousBuild, observeProjectSessionControl } from './autonomous-state.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { buildSessionStart, readCurrentHandoff } from './session-handoff.js';
 import { projectSessionObserver } from './session-supervision.js';
@@ -45,6 +45,8 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
     }
     if (mainIncidentHold(root, record.programme, record.project)) return skip('main-incident', 'shared main repair awaits its owning programme plan');
     if (capability.review && reviewRoutePending(root, state)) return { kind: 'review', flavor: 'autonomous', routing: true };
+    const phaseHold = programmePhaseHold(agreement, state.contract.programme_phase);
+    if (phaseHold) return skip('programme-phase', `goal waits: ${phaseHold}`);
     if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };
     if (state.phase !== 'ready') return skip('autonomous-not-ready', `autonomous project is ${state.phase}`);
     if (openPrs.some(pr => pr.number !== state.ownership.pr || pr.headRefName !== state.ownership.branch)) return skip('autonomous-pr-mismatch', 'an open PR does not match project ownership');

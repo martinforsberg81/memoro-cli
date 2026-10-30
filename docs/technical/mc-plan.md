@@ -219,8 +219,8 @@ never triggered.
    An autonomous (v2) goal is never the runner's to archive: the programme
    archive is its only door (`autonomousArchiveFacts`). It refuses while any v2
    goal is not confirmed by plan — landed is not confirmed — or its state is
-   unreadable, while the programme's job mode is anything but not started or
-   resting at a reached planned stop (active, paused, waiting, exception), and
+   unreadable, while autonomy is on and the planner is anything but resting at a
+   reached stop (active, waiting, exception), and
    while a plan session holds its lease. Until then the programme's records —
    `PROGRAMME_STATE.json`, each goal's `AUTONOMOUS_STATE.json`, plans and
    drafts — stay in `~/mc/programs/<programme>/`; after, they move with the

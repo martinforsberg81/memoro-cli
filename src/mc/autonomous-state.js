@@ -81,7 +81,27 @@ function programmeState(paths) {
   if (state.active_run !== null) actorCheck(state.active_run);
   if (new Set(state.runs.map(run => { actorCheck(run); return run.run_id; })).size !== state.runs.length) throw new Error('duplicate run ID');
   if (state.active_run && !state.runs.some(run => isDeepStrictEqual(run, state.active_run))) throw new Error('active programme run is missing from history');
+  const phases = state.phases;
+  if (phases !== undefined && (!Array.isArray(phases) || phases.some((item, index) => !Number.isSafeInteger(item?.n) || item.n < 1 || !text(item.name) || !text(item.purpose)
+    || (index > 0 && item.n <= phases[index - 1].n) || (item.closed !== null && !text(item.closed?.reference))))) throw new Error('invalid programme phases; preserve state for recovery');
+  const autonomy = state.autonomy;
+  if (autonomy !== undefined && (typeof autonomy?.enabled !== 'boolean' || (autonomy.stop !== null && !text(autonomy.stop)))) throw new Error('invalid programme autonomy; preserve state for recovery');
   return state;
+}
+/** Programme phases are ordering; a goal's runtime `phase` is its lifecycle.
+ * An undeclared number has no ordering of its own, so goals written before
+ * phases existed keep running; only declared, unclosed phases hold later ones. */
+export function programmePhaseHold(state, programmePhase) {
+  const phases = state.phases || [];
+  if (phases.find(item => item.n === programmePhase)?.closed) return `programme phase ${programmePhase} is closed`;
+  const earlier = phases.find(item => item.n < programmePhase && !item.closed);
+  return earlier ? `programme phase ${earlier.n} is not closed` : null;
+}
+function assertGoalPhase(state, programmePhase) {
+  const phases = state.phases || [];
+  const phase = phases.find(item => item.n === programmePhase);
+  if (phase?.closed) throw new Error(`programme phase ${programmePhase} is closed; create the goal in an open phase`);
+  if (phases.length && !phase) throw new Error(`programme phase ${programmePhase} is not declared; add it with mc programme phase add`);
 }
 function emptyProgramme(programme) {
   return { schema: 'mc-programme-state', version: GOAL_STATE_VERSION,
@@ -193,11 +213,14 @@ export function readProgrammePlanSnapshot(root, programme, deps = {}) {
   }, deps);
 }
 
-function plannerBoundary(root, programme, state) {
+function goalOwned(root, programme, state) {
   const claimPath = join(root, 'runner', 'autonomous-builds', programme, `${state.contract.project_id}.claim`);
   const claim = existsSync(claimPath) ? readClaim(claimPath) : null;
-  if (state.active_run || ['running', 'handoff_requested', 'closing', 'publishing', 'reviewing', 'landing'].includes(state.phase)
-    || existsSync(claimPath) && (!claim || processAlive(claim.pid))) {
+  return !!state.active_run || ['running', 'handoff_requested', 'closing', 'publishing', 'reviewing', 'landing'].includes(state.phase)
+    || existsSync(claimPath) && (!claim || processAlive(claim.pid));
+}
+function plannerBoundary(root, programme, state) {
+  if (goalOwned(root, programme, state)) {
     throw new Error('affected runs must close at a safe boundary; preserve the open PR and retry with a fresh revision');
   }
 }
@@ -231,6 +254,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
     if (state.phase === 'landed') throw new Error('delivered scope is immutable; create remaining work as another goal');
     if (intent.kind === 'revise-project') {
       assignmentInProgramme(agreement, intent.input);
+      if (intent.input.programme_phase !== state.contract.programme_phase) assertGoalPhase(agreement, intent.input.programme_phase);
       const invalid = autonomousRevisionProblems(state.contract, intent.input);
       if (invalid.length) throw new Error(invalid.join('; '));
       rejectRetiredCriteria(state.contracts, state.contract, intent.input);
@@ -287,6 +311,8 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
 function assertProgrammeDispatch(root, programme, state) {
   const incident = mainIncidentHold(root, programme, state.contract.project_id);
   if (incident) throw new Error(`shared main incident ${incident.id} awaits its owning programme plan`);
+  const hold = programmePhaseHold(programmeState(autonomousPaths(root, programme)), state.contract.programme_phase);
+  if (hold) throw new Error(`goal waits: ${hold}`);
   for (const item of state.plan_dependencies || []) {
     const dependency = projectState(autonomousPaths(root, programme, item.project));
     if (!reviewedLanding(dependency) || dependency.goal_revision !== item.goal_revision) throw new Error(`dependency ${item.project} awaits verified landing`);
@@ -388,13 +414,47 @@ export function releaseProgrammeRun(root, programme, actor, revision, deps = {})
     return save(paths.programme, state, { ...state, active_run: null }, deps);
   }, deps);
 }
+function addPhase(state, input) {
+  const phases = state.phases || [];
+  if (Object.keys(input).sort().join(',') !== 'n,name,purpose' || !Number.isSafeInteger(input.n) || input.n < 1 || !text(input.name) || !text(input.purpose)) throw new Error('a phase needs a positive number, a name and a purpose');
+  if (phases.some(item => item.n === input.n)) throw new Error(`programme phase ${input.n} already exists`);
+  if (phases.some(item => item.closed && item.n > input.n)) throw new Error('a new phase cannot precede a closed phase');
+  return [...phases, { ...input, closed: null }].sort((a, b) => a.n - b.n);
+}
+/** Explicit, never automatic: an empty phase holds later ones until closed. */
+function closePhase(root, programme, paths, state, input, actor, deps) {
+  const phases = state.phases || [];
+  const phase = phases.find(item => item.n === input.n);
+  if (!phase) throw new Error(`programme phase ${input.n} is not declared`);
+  if (!text(input.reference)) throw new Error('closing a phase needs a completion reference');
+  const earlier = phases.find(item => item.n < input.n && !item.closed);
+  if (earlier) throw new Error(`close programme phase ${earlier.n} first`);
+  const goals = readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name))
+    .map(item => autonomousPaths(root, programme, item.name)).filter(goal => existsSync(goal.project)).map(projectState);
+  for (const goal of goals.filter(item => item.contract.programme_phase === input.n)) {
+    const name = goal.contract.project_id;
+    if (goalOwned(root, programme, goal)) throw new Error(`phase goal ${name} is still owned`);
+    const completion = goalCompletion(goal);
+    if (!completion.done) throw new Error(`phase goal ${name} has not landed`);
+    if (completion.pending_follow_ups.length) throw new Error(`phase goal ${name} has unmeasured follow-ups: ${completion.pending_follow_ups.join(', ')}`);
+  }
+  const closed = { reference: input.reference, run_id: actor.run_id, role: actor.role, at: new Date(deps.now?.() ?? Date.now()).toISOString() };
+  return phases.map(item => item.n === input.n ? { ...item, closed } : item);
+}
 /** Minimal programme context, without draft/approval or launch authority. */
 export function mutateProgramme(root, programme, operation, input, { actor, revision, ...deps }) {
   return locked(root, programme, null, paths => {
     const previous = existsSync(paths.programme) ? programmeState(paths) : null;
+    if (operation === 'phase-close') {
+      const closed = previous?.phases?.find(item => item.n === input.n)?.closed;
+      if (closed && closed.reference !== input.reference) throw new Error(`programme phase ${input.n} is already closed with another reference`);
+      if (closed) return structuredClone(previous);
+    }
     expected(previous, revision);
     const state = previous || emptyProgramme(programme);
     const operationActor = planningActor(state, actor, deps);
+    if (operation === 'phase-add') return save(paths.programme, previous, { ...state, phases: addPhase(state, input) }, deps);
+    if (operation === 'phase-close') return save(paths.programme, previous, { ...state, phases: closePhase(root, programme, paths, state, input, operationActor, deps) }, deps);
     if (operation !== 'metadata') throw new Error('unsupported programme operation; draft/approve are not goal assignment authority');
     valid(validateProgrammeMetadata(input));
     if (input.id !== programme) throw new Error('programme identity cannot change');
@@ -425,6 +485,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
       return structuredClone(current);
     }
     valid(validateAutonomousProject(input, { programme: state.metadata, allowEmptyCriteria: true }));
+    assertGoalPhase(state, input.programme_phase);
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
     if (existsSync(paths.project)) projectState(paths); // diagnose old format without overwriting it
     if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');
@@ -494,6 +555,7 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       next.follow_up_observations = [...(state.follow_up_observations || []), record];
     } else if (operation === 'revise') {
       assignmentInProgramme(programmeState(paths), input);
+      if (input.programme_phase !== state.contract.programme_phase) assertGoalPhase(programmeState(paths), input.programme_phase);
       const problems = autonomousRevisionProblems(state.contract, input);
       if (problems.length) throw new Error(problems.join('; '));
       rejectRetiredCriteria(state.contracts, state.contract, input);

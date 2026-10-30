@@ -34,7 +34,7 @@ const expected = (state, revision) => {
 const empty = () => ({ version: 1, mode: 'inactive', wait: null, stop: null, events: [], pending: null, lease: null, operations: [], recoveries: [] });
 function jobs(state) {
   const value = state.planner_jobs === undefined ? empty() : state.planner_jobs;
-  if (!value || value.version !== 1 || !['inactive', 'active', 'paused', 'waiting', 'stopped', 'exception'].includes(value.mode)
+  if (!value || value.version !== 1 || !['inactive', 'active', 'waiting', 'stopped', 'exception'].includes(value.mode)
     || !['events', 'operations', 'recoveries'].every(key => Array.isArray(value[key]))
     || (value.pending !== null && (!stable(value.pending.id) || !Array.isArray(value.pending.event_ids) || !value.pending.event_ids.length))
     || (value.lease !== null && (!stable(value.lease.token) || !positive(value.lease.pid) || !positive(value.lease.expires_at)
@@ -58,7 +58,7 @@ function jobs(state) {
   }
   return value;
 }
-// `anyRevision` is only for idempotent holds (pause): no read-modify-write of
+// `anyRevision` is only for idempotent holds (autonomy off): no read-modify-write of
 // an operator's view, so a renewed lease must not turn it into a stale refusal.
 function transact(options, change) {
   return updateProgrammeRegister(options.root, options.programme, (state, paths) => {
@@ -90,16 +90,19 @@ export function recordProgrammeTrigger(options, event) {
   return transact(options, (state, journal) => { enqueue(state, journal, event); });
 }
 
-/** Future activation/operations seam, not production enablement. Pause/waits
- * retain pending events. A planned stop cannot silently turn back into active. */
+/** Future activation/operations seam, not production enablement. Waits retain
+ * pending events. A planned stop cannot silently turn back into active. */
 export function setProgrammeJobMode(options, { mode, wait = null, stop = null, event = null }) {
   return transact(options, (state, journal) => {
-    if (!['active', 'paused', 'waiting', 'stopped'].includes(mode)) throw new Error('explicit programme job mode required');
+    if (!['active', 'waiting', 'stopped'].includes(mode)) throw new Error('explicit programme job mode required');
     if (journal.mode === 'stopped') {
       if (mode === 'stopped' && stop === journal.stop && !event) return state;
       throw new Error('planned stop requires an explicit foreground planning restart before new claims');
     }
-    if (mode === 'active' && journal.mode === 'inactive' && event?.type !== 'activation') throw new Error('activation must persist its trigger');
+    if (mode === 'active' && journal.mode === 'inactive') {
+      if (event?.type !== 'activation') throw new Error('activation must persist its trigger');
+      state.autonomy = { enabled: true, stop: null };
+    }
     if (mode === 'waiting' && !validWait(wait)) throw new Error('wait names its condition and bounded retry or external dependency');
     if (mode === 'stopped' && !stable(stop)) throw new Error('stop must be an explicit stable ID');
     if (mode !== 'waiting' && wait !== null || mode !== 'stopped' && stop !== null) throw new Error('wait/stop must match mode');
@@ -121,10 +124,11 @@ function duration(ms) {
 }
 
 /** Reservation and event snapshot commit together. Builders use their existing
- * independent project reservations and shared resource lane, not this lease. */
+ * independent project reservations and shared resource lane, not this lease.
+ * Autonomy off refuses here and nowhere else: a held lease finishes its snapshot. */
 export function claimProgrammeJob(options) {
   return transact(options, (state, journal) => {
-    if (journal.mode !== 'active' || !journal.pending || journal.lease || state.active_run) return state;
+    if (!state.autonomy?.enabled || journal.mode !== 'active' || !journal.pending || journal.lease || state.active_run) return state;
     if (options.actor?.role !== 'plan' || !stable(options.actor.run_id) || Object.keys(options.actor).length !== 2
       || state.runs.some(item => item.run_id === options.actor.run_id) || !positive(options.pid)) throw new Error('a fresh planner run and owning pid are required');
     const now = instant(options);
@@ -261,7 +265,7 @@ export function reconcileProgrammeJobs(options, { dependencies = [] } = {}) {
     }
     const sources = projectTriggers(paths, options, state, journal);
     for (const event of [...sources.events, ...dependencies]) enqueue(state, journal, event);
-    if (journal.mode === 'active' && !state.active_run && !journal.pending && !sources.hasNextAction) {
+    if (state.autonomy?.enabled && journal.mode === 'active' && !state.active_run && !journal.pending && !sources.hasNextAction) {
       // Stable across repeated scans of unchanged work, including after ack.
       enqueue(state, journal, { id: `idle-${digest([state.metadata.id, sources.identities]).slice(0, 59)}`,
         type: 'idle', reference: `${paths.programme}#idle` });
@@ -280,7 +284,7 @@ export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = (
     try {
       const previous = readProgrammeState(root, entry.name);
       const state = reconcileProgrammeJobs({ root, programme: entry.name, revision: previous.revision, now, alive });
-      if (state.planner_jobs?.mode === 'active' && state.planner_jobs.pending && !state.active_run) pending.push(entry.name);
+      if (state.autonomy?.enabled && state.planner_jobs?.mode === 'active' && state.planner_jobs.pending && !state.active_run) pending.push(entry.name);
     } catch (error) { say(`${entry.name}: programme job reconciliation refused — ${error.message}`); }
   }
   return pending;
@@ -378,11 +382,13 @@ export function yieldProgrammeJob(options, reason, { retry = false } = {}) {
   });
 }
 
-/** Stop intent and effect fit in one authoritative write. No agreement edits. */
-export function reachProgrammePlanStop(options, input) {
+/** Stop intent and effect fit in one authoritative write. No agreement edits.
+ * Foreground and leased planning share it; it leaves `autonomy` as the user set it. */
+export function reachProgrammeStop(options, input) {
   return transact(options, (state, journal, paths) => {
-    const lease = owned(state, journal, options);
-    if (!input || Object.keys(input).sort().join(',') !== 'id,reference,stop' || !stable(input.id)
+    const lease = options.actor ? owned(state, journal, options) : null;
+    if (!lease && (state.active_run || journal.lease)) throw new Error('the programme already has an active run');
+    if (!input || Object.keys(input).some(key => !['id', 'reference', 'stop'].includes(key)) || !stable(input.id)
       || typeof input.reference !== 'string' || !input.reference.trim()) throw new Error('stop decision needs identity and evidence reference');
     const previous = journal.operations.find(item => item.intent.id === input.id);
     const intent = { ...input, kind: 'reach-stop' };
@@ -390,8 +396,8 @@ export function reachProgrammePlanStop(options, input) {
       if (!isDeepStrictEqual(previous.intent, intent)) throw new Error('planner operation ID already used with different content');
       return;
     }
-    if (lease.completion) throw new Error('completed planner must exit before new decisions');
-    if (journal.mode !== 'active' || !stable(input.stop)) throw new Error('stop needs an active planner and an explicit stable ID');
+    if (lease?.completion) throw new Error('completed planner must exit before new decisions');
+    if (journal.mode !== 'active' || (input.stop !== undefined && !stable(input.stop))) throw new Error('stop needs an active planner and an explicit stable ID');
     if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before stopping');
     for (const entry of readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && stable(item.name))) {
       const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
@@ -400,8 +406,10 @@ export function reachProgrammePlanStop(options, input) {
       if (project.active_run || ['running', 'handoff_requested', 'closing', 'publishing', 'reviewing', 'landing'].includes(project.phase)
         || projectClaimHeld(options.root, options.programme, entry.name)) throw new Error('affected runs must close before reaching the planned stop');
     }
-    journal.operations.push({ intent, status: 'applied', result: { stop: input.stop } });
-    journal.mode = 'stopped'; journal.stop = input.stop;
+    const stop = input.stop ?? input.id;
+    journal.operations.push({ intent, status: 'applied', result: { stop } });
+    journal.mode = 'stopped'; journal.stop = stop;
+    journal.reached_stop = { stop, reference: input.reference, condition: state.autonomy?.stop ?? null, run_id: lease?.actor.run_id ?? null };
   });
 }
 

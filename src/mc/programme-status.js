@@ -3,7 +3,7 @@
  * observation is `unknown`, never zero, green or done. */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { readProgrammeState, readAutonomousState, currentAutonomousEvidence, PUBLICATION_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
+import { programmePhaseHold, readProgrammeState, readAutonomousState, currentAutonomousEvidence, PUBLICATION_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
 import { STABLE_ID_RE } from './goal-contract.js';
 import { goalCompletion } from './goal-followup.js';
 import { installationCapabilities, missingCapabilities } from './programme-control.js';
@@ -60,6 +60,7 @@ function goalAction(root, state, holds) {
   if (run?.role === 'plan') return `plan run ${run.run_id} holds the goal`;
   if (holds.incident) return `wait for shared main repair ${holds.incident}`;
   if (holds.claim) return 'wait for the builder claim to be reconciled';
+  if (holds.phase) return `wait: ${holds.phase}`;
   if (BUSY.includes(state.phase) && state.phase !== 'landing') return `recover the interrupted ${state.phase} session`;
   if (state.phase === 'ready') return 'start a build session';
   if (state.phase === 'review_ready') return 'start an independent review';
@@ -95,7 +96,8 @@ export function goalStatus(root, programme, project) {
     findings: state.evidence.reviews.find(item => item.id === last.id)?.findings || [] } : null;
   const control = state.session_control || null;
   const context = control?.context;
-  const holds = { incident: mainIncidentHold(root, programme, project)?.id || null, claim: null };
+  const holds = { incident: mainIncidentHold(root, programme, project)?.id || null, claim: null, phase: null };
+  if (['ready', 'review_ready'].includes(state.phase)) holds.phase = programmePhaseHold(readProgrammeState(root, programme), state.contract.programme_phase);
   const claim = claimHolder(root, programme, project);
   if (claim && !state.active_run && claim.alive !== false) holds.claim = claim;
   const builders = (state.model_history || []).filter(item => item.goal_revision === state.goal_revision).map(item => model(item.model));
@@ -124,6 +126,7 @@ export function goalStatus(root, programme, project) {
     waits: [
       ...(holds.incident ? [`shared main repair ${holds.incident}`] : []),
       ...(holds.claim ? [`builder claim held by pid ${holds.claim.pid ?? UNKNOWN}`] : []),
+      ...(holds.phase ? [holds.phase] : []),
       ...(state.dependency_release?.status === 'waiting' ? [`dependencies ${state.plan_dependencies.map(item => item.project).join(', ')}`] : []),
     ],
     next_action: goalAction(root, state, holds),
@@ -141,10 +144,9 @@ function legacyGoals(root, programme) {
 
 function programmeAction(status, journal) {
   const mode = status.mode;
-  if (mode === 'inactive') return 'planner unavailable — not started; sent goals continue';
-  if (mode === 'paused') return status.in_flight.length
-    ? `none new — paused; ${status.in_flight.length} started operation${status.in_flight.length === 1 ? '' : 's'} finishing`
-    : 'none — paused; mc programme resume';
+  if (mode === 'off') return status.in_flight.length
+    ? `no new planner — autonomy off; ${status.in_flight.length} started operation${status.in_flight.length === 1 ? '' : 's'} finishing`
+    : 'no headless planner — autonomy off; sent goals continue';
   if (mode === 'stopped') return `none — planned stop ${journal.stop} reached; new headless planning is stopped`;
   if (mode === 'exception') return `none — exception ${journal.exception.code || ''}: ${journal.exception.reason}`.replace(' :', ':');
   if (mode === 'waiting') return journal.wait.until === null ? `wait for external ${journal.wait.reason}` : `retry after ${iso(journal.wait.until)} (${journal.wait.kind})`;
@@ -175,9 +177,6 @@ export function programmeStatus(root, programme, deps = {}) {
   const projects = readdirSync(dir, { withFileTypes: true }).filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name)
     && existsSync(join(dir, item.name, AUTONOMOUS_STATE_FILE))).map(item => item.name).sort();
   const goals = projects.map(project => goalStatus(root, programme, project));
-  const activation = journal.activation || null;
-  const target = activation?.stop || null;
-  const stopOf = id => id;
   const lease = journal.lease ? { run_id: journal.lease.actor.run_id, expires_at: iso(journal.lease.expires_at), job_id: journal.lease.job_id } : null;
   const in_flight = [
     ...(lease ? [`plan ${lease.run_id} (lease until ${lease.expires_at})`] : []),
@@ -186,18 +185,21 @@ export function programmeStatus(root, programme, deps = {}) {
     ...goals.filter(goal => goal.merge?.status === 'pending').map(goal => `merge of #${goal.merge.pr} for ${goal.project} (sent goal; independent evidence rechecked at the merge door)`),
   ];
   const pendingOperations = (journal.operations || []).filter(item => item.status === 'pending').map(item => `${item.intent.kind} ${item.intent.id}`);
+  const inPhase = n => goals.filter(goal => goal.programme_phase === n);
   const status = {
-    programme, state_revision: state.revision, mode: journal.mode, execution,
+    // `mode` is the planner's; the user's preference is `autonomy`, kept whole
+    // when a stop is reached.
+    programme, state_revision: state.revision, mode: state.autonomy?.enabled ? journal.mode : 'off', execution,
     metadata,
-    activation: activation ? { at: activation.at, by: activation.by,
-      build: { class: activation.profiles.build.class }, review: { model: model(activation.profiles.review.model) } } : null,
-    planned_stop: { target, condition: target ? stopOf(target) : null, reached: journal.mode === 'stopped' ? journal.stop : null,
-      agreed: target ? [target] : [] },
+    autonomy: { enabled: !!state.autonomy?.enabled, stop: state.autonomy?.stop ?? null, by: state.autonomy?.by ?? null, at: state.autonomy?.at ?? null,
+      reached: journal.mode === 'stopped' ? { stop: journal.stop, reference: journal.reached_stop?.reference ?? null } : null },
+    phases: (state.phases || []).map(item => ({ n: item.n, name: item.name, purpose: item.purpose, closed: item.closed?.reference ?? null,
+      goals: inPhase(item.n).length, landed: inPhase(item.n).filter(goal => goal.done).length,
+      pending_follow_ups: inPhase(item.n).flatMap(goal => goal.pending_follow_ups || []).length })),
     plan: { owner: 'plan', active_run: state.active_run, lease, pending_events: journal.pending?.event_ids.length || 0,
       pending_operations: pendingOperations },
     wait: journal.mode === 'waiting' ? { kind: journal.wait.kind, reason: journal.wait.reason, until: journal.wait.until === null ? null : iso(journal.wait.until) } : null,
     exception: journal.mode === 'exception' ? { code: journal.exception.code || null, reason: journal.exception.reason } : null,
-    pause: journal.pause ? { by: journal.pause.by, at: journal.pause.at, previous: journal.pause.previous.mode } : null,
     goals, legacy: legacyGoals(root, programme), in_flight,
   };
   status.next_action = programmeAction(status, journal);
@@ -213,11 +215,11 @@ export function autonomySection({ root, deps = {} } = {}) {
   return { programmes: names.map(name => {
     const status = programmeStatus(root, name, deps);
     return { programme: name, mode: status.mode, goals: status.goals.length, in_flight: status.in_flight.length,
-      stop: status.planned_stop?.target || null, next_action: status.next_action, problem: status.problem || null };
+      stop: status.autonomy?.stop || null, next_action: status.next_action, problem: status.problem || null };
   }) };
 }
 
-/** `mc programme capabilities`: whether start can succeed here and, per
+/** `mc programme capabilities`: whether autonomy on can succeed here and, per
  * control capability and tool transport, what is built, proven and missing. */
 export function capabilityReport(deps = {}) {
   const report = installationCapabilities(deps);
@@ -236,7 +238,7 @@ const clip = (value, max) => {
 export function renderCapabilities(report) {
   const out = [report.supported ? 'autonomous execution — supported by this installation'
     : `autonomous execution — not supported here: ${report.reason || 'unsupported'}`];
-  if (!report.supported) out.push(`  start refuses — missing ${report.missing.join(', ')}`);
+  if (!report.supported) out.push(`  autonomy on refuses — missing ${report.missing.join(', ')}`);
   const sub = (key, value) => out.push(`    ${key.padEnd(9)} ${value}`);
   if (report.capabilities.length) { out.push(''); out.push('CAPABILITIES'); }
   for (const item of report.capabilities) {
@@ -258,23 +260,25 @@ export function renderProgrammeStatus(status) {
   row('execution', status.execution.supported ? 'supported by this installation'
     : `not supported here — ${status.execution.reason || 'unsupported'} (missing ${status.execution.missing.join(', ')})`);
   row('programme', `${status.metadata.brief} · state revision ${status.state_revision}`);
-  if (status.activation) row('started', `${status.activation.at} by ${status.activation.by} · build ${status.activation.build.class} · review ${status.activation.review.model}`);
-  else row('started', 'planner unavailable — sent goals continue');
-  row('stop', status.planned_stop.target ? `runs to ${status.planned_stop.target} — ${clip(status.planned_stop.condition, 70)}${status.planned_stop.reached ? ' · reached' : ''}`
-    : `none chosen · agreed stops: ${status.planned_stop.agreed.join(', ') || 'none'}`);
+  const { autonomy } = status;
+  row('autonomy', autonomy.enabled ? `on · ${autonomy.at ?? UNKNOWN} by ${autonomy.by ?? UNKNOWN}` : 'off — sent goals continue; no new headless planner');
+  row('stop', `${autonomy.stop ? clip(autonomy.stop, 70) : 'none set'}${autonomy.reached ? ` · reached ${autonomy.reached.stop}${autonomy.reached.reference ? ` — ${clip(autonomy.reached.reference, 50)}` : ''}` : ''}`);
   const plan = status.plan;
   row('plan', `owns goals and follow-ups · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
-  if (status.pause) row('paused', `${status.pause.at} by ${status.pause.by} (was ${status.pause.previous})`);
   if (status.wait) row('wait', `${status.wait.kind}: ${status.wait.reason}${status.wait.until ? ` · until ${status.wait.until}` : ' · external'}`);
   if (status.exception) row('exception', `${status.exception.code || UNKNOWN}: ${status.exception.reason}`);
   row('in flight', status.in_flight.length ? status.in_flight.join('; ') : 'nothing');
   row('next', status.next_action);
+  if (status.phases.length) { out.push(''); out.push('PHASES'); }
+  for (const item of status.phases) {
+    out.push(`  ${item.n} ${item.name} — ${clip(item.purpose, 70)} · ${item.closed ? `closed: ${clip(item.closed, 50)}` : 'open'} · ${item.landed}/${item.goals} landed · ${item.pending_follow_ups} follow-up${item.pending_follow_ups === 1 ? '' : 's'}`);
+  }
   out.push('');
   out.push('GOALS');
   if (!status.goals.length) out.push('  none yet — create assignments with mc goal new');
   for (const goal of status.goals) {
     if (goal.problem) { out.push(`  ${goal.project}  problem: ${goal.problem}`); out.push(`    next       ${goal.next_action}`); continue; }
-    out.push(`  ${goal.project}  ${goal.phase} · goal r${goal.goal_revision} · ${goal.work_class} · phase ${goal.programme_phase} · branch ${goal.branch || 'none'} · PR ${goal.pr ? `#${goal.pr}` : 'none'}`);
+    out.push(`  ${goal.project}  ${goal.phase} · goal r${goal.goal_revision} · ${goal.work_class} · programme phase ${goal.programme_phase} · branch ${goal.branch || 'none'} · PR ${goal.pr ? `#${goal.pr}` : 'none'}`);
     const sub = (key, value) => out.push(`    ${key.padEnd(10)} ${value}`);
     sub('criteria', goal.criteria.map(item => `${item.id} ${item.builder}${item.verification === 'after-integration' ? ' (after integration)' : ''}${item.review !== UNKNOWN ? `, review ${item.review}` : ''}`).join(' · '));
     sub('evidence', `${goal.evidence.quality} · ${goal.evidence.premerge_verified} of ${goal.evidence.premerge_total} premerge reported · gate ${goal.evidence.gate}${goal.evidence.stale_observations ? ` · ${goal.evidence.stale_observations} older-revision observations ignored` : ''}${goal.evidence.incomplete_attempts ? ` · ${goal.evidence.incomplete_attempts} incomplete attempts` : ''}`);

@@ -1,7 +1,7 @@
 /** Guarded headless plan facade. No production activation or model launch. */
 import { goalCompletion } from './goal-followup.js';
 import { applyProgrammeProjectOperation, readProgrammePlanSnapshot, readProgrammeState } from './autonomous-state.js';
-import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammePlanStop, holdProgrammePlan } from './programme-jobs.js';
+import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammeStop, holdProgrammePlan } from './programme-jobs.js';
 import { projectRecovery, readProgrammeIncidents } from './programme-recovery.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -10,7 +10,7 @@ export function decideProgrammePlan(options, intent) {
   if (['wait-programme', 'exception-programme'].includes(intent?.kind)) return holdProgrammePlan(options, intent);
   if (intent?.kind === 'reach-stop') {
     const { kind, ...input } = intent;
-    return reachProgrammePlanStop(options, input);
+    return reachProgrammeStop(options, input);
   }
   if (['create-project', 'main-repair'].includes(intent?.kind)) return createProgrammeJobProject(options, intent);
   const state = prepareProgrammeOperation(options, intent);
@@ -48,7 +48,7 @@ export function programmePlanContext(options) {
       const review = value.review_reports?.at(-1);
       return { project: goal.project, version: 2, repo: value.contract.repo, goal: short(value.contract.goal[0]),
         state_revision: value.revision, goal_revision: value.goal_revision,
-        phase: value.phase, active_run: value.active_run, ownership: value.ownership, ...goalCompletion(value),
+        programme_phase: value.contract.programme_phase, phase: value.phase, active_run: value.active_run, ownership: value.ownership, ...goalCompletion(value),
         dependencies: value.plan_dependencies || [], dependency_release: value.dependency_release || null, recovery: projectRecovery(value),
         criteria: value.contract.success_criteria.map(item => ({ id: item.id, verification: item.verification,
           status: value.evidence.builder.filter(record => record.goal_revision === value.goal_revision && record.criterion_id === item.id).at(-1)?.status || 'unknown' })),

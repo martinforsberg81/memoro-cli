@@ -28,7 +28,7 @@
  * Refused, with nothing touched, while any plan under the programme is still
  * on main in either repository (a done one is the runner's to archive first),
  * while an autonomous (v2) goal has not landed or has pending follow-ups, or the programme's
- * autonomous work is anything but not started or resting at a reached planned
+ * autonomous work has autonomy on and is anything but resting at a reached planned
  * stop (`autonomousArchiveFacts`), or while release would keep anything — uncommitted work, commits main
  * lacks, a shell standing in the directory, a file somebody put there. Main
  * goes first because it is the half that can fail on the network; a planning
@@ -100,8 +100,8 @@ export function archiveVerdict({
       + ' — its records stay with the programme');
   }
   if (autonomy?.problem) lines.push(`${programme}'s autonomous state is unreadable (${autonomy.problem}) — kept for recovery`);
-  else if (autonomy?.mode && !['inactive', 'stopped'].includes(autonomy.mode)) {
-    lines.push(`${programme} is ${autonomy.mode} — an autonomous programme is archived before its start or at a reached planned stop`);
+  else if (autonomy?.mode && !['off', 'stopped'].includes(autonomy.mode)) {
+    lines.push(`${programme} is ${autonomy.mode} — an autonomous programme is archived with autonomy off or at a reached stop`);
   } else if (autonomy?.planner) lines.push(`${programme}'s plan session ${autonomy.planner} still holds its lease`);
   if (autonomy?.pending_work) lines.push(`${programme} has pending autonomous work — reconcile it before archiving`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
@@ -244,7 +244,7 @@ export function autonomousArchiveFacts({ root, programme, plans = [] }) {
   if (!existsSync(paths.programme)) return { goals, mode: null };
   try {
     const state = readProgrammeState(root, programme); const journal = state.planner_jobs;
-    return { goals, mode: journal?.mode || 'inactive', planner: journal?.lease?.actor.run_id || state.active_run?.run_id || null,
+    return { goals, mode: state.autonomy?.enabled ? journal?.mode || 'inactive' : 'off', planner: journal?.lease?.actor.run_id || state.active_run?.run_id || null,
       pending_work: !!journal?.pending?.event_ids.length || !!journal?.operations.some(item => item.status === 'pending')
         || readProgrammeIncidents(root).some(item => item.status === 'open'
           && (item.owner === programme || item.dependents.some(item => item.programme === programme))) };

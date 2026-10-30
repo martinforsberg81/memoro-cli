@@ -4,7 +4,7 @@ export function reviewCommandRefusal(argv, { env = process.env, actor = null } =
   if (role === 'plan' && env.MC_PROGRAMME_LEASE) {
     const [verb, operation] = argv;
     if (['--help', '-h', 'help', '--version', 'status', 'hook'].includes(verb)) return null;
-    if (verb === 'programme' && ['show', 'status', 'capabilities'].includes(operation)) return null;
+    if (verb === 'programme' && ['show', 'status', 'capabilities', 'phase', 'stop'].includes(operation)) return null;
     if (verb === 'goal' && ['new', 'criterion', 'send', 'revise', 'show', 'done', 'recover', 'attempt', 'release'].includes(operation)) return null;
     return 'autonomous plan may only author goals within its programme; agreement edits, legacy mutations, build, publish and merge are denied';
   }

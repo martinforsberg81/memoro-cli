@@ -1,16 +1,24 @@
 /** Programme metadata is context, never goal assignment authority.
- * status/start/pause/resume are the operator's; start records an activation
- * only where the installation supports every control capability. */
-import { readFileSync } from 'node:fs';
-import { mutateProgramme, readProgrammeState } from '../autonomous-state.js';
+ * status/autonomy are the operator's; autonomy on records a preference only
+ * where the installation supports every control capability. phase and stop are
+ * ordinary planning verbs for foreground and leased sessions alike. */
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { autonomousPaths, mutateProgramme, readProgrammeState } from '../autonomous-state.js';
 import { autonomousCommandContext, operationArguments } from './autonomous-project.js';
 import { reviewCommandRefusal } from '../autonomous-review-guard.js';
-import { operatorRefusal, pauseProgramme, resumeProgramme, startProgramme } from '../programme-control.js';
+import { operatorRefusal, programmeAutonomyOff, programmeAutonomyOn } from '../programme-control.js';
+import { reachProgrammeStop } from '../programme-jobs.js';
 import { capabilityReport, programmeStatus, renderCapabilities, renderProgrammeStatus } from '../programme-status.js';
-import { readModels } from '../model-config.js';
 import { scanArgs } from './flags.js';
 
-const CONTROL = ['status', 'start', 'pause', 'resume'];
+const CONTROL = ['status', 'autonomy'];
+const PLANNING = ['phase', 'stop'];
+const REVISION_RE = /^(0|[1-9][0-9]*)$/u;
+const revisionFlag = raw => {
+  if (raw !== null && (!REVISION_RE.test(raw) || !Number.isSafeInteger(Number(raw)))) throw new Error('--expected-revision is a state revision');
+  return raw === null ? null : Number(raw);
+};
 
 /** `capabilities [--json]`: a read of this installation, no programme. */
 function capabilities(argv, deps, { stdout, stderr }) {
@@ -21,23 +29,43 @@ function capabilities(argv, deps, { stdout, stderr }) {
   return 0;
 }
 
-/** `status [--json]`, `start --expected-revision --stop --input-file`,
- * `pause [--expected-revision]`, `resume --expected-revision`. */
+/** `status <programme> [--json]`, `autonomy <programme> on|off
+ * [--stop <prose>] [--expected-revision <n>] [--by <name>]`. */
 function controlArguments(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--expected-revision', '--input-file', '--stop', '--by'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--expected-revision', '--stop', '--by'] });
   if (scanned.error) throw new Error(scanned.error);
-  const [operation, target, ...extra] = scanned.positional;
+  const [operation, target, setting, ...extra] = scanned.positional;
   if (!target || extra.length) throw new Error('an operation and target are required');
   const { json, stop, by } = scanned.flags;
-  const raw = scanned.flags['expected-revision'];
-  const file = scanned.flags['input-file'];
-  if (raw !== null && (!/^(0|[1-9][0-9]*)$/u.test(raw) || !Number.isSafeInteger(Number(raw)))) throw new Error('--expected-revision is a state revision');
-  const allowed = { status: ['json'], start: ['revision', 'input', 'stop'], pause: ['revision', 'by'], resume: ['revision', 'by'] }[operation];
-  const given = { json, revision: raw !== null, input: !!file, stop: !!stop, by: !!by };
-  if (Object.entries(given).some(([key, value]) => value && !allowed.includes(key))) throw new Error(`${operation} takes only ${allowed.map(key => `--${key === 'revision' ? 'expected-revision' : key === 'input' ? 'input-file' : key}`).join(', ') || 'a programme'}`);
-  if (['start', 'resume'].includes(operation) && raw === null) throw new Error('--expected-revision is required: read mc programme status first');
-  if (operation === 'start' && (!file || !stop)) throw new Error('start needs --stop <planned stop> and --input-file <profiles json>');
-  return { operation, target, json, stop, by, file, revision: raw === null ? null : Number(raw) };
+  const revision = revisionFlag(scanned.flags['expected-revision']);
+  if (operation === 'status') {
+    if (setting || stop || by || revision !== null) throw new Error('status takes only a programme and --json');
+    return { operation, target, json };
+  }
+  if (!['on', 'off'].includes(setting) || json) throw new Error('autonomy takes <programme> on|off');
+  if (setting === 'off' && stop) throw new Error('--stop belongs to autonomy on');
+  if (setting === 'on' && revision === null) throw new Error('--expected-revision is required: read mc programme status first');
+  return { operation, target, setting, stop: stop ?? null, by, revision };
+}
+
+/** `phase add <programme> <n> <name> --purpose <text>`, `phase close <programme> <n>
+ * --reference <ref>`, `stop <programme> --reference <ref>`; revision optional. */
+function planningArguments(argv) {
+  const scanned = scanArgs(argv, { strictValues: ['--expected-revision', '--purpose', '--reference'] });
+  if (scanned.error) throw new Error(scanned.error);
+  const { purpose, reference } = scanned.flags;
+  const revision = revisionFlag(scanned.flags['expected-revision']);
+  const [verb, ...rest] = scanned.positional;
+  if (verb === 'stop') {
+    if (rest.length !== 1 || !reference || purpose) throw new Error('stop takes <programme> --reference <evidence>');
+    return { operation: 'stop', target: rest[0], reference, revision };
+  }
+  const [action, target, number, name, ...extra] = rest;
+  if (!/^[1-9][0-9]*$/u.test(number || '') || !Number.isSafeInteger(Number(number)) || extra.length) throw new Error('phase takes add|close <programme> <n>');
+  const n = Number(number);
+  if (action === 'add' && name && purpose && !reference) return { operation: 'phase-add', target, input: { n, name, purpose }, revision };
+  if (action === 'close' && !name && reference && !purpose) return { operation: 'phase-close', target, input: { n, reference }, revision };
+  throw new Error('phase add needs <name> and --purpose; phase close needs --reference');
 }
 
 export async function run(argv, deps = {}) {
@@ -47,6 +75,7 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   if (argv[0] === 'capabilities') return capabilities(argv.slice(1), deps, { stdout, stderr });
   if (CONTROL.includes(argv[0])) return control(argv, deps, { stdout, stderr, env });
+  if (PLANNING.includes(argv[0])) return planning(argv, deps, { stdout, stderr, env });
   let args;
   try { args = operationArguments(argv, ['show', 'metadata']); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }
@@ -77,17 +106,32 @@ async function control(argv, deps, { stdout, stderr, env }) {
     const denied = operatorRefusal(env);
     if (denied) throw new Error(denied);
     const now = deps.now ? Number(deps.now()) : Date.now();
-    const by = args.by || env.USER || 'operator';
-    const options = { root, programme: args.target, revision: args.revision, now,
-      deps: { ...deps, catalog: deps.catalog || (() => readModels(env)) } };
-    if (args.operation === 'start') {
-      const input = JSON.parse((deps.readInput || (file => readFileSync(file, 'utf8')))(args.file));
-      startProgramme({ ...options, stop: args.stop }, input);
-    } else if (args.operation === 'pause') pauseProgramme({ ...options, by });
-    else resumeProgramme({ ...options, by });
+    const options = { root, programme: args.target, revision: args.revision, by: args.by || env.USER || 'operator', now, deps };
+    if (args.setting === 'on') programmeAutonomyOn({ ...options, stop: args.stop });
+    else programmeAutonomyOff(options);
     const status = programmeStatus(root, args.target, deps);
-    stdout.write(`${JSON.stringify({ programme: args.target, mode: status.mode, state_revision: status.state_revision,
+    stdout.write(`${JSON.stringify({ programme: args.target, mode: status.mode, autonomy: status.autonomy, state_revision: status.state_revision,
       in_flight: status.in_flight, next_action: status.next_action }, null, 2)}\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+}
+
+async function planning(argv, deps, { stdout, stderr, env }) {
+  let args;
+  try { args = planningArguments(argv); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }
+  try {
+    const { root, actor } = autonomousCommandContext(deps);
+    if (actor && actor.role !== 'plan') throw new Error('only planning roles may change the programme');
+    if (actor && env.MC_PROGRAMME && env.MC_PROGRAMME !== args.target) throw new Error('planner target must match the owning programme');
+    const token = deps.token || env.MC_PROGRAMME_LEASE;
+    const revision = args.revision ?? (existsSync(autonomousPaths(root, args.target).programme) ? readProgrammeState(root, args.target, deps).revision : 0);
+    const now = deps.now ? Number(deps.now()) : Date.now();
+    const result = args.operation === 'stop'
+      ? reachProgrammeStop({ root, programme: args.target, revision, actor, token, now, deps },
+        { id: `stop-${createHash('sha256').update(args.reference).digest('hex').slice(0, 40)}`, reference: args.reference })
+      : mutateProgramme(root, args.target, args.operation, args.input, { ...deps, env, actor, token, revision, now: () => now });
+    stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
@@ -96,12 +140,14 @@ export function usage() {
   return 'usage — mc programme show <programme>\n'
     + '        mc programme capabilities [--json]\n'
     + '        mc programme status <programme> [--json]\n'
-    + '        mc programme start <programme> --expected-revision <n> --stop <planned stop> --input-file <json>\n'
-    + '        mc programme pause <programme> [--expected-revision <n>] [--by <name>]\n'
-    + '        mc programme resume <programme> --expected-revision <n> [--by <name>]\n'
+    + '        mc programme autonomy <programme> on --expected-revision <n> [--stop "<condition>"] [--by <name>]\n'
+    + '        mc programme autonomy <programme> off [--expected-revision <n>] [--by <name>]\n'
+    + '        mc programme phase add <programme> <n> <name> --purpose <text> [--expected-revision <n>]\n'
+    + '        mc programme phase close <programme> <n> --reference <evidence> [--expected-revision <n>]\n'
+    + '        mc programme stop <programme> --reference <evidence> [--expected-revision <n>]\n'
     + '        mc programme metadata <programme> --expected-revision <n> --input-file <json>\n'
-    + '        Planner continuation is unavailable until headless queue consumption is implemented; use mc goal for assignments\n'
-    + '        start input: { "by", "build": { "class", "profile" }, "review": { "model" } }; start refuses\n'
-    + '        unless this installation supports every control capability — mc programme capabilities says\n'
-    + '        what it has and lacks; the installed runner supports none\n';
+    + '        Autonomy controls only new headless planner claims: sent goals, reviews and admitted merges continue.\n'
+    + '        autonomy on refuses unless this installation supports every control capability —\n'
+    + '        mc programme capabilities says what it has and lacks; the installed runner supports none.\n'
+    + '        Phases close explicitly, in order; only the earliest unclosed phase dispatches. Use mc goal for assignments.\n';
 }

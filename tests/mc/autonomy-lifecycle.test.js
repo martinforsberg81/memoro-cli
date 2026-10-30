@@ -174,13 +174,13 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.equal(w.state().phase, 'landed');
   assert.deepEqual(goalCompletion(w.state()).pending_follow_ups, []);
 
-  // The planned stop: nothing starts beyond it, not even by a resume.
+  // The planned stop: nothing starts beyond it, without the operator's explicit on.
   plan.stop(); plan.finish();
   status = programmeStatus(w.root, PROGRAMME, supported);
-  assert.equal(status.mode, 'stopped'); assert.equal(status.planned_stop.reached, 'design-review');
+  assert.equal(status.mode, 'stopped'); assert.equal(status.autonomy.reached.stop, 'design-review');
+  assert.equal(status.autonomy.enabled, true, 'a reached stop keeps the preference');
   assert.match(status.next_action, /planned stop design-review reached/u);
   assert.equal(w.next(w.record()), null);
-  assert.equal((await w.cli(['resume', PROGRAMME, '--expected-revision', String(w.programme().revision)])).code, 1);
   assert.throws(() => setProgrammeJobMode({ root: w.root, programme: PROGRAMME, revision: w.programme().revision }, { mode: 'active' }), /foreground planning restart/u);
   assert.equal(w.builds.length, 3); assert.equal(w.reviews.length, 2);
 

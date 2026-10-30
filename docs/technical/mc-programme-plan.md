@@ -17,8 +17,8 @@ goal-state boundary; `programme-plan-contract.js` is no longer needed.
 Headless queue consumption is not implemented. The runner does not launch a
 planner; `mc programme status` reports `planner unavailable` and pending events
 remain durable. This is distinct from build/review lifecycle handling and does
-not enable autonomous execution. The operator controls programme activation,
-pause and resume, but activation does not supply a queue consumer.
+not enable autonomous execution. The operator sets programme autonomy on or
+off, but autonomy on does not supply a queue consumer.
 
 ## Ordinary goal lifecycle
 

@@ -29,8 +29,9 @@ him the one thing.
 
 A plan is mc-plan v1 with fixed steps, or an ordinary versioned goal assignment
 authored with `mc goal`. Programme metadata is context, not approval authority.
-Headless queue consumption is unavailable here; this session never starts,
-pauses or resumes autonomous work.
+Headless queue consumption is unavailable here; this session never turns
+programme autonomy on or off. Phases are planning: `mc programme phase add` and
+`phase close` are yours when their conditions hold.
 
 @include _session-work.md
 

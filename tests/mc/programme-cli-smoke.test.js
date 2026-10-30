@@ -1,11 +1,11 @@
 /** The documented operator commands against a disposable programme, each a real
  * process: ordinary goal assignment creation without programme approval,
- * then `capabilities`, `status`, `start`, `pause` and `resume`. The installed
- * `mc` refuses to start it; a fixture installation that reports every
- * capability (`fixtures/programme-installation.js`, never a production switch)
- * starts and resumes it. Fake `codex` and `claude` binaries on PATH record every
+ * then `capabilities`, `status` and `autonomy on|off`. The installed `mc`
+ * refuses autonomy on; a fixture installation that reports every capability
+ * (`fixtures/programme-installation.js`, never a production switch) turns it
+ * on. Fake `codex` and `claude` binaries on PATH record every
  * invocation: no verb launches an agent, and a headless session driving them
- * cannot change the programme's mode. No model is called. */
+ * cannot change the programme's autonomy. No model is called. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,12 +22,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const INSTALLATION = join(HERE, 'fixtures', 'programme-installation.js');
 const MC_CLI = join(HERE, '..', '..', 'src', 'mc-cli.js');
 const PROGRAMME = 'disposable-programme';
-const PROFILE = { soft_active_ms: 100, upper_active_ms: 200, emergency_active_ms: 300, reserve_active_ms: 100,
-  soft_context: 0.5, upper_context: 0.7, emergency_context: 0.9, reserve_context: 0.1, context_stale_ms: 50,
-  closing_ms: 200, tool_wait_ms: 120, lane_wait_ms: 150, total_awake_ms: 1000,
-  no_progress_ms: 800, max_stagnant_sessions: 3, max_failures: 3 };
-const START = { by: 'Martin', build: { class: 'fast', profile: PROFILE }, review: { model: { tool: 'claude', model: 'opus', effort: 'high' } } };
-
 // A deterministic stand-in for a provider CLI: it records how it was called
 // and, as a headless session, runs one `mc programme` verb. No model, no network.
 const FAKE_TOOL = `#!${process.execPath}
@@ -63,7 +57,7 @@ function disposable(t) {
   w.bytes = () => readFileSync(w.state, 'utf8');
   w.revision = () => JSON.parse(w.bytes()).revision;
   w.tools = () => readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
-  w.start = run => run(['start', PROGRAMME, '--expected-revision', String(w.revision()), '--stop', 'design-review', '--input-file', w.file('start.json', START)]);
+  w.on = run => run(['autonomy', PROGRAMME, 'on', '--expected-revision', String(w.revision()), '--stop', 'design-review', '--by', 'Martin']);
 
   // Foreground programme context needs no draft/approve or reservation.
   const metadata = programmeMetadata({ id: PROGRAMME });
@@ -80,7 +74,7 @@ function disposable(t) {
   return w;
 }
 
-test('the installed mc reports what it lacks and refuses to start a disposable programme; nothing is written or launched', t => {
+test('the installed mc reports what it lacks and refuses autonomy on a disposable programme; nothing is written or launched', t => {
   const w = disposable(t);
   const report = w.mc(['capabilities', '--json']);
   assert.equal(report.code, 0, report.err);
@@ -98,66 +92,63 @@ test('the installed mc reports what it lacks and refuses to start a disposable p
   const status = w.mc(['status', PROGRAMME, '--json']);
   assert.equal(status.code, 0, status.err);
   const read = status.json();
-  assert.equal(read.mode, 'inactive'); assert.equal(read.execution.supported, false);
-  assert.deepEqual(read.metadata, programmeMetadata({ id: PROGRAMME })); assert.deepEqual(read.planned_stop.agreed, []);
-  assert.deepEqual(read.legacy, ['legacy']); assert.match(read.next_action, /not started/u);
+  assert.equal(read.mode, 'off'); assert.equal(read.execution.supported, false);
+  assert.deepEqual(read.metadata, programmeMetadata({ id: PROGRAMME })); assert.equal(read.autonomy.enabled, false);
+  assert.deepEqual(read.legacy, ['legacy']); assert.match(read.next_action, /autonomy off/u);
   assert.match(w.mc(['status', PROGRAMME]).out, /execution\s+not supported here/u);
 
   const before = w.bytes();
-  const start = w.start(w.mc);
-  assert.equal(start.code, 1); assert.match(start.err, /not activated in this installation — missing programme-jobs/u);
-  const pause = w.mc(['pause', PROGRAMME, '--by', 'Martin']);
-  assert.equal(pause.code, 1); assert.match(pause.err, /never started/u);
-  const resume = w.mc(['resume', PROGRAMME, '--expected-revision', String(w.revision()), '--by', 'Martin']);
-  assert.equal(resume.code, 1); assert.match(resume.err, /not activated in this installation/u);
+  const on = w.on(w.mc);
+  assert.equal(on.code, 1); assert.match(on.err, /not activated in this installation — missing programme-jobs/u);
+  assert.equal(w.mc(['autonomy', PROGRAMME, 'off', '--by', 'Martin']).code, 0, 'off is already the preference');
   assert.equal(w.bytes(), before, 'refusals write nothing');
   assert.deepEqual(w.tools(), [], 'no agent was launched');
   assert.equal(readFileSync(w.legacy, 'utf8'), w.legacyBytes);
 });
 
-test('on a fixture installation start, pause and resume drive the disposable programme; headless sessions cannot, and no agent is launched', t => {
+test('on a fixture installation autonomy on and off drive the disposable programme; headless sessions cannot, and no agent is launched', t => {
   const w = disposable(t);
-  const start = w.start(w.fixture);
-  assert.equal(start.code, 0, start.err);
-  assert.equal(start.json().mode, 'active'); assert.match(start.json().next_action, /planner unavailable/u);
-  assert.equal(w.start(w.fixture).code, 1, 'a start applies once');
+  const on = w.on(w.fixture);
+  assert.equal(on.code, 0, on.err);
+  assert.equal(on.json().mode, 'active'); assert.match(on.json().next_action, /planner unavailable/u);
+  const once = w.revision();
+  assert.equal(w.on(w.fixture).code, 0); assert.equal(w.revision(), once, 'a repeated on is a read');
 
-  // The installed mc reads the recorded start, and says it runs nothing.
+  // The installed mc reads the recorded preference, and says it runs nothing.
   const status = w.mc(['status', PROGRAMME, '--json']).json();
-  assert.equal(status.mode, 'active'); assert.equal(status.activation.by, 'Martin'); assert.equal(status.activation.build.class, 'fast');
-  assert.equal(status.planned_stop.target, 'design-review'); assert.equal(status.execution.supported, false);
+  assert.equal(status.mode, 'active'); assert.equal(status.autonomy.by, 'Martin');
+  assert.equal(status.autonomy.stop, 'design-review'); assert.equal(status.execution.supported, false);
   assert.equal(status.next_action, 'planner unavailable — this installation cannot run autonomous work');
 
-  // Headless sessions, as fake tool processes, may read the report but cannot change the mode.
+  // Headless sessions, as fake tool processes, may read the report but cannot change autonomy.
   const started = w.bytes();
   const read = w.session('review', ['capabilities', '--json']);
   assert.equal(read.code, 0, read.err); assert.equal(read.json().supported, false);
-  const step = w.session('step', ['pause', PROGRAMME, '--by', 'step']);
+  const step = w.session('step', ['autonomy', PROGRAMME, 'off', '--by', 'step']);
   assert.equal(step.code, 1); assert.match(step.err, /belong to the operator/u);
-  const review = w.session('review', ['resume', PROGRAMME, '--expected-revision', String(w.revision())]);
+  const review = w.session('review', ['autonomy', PROGRAMME, 'on', '--expected-revision', String(w.revision())]);
   assert.equal(review.code, 1); assert.match(review.err, /autonomous review may only examine and report/u);
-  const plan = w.session('plan', ['pause', PROGRAMME, '--by', 'plan']);
+  const plan = w.session('plan', ['autonomy', PROGRAMME, 'off', '--by', 'plan']);
   assert.equal(plan.code, 1); assert.match(plan.err, /belong to the operator/u);
   assert.equal(w.bytes(), started);
 
-  // Pause needs no capability; the installed mc holds the programme.
-  const pause = w.mc(['pause', PROGRAMME, '--by', 'Martin']);
-  assert.equal(pause.code, 0, pause.err); assert.equal(pause.json().mode, 'paused');
-  const paused = w.revision();
-  assert.equal(w.mc(['pause', PROGRAMME, '--by', 'Martin']).code, 0); assert.equal(w.revision(), paused, 'a repeated pause is a read');
+  // Off needs no capability; the installed mc records it.
+  const off = w.mc(['autonomy', PROGRAMME, 'off', '--by', 'Martin']);
+  assert.equal(off.code, 0, off.err); assert.equal(off.json().mode, 'off');
+  const held = w.revision();
+  assert.equal(w.mc(['autonomy', PROGRAMME, 'off', '--by', 'Martin']).code, 0); assert.equal(w.revision(), held, 'a repeated off is a read');
   const text = w.mc(['status', PROGRAMME]).out;
-  assert.match(text, /autonomous · paused/u); assert.match(text, /paused\s+\S+ by Martin \(was active\)/u);
-  assert.match(text, /next\s+none — paused; mc programme resume/u);
+  assert.match(text, /autonomous · off/u);
+  assert.match(text, /next\s+no headless planner — autonomy off/u);
 
-  // Resume rechecks support: the installed mc refuses, the fixture installation resumes.
-  const refused = w.mc(['resume', PROGRAMME, '--expected-revision', String(paused), '--by', 'Martin']);
-  assert.equal(refused.code, 1); assert.equal(w.revision(), paused);
-  const resume = w.fixture(['resume', PROGRAMME, '--expected-revision', String(paused), '--by', 'Martin']);
-  assert.equal(resume.code, 0, resume.err); assert.equal(resume.json().mode, 'active');
+  // On rechecks support: the installed mc refuses, the fixture installation turns it on.
+  assert.equal(w.on(w.mc).code, 1); assert.equal(w.revision(), held);
+  const back = w.on(w.fixture);
+  assert.equal(back.code, 0, back.err); assert.equal(back.json().mode, 'active');
 
-  const journal = JSON.parse(w.bytes()).planner_jobs;
-  assert.deepEqual(journal.control.map(item => [item.operation, item.by]), [['start', 'Martin'], ['pause', 'Martin'], ['resume', 'Martin']]);
-  assert.equal(journal.activation.stop, 'design-review'); assert.equal(JSON.parse(w.bytes()).execution_enabled, false);
+  const state = JSON.parse(w.bytes());
+  assert.deepEqual(state.planner_jobs.control.map(item => [item.operation, item.by]), [['autonomy-on', 'Martin'], ['autonomy-off', 'Martin'], ['autonomy-on', 'Martin']]);
+  assert.equal(state.autonomy.stop, 'design-review'); assert.equal(state.execution_enabled, false);
   // The only tool processes are the sessions this test ran; mc launched none.
   assert.deepEqual(w.tools().map(item => [item.tool, item.role]), [['codex', 'review'], ['codex', 'step'], ['codex', 'review'], ['codex', 'plan']]);
   assert.equal(readFileSync(w.legacy, 'utf8'), w.legacyBytes);

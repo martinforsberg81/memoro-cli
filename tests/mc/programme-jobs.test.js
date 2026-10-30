@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { programmeAutonomyOff } from '../../src/mc/programme-control.js';
 import { readFileSync, readdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -152,9 +153,9 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     assert.throws(() => renewProgrammeJob(owner({ now: expiry })), /ownership/u);
   });
 
-  it('keeps paused, quota and external waits explicit without losing late events', t => {
+  it('keeps autonomy off, quota and external waits explicit without losing late events', t => {
     const f = fixture(t); f.activate();
-    setProgrammeJobMode(f.options(), { mode: 'paused' });
+    programmeAutonomyOff({ root: f.root, programme: f.programme, by: 'Martin' });
     f.claim(); assert.equal(f.read().active_run, null);
     recordProgrammeTrigger(f.options(), f.event('while-paused', 'failure'));
     assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'waiting', wait: { kind: 'quota', reason: 'reset unknown', until: null } }), /bounded/u);
@@ -314,11 +315,11 @@ describe('durable planner operations and exactly-once project effects', () => {
     assert.throws(() => createProgrammeJobProject(owner(), f.intent('create-goal-2')), /project effect/u);
   });
 
-  it('does not acknowledge a different effect, apply stale programme decisions or apply while paused', t => {
+  it('does not acknowledge a different effect, apply stale programme decisions or apply while waiting', t => {
     const f = fixture(t); f.activate(); const owner = f.claim(); const intent = f.intent();
     assert.throws(() => prepareProgrammeOperation(owner(), { ...intent, input: { ...intent.input, programme: { id: f.programme, revision: 2 } } }), /unsupported pre-ruling-60/u);
     prepareProgrammeOperation(owner(), intent);
-    setProgrammeJobMode(f.options(), { mode: 'paused' });
+    setProgrammeJobMode(f.options(), { mode: 'waiting', wait: { kind: 'external', reason: 'Deployment result not observed.', until: null } });
     assert.throws(() => createProgrammeJobProject(owner(), intent), /waits/u);
     assert.equal(existsSync(autonomousPaths(f.root, f.programme, intent.project).project), false);
     setProgrammeJobMode(f.options(), { mode: 'active' });

@@ -1,0 +1,3 @@
+section: Changed
+
+- **Programmes have explicit phases and an autonomy preference.** `mc programme phase add` and `phase close` give a programme ordered phases: only the earliest unclosed phase dispatches, goals inside it run in parallel, and a phase closes only explicitly, once its goals have landed, follow-ups are measured and nothing is owned. `mc programme autonomy on|off [--stop "<condition>"]` replaces `start`, `pause` and `resume`: off refuses only new headless planner claims, so sent goals, reviews and admitted merges continue. `mc programme stop` records a reached stop without changing the preference.
