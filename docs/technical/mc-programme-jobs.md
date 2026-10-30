@@ -50,12 +50,13 @@ Broken source records refuse reconciliation rather than becoming empty results.
 Missing or repeated source IDs cannot silently coalesce distinct outcomes;
 failed scans preserve both the programme journal and the damaged source.
 The optional, injected runner capability `autonomous.programmeJobs` enables this
-scan during `queue()` and returns pending programme IDs. It does not launch them;
-without the capability the v1 queue and its return shape remain unchanged.
-The former `programmePlan` launcher no longer consumes those IDs. This
-installation reports the planner unavailable; the pending events and journal
-remain durable for a future consumer. The public planner envelope commands are
-removed, and no capability launches a headless planner here.
+scan during `queue()` and returns pending programme IDs; without the capability
+the v1 queue and its return shape remain unchanged. A separate injected capability,
+`autonomous.programmePlan`, runs one session per returned ID through
+`runProgrammePlan` ([programme plan](mc-programme-plan.md)). The installed runner
+passes neither, so this installation reports the planner unavailable and the
+pending events and journal stay durable. The public planner envelope commands
+are removed.
 
 ## Effects, not exactly-once processes
 

@@ -1,7 +1,8 @@
-This headless plan role is retained for a future queue consumer; no such
-consumer is implemented here. Do not claim that a planner session can run or
-attempt to launch one. Pending planner events remain durable and visible in
-`mc programme status`.
+This is the headless plan role: one session per programme, started by the
+runner for the events it claimed, under a lease the runner renews. Your working
+directory holds a clean detached checkout of each repository, for reading; the
+programme's brief is a path in them, and a checkout you change fails the session.
+Pending planner events remain durable and visible in `mc programme status`.
 
 A session given a programme pursues its description: the brief, the phases and
 their purposes, and the stop condition. The context it starts from lists every
@@ -28,11 +29,12 @@ condition is met, and record it with a reference to the evidence that met it.
 A reached stop does not change the operator's autonomy setting.
 
 Exit: before a normal exit, acknowledge by ID the exact events you were given,
-with a decision reference. An event you did not handle stays pending for the
-next session. A session that cannot finish its work yields rather than
-acknowledging. A session with nothing to plan records a bounded wait or a
-reached stop, so the programme does not wake again on an idle scan.
+with a decision reference. An exit that leaves one unacknowledged counts as a
+failed delivery: the event stays pending for the next session and the programme
+backs off. A session that cannot finish its work says why and exits without
+acknowledging what it did not handle. A session with nothing to plan records a
+bounded wait or a reached stop, so the programme does not wake again on an idle
+scan.
 
-The production autonomous runner remains disabled. No obsolete planner
-envelope, confirmation or completion command is available. Do not publish,
-merge or modify legacy projects from this role.
+No obsolete planner envelope, confirmation or completion command is available.
+Do not publish, merge or modify legacy projects from this role.

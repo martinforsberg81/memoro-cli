@@ -7,11 +7,12 @@ operator-control support.
 
 ## Planner availability
 
-The durable planner event queue and operation journal remain for recovery and
-future queue consumption, but this installation does not have a headless queue
-consumer. No planner process is launched. `mc programme status` reports planner
-unavailability and leaves pending events visible; it does not imply that the
-runner will process them. Production autonomous execution remains disabled.
+The durable planner event queue and operation journal serve recovery and queue
+consumption. The headless consumer runs only behind its injected runner
+capability, and the installed runner passes none, so no planner process is
+launched. `mc programme status` reports planner unavailability and leaves pending
+events visible; it does not imply that the runner will process them. Production
+autonomous execution remains disabled.
 
 `mc programme autonomy <programme> on|off` records the operator's preference;
 `on --stop "<condition>"` adds a stop condition in prose for the planner, and

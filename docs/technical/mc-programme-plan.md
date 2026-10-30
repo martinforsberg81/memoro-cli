@@ -9,17 +9,28 @@ expose planner decision envelopes.
 ## Current availability
 
 The durable planner event queue, operation journal, locks, retry receipts and
-recovery state remain on disk. They preserve existing records and the
-crash-consistent boundaries needed by the future queue consumer. The public
+recovery state remain on disk and keep their crash-consistent boundaries. The public
 `draft`, `approve`, `decide`, `complete` and `cancel` programme commands have
 been removed. The old operation-shape validator was folded into the shared
 goal-state boundary; `programme-plan-contract.js` is no longer needed.
 
-Headless queue consumption is not implemented. The runner does not launch a
-planner; `mc programme status` reports `planner unavailable` and pending events
-remain durable. This is distinct from build/review lifecycle handling and does
-not enable autonomous execution. The operator sets programme autonomy on or
-off, but autonomy on does not supply a queue consumer.
+`runProgrammePlan` (`src/mc/programme-plan-run.js`) is the headless queue
+consumer. A runner reaches it only with the injected `autonomous.programmePlan`
+capability, and the installed runner passes none: it launches no planner,
+`mc programme status` reports `planner unavailable` and pending events remain
+durable. This is distinct from build/review lifecycle handling and does not
+enable autonomous execution. The operator sets programme autonomy on or off, but
+autonomy on does not supply the capability.
+
+Given the capability, the consumer holds a claim file and the queue lease, so a
+programme has one headless planner. It refreshes a detached inspection checkout
+of each repository, starts one bounded session with the planner context and
+renews the lease while the session runs. A normal exit needs exact
+acknowledgement: every claimed event acknowledged by ID, or a recorded completion
+covering the snapshot. An exit that leaves one open, a failed process, a lost
+lease or a changed inspection checkout yields the delivery with a bounded retry;
+the unacknowledged events stay pending. `finishProgrammeJob` itself only releases
+the lease and never consumes an event.
 
 `mc programme status` shows the pending events with their age and the next
 actor, with autonomy on or off: the foreground planner while autonomy is off,
@@ -42,8 +53,9 @@ and `mc programme` handlers under a lease: it creates and sends a next goal when
 a goal lands, acknowledges the events it claimed by ID and exits. A crash during
 a send leaves the landed event pending and the send is replayed once by the next
 lease. A session with nothing to plan records a bounded `mc programme wait`, so
-the idle scan does not wake the programme again before the wait ends. Nothing
-here launches a session; installed provider support remains unclaimed.
+the idle scan does not wake the programme again before the wait ends. Further
+scripted sessions run through the consumer itself. Installed provider support
+remains unclaimed.
 
 ## Ordinary goal lifecycle
 

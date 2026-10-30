@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateFixture, planner, builder, reviewer, foreground } from './autonomous-state-fixture.js';
 import { autonomousProject, autonomousEvidence } from './autonomy-fixtures.js';
-import { runnerFixture } from './autonomous-run-fixture.js';
+import { completed, runnerFixture } from './autonomous-run-fixture.js';
 import { ready } from './autonomous-merge-fixture.js';
 import { decideProgrammePlan, programmePlanContext } from '../../src/mc/programme-plan.js';
 import { ensureProgrammePlanWorkspace, runProgrammePlan } from '../../src/mc/programme-plan-run.js';
@@ -17,11 +17,11 @@ import { reviewCommandRefusal } from '../../src/mc/autonomous-review-guard.js';
 import { readAutonomousState, readProgrammeState, sendAutonomousProject, releaseProgrammeRun, reserveProjectRun,
   mutateAutonomousProject, recordAutonomousMergeEvent, startAutonomousBuild, reserveProgrammeRun, mutateProgramme } from '../../src/mc/autonomous-state.js';
 import { claimProgrammeJob, setProgrammeJobMode, cancelProgrammeOperation, completeProgrammePlan, finishProgrammeJob,
-  prepareProgrammeOperation, reconcileProgrammeJobs, renewProgrammeJob, yieldProgrammeJob } from '../../src/mc/programme-jobs.js';
+  prepareProgrammeOperation, reconcileProgrammeJobs, recordProgrammeTrigger, renewProgrammeJob, yieldProgrammeJob } from '../../src/mc/programme-jobs.js';
 import { reportBinding } from '../../src/mc/autonomous-outcomes.js';
 import { autonomousChoice } from '../../src/mc/autonomous-run.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
-import { streamSession } from '../../src/mc/run.js';
+import { createRunner, streamSession } from '../../src/mc/run.js';
 import { run as programmeCommand } from '../../src/mc/commands/programme.js';
 import { run as foregroundPlan } from '../../src/mc/commands/plan.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
@@ -418,13 +418,13 @@ test('a no-op planner session records a bounded wait, so reconciliation does not
   assert.equal(s.read().planner_jobs.pending, null, 'a bounded wait wakes nothing before its time');
 });
 
-test('runner reports planner unavailable and retains pending events without launching a session', async t => {
+test('a runner without the capability retains pending events without launching a session', async t => {
   const f = runnerFixture(t);
   f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
     event: { id: 'runner-activation', type: 'activation', reference: 'operator-start' } });
   const before = readProgrammeState(f.root, f.programme);
-  assert.equal(await runProgrammePlan(), 'skipped:planner-unavailable');
+  assert.equal(await runProgrammePlan({ capability: null }), 'skipped:autonomous-disabled');
   const after = readProgrammeState(f.root, f.programme);
   assert.deepEqual(after, before, 'no lease, acknowledgement, or recovery write is fabricated');
   assert.deepEqual(after.planner_jobs.pending.event_ids, ['runner-activation']);
@@ -441,16 +441,128 @@ test('workspace refresh preserves dirty inspection trees and refuses foreground/
   assert.equal(readFileSync(join(workspace.repos[0].path, 'unfinished'), 'utf8'), 'Do not discard.');
 });
 
-test('planner unavailability leaves queue events durable for a future consumer', async t => {
+test('without the capability queue events stay durable and nothing is recovered', async t => {
   const f = runnerFixture(t); f.deps.now = () => new Date();
   f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
     event: { id: 'incomplete', type: 'activation', reference: 'approval' } });
-  assert.equal(await runProgrammePlan(), 'skipped:planner-unavailable');
+  assert.equal(await runProgrammePlan({ capability: null }), 'skipped:autonomous-disabled');
   const state = readProgrammeState(f.root, f.programme);
   assert.equal(state.active_run, null); assert.deepEqual(state.planner_jobs.pending.event_ids, ['incomplete']);
   assert.equal(state.planner_jobs.recoveries.length, 0);
   assert.equal(state.execution_enabled, false);
+});
+
+/** The runner's own consumer over a scripted session whose commands are the real
+ * handlers, reached through the environment the consumer gives it. */
+function consumer(t, script, { events = [] } = {}) {
+  const f = runnerFixture(t); f.deps.now = () => new Date();
+  const read = () => readProgrammeState(f.root, f.programme);
+  const options = () => ({ root: f.root, programme: f.programme, revision: read().revision });
+  f.releasePlanner();
+  setProgrammeJobMode(options(), { mode: 'active', event: { id: 'activate', type: 'activation', reference: 'approval/activation' } });
+  for (const event of events) recordProgrammeTrigger(options(), event);
+  const sessions = [];
+  f.deps.session = async call => {
+    sessions.push(call);
+    const sink = { write() {} };
+    const mc = (command, ...argv) => (command === 'goal' ? goalCommand : programmeCommand)(argv, { root: f.root, env: call.env, stdout: sink, stderr: sink });
+    const ack = (...ids) => mc('programme', 'events', 'ack', f.programme, ...ids.flatMap(id => ['--event', id]), '--reference', 'decisions/delivery');
+    return await script({ call, mc, ack, read, options }) ?? completed;
+  };
+  const pass = () => createRunner({ deps: f.deps, autonomous: { ...f.capability, programmeJobs: true, programmePlan: true } })
+    .pass({ world: { names: [], plans: [], prs: [], prsFailed: [], programmeJobs: [f.programme] } });
+  return { ...f, read, options, sessions, pass };
+}
+
+test('the consumer starts one bounded session with the context and lease; ordinary verbs and an exact ack finish it', async t => {
+  const f = consumer(t, async ({ call, mc, ack, read }) => {
+    const lease = read().planner_jobs.lease;
+    assert.equal(call.env.MC_PROGRAMME_LEASE, lease.token); assert.equal(call.env.MC_AUTONOMOUS_RUN, lease.actor.run_id);
+    assert.equal(call.env.MC_AUTONOMOUS_ROLE, 'plan'); assert.equal(call.env.MC_PROGRAMME, read().metadata.id);
+    assert.ok(call.maxRunMs > 0, 'the session is bounded');
+    assert.deepEqual(JSON.parse(call.prompt).job.event_ids, ['activate']);
+    const checkout = join(call.cwd, 'memoro-cli');
+    assert.equal(spawnSync('git', ['branch', '--show-current'], { cwd: checkout, encoding: 'utf8' }).stdout.trim(), '', 'a detached inspection checkout');
+    assert.equal(await mc('goal', ...successor(read().metadata.id).slice(1)), 0);
+    assert.equal(await ack('activate'), 0);
+  });
+  const result = await f.pass();
+  assert.equal(result.ran, 1); assert.equal(f.sessions.length, 1);
+  assert.equal(readAutonomousState(f.root, f.programme, 'successor').goal_revision, 1);
+  const state = f.read();
+  assert.equal(state.active_run, null); assert.equal(state.planner_jobs.lease, null); assert.equal(state.planner_jobs.pending, null);
+  assert.equal(state.planner_jobs.mode, 'active');
+  assert.equal(state.planner_jobs.acknowledgements.at(-1).run_id, state.runs.at(-1).run_id);
+});
+
+test('a normal exit without an ack keeps every claimed event, releases the lease and backs off', async t => {
+  const f = consumer(t, () => null);
+  await f.pass();
+  const state = f.read();
+  assert.equal(state.active_run, null); assert.equal(state.planner_jobs.lease, null);
+  assert.deepEqual(state.planner_jobs.pending.event_ids, ['activate']);
+  assert.match(state.planner_jobs.recoveries.at(-1).reason, /left claimed events unacknowledged: activate/u);
+  assert.equal(state.planner_jobs.mode, 'waiting');
+  assert.equal(state.planner_jobs.acknowledgements, undefined, 'the exit acknowledged nothing');
+});
+
+test('a partial ack consumes what it names and fails the delivery for the rest', async t => {
+  const f = consumer(t, async ({ ack }) => { assert.equal(await ack('activate'), 0); },
+    { events: [{ id: 'landing', type: 'landed', reference: 'goal/landing' }] });
+  await f.pass();
+  const state = f.read();
+  assert.deepEqual(state.planner_jobs.pending.event_ids, ['landing']);
+  assert.match(state.planner_jobs.recoveries.at(-1).reason, /unacknowledged: landing/u);
+});
+
+test('an event arriving during the session is not part of its exact ack and waits for the next claim', async t => {
+  const f = consumer(t, async ({ ack, options }) => {
+    recordProgrammeTrigger(options(), { id: 'arrived', type: 'failure', reference: 'goal/attempt' });
+    assert.equal(await ack('activate'), 0);
+  });
+  await f.pass();
+  const state = f.read();
+  assert.deepEqual(state.planner_jobs.pending.event_ids, ['arrived']);
+  assert.deepEqual(state.planner_jobs.recoveries, [], 'the snapshot was acknowledged exactly');
+  assert.equal(state.planner_jobs.mode, 'active');
+});
+
+test('a failed process and a changed inspection checkout keep the delivery with the failure named', async t => {
+  const failed = consumer(t, () => ({ ...completed, status: 1 }));
+  await failed.pass();
+  assert.deepEqual(failed.read().planner_jobs.pending.event_ids, ['activate']);
+  assert.match(failed.read().planner_jobs.recoveries.at(-1).reason, /did not complete normally/u);
+
+  const dirty = consumer(t, async ({ call, ack }) => {
+    assert.equal(await ack('activate'), 0);
+    writeFileSync(join(call.cwd, 'memoro-cli', 'stray'), 'not a planner product\n');
+  });
+  await dirty.pass();
+  assert.match(dirty.read().planner_jobs.recoveries.at(-1).reason, /changed an inspection checkout/u);
+  assert.equal(dirty.read().active_run, null);
+});
+
+test('the consumer renews the lease while the session runs', async t => {
+  let shift = 0;
+  const f = consumer(t, async ({ ack, read }) => {
+    const first = read().planner_jobs.lease.expires_at;
+    shift = 60_000;
+    for (let tries = 0; tries < 200 && read().planner_jobs.lease.expires_at === first; tries++) await new Promise(done => { setTimeout(done, 5); });
+    assert.ok(read().planner_jobs.lease.expires_at > first, 'renewal extends the lease');
+    assert.equal(await ack('activate'), 0);
+  });
+  f.deps.now = () => new Date(Date.now() + shift); f.deps.leaseRenewMs = 2;
+  assert.equal((await f.pass()).ran, 1);
+  assert.equal(f.read().planner_jobs.pending, null);
+});
+
+test('with autonomy off the consumer starts no session, though the programme was already queued', async t => {
+  const f = consumer(t, () => assert.fail('no session while autonomy is off'));
+  assert.equal(await programmeCommand(['autonomy', f.programme, 'off', '--by', 'Martin'], { root: f.root, env: {}, stdout: { write() {} }, stderr: { write() {} } }), 0);
+  assert.equal((await f.pass()).ran, 0);
+  assert.equal(f.sessions.length, 0); assert.equal(f.read().active_run, null);
+  assert.deepEqual(f.read().planner_jobs.pending.event_ids, ['activate']);
 });
 
 test('bounded planner transport terminates only its own child and waits for close', async () => {

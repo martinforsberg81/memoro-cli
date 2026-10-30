@@ -1,9 +1,9 @@
 # Programme-owned recovery (inactive)
 
 Planner operation records and recovery rules remain durable, but their former
-public programme command envelope and headless queue launcher are removed. This
-installation has no headless queue consumer; status reports planner
-unavailability and leaves events pending. Ordinary foreground assignment
+public programme command envelope is removed. The installed runner passes no
+headless queue consumer capability; status reports planner unavailability and
+leaves events pending. Ordinary foreground assignment
 changes use `mc goal`; the scanner still observes verified dependency landings.
 
 This extends the injected programme jobs/plan seam. It does **not** enable live

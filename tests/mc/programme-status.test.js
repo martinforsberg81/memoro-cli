@@ -155,7 +155,7 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.equal(goal.evidence.quality, 'review findings for plan');
   assert.deepEqual(goal.review.findings, ['Pause can lose a queued merge.']); assert.equal(goal.review.current, true);
   assert.equal(goal.models.reviewer_actual, 'claude:opus');
-  assert.equal(goal.next_action, 'planner unavailable — headless queue consumption is not implemented');
+  assert.equal(goal.next_action, 'planner unavailable — no headless queue consumer is wired here');
   assert.equal(status.plan.owner, 'plan'); assert.equal(status.plan.pending_events, 1);
   text = renderProgrammeStatus(status);
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);

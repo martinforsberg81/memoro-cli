@@ -74,7 +74,7 @@ function goalAction(root, state, holds) {
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';
   if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to land`;
-  return 'planner unavailable — headless queue consumption is not implemented';
+  return 'planner unavailable — no headless queue consumer is wired here';
 }
 
 /** One autonomous goal. An unreadable state is reported, not skipped. */
@@ -165,7 +165,7 @@ function programmeAction(status, journal) {
   if (status.plan.lease) return `planner unavailable — lease ${status.plan.lease.run_id} requires recovery`;
   if (status.plan.pending_events) return `planner unavailable — ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'} ${status.plan.pending_events === 1 ? 'awaits' : 'await'} headless queue consumption`;
   const goal = status.goals.find(item => !item.next_action.startsWith('none'));
-  return goal ? `${goal.project}: ${goal.next_action}` : 'planner unavailable — headless queue consumption is not implemented';
+  return goal ? `${goal.project}: ${goal.next_action}` : 'planner unavailable — no headless queue consumer is wired here';
 }
 
 /** Everything `mc programme status` says. `capabilities` defaults to what this

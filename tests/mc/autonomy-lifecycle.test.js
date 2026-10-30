@@ -124,7 +124,7 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   let status = programmeStatus(w.root, PROGRAMME, supported);
   assert.equal(status.goals[0].evidence.quality, 'review findings for plan');
   assert.deepEqual(status.goals[0].review.findings, ['second() ignores the first behaviour.']);
-  assert.equal(status.goals[0].next_action, 'planner unavailable — headless queue consumption is not implemented');
+  assert.equal(status.goals[0].next_action, 'planner unavailable — no headless queue consumer is wired here');
   assert.ok(status.plan.pending_events >= 1);
   let plan = w.plan('plan-review');
   assert.ok(plan.events().includes('review'));
