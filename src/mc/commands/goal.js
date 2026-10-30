@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { autonomousPaths, createAutonomousDraft, mutateAutonomousProject, mutateProgramme, readAutonomousState, readProgrammeState, sendAutonomousProject } from '../autonomous-state.js';
 import { validateAutonomousProject } from '../autonomous-project.js';
 import { STABLE_ID_RE } from '../goal-contract.js';
+import { goalCompletion } from '../goal-followup.js';
 import { workRoot } from '../paths.js';
 import { scanArgs } from './flags.js';
 import { autonomousCommandContext, run as legacyOperations } from './autonomous-project.js';
@@ -23,7 +24,7 @@ export async function run(argv, deps = {}) {
   const context = autonomousCommandContext(deps);
   const root = deps.root || workRoot(env);
   const scanned = scanArgs(argv, {
-    strictValues: ['--phase', '--repo', '--class', '--id', '--criterion', '--instruction', '--check', '--verify', '--expected-revision', '--input-file', '--reference'],
+    strictValues: ['--phase', '--repo', '--class', '--id', '--criterion', '--instruction', '--check', '--verify', '--expected-revision', '--input-file', '--reference', '--integrated-sha', '--outcome'],
     repeatable: ['--goal', '--contract', '--out-of-scope', '--after'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -62,7 +63,9 @@ export async function run(argv, deps = {}) {
     if (operation === 'done') {
       if (tail.length) throw new Error('done takes one target');
       const state = readAutonomousState(root, programme, goal, deps);
-      output(stdout, { goal, phase: state.phase, done: state.phase === 'landed', follow_up_criteria: state.contract.success_criteria.filter(item => item.verification === 'after-integration').map(item => item.id) });
+      const completion = goalCompletion(state);
+      if (completion.pending_follow_ups.length) throw new Error(`follow-ups need successful current measurements: ${completion.pending_follow_ups.join(', ')}`);
+      output(stdout, { goal, phase: state.phase, ...completion });
       return 0;
     }
     throw new Error('unknown goal operation');
@@ -139,12 +142,22 @@ function addCriterion(scanned, tail, deps) {
   output(deps.stdout, result); return 0;
 }
 function evidence(scanned, tail, deps) {
-  rejectFlags(scanned, ['--id', '--reference', '--expected-revision']);
+  rejectFlags(scanned, ['--id', '--reference', '--expected-revision', '--integrated-sha', '--outcome']);
   const [programme, goal] = parseTarget(tail);
   const revision = expectedRevision(scanned); const state = readAutonomousState(deps.root, programme, goal, deps);
   if (state.revision !== revision) throw new Error('stale state revision — read the current state');
-  if (!state.contract.success_criteria.some(item => item.id === scanned.flags.id)) throw new Error('unknown criterion ID');
+  const criterion = state.contract.success_criteria.find(item => item.id === scanned.flags.id);
+  if (!criterion) throw new Error('unknown criterion ID');
   if (!text(scanned.flags.reference)) throw new Error('--reference <evidence> is required');
+  if (criterion.verification === 'after-integration') {
+    if (!scanned.flags['integrated-sha'] || !scanned.flags.outcome) throw new Error('after-integration evidence needs --integrated-sha and --outcome passed|failed|unknown');
+    const result = mutateAutonomousProject(deps.root, programme, goal, 'follow-up', {
+      id: `follow-up-${randomUUID()}`, criterion_id: criterion.id, goal_revision: state.goal_revision,
+      integrated_sha: scanned.flags['integrated-sha'], reference: scanned.flags.reference, outcome: scanned.flags.outcome,
+    }, { ...deps, ...deps.context, revision });
+    output(deps.stdout, result); return 0;
+  }
+  if (scanned.flags['integrated-sha'] || scanned.flags.outcome) throw new Error('--integrated-sha and --outcome are only for after-integration measurements');
   const actor = deps.context.actor || { run_id: `foreground-${process.pid}`, role: 'step' };
   const result = mutateAutonomousProject(deps.root, programme, goal, 'progress', { id: `evidence-${randomUUID()}`, criterion_id: scanned.flags.id, status: 'verified', reference: scanned.flags.reference }, { ...deps, actor, revision });
   output(deps.stdout, result); return 0;
@@ -155,6 +168,6 @@ export function usage() {
     + '        mc goal send <programme>/<goal> [--after <goal>]\n'
     + '        mc goal revise <programme>/<goal> --input-file <assignment.json> --expected-revision <n>\n'
     + '        mc goal show|done <programme>/<goal>\n'
-    + '        mc goal criterion evidence <programme>/<goal> --id <id> --reference <evidence> --expected-revision <n>\n'
+    + '        mc goal criterion evidence <programme>/<goal> --id <id> --reference <evidence> --expected-revision <n> [--integrated-sha <sha> --outcome passed|failed|unknown]\n'
     + '        mc goal finish|report|recover|attempt|release <programme>/<goal> [role-specific flags]\n';
 }

@@ -6,6 +6,7 @@ import { programmeJobsFixture } from './programme-jobs-fixture.js';
 import { autonomousProject } from './autonomy-fixtures.js';
 import { planner, builder, foreground } from './autonomous-state-fixture.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
+import { measuredLanding } from './goal-followup-fixture.js';
 import { ready, clean } from './autonomous-merge-fixture.js';
 import { decideProgrammePlan, programmePlanContext } from '../../src/mc/programme-plan.js';
 import { claimProgrammeJob, reconcileProgrammeJobs, finishProgrammeJob, yieldProgrammeJob, cancelProgrammeOperation,
@@ -54,11 +55,8 @@ function diagnose(f, approach, action = 'retry') {
   return f.apply(f.intent('diagnose-project', { action, attempt_ids: f.state().attempts.map(item => item.id),
     diagnosis: 'The failure is technical, within the approved CLI scope.', ...(action === 'retry' ? { approach } : {}) }));
 }
-function confirmed(f, project) {
-  f.patch(state => { state.phase = 'confirmed'; state.confirmed = true;
-    state.evidence.confirmation = { id: `confirmed-${project}`, role: 'plan', run_id: 'plan-confirmation', project_id: project,
-      programme_id: f.programme, goal_revision: state.goal_revision, reference: 'integration/repair-verified' };
-  }, project);
+function landed(f, project) {
+  f.patch(state => measuredLanding(state), project);
 }
 
 test('review findings enter the plan job; only a revision can resume the same branch/PR', async t => {
@@ -128,12 +126,12 @@ test('another goal revision leaves recovery evidence current, but this goal need
   assert.equal(f.state().recovery_diagnoses.at(-1).goal_revision, 2);
 });
 
-test('plan-selected dependency release occurs after confirmation, not landing, and survives a programme-ack crash exactly once', t => {
+test('plan-selected dependency release occurs after verified landing, not a phase label, and survives a programme-ack crash exactly once', t => {
   const f = fixture(t); f.create('dependency'); f.send(f.project);
   f.apply(f.intent('dependencies', { projects: [{ project: 'dependency', goal_revision: 1 }] }));
   f.apply(f.intent('await-dependencies'));
   f.patch(state => { state.phase = 'landed'; }, 'dependency'); f.scan(); assert.equal(f.state().phase, 'plan_pending');
-  confirmed(f, 'dependency');
+  landed(f, 'dependency');
   assert.throws(() => reconcileProgrammeJobs(f.options({ deps: { write: () => { throw new Error('programme ack crash'); } } })), /ack crash/u);
   assert.equal(f.state().phase, 'ready'); const revision = f.state().revision;
   f.scan(); f.scan(); assert.equal(f.state().revision, revision);
@@ -148,7 +146,7 @@ test('a revised dependency cannot release a goal waiting on its earlier revision
   const before = f.state();
   f.apply(f.intent('revise-project', { ...f.state('dependency').contract, goal_revision: 2 },
     { project: 'dependency', expected_revision: f.state('dependency').revision }));
-  confirmed(f, 'dependency'); f.scan(); f.scan();
+  landed(f, 'dependency'); f.scan(); f.scan();
   assert.deepEqual(f.state(), before);
   assert.equal(f.state().dependency_release.status, 'waiting');
   assert.equal(f.state('dependency').goal_revision, 2);
@@ -174,11 +172,11 @@ test('changed programme metadata does not fence an armed dependency release', t 
   f.apply(f.intent('dependencies', { projects: [{ project: 'dependency', goal_revision: 1 }] })); f.apply(f.intent('await-dependencies'));
   acknowledge(f);
   mutateProgramme(f.root, f.programme, 'metadata', { ...f.draft, brief: 'docs/project/updated/' }, { env: {}, revision: f.read().revision });
-  confirmed(f, 'dependency'); f.scan(); assert.equal(f.state().phase, 'ready');
+  landed(f, 'dependency'); f.scan(); assert.equal(f.state().phase, 'ready');
   assert.equal(f.state().dependency_release.status, 'released');
 });
 
-test('main failures coalesce into one owner and ordinary repair, and every dependent waits for its planner-confirmed result', t => {
+test('main failures coalesce into one owner and ordinary repair, and every dependent waits for its new successful main measurement', t => {
   const f = fixture(t); f.create('another-project');
   for (const project of [f.project, 'another-project']) f.patch(state => {
     state.plan_events = [{ id: `merge-failure-${project}`, type: 'merge-failed', binding: { }, details: { main_failures: ['tests/shared.test.js'] } }];
@@ -197,9 +195,9 @@ test('main failures coalesce into one owner and ordinary repair, and every depen
   cancelProgrammeOperation(owner(), { id: 'duplicate-repair', reason: 'All dependents use the existing repair.' });
   for (const project of [f.project, 'another-project']) assert.equal(mainIncidentHold(f.root, f.programme, project).id, incident.id);
   f.patch(state => { state.phase = 'landed'; }, repair.project); f.scan(); assert.ok(mainIncidentHold(f.root, f.programme, f.project));
-  confirmed(f, repair.project); f.scan(); f.scan();
-  assert.equal(mainIncidentHold(f.root, f.programme, f.project), null); assert.equal(readProgrammeIncidents(f.root)[0].status, 'resolved');
-  assert.ok(f.read().planner_jobs.events.some(item => item.type === 'dependency'));
+  landed(f, repair.project); f.scan(); f.scan();
+  assert.ok(mainIncidentHold(f.root, f.programme, f.project));
+  assert.equal(readProgrammeIncidents(f.root)[0].status, 'open', 'a landed repair is not measured green main');
 });
 
 for (const kind of ['quota', 'network', 'resource']) test(`${kind} waits retry durably across restarts and exhaust into a precise exception, not a design question`, t => {
@@ -221,7 +219,7 @@ test('a planner stop is committed once across restart without holding sent depen
   f.apply(f.intent('dependencies', { projects: [{ project: 'dependency', goal_revision: 1 }] })); f.apply(f.intent('await-dependencies'));
   const stop = { id: 'stop-exactly-once', kind: 'reach-stop', stop: 'design-review', reference: 'decisions/stop' };
   f.apply(stop); f.apply(stop); acknowledge(f);
-  confirmed(f, 'dependency'); f.scan(); f.scan();
+  landed(f, 'dependency'); f.scan(); f.scan();
   assert.equal(f.state().phase, 'ready'); assert.equal(f.read().planner_jobs.operations.filter(item => item.intent.id === stop.id).length, 1);
   assert.equal(f.read().planner_jobs.mode, 'stopped'); assert.equal(f.read().execution_enabled, false);
   const record = { plan: f.state().contract, project: f.project, programme: f.programme, repo: 'memoro-cli' };
@@ -229,7 +227,7 @@ test('a planner stop is committed once across restart without holding sent depen
   assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'active' }), /foreground planning restart/u);
 });
 
-test('merge outcome main-red identities survive recording and reconciliation; a clean landing still requires after-integration confirmation', async t => {
+test('merge outcome main-red identities survive recording and reconciliation; landing completes execution while main measurements remain pending', async t => {
   const base = await ready(t);
   const read = () => readProgrammeState(base.root, base.programme);
   base.releasePlanner();
@@ -437,7 +435,7 @@ test('unrelated programme metadata preserves exact reviewed merge evidence', asy
   assert.deepEqual(f.stateNow(), before);
 });
 
-test('a real clean landing releases the next selected goal only after planner confirmation covers after-integration verification', async t => {
+test('a real clean landing releases the next selected goal while after-integration follow-ups stay open', async t => {
   const base = await ready(t); const read = () => readProgrammeState(base.root, base.programme);
   base.releasePlanner();
   const options = extra => ({ root: base.root, programme: base.programme, revision: read().revision, ...extra });
@@ -452,15 +450,9 @@ test('a real clean landing releases the next selected goal only after planner co
   const report = f.state().review_reports.at(-1);
   recordAutonomousMergeEvent(f.root, f.programme, f.project, { binding: reportBinding(report), type: 'merge-landed',
     details: { merge_commit: report.session.head, merged_into: 'main' } });
-  f.scan(); assert.equal(f.state().confirmed, false); assert.equal(f.state('next-goal').phase, 'plan_pending');
-  const input = { id: 'confirm-delivery', reference: 'decisions/verified-integration', criteria: [
-    { criterion_id: 'schema', reference: 'reports/schema' }, { criterion_id: 'integration', reference: 'integration/observed' } ] };
-  const rejected = f.intent('confirm-project', { ...input, criteria: input.criteria.slice(0, 1) });
-  assert.throws(() => f.apply(rejected), /including after-integration/u);
-  cancelProgrammeOperation(f.owner(), { id: rejected.id, reason: 'Wait for the after-integration observation.' });
-  f.apply(f.intent('confirm-project', input)); f.scan();
+  f.scan(); assert.equal(f.state().phase, 'landed');
   const released = f.state('next-goal');
-  assert.equal(f.state().confirmed, true); assert.equal(released.phase, 'ready');
+  assert.equal(f.state().evidence.confirmation, null); assert.equal(released.phase, 'ready');
   f.scan(); assert.equal(f.state('next-goal').revision, released.revision);
   assert.equal(released.plan_events.filter(item => item.type === 'dependency-released').length, 1);
   assert.equal(f.read().execution_enabled, false);

@@ -59,10 +59,10 @@ locks**. Independent projects retain their own running reservations.
 | `send-project` | Empty input. Publishes the authoritative goal as an inactive PLAN snapshot, without dispatch. |
 | `revise-project` | Complete v2 contract, goal revision +1. Preserves identity, branch/PR, commits, attempts, historical contracts/evidence/reports and run history. No person-held block or PR closure is required. |
 | `dependencies` | `{projects: [{project, goal_revision}]}`. Selects same-programme dependencies; rejects unknown/stale goals, duplicates, self-links and cycles. Leaves work pending. |
-| `resume-project` | Empty input. Requires a sent pending goal and planner-confirmed dependencies at their selected revisions. Sets ready only inside the injected execution seam. |
-| `confirm-project` | `{id, reference, criteria: [{criterion_id, reference}]}`. Requires landed, current independently reviewed delivery on main and explicit evidence references for every criterion, including after-integration checks. |
+| `resume-project` | Empty input. Requires a sent pending goal and verified landed dependencies at their selected revisions. Sets ready only inside the injected execution seam. |
+| `confirm-project` | Obsolete and refused. Landing completes execution; record measured follow-ups with ordinary `mc goal criterion evidence` and check them with `mc goal done`. |
 | `diagnose-project` | Exact attempt IDs, technical diagnosis and a different retry approach, or a precise exception. |
-| `await-dependencies` | Empty input. Arms confirmed-dependency release of this exact sent goal revision. |
+| `await-dependencies` | Empty input. Arms verified-landing dependency release of this exact sent goal revision. |
 | `main-repair` | Creation envelope plus incident and approved scope basis. Reserves the one ordinary shared repair project. |
 | `wait-programme` / `exception-programme` | Durable bounded external condition or precise exception; see recovery policy. |
 | `reach-stop` | `{id, kind, programme_revision, stop, reference}` names an approved stop. Intent and stopped mode commit together after affected runs close. New dispatch is forbidden beyond it. |
@@ -81,7 +81,7 @@ prevent revision. The pending decision remains durable: after the run closes,
 refresh versions and explicitly supersede any stale uncommitted decision with
 `mc programme cancel ... --input-file <json>` containing `{id, reason}`. It is
 not a person-held design block. Independent running goals are not stopped.
-Delivered/confirmed scope cannot be rewritten: create a new goal for further work.
+Landed scope cannot be rewritten: create a new goal for further work.
 
 Revision conservatively invalidates current handoff, publication, review session,
 merge permission, landing and control/continuation bindings. Old observations and
@@ -123,7 +123,7 @@ authority.
 `mc gate tests/mc/programme-plan.test.js` covers full-programme context, role and
 lease denial, stale decisions, open-PR revision and invalidation, preserved
 independent runs, projection failure/replay across leases, changed approved
-revisions, dependencies/cycles, reviewed delivery confirmation, planned stops,
+revisions, dependencies/cycles, reviewed landing and measured follow-ups, planned stops,
 explicit completion, foreground non-activation, real detached Git worktrees and
 bounded transport closure. Fixtures use temporary roots/repos and controlled
 model/GitHub adapters, not live programmes or paid model calls.

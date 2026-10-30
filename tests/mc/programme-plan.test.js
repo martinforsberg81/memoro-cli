@@ -182,7 +182,7 @@ test('create, send and resume are separate guarded effects; dependencies reject 
   assert.equal(existsSync(join(f.paths.dir, project, 'PLAN.json')), false);
   f.apply(op('send-project'));
   f.apply(op('dependencies', { projects: [{ project: f.project, goal_revision: 1 }] }));
-  assert.throws(() => f.apply(op('resume-project')), /awaits planner confirmation/u);
+  assert.throws(() => f.apply(op('resume-project')), /awaits verified landing/u);
   cancelProgrammeOperation(f.options(), { id: 'resume-project', reason: 'Dependency is not delivered.' });
   assert.throws(() => f.apply(f.intent('dependencies', { projects: [{ project, goal_revision: 1 }] })), /cycle/u);
   cancelProgrammeOperation(f.options(), { id: 'dependencies-1', reason: 'Reject a cycle.' });
@@ -194,21 +194,23 @@ test('create, send and resume are separate guarded effects; dependencies reject 
   assert.equal(f.read().execution_enabled, false, 'test seam never enables production execution');
 });
 
-test('only the current independently reviewed delivery can be confirmed, with after-integration evidence', async t => {
+test('a current reviewed landing is complete without confirmation and its assignment stays immutable', async t => {
   const base = await ready(t);
   const report = base.stateNow().review_reports.at(-1);
   recordAutonomousMergeEvent(base.root, base.programme, base.project, { binding: reportBinding(report), type: 'merge-landed',
     details: { merge_commit: report.session.head, merged_into: 'main' } });
   const f = decorate(base, claim(base));
-  const before = f.read().metadata;
-  const input = { id: 'confirmed-delivery', reference: 'decisions/delivery', criteria: [
-    { criterion_id: 'schema', reference: 'reports/schema' }, { criterion_id: 'integration', reference: 'integration/observed' } ] };
-  assert.throws(() => f.apply(f.intent('confirm-project', { ...input, criteria: input.criteria.slice(0, 1) }, { id: 'incomplete-confirmation' })), /every criterion/u);
-  cancelProgrammeOperation(f.options(), { id: 'incomplete-confirmation', reason: 'Include after-integration proof.' });
-  f.apply(f.intent('confirm-project', input));
-  assert.equal(f.state().phase, 'confirmed'); assert.equal(f.state().evidence.confirmation.role, 'plan');
-  assert.equal(f.state().ownership.pr, 42); assert.deepEqual(f.read().metadata, before);
-  assert.equal(f.state().plan_decisions.at(-1).intent.input.criteria[1].reference, 'integration/observed');
+  const before = f.state();
+  assert.throws(() => f.apply(f.intent('confirm-project', { id: 'obsolete-confirm', reference: 'none', criteria: [] })), /obsolete/u);
+  cancelProgrammeOperation(f.options(), { id: 'confirm-project-1', reason: 'Landing completes execution without confirmation.' });
+  assert.throws(() => f.apply(f.intent('revise-project', { ...before.contract, goal_revision: 2 })), /immutable/u);
+  cancelProgrammeOperation(f.options(), { id: 'revise-project-1', reason: 'Additional work belongs to a new goal.' });
+  const owner = f.options();
+  mutateAutonomousProject(f.root, f.programme, f.project, 'follow-up', { id: 'integration-measured', criterion_id: 'integration',
+    goal_revision: 1, integrated_sha: report.session.head, outcome: 'passed', reference: 'measurements/integration' },
+    { actor: owner.actor, token: owner.token, revision: f.state().revision });
+  assert.equal(f.state().phase, 'landed'); assert.equal(f.state().evidence.confirmation, null);
+  assert.deepEqual(f.state().contract, before.contract); assert.equal(f.state().ownership.pr, 42);
 });
 
 test('a planner stop does not hold sent goals, clean-review merge admission or routing', async t => {
@@ -220,9 +222,9 @@ test('a planner stop does not hold sent goals, clean-review merge admission or r
   assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).kind, 'review');
 });
 
-test('undelivered goals cannot be confirmed and only explicit valid stops can halt future dispatch', t => {
+test('confirmation cannot fabricate delivery and only explicit valid stops can halt future dispatch', t => {
   const f = fixture(t);
-  assert.throws(() => f.apply(f.intent('confirm-project', { id: 'fake-confirmation', reference: 'none', criteria: [] })), /reviewed delivery/u);
+  assert.throws(() => f.apply(f.intent('confirm-project', { id: 'fake-confirmation', reference: 'none', criteria: [] })), /obsolete/u);
   cancelProgrammeOperation(f.options(), { id: 'confirm-project-1', reason: 'Not delivered.' });
   assert.throws(() => f.apply({ id: 'unplanned-stop', kind: 'reach-stop', stop: '../invalid-stop', reference: 'none' }), /stable ID/u);
   f.apply(f.intent('resume-project'));

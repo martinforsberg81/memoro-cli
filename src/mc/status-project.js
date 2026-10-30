@@ -1,3 +1,4 @@
+import { goalCompletion } from './goal-followup.js';
 /**
  * `mc status <name>` — one project on one page: what its plan says right
  * now, the last
@@ -151,8 +152,9 @@ export function renderProject({
       out.push(control?.execution_supported ? '  execution supported by this installation' : '  execution disabled — this installation does not run autonomous work');
       out.push(`  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision} · programme ${control?.mode || 'unknown'}`);
       if (autonomous) {
-        out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · planner confirmed: ${autonomous.confirmed}`);
+        out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · done on main: ${autonomous.done}`);
         out.push(`  branch ${autonomous.ownership.branch || 'none'} · PR ${autonomous.ownership.pr ? `#${autonomous.ownership.pr}` : 'none'}`);
+        if (autonomous.pending_follow_ups?.length) out.push(`  follow-ups pending: ${autonomous.pending_follow_ups.join(', ')}`);
         if (control) out.push(`  next ${control.next_action}${control.mode === 'active' ? '' : ` (held while ${control.mode})`} · mc programme status ${plan.programme.id}`);
       }
       for (const criterion of plan.success_criteria) {
@@ -279,7 +281,7 @@ export async function collectProject(name, {
     try {
       const state = readAutonomousState(root, programme, name);
       if (!isDeepStrictEqual(state.contract, plan)) throw new Error('published contract differs from authoritative autonomous state');
-      autonomous = { revision: state.revision, phase: state.phase, confirmed: state.confirmed,
+      autonomous = { revision: state.revision, phase: state.phase, ...goalCompletion(state),
         ownership: state.ownership, evidence: currentAutonomousEvidence(state) };
       const overview = programmeStatus(root, programme);
       autonomous.programme = { mode: overview.mode, execution_supported: overview.execution.supported,

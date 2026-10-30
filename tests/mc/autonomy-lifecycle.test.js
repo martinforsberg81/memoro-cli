@@ -7,6 +7,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, test } from 'node:test';
+import { goalCompletion } from '../../src/mc/goal-followup.js';
+import { mutateAutonomousProject } from '../../src/mc/autonomous-state.js';
 import { programmeStatus } from '../../src/mc/programme-status.js';
 import { setProgrammeJobMode } from '../../src/mc/programme-jobs.js';
 import { archiveDue } from '../../src/mc/project-archive.js';
@@ -40,13 +42,18 @@ async function opened(t, options) {
   w.open(PROJECT, { success_criteria: SHORT });
   return w;
 }
-/** Plan's confirmation once the goal has landed: every criterion, the integration one read on main. */
-function confirm(w, runId = 'plan-confirm') {
+/** A measured follow-up on landed main, without a confirmation transition. */
+function measure(w, plan, id = 'integration-measured', deps = {}) {
+  const state = w.state();
+  return mutateAutonomousProject(w.root, PROGRAMME, PROJECT, 'follow-up', { id, criterion_id: 'installed',
+    goal_revision: state.goal_revision, integrated_sha: state.landing.merge_commit, reference: 'measurements/main#installed', outcome: 'passed' },
+    { actor: plan.actor, token: plan.lease.token, revision: state.revision, ...deps });
+}
+function followUp(w, runId = 'plan-follow-up') {
   w.scan();
   const plan = w.plan(runId);
   assert.match(w.show('main', 'first.js'), /first = 1/u);
-  plan.decide('confirm-project', PROJECT, { id: `${runId}-delivery`, reference: 'decisions/confirm',
-    criteria: SHORT.map(item => ({ criterion_id: item.id, reference: `integration/main#${item.id}` })) });
+  if (goalCompletion(w.state()).pending_follow_ups.length) measure(w, plan);
   plan.finish();
 }
 /** What a recovered delivery must look like, whatever crashed on the way. */
@@ -55,13 +62,14 @@ function deliveredOnce(w) {
   assert.equal(w.hub.created(), 1, 'one PR');
   assert.deepEqual(w.hub.merges.map(item => [item.pr, item.head]), [[1, state.publication.head]], 'one merge, of the published head');
   assert.equal(w.tree('main'), w.tree(state.publication.head));
-  assert.equal(state.phase, 'confirmed'); assert.equal(state.confirmations.length, 1);
+  assert.equal(state.phase, 'landed'); assert.equal(state.follow_up_observations.length, 1);
+  assert.deepEqual(goalCompletion(state).pending_follow_ups, []);
   assert.equal(state.runs.filter(run => run.role === 'step').length, 1, 'no second builder');
   assert.equal(state.runs.filter(run => run.role === 'review').length, 1, 'no second review');
   assert.equal(state.plan_events.filter(item => item.type === 'merge-landed').length, 1);
 }
 
-test('one goal runs from a deliberate start to its planned stop: fresh sessions, findings to plan, one PR, exact-head landing, confirmation, archive', async t => {
+test('one goal runs from a deliberate start to its planned stop: fresh sessions, findings to plan, one PR, exact-head landing, measured follow-up, archive', async t => {
   const w = programmeWorld(t);
   assert.equal(w.programme().planner_jobs, undefined, 'nothing is started by installing or approving');
   assert.equal((await w.start()).code, 0);
@@ -145,29 +153,26 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.equal(w.state().phase, 'landing'); assert.equal(w.jobs().length, 1);
   assert.equal(w.jobs()[0].autonomous.head, head); assert.equal(w.jobs()[0].pr, 1);
   let archived = await w.archive();
-  assert.equal(archived.code, 1); assert.match(archived.err, /not confirmed by plan \(landing\)/u);
+  assert.equal(archived.code, 1); assert.match(archived.err, /without verified landing \(landing\)/u);
 
-  // The merger lands exactly the reviewed head; landing is not confirmation.
+  // The merger lands exactly the reviewed head; execution is done at landing.
   const outcome = await w.land();
   assert.equal(outcome.landed, true, JSON.stringify(outcome.report));
   assert.deepEqual(w.hub.merges.map(item => [item.pr, item.head]), [[1, head]]);
   assert.equal(w.tree('main'), w.tree(head), 'main holds the reviewed tree');
   assert.equal(w.state().phase, 'landed'); assert.equal(w.state().confirmed, false);
   archived = await w.archive();
-  assert.equal(archived.code, 1); assert.match(archived.err, /not confirmed by plan \(landed\)/u);
+  assert.equal(archived.code, 1); assert.match(archived.err, /pending follow-ups \(installed\)/u);
   assert.equal(archiveDue({ record: w.record(), entry: { steps: [{ status: 'done' }] }, nowMs: Date.now() }).due, false);
 
-  // After integration plan checks the integration criterion on main and alone confirms.
+  // Integration is measured separately, without reopening execution or confirming.
   w.scan();
-  plan = w.plan('plan-confirm');
+  plan = w.plan('plan-follow-up');
   assert.ok(plan.events().includes('landed'));
   assert.match(w.show('main', 'second.js'), /=> first/u);
-  const criteria = CRITERIA.map(item => ({ criterion_id: item.id, reference: `integration/main#${item.id}` }));
-  const partial = plan.intent('confirm-project', PROJECT, { id: 'confirm-partial', reference: 'decisions/confirm', criteria: criteria.slice(0, 2) });
-  assert.throws(() => plan.apply(partial), /including after-integration/u);
-  plan.cancel(partial.id, 'The after-integration criterion is measured on main first.');
-  plan.decide('confirm-project', PROJECT, { id: 'confirm-delivery', reference: 'decisions/confirm', criteria });
-  assert.equal(w.state().confirmed, true); assert.equal(w.state().phase, 'confirmed');
+  measure(w, plan);
+  assert.equal(w.state().phase, 'landed');
+  assert.deepEqual(goalCompletion(w.state()).pending_follow_ups, []);
 
   // The planned stop: nothing starts beyond it, not even by a resume.
   plan.stop(); plan.finish();
@@ -187,7 +192,7 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.equal(existsSync(programmeDir), false);
   const kept = join(w.root, 'archive', 'programs', PROGRAMME);
   assert.equal(JSON.parse(readFileSync(join(kept, 'PROGRAMME_STATE.json'), 'utf8')).planner_jobs.stop, 'design-review');
-  assert.equal(JSON.parse(readFileSync(join(kept, PROJECT, 'AUTONOMOUS_STATE.json'), 'utf8')).confirmed, true);
+  assert.deepEqual(goalCompletion(JSON.parse(readFileSync(join(kept, PROJECT, 'AUTONOMOUS_STATE.json'), 'utf8'))).pending_follow_ups, []);
 });
 
 for (const exit of ['red-gate', 'forced-exit']) test(`closing mid-criterion with a ${exit} keeps the work for plan and claims no green`, async t => {
@@ -384,8 +389,8 @@ const CRASHES = {
     w.land(); await died.promise;
     assert.equal(w.hub.merges.length, 1); assert.equal(w.state().phase, 'landing');
   },
-  // Plan's confirmation is durable on the goal; plan dies before acknowledging it.
-  'after the confirmation': async w => {
+  // The follow-up is durable; plan dies before acknowledging its delivery.
+  'after the follow-up measurement': async w => {
     w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready' });
     assert.equal(await w.run(), 'ran');
     w.review(cleanReview(SHORT));
@@ -393,29 +398,24 @@ const CRASHES = {
     assert.equal((await w.land()).landed, true);
     w.scan();
     const plan = w.plan('plan-dies');
-    const intent = plan.intent('confirm-project', PROJECT, { id: 'confirm-once', reference: 'decisions/confirm',
-      criteria: SHORT.map(item => ({ criterion_id: item.id, reference: `integration/main#${item.id}` })) });
-    let writes = 0;
-    assert.throws(() => plan.apply(intent, { deps: { write: (file, value) => {
-      if (file.endsWith('PROGRAMME_STATE.json') && ++writes === 2) throw new Error('plan died');
-      writeJsonAtomic(file, value);
-    } } }), /plan died/u);
-    assert.equal(w.state().confirmed, true);
-    // The orphaned lease is recovered; the next plan replays the same decision.
+    assert.throws(() => measure(w, plan, 'measured-once', { write: (file, value) => {
+      writeJsonAtomic(file, value); throw new Error('plan died');
+    } }), /plan died/u);
+    assert.deepEqual(goalCompletion(w.state()).pending_follow_ups, []);
     w.scan({ alive: () => false });
     const next = w.plan('plan-replays');
-    next.apply(intent); next.finish();
-    assert.equal(w.programme().planner_jobs.operations.filter(item => item.intent.id === intent.id && item.status === 'applied').length, 1);
+    assert.deepEqual(goalCompletion(w.state()).pending_follow_ups, []); next.finish();
+    assert.equal(w.state().follow_up_observations.length, 1);
   },
 };
 // Each world is its own temporary root and origin: the cases run side by side.
 describe('a crash at each external and persistence boundary', { concurrency: 3 }, () => {
-  for (const [boundary, crash] of Object.entries(CRASHES)) it(`${boundary} recovers to one PR, one merge and one confirmation`, async t => {
+  for (const [boundary, crash] of Object.entries(CRASHES)) it(`${boundary} recovers to one PR, one merge and one measured follow-up`, async t => {
     const w = await opened(t);
     await crash(w);
     if (w.state().phase === 'review_ready') { w.review(cleanReview(SHORT)); assert.equal(await w.run(), 'ran'); }
     if (w.state().phase === 'landing') assert.equal((await w.land()).landed, true);
-    if (w.state().phase === 'landed') confirm(w);
+    if (w.state().phase === 'landed') followUp(w);
     deliveredOnce(w);
   });
 });

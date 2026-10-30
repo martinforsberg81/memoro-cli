@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, readProgrammeState, updateProgrammeRegister, AUTONOMOUS_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
+import { reviewedLanding } from './goal-followup.js';
 import { STABLE_ID_RE } from './goal-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
@@ -205,20 +206,20 @@ function projectTriggers(paths, options, state, journal) {
         source: `${paths.id}/${name}/${source.id}/${failure}`, reference: `${file}#plan_events/${source.id}` });
     }
   }
-  const incidents = reconcileMainRepairsLocked(options.root);
+  const incidents = reconcileMainRepairsLocked(options.root, { evidenceRoot: options.evidenceRoot });
   for (const incident of incidents) {
     if (incident.owner === paths.id) events.push({ id: `incident-${digest(incident.id).slice(0, 55)}`, type: 'failure',
       reference: `${options.root}/runner/programme-incidents.json#${incident.id}` });
     if (incident.status === 'resolved' && incident.dependents.some(item => item.programme === paths.id)) events.push({
       id: `resolved-${digest(incident.id).slice(0, 55)}`, type: 'dependency',
-      reference: `${options.root}/runner/programme-incidents.json#${incident.id}/confirmation` });
+      reference: `${options.root}/runner/programme-incidents.json#${incident.id}/measurement` });
   }
   for (const [name, { state: project, file }] of projects) {
     const dependencies = project.plan_dependencies || [];
     if (!dependencies.length) continue;
     const available = dependencies.every(item => {
       const dependency = projects.get(item.project)?.state;
-      return dependency?.confirmed && dependency.goal_revision === item.goal_revision;
+      return dependency && reviewedLanding(dependency) && dependency.goal_revision === item.goal_revision;
     });
     if (!available) continue;
     const id = `dep-${digest([name, project.goal_revision, dependencies]).slice(0, 60)}`;

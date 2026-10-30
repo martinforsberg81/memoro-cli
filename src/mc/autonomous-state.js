@@ -12,6 +12,7 @@ import { reviewDigest, reviewInputProblems, cleanReviewInput } from './autonomou
 import { PLAN_FILE } from './plan-source.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { STABLE_ID_RE } from './goal-contract.js';
+import { reviewedLanding, goalCompletion, followUpObservationProblems } from './goal-followup.js';
 import { validateProgrammeMetadata } from './programme-metadata.js';
 import { validateAutonomousProject, autonomousRevisionProblems, validateAutonomousEvidence, evidenceForRevision } from './autonomous-project.js';
 import { planOperationProblems } from './programme-plan-contract.js';
@@ -21,7 +22,7 @@ import { readClaim, processAlive } from './resource-claim.js';
 export const GOAL_STATE_VERSION = 2;
 export const PROGRAMME_STATE_FILE = 'PROGRAMME_STATE.json';
 export const AUTONOMOUS_STATE_FILE = 'AUTONOMOUS_STATE.json';
-export const AUTONOMOUS_PHASES = Object.freeze(['ready', 'running', 'handoff_requested', 'closing', 'publishing', 'review_ready', 'reviewing', 'plan_pending', 'landing', 'landed', 'confirmed']);
+export const AUTONOMOUS_PHASES = Object.freeze(['ready', 'running', 'handoff_requested', 'closing', 'publishing', 'review_ready', 'reviewing', 'plan_pending', 'landing', 'landed']);
 const valid = result => { if (!result.ok) throw new Error(result.problems.join('; ')); };
 const name = value => { if (typeof value !== 'string' || !STABLE_ID_RE.test(value)) throw new Error('a stable lower-case ID is required'); return value; };
 const read = file => {
@@ -128,6 +129,7 @@ function projectState(paths) {
   if (state.active_run !== null) actorCheck(state.active_run);
   if (new Set(state.runs.map(run => { actorCheck(run); return run.run_id; })).size !== state.runs.length) throw new Error('duplicate run ID');
   if (state.active_run && !state.runs.some(run => isDeepStrictEqual(run, state.active_run))) throw new Error('active goal run is missing from history');
+  goalCompletion(state); // Fail closed on damaged follow-up history.
   return state;
 }
 function rejectRetiredCriteria(history, current, next) {
@@ -199,8 +201,8 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
     expected(state, intent.expected_revision);
     plannerBoundary(root, programme, state);
     const next = structuredClone(state);
-    if (state.confirmed) throw new Error('confirmed goals are immutable; create remaining work as another goal');
-    if (state.phase === 'landed' && intent.kind !== 'confirm-project') throw new Error('delivered scope is immutable; create remaining work as another goal');
+    if (intent.kind === 'confirm-project') throw new Error('confirmation is obsolete; record follow-up measurements with mc goal criterion evidence');
+    if (state.phase === 'landed') throw new Error('delivered scope is immutable; create remaining work as another goal');
     if (intent.kind === 'revise-project') {
       assignmentInProgramme(agreement, intent.input);
       const invalid = autonomousRevisionProblems(state.contract, intent.input);
@@ -242,21 +244,6 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
       assertProjectRecovery(state);
       next.phase = 'ready';
       delete next.publication; delete next.merge_handoff; delete next.dependency_release;
-    } else if (intent.kind === 'confirm-project') {
-      if (mainIncidentHold(root, programme, intent.project)) throw new Error('confirmation waits for the shared main repair');
-      const report = state.review_reports?.at(-1);
-      const binding = state.landing?.binding;
-      if (state.phase !== 'landed' || !report?.clean || !binding || binding.report_id !== report.id
-        || binding.report_digest !== reviewDigest(report) || binding.goal_revision !== state.goal_revision || binding.head !== state.publication?.head
-        || report.session.assignment.goal_revision !== state.goal_revision || report.session.head !== binding.head
-        || !/^[a-f0-9]{40}$/u.test(state.landing.merge_commit || '') || state.landing.merged_into !== 'main') throw new Error('confirmation requires the current independently reviewed delivery on main');
-      const ids = state.contract.success_criteria.map(item => item.id);
-      if (intent.input.criteria.length !== ids.length || new Set(intent.input.criteria.map(item => item.criterion_id)).size !== ids.length
-        || intent.input.criteria.some(item => !ids.includes(item.criterion_id))) throw new Error('confirmation must account for every criterion, including after-integration evidence');
-      if (state.confirmations.some(item => item.id === intent.input.id)) throw new Error('confirmation ID already used');
-      const record = { id: intent.input.id, reference: intent.input.reference, role: 'plan', run_id: actor.run_id, project_id: intent.project,
-        programme_id: programme, goal_revision: state.goal_revision };
-      next.evidence.confirmation = record; next.confirmations.push(record); next.confirmed = true; next.phase = 'confirmed';
     }
     next.plan_sent ||= existsSync(join(paths.projectDir, PLAN_FILE));
     next.plan_decisions = [...(state.plan_decisions || []), { intent, run_id: actor.run_id,
@@ -276,7 +263,7 @@ function assertProgrammeDispatch(root, programme, state) {
   if (incident) throw new Error(`shared main incident ${incident.id} awaits its owning programme plan`);
   for (const item of state.plan_dependencies || []) {
     const dependency = projectState(autonomousPaths(root, programme, item.project));
-    if (!dependency.confirmed || dependency.goal_revision !== item.goal_revision) throw new Error(`dependency ${item.project} awaits planner confirmation`);
+    if (!reviewedLanding(dependency) || dependency.goal_revision !== item.goal_revision) throw new Error(`dependency ${item.project} awaits verified landing`);
   }
 }
 export function readProgrammeState(root, programme, deps = {}) {
@@ -404,7 +391,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
       schema: 'mc-autonomous-state', version: GOAL_STATE_VERSION, contract: input, contracts: [input], active_run: null,
       phase: 'plan_pending', goal_revision: 1,
       ownership: { branch: null, pr: null }, commits: [], current_handoff: null,
-      attempts: [], runs: [], evidence: { builder: [], reviews: [], confirmation: null }, confirmations: [], confirmed: false,
+      attempts: [], runs: [], follow_up_observations: [], evidence: { builder: [], reviews: [], confirmation: null }, confirmations: [], confirmed: false,
       planning_operations: [{ actor: operationActor, operation: 'create', expected_revision: revision, goal_revision: 1 }],
       ...(receipt ? { operation_receipts: [{ ...receipt, run_id: operationActor.run_id }] } : {}),
     }, deps);
@@ -428,10 +415,11 @@ export function reserveProjectRun(root, programme, project, actor, revision, dep
 export function mutateAutonomousProject(root, programme, project, operation, input, { actor, revision, ...deps }) {
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
-    const planning = ['revise', 'recover'].includes(operation);
+    if (operation === 'confirm') throw new Error('confirmation is obsolete; record follow-up measurements with mc goal criterion evidence');
+    const planning = ['revise', 'recover', 'follow-up'].includes(operation);
     const operationActor = planning ? planningActor(programmeState(paths), actor, deps) : actor;
     if (planning) plannerBoundary(root, programme, state);
-    const roles = { revise: ['plan'], recover: ['plan'], confirm: ['plan'], progress: ['step'], report: ['review'], attempt: ['step', 'review', 'plan'], release: ['step', 'review', 'plan'] };
+    const roles = { progress: ['step'], report: ['review'], attempt: ['step', 'review', 'plan'], release: ['step', 'review', 'plan'] };
     if (!planning) owner(state, actor, roles[operation] || []);
     if (state.review_session?.run_id === operationActor.run_id && operation !== 'report') throw new Error('independent review may only submit its report');
     if (operation === 'progress' && state.session_control) ownedControl(state, actor);
@@ -440,15 +428,29 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       const agreement = programmeState(paths);
       // Preserve pre-outbox reservation/release behavior. Once jobs are in use,
       // every planner write is fenced, including attempts and releases.
-      if (agreement.planner_jobs || ['revise', 'confirm', 'recover'].includes(operation)) owner(agreement, actor, ['plan'], deps.now?.());
+      if (agreement.planner_jobs) owner(agreement, actor, ['plan'], deps.now?.());
     }
     if (operation === 'recover') {
       (deps.writeDraft || writeJsonAtomic)(paths.draft, state.contract);
       if (state.plan_sent || existsSync(join(paths.projectDir, PLAN_FILE))) (deps.writePlan || writeJsonAtomic)(join(paths.projectDir, PLAN_FILE), state.contract);
       return structuredClone(state);
     }
-    if (operation === 'revise') {
-      if (state.confirmed || ['landed', 'confirmed'].includes(state.phase)) throw new Error('delivered scope is immutable; create another goal');
+    if (state.phase === 'landed' && !['follow-up', 'release'].includes(operation)) throw new Error('delivered scope is immutable; create another goal');
+    if (operation === 'follow-up') {
+      const landing = reviewedLanding(state);
+      if (!landing) throw new Error('follow-up measurements require verified landing of the current reviewed goal');
+      const record = { ...input, run_id: operationActor.run_id, project_id: project, programme_id: programme };
+      const problems = followUpObservationProblems(record);
+      if (problems.length) throw new Error(problems.join('; '));
+      if (record.goal_revision !== state.goal_revision || record.integrated_sha !== landing.merge_commit) throw new Error('stale follow-up measurement: goal revision and integrated SHA must match the landing');
+      if (!state.contract.success_criteria.some(item => item.id === record.criterion_id && item.verification === 'after-integration')) throw new Error('follow-up measurement needs an after-integration criterion');
+      const previous = state.follow_up_observations?.find(item => item.id === record.id);
+      if (previous) {
+        if (!isDeepStrictEqual(previous, record)) throw new Error('follow-up observation is immutable');
+        return structuredClone(state);
+      }
+      next.follow_up_observations = [...(state.follow_up_observations || []), record];
+    } else if (operation === 'revise') {
       assignmentInProgramme(programmeState(paths), input);
       const problems = autonomousRevisionProblems(state.contract, input);
       if (problems.length) throw new Error(problems.join('; '));
@@ -458,7 +460,7 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       next.evidence.confirmation = null; next.current_handoff = null; next.phase = 'plan_pending';
       for (const field of ['publication', 'review_session', 'review_submission', 'merge_handoff', 'landing', 'continuation', 'session_control', 'dependency_release']) delete next[field];
       recordPlanningOperation(next, operationActor, 'revise', revision);
-    } else if (operation === 'progress' || operation === 'report' || operation === 'confirm') {
+    } else if (operation === 'progress' || operation === 'report') {
       const record = { ...input, run_id: actor.run_id, project_id: project, programme_id: programme,
         goal_revision: state.goal_revision };
       const records = [...state.evidence.builder, ...state.evidence.reviews, ...state.confirmations];
@@ -479,8 +481,6 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
         if (!Array.isArray(record.criteria) || record.criteria.length !== ids.size || new Set(record.criteria.map(item => item.criterion_id)).size !== ids.size) throw new Error('review must cover every criterion exactly once');
         if (record.criteria?.some(item => !ids.has(item.criterion_id))) throw new Error('unknown criterion ID');
         next.evidence.reviews.push(record);
-      } else {
-        record.role = 'plan'; next.evidence.confirmation = record; next.confirmations.push(record); next.confirmed = true; next.phase = 'confirmed';
       }
       valid(validateAutonomousEvidence(next.evidence));
     } else if (operation === 'attempt') {
@@ -727,17 +727,23 @@ export function incompleteAutonomousReview(root, programme, project, { actor, re
   }, deps);
 }
 
-/** Trusted outcome writer. Events precede queue cleanup; replay never confirms
- * a goal, resurrects an answered handoff or rewrites a later assignment. */
+/** Trusted outcome writer. Events precede queue cleanup; replay never requests
+ * another merge, resurrects an answered handoff or rewrites a later assignment. */
 export function recordAutonomousMergeEvent(root, programme, project, { binding, type, details = {}, ticket = null, ...deps }) {
   return locked(root, programme, project, paths => {
     const state = projectState(paths);
     if (!['merge-queued', 'merge-refused', 'merge-failed', 'merge-unknown', 'merge-landed'].includes(type)) throw new Error('unknown autonomous merge event');
     const report = state.review_reports?.find(item => item.id === binding.report_id);
     const bound = !!report && reviewDigest(report) === binding.report_digest
-      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision;
+      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision
+      && report.session.branch === binding.branch && report.session.pr === binding.pr;
     if (state.ownership.pr !== binding.pr || state.ownership.branch !== binding.branch
       || (!bound && ['merge-queued', 'merge-landed'].includes(type))) throw new Error('merge event report/ownership binding changed');
+    if (type === 'merge-landed') {
+      if (!report?.clean || !cleanReviewInput(report.result, report.session.assignment) || report.invalid_reasons?.length !== 0
+        || details.merged_into !== 'main' || !/^[a-f0-9]{40}$/u.test(details.merge_commit || '')) throw new Error('landing requires a clean independent review and verified main commit');
+      details = { merge_commit: details.merge_commit, merged_into: 'main' };
+    }
     // Missing/damaged evidence can carry a refusal to plan, never permission
     // to queue or attribute a successful landing to that evidence.
     const event = { id: `${type}-${reviewDigest({ binding, details })}`, type, binding, binding_verified: bound, details };
@@ -745,18 +751,23 @@ export function recordAutonomousMergeEvent(root, programme, project, { binding, 
     if (previous.some(item => item.id === event.id)) return structuredClone(state);
     const current = state.goal_revision === binding.goal_revision
       && state.publication?.head === binding.head && (!state.review_reports?.length || state.review_reports.at(-1).id === binding.report_id);
+    if (current && type === 'merge-landed' && state.landing && !isDeepStrictEqual(state.landing.binding, binding)) throw new Error('landed assignment cannot change');
+    if (current && type === 'merge-landed' && state.landing && state.landing.merge_commit !== details.merge_commit) throw new Error('landed commit cannot change');
     const next = { ...state, plan_events: [...previous, event] };
     if (type === 'merge-queued') {
-      if (!current || state.active_run || state.confirmed || !['plan_pending', 'landing'].includes(state.phase)
+      if (!current || state.active_run || !['plan_pending', 'landing'].includes(state.phase)
         || (state.merge_handoff?.status === 'answered' && isDeepStrictEqual(state.merge_handoff.binding, binding))) throw new Error('autonomous merge handoff is no longer pending');
       if (!ticket || ticket.head !== binding.head || ticket.review_id !== binding.report_id
         || ticket.review_digest !== binding.report_digest) throw new Error('merge ticket does not match report');
       next.phase = 'landing'; next.merge_handoff = { binding, ticket, status: 'pending' };
-    } else if (current) {
+    } else if (current && (type === 'merge-landed' || state.phase !== 'landed')) {
       next.merge_handoff = { binding, ticket: ticket || state.merge_handoff?.ticket || null, status: 'answered' };
       // A late failure cannot undo a read-back landing or a planner decision.
-      if (type === 'merge-landed') next.landing = { ...details, binding };
-      if (!state.confirmed && !state.active_run) {
+      if (type === 'merge-landed') {
+        next.landing = { ...details, binding, observed_at: new Date(deps.now?.() ?? Date.now()).toISOString() };
+        if (!reviewedLanding({ ...next, phase: 'landed' })) throw new Error('landing does not match the current reviewed assignment');
+      }
+      if (!state.active_run) {
         if (type === 'merge-landed') next.phase = 'landed';
         else if (state.phase !== 'landed') next.phase = 'plan_pending';
       }

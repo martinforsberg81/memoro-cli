@@ -34,7 +34,7 @@ once the outbox is present; pre-outbox v2 reservation behavior is preserved.
 
 `reconcileProgrammeJobs` scans durable project review/merge events and incomplete
 attempts. Dependencies can also be supplied as immutable trigger records.
-[Programme recovery](mc-programme-recovery.md) automatically observes confirmed
+[Programme recovery](mc-programme-recovery.md) automatically observes verified landed
 dependencies, selected releases and shared-main failures. Active
 programmes without a next action receive an idle trigger, deduplicated for the
 same project-state snapshot rather than spinning up planners on unchanged work.
@@ -69,8 +69,8 @@ A planner must reserve that project before further guarded goal operations.
 On repeated delivery, the matching receipt reconciles a committed creation and
 repairs a missing DRAFT projection. It never creates another project or silently
 adopts an unrelated existing one. A crash after acknowledgement returns the same
-result. Pending effects prevent job acknowledgement. Goal revision, send and
-confirmation now have their own operation receipts/readback in the
+result. Pending effects prevent job acknowledgement. Goal revision and send
+have their own operation receipts/readback in the
 [guarded planner facade](mc-programme-plan.md). The original creation seam stays
 compatible. Explicit uncommitted cancellation is journaled; committed effects
 must be reconciled. No arbitrary external effects are claimed exactly-once,

@@ -26,7 +26,7 @@ import { SESSION_START_MAX_BYTES } from '../../src/mc/session-handoff.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { readClaim } from '../../src/mc/resource-claim.js';
 import { landJob } from '../../src/mc/merger.js';
-import { parseQueue, mergesPath } from '../../src/mc/merge-queue.js';
+import { parseQueue, mergesPath, dequeue } from '../../src/mc/merge-queue.js';
 import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { archiveProgramme } from '../../src/mc/archive-programme.js';
@@ -295,6 +295,10 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
         gate: async () => ({ ok: true, stopped_at: null, reason: null, base: { commit: hub.head('main') },
           pr: { number: job.pr, base: 'main', head: job.branch, head_sha: hub.head(job.branch) },
           candidate: { red: [], totals: { tests: 1, fail: 0 } }, extra_gates: [] }) }) });
+    // This fixture invokes landJob, not serve's loop. Complete the same queue
+    // acknowledgement serve writes after the durable landing outcome. A crash
+    // before landJob returns retains the row for readback as in production.
+    if (outcome.landed && outcome.report?.ok && outcome.report.merged) writeJsonAtomic(mergesPath(root), dequeue(w.jobs(), job));
     return outcome;
   };
   /** `mc plan <programme> --archive` with the docs merge and area release as adapters. */

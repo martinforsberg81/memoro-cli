@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readProgrammeState, readAutonomousState, currentAutonomousEvidence, PUBLICATION_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
 import { STABLE_ID_RE } from './goal-contract.js';
+import { goalCompletion } from './goal-followup.js';
 import { installationCapabilities, missingCapabilities } from './programme-control.js';
 import { mainIncidentHold } from './programme-recovery.js';
 import { reviewRoutePending } from './autonomous-outcomes.js';
@@ -35,7 +36,7 @@ function claimHolder(root, programme, project) {
 }
 
 function evidenceQuality(state, criteria, report) {
-  if (state.confirmed) return 'confirmed by plan';
+  if (goalCompletion(state).done) return 'reviewed delivery landed on main';
   const premerge = criteria.filter(item => item.verification === 'premerge');
   if (report?.current && report.clean) return 'clean independent review of the published head';
   if (report?.current) return 'review findings for plan';
@@ -53,7 +54,6 @@ function gateState(state) {
 }
 
 function goalAction(root, state, holds) {
-  if (state.confirmed) return 'none — confirmed by plan';
   const run = state.active_run;
   if (run?.role === 'step') return `build session ${run.run_id} ${state.session_control?.phase || state.phase}`;
   if (run?.role === 'review') return `independent review ${run.run_id} running`;
@@ -64,11 +64,15 @@ function goalAction(root, state, holds) {
   if (state.phase === 'ready') return 'start a build session';
   if (state.phase === 'review_ready') return 'start an independent review';
   if (state.phase === 'landing') return `merger lands #${state.ownership.pr ?? UNKNOWN}`;
-  if (state.phase === 'landed') return 'plan confirms the landed delivery';
+  if (state.phase === 'landed') {
+    const completion = goalCompletion(state);
+    if (!completion.done) return 'unknown — landing evidence is incomplete';
+    return completion.pending_follow_ups.length ? `measure follow-ups: ${completion.pending_follow_ups.join(', ')}` : 'none — done on main';
+  }
   let route = false;
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';
-  if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to be confirmed`;
+  if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to land`;
   return 'plan decides the next step for this goal';
 }
 
@@ -99,7 +103,7 @@ export function goalStatus(root, programme, project) {
   return {
     project, phase: state.phase, state_revision: state.revision, goal_revision: state.goal_revision,
     work_class: state.contract.work_class, programme_phase: state.contract.programme_phase,
-    confirmed: state.confirmed, branch: state.ownership.branch, pr: state.ownership.pr, active_run: state.active_run,
+    ...goalCompletion(state), branch: state.ownership.branch, pr: state.ownership.pr, active_run: state.active_run,
     criteria,
     evidence: { quality: evidenceQuality(state, criteria, report), gate: gateState(state),
       premerge_verified: criteria.filter(item => item.verification === 'premerge' && item.builder === 'verified').length,
@@ -259,7 +263,7 @@ export function renderProgrammeStatus(status) {
   row('stop', status.planned_stop.target ? `runs to ${status.planned_stop.target} — ${clip(status.planned_stop.condition, 70)}${status.planned_stop.reached ? ' · reached' : ''}`
     : `none chosen · agreed stops: ${status.planned_stop.agreed.join(', ') || 'none'}`);
   const plan = status.plan;
-  row('plan', `owns goals and confirmation · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
+  row('plan', `owns goals and follow-ups · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
   if (status.pause) row('paused', `${status.pause.at} by ${status.pause.by} (was ${status.pause.previous})`);
   if (status.wait) row('wait', `${status.wait.kind}: ${status.wait.reason}${status.wait.until ? ` · until ${status.wait.until}` : ' · external'}`);
   if (status.exception) row('exception', `${status.exception.code || UNKNOWN}: ${status.exception.reason}`);
@@ -279,6 +283,7 @@ export function renderProgrammeStatus(status) {
     sub('session', goal.session ? `${goal.session.run_id} ${goal.session.phase}${goal.session.reason ? ` (${goal.session.reason})` : ''} · ${goal.session.activity} · context ${goal.session.context.fraction === UNKNOWN ? UNKNOWN : `${Math.round(goal.session.context.fraction * 100)}% ${goal.session.context.quality}`}` : 'none');
     if (goal.publication) sub('publish', `${goal.publication.phase}${goal.publication.head ? ` · head ${goal.publication.head.slice(0, 7)}` : ''}${goal.publication.pr ? ` · #${goal.publication.pr}` : ''}`);
     if (goal.merge || goal.landing) sub('merge', `${goal.merge ? `handoff ${goal.merge.status}` : ''}${goal.landing ? `${goal.merge ? ' · ' : ''}landed ${goal.landing.merge_commit.slice(0, 7)} on ${goal.landing.merged_into}` : ''}`);
+    if (goal.follow_ups.length) sub('follow-ups', goal.follow_ups.map(item => `${item.criterion_id} ${item.outcome}`).join(' · '));
     if (goal.waits.length) sub('waits', goal.waits.join('; '));
     sub('next', goal.next_action);
   }

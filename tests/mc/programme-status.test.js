@@ -168,7 +168,7 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   text = renderProgrammeStatus(status);
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);
   assert.match(text, /publish {4}handoff_committed · head bbbbbbb · #42/u);
-  assert.match(text, /plan {8}owns goals and confirmation · no session · 1 pending event/u);
+  assert.match(text, /plan {8}owns goals and follow-ups · no session · 1 pending event/u);
 });
 
 test('a revised goal ignores older evidence and a claimed planner is visible as the continuation', async t => {

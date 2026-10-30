@@ -88,7 +88,7 @@ test('v2 status exposes revisioned observations read-only without seeding or app
       programs: () => programsPlans({ home: join(f.root, 'programs') }), merges: () => null };
     const before = readFileSync(f.paths.project, 'utf8');
     const status = await collectProject(f.project, options);
-    assert.deepEqual(status.plan, autonomousProject()); assert.equal(status.autonomous.confirmed, false);
+    assert.deepEqual(status.plan, autonomousProject()); assert.equal(status.autonomous.done, false);
     assert.equal(status.machine.runnable, false); assert.equal(status.machine.reason, 'inactive');
     assert.deepEqual(overlayPlans([{ plan: status.plan }], { root: f.root, write: () => assert.fail('v1 write') }), [{ plan: status.plan }]);
     assert.deepEqual(applyEntry({ plan: status.plan }, { steps: [] }), { plan: status.plan });

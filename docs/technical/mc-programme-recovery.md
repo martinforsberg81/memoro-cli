@@ -12,9 +12,12 @@ Reconciliation delivers review/build/merge outcomes to the same coalesced plan
 job. Current review findings cannot go directly back to build, even by asking
 for `resume-project`: plan must revise the goal or create different work. The
 same branch/PR, reports and unsuccessful attempts survive revision and restart.
-A clean reviewed landing is `landed`, not `confirmed`. The existing guarded
-confirmation accounts for **every** criterion, including after-integration
-observations. No new permission to deploy follows from a deferred check.
+A clean reviewed landing is `landed` and completes execution of that goal
+revision. After-integration criteria remain separate follow-ups: planning records
+measurements with criterion ID, goal revision, integrated SHA, reference and
+`passed`, `failed` or `unknown` outcome. `mc goal done` checks that the latest
+current measurement for every follow-up passed; it never writes a landing.
+No new permission to deploy follows from a deferred check.
 
 `diagnose-project` uses the usual project decision envelope and basis, with:
 
@@ -45,13 +48,13 @@ refuses an active/unknown builder claim or an active publication.
 
 `dependencies` selects exact same-programme goal revisions, preserving the
 existing cycle checks. Reconciliation automatically delivers a dependency event
-when those revisions are planner-confirmed. It does not treat a landing as
-confirmation or choose the next goal itself.
+when those exact revisions have verified reviewed landings on main. Open
+follow-ups do not hold goal dependencies; reconciliation does not choose the next goal itself.
 
 Plan may additionally issue `await-dependencies` (empty input) for a sent,
 pending goal with selected dependencies. This explicitly authorizes its later
 release. Reconciliation atomically records `ready` and a release outbox event
-once all dependencies are confirmed, runs are closed, the sent contract matches
+once all dependencies have verified landings, runs are closed, the sent contract matches
 and no shared-main incident holds it. Replaying an interrupted programme
 acknowledgement cannot release twice. A changed selected goal revision fences
 the selection; plan must reselect it. Unrelated goals and programme metadata
@@ -88,8 +91,13 @@ The rationale is mechanically referenced, not semantic proof that
 prose scope permits repository-wide repairs. Without that authority, plan records
 a precise programme exception rather than expanding scope.
 
-Dependents remain held through repair landing and after-integration verification.
-Only current planner confirmation resolves the shared incident. Resolution emits
+A repair landing alone never resolves red main. Reconciliation requires a new
+successful gate receipt covering the affected main check, without test filtering
+or incomplete/cancelled execution. It must postdate the landing and every incident
+observation, measure the exact tree of a main commit containing that landing,
+and belong to the repair's repository. Premerge publication receipts cannot qualify.
+The incident retains the measurement reference, integrated and measured SHAs and
+outcome separately from execution state. Resolution emits
 durable dependency events for affected programmes; plan then authorizes any
 failed work to resume. No branch/PR, failed history or publication is discarded.
 The designated ordinary repair can observe its own assigned failure again without
@@ -127,5 +135,5 @@ bounded quota/network/resource waits, exceptions and a stop reached once. Real
 Git fixtures and controlled adapters cover review/merge recording without hosted
 model calls, live programme activation or deployment.
 The recovery suite also follows a clean reviewed landing through complete
-after-integration confirmation to exactly one selected next-goal release, and
+verified landing to exactly one selected next-goal release while follow-ups remain open, and
 checks revision fencing, repair self-observation and unknown/live stop claims.

@@ -18,7 +18,7 @@ without durable ownership also refuses rather than guessing authority.
 settled publication, durable normal handoff, matching sent goal assignment,
 all current published verified premerge criterion evidence, and a complete clean
 independent report are required. After-integration criteria may remain deferred;
-they do not block their own merge or count as planner confirmation. Active or
+they do not block their own merge or count as measured follow-ups. Active or
 incomplete attempts are not admissions.
 
 The report must match the full assignment and criterion digests, published SHA,
@@ -73,7 +73,7 @@ of whether the gate found any tests to rerun.
 `recordAutonomousReview` atomically appends the immutable report, its attributed
 criterion summary and a `review-reported` event to `AUTONOMOUS_STATE.json`.
 Every criterion remains visible, including findings, uncertainty and deferred
-after-integration work. Neither the report nor routing confirms the goal or
+after-integration work. Neither the report nor routing fabricates landing or
 creates a build job. Findings/unknowns stay `plan_pending` for plan.
 
 After the review process exits, `routeAutonomousReview` rechecks the full
@@ -112,9 +112,9 @@ wait. V1 keeps its existing mend, load retries, push handling and step booking.
 A crash after the actual squash but before its event is recovered from GitHub,
 either by the restarted queue job, the red-row sweep after `merge-unknown`, or
 the routing continuation of a direct round. It writes `merge-landed` and
-`landing` facts, never planner confirmation. `landed` is not `confirmed`.
-Deferred after-integration checks still need follow-up before plan confirms;
-they do not block their own merge. Existing v2 archive guards refuse the legacy
+`landing` facts. Execution is done at that verified reviewed landing; there is
+no confirmation phase. Deferred after-integration checks remain measured follow-ups
+until their latest revision/SHA-bound observations pass; they do not block their own merge. Existing v2 archive guards refuse the legacy
 auto-archive path even after landing; autonomous archive/activation remains
 future operations work. No live programme is activated here.
 
@@ -131,4 +131,4 @@ restarted queue metadata without hosted model calls or live programmes.
 also exercises trusted runner auto-routing, duplicate report/event delivery,
 report/queue-intent/landing crash gaps, unavailable state persistence,
 head/main movement, lost merge replies and later readback, no premature
-confirmation/archive, autonomous red ownership and the preserved v1 retries.
+completion/archive, autonomous red ownership and the preserved v1 retries.

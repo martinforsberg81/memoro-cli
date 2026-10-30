@@ -104,7 +104,7 @@ read: it takes the same locks as other readers and writes nothing. It shows:
   missing, approved and draft revisions, the state revision to pass back;
 - the activation (when, by whom, build class and reviewer model) and the
   planned stop it runs to, with whether it has been reached;
-- plan ownership: plan owns goals and confirmation; its current lease, pending
+- plan ownership: plan owns goals and follow-ups; its current lease, pending
   trigger events and unreconciled operation intents;
 - a known wait or exception, the pause record, and everything *in flight*;
 - the next automatic action, which says plainly when nothing will happen
@@ -135,9 +135,11 @@ per programme that has `PROGRAMME_STATE.json`; with none, the page is unchanged.
 A programme with autonomous goals ends the way every programme does, with
 `mc plan <programme> --archive` ([mc-plan.md](mc-plan.md#archiving-a-programme)),
 and only then: the runner never archives a v2 goal on its own. The archive is
-refused while any goal is not confirmed by plan (a landed goal is not), while
-the programme is active, paused, waiting or in an exception, or while a plan
-session holds its lease. Before that every programme record stays where it is;
+refused while any goal lacks a verified reviewed landing, has unfinished
+follow-ups or still has live/unknown ownership or pending work. Programme leases,
+unacknowledged events/effects, queued merges and open main incidents also hold
+archive, as do active, paused, waiting or exception programme modes. No planner
+confirmation is required. Before that every programme record stays where it is;
 after, the programme's directory, its `PROGRAMME_STATE.json` and every goal's
 state with it, moves whole to `~/mc/archive/programs/<programme>/`.
 
@@ -174,13 +176,13 @@ sessions and the merge round's gate are deterministic adapters
 - `mc gate tests/mc/autonomy-lifecycle.test.js`: one goal from a deliberate
   start through fresh bounded sessions, a main conflict integrated by the next
   session, review findings to plan only, a plan revision on the same branch and
-  PR, a clean review, the exact-head landing, after-integration confirmation,
+  PR, a clean review, the exact-head landing, after-integration measurements,
   the planned stop and the programme archive; a closing mid-criterion with a red
   gate or a forced exit; a real process that ignores closure (and SIGTERM) and
   one that loses its clock; a long gate that keeps its lane and its builder; a
   crash after the push, after PR creation, after the review report, after the
-  merge intent, after the merge and after plan's confirmation, each recovered to
-  one PR, one merge and one confirmation; main or head movement and damaged
+  merge intent, after the merge and after the follow-up measurement, each recovered to
+  one PR, one merge and one measured follow-up; main or head movement and damaged
   ownership after review; one red main shared by two goals becoming one
   incident and one repair, a quota wait, and stagnation counted across sessions.
 - `mc gate tests/mc/autonomy-coexistence.test.js`: a v1 project beside a v2

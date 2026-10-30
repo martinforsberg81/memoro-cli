@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { readAutonomousState, recordAutonomousMergeEvent } from './autonomous-state.js';
+import { reviewedLanding } from './goal-followup.js';
 import { reviewDigest } from './autonomous-review-report.js';
 import { autonomousMergeDoor, autonomousPrOwner } from './autonomous-pr.js';
 import { mergesPath, parseQueue, queuedFor } from './merge-queue.js';
@@ -45,7 +46,7 @@ export function recordMergeOutcome({ root, job, report }) {
   const binding = ticket?.review_id && ticket.pr === owner.pr && ticket.branch === owner.branch ? ticketBinding(ticket) : fallback;
   const matched = state.review_reports?.find(item => item.id === binding.report_id);
   const verified = !!matched && isDeepStrictEqual(reportBinding(matched), binding);
-  const landed = report?.ok && report.merged && report.merged_into === 'main' && !report.off_default && report.merge_commit;
+  const landed = /^[a-f0-9]{40}$/u.test(report?.merge_commit || '') && report?.ok && report.merged && report.merged_into === 'main' && !report.off_default && report.merge_commit;
   const type = landed && verified ? 'merge-landed' : landed || ['merge-unknown', 'autonomous-landing-unknown'].includes(report?.stopped_at) ? 'merge-unknown' : 'merge-failed';
   const mainFailures = report?.main_red?.red_on_main || report?.gate?.main_red?.red_on_main || [];
   const details = landed ? { merge_commit: report.merge_commit, merged_into: 'main',
@@ -58,7 +59,7 @@ export function recordMergeOutcome({ root, job, report }) {
  * A queued intent with no queue row is a crash gap, not a new build/review. */
 export function reviewRoutePending(root, state) {
   const report = state.review_reports?.at(-1);
-  if (state.active_run || state.confirmed || !report?.clean || !['plan_pending', 'landing'].includes(state.phase)
+  if (state.active_run || reviewedLanding(state) || !report?.clean || !['plan_pending', 'landing'].includes(state.phase)
     || report.session.assignment.goal_revision !== state.goal_revision || report.session.head !== state.publication?.head
     || (state.merge_handoff?.status === 'answered' && state.merge_handoff.binding.report_id === report.id)) return false;
   const path = mergesPath(root);

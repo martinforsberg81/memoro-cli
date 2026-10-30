@@ -48,7 +48,7 @@ The routed command modules take these argument vectors:
 - `programme show <programme>`
 - `programme metadata <programme> --expected-revision <n> --input-file <json>`
 - `autonomous-project show <programme>/<project>`
-- `autonomous-project create|revise|progress|report|confirm|attempt <programme>/<project> --expected-revision <n> --input-file <json>`
+- `autonomous-project create|revise|progress|report|attempt <programme>/<project> --expected-revision <n> --input-file <json>`
 - `autonomous-project send|release|recover <programme>/<project> --expected-revision <n>`
 
 These are transitional entry points pending ordinary `goal` verbs. The old
@@ -70,15 +70,21 @@ report digest and independent-model checks remain required at every merge.
 
 Autonomy off disables only new headless planner claims. Sent goals continue
 build, review and merge. The installed runner still has no autonomous
-capability, so this cutover activates nothing. Confirmation/dependency follow-up
-semantics and obsolete entry-point removal are subsequent project steps.
+capability, so this cutover activates nothing. Execution completes at a verified
+reviewed landing on main. Follow-up measurements stay in append-only
+`follow_up_observations`, separate from builder/review evidence; `confirmed` is
+not an execution phase. Obsolete entry-point removal is a subsequent project step.
 
 `step` may append builder progress; `review` may append independent reports.
 Neither can change scope or confirm. Record attribution is stamped from the
 active reservation and current contract, not trusted from the input. Evidence
 IDs cannot be overwritten. Verification observations are not green gate
-receipts or merge authorization. Planner confirmation is a separate attributed
-decision, not inferred from builder or review progress.
+receipts or merge authorization. After landing, either planning session can
+record after-integration evidence through `mc goal criterion evidence` with
+`--integrated-sha <sha> --outcome passed|failed|unknown`. The goal revision and
+landing SHA must match. `mc goal done` is an idempotent read that refuses missing,
+stale or unsuccessful follow-up measurements. Landed assignments are immutable;
+additional implementation belongs to a new goal. Confirmation writes are refused.
 
 `attempt` accepts `{id, reason, commits, branch?, pr?, handoff?}`; commits are
 full SHAs. It appends an **incomplete** result, never a green handoff. Existing

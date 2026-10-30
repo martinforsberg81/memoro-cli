@@ -181,10 +181,12 @@ test('active build, review and merge phases refuse revision even without a recor
     assert.throws(() => f.revise(assignment({ goal_revision: 2 })), /safe boundary/u);
     assert.equal(readFileSync(f.paths.project, 'utf8'), before);
   }
-  for (const phase of ['landed', 'confirmed']) {
-    writeFileSync(f.paths.project, JSON.stringify({ ...original, phase }));
-    assert.throws(() => f.revise(assignment({ goal_revision: 2 })), /immutable/u);
-  }
+  writeFileSync(f.paths.project, JSON.stringify({ ...original, phase: 'landed' }));
+  assert.throws(() => f.revise(assignment({ goal_revision: 2 })), /immutable/u);
+  writeFileSync(f.paths.project, JSON.stringify({ ...original, phase: 'confirmed' }));
+  const obsolete = readFileSync(f.paths.project, 'utf8');
+  assert.throws(() => f.revise(assignment({ goal_revision: 2 })), /invalid autonomous state/u);
+  assert.equal(readFileSync(f.paths.project, 'utf8'), obsolete, 'obsolete execution states fail closed, never migrate');
 });
 
 test('a live project owner cannot be replaced by a foreground operation', t => {

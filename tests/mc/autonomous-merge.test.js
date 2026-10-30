@@ -353,11 +353,11 @@ test('a crash after landing but before its event uses GitHub readback, never ano
   assert.equal(jobsOf(f).length, 0);
 });
 
-test('a late old-revision outcome is retained without overwriting the current assignment or confirmation', async t => {
+test('a late old-revision outcome is retained without overwriting the current assignment or completion', async t => {
   const f = await ready(t); await route(f); const [job] = jobsOf(f);
-  f.patch(state => { state.goal_revision++; state.contract = { ...state.contract, goal_revision: state.goal_revision }; state.contracts.push(state.contract); state.phase = 'confirmed'; state.confirmed = true; });
+  f.patch(state => { state.goal_revision++; state.contract = { ...state.contract, goal_revision: state.goal_revision }; state.contracts.push(state.contract); state.phase = 'plan_pending'; delete state.landing; });
   recordMergeOutcome({ root: f.root, job, report: { ok: true, merged: true, merged_into: 'main', merge_commit: 'b'.repeat(40) } });
-  assert.equal(f.stateNow().phase, 'confirmed'); assert.equal(f.stateNow().confirmed, true);
+  assert.equal(f.stateNow().phase, 'plan_pending'); assert.equal(f.stateNow().landing, undefined);
   assert.equal(f.stateNow().plan_events.at(-1).binding.goal_revision, 1);
 });
 

@@ -27,7 +27,7 @@
  *
  * Refused, with nothing touched, while any plan under the programme is still
  * on main in either repository (a done one is the runner's to archive first),
- * while an autonomous (v2) goal is not confirmed by plan or the programme's
+ * while an autonomous (v2) goal has not landed or has pending follow-ups, or the programme's
  * autonomous work is anything but not started or resting at a reached planned
  * stop (`autonomousArchiveFacts`), or while release would keep anything — uncommitted work, commits main
  * lacks, a shell standing in the directory, a file somebody put there. Main
@@ -36,7 +36,7 @@
  * and running it again carries on: an archive PR still open from an earlier
  * attempt is landed rather than opened twice.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,6 +44,10 @@ import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from '
 import { listPlans, listProgrammes } from './brief-collect.js';
 import { archivedProgramsHome, programsHome, workRoot } from './paths.js';
 import { autonomousPaths, readAutonomousState, readProgrammeState } from './autonomous-state.js';
+import { goalCompletion } from './goal-followup.js';
+import { readClaim, processAlive } from './resource-claim.js';
+import { mergesPath } from './merge-queue.js';
+import { readProgrammeIncidents } from './programme-recovery.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 import { tilde } from './status-project.js';
@@ -82,21 +86,24 @@ export function archiveVerdict({
 }) {
   const lines = [];
   for (const plan of plans) {
-    // An autonomous goal is never the runner's to archive: its confirmation decides, below.
+    // Autonomous execution and follow-ups are checked below, not by v1 status.
     if (plan.plan?.version === 2) continue;
     lines.push(`${plan.repo} ${programme}/${plan.project} is still on main (${plan.status || 'no status'})`
       + (plan.status === 'done' ? ' — mc run archives it first' : ''));
   }
   for (const goal of autonomy?.goals || []) {
-    if (goal.confirmed) continue;
+    if (goal.done && !goal.pending_follow_ups?.length && !goal.owner && !goal.pending_work) continue;
     lines.push(`${goal.repo} ${programme}/${goal.project} is an autonomous goal `
-      + (goal.problem ? `whose state is unreadable (${goal.problem})` : `not confirmed by plan (${goal.phase})`)
+      + (goal.problem ? `whose state is unreadable (${goal.problem})` : !goal.done ? `without verified landing (${goal.phase})`
+        : goal.pending_follow_ups?.length ? `with pending follow-ups (${goal.pending_follow_ups.join(', ')})`
+          : goal.owner ? `still owned by ${goal.owner}` : 'with pending work')
       + ' — its records stay with the programme');
   }
   if (autonomy?.problem) lines.push(`${programme}'s autonomous state is unreadable (${autonomy.problem}) — kept for recovery`);
   else if (autonomy?.mode && !['inactive', 'stopped'].includes(autonomy.mode)) {
     lines.push(`${programme} is ${autonomy.mode} — an autonomous programme is archived before its start or at a reached planned stop`);
   } else if (autonomy?.planner) lines.push(`${programme}'s plan session ${autonomy.planner} still holds its lease`);
+  if (autonomy?.pending_work) lines.push(`${programme} has pending autonomous work — reconcile it before archiving`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
   for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
@@ -196,28 +203,51 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
 /**
  * What the archive needs to know about a programme's autonomous work, read
  * under the state locks and never written: each v2 goal among `plans` with
- * whether plan has confirmed it (landing is not confirmation), and the
+ * its verified landing, pending follow-ups and ownership, and the
  * programme's job mode and planner lease. `{ goals: [], mode: null }` for a
  * programme without `PROGRAMME_STATE.json`. Unreadable state is a `problem`,
  * never an absent goal.
  */
 export function autonomousArchiveFacts({ root, programme, plans = [] }) {
-  const goals = plans.filter((plan) => plan.plan?.version === 2).map((plan) => {
+  let paths;
+  try { paths = autonomousPaths(root, programme); } catch (error) {
+    return { goals: plans.filter(plan => plan.plan?.version === 2).map(plan => ({
+      repo: plan.repo, project: plan.project, done: false, problem: error.message,
+    })), mode: null };
+  }
+  const candidates = new Map(plans.filter(plan => plan.plan?.version === 2).map(plan => [plan.project, plan]));
+  // Unsent goals and goals absent from main still own records in the programme.
+  if (existsSync(paths.dir)) for (const entry of readdirSync(paths.dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && existsSync(join(paths.dir, entry.name, 'AUTONOMOUS_STATE.json')) && !candidates.has(entry.name)) {
+      candidates.set(entry.name, { project: entry.name, repo: 'unknown' });
+    }
+  }
+  const goals = [...candidates.values()].map((plan) => {
     try {
       const state = readAutonomousState(root, programme, plan.project);
-      return { repo: plan.repo, project: plan.project, phase: state.phase,
-        confirmed: state.confirmed === true && state.phase === 'confirmed' && state.evidence.confirmation?.role === 'plan' };
+      const claimPath = join(root, 'runner', 'autonomous-builds', programme, `${plan.project}.claim`);
+      const claim = existsSync(claimPath) ? readClaim(claimPath) : null;
+      const held = existsSync(claimPath) && (!claim || processAlive(claim.pid));
+      let queued = false;
+      if (existsSync(mergesPath(root))) {
+        const entries = JSON.parse(readFileSync(mergesPath(root), 'utf8'));
+        if (!Array.isArray(entries) || entries.some(item => !item || typeof item.repo !== 'string' || !Number.isSafeInteger(item.pr))) throw new Error('merge queue is unreadable');
+        queued = entries.some(item => item.repo === state.contract.repo && item.pr === state.ownership.pr);
+      }
+      return { repo: state.contract.repo, project: plan.project, phase: state.phase, ...goalCompletion(state),
+        owner: state.active_run?.run_id || (held ? `builder claim ${claim?.pid || 'unknown'}` : null),
+        pending_work: queued || state.merge_handoff?.status === 'pending' || state.dependency_release?.status === 'waiting' };
     } catch (error) {
-      return { repo: plan.repo, project: plan.project, phase: null, confirmed: false, problem: error.message };
+      return { repo: plan.repo, project: plan.project, phase: null, done: false, problem: error.message };
     }
   });
-  // A name that is no stable ID has no autonomous state at all.
-  let file;
-  try { file = autonomousPaths(root, programme).programme; } catch { return { goals, mode: null }; }
-  if (!existsSync(file)) return { goals, mode: null };
+  if (!existsSync(paths.programme)) return { goals, mode: null };
   try {
-    const journal = readProgrammeState(root, programme).planner_jobs;
-    return { goals, mode: journal?.mode || 'inactive', planner: journal?.lease?.actor.run_id || null };
+    const state = readProgrammeState(root, programme); const journal = state.planner_jobs;
+    return { goals, mode: journal?.mode || 'inactive', planner: journal?.lease?.actor.run_id || state.active_run?.run_id || null,
+      pending_work: !!journal?.pending?.event_ids.length || !!journal?.operations.some(item => item.status === 'pending')
+        || readProgrammeIncidents(root).some(item => item.status === 'open'
+          && (item.owner === programme || item.dependents.some(item => item.programme === programme))) };
   } catch (error) {
     return { goals, mode: null, problem: error.message };
   }
