@@ -55,10 +55,3 @@ export async function run(argv, deps = {}) {
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
-
-export function usage() {
-  return 'usage — mc autonomous-project show <programme>/<project>\n'
-    + '        mc autonomous-project create|revise|progress|report|confirm|attempt|finish <programme>/<project> --expected-revision <n> --input-file <json>\n'
-    + '        mc autonomous-project send|release|recover <programme>/<project> --expected-revision <n>\n'
-    + '        send publishes an inactive contract; autonomous execution is disabled\n';
-}

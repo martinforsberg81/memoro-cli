@@ -1,0 +1,1 @@
+Programme status shows a clean goal's merge route and dependency wait again, and `mc status` no longer calls sent goals held by a pause. A revised goal's send re-pins its dependencies. Shipped prompts no longer mention confirmation, and refusals and help name `mc goal` instead of the removed `mc autonomous-project` and the v2 `mc project send`.

@@ -22,7 +22,7 @@ contract ceilings, not context telemetry estimates or session-control thresholds
 
 ## Model results versus observations
 
-Results and their handoffs carry `programme_id`, `programme_revision`,
+Results and their handoffs carry `programme_id`,
 `project_id`, `goal_revision` and `run_id`. Evidence entries carry the same binding
 and an assigned criterion ID, measured-evidence reference and summary. Each handoff
 names the last published SHA (or null for an incomplete attempt), implemented and

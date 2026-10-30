@@ -1,5 +1,5 @@
-import { goalCompletion } from './goal-followup.js';
 /** Guarded headless plan facade. No production activation or model launch. */
+import { goalCompletion } from './goal-followup.js';
 import { applyProgrammeProjectOperation, readProgrammePlanSnapshot, readProgrammeState } from './autonomous-state.js';
 import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammePlanStop, holdProgrammePlan } from './programme-jobs.js';
 import { projectRecovery, readProgrammeIncidents } from './programme-recovery.js';

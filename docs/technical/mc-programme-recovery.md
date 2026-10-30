@@ -112,7 +112,7 @@ the dependents' holds and the final green publication/merge requirements remain.
 
 ## External waits and exhausted continuations
 
-Plan can atomically journal `wait-programme` with `id`, `programme_revision`,
+Plan can atomically journal `wait-programme` with `id`,
 `reference`, a stable `condition` ID and `wait: {kind, reason, until}`. Quota,
 network and resource waits require a future retry within 24 hours. An external
 dependency may have `until: null` and remains explicitly waiting for the external
@@ -120,9 +120,9 @@ operations seam. Timed expiry creates a fresh durable planner event, even when
 the previous claimed snapshot was acknowledged before restart. Repeated IDs are
 idempotent. Three waits on the same condition exhaust into a precise
 `wait-exhausted` exception, with history intact. This conservative bound does not
-reset at a session or programme-revision change.
+reset at a session or goal-revision change.
 
-`exception-programme` carries `id`, `programme_revision`, `reference` and
+`exception-programme` carries `id`, `reference` and
 `exception: {code, reason}`. It records an explicit dispatch hold, not a planned
 stop or a question for a new agent. Failed planner transports also preserve the
 job and use bounded 30/60-second resource backoff; a third unsuccessful delivery

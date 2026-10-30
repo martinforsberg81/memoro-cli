@@ -103,7 +103,7 @@ const stamp = now => new Date(now).toISOString();
 const logged = (journal, entry) => { journal.control = [...(journal.control || []), entry]; };
 
 /** Inactive → active, once, with the activation trigger persisted in the same
- * write. The approved revision, the stop and the profiles are recorded. */
+ * write. The stop and the profiles are recorded. */
 export function startProgramme({ root, programme, revision, stop, now = Date.now(), deps = {} }, input) {
   const capabilities = supportedCapabilities(deps);
   const problems = startInputProblems(input, deps.catalog ? deps.catalog() : DEFAULT_CATALOG);

@@ -97,7 +97,7 @@ checkout fingerprint, and checks that the source checkout is unchanged. Changed
 checkout, moved publication, failure/interruption or absent submission cannot be clean. Missing/invalid submissions become
 explicit unknown observations for every criterion. A report is clean only with
 no defects/uncertainties/invalidation and verified premerge observations;
-after-integration deferral stays pending, not planner-confirmed.
+after-integration deferral stays a follow-up to measure after landing.
 
 The full immutable `mc-autonomous-review-report` and frozen session are appended
 to authoritative `AUTONOMOUS_STATE.json`'s `review_reports`; the existing
@@ -117,7 +117,7 @@ Review itself still neither queues nor merges. After its process exits, the
 trusted runner automatically routes a complete current clean report through
 that door to the existing merger. Findings/unknowns remain with plan, as do
 all merge outcomes. Routing crash recovery never launches another builder or
-reviewer. Landed remains distinct from planner-confirmed. Execution remains
+reviewer. Landing completes execution; follow-ups stay measured. Execution remains
 inactive; see the merge document for event identities and recovery.
 
 ## Verification

@@ -262,7 +262,7 @@ function draftLines(name, found, plan) {
     `  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision}`,
     ...plan.success_criteria.map(criterion => `  ${criterion.id}  ${criterion.criterion} (${criterion.verification})`),
     ...validateProject(plan).problems.map(problem => `  ${problem}`),
-    `send: mc project send ${name} --expected-revision <state-revision> (inactive publication)`];
+    `send: mc goal send ${found.programme}/${name}`];
   const goal = Array.isArray(plan.goal) ? plan.goal[0] : undefined;
   if (goal) lines.push(goal, '');
 
@@ -1196,7 +1196,6 @@ export function usage() {
     '        mc project step edit <project> <n> [--title <text>] [--model fast|large] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        a step names a work class; mc picks the model when the step starts (ruling 59)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
-    '        mc project send <v2-project> --expected-revision <n>   publish the guarded v2 contract, inactive and without a legacy review step\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',

@@ -1,4 +1,3 @@
-import { goalCompletion } from './goal-followup.js';
 /**
  * `mc status <name>` — one project on one page: what its plan says right
  * now, the last
@@ -23,6 +22,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
+import { goalCompletion } from './goal-followup.js';
 import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
@@ -155,7 +155,7 @@ export function renderProject({
         out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · done on main: ${autonomous.done}`);
         out.push(`  branch ${autonomous.ownership.branch || 'none'} · PR ${autonomous.ownership.pr ? `#${autonomous.ownership.pr}` : 'none'}`);
         if (autonomous.pending_follow_ups?.length) out.push(`  follow-ups pending: ${autonomous.pending_follow_ups.join(', ')}`);
-        if (control) out.push(`  next ${control.next_action}${control.mode === 'active' ? '' : ` (held while ${control.mode})`} · mc programme status ${plan.programme.id}`);
+        if (control) out.push(`  next ${control.next_action} · mc programme status ${plan.programme.id}`);
       }
       for (const criterion of plan.success_criteria) {
         const latest = autonomous?.evidence.builder.filter(item => item.criterion_id === criterion.id).at(-1);

@@ -112,7 +112,7 @@ export function validateSessionResult(value, context) {
   return { ok: problems.length === 0, problems };
 }
 
-const STANDING = 'Build only the current goal assignment. Only plan revises goals or confirms completion. Independent review reports findings without repairs. Read referenced detail on demand; prior interpretation and evidence are continuation context, not proof for this run. A normal result requires a relevant green gate and matching committed/pushed content on the same branch/PR. An interrupted attempt is incomplete, never green.';
+const STANDING = 'Build only the current goal assignment. Only plan revises goals. Independent review reports findings without repairs. Read referenced detail on demand; prior interpretation and evidence are continuation context, not proof for this run. A normal result requires a relevant green gate and matching committed/pushed content on the same branch/PR. An interrupted attempt is incomplete, never green.';
 
 /** One fresh payload, not transcript concatenation. Oversize requirements fail
  * closed: callers must obtain a bounded assignment, never trim its criteria. */

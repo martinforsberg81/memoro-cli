@@ -170,6 +170,18 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.match(text, /plan {8}owns goals and follow-ups · no session · 1 pending event/u);
 });
 
+test('a pending goal names its merge route or dependency before the unavailable planner', t => {
+  const f = fixture(t);
+  f.release(); f.building(); f.reviewed({ clean: true });
+  const next = () => programmeStatus(f.root, f.programme, { capabilities: supported }).goals[0].next_action;
+  assert.equal(next(), 'submit the clean review for merge');
+  f.patch(state => {
+    state.review_reports = []; state.plan_dependencies = [{ project: 'other-goal', goal_revision: 1 }];
+    state.dependency_release = { goal_revision: state.goal_revision, status: 'waiting', operation: 'goal-send-1' };
+  });
+  assert.equal(next(), 'wait for other-goal to land');
+});
+
 test('a revised goal ignores older evidence and a claimed planner is visible as the continuation', async t => {
   const f = fixture(t);
   assert.equal(await f.start(), 0, f.err());
@@ -316,9 +328,9 @@ test('the page draws AUTONOMY only for programmes with autonomous state and mc s
 
   const state = readAutonomousState(f.root, f.programme, f.project);
   const text = renderProject({ name: f.project, repo: 'memoro-cli', programme: f.programme, path: '/p/PLAN.json', plan: state.contract,
-    workarea: null, runs: [], prs: [], autonomous: { revision: state.revision, phase: state.phase, confirmed: false, ownership: state.ownership,
+    workarea: null, runs: [], prs: [], autonomous: { revision: state.revision, phase: state.phase, done: false, ownership: state.ownership,
       evidence: state.evidence, programme: { mode: 'paused', execution_supported: false, next_action: 'build session build-1 running' } } });
   assert.match(text, /execution disabled — this installation does not run autonomous work/u);
   assert.match(text, /goal revision 1 · programme paused/u);
-  assert.match(text, /next build session build-1 running \(held while paused\) · mc programme status test-programme/u);
+  assert.match(text, /next build session build-1 running · mc programme status test-programme/u);
 });

@@ -86,8 +86,9 @@ mc programme status <programme>
 Sending an assignment makes the current goal revision ready for a build when
 its selected dependencies have verified landings. Otherwise it remains
 pending, and the dependency scanner releases it when those exact revisions
-land. A revised assignment is sent again to make it ready. Sending never
-starts a session or enables the production autonomous runner.
+land. A revised assignment is sent again to make it ready; that send keeps its
+dependencies, pinned to their current revisions, unless `--after` names others.
+Sending never starts a session or enables the production autonomous runner.
 
 The same verbs serve the interactive plan session and the headless one. A
 headless session differs only in that it runs under the runner's lease and

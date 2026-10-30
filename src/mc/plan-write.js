@@ -371,7 +371,7 @@ export function readDraftOrPlan(file, { read = (path) => readFileSync(path, 'utf
 /** Legacy verbs must not mutate a versioned contract or its draft projection. */
 export function legacyMutationProblem(file, plan) {
   return (plan?.version !== undefined && plan.version !== 1) || existsSync(join(dirname(file), 'AUTONOMOUS_STATE.json'))
-    ? `unsupported: this is not a fixed-step v1 project — use mc autonomous-project for v2 operations`
+    ? `unsupported: this is not a fixed-step v1 project — use mc goal for v2 operations`
     : null;
 }
 

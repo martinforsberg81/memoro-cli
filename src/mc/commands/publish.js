@@ -53,7 +53,7 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const autonomous = deps.autonomousPublication || null;
   if ((env.MC_AUTONOMOUS_RUN || env.MC_AUTONOMOUS_ROLE) && !autonomous) {
-    stderr.write('mc: autonomous publication requires mc autonomous-project finish; ordinary publish cannot close this run\n');
+    stderr.write('mc: autonomous publication requires mc goal finish; ordinary publish cannot close this run\n');
     return 1;
   }
   const scanned = scanArgs(argv, { booleans: ['--json', '--no-merge'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
@@ -81,7 +81,7 @@ export async function run(argv, deps = {}) {
 
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   if (!autonomous && autonomousBranchHeld({ root: deps.root || workRoot(env), repo: repoNameOf(root), branch })) {
-    stderr.write('mc: known autonomous branch requires mc autonomous-project finish; nothing pushed or queued\n'); return 1;
+    stderr.write('mc: known autonomous branch requires mc goal finish; nothing pushed or queued\n'); return 1;
   }
   let autonomousListed = null;
   if (autonomous) {

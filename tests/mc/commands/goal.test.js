@@ -44,6 +44,8 @@ test('leased planner uses ordinary goal verbs and cannot publish outside its pro
   const result = runMcCli(['goal', 'revise', `${f.programme}/${f.project}`, '--expected-revision', '1', '--input-file', f.file(autonomousProject({ goal_revision: 2 }))], env, { cwd: f.root });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).goal_revision, 2);
+  const decide = runMcCli(['programme', 'decide', f.programme, '--expected-revision', '1', '--input-file', f.file({})], env, { cwd: f.root });
+  assert.notEqual(decide.status, 0); assert.match(decide.stderr, /author goals/u);
 });
 
 test('goal role boundaries reject assignment changes by builder and reviewer; dependency names fail closed', t => {
@@ -74,5 +76,32 @@ test('goal role boundaries reject assignment changes by builder and reviewer; de
   });
   assert.equal(evidence.status, 0, evidence.stderr);
   assert.equal(readAutonomousState(f.root, f.programme, 'owner').evidence.builder[0].reference, 'evidence/cli.json');
+});
+
+test('a sent goal keeps its pinned dependencies until a revision is sent again', t => {
+  const f = stateFixture(); t.after(f.cleanup); releaseProgrammeRun(f.root, f.programme, foreground, 1); const w = workspace(f);
+  const more = name => w.cli(['goal', 'criterion', 'add', `${f.programme}/${name}`, '--id', 'later', '--criterion', 'More is true.', '--instruction', 'Measure more.', '--check', 'mc gate tests/mc/commands/goal.test.js', '--verify', 'premerge']);
+  for (const name of ['first', 'second']) { assert.equal(w.newGoal(name).status, 0); assert.equal(w.criterion(name).status, 0); }
+  assert.equal(w.cli(['goal', 'send', `${f.programme}/second`, '--after', 'first']).status, 0);
+  assert.equal(more('first').status, 0);
+  const stale = w.cli(['goal', 'send', `${f.programme}/second`]);
+  assert.notEqual(stale.status, 0); assert.match(stale.stderr, /revise the goal/u);
+  assert.equal(more('second').status, 0);
+  const sent = w.cli(['goal', 'send', `${f.programme}/second`]);
+  assert.equal(sent.status, 0, sent.stderr);
+  const state = readAutonomousState(f.root, f.programme, 'second');
+  assert.deepEqual(state.plan_dependencies, [{ project: 'first', goal_revision: 3 }]);
+  assert.equal(state.phase, 'plan_pending'); assert.equal(state.dependency_release.status, 'waiting');
+});
+
+test('shipped prompts and refusals name ordinary goal verbs, never confirmation or a removed route', t => {
+  const f = stateFixture(); t.after(f.cleanup); releaseProgrammeRun(f.root, f.programme, foreground, 1); const w = workspace(f);
+  for (const file of ['canon/roles/_plan-autonomous.md', 'canon/roles/_step-autonomous.md', 'canon/roles/_review-autonomous.md', 'canon/roles/plan.md',
+    'src/mc/session-handoff.js', 'src/mc/help-text.js', 'src/mc/plan-write.js', 'src/mc/commands/publish.js', 'src/mc/commands/project.js', 'src/mc/commands/programme.js']) {
+    const text = readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(text, /confirms completion|mc autonomous-project|mc programme (draft|approve|decide|complete|cancel)|<v2-project>/u, file);
+  }
+  assert.equal(w.newGoal('drafted').status, 0); assert.equal(w.criterion('drafted').status, 0);
+  assert.match(w.cli(['project', 'drafted']).stdout, new RegExp(`send: mc goal send ${f.programme}/drafted`, 'u'));
 });
 

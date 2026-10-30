@@ -266,7 +266,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
       next.dependency_release = { goal_revision: state.goal_revision, status: 'waiting', operation: intent.id };
     } else if (intent.kind === 'resume-project') {
       if (state.phase !== 'plan_pending' || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('resume needs a sent, pending goal');
-      assertProgrammeDispatch(root, programme, state, agreement);
+      assertProgrammeDispatch(root, programme, state);
       assertProjectRecovery(state);
       next.phase = 'ready';
       delete next.publication; delete next.merge_handoff; delete next.dependency_release;
@@ -319,7 +319,8 @@ export function sendAutonomousProject(root, programme, project, { actor, revisio
     const operationActor = planningActor(agreement, actor, deps);
     plannerBoundary(root, programme, state);
     assignmentInProgramme(agreement, state.contract);
-    const after = deps.after || [];
+    // A send without --after keeps the selected goals, pinned to their current revisions.
+    const after = deps.after?.length ? deps.after : (state.plan_dependencies || []).map(item => item.project);
     if (!Array.isArray(after) || after.some(item => typeof item !== 'string' || !STABLE_ID_RE.test(item))) throw new Error('dependencies must be goal names');
     if (new Set(after).size !== after.length) throw new Error('duplicate goal dependency');
     if (after.includes(project)) throw new Error('a goal cannot depend on itself');
@@ -337,7 +338,9 @@ export function sendAutonomousProject(root, programme, project, { actor, revisio
     const file = join(paths.projectDir, PLAN_FILE);
     if (existsSync(file) && !isDeepStrictEqual(read(file), state.contract)) throw new Error('a different PLAN.json already exists');
     if (state.plan_sent && existsSync(file)) {
-      if (!isDeepStrictEqual(state.plan_dependencies || [], dependencies)) throw new Error('sent goal dependencies are immutable; revise the goal before changing them');
+      const sent = (state.planning_operations || []).filter(item => item.operation === 'send').at(-1)?.goal_revision;
+      if ((state.phase !== 'plan_pending' || sent === state.goal_revision)
+        && !isDeepStrictEqual(state.plan_dependencies || [], dependencies)) throw new Error('sent goal dependencies are immutable; revise the goal before changing them');
       if (state.phase !== 'plan_pending') return structuredClone(state.contract);
     }
     const next = structuredClone(state);
@@ -673,7 +676,7 @@ export function startAutonomousBuild(root, programme, project, { actor, revision
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     if (state.active_run || state.phase !== 'ready') throw new Error('project is not ready or already has an owner');
-    assertProgrammeDispatch(root, programme, state, programmeState(paths));
+    assertProgrammeDispatch(root, programme, state);
     if (!isDeepStrictEqual(state.contract, assignment) || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), assignment)) throw new Error('assignment changed or is not sent');
     assignmentInProgramme(programmeState(paths), assignment);
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
@@ -697,7 +700,7 @@ export function startAutonomousReview(root, programme, project, { actor, revisio
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     if (state.active_run || state.phase !== 'review_ready') throw new Error('project is not review ready');
-    assertProgrammeDispatch(root, programme, state, programmeState(paths));
+    assertProgrammeDispatch(root, programme, state);
     if (state.runs.some(run => run.run_id === actor.run_id)) throw new Error('run ID already used');
     assignmentInProgramme(programmeState(paths), state.contract);
     if (!isDeepStrictEqual(state.contract, read(join(paths.projectDir, PLAN_FILE)))

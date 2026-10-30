@@ -69,7 +69,6 @@ function goalAction(root, state, holds) {
     if (!completion.done) return 'unknown — landing evidence is incomplete';
     return completion.pending_follow_ups.length ? `measure follow-ups: ${completion.pending_follow_ups.join(', ')}` : 'none — done on main';
   }
-  if (state.phase === 'plan_pending') return 'planner unavailable — headless queue consumption is not implemented';
   let route = false;
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';

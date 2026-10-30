@@ -35,7 +35,6 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
     const state = readAutonomousState(root, record.programme, record.project);
     const agreement = readProgrammeState(root, record.programme);
     const journal = agreement.planner_jobs;
-    const mode = journal?.mode;
     const reviewRecovery = state.active_run?.role === 'review' && capability.review;
     if (!reviewRecovery && !isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
     if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
