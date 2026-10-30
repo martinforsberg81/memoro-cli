@@ -1,10 +1,23 @@
-/** Guarded headless plan facade. No production activation or model launch. */
+/** The planning journal both planners share: prepare, apply, receipt. Headless
+ * proves its lease; foreground never pretends to hold one. No model launch. */
+import { createHash } from 'node:crypto';
 import { goalCompletion } from './goal-followup.js';
-import { applyProgrammeProjectOperation, readProgrammePlanSnapshot, readProgrammeState } from './autonomous-state.js';
-import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammeStop, holdProgrammePlan } from './programme-jobs.js';
+import { applyProgrammeProjectOperation, mutateAutonomousProject, readAutonomousState, readProgrammePlanSnapshot, readProgrammeState, sendAutonomousProject } from './autonomous-state.js';
+import { acknowledgeProgrammeEvents, createProgrammeJobProject, prepareProgrammeOperation, programmeOperationCommitted, completeProgrammeOperation, reachProgrammeStop, holdProgrammePlan, withdrawProgrammeOperation } from './programme-jobs.js';
 import { projectRecovery, readProgrammeIncidents } from './programme-recovery.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { isDeepStrictEqual } from 'node:util';
+
+/** Identity is what the command says, never when it ran: a repeat is a replay. */
+export const planningOperationId = (...parts) => `op-${createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 40)}`;
+
+function applyGoalVerb(options, intent, shared) {
+  const { root, programme } = options;
+  const { project, input, expected_revision: revision } = intent;
+  if (intent.kind === 'send-goal') sendAutonomousProject(root, programme, project, { ...shared, revision, after: input.after, operation: intent });
+  else mutateAutonomousProject(root, programme, project, intent.kind === 'revise-goal' ? 'revise' : 'follow-up', input, { ...shared, revision, operation: intent });
+  return readAutonomousState(root, programme, project).operation_receipts.find(item => item.id === intent.id).result;
+}
 
 export function decideProgrammePlan(options, intent) {
   if (['wait-programme', 'exception-programme'].includes(intent?.kind)) return holdProgrammePlan(options, intent);
@@ -12,16 +25,41 @@ export function decideProgrammePlan(options, intent) {
     const { kind, ...input } = intent;
     return reachProgrammeStop(options, input);
   }
-  if (['create-project', 'main-repair'].includes(intent?.kind)) return createProgrammeJobProject(options, intent);
+  if (['create-project', 'main-repair', 'new-goal'].includes(intent?.kind)) return createProgrammeJobProject(options, intent);
   const state = prepareProgrammeOperation(options, intent);
   const operation = state.planner_jobs.operations.find(item => item.intent.id === intent.id);
   if (operation.status === 'applied') return operation.result;
   if (operation.status === 'cancelled') throw new Error('planner decision was cancelled; use a new operation ID');
-  const result = applyProgrammeProjectOperation(options.root, options.programme, intent,
-    { ...options.deps, actor: options.actor, token: options.token, revision: state.revision, now: () => options.now ?? Date.now() });
+  const shared = { ...options.deps, actor: options.actor, token: options.token, now: () => options.now ?? Date.now() };
+  const result = ['send-goal', 'revise-goal', 'follow-up-goal'].includes(intent.kind) ? applyGoalVerb(options, intent, shared)
+    : applyProgrammeProjectOperation(options.root, options.programme, intent, { ...shared, revision: state.revision });
   const current = readProgrammeState(options.root, options.programme);
   completeProgrammeOperation({ ...options, revision: current.revision }, intent, result);
   return result;
+}
+
+/** Finish what committed before anything new: the receipt says it happened, and
+ * replay repairs its projections. An intent without one waits for its own command. */
+function settlePlanningOperations(options) {
+  const operations = readProgrammeState(options.root, options.programme).planner_jobs?.operations || [];
+  for (const { intent, status } of operations) {
+    if (status === 'pending' && programmeOperationCommitted(options.root, options.programme, intent)) decideProgrammePlan({ ...options, anyRevision: true }, intent);
+  }
+}
+
+/** The ordinary verbs' door, for either planner. */
+export function runPlanningOperation(options, { kind, project, input, revision }) {
+  // A cancelled command is a decision not taken: saying it again takes it.
+  const journaled = { ...options, anyRevision: true, reopen: true };
+  settlePlanningOperations(journaled);
+  const intent = { id: planningOperationId(kind, project, revision, input), kind, project, expected_revision: revision, input };
+  try { return decideProgrammePlan(journaled, intent); }
+  catch (error) { withdrawProgrammeOperation(journaled, intent.id, error.message); throw error; }
+}
+
+export function acknowledgePlanningEvents(options, input) {
+  settlePlanningOperations(options);
+  return acknowledgeProgrammeEvents(options, input);
 }
 
 const short = text => typeof text === 'string' ? text.slice(0, 384) : null;

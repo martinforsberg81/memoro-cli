@@ -12,10 +12,18 @@ control capability. Opening `mc plan` is unchanged.
 The optional `planner_jobs` record starts inactive. It retains immutable event
 IDs and references, one coalesced pending job, a leased event snapshot,
 operation intents/results and recovery history. Activation commits its event
-before a claim can be made. Review, landing, failure, dependency and idle events
-use the same queue. Repeated IDs must have identical content and are deduplicated
-even after acknowledgement. Events arriving during a lease remain pending for
-another delivery; finishing acknowledges only the claimed snapshot.
+before a claim can be made. Review, landing, failure, dependency, red main,
+follow-up result, phase completion and idle events use the same queue, with
+autonomy on or off. Repeated IDs must have identical content and are deduplicated
+even after acknowledgement. An event's ID comes from its immutable source and goal
+revision, never from when a scan ran, so `planner_jobs.pending` is not re-filled
+by polling.
+
+Only a named acknowledgement consumes an event: `mc programme events ack`, or
+`completeProgrammePlan` for a whole snapshot. Finishing a lease, its expiry or a
+process exit consumes nothing, and the events go to the next delivery. A lease may
+name only its snapshot, so events arriving during it remain pending. Each ack is
+recorded in `acknowledgements` with its reference and who made it.
 
 All mutations check an expected **state revision** inside the existing programme
 plan lock and strict register lock, then use the existing atomic JSON writer.
@@ -79,6 +87,22 @@ and process exit alone never establishes success.
 Receipt readback checks the expected programme state revision before repairing
 the projection, just like a new effect checks it before writing project state.
 
+## The ordinary verbs
+
+`runPlanningOperation` in `src/mc/programme-plan.js` is the door for the ordinary
+goal verbs, for both planners. It first replays any pending intent whose receipt
+exists, then prepares the intent, applies it and records the receipt. The
+operation ID is a digest of the command (kind, goal, expected revision, input),
+so repeating a command is a replay, and the project receipt commits in the same
+write as the effect. Programme metadata and phases commit effect and receipt in
+one write, so no crash separates them.
+
+Headless needs its unexpired lease at every step. Foreground never reserves a run
+or a lease: it refuses with `contention:` while either is held, or while another
+intent on the same goal is unresolved. A refused effect marks its intent
+`refused`, so the same command can run again; a crash leaves it `pending`, which
+holds that goal and every ack until it is replayed or cancelled.
+
 ## Explicit dispatch holds
 
 Autonomy off preserves the queue and refuses only new claims; a held lease keeps
@@ -93,6 +117,9 @@ not already sent goals; programme context is not an approval boundary.
 
 ## Verification
 
+`mc gate tests/mc/programme-events.test.js` covers concurrent authors in real
+processes, a real crash either side of the effect, expired leases, duplicate
+replay, autonomy off and on, and events arriving during an ack.
 `mc gate tests/mc/programme-jobs.test.js` covers trigger coalescing, late delivery,
 competing processes, failed atomic persistence, lease renewal/expiry/dead owners,
 stale-writer fencing, independent builders, source reconciliation, explicit

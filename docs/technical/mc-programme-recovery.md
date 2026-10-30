@@ -25,7 +25,9 @@ measurements with criterion ID, goal revision, integrated SHA, reference and
 current measurement for every follow-up passed; it never writes a landing.
 No new permission to deploy follows from a deferred check.
 
-`diagnose-project` uses the usual project decision envelope and basis, with:
+`mc goal diagnose` records a `diagnose-project` operation, and `mc goal retry` a
+`resume-project` one, through the [planning journal](mc-programme-jobs.md), for
+either planner. The operation's input is:
 
 ```
 {action: "retry", attempt_ids: [all incomplete attempt IDs],

@@ -8,12 +8,13 @@ import { autonomousPaths, mutateProgramme, readProgrammeState } from '../autonom
 import { autonomousCommandContext, operationArguments } from './autonomous-project.js';
 import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 import { operatorRefusal, programmeAutonomyOff, programmeAutonomyOn } from '../programme-control.js';
-import { reachProgrammeStop } from '../programme-jobs.js';
+import { cancelProgrammeOperation, holdProgrammePlan, listProgrammeEvents, reachProgrammeStop } from '../programme-jobs.js';
+import { acknowledgePlanningEvents, planningOperationId } from '../programme-plan.js';
 import { capabilityReport, programmeStatus, renderCapabilities, renderProgrammeStatus } from '../programme-status.js';
 import { scanArgs } from './flags.js';
 
 const CONTROL = ['status', 'autonomy'];
-const PLANNING = ['phase', 'stop'];
+const PLANNING = ['phase', 'stop', 'wait', 'events', 'operation'];
 const REVISION_RE = /^(0|[1-9][0-9]*)$/u;
 const revisionFlag = raw => {
   if (raw !== null && (!REVISION_RE.test(raw) || !Number.isSafeInteger(Number(raw)))) throw new Error('--expected-revision is a state revision');
@@ -51,11 +52,29 @@ function controlArguments(argv) {
 /** `phase add <programme> <n> <name> --purpose <text>`, `phase close <programme> <n>
  * --reference <ref>`, `stop <programme> --reference <ref>`; revision optional. */
 function planningArguments(argv) {
-  const scanned = scanArgs(argv, { strictValues: ['--expected-revision', '--purpose', '--reference'] });
+  const scanned = scanArgs(argv, { strictValues: ['--expected-revision', '--purpose', '--reference', '--condition', '--kind', '--reason', '--until'], repeatable: ['--event'] });
   if (scanned.error) throw new Error(scanned.error);
-  const { purpose, reference } = scanned.flags;
+  const { purpose, reference, condition, kind, reason, until, event } = scanned.flags;
   const revision = revisionFlag(scanned.flags['expected-revision']);
   const [verb, ...rest] = scanned.positional;
+  if (verb === 'events') {
+    const [action, target, ...extra] = rest;
+    if (!target || extra.length || purpose || condition || kind || reason || until) throw new Error('events takes list|ack <programme>');
+    if (action === 'list' && !reference && !event.length && revision === null) return { operation: 'events-list', target };
+    if (action === 'ack' && reference && event.length) return { operation: 'events-ack', target, input: { event_ids: event, reference }, revision };
+    throw new Error('events list takes only <programme>; events ack needs --event and --reference');
+  }
+  if (verb === 'wait') {
+    if (rest.length !== 1 || !condition || !kind || !reason || !reference || purpose || event.length) throw new Error('wait takes <programme> --condition <id> --kind <kind> --reason <text> --reference <evidence> [--until <time>]');
+    const instant = until === null ? null : /^[0-9]+$/u.test(until) ? Number(until) : Date.parse(until);
+    if (Number.isNaN(instant)) throw new Error('--until is a time');
+    return { operation: 'wait', target: rest[0], input: { condition, reference, wait: { kind, reason, until: instant } }, revision };
+  }
+  if (verb === 'operation') {
+    const [action, target, id, ...extra] = rest;
+    if (action !== 'cancel' || !target || !id || extra.length || !reason) throw new Error('operation takes cancel <programme> <id> --reason <text>');
+    return { operation: 'operation-cancel', target, input: { id, reason }, revision };
+  }
   if (verb === 'stop') {
     if (rest.length !== 1 || !reference || purpose) throw new Error('stop takes <programme> --reference <evidence>');
     return { operation: 'stop', target: rest[0], reference, revision };
@@ -86,7 +105,8 @@ export async function run(argv, deps = {}) {
     const options = { root, programme: args.target, actor, token: deps.token || env.MC_PROGRAMME_LEASE,
       revision: args.revision, now: deps.now ? Number(deps.now()) : Date.now(), deps };
     const result = args.operation === 'show' ? readProgrammeState(root, args.target, deps)
-      : mutateProgramme(root, args.target, args.operation, input, { ...deps, actor, revision: args.revision });
+      : mutateProgramme(root, args.target, args.operation, input, { ...deps, actor, revision: args.revision,
+        operation: { id: planningOperationId('metadata', args.target, args.revision, input), kind: 'programme-metadata', input } });
     stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
@@ -127,10 +147,14 @@ async function planning(argv, deps, { stdout, stderr, env }) {
     const token = deps.token || env.MC_PROGRAMME_LEASE;
     const revision = args.revision ?? (existsSync(autonomousPaths(root, args.target).programme) ? readProgrammeState(root, args.target, deps).revision : 0);
     const now = deps.now ? Number(deps.now()) : Date.now();
-    const result = args.operation === 'stop'
-      ? reachProgrammeStop({ root, programme: args.target, revision, actor, token, now, deps },
-        { id: `stop-${createHash('sha256').update(args.reference).digest('hex').slice(0, 40)}`, reference: args.reference })
-      : mutateProgramme(root, args.target, args.operation, args.input, { ...deps, env, actor, token, revision, now: () => now });
+    const options = { root, programme: args.target, revision, actor, token, now, deps: { ...deps, env } };
+    const journaled = { id: planningOperationId(args.operation, args.target, revision, args.input), kind: `programme-${args.operation}`, input: args.input };
+    const result = args.operation === 'stop' ? reachProgrammeStop(options, { id: `stop-${createHash('sha256').update(args.reference).digest('hex').slice(0, 40)}`, reference: args.reference })
+      : args.operation === 'events-list' ? listProgrammeEvents(options)
+        : args.operation === 'events-ack' ? acknowledgePlanningEvents({ ...options, revision: args.revision }, args.input)
+          : args.operation === 'operation-cancel' ? cancelProgrammeOperation(options, args.input)
+            : args.operation === 'wait' ? holdProgrammePlan(options, { ...args.input, id: `wait-${createHash('sha256').update(JSON.stringify(args.input)).digest('hex').slice(0, 40)}`, kind: 'wait-programme' })
+              : mutateProgramme(root, args.target, args.operation, args.input, { ...deps, env, actor, token, revision, now: () => now, operation: journaled });
     stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
@@ -145,9 +169,14 @@ export function usage() {
     + '        mc programme phase add <programme> <n> <name> --purpose <text> [--expected-revision <n>]\n'
     + '        mc programme phase close <programme> <n> --reference <evidence> [--expected-revision <n>]\n'
     + '        mc programme stop <programme> --reference <evidence> [--expected-revision <n>]\n'
+    + '        mc programme wait <programme> --condition <id> --kind quota|network|resource|external --reason <text> --reference <evidence> [--until <time>]\n'
+    + '        mc programme events list <programme>\n'
+    + '        mc programme events ack <programme> --event <id>... --reference <evidence> [--expected-revision <n>]\n'
+    + '        mc programme operation cancel <programme> <id> --reason <text>\n'
     + '        mc programme metadata <programme> --expected-revision <n> --input-file <json>\n'
     + '        Autonomy controls only new headless planner claims: sent goals, reviews and admitted merges continue.\n'
     + '        autonomy on refuses unless this installation supports every control capability —\n'
     + '        mc programme capabilities says what it has and lacks; the installed runner supports none.\n'
-    + '        Phases close explicitly, in order; only the earliest unclosed phase dispatches. Use mc goal for assignments.\n';
+    + '        Phases close explicitly, in order; only the earliest unclosed phase dispatches. Use mc goal for assignments.\n'
+    + '        Events persist with autonomy on or off; only a named ack consumes one, never a process exit.\n';
 }

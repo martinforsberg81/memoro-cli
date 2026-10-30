@@ -32,6 +32,34 @@ reached. Foreground and leased planning share the operation; it refuses while
 goals are owned and leaves the autonomy preference as the user set it, with the
 planner resting in mode `stopped`.
 
+## Events and the planning journal
+
+`mc programme events list <programme>` scans the durable sources and prints the
+pending events with their IDs and evidence references, plus any unresolved
+operation. `mc programme events ack <programme> --event <id>... --reference
+<evidence>` consumes exactly the named events. Both work the same for a foreground
+planner and for a leased one, with autonomy on or off. A leased planner can name
+only its claimed snapshot; an unknown ID or a pending operation is refused, a
+repeated ack is a read, and an event that arrives meanwhile stays pending.
+`--expected-revision` is optional on ack, because the IDs already say what was
+seen. Finishing a session never acknowledges; see
+[programme jobs](mc-programme-jobs.md).
+
+`mc goal new|send|revise|criterion add|criterion evidence|diagnose|retry` and
+`mc programme phase|metadata` go through the same journal. A refusal caused by
+another writer starts with `contention:`: a stale revision, a running lease, a
+goal still owned or another unresolved operation on the goal. Read and run the
+command again. A crash that left an intent without an effect holds that goal and
+any ack: run the same command again, or
+`mc programme operation cancel <programme> <id> --reason <text>`.
+
+`mc goal diagnose <programme>/<goal> --attempt <id>... --diagnosis <text>` with
+`--approach <text>` or `--exception`, and `mc goal retry <programme>/<goal>`, carry
+the [recovery](mc-programme-recovery.md) rules. `mc programme wait <programme>
+--condition <id> --kind quota|network|resource|external --reason <text> --reference
+<evidence> [--until <time>]` holds new headless claims; the third wait on one
+condition is an exception instead.
+
 ## Phases
 
 `mc programme phase add <programme> <n> <name> --purpose <text>` declares an
@@ -87,4 +115,5 @@ read-only status and unavailable planner reporting. `tests/mc/programme-cli-smok
 uses a temporary root and fake provider CLIs to verify that no model is
 launched. `tests/mc/autonomy-lifecycle.test.js` and
 `tests/mc/autonomy-coexistence.test.js` cover ordinary goal setup, lifecycle
-recovery and unchanged v1 behavior.
+recovery and unchanged v1 behavior. `tests/mc/programme-events.test.js` covers the
+journal and the event queue.
