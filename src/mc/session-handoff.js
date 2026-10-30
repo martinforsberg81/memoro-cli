@@ -18,7 +18,7 @@ export const SESSION_OUTCOMES = Object.freeze(['continue', 'review-ready', 'inco
 const ARTIFACT_MAX_BYTES = 32 * 1024;
 const MISSING = Symbol('missing session artifact');
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-const bindingKeys = ['programme_id', 'programme_revision', 'project_id', 'goal_revision', 'run_id'];
+const bindingKeys = ['programme_id', 'project_id', 'goal_revision', 'run_id'];
 const plain = value => value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const id = value => typeof value === 'string' && STABLE_ID_RE.test(value);
@@ -52,10 +52,10 @@ function bounded(value, max, label) {
   return bytes;
 }
 function binding({ assignment, programme, runId }) {
-  if (!programme) throw new Error('the approved programme snapshot is required');
+  if (!programme) throw new Error('programme context is required');
   requireValid(validateAutonomousProject(assignment, { programme }));
   if (!id(runId)) throw new Error('a stable session run ID is required');
-  return { programme_id: programme.id, programme_revision: programme.revision,
+  return { programme_id: programme.id,
     project_id: assignment.project_id, goal_revision: assignment.goal_revision, run_id: runId };
 }
 function matches(value, expected, at, problems) {
@@ -112,7 +112,7 @@ export function validateSessionResult(value, context) {
   return { ok: problems.length === 0, problems };
 }
 
-const STANDING = 'Build only the approved assignment within programme scope and planned stops. Only plan revises goals or confirms completion. Independent review reports findings without repairs. Read referenced detail on demand; prior interpretation and evidence are continuation context, not proof for this run. A normal result requires a relevant green gate and matching committed/pushed content on the same branch/PR. An interrupted attempt is incomplete, never green.';
+const STANDING = 'Build only the current goal assignment. Only plan revises goals or confirms completion. Independent review reports findings without repairs. Read referenced detail on demand; prior interpretation and evidence are continuation context, not proof for this run. A normal result requires a relevant green gate and matching committed/pushed content on the same branch/PR. An interrupted attempt is incomplete, never green.';
 
 /** One fresh payload, not transcript concatenation. Oversize requirements fail
  * closed: callers must obtain a bounded assignment, never trim its criteria. */
@@ -186,7 +186,7 @@ function predecessorContext(dir, runId, context, history) {
   const result = plain(attempt) ? attempt.result : null;
   return { ...context,
     assignment: history?.assignments?.find(item => item.goal_revision === result?.goal_revision) || context.assignment,
-    programme: history?.programmes?.find(item => item.revision === result?.programme_revision) || context.programme };
+    programme: context.programme };
 }
 
 /** Trusted, inactive runner seam. Publication observations come from Git and the

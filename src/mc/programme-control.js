@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
 import { validateControlProfile } from './session-control.js';
 import { autonomousModelIdentity, independentModel } from './autonomous-models.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { CLASSES, DEFAULT_CATALOG } from './model-config.js';
 
 export const CONTROL_CAPABILITIES = Object.freeze(['programme-jobs', 'programme-plan', 'build', 'review', 'control-signals', 'interrupt']);
@@ -107,22 +108,20 @@ export function startProgramme({ root, programme, revision, stop, now = Date.now
   const problems = startInputProblems(input, deps.catalog ? deps.catalog() : DEFAULT_CATALOG);
   if (problems.length) throw new Error(problems.join('; '));
   return updateProgrammeJobs({ root, programme, revision, deps }, (state, journal, paths) => {
-    const agreement = state.approved.at(-1);
-    if (!agreement) throw new Error('start needs an approved programme revision');
     if (journal.mode !== 'inactive') throw new Error(`programme is already ${journal.mode}; ${journal.mode === 'paused' ? 'resume it' : 'start applies once'}`);
-    if (!agreement.planned_stops.some(item => item.id === stop)) throw new Error('start names one of the approved planned stops');
+    if (typeof stop !== 'string' || !STABLE_ID_RE.test(stop)) throw new Error('start names an explicit stable stop ID');
     const at = stamp(now);
-    const id = `activation-${createHash('sha256').update(JSON.stringify([programme, agreement.revision, stop, at])).digest('hex').slice(0, 40)}`;
-    enqueueProgrammeEvent(state, journal, { id, type: 'activation', programme_revision: agreement.revision,
+    const id = `activation-${createHash('sha256').update(JSON.stringify([programme, stop, at])).digest('hex').slice(0, 40)}`;
+    enqueueProgrammeEvent(state, journal, { id, type: 'activation',
       reference: `${paths.programme}#planner_jobs/activation` });
-    journal.activation = { id, programme_revision: agreement.revision, stop, by: input.by, at,
+    journal.activation = { id, stop, by: input.by, at,
       profiles: { build: structuredClone(input.build), review: structuredClone(input.review) }, capabilities };
     journal.mode = 'active'; journal.wait = null; journal.stop = null; journal.exception = null;
     logged(journal, { operation: 'start', by: input.by, at, state_revision: state.revision });
   });
 }
 
-/** Stops new claims, builds, reviews and merge submissions. Work already
+/** Stops only new headless planner claims. Sent goals and work already
  * started finishes and is recorded; nothing is signalled or reverted. A
  * repeated pause is a read, not another revision. */
 export function pauseProgramme({ root, programme, revision = null, by, now = Date.now(), deps = {} }) {
@@ -147,7 +146,6 @@ export function resumeProgramme({ root, programme, revision, by, now = Date.now(
     if (journal.mode !== 'paused') throw new Error(`programme is ${journal.mode}; resume applies to a paused programme`);
     const activation = journal.activation;
     if (!activation) throw new Error('programme was never started here; start it with mc programme start');
-    if (!state.approved.at(-1).planned_stops.some(item => item.id === activation.stop)) throw new Error('the approved programme no longer has the planned stop this start runs to; agree a new start');
     const previous = journal.pause?.previous || { mode: 'active', wait: null };
     // A due wait becomes active at reconciliation, with its retry event.
     if (previous.mode === 'waiting' && previous.wait) { journal.mode = 'waiting'; journal.wait = previous.wait; }

@@ -33,22 +33,18 @@ test('real CLI routes guarded programme and v2 commands in a temporary root with
     for (const verb of ['programme', 'autonomous-project']) {
       const help = cli([verb, '--help']); assert.equal(help.status, 0, help.stderr); assert.match(help.stdout, /^usage/u);
     }
-    let result = cli(['programme', 'draft', f.programme, '--expected-revision', '1', '--input-file', f.file(f.draft)]);
-    assert.equal(result.status, 0, result.stderr);
-    result = cli(['programme', 'approve', f.programme, '--expected-revision', '2', '--input-file', f.file({ by: 'Martin', at: '2026-10-28T12:00:00Z' })]);
+    releaseProgrammeRun(f.root, f.programme, foreground, 1);
+    let result = cli(['programme', 'metadata', f.programme, '--expected-revision', '2', '--input-file', f.file(f.draft)]);
     assert.equal(result.status, 0, result.stderr);
     result = cli(['programme', 'show', f.programme]);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
-    // Only the trusted control plane reserves runs; no public command launches one.
-    releaseProgrammeRun(f.root, f.programme, foreground, 3);
-    reserveProgrammeRun(f.root, f.programme, planner, 4);
-    result = cli(['autonomous-project', 'create', `${f.programme}/${f.project}`, '--expected-revision', '5', '--input-file', f.file(autonomousProject())], planner);
+    result = cli(['autonomous-project', 'create', `${f.programme}/${f.project}`, '--expected-revision', '3', '--input-file', f.file(autonomousProject())]);
     assert.equal(result.status, 0, result.stderr);
-    result = cli(['autonomous-project', 'revise', `${f.programme}/${f.project}`, '--expected-revision', '1', '--input-file', f.file(autonomousProject({ goal_revision: 2 }))], planner);
+    result = cli(['autonomous-project', 'revise', `${f.programme}/${f.project}`, '--expected-revision', '1', '--input-file', f.file(autonomousProject({ goal_revision: 2 }))]);
     assert.equal(result.status, 0, result.stderr);
-    result = cli(['project', f.project, '--json', '--offline'], planner);
+    result = cli(['project', f.project, '--json', '--offline']);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).goal_revision, 2);
-    result = cli(['project', 'send', f.project, '--expected-revision', '2'], planner);
+    result = cli(['project', 'send', f.project, '--expected-revision', '2']);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
     assert.deepEqual(f.json(join(f.paths.projectDir, 'PLAN.json')), autonomousProject({ goal_revision: 2 }));
     assert.equal('steps' in f.json(join(f.paths.projectDir, 'PLAN.json')), false);
@@ -81,7 +77,7 @@ test('v2 send checks state, approved contract, ownership and expected revision u
     assert.equal(await projectCommand(['send', f.project], deps), 2);
     assert.equal(await projectCommand(['send', f.project, '--expected-revision', '0'], deps), 1);
     const agreement = readFileSync(f.paths.programme, 'utf8');
-    const state = f.json(f.paths.programme); state.approved = []; writeFileSync(f.paths.programme, JSON.stringify(state));
+    const state = f.json(f.paths.programme); state.metadata.id = 'foreign-programme'; writeFileSync(f.paths.programme, JSON.stringify(state));
     assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
     writeFileSync(f.paths.programme, agreement);
     const before = readFileSync(f.paths.project, 'utf8');
@@ -89,7 +85,10 @@ test('v2 send checks state, approved contract, ownership and expected revision u
     assert.equal(await projectCommand(args, { ...deps, lock: staleInsideLock }), 1); assert.equal(existsSync(sent), false);
     writeFileSync(f.paths.project, before);
     assert.equal(await projectCommand(args, { ...deps, writePlan: () => { throw new Error('atomic publication failed'); } }), 1);
-    assert.equal(existsSync(sent), false); assert.equal(readFileSync(f.paths.project, 'utf8'), before);
+    assert.equal(existsSync(sent), false);
+    const sentState = readFileSync(f.paths.project, 'utf8');
+    assert.equal(JSON.parse(sentState).plan_sent, true);
+    writeFileSync(f.paths.project, before);
     const contract = f.json(f.paths.project); contract.contract.execution = {}; writeFileSync(f.paths.project, JSON.stringify(contract));
     assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
     writeFileSync(f.paths.project, before);
@@ -103,8 +102,9 @@ test('v2 send checks state, approved contract, ownership and expected revision u
     }
     assert.equal(await projectCommand(args, deps), 0, f.err.join(''));
     assert.deepEqual(f.json(sent), autonomousProject()); assert.deepEqual(withReviewStep(f.json(sent)), autonomousProject());
-    assert.equal(await run(['send', `${f.programme}/${f.project}`, '--expected-revision', '1'], f.deps), 0, 'same publication is idempotent');
-    assert.equal(readFileSync(f.paths.project, 'utf8'), before, 'publishing does not change phase or reserve a run');
+    const published = readFileSync(f.paths.project, 'utf8');
+    assert.equal(await run(['send', `${f.programme}/${f.project}`, '--expected-revision', '2'], f.deps), 0, 'same publication is idempotent');
+    assert.equal(readFileSync(f.paths.project, 'utf8'), published, 'replaying send does not reserve a run or duplicate history');
   } finally { f.cleanup(); }
 });
 
@@ -170,7 +170,7 @@ test('v2 creation is planner-owned, validates an approved programme and creates 
     assert.deepEqual(f.json(f.paths.draft), state.contract);
     assert.equal(existsSync(join(f.paths.projectDir, 'PLAN.json')), false);
     assert.equal(existsSync(join(f.paths.projectDir, 'STATE.json')), false, 'no v1 register is seeded');
-    assert.deepEqual(state.active_run, planner); assert.equal(state.phase, 'plan_pending'); assert.equal(state.confirmed, false);
+    assert.equal(state.active_run, null); assert.equal(state.phase, 'plan_pending'); assert.equal(state.confirmed, false);
     assert.deepEqual(state.ownership, { branch: null, pr: null });
     assert.equal(await invoke(f, 'create', 5, autonomousProject()), 1, 'cannot overwrite a project');
     assert.equal(await run(['show', `${f.programme}/${f.project}`], f.deps), 0);
@@ -212,19 +212,14 @@ test('revisions preserve run, attempt, commit, PR and report history while inval
     assert.equal(await invoke(f, 'attempt', state.revision, { id: 'attempt-1', reason: 'Gate stayed red.', commits: [sha], branch: 'goal-branch', pr: 123, handoff: 'handoffs/attempt-1.json' }), 0);
     state = f.switchProject(reviewer); f.deps.actor = reviewer;
     assert.equal(await invoke(f, 'report', state.revision, report), 0, f.err.join(''));
-    state = f.switchProject({ ...planner, run_id: 'plan-2' }); f.deps.actor = state.active_run;
-    // An active project planner without the programme reservation cannot revise.
-    assert.equal(await invoke(f, 'revise', state.revision, autonomousProject({ goal_revision: 2 })), 1);
-    state = mutateAutonomousProject(f.root, f.programme, f.project, 'release', null, { actor: state.active_run, revision: state.revision });
-    // Reuse of the old planner run ID is deliberately forbidden; hand the
-    // programme over to the fresh plan reservation instead.
-    const { releaseProgrammeRun, reserveProgrammeRun } = await import('../../../src/mc/autonomous-state.js');
-    releaseProgrammeRun(f.root, f.programme, planner, 5);
-    const nextPlanner = { run_id: 'plan-3', role: 'plan' };
-    reserveProgrammeRun(f.root, f.programme, nextPlanner, 6);
-    state = reserveProjectRun(f.root, f.programme, f.project, nextPlanner, state.revision); f.deps.actor = nextPlanner;
-    assert.equal(await invoke(f, 'confirm', state.revision, { id: 'confirmation-1', reference: 'decisions/confirmation-1.json' }), 0);
-    const before = stateOf(f); assert.equal(before.confirmed, true);
+    // A planner without the programme lease cannot author or claim the goal.
+    const unowned = { ...planner, run_id: 'plan-2' };
+    assert.throws(() => reserveProjectRun(f.root, f.programme, f.project, unowned, stateOf(f).revision), /ownership/u);
+    assert.equal(await invoke(f, 'revise', stateOf(f).revision, autonomousProject({ goal_revision: 2 }), { actor: unowned }), 1);
+    state = mutateAutonomousProject(f.root, f.programme, f.project, 'release', null, { actor: reviewer, revision: stateOf(f).revision });
+    // Foreground planning resumes after the real headless reservation closes.
+    f.releasePlanner(); f.deps.actor = undefined;
+    const before = stateOf(f);
     const next = autonomousProject({ goal_revision: 2, success_criteria: autonomousProject().success_criteria.slice().reverse() });
     assert.equal(await invoke(f, 'revise', before.revision, next), 0, f.err.join(''));
     const after = stateOf(f);
@@ -303,7 +298,7 @@ test('ownership and expected revision are rechecked under lock, and active build
   try {
     f.setupProject();
     const lock = (_root, fn) => {
-      const state = stateOf(f); state.active_run = builder;
+      const state = stateOf(f); state.active_run = builder; state.runs.push(builder);
       writeFileSync(f.paths.project, JSON.stringify(state)); return fn();
     };
     assert.equal(await invoke(f, 'revise', 1, autonomousProject({ goal_revision: 2 }), { lock }), 1);
@@ -312,7 +307,7 @@ test('ownership and expected revision are rechecked under lock, and active build
     f.deps.actor = builder;
     assert.equal(await invoke(f, 'release', 1), 0);
     assert.throws(() => reserveProjectRun(f.root, f.programme, f.project, planner, 1), /stale/);
-    assert.throws(() => reserveProjectRun(f.root, f.programme, f.project, planner, 2), /already used/);
+    assert.throws(() => reserveProjectRun(f.root, f.programme, f.project, builder, 2), /already used/);
   } finally { f.cleanup(); }
 });
 
@@ -335,10 +330,10 @@ test('project creation denies unowned planners, stale programme state and unappr
     const input = autonomousProject({ project_id: 'second-project' });
     for (const options of [
       { actor: builder, revision: 5 }, { actor: reviewer, revision: 5 },
-      { actor: { ...planner, run_id: 'other-plan' }, revision: 5 }, { actor: planner, revision: 4 },
+      { actor: { ...planner, run_id: 'other-plan' }, revision: 5 }, { actor: planner, token: 'fixture-lease', revision: 4 },
     ]) assert.throws(() => createAutonomousDraft(f.root, f.programme, 'second-project', input, options));
     for (const programme of [{ id: f.programme, revision: 2 }, { id: 'other-programme', revision: 1 }]) {
-      assert.throws(() => createAutonomousDraft(f.root, f.programme, 'second-project', { ...input, programme }, { actor: planner, revision: 5 }));
+      assert.throws(() => createAutonomousDraft(f.root, f.programme, 'second-project', { ...input, programme }, { actor: planner, token: 'fixture-lease', revision: 5 }));
     }
     assert.equal(existsSync(join(f.paths.dir, 'second-project', 'AUTONOMOUS_STATE.json')), false);
     assert.equal(existsSync(join(f.paths.dir, 'second-project', 'DRAFT.json')), false);
@@ -354,7 +349,7 @@ test('a process exiting after the atomic state commit leaves one recoverable rev
     const next = autonomousProject({ goal_revision: 2, goal: ['The revised goal.'] });
     const code = `import { mutateAutonomousProject } from ${JSON.stringify(module)};
       mutateAutonomousProject(process.argv[1], 'test-programme', 'test-project', 'revise', JSON.parse(process.argv[2]), {
-        actor: ${JSON.stringify(planner)}, revision: 1, writeDraft: () => process.exit(23)
+        actor: ${JSON.stringify(planner)}, token: 'fixture-lease', revision: 1, writeDraft: () => process.exit(23)
       });`;
     const status = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', code, f.root, JSON.stringify(next)], { stdio: ['ignore', 'pipe', 'pipe'] });

@@ -231,11 +231,11 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
       const recovery = projectRecovery(state);
       if (!isDeepStrictEqual(intent.input.attempt_ids, recovery.attempt_ids)) throw new Error('diagnosis must account for every incomplete attempt');
       if (intent.input.action === 'retry' && (recovery.exception || state.recovery_diagnoses?.some(item => item.approach === intent.input.approach))) throw new Error('recovery exception or repeated unsuccessful approach; retain a precise diagnosis');
-      next.recovery_diagnoses = [...(state.recovery_diagnoses || []), { ...intent.input, goal_revision: state.goal_revision, programme_revision: state.programme_revision, run_id: actor.run_id }];
+      next.recovery_diagnoses = [...(state.recovery_diagnoses || []), { ...intent.input, goal_revision: state.goal_revision, run_id: actor.run_id }];
     } else if (intent.kind === 'await-dependencies') {
       if (state.phase !== 'plan_pending' || !state.plan_dependencies?.length || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('dependency release needs a sent pending goal and selected dependencies');
       assertProjectRecovery(state);
-      next.dependency_release = { goal_revision: state.goal_revision, programme_revision: state.programme_revision, status: 'waiting', operation: intent.id };
+      next.dependency_release = { goal_revision: state.goal_revision, status: 'waiting', operation: intent.id };
     } else if (intent.kind === 'resume-project') {
       if (state.phase !== 'plan_pending' || !isDeepStrictEqual(read(join(paths.projectDir, PLAN_FILE)), state.contract)) throw new Error('resume needs a sent, pending goal');
       assertProgrammeDispatch(root, programme, state, agreement);
@@ -247,8 +247,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
       const report = state.review_reports?.at(-1);
       const binding = state.landing?.binding;
       if (state.phase !== 'landed' || !report?.clean || !binding || binding.report_id !== report.id
-        || binding.report_digest !== reviewDigest(report) || binding.goal_revision !== state.goal_revision
-        || binding.programme_revision !== state.programme_revision || binding.head !== state.publication?.head
+        || binding.report_digest !== reviewDigest(report) || binding.goal_revision !== state.goal_revision || binding.head !== state.publication?.head
         || report.session.assignment.goal_revision !== state.goal_revision || report.session.head !== binding.head
         || !/^[a-f0-9]{40}$/u.test(state.landing.merge_commit || '') || state.landing.merged_into !== 'main') throw new Error('confirmation requires the current independently reviewed delivery on main');
       const ids = state.contract.success_criteria.map(item => item.id);
@@ -256,7 +255,7 @@ export function applyProgrammeProjectOperation(root, programme, intent, { actor,
         || intent.input.criteria.some(item => !ids.includes(item.criterion_id))) throw new Error('confirmation must account for every criterion, including after-integration evidence');
       if (state.confirmations.some(item => item.id === intent.input.id)) throw new Error('confirmation ID already used');
       const record = { id: intent.input.id, reference: intent.input.reference, role: 'plan', run_id: actor.run_id, project_id: intent.project,
-        programme_id: programme, programme_revision: state.programme_revision, goal_revision: state.goal_revision };
+        programme_id: programme, goal_revision: state.goal_revision };
       next.evidence.confirmation = record; next.confirmations.push(record); next.confirmed = true; next.phase = 'confirmed';
     }
     next.plan_sent ||= existsSync(join(paths.projectDir, PLAN_FILE));
@@ -309,6 +308,7 @@ export function sendAutonomousProject(root, programme, project, { actor, revisio
     assignmentInProgramme(agreement, state.contract);
     const file = join(paths.projectDir, PLAN_FILE);
     if (existsSync(file) && !isDeepStrictEqual(read(file), state.contract)) throw new Error('a different PLAN.json already exists');
+    if (state.plan_sent && existsSync(file)) return structuredClone(state.contract);
     const next = structuredClone(state);
     next.plan_sent = true;
     recordPlanningOperation(next, operationActor, 'send', revision);
@@ -481,7 +481,7 @@ export function mutateAutonomousProject(root, programme, project, operation, inp
       if (input.handoff !== undefined && (typeof input.handoff !== 'string' || !input.handoff.trim())) throw new Error('handoff must be a reference');
       next.commits = [...new Set([...state.commits, ...input.commits])];
       next.current_handoff = input.handoff || null;
-      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, programme_revision: state.programme_revision, goal_revision: state.goal_revision, outcome: 'incomplete', progress: recoveryProgress(state) });
+      next.attempts.push({ ...input, run_id: actor.run_id, role: actor.role, goal_revision: state.goal_revision, outcome: 'incomplete', progress: recoveryProgress(state) });
       next.phase = 'plan_pending'; next.confirmed = false; next.evidence.confirmation = null; delete next.dependency_release;
     } else if (operation === 'release') next.active_run = null;
     else throw new Error('unknown autonomous project operation');
@@ -507,7 +507,6 @@ export function settleAutonomousBuild(root, programme, project, { actor, revisio
       || state.publication.phase !== 'handoff_committed' || state.current_handoff !== handoff.artifact
       || !handoff.observed.normal_exit || handoff.observed.head !== state.publication.head
       || handoff.handoff.run_id !== actor.run_id || handoff.handoff.goal_revision !== state.goal_revision
-      || handoff.handoff.programme_revision !== state.programme_revision
       || !['continue', 'review-ready'].includes(handoff.outcome)) throw new Error('settled normal publication required');
     const latest = new Map(currentAutonomousEvidence(state).builder.map(item => [item.criterion_id, item]));
     const reported = new Map(handoff.handoff.evidence.map(item => [item.criterion_id, item]));
@@ -523,7 +522,7 @@ export function settleAutonomousBuild(root, programme, project, { actor, revisio
     const phase = done ? 'review_ready' : 'ready';
     return save(paths.project, state, { ...state, phase, active_run: null,
       continuation: { run_id: actor.run_id, goal_revision: state.goal_revision,
-        programme_revision: state.programme_revision, handoff: handoff.artifact, phase } }, deps);
+        handoff: handoff.artifact, phase } }, deps);
   }, deps);
 }
 
@@ -536,8 +535,7 @@ export function saveAutonomousPublication(root, programme, project, { actor, rev
     const state = projectState(paths); expected(state, revision);
     const control = ownedControl(state, actor);
     if (control.phase !== 'closing' || !['running', 'closing', 'publishing'].includes(state.phase)) throw new Error('finish requires closing control');
-    if (publication.run_id !== actor.run_id || publication.goal_revision !== state.goal_revision
-      || publication.programme_revision !== state.programme_revision) throw new Error('publication assignment changed');
+    if (publication.run_id !== actor.run_id || publication.goal_revision !== state.goal_revision) throw new Error('publication assignment changed');
     const previous = state.publication?.run_id === actor.run_id ? state.publication : null;
     const index = PUBLICATION_PHASES.indexOf(publication.phase);
     const before = previous ? PUBLICATION_PHASES.indexOf(previous.phase) : -1;
@@ -557,7 +555,7 @@ export function saveAutonomousPublication(root, programme, project, { actor, rev
 // Inactive trusted runner seams. No CLI operation accepts profiles, clocks or
 // measured progress. Keep control and project ownership in one atomic record.
 function controlBinding(state, actor) {
-  return { programme_id: state.contract.programme.id, programme_revision: state.programme_revision,
+  return { programme_id: state.contract.programme.id,
     project_id: state.contract.project_id, goal_revision: state.goal_revision, run_id: actor.run_id };
 }
 function controlObservation(state, observation) {
@@ -677,14 +675,14 @@ export function recordAutonomousReview(root, programme, project, { actor, revisi
     if (problems.length) throw new Error(problems.join('; '));
     const reference = `${paths.project}#review_reports/${report.id}`;
     const observation = { id: report.id, run_id: actor.run_id, project_id: project, programme_id: programme,
-      goal_revision: session.assignment.goal_revision, programme_revision: session.assignment.programme.revision,
+      goal_revision: session.assignment.goal_revision,
       reference, findings: [...report.result.defects, ...report.invalid_reasons, ...report.result.uncertainty,
         ...report.result.criteria.flatMap(item => item.uncertainty.map(text => `${item.criterion_id}: ${text}`))],
       criteria: report.result.criteria.map(item => ({ criterion_id: item.criterion_id, status: item.status, reference: item.evidence.join('\n') })) };
     const next = { ...state, phase: 'plan_pending', active_run: null,
       plan_events: [...(state.plan_events || []), { id: `review-${reviewDigest(report)}`, type: 'review-reported',
         report_id: report.id, reference, goal_revision: session.assignment.goal_revision,
-        programme_revision: session.assignment.programme.revision, clean: report.clean }],
+        clean: report.clean }],
       review_reports: [...(state.review_reports || []), { ...report, reference }],
       evidence: { ...state.evidence, reviews: [...state.evidence.reviews, observation] } };
     valid(validateAutonomousEvidence(next.evidence));
@@ -703,7 +701,7 @@ export function incompleteAutonomousReview(root, programme, project, { actor, re
     return save(paths.project, state, { ...state, phase: 'plan_pending', confirmed: false,
       evidence: { ...state.evidence, confirmation: null },
       attempts: [...state.attempts, { id: actor.run_id, run_id: actor.run_id, role: 'review', reason, commits: [],
-        programme_revision: binding.programme.revision, goal_revision: binding.goal_revision,
+        goal_revision: binding.goal_revision,
         outcome: 'incomplete', progress: recoveryProgress(state) }] }, deps);
   }, deps);
 }
@@ -716,8 +714,7 @@ export function recordAutonomousMergeEvent(root, programme, project, { binding, 
     if (!['merge-queued', 'merge-refused', 'merge-failed', 'merge-unknown', 'merge-landed'].includes(type)) throw new Error('unknown autonomous merge event');
     const report = state.review_reports?.find(item => item.id === binding.report_id);
     const bound = !!report && reviewDigest(report) === binding.report_digest
-      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision
-      && report.session.assignment.programme.revision === binding.programme_revision;
+      && report.session.head === binding.head && report.session.assignment.goal_revision === binding.goal_revision;
     if (state.ownership.pr !== binding.pr || state.ownership.branch !== binding.branch
       || (!bound && ['merge-queued', 'merge-landed'].includes(type))) throw new Error('merge event report/ownership binding changed');
     // Missing/damaged evidence can carry a refusal to plan, never permission
@@ -725,7 +722,7 @@ export function recordAutonomousMergeEvent(root, programme, project, { binding, 
     const event = { id: `${type}-${reviewDigest({ binding, details })}`, type, binding, binding_verified: bound, details };
     const previous = state.plan_events || [];
     if (previous.some(item => item.id === event.id)) return structuredClone(state);
-    const current = state.goal_revision === binding.goal_revision && state.programme_revision === binding.programme_revision
+    const current = state.goal_revision === binding.goal_revision
       && state.publication?.head === binding.head && (!state.review_reports?.length || state.review_reports.at(-1).id === binding.report_id);
     const next = { ...state, plan_events: [...previous, event] };
     if (type === 'merge-queued') {

@@ -34,8 +34,8 @@ export function fixture(t, { close = true, existing = null, assignment = {} } = 
   git(cwd, 'remote', 'add', 'origin', remote); git(cwd, 'fetch', '-q', 'origin');
   git(cwd, 'switch', '-qc', f.project);
   let state = readAutonomousState(f.root, f.programme, f.project);
-  sendAutonomousProject(f.root, f.programme, f.project, { actor: planner, revision: state.revision });
-  state = mutateAutonomousProject(f.root, f.programme, f.project, 'release', null, { actor: planner, revision: state.revision });
+  sendAutonomousProject(f.root, f.programme, f.project, { actor: planner, token: 'fixture-lease', revision: state.revision });
+  state = readAutonomousState(f.root, f.programme, f.project);
   // Activation remains unavailable; only this isolated runner fixture admits it.
   state.phase = 'ready';
   if (existing !== null) state.ownership.pr = existing;

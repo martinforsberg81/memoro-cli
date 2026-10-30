@@ -149,7 +149,7 @@ export function renderProject({
       out.push('AUTONOMOUS');
       const control = autonomous?.programme;
       out.push(control?.execution_supported ? '  execution supported by this installation' : '  execution disabled — this installation does not run autonomous work');
-      out.push(`  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision} · programme ${control?.mode || 'unknown'}`);
+      out.push(`  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision} · programme ${control?.mode || 'unknown'}`);
       if (autonomous) {
         out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · planner confirmed: ${autonomous.confirmed}`);
         out.push(`  branch ${autonomous.ownership.branch || 'none'} · PR ${autonomous.ownership.pr ? `#${autonomous.ownership.pr}` : 'none'}`);

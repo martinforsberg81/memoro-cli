@@ -23,10 +23,9 @@ function owned(options) {
   if (options.actor?.role !== 'step' || !isDeepStrictEqual(state.active_run, options.actor)) throw new Error('active step run ownership required');
   const binding = state.session_control?.binding;
   if (state.session_control?.phase !== 'closing' || !['running', 'closing', 'publishing'].includes(state.phase)
-    || binding?.run_id !== options.actor.run_id || binding.goal_revision !== state.goal_revision
-    || binding.programme_revision !== state.programme_revision) throw new Error('finish requires closing control on the current assignment');
+    || binding?.run_id !== options.actor.run_id || binding.goal_revision !== state.goal_revision) throw new Error('finish requires closing control on the current assignment');
   if (git(options.cwd, ['branch', '--show-current']) !== state.ownership.branch) throw new Error('branch ownership mismatch');
-  const agreement = readProgrammeState(options.root, options.programme).approved.find(item => item.revision === state.programme_revision);
+  const agreement = readProgrammeState(options.root, options.programme).metadata;
   const assignmentPath = join(options.root, 'programs', options.programme, options.project, PLAN_FILE);
   if (!isDeepStrictEqual(JSON.parse(readFileSync(assignmentPath, 'utf8')), state.contract)) throw new Error('sent assignment changed');
   return { state, context: { assignment: state.contract, programme: agreement, runId: options.actor.run_id } };
@@ -92,7 +91,7 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
     let publication = initial.publication?.run_id === options.actor.run_id ? initial.publication : null;
     if (publication && !isDeepStrictEqual(publication.input, input)) throw new Error('publication intent cannot change during retry');
     if (!publication) publication = save(options, { run_id: options.actor.run_id, goal_revision: initial.goal_revision,
-      programme_revision: initial.programme_revision, branch: initial.ownership.branch, pr: initial.ownership.pr,
+      branch: initial.ownership.branch, pr: initial.ownership.pr,
       phase: 'started', input }, deps);
     if (publication.phase === 'started') {
       let output = '';
@@ -191,7 +190,7 @@ export async function completeAutonomousPublication(options, processResult, deps
       sessionRun: options.actor.run_id, goalRevision: state.goal_revision })) throw new Error('publication evidence changed');
     const previousRun = state.runs.filter(run => run.role === 'step' && run.run_id !== options.actor.run_id).at(-1)?.run_id ?? null;
     // A predecessor built before plan revised the goal is read against its own revision.
-    const history = { assignments: state.contracts, programmes: readProgrammeState(options.root, options.programme).approved };
+    const history = { assignments: state.contracts };
     const handoff = persistSessionResult({ root: options.root, ...context, result, publication: evidence, history,
       ownership: state.ownership, expectedPreviousRun: previousRun, completion: { exit_code: 0, interrupted: false } }, deps.handoffDeps);
     if (publication.phase !== 'handoff_committed') publication = save(options, { ...publication,

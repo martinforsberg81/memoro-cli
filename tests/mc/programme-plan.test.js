@@ -26,9 +26,9 @@ import { run as foregroundPlan } from '../../src/mc/commands/plan.js';
 
 function claim(f) {
   const read = () => readProgrammeState(f.root, f.programme);
-  releaseProgrammeRun(f.root, f.programme, planner, read().revision);
+  f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: read().revision }, { mode: 'active',
-    event: { id: 'activate', type: 'activation', programme_revision: 1, reference: 'approval/activation' } });
+    event: { id: 'activate', type: 'activation', reference: 'approval/activation' } });
   const actor = { role: 'plan', run_id: 'headless-plan-1' };
   const claimed = claimProgrammeJob({ root: f.root, programme: f.programme, revision: read().revision, actor, pid: process.pid });
   const options = extra => ({ root: f.root, programme: f.programme, actor, token: claimed.planner_jobs.lease.token, revision: read().revision, ...extra });
@@ -36,21 +36,20 @@ function claim(f) {
 }
 function fixture(t, { send = true } = {}) {
   const f = stateFixture(); t.after(f.cleanup); let state = f.setupProject();
-  if (send) sendAutonomousProject(f.root, f.programme, f.project, { actor: planner, revision: state.revision });
-  mutateAutonomousProject(f.root, f.programme, f.project, 'release', null, { actor: planner, revision: state.revision });
+  if (send) sendAutonomousProject(f.root, f.programme, f.project, { actor: planner, token: 'fixture-lease', revision: state.revision });
   return decorate(f, claim(f));
 }
 function decorate(f, ownership) {
   const state = project => readAutonomousState(f.root, f.programme, project || f.project);
   const patch = change => { const value = state(); change(value); writeFileSync(f.paths.project, JSON.stringify(value)); };
   const intent = (kind, input = {}, extra = {}) => ({ id: `${kind}-1`, kind, project: f.project, expected_revision: state().revision,
-    programme_revision: 1, input, basis: { criteria: ['contracts'], reference: 'decisions/within-approved-cli-scope' }, ...extra });
+    input, ...extra });
   return { ...f, ...ownership, state, patch, intent, apply: value => decideProgrammePlan(ownership.options(), value) };
 }
 
-test('headless plan sees the complete approved programme and concise results for all goals, not transcripts', t => {
+test('headless plan sees the programme metadata and concise results for all goals, not transcripts', t => {
   const f = fixture(t);
-  f.apply({ id: 'create-independent', kind: 'create-project', project: 'independent', expected_revision: 0, programme_revision: 1,
+  f.apply({ id: 'create-independent', kind: 'create-project', project: 'independent', expected_revision: 0,
     input: autonomousProject({ project_id: 'independent', repo: 'memoro' }) });
   const independent = f.state('independent');
   reserveProjectRun(f.root, f.programme, 'independent', builder, independent.revision);
@@ -58,7 +57,7 @@ test('headless plan sees the complete approved programme and concise results for
   const dir = join(f.paths.dir, 'legacy'); mkdirSync(dir);
   writeFileSync(join(dir, 'PLAN.json'), JSON.stringify({ version: 1, repo: 'memoro-cli', goal: ['Legacy work'], steps: [{ status: 'ready' }] }));
   const prompt = programmePlanContext(f.options()); const context = JSON.parse(prompt);
-  assert.deepEqual(context.programme, f.read().approved[0]);
+  assert.deepEqual(context.programme, f.read().metadata);
   assert.deepEqual(context.goals.map(goal => goal.project), ['independent', 'legacy', f.project]);
   assert.equal(context.goals[0].active_run.run_id, builder.run_id);
   assert.equal(context.goals[1].authority, 'read-only legacy goal');
@@ -77,7 +76,7 @@ test('context refuses overflow and damaged goals instead of omitting programme c
 });
 
 test('revision of a sent open goal preserves its PR, commits, evidence and history while invalidating current authority', t => {
-  const f = fixture(t); const programme = f.read().approved;
+  const f = fixture(t); const programme = f.read().metadata;
   f.patch(value => {
     value.ownership = { branch: 'owned-branch', pr: 42 }; value.commits = ['a'.repeat(40)];
     value.evidence = autonomousEvidence(); value.current_handoff = 'handoffs/old';
@@ -94,25 +93,25 @@ test('revision of a sent open goal preserves its PR, commits, evidence and histo
   assert.equal(after.active_run, null); assert.equal(after.current_handoff, null); assert.equal(after.publication, undefined);
   assert.equal(after.merge_handoff, undefined); assert.equal(after.plan_decisions[0].previous.publication.head, 'a'.repeat(40));
   assert.deepEqual(f.json(join(f.paths.projectDir, 'PLAN.json')), after.contract);
-  assert.deepEqual(f.read().approved, programme);
+  assert.deepEqual(f.read().metadata, programme);
   assert.deepEqual(f.apply(intent), result, 'repeated delivery applies the same revision once');
 });
 
-test('only plan with the active lease can decide; stale state and altered programme/stop authority fail closed', async t => {
+test('only plan with the active lease can decide; stale state and altered goal revision and unsupported authority fields fail closed', async t => {
   const f = fixture(t); const intent = f.intent('revise-project', { ...f.state().contract, goal_revision: 2 });
   for (const actor of [builder, reviewer, { run_id: 'stranger', role: 'plan' }]) {
     assert.throws(() => decideProgrammePlan(f.options({ actor }), intent), /ownership/u);
   }
   assert.throws(() => decideProgrammePlan(f.options({ revision: 1 }), intent), /stale/u);
   assert.throws(() => decideProgrammePlan(f.options({ token: 'wrong' }), intent), /ownership/u);
-  assert.throws(() => f.apply({ ...intent, programme_revision: 2 }), /programme revision changed/u);
-  assert.throws(() => f.apply({ ...intent, basis: { criteria: ['invented'], reference: 'anything' } }), /approved programme criteria/u);
+  assert.throws(() => f.apply({ ...intent, input: { ...intent.input, goal_revision: 3 } }), /advance by exactly one/u);
+  assert.throws(() => f.apply({ ...intent, id: 'unsupported-authority-field', basis: { criteria: ['invented'], reference: 'anything' } }), /unknown planner intent field/u);
   assert.throws(() => f.apply({ ...intent, kind: 'approve-programme' }), /operation/u);
   const out = []; const err = [];
   const code = await programmeCommand(['approve', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ by: 'headless' })],
     { root: f.root, actor: f.options().actor, stdout: { write: line => out.push(line) }, stderr: { write: line => err.push(line) } });
-  assert.equal(code, 1); assert.match(err.join(''), /ownership/u);
-  assert.equal(f.read().approved.length, 1); assert.equal(f.state().goal_revision, 1);
+  assert.equal(code, 1); assert.match(err.join(''), /ownership|draft\/approve/u);
+  assert.equal(f.read().metadata.id, f.programme); assert.equal(f.state().goal_revision, 1);
 });
 
 test('affected active runs wait, then a fresh explicit decision revises the same PR; independent runs remain owned', t => {
@@ -127,7 +126,7 @@ test('affected active runs wait, then a fresh explicit decision revises the same
   cancelProgrammeOperation(f.options(), { id: intent.id, reason: 'Affected run closed; refresh observed state.' });
   f.apply({ ...intent, id: 'revision-after-close', expected_revision: f.state().revision });
   assert.equal(f.state().ownership.pr, 42);
-  f.apply({ id: 'other-goal', kind: 'create-project', project: 'independent', expected_revision: 0, programme_revision: 1, input: autonomousProject({ project_id: 'independent' }) });
+  f.apply({ id: 'other-goal', kind: 'create-project', project: 'independent', expected_revision: 0, input: autonomousProject({ project_id: 'independent' }) });
   reserveProjectRun(f.root, f.programme, 'independent', builder, f.state('independent').revision);
   f.apply(f.intent('revise-project', { ...f.state().contract, goal_revision: 3 }, { id: 'independent-safe-revision' }));
   assert.deepEqual(f.state('independent').active_run, builder);
@@ -146,7 +145,7 @@ test('a revision receipt repairs interrupted PLAN publication without replaying 
   assert.throws(() => f.apply({ ...intent, input: { ...intent.input, instruction: ['Different decision.'] } }), /already used/u);
 });
 
-test('a new lease reconciles committed revisions; changed foreground agreement fences old decisions', t => {
+test('a new lease reconciles committed revisions; unrelated programme context does not stale goal decisions', t => {
   const f = fixture(t);
   const intent = f.intent('revise-project', { ...f.state().contract, goal_revision: 2 });
   assert.throws(() => decideProgrammePlan(f.options({ deps: { writePlan: () => { throw new Error('crash'); } } }), intent), /crash/u);
@@ -160,31 +159,25 @@ test('a new lease reconciles committed revisions; changed foreground agreement f
   const stale = f.intent('revise-project', { ...f.state().contract, goal_revision: 3 }, { id: 'old-agreement-decision' });
   prepareProgrammeOperation(options(), stale);
   yieldProgrammeJob(options(), 'Foreground agreement changed at its own boundary.');
-  const nextForeground = { ...foreground, run_id: 'foreground-revision-2' };
-  reserveProgrammeRun(f.root, f.programme, nextForeground, f.read().revision);
-  mutateProgramme(f.root, f.programme, 'draft', { ...f.draft, revision: 2, based_on: 1 }, { actor: nextForeground, revision: f.read().revision });
-  mutateProgramme(f.root, f.programme, 'approve', { by: 'Martin', at: '2026-10-29T12:00:00Z' }, { actor: nextForeground, revision: f.read().revision });
-  releaseProgrammeRun(f.root, f.programme, nextForeground, f.read().revision);
-  const nextActor = { role: 'plan', run_id: 'new-agreement-plan' };
+  mutateProgramme(f.root, f.programme, 'metadata', { ...f.read().metadata, brief: 'docs/project/updated/' }, { env: {}, revision: f.read().revision });
+  const nextActor = { role: 'plan', run_id: 'new-context-plan' };
   const next = claimProgrammeJob({ root: f.root, programme: f.programme, revision: f.read().revision, actor: nextActor, pid: process.pid, now });
   const current = () => ({ ...options(), actor: nextActor, token: next.planner_jobs.lease.token, revision: f.read().revision });
-  assert.throws(() => decideProgrammePlan(current(), stale), /programme waits or changed|programme revision changed/u);
-  cancelProgrammeOperation(current(), { id: stale.id, reason: 'Use the newly approved revision.' });
-  decideProgrammePlan(current(), { ...stale, id: 'aligned-agreement-decision', expected_revision: f.state().revision, programme_revision: 2,
-    input: { ...stale.input, programme: { id: f.programme, revision: 2 } } });
-  assert.equal(f.state().programme_revision, 2); assert.equal(f.read().approved.length, 2);
+  decideProgrammePlan(current(), stale);
+  assert.equal(f.state().goal_revision, 3);
+  assert.equal(f.read().metadata.brief, 'docs/project/updated/');
 });
 
 test('create, send and resume are separate guarded effects; dependencies reject stale versions and cycles', t => {
   const f = fixture(t);
   const cancelled = { id: 'cancelled-creation', kind: 'create-project', project: 'never-created', expected_revision: 0,
-    programme_revision: 1, input: autonomousProject({ project_id: 'never-created' }) };
+    input: autonomousProject({ project_id: 'never-created' }) };
   prepareProgrammeOperation(f.options(), cancelled);
   cancelProgrammeOperation(f.options(), { id: cancelled.id, reason: 'No longer needed within the programme.' });
   assert.throws(() => f.apply(cancelled), /cancelled/u);
   assert.equal(existsSync(join(f.paths.dir, 'never-created', 'AUTONOMOUS_STATE.json')), false);
   const project = 'dependent';
-  f.apply({ id: 'new-dependent', kind: 'create-project', project, expected_revision: 0, programme_revision: 1, input: autonomousProject({ project_id: project }) });
+  f.apply({ id: 'new-dependent', kind: 'create-project', project, expected_revision: 0, input: autonomousProject({ project_id: project }) });
   const op = (kind, input = {}, id = kind) => f.intent(kind, input, { id, project, expected_revision: f.state(project).revision });
   assert.equal(existsSync(join(f.paths.dir, project, 'PLAN.json')), false);
   f.apply(op('send-project'));
@@ -207,37 +200,38 @@ test('only the current independently reviewed delivery can be confirmed, with af
   recordAutonomousMergeEvent(base.root, base.programme, base.project, { binding: reportBinding(report), type: 'merge-landed',
     details: { merge_commit: report.session.head, merged_into: 'main' } });
   const f = decorate(base, claim(base));
-  const before = f.read().approved;
+  const before = f.read().metadata;
   const input = { id: 'confirmed-delivery', reference: 'decisions/delivery', criteria: [
     { criterion_id: 'schema', reference: 'reports/schema' }, { criterion_id: 'integration', reference: 'integration/observed' } ] };
   assert.throws(() => f.apply(f.intent('confirm-project', { ...input, criteria: input.criteria.slice(0, 1) }, { id: 'incomplete-confirmation' })), /every criterion/u);
   cancelProgrammeOperation(f.options(), { id: 'incomplete-confirmation', reason: 'Include after-integration proof.' });
   f.apply(f.intent('confirm-project', input));
   assert.equal(f.state().phase, 'confirmed'); assert.equal(f.state().evidence.confirmation.role, 'plan');
-  assert.equal(f.state().ownership.pr, 42); assert.deepEqual(f.read().approved, before);
+  assert.equal(f.state().ownership.pr, 42); assert.deepEqual(f.read().metadata, before);
   assert.equal(f.state().plan_decisions.at(-1).intent.input.criteria[1].reference, 'integration/observed');
 });
 
-test('an approved reached stop also refuses clean-review merge admission and autonomous routing', async t => {
+test('a planner stop does not hold sent goals, clean-review merge admission or routing', async t => {
   const base = await ready(t); const f = decorate(base, claim(base));
-  f.apply({ id: 'stop-before-next-dispatch', kind: 'reach-stop', programme_revision: 1, stop: 'design-review', reference: 'decisions/agreed-stop' });
+  f.apply({ id: 'stop-before-next-dispatch', kind: 'reach-stop', stop: 'design-review', reference: 'decisions/agreed-stop' });
   const door = await base.door();
-  assert.equal(door.ok, false); assert.match(door.problems.join('; '), /paused, waiting or stopped/u);
+  assert.equal(door.ok, true, door.problems.join('; '));
   const record = { project: f.project, programme: f.programme, repo: 'memoro-cli', plan: f.state().contract };
-  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).reason, 'programme-held');
+  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).kind, 'review');
 });
 
-test('undelivered goals cannot be confirmed and only predefined stops can halt future dispatch', t => {
+test('undelivered goals cannot be confirmed and only explicit valid stops can halt future dispatch', t => {
   const f = fixture(t);
   assert.throws(() => f.apply(f.intent('confirm-project', { id: 'fake-confirmation', reference: 'none', criteria: [] })), /reviewed delivery/u);
   cancelProgrammeOperation(f.options(), { id: 'confirm-project-1', reason: 'Not delivered.' });
-  assert.throws(() => f.apply({ id: 'unplanned-stop', kind: 'reach-stop', programme_revision: 1, stop: 'new-design-question', reference: 'none' }), /approved programme/u);
+  assert.throws(() => f.apply({ id: 'unplanned-stop', kind: 'reach-stop', stop: '../invalid-stop', reference: 'none' }), /stable ID/u);
   f.apply(f.intent('resume-project'));
-  const stop = { id: 'agreed-stop', kind: 'reach-stop', programme_revision: 1, stop: 'design-review', reference: 'decisions/stop-reached' };
+  const stop = { id: 'agreed-stop', kind: 'reach-stop', stop: 'design-review', reference: 'decisions/stop-reached' };
   f.apply(stop); f.apply(stop);
   assert.equal(f.read().planner_jobs.operations.filter(item => item.intent.id === stop.id).length, 1);
   assert.equal(f.read().planner_jobs.mode, 'stopped');
-  assert.throws(() => startAutonomousBuild(f.root, f.programme, f.project, { actor: builder, revision: f.state().revision }), /paused, waiting or stopped/u);
+  const record = { project: f.project, programme: f.programme, repo: 'memoro-cli', plan: f.state().contract };
+  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).kind, 'step');
   assert.throws(() => f.apply(f.intent('revise-project', { ...f.state().contract, goal_revision: 2 })), /active programme/u);
 });
 
@@ -274,7 +268,7 @@ test('the real headless CLI exposes guarded decisions/completion and denies agre
   let reply = cli('programme', 'decide', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file(decide));
   assert.equal(reply.status, 0, reply.stderr); assert.equal(f.state().goal_revision, 2);
   reply = cli('programme', 'approve', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ by: 'headless' }));
-  assert.equal(reply.status, 1); assert.match(reply.stderr, /agreement edits.*denied/u); assert.equal(f.read().approved.length, 1);
+  assert.equal(reply.status, 1); assert.match(reply.stderr, /agreement edits.*denied/u); assert.equal(f.read().metadata.id, f.programme);
   reply = cli('programme', 'complete', f.programme, '--expected-revision', String(f.read().revision), '--input-file', f.file({ event_ids: ['activate'], reference: 'decisions/cli-complete' }));
   assert.equal(reply.status, 0, reply.stderr); assert.equal(f.read().planner_jobs.lease.completion.reference, 'decisions/cli-complete');
 });
@@ -289,9 +283,9 @@ test('opening mc plan remains foreground and does not reserve or start autonomou
 
 for (const changeCheckout of [false, true]) test(`runner launches an isolated headless plan and validates explicit completion (changed checkout: ${changeCheckout})`, async t => {
   const f = runnerFixture(t); f.deps.now = () => new Date();
-  releaseProgrammeRun(f.root, f.programme, planner, readProgrammeState(f.root, f.programme).revision);
+  f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
-    event: { id: 'runner-activation', type: 'activation', programme_revision: 1, reference: 'approval' } });
+    event: { id: 'runner-activation', type: 'activation', reference: 'approval' } });
   let call;
   f.deps.session = async value => {
     call = value;
@@ -329,9 +323,9 @@ test('workspace refresh preserves dirty inspection trees and refuses foreground/
 
 test('zero exit without durable planner completion retains events and ownership is released for reconciliation', async t => {
   const f = runnerFixture(t); f.deps.now = () => new Date();
-  releaseProgrammeRun(f.root, f.programme, planner, readProgrammeState(f.root, f.programme).revision);
+  f.releasePlanner();
   setProgrammeJobMode({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision }, { mode: 'active',
-    event: { id: 'incomplete', type: 'activation', programme_revision: 1, reference: 'approval' } });
+    event: { id: 'incomplete', type: 'activation', reference: 'approval' } });
   const runner = createRunner({ deps: f.deps, autonomous: { ...f.capability, programmeJobs: true, programmePlan: true } });
   await runner.pass({ world: { ...f.world(f.record), programmeJobs: [f.programme] } });
   const state = readProgrammeState(f.root, f.programme);

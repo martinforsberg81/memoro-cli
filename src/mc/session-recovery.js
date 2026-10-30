@@ -104,7 +104,7 @@ export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
       // before refreshing its snapshot. This exception permits only that tree
       // on the same run/revision and descendant history, never new content.
       if (!publication || publication.run_id !== previous.run_id
-        || publication.goal_revision !== previous.binding.goal_revision || publication.programme_revision !== previous.binding.programme_revision
+        || publication.goal_revision !== previous.binding.goal_revision
         || publication.tree !== checkpoint.content.tree || (publication.head && publication.head !== head)
         || sessionGit(previous.cwd, ['rev-parse', 'HEAD^{tree}']).trim() !== publication.tree
         || sessionGit(previous.cwd, ['status', '--porcelain']).trim()) return { ok: false, reason: 'previous-worktree-changed' };

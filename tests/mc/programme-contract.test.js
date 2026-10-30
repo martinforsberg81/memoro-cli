@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateProgrammeMetadata } from '../../src/mc/programme-metadata.js';
-import { programmeContract } from './autonomy-fixtures.js';
+const programmeContract = (overrides = {}) => ({ schema: 'mc-programme', version: 1, id: 'test-programme', revision: 1, based_on: 0, status: 'approved', approval: { by: 'Martin' }, ...overrides });
 
 test('programme metadata keeps identity and a brief source, without an approval schema', () => {
   const metadata = { id: 'test-programme', brief: 'docs/project/test-programme/' };

@@ -1,4 +1,4 @@
-/** Programme contract drafts are separate from approved immutable revisions.
+/** Programme metadata is context, never goal assignment authority.
  * status/start/pause/resume are the operator's; start records an activation
  * only where the installation supports every control capability. */
 import { readFileSync } from 'node:fs';
@@ -50,12 +50,12 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'capabilities') return capabilities(argv.slice(1), deps, { stdout, stderr });
   if (CONTROL.includes(argv[0])) return control(argv, deps, { stdout, stderr, env });
   let args;
-  try { args = operationArguments(argv, ['show', 'draft', 'approve', 'decide', 'complete', 'cancel']); }
+  try { args = operationArguments(argv, ['show', 'metadata', 'draft', 'approve', 'decide', 'complete', 'cancel']); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }
   try {
     const { root, actor } = autonomousCommandContext(deps);
     const input = args.file ? JSON.parse((deps.readInput || (file => readFileSync(file, 'utf8')))(args.file)) : null;
-    if (actor.role === 'plan' && env.MC_PROGRAMME && env.MC_PROGRAMME !== args.target) throw new Error('planner target must match the owning programme');
+    if (actor?.role === 'plan' && env.MC_PROGRAMME && env.MC_PROGRAMME !== args.target) throw new Error('planner target must match the owning programme');
     const options = { root, programme: args.target, actor, token: deps.token || env.MC_PROGRAMME_LEASE,
       revision: args.revision, now: deps.now ? Number(deps.now()) : Date.now(), deps };
     const result = args.operation === 'decide' ? decideProgrammePlan(options, input)
@@ -104,6 +104,7 @@ export function usage() {
     + '        mc programme start <programme> --expected-revision <n> --stop <planned stop> --input-file <json>\n'
     + '        mc programme pause <programme> [--expected-revision <n>] [--by <name>]\n'
     + '        mc programme resume <programme> --expected-revision <n> [--by <name>]\n'
+    + '        mc programme metadata <programme> --expected-revision <n> --input-file <json>\n'
     + '        mc programme draft|approve <programme> --expected-revision <n> --input-file <json>\n'
     + '        mc programme decide|complete|cancel <programme> --expected-revision <n> --input-file <json> (active planner lease only)\n'
     + '        start input: { "by", "build": { "class", "profile" }, "review": { "model" } }; start refuses\n'

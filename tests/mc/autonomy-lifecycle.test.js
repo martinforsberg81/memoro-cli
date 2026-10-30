@@ -176,7 +176,7 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.match(status.next_action, /planned stop design-review reached/u);
   assert.equal(w.next(w.record()), null);
   assert.equal((await w.cli(['resume', PROGRAMME, '--expected-revision', String(w.programme().revision)])).code, 1);
-  assert.throws(() => setProgrammeJobMode({ root: w.root, programme: PROGRAMME, revision: w.programme().revision }, { mode: 'active' }), /new foreground agreement/u);
+  assert.throws(() => setProgrammeJobMode({ root: w.root, programme: PROGRAMME, revision: w.programme().revision }, { mode: 'active' }), /foreground planning restart/u);
   assert.equal(w.builds.length, 3); assert.equal(w.reviews.length, 2);
 
   // Programme records stay until the explicit programme archive, which takes them whole.
@@ -482,7 +482,7 @@ test('one red main becomes one incident and one repair for every affected goal; 
   const goals = ['alpha-goal', 'beta-goal'];
   const plan = w.plan('plan-goals');
   for (const project of goals) {
-    plan.apply({ id: `create-${project}`, kind: 'create-project', project, expected_revision: 0, programme_revision: 1,
+    plan.apply({ id: `create-${project}`, kind: 'create-project', project, expected_revision: 0,
       input: goal(project, { success_criteria: SHORT }) });
     plan.decide('send-project', project); plan.decide('resume-project', project);
   }
@@ -507,21 +507,21 @@ test('one red main becomes one incident and one repair for every affected goal; 
     assert.equal(w.next(w.record(project)), null);
   }
   const repairPlan = w.plan('plan-repair');
-  const repair = { id: 'repair-shared', kind: 'main-repair', project: 'shared-repair', expected_revision: 0, programme_revision: 1,
-    incident: incident.id, basis: { criteria: ['contracts'], reference: 'decisions/approved-scope' },
+  const repair = { id: 'repair-shared', kind: 'main-repair', project: 'shared-repair', expected_revision: 0,
+    incident: incident.id, basis: { criteria: ['first'], reference: 'decisions/repair-scope' },
     input: goal('shared-repair', { success_criteria: SHORT }) };
   repairPlan.apply(repair); repairPlan.apply(repair);
   assert.throws(() => repairPlan.apply({ ...repair, id: 'repair-again', project: 'another-repair',
     input: { ...repair.input, project_id: 'another-repair' } }), /already has one repair/u);
   repairPlan.cancel('repair-again', 'Both goals wait on the one repair.');
   repairPlan.decide('send-project', 'shared-repair'); repairPlan.decide('resume-project', 'shared-repair');
-  // A provider quota wait holds every start until its condition passes.
+  // A planner quota wait holds new planner claims, not already sent goals.
   const until = Date.now() + 1000;
-  repairPlan.apply({ id: 'wait-quota', kind: 'wait-programme', programme_revision: 1, condition: 'provider-quota',
+  repairPlan.apply({ id: 'wait-quota', kind: 'wait-programme', condition: 'provider-quota',
     reference: 'diagnosis/quota', wait: { kind: 'quota', reason: 'Provider quota exhausted.', until } });
   repairPlan.finish();
   assert.equal(w.programme().planner_jobs.mode, 'waiting');
-  assert.equal(await w.run('shared-repair'), 'skipped:programme-held');
+  assert.equal(w.next(w.record('shared-repair')).name, 'shared-repair');
   w.scan({ now: until + 1 });
   assert.equal(w.programme().planner_jobs.mode, 'active');
   // Two fresh repair sessions end without progress: the count survives the new

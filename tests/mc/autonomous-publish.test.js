@@ -40,7 +40,7 @@ test('finish commits measured dirty content, confirms the pushed marked PR, and 
   assert.equal(f.stateNow().current_handoff, null); held(f);
   const done = await f.complete(); assert.equal(done.phase, 'handoff_committed'); held(f);
   const handoff = readCurrentHandoff({ root: f.root, assignment: f.stateNow().contract,
-    programme: readProgrammeState(f.root, f.programme).approved[0], runId: builder.run_id });
+    programme: readProgrammeState(f.root, f.programme).metadata, runId: builder.run_id });
   assert.equal(handoff.observed.normal_exit, true); assert.equal(handoff.observed.head, prepared.head);
   assert.equal(handoff.observed.pushed, prepared.head); assert.ok(handoff.observed.gate.startsWith(f.env.MC_HOME));
   assert.equal(await criteriaDoor({ repoPath: f.cwd, pr: 42, root: f.root, gh: f.gh, programs: () => [] }).then(x => x.ok), false);

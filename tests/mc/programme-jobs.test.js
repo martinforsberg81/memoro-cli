@@ -80,7 +80,7 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
   it('refuses stale revisions, malformed events and unbounded or non-plan reservations', t => {
     const f = fixture(t); const stale = f.options(); f.activate();
     assert.throws(() => recordProgrammeTrigger(stale, f.event('review-1', 'review')), /stale/u);
-    for (const event of [f.event('../escape'), f.event('unknown', 'repair'), { ...f.event(), programme_revision: 2 }]) {
+    for (const event of [f.event('../escape'), f.event('unknown', 'repair'), { ...f.event(), programme_revision: 1 }]) {
       assert.throws(() => recordProgrammeTrigger(f.options(), event), /invalid/u);
     }
     assert.throws(() => f.claim({ actor: builder }), /planner/u);
@@ -98,7 +98,7 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
     // The pre-existing fixture project is owned by the former planner. Its
     // release must not be forged by that expired owner; use a fresh project.
     assert.throws(() => mutateAutonomousProject(f.root, f.programme, f.project, 'release', null,
-      { actor: planner, revision: state.revision }), /ownership/u);
+      { actor: planner, token: 'fixture-lease', revision: state.revision }), /ownership/u);
     createProgrammeJobProject(owner(), f.intent());
     state = readAutonomousState(f.root, f.programme, 'next-project');
     state = reserveProjectRun(f.root, f.programme, 'next-project', owner().actor, state.revision);
@@ -171,9 +171,9 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     f.claim(); assert.equal(f.read().active_run, null);
   });
 
-  it('stops only at an approved stop and refuses further dispatch or implicit resume', t => {
+  it('stops at an explicit stop and refuses further dispatch or implicit resume', t => {
     const f = fixture(t); f.activate();
-    assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'stopped', stop: 'new-design-question' }), /approved/u);
+    assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'stopped', stop: '../invalid-stop' }), /stable ID/u);
     setProgrammeJobMode(f.options(), { mode: 'stopped', stop: 'design-review' });
     const stopped = f.read().revision;
     setProgrammeJobMode(f.options(), { mode: 'stopped', stop: 'design-review' });
@@ -182,7 +182,7 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     scan(f); f.claim();
     assert.equal(f.read().planner_jobs.pending.event_ids.length, 2);
     assert.equal(f.read().active_run, null);
-    assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'active' }), /foreground agreement/u);
+    assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'active' }), /foreground planning restart/u);
   });
 
   it('scans durable review, landing, failure and dependency sources once, even when delivery repeats', t => {
@@ -190,11 +190,11 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     const source = f.json(f.paths.project);
     source.active_run = null; source.phase = 'plan_pending';
     source.plan_events = [
-      { id: 'review-source', type: 'review-reported', programme_revision: 1 },
-      { id: 'landed-source', type: 'merge-landed', binding: { programme_revision: 1 } },
-      { id: 'failed-source', type: 'merge-failed', binding: { programme_revision: 1 } },
+      { id: 'review-source', type: 'review-reported' },
+      { id: 'landed-source', type: 'merge-landed', binding: { } },
+      { id: 'failed-source', type: 'merge-failed', binding: { } },
     ];
-    source.attempts = [{ id: 'build-attempt', programme_revision: 1 }];
+    source.attempts = [{ id: 'build-attempt' }];
     writeFileSync(f.paths.project, JSON.stringify(source));
     const dependency = f.event('dependency-1', 'dependency');
     scan(f, {}, [dependency]);
@@ -213,9 +213,9 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
 
   it('keeps v1 queue behavior unchanged and reconciles only through the injected runner capability', t => {
     const f = runnerFixture(t);
-    releaseProgrammeRun(f.root, f.programme, planner, 5);
+    f.releasePlanner();
     const options = () => ({ root: f.root, programme: f.programme, revision: readProgrammeState(f.root, f.programme).revision });
-    setProgrammeJobMode(options(), { mode: 'active', event: { id: 'activation-1', type: 'activation', programme_revision: 1, reference: 'fixture activation' } });
+    setProgrammeJobMode(options(), { mode: 'active', event: { id: 'activation-1', type: 'activation', reference: 'fixture activation' } });
     const before = readProgrammeState(f.root, f.programme);
     const legacy = createRunner({ deps: f.deps }).queue();
     assert.equal(Object.hasOwn(legacy, 'programmeJobs'), false);
@@ -230,13 +230,13 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
   it('refuses damaged trigger sources atomically instead of losing failures behind a deduplicated ID', t => {
     const f = fixture(t); f.activate(); f.claim();
     const original = f.json(f.paths.project); const before = f.read();
-    const event = { id: `review-${'a'.repeat(64)}`, type: 'review-reported', programme_revision: 1 };
-    const attempt = { id: 'attempt-1', programme_revision: 1 };
+    const event = { id: `review-${'a'.repeat(64)}`, type: 'review-reported' };
+    const attempt = { id: 'attempt-1' };
     const damagedSources = [
       { ...original, plan_events: [{ ...event, id: undefined }] },
       { ...original, plan_events: [event, event] },
       { ...original, plan_events: null },
-      { ...original, attempts: [{ programme_revision: 1 }] },
+      { ...original, attempts: [{ }] },
       { ...original, attempts: [attempt, attempt] },
       { ...original, attempts: null },
       { ...original, phase: 'unknown' },
@@ -277,7 +277,7 @@ describe('durable planner operations and exactly-once project effects', () => {
     const paths = autonomousPaths(f.root, f.programme, intent.project);
     rmSync(paths.draft);
     const retry = revision => createAutonomousDraft(f.root, f.programme, intent.project, intent.input,
-      { actor: owner().actor, revision, operationId: intent.id });
+      { actor: owner().actor, token: owner().token, revision, operationId: intent.id });
     assert.throws(() => retry(stale), /stale state revision/u);
     assert.equal(existsSync(paths.draft), false, 'stale readback must not write a projection');
     const before = f.read();
@@ -316,7 +316,7 @@ describe('durable planner operations and exactly-once project effects', () => {
 
   it('does not acknowledge a different effect, apply stale programme decisions or apply while paused', t => {
     const f = fixture(t); f.activate(); const owner = f.claim(); const intent = f.intent();
-    assert.throws(() => prepareProgrammeOperation(owner(), { ...intent, programme_revision: 2, input: { ...intent.input, programme: { id: f.programme, revision: 2 } } }), /revision changed/u);
+    assert.throws(() => prepareProgrammeOperation(owner(), { ...intent, input: { ...intent.input, programme: { id: f.programme, revision: 2 } } }), /unsupported pre-ruling-60/u);
     prepareProgrammeOperation(owner(), intent);
     setProgrammeJobMode(f.options(), { mode: 'paused' });
     assert.throws(() => createProgrammeJobProject(owner(), intent), /waits/u);
@@ -327,28 +327,18 @@ describe('durable planner operations and exactly-once project effects', () => {
   });
 
   for (const committed of [false, true]) {
-    it(`reconciles a changed programme revision with effect ${committed ? 'committed' : 'absent'}`, t => {
+    it(`reconciles changed programme context with effect ${committed ? 'committed' : 'absent'}`, t => {
       const f = fixture(t); f.activate(); const original = f.claim(); const intent = f.intent();
       prepareProgrammeOperation(original(), intent);
       if (committed) createAutonomousDraft(f.root, f.programme, intent.project, intent.input,
-        { actor: original().actor, revision: f.read().revision, operationId: intent.id });
+        { actor: original().actor, token: original().token, revision: f.read().revision, operationId: intent.id });
       scan(f, { alive: () => false });
-      const foreground = { role: 'foreground-plan', run_id: 'foreground-revision-2' };
-      reserveProgrammeRun(f.root, f.programme, foreground, f.read().revision);
-      mutateProgramme(f.root, f.programme, 'draft', { ...f.draft, revision: 2, based_on: 1 },
-        { actor: foreground, revision: f.read().revision });
-      mutateProgramme(f.root, f.programme, 'approve', { by: 'Martin', at: '2026-10-29T12:00:00Z' },
-        { actor: foreground, revision: f.read().revision });
-      releaseProgrammeRun(f.root, f.programme, foreground, f.read().revision);
+      mutateProgramme(f.root, f.programme, 'metadata', { ...f.draft, brief: 'docs/project/updated/' },
+        { env: {}, revision: f.read().revision });
       const replacement = f.claim({ actor: { role: 'plan', run_id: 'replacement-plan' } });
-      if (committed) {
-        assert.deepEqual(createProgrammeJobProject(replacement(), intent), { project: intent.project, revision: 1 });
-        assert.equal(f.read().planner_jobs.operations[0].status, 'applied');
-      } else {
-        assert.throws(() => createProgrammeJobProject(replacement(), intent), /revision changed/u);
-        assert.equal(f.read().planner_jobs.operations[0].status, 'pending');
-        assert.equal(existsSync(autonomousPaths(f.root, f.programme, intent.project).project), false);
-      }
+      assert.deepEqual(createProgrammeJobProject(replacement(), intent), { project: intent.project, revision: 1 });
+      assert.equal(f.read().planner_jobs.operations[0].status, 'applied');
+      assert.equal(readAutonomousState(f.root, f.programme, intent.project).contracts.length, 1);
     });
   }
 

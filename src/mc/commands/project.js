@@ -263,7 +263,7 @@ async function showProject(name, flags, deps) {
 function draftLines(name, found, plan) {
   const lines = [`${name} — draft · ${plan.repo} · ${found.programme}`, `  file   ${found.file}`, ''];
   if (plan.version === 2) return [...lines, '  autonomous execution is disabled',
-    `  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision}`,
+    `  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision}`,
     ...plan.success_criteria.map(criterion => `  ${criterion.id}  ${criterion.criterion} (${criterion.verification})`),
     ...validateProject(plan).problems.map(problem => `  ${problem}`),
     `send: mc project send ${name} --expected-revision <state-revision> (inactive publication)`];

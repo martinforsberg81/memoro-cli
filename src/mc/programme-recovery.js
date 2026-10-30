@@ -31,15 +31,13 @@ export function projectRecovery(state) {
 }
 export function assertProjectRecovery(state) {
   const report = state.review_reports?.at(-1);
-  if (report && !report.clean && report.session.assignment.goal_revision === state.goal_revision
-    && report.session.assignment.programme.revision === state.programme_revision) throw new Error('review findings require a planner revision or a new goal, never direct build');
+  if (report && !report.clean && report.session.assignment.goal_revision === state.goal_revision) throw new Error('review findings require a planner revision or a new goal, never direct build');
   const recovery = projectRecovery(state);
   if (recovery.exception) throw new Error(`recovery exception: ${recovery.exception.reason}; retain diagnosis for plan`);
   if (recovery.latest_diagnosis?.action === 'exception' && recovery.latest_diagnosis.goal_revision === state.goal_revision) throw new Error(`recovery exception: ${recovery.latest_diagnosis.diagnosis}`);
   if (!state.attempts.length) return;
   const diagnosis = recovery.latest_diagnosis;
-  if (!diagnosis || diagnosis.action !== 'retry' || diagnosis.goal_revision !== state.goal_revision
-    || diagnosis.programme_revision !== state.programme_revision || !isDeepStrictEqual(diagnosis.attempt_ids, recovery.attempt_ids)) {
+  if (!diagnosis || diagnosis.action !== 'retry' || diagnosis.goal_revision !== state.goal_revision || !isDeepStrictEqual(diagnosis.attempt_ids, recovery.attempt_ids)) {
     throw new Error('incomplete attempts require a current planner diagnosis and a different approach');
   }
 }
@@ -129,11 +127,11 @@ export function reconcileMainRepairsLocked(root) {
     if (!existsSync(file)) continue; // reserved target; creation receipt will reconcile
     const state = JSON.parse(readFileSync(file, 'utf8'));
     if (state.schema !== 'mc-autonomous-state' || !validateAutonomousProject(state.contract).ok || !validateAutonomousEvidence(state.evidence).ok
-      || state.goal_revision !== state.contract.goal_revision || state.programme_revision !== state.contract.programme.revision || state.contract?.project_id !== incident.repair.project
+      || state.goal_revision !== state.contract.goal_revision || state.contract?.project_id !== incident.repair.project
       || state.contract?.repo !== incident.repo || state.contract?.programme.id !== incident.owner) throw new Error('shared main repair identity is unreadable');
     const confirmation = state.evidence?.confirmation;
     if (state.confirmed && state.phase === 'confirmed' && confirmation?.role === 'plan'
-      && confirmation.goal_revision === state.goal_revision && confirmation.programme_revision === state.programme_revision) {
+      && confirmation.goal_revision === state.goal_revision) {
       incident.status = 'resolved'; incident.confirmation = { project: incident.repair.project, goal_revision: state.goal_revision, reference: confirmation.reference }; changed = true;
     }
   }

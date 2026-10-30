@@ -101,7 +101,7 @@ for (const mutation of ['plan-missing', 'plan-corrupt', 'state-missing', 'state-
       if (mutation === 'report-corrupt') s.review_reports[0].session_digest = 'broken';
       if (mutation === 'criterion-missing') s.evidence.builder = [];
       if (mutation === 'criterion-unknown') s.evidence.builder[0].status = 'unknown';
-      if (mutation === 'revision') { s.goal_revision++; s.contract.goal_revision++; }
+      if (mutation === 'revision') { s.goal_revision++; s.contract = { ...s.contract, goal_revision: s.goal_revision }; s.contracts.push(s.contract); }
       if (mutation === 'criteria-change') s.contract.success_criteria[0].instruction += ' Changed.';
       if (mutation === 'evidence-change') s.evidence.builder[0].id = 'replacement-proof';
       if (mutation === 'publication-incomplete') s.publication.phase = 'pushed';
@@ -313,7 +313,7 @@ test('a crash after landing but before its event uses GitHub readback, never ano
 
 test('a late old-revision outcome is retained without overwriting the current assignment or confirmation', async t => {
   const f = await ready(t); await route(f); const [job] = jobsOf(f);
-  f.patch(state => { state.goal_revision++; state.contract.goal_revision++; state.phase = 'confirmed'; state.confirmed = true; });
+  f.patch(state => { state.goal_revision++; state.contract = { ...state.contract, goal_revision: state.goal_revision }; state.contracts.push(state.contract); state.phase = 'confirmed'; state.confirmed = true; });
   recordMergeOutcome({ root: f.root, job, report: { ok: true, merged: true, merged_into: 'main', merge_commit: 'b'.repeat(40) } });
   assert.equal(f.stateNow().phase, 'confirmed'); assert.equal(f.stateNow().confirmed, true);
   assert.equal(f.stateNow().plan_events.at(-1).binding.goal_revision, 1);

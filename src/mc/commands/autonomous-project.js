@@ -8,7 +8,7 @@ import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 
 export function autonomousCommandContext(deps) {
   const env = deps.env || process.env;
-  return { root: deps.root || workRoot(env), actor: deps.actor || { run_id: env.MC_AUTONOMOUS_RUN, role: env.MC_AUTONOMOUS_ROLE } };
+  return { root: deps.root || workRoot(env), actor: deps.actor || (env.MC_AUTONOMOUS_ROLE && env.MC_AUTONOMOUS_ROLE !== 'foreground-plan' ? { run_id: env.MC_AUTONOMOUS_RUN, role: env.MC_AUTONOMOUS_ROLE } : undefined) };
 }
 export function operationArguments(argv, verbs) {
   const scanned = scanArgs(argv, { strictValues: ['--expected-revision', '--input-file'] });

@@ -2,17 +2,17 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readAutonomousState, readProgrammeState, recordAutonomousMergeEvent } from './autonomous-state.js';
+import { readAutonomousState, recordAutonomousMergeEvent } from './autonomous-state.js';
 import { reviewDigest } from './autonomous-review-report.js';
 import { autonomousMergeDoor, autonomousPrOwner } from './autonomous-pr.js';
 import { mergesPath, parseQueue, queuedFor } from './merge-queue.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
 
 export const reportBinding = report => ({ report_id: report.id, report_digest: reviewDigest(report),
-  goal_revision: report.session.assignment.goal_revision, programme_revision: report.session.assignment.programme.revision,
+  goal_revision: report.session.assignment.goal_revision,
   head: report.session.head, branch: report.session.branch, pr: report.session.pr });
 const ticketBinding = ticket => ({ report_id: ticket.review_id, report_digest: ticket.review_digest,
-  goal_revision: ticket.goal_revision, programme_revision: ticket.programme_revision,
+  goal_revision: ticket.goal_revision,
   head: ticket.head, branch: ticket.branch, pr: ticket.pr });
 
 /** Damaged explicit metadata must not fall into v1 mend/retry ownership. */
@@ -39,7 +39,7 @@ export function recordMergeOutcome({ root, job, report }) {
   const state = readAutonomousState(root, owner.programme, owner.project);
   const latest = state.review_reports?.at(-1);
   const fallback = latest ? reportBinding(latest) : { report_id: null, report_digest: null,
-    goal_revision: state.goal_revision, programme_revision: state.programme_revision,
+    goal_revision: state.goal_revision,
     head: state.publication?.head || null, branch: owner.branch, pr: owner.pr };
   const ticket = job.autonomous;
   const binding = ticket?.review_id && ticket.pr === owner.pr && ticket.branch === owner.branch ? ticketBinding(ticket) : fallback;
@@ -59,8 +59,7 @@ export function recordMergeOutcome({ root, job, report }) {
 export function reviewRoutePending(root, state) {
   const report = state.review_reports?.at(-1);
   if (state.active_run || state.confirmed || !report?.clean || !['plan_pending', 'landing'].includes(state.phase)
-    || report.session.assignment.goal_revision !== state.goal_revision
-    || report.session.assignment.programme.revision !== state.programme_revision || report.session.head !== state.publication?.head
+    || report.session.assignment.goal_revision !== state.goal_revision || report.session.head !== state.publication?.head
     || (state.merge_handoff?.status === 'answered' && state.merge_handoff.binding.report_id === report.id)) return false;
   const path = mergesPath(root);
   if (!existsSync(path)) return true;
@@ -77,9 +76,6 @@ export async function routeAutonomousReview({ root, programme, project, repoPath
   try {
     const state = readAutonomousState(root, programme, project);
     if (!reviewRoutePending(root, state)) return { queued: false, reason: 'report has no pending automatic route' };
-    // Pause holds a new submission without answering it: the route stays
-    // pending and continues on resume, rather than becoming a refusal for plan.
-    if (readProgrammeState(root, programme).planner_jobs?.mode === 'paused') return { queued: false, reason: 'programme is paused; the clean review is submitted on resume' };
     const report = state.review_reports.at(-1); const binding = reportBinding(report);
     const refuse = reason => {
       recordAutonomousMergeEvent(root, programme, project, { binding, type: 'merge-refused', details: { reason } });

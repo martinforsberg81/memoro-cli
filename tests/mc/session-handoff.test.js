@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
-import { autonomousProject, programmeContract, attribution } from './autonomy-fixtures.js';
+import { autonomousProject, programmeMetadata, attribution } from './autonomy-fixtures.js';
 import { buildSessionStart, validateSessionResult, persistSessionResult, readCurrentHandoff,
   HANDOFF_MAX_BYTES, SESSION_RESULT_MAX_BYTES, SESSION_START_MAX_BYTES } from '../../src/mc/session-handoff.js';
 import { captureWorktree, gateReceipt, persistGateReceipt } from '../../src/mc/session-gate-evidence.js';
@@ -13,7 +13,7 @@ import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { AUTONOMOUS_EXECUTION_ENABLED } from '../../src/mc/autonomous-project.js';
 
 const SHA = 'a'.repeat(40);
-const context = (runId = 'build-1') => ({ assignment: autonomousProject(), programme: programmeContract(), runId });
+const context = (runId = 'build-1') => ({ assignment: autonomousProject(), programme: programmeMetadata(), runId });
 const binding = (run_id = 'build-1') => ({ ...attribution(), run_id });
 function result(runId = 'build-1', outcome = 'incomplete') {
   return { schema: 'mc-session-result', version: 1, ...binding(runId), outcome,
@@ -101,7 +101,7 @@ it('rejects malformed schemas, missing continuation fields and model-supplied ob
 });
 
 it('rejects results, handoffs and evidence from any other run or assignment revision', () => {
-  for (const field of ['run_id', 'programme_id', 'programme_revision', 'project_id', 'goal_revision']) {
+  for (const field of ['run_id', 'programme_id', 'project_id', 'goal_revision']) {
     for (const path of [value => value, value => value.handoff, value => value.handoff.evidence[0]]) {
       const value = result(); const target = path(value);
       target[field] = typeof target[field] === 'number' ? 2 : 'other-run';
@@ -125,15 +125,15 @@ it('bounds the entire start payload without silently dropping requirements or re
   assert.equal(ctx.assignment.success_criteria.length, 2);
   const docs = context(); docs.assignment.documents = [{ label: 'Detailed design', path: 'docs/design.md' }];
   assert.deepEqual(JSON.parse(buildSessionStart(docs)).assignment.documents, docs.assignment.documents);
-  const largeProgramme = context(); largeProgramme.programme.specification = ['å'.repeat(SESSION_START_MAX_BYTES / 2)];
+  const largeProgramme = context(); largeProgramme.programme.brief = 'å'.repeat(SESSION_START_MAX_BYTES / 2);
   assert.throws(() => buildSessionStart(largeProgramme), /session start: exceeds/);
 });
 
-it('rejects draft programmes, legacy assignments and missing approved snapshots', () => {
+it('rejects obsolete approval fields, legacy assignments and missing programme context', () => {
   const draft = context(); draft.programme.status = 'draft'; delete draft.programme.approval;
-  assert.throws(() => buildSessionStart(draft), /draft grants no authority/);
+  assert.throws(() => buildSessionStart(draft), /programme context.status: unknown key/);
   assert.throws(() => buildSessionStart({ ...context(), assignment: { version: 1, steps: [] } }), /version: must be 2/);
-  assert.throws(() => buildSessionStart({ ...context(), programme: undefined }), /approved programme snapshot/);
+  assert.throws(() => buildSessionStart({ ...context(), programme: undefined }), /programme context/);
 });
 
 it('review-ready requires no remaining work and evidence for each premerge criterion, not after-integration work', () => {

@@ -226,6 +226,7 @@ test('autonomous integration keeps both .gitignore intents instead of taking leg
 test('oversize current assignments fail closed without truncation or a model launch', async t => {
   const f = fixture(t); const state = f.state();
   state.contract.goal = ['x'.repeat(SESSION_START_MAX_BYTES)];
+  state.contracts[state.contracts.length - 1] = structuredClone(state.contract);
   writeFileSync(f.paths.project, JSON.stringify(state));
   writeFileSync(join(f.paths.projectDir, 'PLAN.json'), JSON.stringify(state.contract));
   const record = { ...f.record, plan: state.contract };

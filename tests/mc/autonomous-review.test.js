@@ -83,7 +83,7 @@ for (const finding of ['defect', 'uncertainty', 'criterion-finding', 'unknown'])
   if (finding === 'unknown') report.criteria[0].status = 'unknown';
   f.submit(report); const final = finish(f);
   assert.equal(final.review_reports[0].clean, false); assert.equal(final.phase, 'plan_pending');
-  assert.equal(final.active_run, null); assert.equal(final.runs.length, 3); // planner, builder, review
+  assert.equal(final.active_run, null); assert.equal(final.runs.length, 2); // builder, review; assignment authoring is an operation
 });
 
 for (const mutation of ['tracked', 'untracked', 'ignored', 'index', 'commit', 'branch']) test(`${mutation} review checkout mutation invalidates an otherwise clean report`, async t => {
@@ -180,7 +180,7 @@ test('injected review dispatch uses shared slot, distinct model/checkout, durabl
 
 test('assignment movement invalidates the old frozen report without rewriting its revision', async t => {
   const f = await ready(t); f.start(); f.submit(clean());
-  const state = f.stateNow(); state.contract.goal_revision = 2; state.goal_revision = 2;
+  const state = f.stateNow(); state.contract = { ...state.contract, goal_revision: 2 }; state.contracts.push(state.contract); state.goal_revision = 2;
   writeFileSync(f.paths.project, JSON.stringify(state));
   const final = finish(f);
   assert.equal(final.review_reports[0].clean, false);

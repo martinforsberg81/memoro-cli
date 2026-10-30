@@ -36,7 +36,7 @@ export function incompleteAutonomousBuild(options, reason) {
 export async function settlePublishedBuild(options, processResult, deps = {}) {
   await completeAutonomousPublication(options, processResult, deps);
   const state = read(options);
-  const programme = readProgrammeState(options.root, options.programme).approved.find(item => item.revision === state.programme_revision);
+  const programme = readProgrammeState(options.root, options.programme).metadata;
   const handoff = readCurrentHandoff({ root: options.root, assignment: state.contract, programme, runId: options.actor.run_id });
   return settleAutonomousBuild(options.root, options.programme, options.project,
     { actor: options.actor, revision: state.revision, handoff });

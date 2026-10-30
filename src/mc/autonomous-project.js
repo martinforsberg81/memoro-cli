@@ -56,6 +56,10 @@ export function validateAutonomousProject(value, { programme } = {}) {
   });
   if (programme !== undefined) {
     if (!plain(programme) || programme.id !== value.programme?.id) problems.push('programme: must match programme identity');
+    if (plain(programme)) {
+      keys(programme, ['id', 'brief'], 'programme context', problems);
+      if ('brief' in programme && !text(programme.brief)) problems.push('programme context.brief: a description source path');
+    }
   }
   return { ok: problems.length === 0, problems };
 }

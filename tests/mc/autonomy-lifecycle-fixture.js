@@ -33,7 +33,7 @@ import { archiveProgramme } from '../../src/mc/archive-programme.js';
 import { normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
-import { programmeContract, autonomousProject } from './autonomy-fixtures.js';
+import { programmeMetadata, autonomousProject } from './autonomy-fixtures.js';
 
 export const PROGRAMME = 'test-programme';
 export const PROJECT = 'test-project';
@@ -48,7 +48,7 @@ export const CRITERIA = [
   { id: 'installed', criterion: 'The landed main carries both.', instruction: ['Check main after landing.'], check: 'Read the landed files on main.', verification: 'after-integration' },
 ];
 // Every plan decision cites the agreement's one approved criterion.
-const BASIS = { criteria: ['contracts'], reference: 'decisions/approved-scope' };
+const BASIS = { criteria: ['schema'], reference: 'decisions/approved-scope' };
 // A dead process group: never one this test signals or waits on.
 const DEAD_PID = 2147483647;
 export const COMPLETION = { status: 0, normal_exit: true, recovery_ready: true, control_persisted: true, interrupted: false };
@@ -137,14 +137,9 @@ export function github(remote) {
     hang: (when, before = null) => hangs.push({ when, before }) };
 }
 
-/** The agreement, approved by the operator's foreground plan and released. */
+/** Minimal programme context; goals obtain their own assignment authority. */
 function agree(root) {
-  const foreground = { run_id: 'foreground-1', role: 'foreground-plan' };
-  reserveProgrammeRun(root, PROGRAMME, foreground, 0);
-  const draft = programmeContract({ status: 'draft' }); delete draft.approval;
-  mutateProgramme(root, PROGRAMME, 'draft', draft, { actor: foreground, revision: 1 });
-  mutateProgramme(root, PROGRAMME, 'approve', { by: 'Martin', at: '2026-10-28T12:00:00Z' }, { actor: foreground, revision: 2 });
-  releaseProgrammeRun(root, PROGRAMME, foreground, 3);
+  mutateProgramme(root, PROGRAMME, 'metadata', programmeMetadata(), { env: {}, revision: 0 });
 }
 
 export function programmeWorld(t, { profile = PROFILE } = {}) {
@@ -264,15 +259,15 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
     const owner = (extra = {}) => ({ root, programme: PROGRAMME, revision: w.programme().revision, actor, token: lease.token, ...extra });
     let count = 0;
     const intent = (kind, project = PROJECT, input = {}) => ({ id: `${runId}-${++count}`, kind, project,
-      expected_revision: w.state(project).revision, programme_revision: w.programme().approved.at(-1).revision, basis: BASIS, input });
+      expected_revision: w.state(project).revision, input });
     return { actor, lease, owner, intent,
       events: () => w.programme().planner_jobs.events.filter(item => lease.event_ids.includes(item.id)).map(item => item.type),
       apply: (value, extra) => decideProgrammePlan(owner(extra), value),
       decide: (kind, project = PROJECT, input = {}) => decideProgrammePlan(owner(), intent(kind, project, input)),
       create: (project = PROJECT, overrides = {}) => decideProgrammePlan(owner(), { id: `${runId}-create`, kind: 'create-project', project,
-        expected_revision: 0, programme_revision: 1, input: goal(project, overrides) }),
+        expected_revision: 0, input: goal(project, overrides) }),
       cancel: (id, reason) => cancelProgrammeOperation(owner(), { id, reason }),
-      stop: () => decideProgrammePlan(owner(), { id: `${runId}-stop`, kind: 'reach-stop', programme_revision: 1, stop: 'design-review', reference: 'decisions/planned-stop' }),
+      stop: () => decideProgrammePlan(owner(), { id: `${runId}-stop`, kind: 'reach-stop', stop: 'design-review', reference: 'decisions/planned-stop' }),
       finish: (reference = `decisions/${runId}`) => { completeProgrammePlan(owner(), { event_ids: lease.event_ids, reference }); finishProgrammeJob(owner()); } };
   };
   /** Plan creates the goal, sends it and makes it ready, in one delivery. */
