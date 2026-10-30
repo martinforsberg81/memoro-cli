@@ -628,7 +628,7 @@ export function recordAutonomousReview(root, programme, project, { actor, revisi
     }
     expected(state, revision); owner(state, actor, ['review']);
     const session = state.review_session;
-    if (!session || session.run_id !== actor.run_id || state.phase !== 'reviewing' || report.id !== actor.run_id || report.session_digest !== reviewDigest(session)
+    if (!session || session.run_id !== actor.run_id || !['reviewing', 'plan_pending'].includes(state.phase) || report.id !== actor.run_id || report.session_digest !== reviewDigest(session)
       || !isDeepStrictEqual(report.session, session)) throw new Error('review session binding changed');
     if (report.schema !== 'mc-autonomous-review-report' || report.version !== 1
       || !Array.isArray(report.invalid_reasons) || !report.invalid_reasons.every(item => typeof item === 'string' && item.trim())
@@ -649,6 +649,22 @@ export function recordAutonomousReview(root, programme, project, { actor, revisi
       evidence: { ...state.evidence, reviews: [...state.evidence.reviews, observation] } };
     valid(validateAutonomousEvidence(next.evidence));
     return save(paths.project, state, next, deps);
+  }, deps);
+}
+
+/** Trusted recovery observation, not a review command or ownership release.
+ * An unknown old process remains owned, but its failure is delivered to plan. */
+export function incompleteAutonomousReview(root, programme, project, { actor, revision, reason, ...deps }) {
+  return locked(root, programme, project, paths => {
+    const state = projectState(paths); expected(state, revision); owner(state, actor, ['review']);
+    if (state.attempts.some(item => item.id === actor.run_id)) return structuredClone(state);
+    if (typeof reason !== 'string' || !reason.trim()) throw new Error('review recovery needs a reason');
+    const binding = state.review_session?.assignment || state.contract;
+    return save(paths.project, state, { ...state, phase: 'plan_pending', confirmed: false,
+      evidence: { ...state.evidence, confirmation: null },
+      attempts: [...state.attempts, { id: actor.run_id, run_id: actor.run_id, role: 'review', reason, commits: [],
+        programme_revision: binding.programme.revision, goal_revision: binding.goal_revision,
+        outcome: 'incomplete', progress: recoveryProgress(state) }] }, deps);
   }, deps);
 }
 

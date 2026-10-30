@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from './autonomous-publication-fixture.js';
+import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { reviewer } from './autonomous-state-fixture.js';
 import { completeAutonomousReview } from '../../src/mc/autonomous-review.js';
 import { mutateAutonomousProject, recordAutonomousMergeEvent } from '../../src/mc/autonomous-state.js';
@@ -331,7 +332,8 @@ test('trusted runner routes a completed clean independent session without anothe
         sessions++; assert.equal(slots, 1); assert.notEqual(call.cwd, f.cwd); assert.equal(call.env.MC_AUTONOMOUS_ROLE, 'review');
         const current = f.stateNow(); mutateAutonomousProject(f.root, f.programme, f.project, 'report', clean(),
           { actor: current.active_run, revision: current.revision });
-        return { status: 0, stdout: '', stderr: '' };
+        reviewSpawn(call.reviewProcess.options);
+        return { ...reviewCompletion, stdout: '', stderr: '' };
       } },
     routeClass: () => ({ ok: true, candidate: state.reviewer_model }),
     waitForSlot: async () => { slots++; return 'ok'; }, dropSlot: () => { slots--; },

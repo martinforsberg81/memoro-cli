@@ -108,6 +108,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { streamAutonomousSession } from './session-supervision.js';
+import { streamReviewSession } from './autonomous-review-process.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import { logRows } from './archive-plan.js';
@@ -311,7 +312,8 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0 }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0, reviewProcess = null }) {
+  if (reviewProcess !== null) return streamReviewSession({ bin, args, cwd, env, unsetEnv, prompt, spawn: spawnFn, reviewProcess });
   if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
   return new Promise((resolve) => {
     const piped = prompt != null;

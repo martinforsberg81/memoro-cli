@@ -27,6 +27,7 @@ import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { readClaim } from '../../src/mc/resource-claim.js';
 import { landJob } from '../../src/mc/merger.js';
 import { parseQueue, mergesPath } from '../../src/mc/merge-queue.js';
+import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { archiveProgramme } from '../../src/mc/archive-programme.js';
 import { normaliseCapacity } from '../../src/mc/model-capacity.js';
@@ -419,10 +420,11 @@ function reviewer(w, result, project, after) {
     const state = w.state(project); const actor = state.active_run;
     assert.equal(actor.role, 'review'); assert.equal(call.env.MC_AUTONOMOUS_ROLE, 'review');
     assert.notEqual(call.cwd, w.cwd(project), 'review never works in the builder checkout');
+    reviewSpawn(call.reviewProcess.options);
     w.reviews.push({ run_id: actor.run_id, model: state.review_session.model, checkout: call.cwd, head: state.review_session.head });
     mutateAutonomousProject(w.root, PROGRAMME, project, 'report', result, { actor, revision: state.revision });
     if (after) await after(call);
-    return { status: 0, stdout: '', stderr: '' };
+    return { ...reviewCompletion, stdout: '', stderr: '' };
   };
 }
 

@@ -14,7 +14,7 @@ import { autonomousMergeDoor } from '../../src/mc/autonomous-pr.js';
 import { reconcileProgrammeQueue } from '../../src/mc/programme-jobs.js';
 import { programmeStatus } from '../../src/mc/programme-status.js';
 import { programmeContract } from './autonomy-fixtures.js';
-import { programmeWorld, cleanReview, findings, deferred, goal, git, PROGRAMME, PROJECT, CRITERIA } from './autonomy-lifecycle-fixture.js';
+import { programmeWorld, cleanReview, deferred, goal, git, PROGRAMME, PROJECT, CRITERIA } from './autonomy-lifecycle-fixture.js';
 
 const SHORT = [CRITERIA[0], CRITERIA[2]];
 const FIRST = { 'first.js': 'export const first = 1;\n' };
@@ -141,8 +141,13 @@ test('at the planned stop v2 starts nothing while v1 runs on, and a foreground d
   const w = await started(t); const v1 = legacy(w);
   w.build({ criteria: ['first'], files: FIRST, outcome: 'review-ready' });
   assert.equal(await w.run(), 'ran');
-  w.review(findings('The design question needs the agreed review.'));
+  const defects = ['The design question needs the agreed review.'];
+  w.review({ ...cleanReview(SHORT), defects });
   assert.equal(await w.run(), 'ran');
+  const report = w.state().review_reports?.at(-1);
+  assert.equal(report?.clean, false, w.log.join('\n'));
+  assert.deepEqual(report.result.defects, defects);
+  assert.deepEqual(report.invalid_reasons, [], 'the planned stop follows valid review findings, not a broken submission');
   const head = w.hub.head(PROJECT); const phase = w.state().phase;
   // Plan answers the review at the agreed design point: the planned stop.
   w.scan();

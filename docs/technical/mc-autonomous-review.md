@@ -72,10 +72,28 @@ needs evidence/reason and an explicit uncertainty array. Missing findings,
 unknown IDs, missing evidence or attempts to add scope/state fields are refused.
 Submission is immutable and is not yet a completed review.
 
-After process completion the trusted runner checks HEAD, detached identity,
+Before spawn, an immutable `manifest.json` beside the detached checkout freezes
+its session, source checkout fingerprint, Git identities and a fresh generation.
+`spawn-intent.json` is written before calling the transport; a crash after that
+write with no observed child is **unknown**, not proof that spawn failed.
+`launch.json` consumes native launch permission before spawn, so losing the spawn
+response cannot launch the same attempt twice. `launch.json`, `spawned.json`,
+`terminal.json` and `report.json` are immutable, generation- and
+manifest-digest-bound facts. Generation-safe process and project claims serialize
+writers; a dead PID alone never proves successful closure or permission to reuse
+an attempt. Corrupt facts and live or unreadable claims retain ownership.
+
+The dedicated inactive review transport detaches its own process group, observes
+native close, group death, transport completion, outstanding tool jobs and the
+existing gate worker. Unknown spawn outcome, open pipes, surviving children or
+unfinished tools retain the active review owner. Exit zero without a complete
+transport result is incomplete, never clean. A known pre-spawn abort can only
+produce an incomplete report. No discovered old process is signalled.
+
+After proven process/tool closure the trusted runner checks HEAD, detached identity,
 index, tracked/untracked raw content and ignored additions against the initial
-checkout fingerprint. Changed checkout, moved publication, failure/interruption
-or absent submission cannot be clean. Missing/invalid submissions become
+checkout fingerprint, and checks that the source checkout is unchanged. Changed
+checkout, moved publication, failure/interruption or absent submission cannot be clean. Missing/invalid submissions become
 explicit unknown observations for every criterion. A report is clean only with
 no defects/uncertainties/invalidation and verified premerge observations;
 after-integration deferral stays pending, not planner-confirmed.
@@ -83,7 +101,11 @@ after-integration deferral stays pending, not planner-confirmed.
 The full immutable `mc-autonomous-review-report` and frozen session are appended
 to authoritative `AUTONOMOUS_STATE.json`'s `review_reports`; the existing
 `evidence.reviews` gets a compatible attributed summary/reference. Both commit
-in one atomic state write. Duplicate completion returns the durable report;
+in one atomic state write, after publishing the immutable `report.json`.
+A crash before that state write leaves ownership held. Retrying completion
+revalidates the frozen assignment, checkout and publication and writes the exact
+same report before releasing ownership; changed evidence cannot overwrite it.
+Duplicate completion returns the durable report;
 changing the same report ID is refused. All completions leave `plan_pending`
 with no active owner, no new build job and no confirmation. A runner interrupted
 before completion preserves its reservation/checkout/submission; it is never

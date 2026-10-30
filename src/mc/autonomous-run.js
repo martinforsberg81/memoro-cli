@@ -16,6 +16,8 @@ import { profileArgs } from './portrait.js';
 import { run as gateCommand } from './commands/gate.js';
 import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-review.js';
+import { beginReviewProcess } from './autonomous-review-process.js';
+import { recoverAutonomousReview, verifyReviewPr } from './autonomous-review-recovery.js';
 import { SESSION_START_MAX_BYTES } from './session-handoff.js';
 import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
@@ -35,8 +37,10 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
     const journal = agreement.planner_jobs;
     const mode = journal?.mode;
     if (mode && mode !== 'active') return skip('programme-held', 'programme is paused, waiting or stopped');
-    if (!isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
+    const reviewRecovery = state.active_run?.role === 'review' && capability.review;
+    if (!reviewRecovery && !isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
     if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
+    if (reviewRecovery) return { kind: 'review', flavor: 'autonomous', recovery: true };
     if (state.active_run) {
       if (worktree && (state.phase !== 'plan_pending' || journal) && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
@@ -61,7 +65,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     say(`${record.project}: independent review continuation: ${routed.queued ? 'queued for merger' : routed.reason}`);
     return 'ran';
   }
-  if (choice.kind === 'review') return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+  if (choice.kind === 'review' && !choice.recovery) return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
     waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult });
   const name = record.project; const programme = record.programme;
   if (choice.recovery) {
@@ -74,12 +78,21 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     try {
       if (!held.ok) return 'skipped:autonomous-owned';
       const state = readAutonomousState(root, programme, name);
-      if (!state.active_run) return 'skipped:autonomous-reconciled';
-      writeJson(currentPath, { name, step: null, kind: 'step', flavor: 'autonomous-recovery', run_id: state.active_run.run_id,
-        repo: repo.name, lane, started: stamp(), pid, worktree });
+      if (!state.active_run || state.active_run.role !== choice.kind) return 'skipped:autonomous-reconciled';
+      const review = choice.kind === 'review';
+      const cwd = review && !deps.exists(worktree) ? repo.path : worktree;
+      writeJson(currentPath, { name, step: null, kind: choice.kind, flavor: review ? 'autonomous-review-recovery' : 'autonomous-recovery', run_id: state.active_run.run_id,
+        repo: repo.name, lane, started: stamp(), pid, worktree: review ? state.review_session?.checkout || cwd : worktree });
       currentWritten = true;
-      const recovered = await recoverAutonomousBuild({ root, programme, project: name, actor: state.active_run, cwd: worktree, env: deps.env }, capability.publication || {});
+      const options = { root, programme, project: name, actor: state.active_run, cwd, env: deps.env };
+      const recovered = review ? await recoverAutonomousReview(options, { gh: deps.gh })
+        : await recoverAutonomousBuild(options, capability.publication || {});
       say(`${name}: recovered ${state.active_run.run_id}: ${recovered.phase}`);
+      if (review && !recovered.active_run && recovered.review_reports?.at(-1)?.clean) {
+        const routed = await routeAutonomousReview({ root, programme, project: name, repoPath: repo.path,
+          env: deps.env, gh: deps.gh, start: deps.startMerger });
+        say(`${name}: recovered review continuation: ${routed.queued ? 'queued for merger' : routed.reason}`);
+      }
       return 'ran';
     } finally {
       if (currentWritten) remove(currentPath);
@@ -229,16 +242,14 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
   if (!launch?.ok) return 'skipped:tool-missing';
   const slot = await waitForSlot(name);
   if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped';
+  const claimPath = autonomousBuildClaim({ root, programme, project: name });
+  const held = takeClaim(claimPath, { pid, project: name });
+  if (!held.ok) { dropSlot(); return 'skipped:autonomous-owned'; }
   const actor = { run_id: `review-${randomUUID()}`, role: 'review' };
   const options = { root, programme, project: name, actor, cwd: deps.exists(worktree) ? worktree : repo.path, model: route.candidate };
   const currentPath = paths.currentFor(repo.name, lane);
   let reserved = false; let currentWritten = false;
-  const verifyPr = async session => {
-    const response = await deps.gh(['pr', 'view', String(session.pr), '--json', 'headRefOid,headRefName,baseRefName,state'], { cwd: options.cwd });
-    if (!(response?.ok === true || response?.status === 0)) throw new Error('published PR head is unknown');
-    const pr = JSON.parse(response.stdout);
-    if (pr.headRefOid !== session.head || pr.headRefName !== session.branch || pr.baseRefName !== 'main' || pr.state !== 'OPEN') throw new Error('published PR head changed or is not open on main');
-  };
+  const verifyPr = session => verifyReviewPr(options, session, deps.gh);
   try {
     const started = prepareAutonomousReview(options); reserved = true;
     const session = started.review_session;
@@ -255,7 +266,9 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     currentWritten = true;
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
     const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    beginReviewProcess(options);
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: session.checkout, prompt,
+      reviewProcess: { options, tool: launch.id },
       env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'review', MC_PROJECT: name,
         MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
       unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'] });
@@ -268,10 +281,14 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     return 'ran';
   } catch (error) {
     say(`${name}: independent review stopped: ${error.message}`);
-    if (reserved) completeAutonomousReview(options, { status: 1 }, { invalidReasons: [error.message] });
+    if (reserved) {
+      try { completeAutonomousReview(options, null, { invalidReasons: [error.message] }); }
+      catch (failure) { say(`${name}: ${failure.message}`); }
+    }
     return reserved ? 'ran' : 'skipped:review-wait';
   } finally {
     if (currentWritten) remove(currentPath);
+    releaseClaim(claimPath, held.marker);
     dropSlot();
   }
 }
