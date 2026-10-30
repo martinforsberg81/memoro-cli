@@ -159,3 +159,4 @@ existed?
 | 2026-10-29 | mc | autonomy-session-control | delivered | Review the project against its goal | none | [#1159](https://github.com/martinforsberg81/memoro-cli/pull/1159) |
 | 2026-10-30 | mc | autonomy-build-loop | delivered | Review the project against its goal | none | [#1160](https://github.com/martinforsberg81/memoro-cli/pull/1160) |
 | 2026-10-30 | mc | autonomy-review-merge | delivered | Review the project against its goal | none | [#1161](https://github.com/martinforsberg81/memoro-cli/pull/1161) |
+| 2026-10-30 | mc | autonomy-programme-plan | delivered | Review the project against its goal | none | [#1162](https://github.com/martinforsberg81/memoro-cli/pull/1162) |
