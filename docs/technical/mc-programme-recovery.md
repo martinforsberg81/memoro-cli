@@ -24,7 +24,7 @@ observations. No new permission to deploy follows from a deferred check.
 ```
 
 An exception instead uses `action: "exception"`, without `approach`. Diagnoses
-are durable history, bound to the current programme/goal revision and exact
+are durable history, bound to the current goal revision and exact
 attempt list. Resuming a failed goal requires a current retry diagnosis; an
 already unsuccessful approach is refused. Three consecutive incomplete attempts
 without another verified criterion retain a `no-progress` exception. Neither a
@@ -51,20 +51,15 @@ confirmation or choose the next goal itself.
 Plan may additionally issue `await-dependencies` (empty input) for a sent,
 pending goal with selected dependencies. This explicitly authorizes its later
 release. Reconciliation atomically records `ready` and a release outbox event
-once all dependencies are confirmed, runs are closed, the sent contract matches,
-the programme is active/current and no shared-main incident holds it. Replaying
-an interrupted programme acknowledgement cannot release twice. Changed goal or
-approved programme revisions fence the selection; plan must align/reselect it.
-An approved reached stop prevents release as well as build, review and merge.
-Plan must never select work beyond the approved stopping boundary.
-Reaching it also waits for live or unreadable builder claims, not merely the
-project's recorded active run. An orphaned claim is not proof of a safe boundary.
-
-With programme jobs in use, a successor approved agreement fences new build,
-review and merge dispatch for goals on the previous revision. Reconciliation
-coalesces a revision-mismatch event into the owning planner job even when the
-goal was already ready. Plan aligns remaining work at its safe boundary; the
-old PR, evidence and attempts are preserved. Pre-outbox behavior is unchanged.
+once all dependencies are confirmed, runs are closed, the sent contract matches
+and no shared-main incident holds it. Replaying an interrupted programme
+acknowledgement cannot release twice. A changed selected goal revision fences
+the selection; plan must reselect it. Unrelated goals and programme metadata
+changes do not invalidate it. Planner stops hold new planner claims, not sent
+goal dispatch. Recording a stop still waits for live or unreadable builder
+claims, not merely the project's recorded active run. An orphaned claim is not
+proof of a safe boundary. Goal revision preserves the old PR, evidence and
+attempts, but recovery requires a diagnosis for the new revision.
 
 ## One shared-main incident and repair
 
@@ -78,13 +73,13 @@ replaying old sources; a genuinely new observation can create a new occurrence.
 Unreadable incident data refuses dispatch, rather than becoming an empty wait.
 
 The owning planner uses `main-repair`, a create-project envelope with `incident`
-and the usual `basis` of approved criterion IDs and scope rationale. It creates
+and the usual `basis` of goal criterion IDs and scope rationale. It creates
 an **ordinary v2 project**, not a repair role. A repair target is reserved before
 creation; its normal receipt reconciles a crash before/after project state or
 DRAFT projection. Another owner/target is refused, and a committed repair cannot
 be cancelled away. An uncreated reservation can be explicitly cancelled; its
-fenced history prevents replaying it after an agreement change. Send/resume/build/review/merge remain the normal guarded
-operations. A repair may start implementation from a **completed red preflight**
+fenced history prevents replaying its cancelled intent. Send/resume/build/review/merge
+remain the normal guarded operations. A repair may start implementation from a **completed red preflight**
 only when its immutable affected-gate receipt still matches the checkout/base,
 all reported failures name its assigned incident and no command/cancellation is
 unknown or failed. That preflight stays red; final publication and merge still

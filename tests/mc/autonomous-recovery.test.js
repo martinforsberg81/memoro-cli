@@ -11,7 +11,7 @@ import { autonomousProject } from './autonomy-fixtures.js';
 import { autonomousBuildClaim, recoverAutonomousBuild, settlePublishedBuild } from '../../src/mc/autonomous-recovery.js';
 import { autonomousChoice, runAutonomousBuild } from '../../src/mc/autonomous-run.js';
 import { createRunner } from '../../src/mc/run.js';
-import { startAutonomousBuild, mutateAutonomousProject, observeProjectSessionControl } from '../../src/mc/autonomous-state.js';
+import { startAutonomousBuild, mutateAutonomousProject, observeProjectSessionControl, settleAutonomousBuild } from '../../src/mc/autonomous-state.js';
 import { finishAutonomousPublication } from '../../src/mc/autonomous-publish.js';
 import { preserveSession, sessionGitDir } from '../../src/mc/session-recovery.js';
 import { controlResponse } from '../../src/mc/session-control.js';
@@ -21,6 +21,7 @@ import { archiveDue, archivePrograms } from '../../src/mc/project-archive.js';
 import { captureWorktree, gateReceipt, persistGateReceipt } from '../../src/mc/session-gate-evidence.js';
 import { gateConfiguration } from '../../src/mc/gate-greens.js';
 import { AUTONOMOUS_PR_MARK } from '../../src/mc/autonomous-pr.js';
+import { readCurrentHandoff } from '../../src/mc/session-handoff.js';
 
 const assignment = { success_criteria: [...autonomousProject().success_criteria,
   { id: 'continuation', criterion: 'Another session builds.', instruction: ['Build the next part.'], check: 'mc gate next.test.js', verification: 'premerge' }] };
@@ -120,6 +121,24 @@ test('a recovered commit crash before snapshot refresh reconciles the measured d
   assert.equal(readFileSync(join(saved.snapshot, 'checkpoint.json'), 'utf8'), bytes);
   const manifest = JSON.parse(readFileSync(join(sessionGitDir(f.cwd), 'mc-autonomous-session.json'), 'utf8'));
   assert.notEqual(manifest.snapshot, saved.snapshot); assert.ok(manifest.snapshot.startsWith(dirname(saved.snapshot)));
+});
+
+test('a stale publication cannot settle a current handoff and a stale continuation cannot bypass recovery ownership', async t => {
+  const f = fixture(t); f.edit(); await f.finish(); await f.complete();
+  const state = f.stateNow();
+  const handoff = readCurrentHandoff({ root: f.root, assignment: state.contract, programme: f.draft, runId: builder.run_id });
+  state.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  const bytes = readFileSync(f.paths.project, 'utf8');
+  assert.throws(() => settleAutonomousBuild(f.root, f.programme, f.project, {
+    actor: builder, revision: state.revision, handoff,
+  }), /settled normal publication/u);
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+  state.active_run = null;
+  state.continuation = { run_id: builder.run_id, goal_revision: state.goal_revision + 1, handoff: handoff.artifact, phase: 'ready' };
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  await assert.rejects(recoverAutonomousBuild(f.options(), f.deps), /active step ownership/u);
+  assert.equal(f.stateNow().continuation.goal_revision, state.goal_revision + 1);
 });
 
 test('only published current premerge reports route review-ready; postintegration work does not block it', async t => {

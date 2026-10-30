@@ -46,7 +46,7 @@ export async function settlePublishedBuild(options, processResult, deps = {}) {
  * not a runner restart or status=0 alone, supplies process completion facts. */
 export async function recoverAutonomousBuild(options, deps = {}) {
   const state = read(options);
-  if (state.continuation?.run_id === options.actor.run_id && !state.active_run) return state;
+  if (state.continuation?.run_id === options.actor.run_id && state.continuation.goal_revision === state.goal_revision && !state.active_run) return state;
   if (!isDeepStrictEqual(state.active_run, options.actor) || options.actor.role !== 'step') throw new Error('active step ownership required');
   if (state.phase === 'plan_pending' && !readProgrammeState(options.root, options.programme).planner_jobs) return state;
   // A surviving supervisor/finish operation is not ours to replace. Unknown

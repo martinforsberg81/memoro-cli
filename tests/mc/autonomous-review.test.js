@@ -13,7 +13,7 @@ import { reviewer, planner } from './autonomous-state-fixture.js';
 import { settlePublishedBuild } from '../../src/mc/autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview, reviewCheckoutFingerprint } from '../../src/mc/autonomous-review.js';
 import { reviewInputProblems } from '../../src/mc/autonomous-review-report.js';
-import { mutateAutonomousProject, recordAutonomousReview, reserveProjectRun } from '../../src/mc/autonomous-state.js';
+import { mutateAutonomousProject, mutateProgramme, readProgrammeState, recordAutonomousReview, reserveProjectRun, startAutonomousReview } from '../../src/mc/autonomous-state.js';
 import { run as projectCommand } from '../../src/mc/commands/autonomous-project.js';
 import { run as legacyProjectCommand } from '../../src/mc/commands/project.js';
 import { run as publishCommand } from '../../src/mc/commands/publish.js';
@@ -96,6 +96,40 @@ for (const mutation of ['tracked', 'untracked', 'ignored', 'index', 'commit', 'b
   if (mutation === 'branch') git(cwd, 'switch', '-qc', 'unauthorized-review-branch');
   const final = finish(f); assert.equal(final.review_reports[0].clean, false);
   assert.ok(final.review_reports[0].invalid_reasons.includes('review checkout changed'));
+});
+
+test('a mismatched publication goal revision refuses both review preparation and the atomic reservation', async t => {
+  const f = await ready(t); const original = f.stateNow();
+  const session = f.start().review_session;
+  // Keep an otherwise exact frozen session but restore the pre-reservation state.
+  // A stale publication must not pass even the trusted low-level reservation.
+  original.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(original));
+  const bytes = readFileSync(f.paths.project, 'utf8');
+  assert.throws(() => startAutonomousReview(f.root, f.programme, f.project, {
+    actor: reviewer, revision: original.revision, session,
+  }), /settled published head/u);
+  assert.throws(f.start, /settled published head/u);
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+});
+
+test('publication goal revision changing during review invalidates an otherwise clean report', async t => {
+  const f = await ready(t); f.start(); f.submit(clean());
+  const state = f.stateNow(); state.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  const report = finish(f).review_reports[0];
+  assert.equal(report.clean, false);
+  assert.ok(report.invalid_reasons.some(reason => reason.includes('settled published head')));
+});
+
+test('programme metadata changing during review preserves the exact assignment and clean report', async t => {
+  const f = await ready(t); const session = f.start().review_session; f.submit(clean()); f.releasePlanner();
+  const programme = readProgrammeState(f.root, f.programme);
+  mutateProgramme(f.root, f.programme, 'metadata', { ...programme.metadata, brief: 'docs/project/updated-context/' },
+    { env: {}, revision: programme.revision });
+  const report = finish(f).review_reports[0];
+  assert.equal(report.clean, true, report.invalid_reasons.join('; '));
+  assert.deepEqual(report.session, session);
 });
 
 test('historical builder reuse, missing provenance and moved remote head refuse review admission', async t => {

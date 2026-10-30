@@ -15,7 +15,7 @@ admission, never falls back to legacy `notChecked`. A body marker or v2 branch
 without durable ownership also refuses rather than guessing authority.
 
 `criteriaDoor` checks autonomous admission before legacy step lookup. A current
-settled publication, durable normal handoff, matching sent/approved assignment,
+settled publication, durable normal handoff, matching sent goal assignment,
 all current published verified premerge criterion evidence, and a complete clean
 independent report are required. After-integration criteria may remain deferred;
 they do not block their own merge or count as planner confirmation. Active or
@@ -25,7 +25,9 @@ The report must match the full assignment and criterion digests, published SHA,
 gate run, historical builders and reserved independent reviewer. New commits
 (including equal-tree commits), changed criteria/evidence and findings invalidate
 it. The latest report must be clean; an earlier clean report cannot override a
-later finding. Admission reads the immutable handoff and gate receipt, not a log
+later finding. Revisions of other goals and changes to programme metadata do not
+change admission; revising this goal invalidates its earlier evidence without
+deleting history. Admission reads the immutable handoff and gate receipt, not a log
 or cache claim. It reselects the publication's complete relevant checks at its
 frozen base, compares configuration, exact selection, content tree/fingerprint,
 successful execution and run/revision bindings, and rechecks the remote and PR.

@@ -28,10 +28,11 @@ resource reservations are unchanged.
 ## Frozen session and command boundary
 
 `prepareAutonomousReview` requires review-ready state and a settled publication,
-checks the pushed branch's head and creates a new detached worktree beneath
+checks the publication's goal revision and pushed branch head, and creates a new
+detached worktree beneath
 `<work root>/runner/reviews/<run ID>/checkout`. It never syncs or resets the
 builder's branch/index. The session freezes the complete assignment, criterion
-and assignment digests, programme/goal revision, published head, branch/PR,
+and assignment digests, goal revision, published head, branch/PR,
 merge-base comparison SHA, observed integration base, model provenance, builder
 verification references and gate run. The runner also verifies GitHub's open PR
 head, branch and main target before and after the separate review session.

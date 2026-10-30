@@ -4,10 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateProject } from '../../src/mc/plan-schema.js';
-import { AUTONOMOUS_EXECUTION_ENABLED, autonomousRevisionProblems, validateAutonomousProject } from '../../src/mc/autonomous-project.js';
+import { AUTONOMOUS_EXECUTION_ENABLED, autonomousRevisionProblems, evidenceForRevision, validateAutonomousProject } from '../../src/mc/autonomous-project.js';
 import { validateProgrammeMetadata } from '../../src/mc/programme-metadata.js';
 import {
-  applyProgrammeProjectOperation, autonomousPaths, createAutonomousDraft, GOAL_STATE_VERSION, mutateAutonomousProject, mutateProgramme,
+  applyProgrammeProjectOperation, autonomousPaths, createAutonomousDraft, currentAutonomousEvidence, GOAL_STATE_VERSION, mutateAutonomousProject, mutateProgramme,
   readAutonomousState, readProgrammeState, reserveProjectRun, sendAutonomousProject, updateProgrammeRegister,
 } from '../../src/mc/autonomous-state.js';
 
@@ -320,4 +320,57 @@ test('a retained unknown build claim fences foreground revision rather than bein
   assert.throws(() => f.revise(assignment({ goal_revision: 2 })), /safe boundary/u);
   assert.equal(readFileSync(file, 'utf8'), bytes);
   assert.equal(f.state().goal_revision, 1);
+});
+
+test('evidence selection isolates goal identity and revision even with shared criterion IDs', () => {
+  const goal = assignment();
+  const observations = [
+    { project_id: goal.project_id, programme_id: goal.programme.id, goal_revision: 1 },
+    { project_id: 'goal-two', programme_id: goal.programme.id, goal_revision: 1 },
+    { project_id: goal.project_id, programme_id: 'another-programme', goal_revision: 1 },
+    { project_id: goal.project_id, programme_id: goal.programme.id, goal_revision: 2 },
+  ];
+  const evidence = { builder: [], reviews: [], confirmation: null };
+  observations.forEach((binding, index) => {
+    evidence.builder.push({ ...binding, id: `build-${index}`, run_id: `builder-${index}`,
+      criterion_id: 'contract', status: 'verified', reference: `proof/${index}` });
+    evidence.reviews.push({ ...binding, id: `review-${index}`, run_id: `reviewer-${index}`,
+      reference: `report/${index}`, findings: [], criteria: [{ criterion_id: 'contract', status: 'verified', reference: `proof/${index}` }] });
+  });
+  const before = structuredClone(evidence);
+  for (const [project, index] of [[goal, 0], [assignment({ project_id: 'goal-two' }), 1],
+    [assignment({ programme: { id: 'another-programme' } }), 2], [assignment({ goal_revision: 2 }), 3]]) {
+    assert.deepEqual(evidenceForRevision(project, evidence), {
+      builder: [evidence.builder[index]], reviews: [evidence.reviews[index]], confirmation: null,
+    });
+  }
+  assert.deepEqual(evidence, before, 'selecting current evidence never rewrites history');
+});
+
+test('revising another goal or programme context preserves evidence; revising this goal invalidates it without deleting history', t => {
+  const f = fixture(t); f.init(); f.create();
+  const actor = { role: 'step', run_id: 'goal-one-builder' };
+  reserveProjectRun(f.root, f.programme, f.project, actor, f.state().revision);
+  mutateAutonomousProject(f.root, f.programme, f.project, 'progress', {
+    id: 'contract-proof', criterion_id: 'contract', status: 'verified', reference: 'evidence/contract.json',
+  }, { actor, revision: f.state().revision });
+  const before = f.state(); const bytes = readFileSync(f.paths.project, 'utf8');
+  const other = assignment({ project_id: 'goal-two' });
+  const created = createAutonomousDraft(f.root, f.programme, other.project_id, other,
+    { ...f.options, revision: readProgrammeState(f.root, f.programme).revision });
+  mutateAutonomousProject(f.root, f.programme, other.project_id, 'revise', { ...other, goal_revision: 2 },
+    { ...f.options, revision: created.revision });
+  mutateProgramme(f.root, f.programme, 'metadata', { ...f.metadata, brief: 'docs/project/new-context/' },
+    { ...f.options, revision: readProgrammeState(f.root, f.programme).revision });
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+  assert.deepEqual(currentAutonomousEvidence(f.state()), currentAutonomousEvidence(before));
+  mutateAutonomousProject(f.root, f.programme, f.project, 'release', null, { actor, revision: before.revision });
+  const revised = f.revise(assignment({ goal_revision: 2 }));
+  assert.deepEqual(revised.evidence, before.evidence);
+  assert.deepEqual(currentAutonomousEvidence(revised), { builder: [], reviews: [], confirmation: null });
+  const revisedBytes = readFileSync(f.paths.project, 'utf8');
+  assert.throws(() => mutateAutonomousProject(f.root, f.programme, f.project, 'progress', {
+    id: 'stale-proof', criterion_id: 'contract', status: 'verified', reference: 'evidence/contract.json',
+  }, { actor, revision: before.revision }), /stale state revision/u);
+  assert.equal(readFileSync(f.paths.project, 'utf8'), revisedBytes);
 });

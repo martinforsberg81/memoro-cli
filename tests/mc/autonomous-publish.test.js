@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builder } from './autonomous-state-fixture.js';
-import { mutateAutonomousProject, startAutonomousBuild, observeProjectSessionControl, readProgrammeState } from '../../src/mc/autonomous-state.js';
+import { mutateAutonomousProject, mutateProgramme, startAutonomousBuild, observeProjectSessionControl, readProgrammeState } from '../../src/mc/autonomous-state.js';
 import { captureWorktree, gateReceipt, persistGateReceipt } from '../../src/mc/session-gate-evidence.js';
 import { gateConfiguration } from '../../src/mc/gate-greens.js';
 import { finishAutonomousPublication, completeAutonomousPublication } from '../../src/mc/autonomous-publish.js';
@@ -109,6 +109,29 @@ test('focused, filtered, stale-base, wrong-run, wrong-goal and changed-content r
     await assert.rejects(f.finish(), /complete relevant green gate/);
     assert.equal(f.pr(), null); held(f);
   }
+});
+
+test('programme metadata changes between finish and completion do not invalidate publication or its gate receipt', async t => {
+  const f = fixture(t); f.edit(); const prepared = await f.finish(); f.releasePlanner();
+  const programme = readProgrammeState(f.root, f.programme);
+  mutateProgramme(f.root, f.programme, 'metadata', { ...programme.metadata, brief: 'docs/project/updated-context/' },
+    { env: {}, revision: programme.revision });
+  const completed = await f.complete();
+  assert.equal(completed.phase, 'handoff_committed');
+  assert.equal(completed.goal_revision, prepared.goal_revision);
+  assert.equal(completed.head, prepared.head); assert.equal(completed.gate_run, prepared.gate_run);
+});
+
+test('a stale publication revision cannot resume finish or commit a normal handoff even with exact green content', async t => {
+  const f = fixture(t); f.edit(); await f.finish();
+  const state = f.stateNow(); state.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  const bytes = readFileSync(f.paths.project, 'utf8'); const calls = f.calls.length;
+  await assert.rejects(f.finish(), /publication assignment changed/u);
+  await assert.rejects(f.complete(), /current assignment/u);
+  assert.equal(f.calls.length, calls, 'a stale publication never pushes or resolves the PR again');
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+  assert.equal(f.stateNow().current_handoff, null); held(f);
 });
 
 test('push failure retains the commit and gate phase; retry confirms the actual remote and resumes without rebuilding', async t => {

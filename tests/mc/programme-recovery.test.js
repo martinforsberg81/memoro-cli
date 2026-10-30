@@ -108,6 +108,26 @@ test('a second incomplete attempt cannot repeat an already unsuccessful approach
   assert.equal(f.state().attempts.length, 2);
 });
 
+test('another goal revision leaves recovery evidence current, but this goal needs a new revision-bound diagnosis', t => {
+  const f = fixture(t); f.send(f.project); fail(f, 1); diagnose(f, 'first-diagnosis');
+  const before = f.state();
+  f.create('independent-goal');
+  f.apply(f.intent('revise-project', { ...f.state('independent-goal').contract, goal_revision: 2 },
+    { project: 'independent-goal', expected_revision: f.state('independent-goal').revision }));
+  assert.deepEqual(f.state(), before);
+  f.apply(f.intent('resume-project')); assert.equal(f.state().phase, 'ready');
+  f.apply(f.intent('revise-project', { ...f.state().contract, goal_revision: 2 }));
+  const revised = f.state();
+  assert.deepEqual(revised.recovery_diagnoses, before.recovery_diagnoses);
+  const stale = f.intent('resume-project');
+  assert.throws(() => f.apply(stale), /current planner diagnosis/u);
+  assert.deepEqual(f.state(), revised);
+  cancelProgrammeOperation(f.owner(), { id: stale.id, reason: 'The retained diagnosis belongs to the old goal revision.' });
+  diagnose(f, 'revised-diagnosis'); f.apply(f.intent('resume-project'));
+  assert.equal(f.state().phase, 'ready');
+  assert.equal(f.state().recovery_diagnoses.at(-1).goal_revision, 2);
+});
+
 test('plan-selected dependency release occurs after confirmation, not landing, and survives a programme-ack crash exactly once', t => {
   const f = fixture(t); f.create('dependency'); f.send(f.project);
   f.apply(f.intent('dependencies', { projects: [{ project: 'dependency', goal_revision: 1 }] }));
@@ -119,6 +139,34 @@ test('plan-selected dependency release occurs after confirmation, not landing, a
   f.scan(); f.scan(); assert.equal(f.state().revision, revision);
   assert.equal(f.state().plan_events.filter(item => item.type === 'dependency-released').length, 1);
   assert.ok(f.read().planner_jobs.events.some(item => item.type === 'dependency'));
+});
+
+test('a revised dependency cannot release a goal waiting on its earlier revision', t => {
+  const f = fixture(t); f.create('dependency'); f.send(f.project);
+  f.apply(f.intent('dependencies', { projects: [{ project: 'dependency', goal_revision: 1 }] }));
+  f.apply(f.intent('await-dependencies'));
+  const before = f.state();
+  f.apply(f.intent('revise-project', { ...f.state('dependency').contract, goal_revision: 2 },
+    { project: 'dependency', expected_revision: f.state('dependency').revision }));
+  confirmed(f, 'dependency'); f.scan(); f.scan();
+  assert.deepEqual(f.state(), before);
+  assert.equal(f.state().dependency_release.status, 'waiting');
+  assert.equal(f.state('dependency').goal_revision, 2);
+});
+
+test('job reconciliation refuses goal revision drift before acknowledging events or applying dependency effects', t => {
+  const f = fixture(t); f.send(f.project);
+  for (const goal_revision of [undefined, 2]) {
+    f.patch(state => { state.goal_revision = goal_revision; });
+    const programme = readFileSync(f.paths.programme, 'utf8');
+    const project = readFileSync(f.paths.project, 'utf8');
+    assert.throws(() => f.scan(), /invalid autonomous trigger source/u);
+    assert.equal(readFileSync(f.paths.programme, 'utf8'), programme);
+    assert.equal(readFileSync(f.paths.project, 'utf8'), project);
+    // Restore only the isolated malformed fixture for the next negative case.
+    const state = JSON.parse(project); state.goal_revision = state.contract.goal_revision;
+    writeFileSync(f.paths.project, JSON.stringify(state));
+  }
 });
 
 test('changed programme metadata does not fence an armed dependency release', t => {

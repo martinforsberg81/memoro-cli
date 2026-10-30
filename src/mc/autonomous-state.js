@@ -504,6 +504,7 @@ export function settleAutonomousBuild(root, programme, project, { actor, revisio
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision); ownedControl(state, actor);
     if (state.phase !== 'publishing' || state.publication?.run_id !== actor.run_id
+      || state.publication.goal_revision !== state.goal_revision
       || state.publication.phase !== 'handoff_committed' || state.current_handoff !== handoff.artifact
       || !handoff.observed.normal_exit || handoff.observed.head !== state.publication.head
       || handoff.handoff.run_id !== actor.run_id || handoff.handoff.goal_revision !== state.goal_revision
@@ -646,6 +647,7 @@ export function startAutonomousReview(root, programme, project, { actor, revisio
     if (session.assignment_digest !== reviewDigest(state.contract)
       || session.criteria_digest !== reviewDigest(state.contract.success_criteria)) throw new Error('review revision binding changed');
     if (session.run_id !== actor.run_id || session.head !== state.publication?.head
+      || state.publication?.goal_revision !== state.goal_revision
       || state.publication.phase !== 'handoff_committed' || session.pr !== state.ownership.pr
       || session.branch !== state.ownership.branch || !session.base || !session.checkout) throw new Error('review requires settled published head and comparison base');
     if (!isDeepStrictEqual(session.model, state.reviewer_model) || !independentModel(session.model, builderModels(state))) throw new Error('review model must be independent of all historical builders');

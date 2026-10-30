@@ -51,9 +51,11 @@ production activation command.
 ## Effects, not exactly-once processes
 
 A durable operation ID identifies a decision across planner sessions. Its intent
-binds the project, expected target revision, approved programme revision and
-complete input. Intent persistence precedes the effect. Reusing an ID for a
-different decision is refused. A stale agreement cannot authorize a new effect.
+binds the project, expected target state revision and complete input (including
+the goal revision for a revised assignment). Intent persistence precedes the
+effect. Reusing an ID for a different decision is refused. A stale target state
+revision cannot authorize a new effect; unrelated goal revisions and programme
+metadata changes are not evidence authority.
 
 The implemented concrete effect is **create-project** with expected target
 revision zero. `createProgrammeJobProject` first journals its intent, then uses
@@ -82,10 +84,10 @@ Pause preserves the queue and stops new claims/effects. Quota, network and
 resource waits require a retry instant; an external dependency may instead have
 no retry instant and stays explicitly waiting. Timed waits become eligible at
 reconciliation. Existing atomic effects can still be acknowledged while held.
-A reached stop must name an approved planned stop. Its acknowledgement is
-idempotent, subsequent events remain visible, and neither reconciliation nor a
-plain resume dispatches beyond it. Foreground agreement handling is a later
-activation responsibility. `execution_enabled` stays false throughout.
+A planner stop records a reference and reason. Its acknowledgement is
+idempotent and subsequent events remain visible. It holds new planner claims,
+not already sent goals; programme context is not an approval boundary.
+`execution_enabled` stays false throughout.
 
 ## Verification
 

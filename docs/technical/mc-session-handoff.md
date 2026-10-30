@@ -6,10 +6,10 @@ provider transport or execution-enabled flag changes.
 
 ## Fresh context
 
-`buildSessionStart` emits one JSON start payload containing the exact approved
-programme snapshot, complete v2 assignment and at most one predecessor handoff.
-Programme scope, authority, planned stops and criteria, and project requirements,
-criterion instructions/checks and document references remain inline. There is no
+`buildSessionStart` emits one JSON start payload containing programme metadata,
+the complete v2 goal assignment and at most one predecessor handoff. Goal scope,
+requirements, criterion instructions/checks and document references remain inline.
+Programme metadata supplies context, never approval authority. There is no
 transcript concatenation or automatic history loading. Detail belongs in document,
 code, log and immutable artifact references; no reference is fetched implicitly.
 
@@ -66,10 +66,9 @@ identifying the current run and artifact digest. Writes use the existing strict
 register lock and compare the expected predecessor; a stale writer cannot replace
 a newer handoff. Slow Git observations happen before that shared lock; the
 reserved run must own a quiescent checkout. Branch/PR identity cannot change across runs: the predecessor is
-read back to compare it, against the goal and programme revisions it was built
-for (`history: { assignments, programmes }`, the goal's contracts and the
-approved agreements), so a session after plan revised the goal can still
-publish on the same branch and PR. A retry may reuse
+read back to compare it against the goal revision it was built for
+(`history: { assignments }`, the goal's append-only contracts), so a session
+after plan revised the goal can still publish on the same branch and PR. A retry may reuse
 an identical artifact, never replace it or relabel an old run as a new attempt.
 
 The immutable artifact is written before the pointer. A crash between them leaves

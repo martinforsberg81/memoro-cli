@@ -50,6 +50,7 @@ function claim(options) {
 }
 async function receiptFor(options, publication, deps) {
   const { state } = owned(options);
+  if (publication.run_id !== options.actor.run_id || publication.goal_revision !== state.goal_revision) throw new Error('publication assignment changed');
   const requirements = await (deps.requirements || publicationGateSelection)(options.cwd, options.env);
   git(options.cwd, ['merge-base', '--is-ancestor', requirements.base, 'HEAD']);
   const content = captureWorktree(options.cwd);
@@ -89,6 +90,7 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
   const release = claim(options);
   try {
     let publication = initial.publication?.run_id === options.actor.run_id ? initial.publication : null;
+    if (publication && publication.goal_revision !== initial.goal_revision) throw new Error('publication assignment changed');
     if (publication && !isDeepStrictEqual(publication.input, input)) throw new Error('publication intent cannot change during retry');
     if (!publication) publication = save(options, { run_id: options.actor.run_id, goal_revision: initial.goal_revision,
       branch: initial.ownership.branch, pr: initial.ownership.pr,
@@ -160,7 +162,8 @@ export async function completeAutonomousPublication(options, processResult, deps
   try {
     const { state, context } = owned(options);
     let publication = state.publication;
-    if (!publication || publication.run_id !== options.actor.run_id || !['pr_resolved', 'handoff_committed'].includes(publication.phase)) throw new Error('confirmed publication required');
+    if (!publication || publication.run_id !== options.actor.run_id || publication.goal_revision !== state.goal_revision
+      || !['pr_resolved', 'handoff_committed'].includes(publication.phase)) throw new Error('confirmed publication on the current assignment required');
     if (!processResult?.normal_exit || !processResult.recovery_ready || !processResult.control_persisted
       || processResult.status !== 0 || processResult.interrupted || processResult.signal) throw new Error('successful settled process completion required');
     const previous = reconcilePreviousSession(sessionGitDir(options.cwd));

@@ -21,8 +21,10 @@ the owned checkout branch and session control in `closing`. Time/context close
 requests do not relax verification. A worktree claim serializes competing finish
 calls; the durable project owner remains reserved through every phase.
 
-The project's `publication` record pins the run, programme/goal revisions,
-branch/PR and bounded input. It advances through:
+The project's `publication` record pins the run and goal revision,
+branch/PR and bounded input. Resume and completion reject a publication from
+another goal revision even when its content still matches. Programme metadata
+changes do not invalidate its evidence. It advances through:
 
 1. `started`: intent saved before external work.
 2. `gate_verified`: the complete affected session gate completed green. Finish

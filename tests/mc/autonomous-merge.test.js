@@ -6,7 +6,7 @@ import { git } from './autonomous-publication-fixture.js';
 import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { reviewer } from './autonomous-state-fixture.js';
 import { completeAutonomousReview } from '../../src/mc/autonomous-review.js';
-import { mutateAutonomousProject, recordAutonomousMergeEvent } from '../../src/mc/autonomous-state.js';
+import { createAutonomousDraft, currentAutonomousEvidence, mutateAutonomousProject, mutateProgramme, readProgrammeState, recordAutonomousMergeEvent } from '../../src/mc/autonomous-state.js';
 import { autonomousMergeDoor, autonomousPrOwner } from '../../src/mc/autonomous-pr.js';
 import { autonomousProof, reviewRelevance } from '../../src/mc/autonomous-merge.js';
 import { criteriaDoor } from '../../src/mc/merge-boundary.js';
@@ -16,7 +16,7 @@ import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { runDocsMerge } from '../../src/mc/docs-merge.js';
 import { run as mergeCommand } from '../../src/mc/commands/merge.js';
 
-import { routeAutonomousReview, reportBinding, recordMergeOutcome } from '../../src/mc/autonomous-outcomes.js';
+import { routeAutonomousReview, reportBinding, recordMergeOutcome, reviewRoutePending } from '../../src/mc/autonomous-outcomes.js';
 import { autonomousChoice, runAutonomousBuild, runAutonomousReview } from '../../src/mc/autonomous-run.js';
 import { archiveDue } from '../../src/mc/project-archive.js';
 import { clean, ready, queue, receiptPath, moveMain, round } from './autonomous-merge-fixture.js';
@@ -50,6 +50,48 @@ test('editing an issued ticket to match newer state does not manufacture a fresh
   Object.assign(admitted.autonomous, autonomousProof({ root: f.root, owner, pr: 42 }).ticket);
   assert.throws(() => queue(f, admitted.autonomous), /fresh complete/u);
   const renewed = await f.door(); assert.equal(renewed.ok, true); queue(f, renewed.autonomous);
+});
+
+test('another goal revision and programme metadata do not invalidate an exact reviewed goal or its issued admission', async t => {
+  const f = await ready(t); const admitted = await f.door(); assert.equal(admitted.ok, true);
+  f.releasePlanner();
+  const before = f.stateNow(); const bytes = readFileSync(f.paths.project, 'utf8');
+  const other = { ...before.contract, project_id: 'independent-goal' };
+  const created = createAutonomousDraft(f.root, f.programme, other.project_id, other,
+    { env: {}, revision: readProgrammeState(f.root, f.programme).revision });
+  mutateAutonomousProject(f.root, f.programme, other.project_id, 'revise', { ...other, goal_revision: 2 },
+    { env: {}, revision: created.revision });
+  const programme = readProgrammeState(f.root, f.programme);
+  mutateProgramme(f.root, f.programme, 'metadata', { ...programme.metadata, brief: 'docs/project/updated-context/' },
+    { env: {}, revision: programme.revision });
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+  const renewed = await f.door({ expected: admitted.autonomous });
+  assert.equal(renewed.ok, true, renewed.problems.join('; '));
+  assert.deepEqual(renewed.autonomous, admitted.autonomous);
+  queue(f, admitted.autonomous);
+});
+
+test('revising the reviewed goal rejects old admission and routing, retaining a late landing only as historical evidence', async t => {
+  const f = await ready(t); const admitted = await f.door(); assert.equal(admitted.ok, true);
+  const old = f.stateNow(); f.releasePlanner();
+  const revised = mutateAutonomousProject(f.root, f.programme, f.project, 'revise', { ...old.contract, goal_revision: 2 },
+    { env: {}, revision: old.revision });
+  assert.deepEqual(revised.review_reports, old.review_reports);
+  assert.deepEqual(revised.evidence, old.evidence);
+  assert.deepEqual(currentAutonomousEvidence(revised), { builder: [], reviews: [], confirmation: null });
+  assert.equal(reviewRoutePending(f.root, revised), false);
+  assert.equal((await f.door({ expected: admitted.autonomous })).ok, false);
+  assert.throws(() => queue(f, admitted.autonomous), /admission|publication/u);
+  const job = { repo_path: f.cwd, pr: 42, branch: f.project, autonomous: admitted.autonomous };
+  const report = { ok: true, merged: true, merged_into: 'main', merge_commit: 'b'.repeat(40) };
+  recordMergeOutcome({ root: f.root, job, report });
+  const final = f.stateNow();
+  assert.equal(final.goal_revision, 2); assert.deepEqual(final.contract, revised.contract);
+  assert.equal(final.phase, revised.phase); assert.equal(final.landing, undefined);
+  assert.equal(final.merge_handoff, undefined); assert.equal(final.current_handoff, null);
+  assert.equal(final.plan_events.at(-1).binding.goal_revision, 1);
+  assert.deepEqual(final.review_reports, old.review_reports);
+  recordMergeOutcome({ root: f.root, job, report }); assert.deepEqual(f.stateNow(), final);
 });
 
 for (const measuredHead of [null, '', 'a'.repeat(40)]) test(`incomplete or wrong measured head (${measuredHead}) never permits an unpinned autonomous squash`, async t => {

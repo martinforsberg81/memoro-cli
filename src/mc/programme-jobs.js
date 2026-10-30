@@ -167,6 +167,7 @@ function projectTriggers(paths, options, state, journal) {
     const project = JSON.parse(readFileSync(file, 'utf8'));
     if (project.schema !== 'mc-autonomous-state' || project.version !== 2 || project.contract?.project_id !== entry.name
       || project.contract?.programme.id !== paths.id || !positive(project.revision)
+      || project.goal_revision !== project.contract?.goal_revision
       || !validateAutonomousProject(project.contract).ok || !AUTONOMOUS_PHASES.includes(project.phase)
       || !Array.isArray(project.attempts) || (project.plan_events !== undefined && !Array.isArray(project.plan_events))) throw new Error(`invalid autonomous trigger source: ${file}`);
     projects.set(entry.name, { state: project, file });

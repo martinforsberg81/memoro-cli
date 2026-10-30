@@ -177,10 +177,9 @@ export function readCurrentHandoff({ root, ...context }) {
   return continuation;
 }
 
-/** A predecessor is read against the assignment and agreement it was built
- * for: a plan revision between two sessions changes the revisions, never the
- * finished attempt. `history` is `{ assignments, programmes }`, the goal's
- * contracts and the approved agreements; without it, the current ones. */
+/** A predecessor is read against the assignment it was built for: a goal
+ * revision changes the assignment, never the finished attempt. `history` is
+ * `{ assignments }`; programme metadata is context, not evidence authority. */
 function predecessorContext(dir, runId, context, history) {
   const attempt = read(join(dir, `${runId}.json`), ARTIFACT_MAX_BYTES);
   const result = plain(attempt) ? attempt.result : null;

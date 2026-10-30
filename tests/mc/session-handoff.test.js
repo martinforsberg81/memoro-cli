@@ -62,7 +62,7 @@ function published(t, overrides = {}) {
   return { ...fx, save: (value, extras = {}, deps) => fx.save(value, { completion: { exit_code: 0, interrupted: false }, ...extras }, deps), cwd, head, value, publication: { cwd, head, pushed, run: 'gate-1', configuration, selection } };
 }
 
-it('fresh starts preserve the full approved assignment, programme criteria, scope, authority and planned stops', () => {
+it('fresh starts preserve the full goal assignment and programme context without approval authority', () => {
   const ctx = context();
   const payload = buildSessionStart(ctx);
   const parsed = JSON.parse(payload);
@@ -173,6 +173,21 @@ it('requires an explicit predecessor and rejects another run/revision instead of
   assert.throws(() => buildSessionStart({ ...revised, previous, previousRunId: 'build-1' }), /mismatched/);
   assert.throws(() => readCurrentHandoff({ root: fx.root, ...context('other') }), /another run/);
   assert.equal(validateSessionResult({ ...result('build-2'), handoff: previous.handoff }, context('build-2')).ok, false);
+});
+
+it('programme context changes preserve handoffs, while a new goal revision needs its own result and retains the old artifact', t => {
+  const fx = fixture(t); const first = fx.save(result());
+  const bytes = readFileSync(first.artifact, 'utf8');
+  const ctx = context(); ctx.programme.brief = 'docs/project/updated-context/';
+  assert.deepEqual(readCurrentHandoff({ root: fx.root, ...ctx }), first);
+  const revised = context('build-2'); revised.assignment.goal_revision = 2; revised.programme = ctx.programme;
+  assert.throws(() => readCurrentHandoff({ root: fx.root, ...revised, runId: 'build-1' }), /mismatched/u);
+  const next = result('build-2');
+  for (const record of [next, next.handoff, ...next.handoff.evidence]) record.goal_revision = 2;
+  const second = fx.save(next, { ...revised, expectedPreviousRun: 'build-1', history: { assignments: [ctx.assignment] } });
+  assert.equal(second.handoff.goal_revision, 2);
+  assert.deepEqual(readCurrentHandoff({ root: fx.root, ...revised }), second);
+  assert.equal(readFileSync(first.artifact, 'utf8'), bytes);
 });
 
 it('persists incomplete and needs-plan outcomes without a gate or publication and never claims green', t => {
