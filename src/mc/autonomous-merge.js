@@ -42,17 +42,15 @@ export function autonomousProof({ root, owner, pr }) {
   const sent = JSON.parse(readFileSync(join(root, 'programs', owner.programme, owner.project, PLAN_FILE), 'utf8'));
   requireThat(isDeepStrictEqual(sent, assignment) && assignment.repo === owner.repo, 'autonomous sent assignment changed or is invalid');
   const agreement = readProgrammeState(root, owner.programme);
-  requireThat(!agreement.planner_jobs || agreement.planner_jobs.mode === 'active', 'programme is paused, waiting or stopped');
-  requireThat(!agreement.planner_jobs || state.programme_revision === agreement.approved.at(-1).revision, 'programme revision changed; plan must align the goal before dispatch');
-  const programme = agreement.approved.find(item => item.revision === state.programme_revision);
-  requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'approved programme revision is missing or invalid');
+  const programme = agreement.metadata;
+  requireThat(validateAutonomousProject(assignment, { programme: programme || null }).ok, 'programme identity is missing or invalid');
   requireThat(!state.active_run && ['plan_pending', 'landing'].includes(state.phase) && !state.confirmed,
     'autonomous work is incomplete, active or already confirmed');
   const p = state.publication;
   requireThat(p?.phase === 'handoff_committed' && sha(p.head) && p.branch === owner.branch && p.pr === owner.pr
     && /^[a-zA-Z0-9-]+$/u.test(p.gate_run || '')
     && state.ownership.branch === owner.branch && state.ownership.pr === owner.pr
-    && p.goal_revision === state.goal_revision && p.programme_revision === state.programme_revision
+    && p.goal_revision === state.goal_revision
     && p.handoff === state.current_handoff, 'settled current autonomous publication required');
   const handoff = readCurrentHandoff({ root, assignment, programme, runId: p.run_id });
   requireThat(handoff?.observed.normal_exit && handoff.artifact === p.handoff && handoff.observed.head === p.head
@@ -90,7 +88,7 @@ export function autonomousProof({ root, owner, pr }) {
     'durable independent review observation is missing or has findings');
   const ticket = { schema: 'mc-autonomous-merge-admission', version: 1, repo: owner.repo, programme: owner.programme,
     project: owner.project, pr: owner.pr, branch: owner.branch, head: p.head,
-    goal_revision: state.goal_revision, programme_revision: state.programme_revision,
+    goal_revision: state.goal_revision,
     assignment_digest: reviewDigest(assignment), review_id: report.id, review_digest: reviewDigest(report),
     gate_run: p.gate_run, builder_evidence: proofs, handoff: p.handoff };
   return { state, publication: p, session, ticket, handoff };

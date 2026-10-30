@@ -4,14 +4,14 @@ export function reviewCommandRefusal(argv, { env = process.env, actor = null } =
   if (role === 'plan' && env.MC_PROGRAMME_LEASE) {
     const [verb, operation] = argv;
     if (['--help', '-h', 'help', '--version', 'status', 'hook'].includes(verb)) return null;
-    if (verb === 'programme' && ['show', 'status', 'capabilities', 'decide', 'complete', 'cancel'].includes(operation)) return null;
-    if (verb === 'autonomous-project' && operation === 'show') return null;
-    return 'autonomous plan may only decide within its programme; agreement edits, legacy mutations, build, publish and merge are denied';
+    if (verb === 'programme' && ['show', 'status', 'capabilities'].includes(operation)) return null;
+    if (verb === 'goal' && ['new', 'criterion', 'send', 'revise', 'show', 'done', 'recover', 'attempt', 'release'].includes(operation)) return null;
+    return 'autonomous plan may only author goals within its programme; agreement edits, legacy mutations, build, publish and merge are denied';
   }
   if (role !== 'review') return null;
   const [verb, operation] = argv;
   if (['--help', '-h', 'help', '--version', 'status', 'gate'].includes(verb)) return null;
-  if (verb === 'autonomous-project' && ['show', 'report'].includes(operation)) return null;
+  if (verb === 'goal' && ['show', 'report'].includes(operation)) return null;
   if (verb === 'programme' && ['status', 'capabilities'].includes(operation)) return null;
   // Hook execution must remain available; it is not a scope/state mutation.
   if (verb === 'hook') return null;

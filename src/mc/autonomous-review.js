@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree } from './session-gate-evidence.js';
 import { sessionGit, sessionGitDir, reconcileSessionGate } from './session-recovery.js';
 import { readAutonomousState, startAutonomousReview, recordAutonomousReview } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { PLAN_FILE } from './plan-source.js';
 import { builderModels, independentModel } from './autonomous-models.js';
 import { reviewDigest, reviewInputProblems, cleanReviewInput, unknownReviewInput } from './autonomous-review-report.js';
@@ -29,6 +29,7 @@ export function reviewCheckoutFingerprint(cwd) {
 export function publishedReviewHead(cwd, state) {
   const p = state.publication;
   if (p?.phase !== 'handoff_committed' || !/^[a-f0-9]{40}$/u.test(p.head || '')
+    || p.goal_revision !== state.goal_revision
     || p.pr !== state.ownership.pr || p.branch !== state.ownership.branch) throw new Error('settled published head required');
   git(cwd, 'check-ref-format', `refs/heads/${p.branch}`);
   const remote = git(cwd, 'ls-remote', '--heads', 'origin', `refs/heads/${p.branch}`).split(/\s+/u)[0];

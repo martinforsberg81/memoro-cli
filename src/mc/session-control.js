@@ -1,10 +1,10 @@
 /** Pure, inactive v2 policy. Only the trusted runner supplies clocks, measured
  * checkpoints and a profile. Model callbacks cannot reset or choose a budget. */
 import { isDeepStrictEqual } from 'node:util';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 
 const modes = ['model', 'lane', 'tool', 'gate'];
-const bindingKeys = ['programme_id', 'programme_revision', 'project_id', 'goal_revision', 'run_id'];
+const bindingKeys = ['programme_id', 'project_id', 'goal_revision', 'run_id'];
 const profileKeys = ['soft_active_ms', 'upper_active_ms', 'emergency_active_ms', 'reserve_active_ms',
   'soft_context', 'upper_context', 'emergency_context', 'reserve_context', 'context_stale_ms',
   'closing_ms', 'tool_wait_ms', 'lane_wait_ms', 'total_awake_ms', 'no_progress_ms', 'max_stagnant_sessions', 'max_failures'];
@@ -20,7 +20,7 @@ function exact(value, keys, label) {
 function checkBinding(binding) {
   exact(binding, bindingKeys, 'control binding');
   if (!['programme_id', 'project_id', 'run_id'].every(key => id(binding[key]))
-    || !['programme_revision', 'goal_revision'].every(key => integer(binding[key]) && binding[key] > 0)) throw new Error('invalid control binding');
+    || !['goal_revision'].every(key => integer(binding[key]) && binding[key] > 0)) throw new Error('invalid control binding');
 }
 export function validateControlProfile(profile) {
   exact(profile, profileKeys, 'control profile');

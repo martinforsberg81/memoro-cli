@@ -63,17 +63,22 @@ export function runnerFixture(t, { assignment = {} } = {}) {
   const state = (project = f.project) => readAutonomousState(f.root, f.programme, project);
   const add = (project = f.project, overrides = {}) => {
     let value;
+    const planning = readProgrammeState(f.root, f.programme);
+    const author = planning.planner_jobs?.lease ? { actor: planner, token: 'fixture-lease' } : {};
     if (project === f.project) value = state();
     else value = createAutonomousDraft(f.root, f.programme, project, autonomousProject({ project_id: project, ...overrides }),
-      { actor: planner, revision: readProgrammeState(f.root, f.programme).revision });
-    sendAutonomousProject(f.root, f.programme, project, { actor: planner, revision: value.revision });
-    value = mutateAutonomousProject(f.root, f.programme, project, 'release', null, { actor: planner, revision: value.revision });
+      { ...author, revision: planning.revision });
+    sendAutonomousProject(f.root, f.programme, project, { ...author, revision: value.revision });
+    value = state(project);
     // The later planner/activation door is not implemented here. Only this
     // isolated fixture supplies a ready assignment; no live command enables it.
     value.phase = 'ready'; writeFileSync(autonomousPaths(f.root, f.programme, project).project, JSON.stringify(value));
     return { project, programme: f.programme, repo: 'memoro-cli', path: join(f.paths.projectDir, 'PLAN.json'), plan: value.contract };
   };
   const record = add();
+  // The assignment has been sent; the headless planner no longer owns this
+  // programme. Builder recovery must preserve an incomplete attempt for plan.
+  f.releasePlanner();
   const world = (...records) => ({ names: records.map(r => r.project), plans: records, prs: [], prsFailed: [] });
   const cwd = project => join(f.root, 'step', project, 'memoro-cli');
   const advanceMain = text => {

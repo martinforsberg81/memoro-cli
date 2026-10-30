@@ -13,7 +13,7 @@ import { reviewer, planner } from './autonomous-state-fixture.js';
 import { settlePublishedBuild } from '../../src/mc/autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview, reviewCheckoutFingerprint } from '../../src/mc/autonomous-review.js';
 import { reviewInputProblems } from '../../src/mc/autonomous-review-report.js';
-import { mutateAutonomousProject, recordAutonomousReview, reserveProjectRun } from '../../src/mc/autonomous-state.js';
+import { mutateAutonomousProject, mutateProgramme, readProgrammeState, recordAutonomousReview, reserveProjectRun, startAutonomousReview } from '../../src/mc/autonomous-state.js';
 import { run as projectCommand } from '../../src/mc/commands/autonomous-project.js';
 import { run as legacyProjectCommand } from '../../src/mc/commands/project.js';
 import { run as publishCommand } from '../../src/mc/commands/publish.js';
@@ -83,7 +83,7 @@ for (const finding of ['defect', 'uncertainty', 'criterion-finding', 'unknown'])
   if (finding === 'unknown') report.criteria[0].status = 'unknown';
   f.submit(report); const final = finish(f);
   assert.equal(final.review_reports[0].clean, false); assert.equal(final.phase, 'plan_pending');
-  assert.equal(final.active_run, null); assert.equal(final.runs.length, 3); // planner, builder, review
+  assert.equal(final.active_run, null); assert.equal(final.runs.length, 2); // builder, review; assignment authoring is an operation
 });
 
 for (const mutation of ['tracked', 'untracked', 'ignored', 'index', 'commit', 'branch']) test(`${mutation} review checkout mutation invalidates an otherwise clean report`, async t => {
@@ -96,6 +96,40 @@ for (const mutation of ['tracked', 'untracked', 'ignored', 'index', 'commit', 'b
   if (mutation === 'branch') git(cwd, 'switch', '-qc', 'unauthorized-review-branch');
   const final = finish(f); assert.equal(final.review_reports[0].clean, false);
   assert.ok(final.review_reports[0].invalid_reasons.includes('review checkout changed'));
+});
+
+test('a mismatched publication goal revision refuses both review preparation and the atomic reservation', async t => {
+  const f = await ready(t); const original = f.stateNow();
+  const session = f.start().review_session;
+  // Keep an otherwise exact frozen session but restore the pre-reservation state.
+  // A stale publication must not pass even the trusted low-level reservation.
+  original.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(original));
+  const bytes = readFileSync(f.paths.project, 'utf8');
+  assert.throws(() => startAutonomousReview(f.root, f.programme, f.project, {
+    actor: reviewer, revision: original.revision, session,
+  }), /settled published head/u);
+  assert.throws(f.start, /settled published head/u);
+  assert.equal(readFileSync(f.paths.project, 'utf8'), bytes);
+});
+
+test('publication goal revision changing during review invalidates an otherwise clean report', async t => {
+  const f = await ready(t); f.start(); f.submit(clean());
+  const state = f.stateNow(); state.publication.goal_revision++;
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  const report = finish(f).review_reports[0];
+  assert.equal(report.clean, false);
+  assert.ok(report.invalid_reasons.some(reason => reason.includes('settled published head')));
+});
+
+test('programme metadata changing during review preserves the exact assignment and clean report', async t => {
+  const f = await ready(t); const session = f.start().review_session; f.submit(clean()); f.releasePlanner();
+  const programme = readProgrammeState(f.root, f.programme);
+  mutateProgramme(f.root, f.programme, 'metadata', { ...programme.metadata, brief: 'docs/project/updated-context/' },
+    { env: {}, revision: programme.revision });
+  const report = finish(f).review_reports[0];
+  assert.equal(report.clean, true, report.invalid_reasons.join('; '));
+  assert.deepEqual(report.session, session);
 });
 
 test('historical builder reuse, missing provenance and moved remote head refuse review admission', async t => {
@@ -128,9 +162,9 @@ test('review command/state guards deny scope, criterion status, publication, mer
   for (const [command, args] of [[publishCommand, []], [mergeCommand, ['memoro-cli', '42', '--admin']],
     [legacyProjectCommand, ['criterion', 'met', '1']], [stepCommand, ['ready']]]) assert.equal(await command(args, deps), 1);
   assert.match(output, /only examine and report/u);
-  for (const argv of [['programme', 'approve'], ['run'], ['work', 'add'], ['project', 'amend'], ['autonomous-project', 'finish']]) assert.ok(reviewCommandRefusal(argv, deps));
+  for (const argv of [['programme', 'approve'], ['run'], ['work', 'add'], ['project', 'amend'], ['goal', 'finish']]) assert.ok(reviewCommandRefusal(argv, deps));
   assert.equal(reviewCommandRefusal(['publish'], { env: {} }), null, 'legacy review is unchanged');
-  assert.equal(reviewCommandRefusal(['autonomous-project', 'report'], deps), null);
+  assert.equal(reviewCommandRefusal(['goal', 'report'], deps), null);
   const cli = fileURLToPath(new URL('../../src/mc-cli.js', import.meta.url));
   const response = spawnSync(process.execPath, [cli, 'run'], { env: { ...process.env, ...deps.env }, encoding: 'utf8', timeout: 10000 });
   assert.equal(response.status, 1); assert.match(response.stderr, /only examine and report/u);
@@ -180,7 +214,7 @@ test('injected review dispatch uses shared slot, distinct model/checkout, durabl
 
 test('assignment movement invalidates the old frozen report without rewriting its revision', async t => {
   const f = await ready(t); f.start(); f.submit(clean());
-  const state = f.stateNow(); state.contract.goal_revision = 2; state.goal_revision = 2;
+  const state = f.stateNow(); state.contract = { ...state.contract, goal_revision: 2 }; state.contracts.push(state.contract); state.goal_revision = 2;
   writeFileSync(f.paths.project, JSON.stringify(state));
   const final = finish(f);
   assert.equal(final.review_reports[0].clean, false);

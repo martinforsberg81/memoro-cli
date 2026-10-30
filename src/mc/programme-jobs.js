@@ -5,14 +5,15 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, readProgrammeState, updateProgrammeRegister, AUTONOMOUS_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { reviewedLanding } from './goal-followup.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { PLAN_FILE } from './plan-source.js';
 import { processAlive, readClaim } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { observeMainIncidentLocked, reconcileMainRepairsLocked, cancelMainRepairLocked, mainIncidentHold, assertProjectRecovery, boundedRecoveryWait, RECOVERY_ATTEMPT_LIMIT } from './programme-recovery.js';
-import { planOperationProblems } from './programme-plan-contract.js';
+import { planOperationProblems } from './autonomous-state.js';
 
 export const PROGRAMME_JOB_TRIGGERS = Object.freeze(['activation', 'review', 'landed', 'failure', 'dependency', 'idle']);
 export const MAX_PLANNER_LEASE_MS = 5 * 60 * 1000;
@@ -42,12 +43,12 @@ function jobs(state) {
       || !isDeepStrictEqual(value.lease.actor, state.active_run)))
     || (value.mode === 'exception' && (!value.exception || typeof value.exception.reason !== 'string' || !value.exception.reason.trim()))
     || (value.mode === 'waiting' && !validWait(value.wait))
-    || (value.mode === 'stopped' && !state.approved.at(-1)?.planned_stops.some(item => item.id === value.stop))) {
+    || (value.mode === 'stopped' && !stable(value.stop))) {
     throw new Error('invalid programme planner jobs; preserve state for recovery');
   }
   const ids = value.events.map(event => event.id);
   if (new Set(ids).size !== ids.length || value.events.some(event => !stable(event.id) || !PROGRAMME_JOB_TRIGGERS.includes(event.type)
-      || !positive(event.programme_revision) || typeof event.reference !== 'string' || !event.reference.trim())
+      || typeof event.reference !== 'string' || !event.reference.trim())
     || value.pending?.event_ids.some(id => !ids.includes(id))
     || new Set(value.pending?.event_ids).size !== (value.pending?.event_ids.length || 0)
     || value.lease?.event_ids.some(id => !value.pending.event_ids.includes(id))
@@ -68,10 +69,9 @@ function transact(options, change) {
   }, options.deps);
 }
 function enqueue(state, journal, event) {
-  if (!stable(event.id) || !PROGRAMME_JOB_TRIGGERS.includes(event.type) || !positive(event.programme_revision)
-    || !state.approved.some(item => item.revision === event.programme_revision)
+  if (!stable(event.id) || !PROGRAMME_JOB_TRIGGERS.includes(event.type)
     || typeof event.reference !== 'string' || !event.reference.trim()
-    || Object.keys(event).some(key => !['id', 'type', 'programme_revision', 'reference'].includes(key))) throw new Error('invalid programme trigger');
+    || Object.keys(event).some(key => !['id', 'type', 'reference'].includes(key))) throw new Error('invalid programme trigger');
   const previous = journal.events.find(item => item.id === event.id);
   if (previous) {
     if (!isDeepStrictEqual(previous, event)) throw new Error('programme event ID already used with different content');
@@ -97,12 +97,11 @@ export function setProgrammeJobMode(options, { mode, wait = null, stop = null, e
     if (!['active', 'paused', 'waiting', 'stopped'].includes(mode)) throw new Error('explicit programme job mode required');
     if (journal.mode === 'stopped') {
       if (mode === 'stopped' && stop === journal.stop && !event) return state;
-      throw new Error('planned stop requires a new foreground agreement before further dispatch');
+      throw new Error('planned stop requires an explicit foreground planning restart before new claims');
     }
-    if (!state.approved.length) throw new Error('an approved programme is required');
     if (mode === 'active' && journal.mode === 'inactive' && event?.type !== 'activation') throw new Error('activation must persist its trigger');
     if (mode === 'waiting' && !validWait(wait)) throw new Error('wait names its condition and bounded retry or external dependency');
-    if (mode === 'stopped' && !state.approved.at(-1).planned_stops.some(item => item.id === stop)) throw new Error('stop must belong to the approved programme');
+    if (mode === 'stopped' && !stable(stop)) throw new Error('stop must be an explicit stable ID');
     if (mode !== 'waiting' && wait !== null || mode !== 'stopped' && stop !== null) throw new Error('wait/stop must match mode');
     if (event) enqueue(state, journal, event);
     journal.mode = mode; journal.wait = wait; journal.stop = stop;
@@ -131,7 +130,7 @@ export function claimProgrammeJob(options) {
     const now = instant(options);
     journal.lease = { token: `lease-${randomUUID()}`, actor: structuredClone(options.actor), pid: options.pid,
       job_id: journal.pending.id, event_ids: [...journal.pending.event_ids],
-      programme_revision: state.approved.at(-1).revision, expires_at: now + duration(options.leaseMs ?? MAX_PLANNER_LEASE_MS) };
+      expires_at: now + duration(options.leaseMs ?? MAX_PLANNER_LEASE_MS) };
     return { ...state, active_run: options.actor, runs: [...state.runs, options.actor], planner_jobs: journal };
   });
 }
@@ -167,15 +166,13 @@ function projectTriggers(paths, options, state, journal) {
     const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
     if (!existsSync(file)) continue;
     const project = JSON.parse(readFileSync(file, 'utf8'));
-    if (project.schema !== 'mc-autonomous-state' || project.version !== 1 || project.contract?.project_id !== entry.name
+    if (project.schema !== 'mc-autonomous-state' || project.version !== 2 || project.contract?.project_id !== entry.name
       || project.contract?.programme.id !== paths.id || !positive(project.revision)
+      || project.goal_revision !== project.contract?.goal_revision
       || !validateAutonomousProject(project.contract).ok || !AUTONOMOUS_PHASES.includes(project.phase)
       || !Array.isArray(project.attempts) || (project.plan_events !== undefined && !Array.isArray(project.plan_events))) throw new Error(`invalid autonomous trigger source: ${file}`);
     projects.set(entry.name, { state: project, file });
     identities.push([entry.name, project.revision]);
-    if (!project.confirmed && project.programme_revision !== state.approved.at(-1).revision) events.push({
-      id: `agreement-${digest([entry.name, project.goal_revision, state.approved.at(-1).revision]).slice(0, 54)}`,
-      type: 'failure', programme_revision: state.approved.at(-1).revision, reference: `${file}#programme_revision` });
     hasNextAction ||= !!project.active_run || ['ready', 'running', 'review_ready', 'reviewing', 'publishing', 'landing'].includes(project.phase);
     const sourceIds = new Set();
     const sourceId = source => {
@@ -192,14 +189,13 @@ function projectTriggers(paths, options, state, journal) {
         : ['merge-refused', 'merge-failed', 'merge-unknown'].includes(source.type) ? 'failure' : null;
       if (!type) continue;
       events.push({ id: `evt-${digest([entry.name, source.id]).slice(0, 60)}`, type,
-        programme_revision: source.programme_revision ?? source.binding?.programme_revision,
         reference: `${file}#plan_events/${source.id}` });
     }
     sourceIds.clear();
     for (const attempt of project.attempts) {
       sourceId(attempt);
       events.push({ id: `evt-${digest([entry.name, 'attempt', attempt.id]).slice(0, 60)}`,
-        type: 'failure', programme_revision: attempt.programme_revision, reference: `${file}#attempts/${attempt.id}` });
+        type: 'failure', reference: `${file}#attempts/${attempt.id}` });
     }
   }
   // Sources were validated before committing any recoverable cross-file effect.
@@ -210,38 +206,37 @@ function projectTriggers(paths, options, state, journal) {
         source: `${paths.id}/${name}/${source.id}/${failure}`, reference: `${file}#plan_events/${source.id}` });
     }
   }
-  const incidents = reconcileMainRepairsLocked(options.root);
+  const incidents = reconcileMainRepairsLocked(options.root, { evidenceRoot: options.evidenceRoot });
   for (const incident of incidents) {
-    if (incident.owner === paths.id) events.push({ id: `incident-${digest([incident.id, state.approved.at(-1).revision]).slice(0, 55)}`, type: 'failure', programme_revision: state.approved.at(-1).revision,
+    if (incident.owner === paths.id) events.push({ id: `incident-${digest(incident.id).slice(0, 55)}`, type: 'failure',
       reference: `${options.root}/runner/programme-incidents.json#${incident.id}` });
     if (incident.status === 'resolved' && incident.dependents.some(item => item.programme === paths.id)) events.push({
-      id: `resolved-${digest([incident.id, state.approved.at(-1).revision]).slice(0, 55)}`, type: 'dependency', programme_revision: state.approved.at(-1).revision,
-      reference: `${options.root}/runner/programme-incidents.json#${incident.id}/confirmation` });
+      id: `resolved-${digest(incident.id).slice(0, 55)}`, type: 'dependency',
+      reference: `${options.root}/runner/programme-incidents.json#${incident.id}/measurement` });
   }
   for (const [name, { state: project, file }] of projects) {
     const dependencies = project.plan_dependencies || [];
     if (!dependencies.length) continue;
     const available = dependencies.every(item => {
       const dependency = projects.get(item.project)?.state;
-      return dependency?.confirmed && dependency.goal_revision === item.goal_revision;
+      return dependency && reviewedLanding(dependency) && dependency.goal_revision === item.goal_revision;
     });
     if (!available) continue;
-    const id = `dep-${digest([name, project.goal_revision, project.programme_revision, dependencies]).slice(0, 60)}`;
-    events.push({ id, type: 'dependency', programme_revision: project.programme_revision, reference: `${file}#plan_dependencies` });
+    const id = `dep-${digest([name, project.goal_revision, dependencies]).slice(0, 60)}`;
+    events.push({ id, type: 'dependency', reference: `${file}#plan_dependencies` });
     const release = project.dependency_release;
-    if (journal.mode !== 'active' || !release || release.status !== 'waiting' || release.goal_revision !== project.goal_revision
-      || release.programme_revision !== state.approved.at(-1).revision || project.programme_revision !== release.programme_revision
+    if (!release || release.status !== 'waiting' || release.goal_revision !== project.goal_revision
       || project.phase !== 'plan_pending' || project.active_run || projectClaimHeld(options.root, paths.id, name) || mainIncidentHold(options.root, paths.id, name)) continue;
     assertProjectRecovery(project);
     const sent = join(paths.dir, name, PLAN_FILE);
     if (!existsSync(sent) || !isDeepStrictEqual(JSON.parse(readFileSync(sent, 'utf8')), project.contract)) continue;
     // The release and its outcome share one authoritative write. The next scan
     // repairs a programme acknowledgement lost after this write.
-    const source = { id: `released-${digest([name, release.operation]).slice(0, 60)}`, type: 'dependency-released', programme_revision: project.programme_revision };
+    const source = { id: `released-${digest([name, release.operation]).slice(0, 60)}`, type: 'dependency-released', };
     project.revision++; project.phase = 'ready'; project.dependency_release.status = 'released';
     project.plan_events = [...(project.plan_events || []), source];
     writeJsonAtomic(file, project); hasNextAction = true;
-    events.push({ id: `evt-${digest([name, source.id]).slice(0, 60)}`, type: 'dependency', programme_revision: project.programme_revision, reference: `${file}#plan_events/${source.id}` });
+    events.push({ id: `evt-${digest([name, source.id]).slice(0, 60)}`, type: 'dependency', reference: `${file}#plan_events/${source.id}` });
   }
   return { events, identities, hasNextAction };
 }
@@ -261,21 +256,21 @@ export function reconcileProgrammeJobs(options, { dependencies = [] } = {}) {
       }
     }
     if (journal.mode === 'waiting' && journal.wait.until !== null && journal.wait.until <= now) {
-      if (journal.wait.operation) enqueue(state, journal, { id: `wait-${digest(journal.wait.operation).slice(0, 59)}`, type: 'failure', programme_revision: state.approved.at(-1).revision, reference: `${paths.programme}#planner_jobs/wait_history/${journal.wait.operation}` });
+      if (journal.wait.operation) enqueue(state, journal, { id: `wait-${digest(journal.wait.operation).slice(0, 59)}`, type: 'failure', reference: `${paths.programme}#planner_jobs/wait_history/${journal.wait.operation}` });
       journal.mode = 'active'; journal.wait = null;
     }
     const sources = projectTriggers(paths, options, state, journal);
     for (const event of [...sources.events, ...dependencies]) enqueue(state, journal, event);
     if (journal.mode === 'active' && !state.active_run && !journal.pending && !sources.hasNextAction) {
       // Stable across repeated scans of unchanged work, including after ack.
-      enqueue(state, journal, { id: `idle-${digest([state.approved.at(-1).revision, sources.identities]).slice(0, 59)}`,
-        type: 'idle', programme_revision: state.approved.at(-1).revision, reference: `${paths.programme}#idle` });
+      enqueue(state, journal, { id: `idle-${digest([state.metadata.id, sources.identities]).slice(0, 59)}`,
+        type: 'idle', reference: `${paths.programme}#idle` });
     }
   });
 }
 
-/** Opt-in scheduling read/repair only. programme-plan-run supplies the launcher.
- * V1 and normal (capability-less) runners never enter this path. */
+/** Opt-in event reconciliation only. No headless planner queue consumer is
+ * installed; V1 and normal (capability-less) runners never enter this path. */
 export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = () => {} } = {}) {
   const directory = join(root, PROGRAMS_HOME);
   if (!existsSync(directory)) return [];
@@ -293,18 +288,16 @@ export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = (
 
 function operationCheck(state, lease, intent) {
   if (!['create-project', 'main-repair'].includes(intent.kind)) {
-    const problems = planOperationProblems(intent, state.approved.at(-1));
+    const problems = planOperationProblems(intent);
     if (problems.length) throw new Error(problems.join('; '));
-    if (intent.programme_revision !== lease.programme_revision) throw new Error('programme revision changed; replan pending effects');
     return;
   }
   if (!stable(intent.id) || !['create-project', 'main-repair'].includes(intent.kind) || !stable(intent.project) || intent.expected_revision !== 0
-    || !positive(intent.programme_revision) || intent.input?.project_id !== intent.project
-    || intent.input?.programme.id !== state.approved.at(-1).id || intent.input?.programme.revision !== intent.programme_revision
-    || Object.keys(intent).some(key => !['id', 'kind', 'project', 'expected_revision', 'programme_revision', 'input', ...(intent.kind === 'main-repair' ? ['incident', 'basis'] : [])].includes(key))) throw new Error('invalid planner operation intent');
-  if (intent.programme_revision !== lease.programme_revision || intent.programme_revision !== state.approved.at(-1).revision) throw new Error('programme revision changed; replan pending effects');
-  if (intent.kind === 'main-repair' && (!stable(intent.incident) || !intent.basis?.reference?.trim() || !Array.isArray(intent.basis.criteria) || !intent.basis.criteria.length || intent.basis.criteria.some(id => !state.approved.at(-1).success_criteria.some(item => item.id === id)))) throw new Error('main repair needs approved criteria and a scope authority reference');
-  const validation = validateAutonomousProject(intent.input, { programme: state.approved.at(-1) });
+    || intent.input?.project_id !== intent.project
+    || intent.input?.programme.id !== state.metadata.id
+    || Object.keys(intent).some(key => !['id', 'kind', 'project', 'expected_revision', 'input', ...(intent.kind === 'main-repair' ? ['incident', 'basis'] : [])].includes(key))) throw new Error('invalid planner operation intent');
+  if (intent.kind === 'main-repair' && (!stable(intent.incident) || !intent.basis?.reference?.trim() || !Array.isArray(intent.basis.criteria) || !intent.basis.criteria.length || intent.basis.criteria.some(id => !intent.input?.success_criteria?.some(item => item.id === id)))) throw new Error('main repair needs assignment criteria and a scope rationale reference');
+  const validation = validateAutonomousProject(intent.input, { programme: state.metadata });
   if (!validation.ok) throw new Error(`invalid planner goal: ${validation.problems.join('; ')}`);
 }
 /** Persist decision first. Operation IDs are durable across planner run IDs. */
@@ -389,7 +382,7 @@ export function yieldProgrammeJob(options, reason, { retry = false } = {}) {
 export function reachProgrammePlanStop(options, input) {
   return transact(options, (state, journal, paths) => {
     const lease = owned(state, journal, options);
-    if (!input || Object.keys(input).sort().join(',') !== 'id,programme_revision,reference,stop' || !stable(input.id)
+    if (!input || Object.keys(input).sort().join(',') !== 'id,reference,stop' || !stable(input.id)
       || typeof input.reference !== 'string' || !input.reference.trim()) throw new Error('stop decision needs identity and evidence reference');
     const previous = journal.operations.find(item => item.intent.id === input.id);
     const intent = { ...input, kind: 'reach-stop' };
@@ -398,8 +391,7 @@ export function reachProgrammePlanStop(options, input) {
       return;
     }
     if (lease.completion) throw new Error('completed planner must exit before new decisions');
-    if (journal.mode !== 'active' || input.programme_revision !== lease.programme_revision || input.programme_revision !== state.approved.at(-1).revision
-      || !state.approved.at(-1).planned_stops.some(item => item.id === input.stop)) throw new Error('stop must belong to the current approved programme');
+    if (journal.mode !== 'active' || !stable(input.stop)) throw new Error('stop needs an active planner and an explicit stable ID');
     if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before stopping');
     for (const entry of readdirSync(paths.dir, { withFileTypes: true }).filter(item => item.isDirectory() && stable(item.name))) {
       const file = join(paths.dir, entry.name, AUTONOMOUS_STATE_FILE);
@@ -421,8 +413,8 @@ export function createProgrammeJobProject(options, intent) {
   const operation = state.planner_jobs.operations.find(item => item.intent.id === intent.id);
   if (operation.status === 'applied') return operation.result;
   if (operation.status === 'cancelled') throw new Error('planner decision was cancelled; use a new operation ID');
-  // Read back committed effects even when the approved revision/mode changed.
-  // A missing effect still needs current authority before any new write.
+  // Read back committed effects even when the programme metadata/mode changed.
+  // A missing effect still needs current ownership before any new write.
   const path = autonomousPaths(options.root, options.programme, intent.project).project;
   const effect = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
   const committed = effect?.operation_receipts?.some(receipt => receipt.id === intent.id
@@ -432,7 +424,7 @@ export function createProgrammeJobProject(options, intent) {
     if (state.planner_jobs.mode !== 'active') throw new Error('programme waits before applying planner effect');
   }
   createAutonomousDraft(options.root, options.programme, intent.project, intent.input,
-    { actor: options.actor, revision: state.revision, operationId: intent.id, operationKind: intent.kind, ...(intent.kind === 'main-repair' ? { mainIncident: intent.incident } : {}), now: () => instant(options), ...options.deps });
+    { actor: options.actor, token: options.token, revision: state.revision, operationId: intent.id, operationKind: intent.kind, ...(intent.kind === 'main-repair' ? { mainIncident: intent.incident } : {}), now: () => instant(options), ...options.deps });
   state = readProgrammeState(options.root, options.programme);
   const result = { project: intent.project, revision: 1 };
   completeProgrammeOperation({ ...options, revision: state.revision }, intent, result);
@@ -450,9 +442,8 @@ export function holdProgrammePlan(options, intent) {
       return;
     }
     if (!stable(intent?.id) || !['wait-programme', 'exception-programme'].includes(intent.kind)
-      || Object.keys(intent).some(key => !['id', 'kind', 'programme_revision', 'reference', 'condition', 'wait', 'exception'].includes(key))
-      || !intent.reference?.trim() || journal.mode !== 'active' || lease.completion
-      || intent.programme_revision !== lease.programme_revision || intent.programme_revision !== state.approved.at(-1).revision) throw new Error('hold needs current planner authority and a diagnosis reference');
+      || Object.keys(intent).some(key => !['id', 'kind', 'reference', 'condition', 'wait', 'exception'].includes(key))
+      || !intent.reference?.trim() || journal.mode !== 'active' || lease.completion) throw new Error('hold needs current planner authority and a diagnosis reference');
     if (journal.operations.some(item => item.status === 'pending')) throw new Error('reconcile pending planner effects before waiting');
     if (intent.kind === 'wait-programme') {
       if (!stable(intent.condition) || !boundedRecoveryWait(intent.wait, instant(options)) || intent.exception !== undefined) throw new Error('external wait needs a condition and a bounded retry within 24 hours, or explicit external dependency');

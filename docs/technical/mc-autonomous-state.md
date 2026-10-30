@@ -9,30 +9,27 @@ and display are described in [the contract integration](mc-autonomous-programmes
 ## Storage and atomicity
 
 All files are outside repositories, under `programs/<programme>/` in the mc
-work root. `PROGRAMME_STATE.json` is a versioned `mc-programme-state` record:
-its `approved` array contains immutable approved contract snapshots; `draft`
-is separate and cannot change an approved snapshot. Its mutation `revision`
-is distinct from a contract revision. It also holds the reserved plan owner
-and run history. An optional [durable planner outbox](mc-programme-jobs.md)
-holds pending events, leases and operation receipts. `execution_enabled` remains false.
+work root. The ruling-60 format uses `mc-programme-state` **version 2** with
+`metadata: {id, brief}`, a mutation `revision`, reserved planner ownership and
+append-only run/metadata history. There is no programme approval schema or
+approved-revision authority. Its optional durable planner outbox retains events,
+leases and operation receipts. `execution_enabled` remains false.
 
-Each project has `AUTONOMOUS_STATE.json` (`mc-autonomous-state`, version 1).
-It holds the authoritative draft contract and contract history, programme and
-goal revisions, stable criterion observations, independent reports, planner
-confirmation/history, branch/PR ownership, commits, execution phase, current
-handoff reference, run ownership/history and append-only incomplete attempts.
-Independent completion and merge routing additionally append idempotent
-`plan_events`, retain the pending/answered `merge_handoff` intent and record
-`landing` facts separately from confirmation; see
-[autonomous outcomes](mc-autonomous-merge.md#reports-and-outcomes-for-plan).
-It is not a v1 `STATE.json` and must never pass through v1 normalization.
+Each goal has `AUTONOMOUS_STATE.json` (`mc-autonomous-state`, **version 2**).
+Its explicit v2 `mc-plan` assignment has `programme: {id}`, `work_class`
+(`fast` or `large`), `programme_phase` (a positive integer distinct from the
+runtime phase) and `goal_revision`. State keeps immutable assignment history,
+stable criterion observations, independent reports, branch/PR ownership,
+commits, execution phase, handoffs, owners and incomplete attempts. Events,
+merge handoff and landing facts remain durable. It never enters v1 register
+normalization. Pre-ruling-60 programme/goal state, even relabelled as version 2,
+is explicitly unsupported and preserved; there is no automatic migration.
 
-Every mutation, including inactive send, takes the programme's plan lock, the project's plan lock when
-applicable, then the existing strict register lock. It checks the expected
-state revision and active run/role **after** taking those locks, then atomically replaces
-one authoritative JSON file with `writeJsonAtomic`. Send writes only the PLAN
-snapshot; it does not advance state revision or execution phase. A failed replacement leaves
-the previous state intact. No operation holds these locks across remote IO.
+Every mutation takes the programme plan lock, the goal plan lock when
+applicable, and the strict register lock. CAS and ownership are checked inside
+them. Send commits its durable sent marker before projecting PLAN; replay of
+a settled identical send does not duplicate history. A failed atomic state
+replacement leaves the previous state intact. Locks never span remote IO.
 
 `DRAFT.json` is a compatibility projection written **after** the authoritative
 project state commits. Reads and all future v2 consumers must use the locked
@@ -44,41 +41,47 @@ revision. `show` is read-only. Raw edits to the projection are never adopted.
 Sending atomically writes the authoritative contract as an inactive `PLAN.json`;
 it never adopts the draft projection or launches work.
 
-## Typed command operations
+## Public assignment operations
 
-The routed command modules take these argument vectors:
+Programme context is read with `mc programme show <programme>` and updated with
+`mc programme metadata <programme> --expected-revision <n> --input-file <json>`.
+Goal authoring and lifecycle operations use `mc goal new`, `criterion add`,
+`send`, `revise`, `show`, `done`, `finish`, `report`, `attempt`, `release` and
+`recover`. The retired `mc autonomous-project` and programme planner envelope
+routes are not public commands. Durable queue effects below remain internal;
+they do not authorize a headless planner to run.
+Foreground planning obtains an operation actor internally and needs no lease.
+Headless planning must prove the exact programme reservation, token and live
+lease. Builders/reviewers cannot author assignments. Creation CAS checks the
+programme state revision; other goal writes check the goal state revision.
 
-- `programme show <programme>`
-- `programme draft|approve <programme> --expected-revision <n> --input-file <json>`
-- `autonomous-project show <programme>/<project>`
-- `autonomous-project create|revise|progress|report|confirm|attempt <programme>/<project> --expected-revision <n> --input-file <json>`
-- `autonomous-project send|release|recover <programme>/<project> --expected-revision <n>`
+A revision advances `goal_revision` by exactly one, preserves repository,
+goal/programme identity, branch/PR, commits, attempts and reports, and appends
+the assignment to history. Retired criterion IDs cannot be reused. Current
+execution projections are invalidated, not their immutable evidence/history.
+Active build/review/merge owners or unresolved builder claims fence revision.
+Landed scope is immutable. Evidence binds programme/goal identity and the goal
+revision, never a programme state revision: context or another goal changing
+cannot stale exact publication/review evidence. Exact content, head, base,
+report digest and independent-model checks remain required at every merge.
 
-`draft` accepts a complete draft programme contract; `approve` accepts only
-`{by, at}` approval attribution and approves the exact stored draft. Only the
-reserved `foreground-plan` run may do either. A headless `plan` cannot revise
-the programme agreement. `create` checks the expected **programme state**
-revision, the planner's reservation and the referenced approved contract.
-Other project operations check the **project state** revision.
-
-Only the active `plan` run, also owning the programme reservation, may revise
-or confirm a project. A revision advances the goal revision exactly once.
-The [guarded programme planner](mc-programme-plan.md) adds a durable path for
-sent open-PR goals without amending v1 plans or editing the programme agreement.
-The original pre-outbox typed data operations remain compatible. A revision
-keeps project/repository/programme identity and preserves commits, branch/PR,
-reports, attempts and old contracts. All earlier-revision evidence is retained
-but excluded from current evidence; current handoff and confirmation are
-invalidated conservatively. Retired criterion IDs cannot be recycled in later
-approved programme revisions or goal revisions. A new planner cannot replace a running builder:
-the existing owner must release at a safe boundary first.
+Autonomy off disables only new headless planner claims. Sent goals continue
+build, review and merge. The installed runner still has no autonomous
+capability, so this cutover activates nothing. Execution completes at a verified
+reviewed landing on main. Follow-up measurements stay in append-only
+`follow_up_observations`, separate from builder/review evidence; `confirmed` is
+not an execution phase. Obsolete entry-point removal is a subsequent project step.
 
 `step` may append builder progress; `review` may append independent reports.
 Neither can change scope or confirm. Record attribution is stamped from the
 active reservation and current contract, not trusted from the input. Evidence
 IDs cannot be overwritten. Verification observations are not green gate
-receipts or merge authorization. Planner confirmation is a separate attributed
-decision, not inferred from builder or review progress.
+receipts or merge authorization. After landing, either planning session can
+record after-integration evidence through `mc goal criterion evidence` with
+`--integrated-sha <sha> --outcome passed|failed|unknown`. The goal revision and
+landing SHA must match. `mc goal done` is an idempotent read that refuses missing,
+stale or unsuccessful follow-up measurements. Landed assignments are immutable;
+additional implementation belongs to a new goal. Confirmation writes are refused.
 
 `attempt` accepts `{id, reason, commits, branch?, pr?, handoff?}`; commits are
 full SHAs. It appends an **incomplete** result, never a green handoff. Existing

@@ -1,7 +1,7 @@
 /** Durable v2 checkpoint responses for either tool; never a start switch. */
 import { readFileSync } from 'node:fs';
 import { projectSessionCheckpoint } from '../autonomous-state.js';
-import { autonomousCommandContext } from './autonomous-project.js';
+import { goalCommandContext as autonomousCommandContext } from './goal.js';
 import { scanArgs } from './flags.js';
 
 export async function run(argv, deps = {}) {

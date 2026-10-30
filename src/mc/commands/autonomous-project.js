@@ -8,7 +8,7 @@ import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 
 export function autonomousCommandContext(deps) {
   const env = deps.env || process.env;
-  return { root: deps.root || workRoot(env), actor: deps.actor || { run_id: env.MC_AUTONOMOUS_RUN, role: env.MC_AUTONOMOUS_ROLE } };
+  return { root: deps.root || workRoot(env), actor: deps.actor || (env.MC_AUTONOMOUS_ROLE && env.MC_AUTONOMOUS_ROLE !== 'foreground-plan' ? { run_id: env.MC_AUTONOMOUS_RUN, role: env.MC_AUTONOMOUS_ROLE } : undefined) };
 }
 export function operationArguments(argv, verbs) {
   const scanned = scanArgs(argv, { strictValues: ['--expected-revision', '--input-file'] });
@@ -24,7 +24,7 @@ export function operationArguments(argv, verbs) {
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
   if ((deps.env || process.env).MC_AUTONOMOUS_ROLE === 'plan') {
-    const refusal = reviewCommandRefusal(['autonomous-project', ...argv], deps);
+    const refusal = reviewCommandRefusal(['goal', ...argv], deps);
     if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   }
   let args;
@@ -54,11 +54,4 @@ export async function run(argv, deps = {}) {
     stdout.write(`${JSON.stringify(args.operation === 'send' ? { contract: result, execution_enabled: false } : response, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
-}
-
-export function usage() {
-  return 'usage — mc autonomous-project show <programme>/<project>\n'
-    + '        mc autonomous-project create|revise|progress|report|confirm|attempt|finish <programme>/<project> --expected-revision <n> --input-file <json>\n'
-    + '        mc autonomous-project send|release|recover <programme>/<project> --expected-revision <n>\n'
-    + '        send publishes an inactive contract; autonomous execution is disabled\n';
 }

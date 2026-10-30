@@ -4,7 +4,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readProgrammeState, readAutonomousState, currentAutonomousEvidence, PUBLICATION_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
+import { goalCompletion } from './goal-followup.js';
 import { installationCapabilities, missingCapabilities } from './programme-control.js';
 import { mainIncidentHold } from './programme-recovery.js';
 import { reviewRoutePending } from './autonomous-outcomes.js';
@@ -35,7 +36,7 @@ function claimHolder(root, programme, project) {
 }
 
 function evidenceQuality(state, criteria, report) {
-  if (state.confirmed) return 'confirmed by plan';
+  if (goalCompletion(state).done) return 'reviewed delivery landed on main';
   const premerge = criteria.filter(item => item.verification === 'premerge');
   if (report?.current && report.clean) return 'clean independent review of the published head';
   if (report?.current) return 'review findings for plan';
@@ -46,14 +47,13 @@ function evidenceQuality(state, criteria, report) {
 
 function gateState(state) {
   const p = state.publication;
-  if (!p || p.goal_revision !== state.goal_revision || p.programme_revision !== state.programme_revision) {
+  if (!p || p.goal_revision !== state.goal_revision) {
     return state.session_control?.phase === 'running' || state.session_control?.phase === 'closing' ? 'not yet measured' : 'none recorded';
   }
   return PUBLICATION_PHASES.indexOf(p.phase) >= PUBLICATION_PHASES.indexOf('gate_verified') ? `green receipt ${p.gate_run || UNKNOWN}` : 'not yet verified';
 }
 
 function goalAction(root, state, holds) {
-  if (state.confirmed) return 'none — confirmed by plan';
   const run = state.active_run;
   if (run?.role === 'step') return `build session ${run.run_id} ${state.session_control?.phase || state.phase}`;
   if (run?.role === 'review') return `independent review ${run.run_id} running`;
@@ -64,16 +64,20 @@ function goalAction(root, state, holds) {
   if (state.phase === 'ready') return 'start a build session';
   if (state.phase === 'review_ready') return 'start an independent review';
   if (state.phase === 'landing') return `merger lands #${state.ownership.pr ?? UNKNOWN}`;
-  if (state.phase === 'landed') return 'plan confirms the landed delivery';
+  if (state.phase === 'landed') {
+    const completion = goalCompletion(state);
+    if (!completion.done) return 'unknown — landing evidence is incomplete';
+    return completion.pending_follow_ups.length ? `measure follow-ups: ${completion.pending_follow_ups.join(', ')}` : 'none — done on main';
+  }
   let route = false;
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';
-  if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to be confirmed`;
-  return 'plan decides the next step for this goal';
+  if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to land`;
+  return 'planner unavailable — headless queue consumption is not implemented';
 }
 
 /** One autonomous goal. An unreadable state is reported, not skipped. */
-export function goalStatus(root, programme, project, approvedRevision = null) {
+export function goalStatus(root, programme, project) {
   let state;
   try { state = readAutonomousState(root, programme, project); }
   catch (error) { return { project, problem: error.message, next_action: `${UNKNOWN} — state preserved for recovery` }; }
@@ -86,7 +90,7 @@ export function goalStatus(root, programme, project, approvedRevision = null) {
   });
   const last = state.review_reports?.at(-1) || null;
   const report = last ? { id: last.id, clean: last.clean, head: last.session.head,
-    current: last.session.assignment.goal_revision === state.goal_revision && last.session.assignment.programme.revision === state.programme_revision
+    current: last.session.assignment.goal_revision === state.goal_revision
       && last.session.head === state.publication?.head,
     findings: state.evidence.reviews.find(item => item.id === last.id)?.findings || [] } : null;
   const control = state.session_control || null;
@@ -98,8 +102,8 @@ export function goalStatus(root, programme, project, approvedRevision = null) {
   const stale = state.evidence.builder.length + state.evidence.reviews.length - current.builder.length - current.reviews.length;
   return {
     project, phase: state.phase, state_revision: state.revision, goal_revision: state.goal_revision,
-    programme_revision: state.programme_revision, aligned: approvedRevision === null ? UNKNOWN : state.programme_revision === approvedRevision,
-    confirmed: state.confirmed, branch: state.ownership.branch, pr: state.ownership.pr, active_run: state.active_run,
+    work_class: state.contract.work_class, programme_phase: state.contract.programme_phase,
+    ...goalCompletion(state), branch: state.ownership.branch, pr: state.ownership.pr, active_run: state.active_run,
     criteria,
     evidence: { quality: evidenceQuality(state, criteria, report), gate: gateState(state),
       premerge_verified: criteria.filter(item => item.verification === 'premerge' && item.builder === 'verified').length,
@@ -137,18 +141,18 @@ function legacyGoals(root, programme) {
 
 function programmeAction(status, journal) {
   const mode = status.mode;
-  if (mode === 'inactive') return 'none — not started; mc programme start';
+  if (mode === 'inactive') return 'planner unavailable — not started; sent goals continue';
   if (mode === 'paused') return status.in_flight.length
     ? `none new — paused; ${status.in_flight.length} started operation${status.in_flight.length === 1 ? '' : 's'} finishing`
     : 'none — paused; mc programme resume';
-  if (mode === 'stopped') return `none — planned stop ${journal.stop} reached; going further needs a new agreement`;
+  if (mode === 'stopped') return `none — planned stop ${journal.stop} reached; new headless planning is stopped`;
   if (mode === 'exception') return `none — exception ${journal.exception.code || ''}: ${journal.exception.reason}`.replace(' :', ':');
   if (mode === 'waiting') return journal.wait.until === null ? `wait for external ${journal.wait.reason}` : `retry after ${iso(journal.wait.until)} (${journal.wait.kind})`;
-  if (!status.execution.supported) return 'none — this installation cannot run autonomous work';
-  if (status.plan.lease) return `plan session ${status.plan.lease.run_id} running`;
-  if (status.plan.pending_events) return `plan session for ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'}`;
-  const goal = status.goals.find(item => !/^(none|plan decides)/u.test(item.next_action));
-  return goal ? `${goal.project}: ${goal.next_action}` : 'plan reviews the programme (idle check)';
+  if (!status.execution.supported) return 'planner unavailable — this installation cannot run autonomous work';
+  if (status.plan.lease) return `planner unavailable — lease ${status.plan.lease.run_id} requires recovery`;
+  if (status.plan.pending_events) return `planner unavailable — ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'} ${status.plan.pending_events === 1 ? 'awaits' : 'await'} headless queue consumption`;
+  const goal = status.goals.find(item => !item.next_action.startsWith('none'));
+  return goal ? `${goal.project}: ${goal.next_action}` : 'planner unavailable — headless queue consumption is not implemented';
 }
 
 /** Everything `mc programme status` says. `capabilities` defaults to what this
@@ -166,30 +170,29 @@ export function programmeStatus(root, programme, deps = {}) {
   try { state = readProgrammeState(root, programme); }
   catch (error) { return { programme, mode: UNKNOWN, problem: error.message, execution, goals: [], legacy: [], in_flight: [], next_action: `${UNKNOWN} — programme state preserved for recovery` }; }
   const journal = state.planner_jobs || { mode: 'inactive', wait: null, stop: null, pending: null, lease: null, operations: [] };
-  const agreement = state.approved.at(-1) || null;
+  const metadata = state.metadata;
   const dir = join(root, PROGRAMS_HOME, programme);
   const projects = readdirSync(dir, { withFileTypes: true }).filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name)
     && existsSync(join(dir, item.name, AUTONOMOUS_STATE_FILE))).map(item => item.name).sort();
-  const goals = projects.map(project => goalStatus(root, programme, project, agreement?.revision ?? null));
+  const goals = projects.map(project => goalStatus(root, programme, project));
   const activation = journal.activation || null;
   const target = activation?.stop || null;
-  const stopOf = id => agreement?.planned_stops.find(item => item.id === id)?.condition || UNKNOWN;
+  const stopOf = id => id;
   const lease = journal.lease ? { run_id: journal.lease.actor.run_id, expires_at: iso(journal.lease.expires_at), job_id: journal.lease.job_id } : null;
   const in_flight = [
     ...(lease ? [`plan ${lease.run_id} (lease until ${lease.expires_at})`] : []),
     ...goals.filter(goal => goal.active_run).map(goal => `${goal.active_run.role} ${goal.active_run.run_id} on ${goal.project} (${goal.phase})`),
     ...goals.filter(goal => !goal.active_run && goal.waits?.some(item => item.startsWith('builder claim'))).map(goal => `builder claim on ${goal.project}`),
-    ...goals.filter(goal => goal.merge?.status === 'pending').map(goal => `merge of #${goal.merge.pr} for ${goal.project} (queued before any pause; the merge door rechecks the mode)`),
+    ...goals.filter(goal => goal.merge?.status === 'pending').map(goal => `merge of #${goal.merge.pr} for ${goal.project} (sent goal; independent evidence rechecked at the merge door)`),
   ];
   const pendingOperations = (journal.operations || []).filter(item => item.status === 'pending').map(item => `${item.intent.kind} ${item.intent.id}`);
   const status = {
     programme, state_revision: state.revision, mode: journal.mode, execution,
-    agreement: { approved_revision: agreement?.revision ?? null, draft_revision: state.draft?.revision ?? null,
-      approved_by: agreement?.approval?.by || null },
-    activation: activation ? { at: activation.at, by: activation.by, programme_revision: activation.programme_revision,
+    metadata,
+    activation: activation ? { at: activation.at, by: activation.by,
       build: { class: activation.profiles.build.class }, review: { model: model(activation.profiles.review.model) } } : null,
     planned_stop: { target, condition: target ? stopOf(target) : null, reached: journal.mode === 'stopped' ? journal.stop : null,
-      agreed: (agreement?.planned_stops || []).map(item => item.id) },
+      agreed: target ? [target] : [] },
     plan: { owner: 'plan', active_run: state.active_run, lease, pending_events: journal.pending?.event_ids.length || 0,
       pending_operations: pendingOperations },
     wait: journal.mode === 'waiting' ? { kind: journal.wait.kind, reason: journal.wait.reason, until: journal.wait.until === null ? null : iso(journal.wait.until) } : null,
@@ -254,13 +257,13 @@ export function renderProgrammeStatus(status) {
   if (status.problem) { row('problem', status.problem); row('next', status.next_action); return `${out.join('\n')}\n`; }
   row('execution', status.execution.supported ? 'supported by this installation'
     : `not supported here — ${status.execution.reason || 'unsupported'} (missing ${status.execution.missing.join(', ')})`);
-  row('agreement', `approved revision ${status.agreement.approved_revision ?? 'none'}${status.agreement.draft_revision ? ` · draft revision ${status.agreement.draft_revision} (not in force)` : ''} · state revision ${status.state_revision}`);
-  if (status.activation) row('started', `${status.activation.at} by ${status.activation.by} at revision ${status.activation.programme_revision} · build ${status.activation.build.class} · review ${status.activation.review.model}`);
-  else row('started', 'no — nothing runs until mc programme start');
+  row('programme', `${status.metadata.brief} · state revision ${status.state_revision}`);
+  if (status.activation) row('started', `${status.activation.at} by ${status.activation.by} · build ${status.activation.build.class} · review ${status.activation.review.model}`);
+  else row('started', 'planner unavailable — sent goals continue');
   row('stop', status.planned_stop.target ? `runs to ${status.planned_stop.target} — ${clip(status.planned_stop.condition, 70)}${status.planned_stop.reached ? ' · reached' : ''}`
     : `none chosen · agreed stops: ${status.planned_stop.agreed.join(', ') || 'none'}`);
   const plan = status.plan;
-  row('plan', `owns goals and confirmation · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
+  row('plan', `owns goals and follow-ups · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
   if (status.pause) row('paused', `${status.pause.at} by ${status.pause.by} (was ${status.pause.previous})`);
   if (status.wait) row('wait', `${status.wait.kind}: ${status.wait.reason}${status.wait.until ? ` · until ${status.wait.until}` : ' · external'}`);
   if (status.exception) row('exception', `${status.exception.code || UNKNOWN}: ${status.exception.reason}`);
@@ -268,10 +271,10 @@ export function renderProgrammeStatus(status) {
   row('next', status.next_action);
   out.push('');
   out.push('GOALS');
-  if (!status.goals.length) out.push('  none yet — plan creates them once the programme runs');
+  if (!status.goals.length) out.push('  none yet — create assignments with mc goal new');
   for (const goal of status.goals) {
     if (goal.problem) { out.push(`  ${goal.project}  problem: ${goal.problem}`); out.push(`    next       ${goal.next_action}`); continue; }
-    out.push(`  ${goal.project}  ${goal.phase} · goal r${goal.goal_revision} · programme r${goal.programme_revision}${goal.aligned === false ? ' (behind the agreement)' : ''} · branch ${goal.branch || 'none'} · PR ${goal.pr ? `#${goal.pr}` : 'none'}`);
+    out.push(`  ${goal.project}  ${goal.phase} · goal r${goal.goal_revision} · ${goal.work_class} · phase ${goal.programme_phase} · branch ${goal.branch || 'none'} · PR ${goal.pr ? `#${goal.pr}` : 'none'}`);
     const sub = (key, value) => out.push(`    ${key.padEnd(10)} ${value}`);
     sub('criteria', goal.criteria.map(item => `${item.id} ${item.builder}${item.verification === 'after-integration' ? ' (after integration)' : ''}${item.review !== UNKNOWN ? `, review ${item.review}` : ''}`).join(' · '));
     sub('evidence', `${goal.evidence.quality} · ${goal.evidence.premerge_verified} of ${goal.evidence.premerge_total} premerge reported · gate ${goal.evidence.gate}${goal.evidence.stale_observations ? ` · ${goal.evidence.stale_observations} older-revision observations ignored` : ''}${goal.evidence.incomplete_attempts ? ` · ${goal.evidence.incomplete_attempts} incomplete attempts` : ''}`);
@@ -280,8 +283,9 @@ export function renderProgrammeStatus(status) {
     sub('session', goal.session ? `${goal.session.run_id} ${goal.session.phase}${goal.session.reason ? ` (${goal.session.reason})` : ''} · ${goal.session.activity} · context ${goal.session.context.fraction === UNKNOWN ? UNKNOWN : `${Math.round(goal.session.context.fraction * 100)}% ${goal.session.context.quality}`}` : 'none');
     if (goal.publication) sub('publish', `${goal.publication.phase}${goal.publication.head ? ` · head ${goal.publication.head.slice(0, 7)}` : ''}${goal.publication.pr ? ` · #${goal.publication.pr}` : ''}`);
     if (goal.merge || goal.landing) sub('merge', `${goal.merge ? `handoff ${goal.merge.status}` : ''}${goal.landing ? `${goal.merge ? ' · ' : ''}landed ${goal.landing.merge_commit.slice(0, 7)} on ${goal.landing.merged_into}` : ''}`);
+    if (goal.follow_ups.length) sub('follow-ups', goal.follow_ups.map(item => `${item.criterion_id} ${item.outcome}`).join(' · '));
     if (goal.waits.length) sub('waits', goal.waits.join('; '));
-    sub('next', status.mode === 'active' ? goal.next_action : `${goal.next_action} (held while ${status.mode})`);
+    sub('next', goal.next_action);
   }
   if (status.legacy.length) {
     out.push('');

@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { reviewDigest } from './autonomous-review-report.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { takeClaim, releaseClaim, readClaim, processAlive } from './resource-claim.js';
 import { groupAlive, reconcileSessionGate, sessionGitDir } from './session-recovery.js';
 import { createSessionObservation } from './session-observation.js';

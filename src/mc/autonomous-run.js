@@ -35,8 +35,6 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
     const state = readAutonomousState(root, record.programme, record.project);
     const agreement = readProgrammeState(root, record.programme);
     const journal = agreement.planner_jobs;
-    const mode = journal?.mode;
-    if (mode && mode !== 'active') return skip('programme-held', 'programme is paused, waiting or stopped');
     const reviewRecovery = state.active_run?.role === 'review' && capability.review;
     if (!reviewRecovery && !isDeepStrictEqual(state.contract, assignment)) return skip('assignment-mismatch', 'sent and current assignments differ');
     if (autonomousBuildHeld({ root, programme: record.programme, project: record.project })) return skip('autonomous-owned', 'another builder or reconciler owns the project');
@@ -45,7 +43,6 @@ export function autonomousChoice({ root, record, capability, openPrs = [], workt
       if (worktree && (state.phase !== 'plan_pending' || journal) && state.active_run.role === 'step') return { kind: 'step', flavor: 'autonomous', recovery: true };
       return skip('autonomous-owned', `project is owned by ${state.active_run.run_id}; preserve its tree until recovery`);
     }
-    if (journal && state.programme_revision !== agreement.approved.at(-1).revision) return skip('programme-revision', 'programme revision changed; plan must align the goal before dispatch');
     if (mainIncidentHold(root, record.programme, record.project)) return skip('main-incident', 'shared main repair awaits its owning programme plan');
     if (capability.review && reviewRoutePending(root, state)) return { kind: 'review', flavor: 'autonomous', routing: true };
     if (state.phase === 'review_ready' && capability.review) return { kind: 'review', flavor: 'autonomous' };
@@ -151,7 +148,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     if (!previous.ok) throw new Error(`recovery required: ${previous.reason}`);
     if (git(['branch', '--show-current']) !== branch) throw new Error('checkout does not match the owned branch');
     if (git(['status', '--porcelain'])) throw new Error('unfinished tree requires deliberate recovery');
-    const agreement = readProgrammeState(root, programme).approved.find(item => item.revision === state.programme_revision);
+    const agreement = readProgrammeState(root, programme).metadata;
     let previousHandoff = null;
     let previousRunId = null;
     if (state.current_handoff) {
@@ -256,7 +253,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     await verifyPr(session);
     const overlay = '@include _review-autonomous.md';
     const instructions = instructionsFor(settings.tool, overlay);
-    const agreement = readProgrammeState(root, programme).approved.find(item => item.revision === started.programme_revision);
+    const agreement = readProgrammeState(root, programme).metadata;
     const prompt = JSON.stringify({ programme: agreement, session, target: `${programme}/${name}`, state_revision: started.revision });
     if (Buffer.byteLength(prompt) > SESSION_START_MAX_BYTES) throw new Error('review assignment exceeds bounded start context');
     const directory = join(root, 'runner', 'reviews', actor.run_id, 'artifacts'); deps.mkdir(directory);

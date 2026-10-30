@@ -8,7 +8,7 @@ import { repoNameOf } from './repos.js';
 import { workRoot } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { projectForBranch } from './project-prs.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 
 export const AUTONOMOUS_PR_MARK = '<!-- mc-autonomous: review-required -->';
 const digest = value => createHash('sha256').update(value).digest('hex');

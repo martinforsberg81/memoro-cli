@@ -99,9 +99,9 @@ result and state revision. They cannot initialize control, choose a profile,
 inject clocks or measurements, reset history or extend a closing deadline.
 Checkpoint/criterion requests replace one bounded durable request for subsequent
 runner verification; submitting a request is not measured progress. Existing
-`autonomous-project show|progress` also returns a `control` response when control
-has been initialized; without it, the earlier response is unchanged. None of
-these commands activates execution or changes the v1 step/status commands.
+`mc session-control status` reads the durable control response when control has
+been initialized. It does not activate execution or change the v1 step/status
+commands.
 
 Verification: `mc gate tests/mc/session-control.test.js` uses fake clocks and
 isolated real state files for boundaries, reserves, bounded waits, machine sleep,

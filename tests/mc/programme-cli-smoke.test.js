@@ -1,5 +1,5 @@
 /** The documented operator commands against a disposable programme, each a real
- * process: an agreement drafted and approved with `mc programme draft|approve`,
+ * process: ordinary goal assignment creation without programme approval,
  * then `capabilities`, `status`, `start`, `pause` and `resume`. The installed
  * `mc` refuses to start it; a fixture installation that reports every
  * capability (`fixtures/programme-installation.js`, never a production switch)
@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { releaseProgrammeRun, reserveProgrammeRun } from '../../src/mc/autonomous-state.js';
 import { CONTROL_CAPABILITIES } from '../../src/mc/programme-control.js';
-import { programmeContract } from './autonomy-fixtures.js';
+import { programmeMetadata } from './autonomy-fixtures.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INSTALLATION = join(HERE, 'fixtures', 'programme-installation.js');
@@ -65,17 +65,10 @@ function disposable(t) {
   w.tools = () => readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
   w.start = run => run(['start', PROGRAMME, '--expected-revision', String(w.revision()), '--stop', 'design-review', '--input-file', w.file('start.json', START)]);
 
-  // The agreement: a foreground plan run drafts and approves it through the CLI.
-  // There is no public reservation command, so the run is reserved directly.
-  const foreground = { run_id: 'foreground-1', role: 'foreground-plan' };
-  reserveProgrammeRun(root, PROGRAMME, foreground, 0);
-  const as = { MC_AUTONOMOUS_RUN: foreground.run_id, MC_AUTONOMOUS_ROLE: foreground.role };
-  const draft = programmeContract({ id: PROGRAMME, status: 'draft' }); delete draft.approval;
-  const drafted = w.mc(['draft', PROGRAMME, '--expected-revision', '1', '--input-file', w.file('draft.json', draft)], as);
-  assert.equal(drafted.code, 0, drafted.err);
-  const approved = w.mc(['approve', PROGRAMME, '--expected-revision', '2', '--input-file', w.file('approve.json', { by: 'Martin', at: '2026-10-28T12:00:00Z' })], as);
-  assert.equal(approved.code, 0, approved.err);
-  releaseProgrammeRun(root, PROGRAMME, foreground, 3);
+  // Foreground programme context needs no draft/approve or reservation.
+  const metadata = programmeMetadata({ id: PROGRAMME });
+  const created = w.mc(['metadata', PROGRAMME, '--expected-revision', '0', '--input-file', w.file('metadata.json', metadata)]);
+  assert.equal(created.code, 0, created.err);
 
   // A v1 project in the same programme directory.
   const legacy = join(root, 'programs', PROGRAMME, 'legacy'); mkdirSync(legacy);
@@ -106,7 +99,7 @@ test('the installed mc reports what it lacks and refuses to start a disposable p
   assert.equal(status.code, 0, status.err);
   const read = status.json();
   assert.equal(read.mode, 'inactive'); assert.equal(read.execution.supported, false);
-  assert.equal(read.agreement.approved_revision, 1); assert.deepEqual(read.planned_stop.agreed, ['design-review']);
+  assert.deepEqual(read.metadata, programmeMetadata({ id: PROGRAMME })); assert.deepEqual(read.planned_stop.agreed, []);
   assert.deepEqual(read.legacy, ['legacy']); assert.match(read.next_action, /not started/u);
   assert.match(w.mc(['status', PROGRAMME]).out, /execution\s+not supported here/u);
 
@@ -126,14 +119,14 @@ test('on a fixture installation start, pause and resume drive the disposable pro
   const w = disposable(t);
   const start = w.start(w.fixture);
   assert.equal(start.code, 0, start.err);
-  assert.equal(start.json().mode, 'active'); assert.match(start.json().next_action, /plan session for 1 pending event/u);
+  assert.equal(start.json().mode, 'active'); assert.match(start.json().next_action, /planner unavailable/u);
   assert.equal(w.start(w.fixture).code, 1, 'a start applies once');
 
   // The installed mc reads the recorded start, and says it runs nothing.
   const status = w.mc(['status', PROGRAMME, '--json']).json();
   assert.equal(status.mode, 'active'); assert.equal(status.activation.by, 'Martin'); assert.equal(status.activation.build.class, 'fast');
   assert.equal(status.planned_stop.target, 'design-review'); assert.equal(status.execution.supported, false);
-  assert.equal(status.next_action, 'none — this installation cannot run autonomous work');
+  assert.equal(status.next_action, 'planner unavailable — this installation cannot run autonomous work');
 
   // Headless sessions, as fake tool processes, may read the report but cannot change the mode.
   const started = w.bytes();

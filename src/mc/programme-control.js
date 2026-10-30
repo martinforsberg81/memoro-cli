@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
 import { validateControlProfile } from './session-control.js';
 import { autonomousModelIdentity, independentModel } from './autonomous-models.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { CLASSES, DEFAULT_CATALOG } from './model-config.js';
 
 export const CONTROL_CAPABILITIES = Object.freeze(['programme-jobs', 'programme-plan', 'build', 'review', 'control-signals', 'interrupt']);
@@ -17,6 +18,7 @@ const plain = value => !!value && typeof value === 'object' && !Array.isArray(va
 const NOT_WIRED = 'the installed runner (runLoop, src/mc/run.js) passes no autonomous capability';
 const NO_CLOCK = 'no production awake clock that excludes machine suspend';
 const NO_PROVIDER = 'not observed with a provider (model) process';
+const NO_PLANNER = 'headless planner queue consumption is not implemented';
 
 /** What this installation has, capability by capability: what is built, what
  * proved it and what is still missing. Built and proven by fixtures is not
@@ -29,8 +31,8 @@ const INSTALLATION = Object.freeze({
   capabilities: Object.freeze([
     { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
       proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
-    { name: 'programme-plan', built: 'headless plan sessions and their decisions (src/mc/programme-plan-run.js, src/mc/programme-plan.js)',
-      proven: 'scripted plan sessions: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+    { name: 'programme-plan', built: 'durable planner journal and event queue; no queue consumer',
+      proven: 'journal effects and recovery: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NO_PLANNER },
     { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
       proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_CLOCK}` },
     { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',
@@ -101,28 +103,26 @@ const stamp = now => new Date(now).toISOString();
 const logged = (journal, entry) => { journal.control = [...(journal.control || []), entry]; };
 
 /** Inactive → active, once, with the activation trigger persisted in the same
- * write. The approved revision, the stop and the profiles are recorded. */
+ * write. The stop and the profiles are recorded. */
 export function startProgramme({ root, programme, revision, stop, now = Date.now(), deps = {} }, input) {
   const capabilities = supportedCapabilities(deps);
   const problems = startInputProblems(input, deps.catalog ? deps.catalog() : DEFAULT_CATALOG);
   if (problems.length) throw new Error(problems.join('; '));
   return updateProgrammeJobs({ root, programme, revision, deps }, (state, journal, paths) => {
-    const agreement = state.approved.at(-1);
-    if (!agreement) throw new Error('start needs an approved programme revision');
     if (journal.mode !== 'inactive') throw new Error(`programme is already ${journal.mode}; ${journal.mode === 'paused' ? 'resume it' : 'start applies once'}`);
-    if (!agreement.planned_stops.some(item => item.id === stop)) throw new Error('start names one of the approved planned stops');
+    if (typeof stop !== 'string' || !STABLE_ID_RE.test(stop)) throw new Error('start names an explicit stable stop ID');
     const at = stamp(now);
-    const id = `activation-${createHash('sha256').update(JSON.stringify([programme, agreement.revision, stop, at])).digest('hex').slice(0, 40)}`;
-    enqueueProgrammeEvent(state, journal, { id, type: 'activation', programme_revision: agreement.revision,
+    const id = `activation-${createHash('sha256').update(JSON.stringify([programme, stop, at])).digest('hex').slice(0, 40)}`;
+    enqueueProgrammeEvent(state, journal, { id, type: 'activation',
       reference: `${paths.programme}#planner_jobs/activation` });
-    journal.activation = { id, programme_revision: agreement.revision, stop, by: input.by, at,
+    journal.activation = { id, stop, by: input.by, at,
       profiles: { build: structuredClone(input.build), review: structuredClone(input.review) }, capabilities };
     journal.mode = 'active'; journal.wait = null; journal.stop = null; journal.exception = null;
     logged(journal, { operation: 'start', by: input.by, at, state_revision: state.revision });
   });
 }
 
-/** Stops new claims, builds, reviews and merge submissions. Work already
+/** Stops only new headless planner claims. Sent goals and work already
  * started finishes and is recorded; nothing is signalled or reverted. A
  * repeated pause is a read, not another revision. */
 export function pauseProgramme({ root, programme, revision = null, by, now = Date.now(), deps = {} }) {
@@ -147,7 +147,6 @@ export function resumeProgramme({ root, programme, revision, by, now = Date.now(
     if (journal.mode !== 'paused') throw new Error(`programme is ${journal.mode}; resume applies to a paused programme`);
     const activation = journal.activation;
     if (!activation) throw new Error('programme was never started here; start it with mc programme start');
-    if (!state.approved.at(-1).planned_stops.some(item => item.id === activation.stop)) throw new Error('the approved programme no longer has the planned stop this start runs to; agree a new start');
     const previous = journal.pause?.previous || { mode: 'active', wait: null };
     // A due wait becomes active at reconciliation, with its retry event.
     if (previous.mode === 'waiting' && previous.wait) { journal.mode = 'waiting'; journal.wait = previous.wait; }

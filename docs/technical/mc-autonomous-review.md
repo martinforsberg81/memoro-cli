@@ -28,18 +28,19 @@ resource reservations are unchanged.
 ## Frozen session and command boundary
 
 `prepareAutonomousReview` requires review-ready state and a settled publication,
-checks the pushed branch's head and creates a new detached worktree beneath
+checks the publication's goal revision and pushed branch head, and creates a new
+detached worktree beneath
 `<work root>/runner/reviews/<run ID>/checkout`. It never syncs or resets the
 builder's branch/index. The session freezes the complete assignment, criterion
-and assignment digests, programme/goal revision, published head, branch/PR,
+and assignment digests, goal revision, published head, branch/PR,
 merge-base comparison SHA, observed integration base, model provenance, builder
 verification references and gate run. The runner also verifies GitHub's open PR
 head, branch and main target before and after the separate review session.
 The full start context is bounded by the existing session-start byte limit.
 
 The public command dispatcher refuses unknown commands and mutations for
-`MC_AUTONOMOUS_ROLE=review`. Only help/status, gate, hooks and autonomous-project
-show/report are available. Publish, merge (including admin), legacy project and
+`MC_AUTONOMOUS_ROLE=review`. Only help/status, gate, hooks and goal show/report
+are available. Publish, merge (including admin), legacy project and
 step commands also guard their imported command entrypoints. Autonomous state
 writes check expected revision and exact active run/role under lock; a bound
 review can only submit its report, not release itself, change scope, mark
@@ -48,7 +49,7 @@ not OS isolation against a malicious process changing its environment/files.
 
 ## Report lifecycle
 
-Submit `mc autonomous-project report <programme>/<project>
+Submit `mc goal report <programme>/<goal>
 --expected-revision <n> --input-file <json>` from the active review. Input is:
 
 ```json
@@ -96,7 +97,7 @@ checkout fingerprint, and checks that the source checkout is unchanged. Changed
 checkout, moved publication, failure/interruption or absent submission cannot be clean. Missing/invalid submissions become
 explicit unknown observations for every criterion. A report is clean only with
 no defects/uncertainties/invalidation and verified premerge observations;
-after-integration deferral stays pending, not planner-confirmed.
+after-integration deferral stays a follow-up to measure after landing.
 
 The full immutable `mc-autonomous-review-report` and frozen session are appended
 to authoritative `AUTONOMOUS_STATE.json`'s `review_reports`; the existing
@@ -116,7 +117,7 @@ Review itself still neither queues nor merges. After its process exits, the
 trusted runner automatically routes a complete current clean report through
 that door to the existing merger. Findings/unknowns remain with plan, as do
 all merge outcomes. Routing crash recovery never launches another builder or
-reviewer. Landed remains distinct from planner-confirmed. Execution remains
+reviewer. Landing completes execution; follow-ups stay measured. Execution remains
 inactive; see the merge document for event identities and recovery.
 
 ## Verification

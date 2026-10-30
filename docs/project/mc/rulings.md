@@ -2150,3 +2150,20 @@ the review model are system configuration; `mc programme autonomy on|off`
 lets a headless plan session consume the programme's event queue, guided by
 the programme's brief and phases; `decide` and the programme contract
 ceremony go. Plans to follow from that brief.
+
+
+### Clarification to ruling 60 · autonomy off and explicit phase completion
+
+Accepted by Martin with "Go." on 2026-10-29, to the two proposals below. This
+clarifies the original ruling; it does not replace the answer recorded above.
+
+- **Autonomy off disables only new headless planner claims.** Already sent
+  goals continue to build, review and merge. Their events remain available
+  for foreground planning or a later headless claim.
+- **Phase completion is an explicit shared planning operation.** Either
+  foreground or leased headless planning may complete a phase only after all
+  its goals have landed and all follow-ups have measured evidence. An empty
+  phase never advances automatically.
+
+These settled semantics govern `goals-foundation` and `goals-programme-plan`;
+neither project activates the live autonomous runner.

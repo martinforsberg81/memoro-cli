@@ -107,7 +107,7 @@ for (const mutation of ['tracked', 'ignored', 'source', 'remote-head', 'pr-base'
   if (mutation === 'remote-head') git(f.remote, 'update-ref', `refs/heads/${f.project}`, f.session.base);
   if (mutation === 'pr-base') { const gh = f.gh; f.gh = args => { const result = gh(args); return { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), baseRefName: 'other' }) }; }; }
   if (mutation === 'pr-unknown') f.gh = () => ({ status: 1 });
-  if (mutation === 'assignment') f.patch(state => { state.contract.goal_revision++; state.goal_revision++; });
+  if (mutation === 'assignment') f.patch(state => { state.contract = { ...state.contract, goal_revision: state.goal_revision + 1 }; state.contracts.push(state.contract); state.goal_revision++; });
   if (mutation === 'sent-assignment') {
     const path = join(f.paths.projectDir, 'PLAN.json'); const sent = JSON.parse(readFileSync(path)); sent.goal_revision++;
     writeFileSync(path, JSON.stringify(sent));

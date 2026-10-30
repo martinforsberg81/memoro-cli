@@ -17,6 +17,7 @@ import { claimProgrammeJob, completeProgrammePlan, finishProgrammeJob, reconcile
 import { decideProgrammePlan } from '../../src/mc/programme-plan.js';
 import { CONTROL_CAPABILITIES } from '../../src/mc/programme-control.js';
 import { run as programmeCommand } from '../../src/mc/commands/programme.js';
+import { run as goalCommand } from '../../src/mc/commands/goal.js';
 import { finishAutonomousPublication } from '../../src/mc/autonomous-publish.js';
 import { captureWorktree, gateReceipt, persistGateReceipt } from '../../src/mc/session-gate-evidence.js';
 import { publicationGateSelection } from '../../src/mc/commands/gate.js';
@@ -26,14 +27,14 @@ import { SESSION_START_MAX_BYTES } from '../../src/mc/session-handoff.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { readClaim } from '../../src/mc/resource-claim.js';
 import { landJob } from '../../src/mc/merger.js';
-import { parseQueue, mergesPath } from '../../src/mc/merge-queue.js';
+import { parseQueue, mergesPath, dequeue } from '../../src/mc/merge-queue.js';
 import { reviewCompletion, reviewSpawn } from './autonomous-review-process-fixture.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { archiveProgramme } from '../../src/mc/archive-programme.js';
 import { normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
-import { programmeContract, autonomousProject } from './autonomy-fixtures.js';
+import { programmeMetadata, autonomousProject } from './autonomy-fixtures.js';
 
 export const PROGRAMME = 'test-programme';
 export const PROJECT = 'test-project';
@@ -48,7 +49,7 @@ export const CRITERIA = [
   { id: 'installed', criterion: 'The landed main carries both.', instruction: ['Check main after landing.'], check: 'Read the landed files on main.', verification: 'after-integration' },
 ];
 // Every plan decision cites the agreement's one approved criterion.
-const BASIS = { criteria: ['contracts'], reference: 'decisions/approved-scope' };
+const BASIS = { criteria: ['schema'], reference: 'decisions/approved-scope' };
 // A dead process group: never one this test signals or waits on.
 const DEAD_PID = 2147483647;
 export const COMPLETION = { status: 0, normal_exit: true, recovery_ready: true, control_persisted: true, interrupted: false };
@@ -137,14 +138,9 @@ export function github(remote) {
     hang: (when, before = null) => hangs.push({ when, before }) };
 }
 
-/** The agreement, approved by the operator's foreground plan and released. */
+/** Minimal programme context; goals obtain their own assignment authority. */
 function agree(root) {
-  const foreground = { run_id: 'foreground-1', role: 'foreground-plan' };
-  reserveProgrammeRun(root, PROGRAMME, foreground, 0);
-  const draft = programmeContract({ status: 'draft' }); delete draft.approval;
-  mutateProgramme(root, PROGRAMME, 'draft', draft, { actor: foreground, revision: 1 });
-  mutateProgramme(root, PROGRAMME, 'approve', { by: 'Martin', at: '2026-10-28T12:00:00Z' }, { actor: foreground, revision: 2 });
-  releaseProgrammeRun(root, PROGRAMME, foreground, 3);
+  mutateProgramme(root, PROGRAMME, 'metadata', programmeMetadata(), { env: {}, revision: 0 });
 }
 
 export function programmeWorld(t, { profile = PROFILE } = {}) {
@@ -250,13 +246,19 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
       stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) }, ...extra });
     return { code, out: out.join(''), err: err.join('') };
   };
+  w.goal = async argv => {
+    const out = []; const err = [];
+    const code = await goalCommand(argv, { root, env: {}, stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) } });
+    assert.equal(code, 0, err.join(''));
+    return out.join('');
+  };
   w.start = (extra = {}) => {
     const input = join(root, 'start.json');
     writeFileSync(input, JSON.stringify({ by: 'Martin', build: { class: 'fast', profile }, review: { model: { tool: 'claude', model: 'opus', effort: 'high' } } }));
     return w.cli(['start', PROGRAMME, '--expected-revision', String(w.programme().revision), '--stop', 'design-review', '--input-file', input], extra);
   };
 
-  /** One headless plan delivery: claims the pending job, decides, acknowledges. */
+  /** Test-only simulated queue lease for later lifecycle/recovery measurements. */
   w.plan = (runId, { now } = {}) => {
     const actor = { run_id: runId, role: 'plan' };
     const lease = claimProgrammeJob({ root, programme: PROGRAMME, revision: w.programme().revision, actor, pid: process.pid, ...(now ? { now } : {}) }).planner_jobs.lease;
@@ -264,22 +266,28 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
     const owner = (extra = {}) => ({ root, programme: PROGRAMME, revision: w.programme().revision, actor, token: lease.token, ...extra });
     let count = 0;
     const intent = (kind, project = PROJECT, input = {}) => ({ id: `${runId}-${++count}`, kind, project,
-      expected_revision: w.state(project).revision, programme_revision: w.programme().approved.at(-1).revision, basis: BASIS, input });
+      expected_revision: w.state(project).revision, input });
     return { actor, lease, owner, intent,
       events: () => w.programme().planner_jobs.events.filter(item => lease.event_ids.includes(item.id)).map(item => item.type),
       apply: (value, extra) => decideProgrammePlan(owner(extra), value),
       decide: (kind, project = PROJECT, input = {}) => decideProgrammePlan(owner(), intent(kind, project, input)),
       create: (project = PROJECT, overrides = {}) => decideProgrammePlan(owner(), { id: `${runId}-create`, kind: 'create-project', project,
-        expected_revision: 0, programme_revision: 1, input: goal(project, overrides) }),
+        expected_revision: 0, input: goal(project, overrides) }),
       cancel: (id, reason) => cancelProgrammeOperation(owner(), { id, reason }),
-      stop: () => decideProgrammePlan(owner(), { id: `${runId}-stop`, kind: 'reach-stop', programme_revision: 1, stop: 'design-review', reference: 'decisions/planned-stop' }),
+      stop: () => decideProgrammePlan(owner(), { id: `${runId}-stop`, kind: 'reach-stop', stop: 'design-review', reference: 'decisions/planned-stop' }),
       finish: (reference = `decisions/${runId}`) => { completeProgrammePlan(owner(), { event_ids: lease.event_ids, reference }); finishProgrammeJob(owner()); } };
   };
-  /** Plan creates the goal, sends it and makes it ready, in one delivery. */
-  w.open = (project = PROJECT, overrides = {}, runId = `plan-open-${project}`) => {
-    const plan = w.plan(runId);
-    plan.create(project, overrides); plan.decide('send-project', project); plan.decide('resume-project', project); plan.finish();
-    return plan;
+  /** Ordinary foreground goal authoring; no legacy planner envelope or lease. */
+  w.open = async (project = PROJECT, overrides = {}) => {
+    const assignment = goal(project, overrides);
+    const target = `${PROGRAMME}/${project}`;
+    await w.goal(['new', target, '--phase', String(assignment.programme_phase), '--repo', assignment.repo, '--class', assignment.work_class,
+      ...assignment.goal.flatMap(value => ['--goal', value]), ...assignment.contract.flatMap(value => ['--contract', value]),
+      ...assignment.out_of_scope.flatMap(value => ['--out-of-scope', value])]);
+    for (const criterion of assignment.success_criteria) await w.goal(['criterion', 'add', target, '--id', criterion.id,
+      '--criterion', criterion.criterion, '--instruction', criterion.instruction[0], '--check', criterion.check, '--verify', criterion.verification]);
+    await w.goal(['send', target]);
+    return w.state(project);
   };
 
   w.build = (spec = {}) => { w.scripts.step.push(builder(w, spec)); };
@@ -300,6 +308,10 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
         gate: async () => ({ ok: true, stopped_at: null, reason: null, base: { commit: hub.head('main') },
           pr: { number: job.pr, base: 'main', head: job.branch, head_sha: hub.head(job.branch) },
           candidate: { red: [], totals: { tests: 1, fail: 0 } }, extra_gates: [] }) }) });
+    // This fixture invokes landJob, not serve's loop. Complete the same queue
+    // acknowledgement serve writes after the durable landing outcome. A crash
+    // before landJob returns retains the row for readback as in production.
+    if (outcome.landed && outcome.report?.ok && outcome.report.merged) writeJsonAtomic(mergesPath(root), dequeue(w.jobs(), job));
     return outcome;
   };
   /** `mc plan <programme> --archive` with the docs merge and area release as adapters. */

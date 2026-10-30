@@ -1,4 +1,5 @@
 /** Guarded headless plan facade. No production activation or model launch. */
+import { goalCompletion } from './goal-followup.js';
 import { applyProgrammeProjectOperation, readProgrammePlanSnapshot, readProgrammeState } from './autonomous-state.js';
 import { createProgrammeJobProject, prepareProgrammeOperation, completeProgrammeOperation, reachProgrammePlanStop, holdProgrammePlan } from './programme-jobs.js';
 import { projectRecovery, readProgrammeIncidents } from './programme-recovery.js';
@@ -31,8 +32,7 @@ export function programmePlanContext(options) {
   const lease = state.planner_jobs?.lease;
   if (!lease || lease.token !== options.token || !isDeepStrictEqual(lease.actor, options.actor)
     || lease.expires_at <= (options.now ?? Date.now())) throw new Error('active planner lease ownership required');
-  const agreement = state.approved.at(-1);
-  if (lease.programme_revision !== agreement.revision) throw new Error('programme revision changed; replan');
+  const agreement = state.metadata;
   const context = {
     schema: 'mc-programme-plan-context', version: 1, programme: agreement,
     state_revision: state.revision, job: { id: lease.job_id, event_ids: lease.event_ids,
@@ -47,13 +47,13 @@ export function programmePlanContext(options) {
       const value = goal.state;
       const review = value.review_reports?.at(-1);
       return { project: goal.project, version: 2, repo: value.contract.repo, goal: short(value.contract.goal[0]),
-        state_revision: value.revision, goal_revision: value.goal_revision, programme_revision: value.programme_revision,
-        phase: value.phase, active_run: value.active_run, ownership: value.ownership, confirmed: value.confirmed,
+        state_revision: value.revision, goal_revision: value.goal_revision,
+        phase: value.phase, active_run: value.active_run, ownership: value.ownership, ...goalCompletion(value),
         dependencies: value.plan_dependencies || [], dependency_release: value.dependency_release || null, recovery: projectRecovery(value),
         criteria: value.contract.success_criteria.map(item => ({ id: item.id, verification: item.verification,
-          status: value.evidence.builder.filter(record => record.goal_revision === value.goal_revision && record.programme_revision === value.programme_revision && record.criterion_id === item.id).at(-1)?.status || 'unknown' })),
+          status: value.evidence.builder.filter(record => record.goal_revision === value.goal_revision && record.criterion_id === item.id).at(-1)?.status || 'unknown' })),
         latest_review: review ? { id: review.id, clean: review.clean,
-          goal_revision: review.session?.assignment.goal_revision, programme_revision: review.session?.assignment.programme.revision,
+          goal_revision: review.session?.assignment.goal_revision,
           reference: `${goal.reference}#review_reports/${review.id}` } : null,
         attempts: { count: value.attempts.length, latest_reason: short(value.attempts.at(-1)?.reason), reference: `${goal.reference}#attempts` },
         handoff: value.current_handoff, landing: value.landing || null, reference: goal.reference };

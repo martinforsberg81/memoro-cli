@@ -18,28 +18,25 @@ The fixed-step contract below is **mc-plan v1**, still the default. Its `send`
 validation, appended final review, register, publish, merge and recovery rules
 are unchanged. Empty v1 steps never opt into autonomous execution.
 
-Explicit `mc-plan` **version 2** requires `execution.kind: "autonomous"`, an
-approved programme revision, a goal revision and stable criterion IDs instead
-of fixed steps. Use `mc programme` for agreement drafts/approval and
-`mc autonomous-project` for guarded goal operations, not legacy v1 edit verbs
-or raw PLAN edits. Mutations check the active role/run and expected state
-revision under lock. Approved programme revisions remain immutable and separate
-from drafts; only plan revises goals or confirms completion, and independent
-review records findings rather than implementing repairs.
+Explicit `mc-plan` **version 2** uses `execution.kind: "autonomous"`, a goal
+revision and stable criterion IDs instead of fixed steps. Programme metadata is
+descriptive context, not an approval authority. Use ordinary `mc goal` verbs
+for guarded assignment operations, not legacy v1 edit verbs or raw PLAN edits.
+Mutations check the active role/run and expected state revision under lock.
+Goal assignments retain append-only history and completion is at verified
+landing, with after-integration evidence measured as follow-ups. Independent
+review records findings rather than implementing repairs. The durable planner
+event journal remains, but headless queue consumption is unavailable and
+programme status reports that pending events await a consumer.
 
-`mc project send <v2-project> --expected-revision <n>` validates the authoritative
-contract and approved reference, then publishes an **inactive** PLAN without
-appending v1's mutating review step. It cannot start sessions. Only the
-operator's `mc programme start <programme>` activates a programme, naming an
-approved planned stop and the build and review profiles, and it refuses on an
-installation that does not support every control capability — today every
-installed mc: `mc programme capabilities` says what is built, proven and
-missing. `mc programme status|pause|resume` show and hold a programme; status
-lists the v1 projects in it as unchanged. `mc project <name>` and
-`mc status <name>` expose v2 state and revisioned evidence read-only. Invalid
-v2 and unknown versions are reported, never reinterpreted as v1/unplanned work
-or automatically archived; a v2 goal is archived only with its programme, after
-plan confirmed it. No existing project is migrated. See
+`mc goal new`, `criterion add`, `send` and `revise` author and publish v2 goal
+assignments. Sending an unblocked goal makes it ready; exact-revision
+dependencies release through the existing scanner after verified landing.
+`mc goal show|done` expose state and completion evidence. Programme status lists
+v1 projects unchanged beside goals. Invalid v2 and unknown versions are
+reported, never reinterpreted as v1/unplanned work or automatically archived;
+a goal is archived with its programme only after verified landing and any
+required follow-ups. No existing project is migrated. See
 [the v2 contract, its v1 boundaries and rollout state](../technical/mc-autonomous-programmes.md),
 [programme operations](../technical/mc-programme-operations.md)
 and [revisioned storage and ownership](../technical/mc-autonomous-state.md).

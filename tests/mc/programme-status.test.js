@@ -57,14 +57,14 @@ function fixture(t) {
     state.reviewer_model = opus;
     state.evidence.builder.push({ ...attribution({ goal_revision: state.goal_revision }), id: 'schema-proof', run_id: builder.run_id,
       criterion_id: 'schema', status: 'verified', reference: 'evidence/schema-proof.json' });
-    state.session_control = createSessionControl({ binding: { programme_id: f.programme, programme_revision: 1, project_id: f.project,
+    state.session_control = createSessionControl({ binding: { programme_id: f.programme, project_id: f.project,
       goal_revision: state.goal_revision, run_id: builder.run_id }, profile,
     observation: { sequence: 0, at_ms: 1000, awake_ms: 0, activity: { kind: 'model', id: null }, context: null, progress: null, failure: null } });
   });
   f.reviewed = ({ clean }) => f.patch(state => {
     state.phase = 'plan_pending'; state.active_run = null;
     state.publication = { run_id: builder.run_id, phase: 'handoff_committed', head: sha, pr: 42, branch: 'test-project',
-      goal_revision: state.goal_revision, programme_revision: 1, gate_run: 'gate-run-1' };
+      goal_revision: state.goal_revision, gate_run: 'gate-run-1' };
     const findings = clean ? [] : ['Pause can lose a queued merge.'];
     state.review_reports = [{ id: 'review-run-1', clean, session: { assignment: state.contract, head: sha, model: opus, branch: 'test-project', pr: 42 } }];
     state.evidence.reviews.push({ ...attribution({ goal_revision: state.goal_revision }), id: 'review-run-1', run_id: 'review-run-1',
@@ -80,13 +80,12 @@ test('a programme is inactive until an explicit start; status, reconciliation an
   const before = f.raw();
   assert.equal(await f.cli(['status', f.programme]), 0, f.err());
   assert.match(f.out(), /autonomous · inactive/u);
-  assert.match(f.out(), /started {5}no — nothing runs until mc programme start/u);
-  assert.match(f.out(), /next {8}none — not started; mc programme start/u);
+  assert.match(f.out(), /started {5}planner unavailable — sent goals continue/u);
   assert.match(f.out(), /not supported here — autonomous execution is not activated in this installation/u);
   assert.equal(await f.cli(['status', f.programme, '--json']), 0);
   const status = JSON.parse(f.out());
   assert.equal(status.mode, 'inactive'); assert.equal(status.activation, null); assert.equal(status.execution.supported, false);
-  assert.deepEqual(status.planned_stop.agreed, ['design-review']);
+  assert.deepEqual(status.planned_stop.agreed, []);
   // The installation reports no control capability: start refuses and writes nothing.
   assert.equal(await f.start({}), 1);
   assert.match(f.err(), /not activated in this installation — missing programme-jobs/u);
@@ -97,12 +96,12 @@ test('a programme is inactive until an explicit start; status, reconciliation an
   assert.equal(JSON.parse(before).planner_jobs, undefined);
 });
 
-test('start requires an approved revision, a planned stop, valid profiles, supported capabilities and the operator', async t => {
+test('start requires metadata, an explicit stop, valid profiles, supported capabilities and the operator', async t => {
   const f = fixture(t);
   const before = f.raw();
   const partial = { supported: CONTROL_CAPABILITIES.filter(name => name !== 'interrupt'), reason: 'codex control is unverified' };
   assert.equal(await f.start({ capabilities: partial }), 1); assert.match(f.err(), /codex control is unverified — missing interrupt/u);
-  assert.equal(await f.start(undefined, startInput, 'invented-stop'), 1); assert.match(f.err(), /approved planned stops/u);
+  assert.equal(await f.start(undefined, startInput, '../invalid-stop'), 1); assert.match(f.err(), /stable stop ID/u);
   assert.equal(await f.start(undefined, { ...startInput, build: { class: 'fast', profile: { ...profile, closing_ms: 1 } } }), 1);
   assert.match(f.err(), /build\.profile/u);
   const narrow = { ...DEFAULT_CATALOG, fast: [opus] };
@@ -124,16 +123,16 @@ test('start requires an approved revision, a planned stop, valid profiles, suppo
 
   assert.equal(await f.start(), 0, f.err());
   const reply = JSON.parse(f.out());
-  assert.equal(reply.mode, 'active'); assert.equal(reply.next_action, 'plan session for 1 pending event');
+  assert.equal(reply.mode, 'active'); assert.match(reply.next_action, /^planner unavailable — 1 pending event awaits headless queue consumption$/u);
   const journal = f.read().planner_jobs;
-  assert.equal(journal.activation.stop, 'design-review'); assert.equal(journal.activation.programme_revision, 1);
+  assert.equal(journal.activation.stop, 'design-review'); assert.equal('programme_revision' in journal.activation, false);
   assert.deepEqual(journal.activation.profiles.review.model, opus);
   assert.equal(journal.events[0].type, 'activation'); assert.deepEqual(journal.pending.event_ids, [journal.activation.id]);
   assert.equal(f.read().execution_enabled, false, 'activation is not production enablement');
   assert.equal(await f.start(), 1); assert.match(f.err(), /already active; start applies once/u);
   assert.equal(await f.cli(['status', f.programme]), 0);
-  assert.match(f.out(), /started {5}2026-10-29T12:00:00\.000Z by Martin at revision 1 · build fast · review claude:opus/u);
-  assert.match(f.out(), /stop {8}runs to design-review — Stop before activating autonomous execution\./u);
+  assert.match(f.out(), /started {5}2026-10-29T12:00:00\.000Z by Martin · build fast · review claude:opus/u);
+  assert.match(f.out(), /stop {8}runs to design-review — design-review/u);
 });
 
 test('status shows the active goal, builder criteria, review findings, actual models, session, gate and publication', async t => {
@@ -163,12 +162,24 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.equal(goal.evidence.quality, 'review findings for plan');
   assert.deepEqual(goal.review.findings, ['Pause can lose a queued merge.']); assert.equal(goal.review.current, true);
   assert.equal(goal.models.reviewer_actual, 'claude:opus');
-  assert.equal(goal.next_action, 'plan decides the next step for this goal');
+  assert.equal(goal.next_action, 'planner unavailable — headless queue consumption is not implemented');
   assert.equal(status.plan.owner, 'plan'); assert.equal(status.plan.pending_events, 1);
   text = renderProgrammeStatus(status);
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);
   assert.match(text, /publish {4}handoff_committed · head bbbbbbb · #42/u);
-  assert.match(text, /plan {8}owns goals and confirmation · no session · 1 pending event/u);
+  assert.match(text, /plan {8}owns goals and follow-ups · no session · 1 pending event/u);
+});
+
+test('a pending goal names its merge route or dependency before the unavailable planner', t => {
+  const f = fixture(t);
+  f.release(); f.building(); f.reviewed({ clean: true });
+  const next = () => programmeStatus(f.root, f.programme, { capabilities: supported }).goals[0].next_action;
+  assert.equal(next(), 'submit the clean review for merge');
+  f.patch(state => {
+    state.review_reports = []; state.plan_dependencies = [{ project: 'other-goal', goal_revision: 1 }];
+    state.dependency_release = { goal_revision: state.goal_revision, status: 'waiting', operation: 'goal-send-1' };
+  });
+  assert.equal(next(), 'wait for other-goal to land');
 });
 
 test('a revised goal ignores older evidence and a claimed planner is visible as the continuation', async t => {
@@ -188,13 +199,13 @@ test('a revised goal ignores older evidence and a claimed planner is visible as 
   assert.equal(goal.evidence.gate, 'none recorded');
   claimProgrammeJob(f.options({ actor: { run_id: 'job-plan-1', role: 'plan' }, pid: process.pid, now: NOW }));
   const status = programmeStatus(f.root, f.programme, { capabilities: supported });
-  assert.equal(status.next_action, 'plan session job-plan-1 running');
+  assert.equal(status.next_action, 'planner unavailable — lease job-plan-1 requires recovery');
   assert.match(status.in_flight[0], /^plan job-plan-1 \(lease until 2026-10-29T12:05:00\.000Z\)$/u);
   goal = status.goals[0];
-  assert.equal(goal.programme_revision, 1); assert.equal(goal.aligned, true);
+  assert.equal(goal.programme_phase, 1); assert.equal(goal.work_class, 'fast');
 });
 
-test('pause stops new starts and merge submissions, keeps started work and resumes only deliberately', async t => {
+test('pause stops only headless planner claims, keeps sent work and resumes only deliberately', async t => {
   const f = fixture(t);
   assert.equal(await f.cli(['pause', f.programme]), 1); assert.match(f.err(), /never started; nothing to pause/u);
   assert.equal(await f.start(), 0, f.err());
@@ -211,25 +222,15 @@ test('pause stops new starts and merge submissions, keeps started work and resum
   const revision = f.read().revision;
   assert.equal(await f.cli(['pause', f.programme]), 0); assert.equal(f.read().revision, revision, 'a repeated pause is a read');
 
-  // New planner claims, builds and reviews are refused while paused.
+  // Only new planner claims are disabled; a sent goal remains dispatchable.
   assert.equal(claimProgrammeJob(f.options({ actor: { run_id: 'job-plan-2', role: 'plan' }, pid: process.pid, now: NOW })).planner_jobs.lease, null);
   f.patch(state => { state.active_run = null; state.phase = 'ready'; delete state.session_control; });
   const record = { project: f.project, programme: f.programme, repo: 'memoro-cli', plan: readAutonomousState(f.root, f.programme, f.project).contract };
-  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).reason, 'programme-held');
-  assert.throws(() => startAutonomousBuild(f.root, f.programme, f.project, { actor: { run_id: 'build-2', role: 'step' },
-    revision: readAutonomousState(f.root, f.programme, f.project).revision }), /paused, waiting or stopped/u);
-  // A clean review finished during the pause is held, not refused: its route survives to resume.
-  f.reviewed({ clean: true });
-  const events = readAutonomousState(f.root, f.programme, f.project).plan_events;
-  const routed = await routeAutonomousReview({ root: f.root, programme: f.programme, project: f.project, repoPath: f.root });
-  assert.deepEqual(routed, { queued: false, reason: 'programme is paused; the clean review is submitted on resume' });
-  assert.deepEqual(readAutonomousState(f.root, f.programme, f.project).plan_events, events);
-  assert.equal(programmeStatus(f.root, f.programme, { capabilities: supported }).goals[0].next_action, 'submit the clean review for merge');
-
+  assert.equal(autonomousChoice({ root: f.root, record, capability: { review: true } }).kind, 'step');
   assert.equal(await f.cli(['status', f.programme]), 0);
   assert.match(f.out(), /autonomous · paused/u);
   assert.match(f.out(), /paused {6}2026-10-29T12:00:00\.000Z by Martin \(was active\)/u);
-  assert.match(f.out(), /next {7}submit the clean review for merge \(held while paused\)/u);
+  assert.match(f.out(), /next {7}start a build session/u);
 
   // Resume rechecks the revision and this installation's support.
   assert.equal(await f.cli(['resume', f.programme]), 2);
@@ -268,7 +269,7 @@ test('resume restores a wait and an exception rather than dispatching past them;
   assert.equal(await f.cli(['pause', f.programme]), 1); assert.match(f.err(), /rests at planned stop design-review/u);
   const status = programmeStatus(f.root, f.programme, { capabilities: supported });
   assert.equal(status.planned_stop.reached, 'design-review');
-  assert.equal(status.next_action, 'none — planned stop design-review reached; going further needs a new agreement');
+  assert.equal(status.next_action, 'none — planned stop design-review reached; new headless planning is stopped');
 });
 
 test('unknown and damaged state stays unknown, and v1 projects in the programme are listed unchanged', async t => {
@@ -327,9 +328,9 @@ test('the page draws AUTONOMY only for programmes with autonomous state and mc s
 
   const state = readAutonomousState(f.root, f.programme, f.project);
   const text = renderProject({ name: f.project, repo: 'memoro-cli', programme: f.programme, path: '/p/PLAN.json', plan: state.contract,
-    workarea: null, runs: [], prs: [], autonomous: { revision: state.revision, phase: state.phase, confirmed: false, ownership: state.ownership,
+    workarea: null, runs: [], prs: [], autonomous: { revision: state.revision, phase: state.phase, done: false, ownership: state.ownership,
       evidence: state.evidence, programme: { mode: 'paused', execution_supported: false, next_action: 'build session build-1 running' } } });
   assert.match(text, /execution disabled — this installation does not run autonomous work/u);
   assert.match(text, /goal revision 1 · programme paused/u);
-  assert.match(text, /next build session build-1 running \(held while paused\) · mc programme status test-programme/u);
+  assert.match(text, /next build session build-1 running · mc programme status test-programme/u);
 });

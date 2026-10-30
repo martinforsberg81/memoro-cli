@@ -34,7 +34,7 @@ once the outbox is present; pre-outbox v2 reservation behavior is preserved.
 
 `reconcileProgrammeJobs` scans durable project review/merge events and incomplete
 attempts. Dependencies can also be supplied as immutable trigger records.
-[Programme recovery](mc-programme-recovery.md) automatically observes confirmed
+[Programme recovery](mc-programme-recovery.md) automatically observes verified landed
 dependencies, selected releases and shared-main failures. Active
 programmes without a next action receive an idle trigger, deduplicated for the
 same project-state snapshot rather than spinning up planners on unchanged work.
@@ -44,16 +44,19 @@ failed scans preserve both the programme journal and the damaged source.
 The optional, injected runner capability `autonomous.programmeJobs` enables this
 scan during `queue()` and returns pending programme IDs. It does not launch them;
 without the capability the v1 queue and its return shape remain unchanged.
-The additional injected `programmePlan` capability connects those IDs to the
-[guarded headless launcher](mc-programme-plan.md); neither capability has a
-production activation command.
+The former `programmePlan` launcher no longer consumes those IDs. This
+installation reports the planner unavailable; the pending events and journal
+remain durable for a future consumer. The public planner envelope commands are
+removed, and no capability launches a headless planner here.
 
 ## Effects, not exactly-once processes
 
 A durable operation ID identifies a decision across planner sessions. Its intent
-binds the project, expected target revision, approved programme revision and
-complete input. Intent persistence precedes the effect. Reusing an ID for a
-different decision is refused. A stale agreement cannot authorize a new effect.
+binds the project, expected target state revision and complete input (including
+the goal revision for a revised assignment). Intent persistence precedes the
+effect. Reusing an ID for a different decision is refused. A stale target state
+revision cannot authorize a new effect; unrelated goal revisions and programme
+metadata changes are not evidence authority.
 
 The implemented concrete effect is **create-project** with expected target
 revision zero. `createProgrammeJobProject` first journals its intent, then uses
@@ -67,8 +70,8 @@ A planner must reserve that project before further guarded goal operations.
 On repeated delivery, the matching receipt reconciles a committed creation and
 repairs a missing DRAFT projection. It never creates another project or silently
 adopts an unrelated existing one. A crash after acknowledgement returns the same
-result. Pending effects prevent job acknowledgement. Goal revision, send and
-confirmation now have their own operation receipts/readback in the
+result. Pending effects prevent job acknowledgement. Goal revision and send
+have their own operation receipts/readback in the
 [guarded planner facade](mc-programme-plan.md). The original creation seam stays
 compatible. Explicit uncommitted cancellation is journaled; committed effects
 must be reconciled. No arbitrary external effects are claimed exactly-once,
@@ -82,10 +85,10 @@ Pause preserves the queue and stops new claims/effects. Quota, network and
 resource waits require a retry instant; an external dependency may instead have
 no retry instant and stays explicitly waiting. Timed waits become eligible at
 reconciliation. Existing atomic effects can still be acknowledged while held.
-A reached stop must name an approved planned stop. Its acknowledgement is
-idempotent, subsequent events remain visible, and neither reconciliation nor a
-plain resume dispatches beyond it. Foreground agreement handling is a later
-activation responsibility. `execution_enabled` stays false throughout.
+A planner stop records a reference and reason. Its acknowledgement is
+idempotent and subsequent events remain visible. It holds new planner claims,
+not already sent goals; programme context is not an approval boundary.
+`execution_enabled` stays false throughout.
 
 ## Verification
 

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,7 +107,7 @@ describe('mc language is Martin\'s verb', () => {
       'src/mc/page-render.js', 'src/mc/commands/deploy.js',
     ]);
     const files = execFileSync('git', ['ls-files', 'src', 'canon'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
-    const naming = files.filter((file) => !allowed.has(file)
+    const naming = files.filter((file) => existsSync(join(root, file)) && !allowed.has(file)
       && /\bmc language (run|resume|promote)\b|\['language',/u.test(readFileSync(join(root, file), 'utf8')));
     assert.deepEqual(naming, []);
   });

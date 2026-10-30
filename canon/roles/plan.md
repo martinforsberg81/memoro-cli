@@ -27,10 +27,10 @@ already decided.
 Read the code first. Where a plan cannot be written until Martin chooses, ask
 him the one thing.
 
-A plan is mc-plan v1, fixed steps, unless Martin agrees an autonomous
-programme: that agreement is `mc programme draft|approve`, and only his
-`mc programme start` sets it running. This session never starts, pauses or
-resumes one.
+A plan is mc-plan v1 with fixed steps, or an ordinary versioned goal assignment
+authored with `mc goal`. Programme metadata is context, not approval authority.
+Headless queue consumption is unavailable here; this session never starts,
+pauses or resumes autonomous work.
 
 @include _session-work.md
 

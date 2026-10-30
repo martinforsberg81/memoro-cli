@@ -6,12 +6,12 @@ import { autonomousProject } from './autonomy-fixtures.js';
 export function programmeJobsFixture() {
   const fixture = stateFixture();
   fixture.setupProject();
-  releaseProgrammeRun(fixture.root, fixture.programme, planner, 5);
+  fixture.releasePlanner();
   // Keep the existing builder-independent project fixture; the effect below
   // deliberately creates a different project so counts catch duplicate goals.
   fixture.read = () => readProgrammeState(fixture.root, fixture.programme);
   fixture.options = (extra = {}) => ({ root: fixture.root, programme: fixture.programme, revision: fixture.read().revision, ...extra });
-  fixture.event = (id = 'activation-1', type = 'activation') => ({ id, type, programme_revision: 1, reference: `fixtures/${id}` });
+  fixture.event = (id = 'activation-1', type = 'activation') => ({ id, type, reference: `fixtures/${id}` });
   fixture.activate = () => setProgrammeJobMode(fixture.options(), { mode: 'active', event: fixture.event() });
   fixture.claim = (extra = {}) => {
     const state = claimProgrammeJob(fixture.options({ actor: { run_id: 'job-plan-1', role: 'plan' }, pid: process.pid, ...extra }));
@@ -19,7 +19,7 @@ export function programmeJobsFixture() {
   };
   fixture.owner = lease => (extra = {}) => fixture.options({ actor: lease.actor, token: lease.token, ...extra });
   fixture.intent = (id = 'create-goal-1') => ({ id, kind: 'create-project', project: 'next-project', expected_revision: 0,
-    programme_revision: 1, input: autonomousProject({ project_id: 'next-project' }) });
+    input: autonomousProject({ project_id: 'next-project' }) });
   return fixture;
 }
 
@@ -33,11 +33,11 @@ if (process.argv[2] === 'crash') {
   const claimed = claimProgrammeJob({ root, programme, revision: current.revision, actor, pid: process.pid });
   const token = claimed.planner_jobs.lease.token;
   const intent = { id: 'crash-create-1', kind: 'create-project', project: 'crash-project', expected_revision: 0,
-    programme_revision: 1, input: autonomousProject({ project_id: 'crash-project' }) };
+    input: autonomousProject({ project_id: 'crash-project' }) };
   if (phase === 'claim') process.exit(86);
   prepareProgrammeOperation({ root, programme, revision: read().revision, actor, token }, intent);
   if (phase === 'intent') process.exit(86);
-  createAutonomousDraft(root, programme, intent.project, intent.input, { actor, revision: read().revision, operationId: intent.id,
+  createAutonomousDraft(root, programme, intent.project, intent.input, { actor, token, revision: read().revision, operationId: intent.id,
     ...(phase === 'effect' ? { writeDraft: () => process.exit(86) } : {}) });
   if (phase === 'projection') process.exit(86);
   completeProgrammeOperation({ root, programme, revision: read().revision, actor, token }, intent, { project: intent.project, revision: 1 });

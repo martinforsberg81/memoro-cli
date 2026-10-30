@@ -1,22 +1,12 @@
-import { PROGRAMME_AUTHORITY } from '../../src/mc/programme-contract.js';
-
-export function programmeContract(overrides = {}) {
-  return {
-    schema: 'mc-programme', version: 1, id: 'test-programme', revision: 1, based_on: 0,
-    status: 'approved', approval: { by: 'Martin', at: '2026-10-28T12:00:00Z' },
-    goal: ['Deliver the agreed capability.'], specification: ['The CLI owns versioned contracts.'],
-    scope: { included: ['CLI contracts and tests.'], excluded: ['Deployment and credentials.'] },
-    success_criteria: [{ id: 'contracts', criterion: 'Contracts are explicit.', check: 'mc gate tests/mc/programme-contract.test.js', verification: 'premerge' }],
-    authority: { ...PROGRAMME_AUTHORITY },
-    planned_stops: [{ id: 'design-review', condition: 'Stop before activating autonomous execution.' }],
-    ...overrides,
-  };
+/** Shared assignment-format fixtures; no programme approval authority. */
+export function programmeMetadata(overrides = {}) {
+  return { id: 'test-programme', brief: 'docs/project/test-programme/', ...overrides };
 }
 
 export function autonomousProject(overrides = {}) {
   return {
     schema: 'mc-plan', version: 2, project_id: 'test-project', repo: 'memoro-cli',
-    execution: { kind: 'autonomous' }, programme: { id: 'test-programme', revision: 1 }, goal_revision: 1,
+    execution: { kind: 'autonomous' }, programme: { id: 'test-programme' }, goal_revision: 1, work_class: 'fast', programme_phase: 1,
     goal: ['Implement explicit contracts.'], instruction: ['Build and verify the contracts without enabling execution.'],
     contract: ['Keep v1 projects unchanged.'], out_of_scope: ['Launching autonomous sessions.'],
     success_criteria: [
@@ -28,7 +18,7 @@ export function autonomousProject(overrides = {}) {
 }
 
 export function attribution(overrides = {}) {
-  return { project_id: 'test-project', programme_id: 'test-programme', programme_revision: 1, goal_revision: 1, ...overrides };
+  return { project_id: 'test-project', programme_id: 'test-programme', goal_revision: 1, ...overrides };
 }
 
 export function autonomousEvidence(overrides = {}) {

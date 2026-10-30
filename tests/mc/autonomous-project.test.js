@@ -4,7 +4,7 @@ import {
   AUTONOMOUS_EXECUTION_ENABLED, autonomousRevisionProblems, criteriaForPhase,
   evidenceForRevision, validateAutonomousEvidence, validateAutonomousProject,
 } from '../../src/mc/autonomous-project.js';
-import { autonomousEvidence, autonomousProject, attribution, programmeContract } from './autonomy-fixtures.js';
+import { autonomousEvidence, autonomousProject, attribution, programmeMetadata } from './autonomy-fixtures.js';
 
 describe('the explicit autonomous project contract', () => {
   it('accepts a v2 goal without fixed steps, but grants no launch capability', () => {
@@ -16,7 +16,7 @@ describe('the explicit autonomous project contract', () => {
     assert.deepEqual(project, before);
   });
 
-  it('requires explicit schema/version/kind, repository and both revisions', () => {
+  it('requires explicit schema/version/kind, repository, class, phase and goal revision', () => {
     for (const patch of [
       { schema: 'other' }, { version: 1 }, { version: 3 }, { version: '2' }, { execution: null },
       { execution: {} }, { execution: { kind: 'fixed' } }, { execution: { kind: 'autonomous', enabled: true } },
@@ -42,12 +42,12 @@ describe('the explicit autonomous project contract', () => {
     assert.match(validateAutonomousProject(project).problems.join('\n'), /duplicate criterion ID/u);
   });
 
-  it('resolves only the referenced approved programme, never a draft or another revision', () => {
+  it('resolves programme identity without an approved contract or revision', () => {
     const project = autonomousProject();
-    assert.equal(validateAutonomousProject(project, { programme: programmeContract() }).ok, true);
-    const draft = programmeContract({ status: 'draft' });
-    delete draft.approval;
-    for (const programme of [null, draft, programmeContract({ revision: 2, based_on: 1 }), programmeContract({ id: 'other-programme' })]) {
+    for (const programme of [programmeMetadata(), programmeMetadata({ brief: 'docs/project/changed/' })]) {
+      assert.equal(validateAutonomousProject(project, { programme }).ok, true);
+    }
+    for (const programme of [null, programmeMetadata({ id: 'other-programme' })]) {
       assert.equal(validateAutonomousProject(project, { programme }).ok, false);
     }
   });
@@ -73,7 +73,7 @@ describe('goal revisions and evidence identity', () => {
       assert.notDeepEqual(autonomousRevisionProblems(project, { ...next, ...patch }), []);
     }
     assert.notDeepEqual(autonomousRevisionProblems(autonomousProject({ programme: { id: 'test-programme', revision: 2 } }), next), []);
-    assert.deepEqual(autonomousRevisionProblems(project, { ...next, programme: { id: 'test-programme', revision: 2 } }), []);
+    assert.notDeepEqual(autonomousRevisionProblems(project, { ...next, programme: { id: 'test-programme', revision: 2 } }), []);
   });
 
   it('matches evidence by stable ID, not text or position, and keeps attribution/history unchanged', () => {
@@ -94,17 +94,17 @@ describe('goal revisions and evidence identity', () => {
     const evidence = autonomousEvidence({ confirmation });
     const before = structuredClone(evidence);
     assert.deepEqual(evidenceForRevision(autonomousProject(), evidence).confirmation, confirmation);
-    for (const project of [autonomousProject({ goal_revision: 2 }), autonomousProject({ programme: { id: 'test-programme', revision: 2 } })]) {
+    for (const project of [autonomousProject({ goal_revision: 2 }), autonomousProject({ programme: { id: 'foreign-programme' } })]) {
       assert.deepEqual(evidenceForRevision(project, evidence), { builder: [], reviews: [], confirmation: null });
     }
     assert.deepEqual(evidence, before);
     assert.equal(evidence.builder[0].goal_revision, 1);
-    assert.equal(evidence.reviews[0].programme_revision, 1);
+    assert.equal('programme_revision' in evidence.reviews[0], false);
   });
 
   it('does not reuse another project or programme\'s evidence, or a removed criterion\'s progress', () => {
     const evidence = autonomousEvidence();
-    for (const project of [autonomousProject({ project_id: 'other-project' }), autonomousProject({ programme: { id: 'other-programme', revision: 1 } })]) {
+    for (const project of [autonomousProject({ project_id: 'other-project' }), autonomousProject({ programme: { id: 'other-programme' } })]) {
       assert.deepEqual(evidenceForRevision(project, evidence), { builder: [], reviews: [], confirmation: null });
     }
     const project = autonomousProject();

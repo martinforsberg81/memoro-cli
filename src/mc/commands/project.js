@@ -38,8 +38,6 @@ import { runDocsMerge } from '../docs-merge.js';
 import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan, validateProject } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, legacyMutationProblem, readDraftOrPlan, sendProblems, STEP_MODELS, STEP_MODEL_WORDS, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
-import { readAutonomousState } from '../autonomous-state.js';
-import { autonomousCommandContext, run as autonomousProject } from './autonomous-project.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -47,6 +45,8 @@ import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 import { runAmend } from './project-amend.js';
+import { autonomousCommandContext } from './autonomous-project.js';
+import { readAutonomousState } from '../autonomous-state.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope', '--tool'];
@@ -180,12 +180,8 @@ function sendPlan(scanned, deps) {
   const sentFile = join(found.dir, PLAN_FILE);
 
   try {
-    const held = existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'));
-    const filed = held ? null : readDraftOrPlan(found.file, { allowVersioned: true });
-    if (held || filed?.version === 2) {
-      const revision = scanned.flags['expected-revision'];
-      return autonomousProject(['send', `${found.programme}/${project}`, ...(revision === null ? [] : ['--expected-revision', revision])], deps);
-    }
+    const filed = readDraftOrPlan(found.file, { allowVersioned: true });
+    if (filed?.version === 2 || existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'))) throw new Error('v2 assignments are sent with mc goal send <programme>/<goal> --expected-revision <n>');
     if (scanned.flags['expected-revision'] !== null) { stderr.write('mc: v1 send takes no --expected-revision\n'); return 2; }
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 
@@ -263,10 +259,10 @@ async function showProject(name, flags, deps) {
 function draftLines(name, found, plan) {
   const lines = [`${name} — draft · ${plan.repo} · ${found.programme}`, `  file   ${found.file}`, ''];
   if (plan.version === 2) return [...lines, '  autonomous execution is disabled',
-    `  programme ${plan.programme.id} revision ${plan.programme.revision} · goal revision ${plan.goal_revision}`,
+    `  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision}`,
     ...plan.success_criteria.map(criterion => `  ${criterion.id}  ${criterion.criterion} (${criterion.verification})`),
     ...validateProject(plan).problems.map(problem => `  ${problem}`),
-    `send: mc project send ${name} --expected-revision <state-revision> (inactive publication)`];
+    `send: mc goal send ${found.programme}/${name}`];
   const goal = Array.isArray(plan.goal) ? plan.goal[0] : undefined;
   if (goal) lines.push(goal, '');
 
@@ -1200,7 +1196,6 @@ export function usage() {
     '        mc project step edit <project> <n> [--title <text>] [--model fast|large] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        a step names a work class; mc picks the model when the step starts (ruling 59)\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
-    '        mc project send <v2-project> --expected-revision <n>   publish the guarded v2 contract, inactive and without a legacy review step\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
