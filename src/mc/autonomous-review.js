@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree } from './session-gate-evidence.js';
 import { sessionGit, sessionGitDir, reconcileSessionGate } from './session-recovery.js';
 import { readAutonomousState, startAutonomousReview, recordAutonomousReview } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { PLAN_FILE } from './plan-source.js';
 import { builderModels, independentModel } from './autonomous-models.js';
 import { reviewDigest, reviewInputProblems, cleanReviewInput, unknownReviewInput } from './autonomous-review-report.js';

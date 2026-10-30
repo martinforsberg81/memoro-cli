@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { autonomousPaths, autonomousOperationDigest, createAutonomousDraft, readProgrammeState, updateProgrammeRegister, AUTONOMOUS_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { PROGRAMS_HOME } from './paths.js';
 import { PLAN_FILE } from './plan-source.js';

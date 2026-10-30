@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { readProgrammeState } from './autonomous-state.js';
 import { claimProgrammeJob, renewProgrammeJob, finishProgrammeJob, yieldProgrammeJob } from './programme-jobs.js';
 import { programmePlanContext } from './programme-plan.js';

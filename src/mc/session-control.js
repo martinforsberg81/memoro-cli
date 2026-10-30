@@ -1,7 +1,7 @@
 /** Pure, inactive v2 policy. Only the trusted runner supplies clocks, measured
  * checkpoints and a profile. Model callbacks cannot reset or choose a budget. */
 import { isDeepStrictEqual } from 'node:util';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 
 const modes = ['model', 'lane', 'tool', 'gate'];
 const bindingKeys = ['programme_id', 'programme_revision', 'project_id', 'goal_revision', 'run_id'];

@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readProgrammeState, readAutonomousState, currentAutonomousEvidence, PUBLICATION_PHASES, AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE } from './autonomous-state.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { installationCapabilities, missingCapabilities } from './programme-control.js';
 import { mainIncidentHold } from './programme-recovery.js';
 import { reviewRoutePending } from './autonomous-outcomes.js';

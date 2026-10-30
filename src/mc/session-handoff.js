@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateAutonomousProject } from './autonomous-project.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { realLock } from './register.js';
 import { captureWorktree, findPublicationReceipt, sameContent } from './session-gate-evidence.js';
 

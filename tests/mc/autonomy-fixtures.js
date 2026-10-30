@@ -1,4 +1,8 @@
-import { PROGRAMME_AUTHORITY } from '../../src/mc/programme-contract.js';
+// Historical pre-ruling-60 fixture, retained until the legacy scenarios move.
+const PROGRAMME_AUTHORITY = Object.freeze({
+  programme_revision: 'foreground-plan', goal_revision: 'plan', confirmation: 'plan',
+  implementation: 'step', review: 'report-only',
+});
 
 export function programmeContract(overrides = {}) {
   return {

@@ -1,11 +1,11 @@
 /**
  * The opt-in v2 goal contract and revision-attributed observations. No launch
- * path: builder progress, independent review and plan confirmation are separate
+ * path: builder progress and independent review are separate
  * facts. Shape validation is not gate evidence or authorization to merge.
  */
 import {
-  STABLE_ID_RE, VERIFICATION_PHASES, criterionProblems, validateProgrammeContract,
-} from './programme-contract.js';
+  STABLE_ID_RE, VERIFICATION_PHASES, criterionProblems,
+} from './goal-contract.js';
 
 export const AUTONOMOUS_PLAN_VERSION = 2;
 export const AUTONOMOUS_EXECUTION_ENABLED = false;
@@ -19,11 +19,12 @@ function keys(value, allowed, at, problems) {
   for (const key of Object.keys(value)) if (!allowed.includes(key)) problems.push(`${at}.${key}: unknown key`);
 }
 
-/** Validate v2 only. A supplied programme must be the exact approved revision. */
+/** Validate assignments only: programme identity is not approval authority. */
 export function validateAutonomousProject(value, { programme } = {}) {
   const problems = [];
   if (!plain(value)) return { ok: false, problems: ['the autonomous project must be a JSON object'] };
-  keys(value, ['schema', 'version', 'project_id', 'repo', 'execution', 'programme', 'goal_revision', 'goal', 'instruction', 'contract', 'out_of_scope', 'success_criteria', 'documents'], 'project', problems);
+  if (plain(value.programme) && 'revision' in value.programme) problems.push('unsupported pre-ruling-60 goal format; preserve existing files; automatic migration is not supported');
+  keys(value, ['schema', 'version', 'project_id', 'repo', 'execution', 'programme', 'goal_revision', 'work_class', 'programme_phase', 'goal', 'instruction', 'contract', 'out_of_scope', 'success_criteria', 'documents'], 'project', problems);
   if (value.schema !== 'mc-plan') problems.push('schema: must be "mc-plan"');
   if (value.version !== AUTONOMOUS_PLAN_VERSION) problems.push('version: must be 2');
   if (!id(value.project_id)) problems.push('project_id: a stable project name');
@@ -33,12 +34,13 @@ export function validateAutonomousProject(value, { programme } = {}) {
     keys(value.execution, ['kind'], 'execution', problems);
     if (value.execution.kind !== 'autonomous') problems.push('execution.kind: must be autonomous');
   }
-  if (!plain(value.programme)) problems.push('programme: an ID and approved revision');
+  if (!plain(value.programme)) problems.push('programme: a programme identity');
   else {
-    keys(value.programme, ['id', 'revision'], 'programme', problems);
+    keys(value.programme, ['id'], 'programme', problems);
     if (!id(value.programme.id)) problems.push('programme.id: a stable programme name');
-    if (!positive(value.programme.revision)) problems.push('programme.revision: a positive safe integer');
   }
+  if (!['fast', 'large'].includes(value.work_class)) problems.push('work_class: fast or large');
+  if (!positive(value.programme_phase)) problems.push('programme_phase: a positive safe integer, not a runtime phase');
   if (!positive(value.goal_revision)) problems.push('goal_revision: a positive safe integer');
   for (const field of ['goal', 'instruction', 'contract', 'out_of_scope']) {
     if (!prose(value[field])) problems.push(`${field}: at least one paragraph`);
@@ -53,11 +55,7 @@ export function validateAutonomousProject(value, { programme } = {}) {
     if (!text(doc.path)) problems.push(`${at}.path: a path or URL`);
   });
   if (programme !== undefined) {
-    problems.push(...validateProgrammeContract(programme).problems.map((p) => `programme contract: ${p}`));
-    if (programme?.status !== 'approved') problems.push('programme: a draft grants no authority');
-    if (programme?.id !== value.programme?.id || programme?.revision !== value.programme?.revision) {
-      problems.push('programme: must match the referenced approved revision');
-    }
+    if (!plain(programme) || programme.id !== value.programme?.id) problems.push('programme: must match programme identity');
   }
   return { ok: problems.length === 0, problems };
 }
@@ -68,7 +66,6 @@ export function autonomousRevisionProblems(previous, next) {
   if (problems.length) return problems;
   for (const key of ['project_id', 'repo']) if (previous[key] !== next[key]) problems.push(`${key}: a revision cannot change project ownership`);
   if (previous.programme.id !== next.programme.id) problems.push('programme.id: a revision cannot change programme ownership');
-  if (next.programme.revision < previous.programme.revision) problems.push('programme.revision: cannot move backwards');
   if (next.goal_revision !== previous.goal_revision + 1) problems.push('goal_revision: must advance by exactly one');
   return problems;
 }
@@ -97,13 +94,13 @@ export function validateAutonomousEvidence(value) {
     for (const key of ['id', 'run_id', 'project_id', 'programme_id']) if (!id(record[key])) problems.push(`${at}.${key}: a stable ID`);
     if (seen.has(record.id)) problems.push(`${at}.id: duplicate evidence ID`);
     seen.add(record.id);
-    for (const key of ['programme_revision', 'goal_revision']) if (!positive(record[key])) problems.push(`${at}.${key}: a positive safe integer`);
+    for (const key of ['goal_revision']) if (!positive(record[key])) problems.push(`${at}.${key}: a positive safe integer`);
     return true;
   };
   if (!Array.isArray(value.builder)) problems.push('builder: an array of progress observations');
   else value.builder.forEach((record, index) => {
     const at = `builder[${index}]`;
-    if (!attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'programme_revision', 'goal_revision', 'criterion_id', 'status', 'reference'])) return;
+    if (!attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'goal_revision', 'criterion_id', 'status', 'reference'])) return;
     if (!id(record.criterion_id)) problems.push(`${at}.criterion_id: a stable criterion ID`);
     if (!['pending', 'working', 'verified', 'failed', 'unknown'].includes(record.status)) problems.push(`${at}.status: pending, working, verified, failed or unknown`);
     if (record.status === 'verified' ? !text(record.reference) : record.reference !== null && !text(record.reference)) problems.push(`${at}.reference: verified progress requires an evidence reference; otherwise a reference or null`);
@@ -111,7 +108,7 @@ export function validateAutonomousEvidence(value) {
   if (!Array.isArray(value.reviews)) problems.push('reviews: an array of independent reports');
   else value.reviews.forEach((record, index) => {
     const at = `reviews[${index}]`;
-    if (!attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'programme_revision', 'goal_revision', 'reference', 'criteria', 'findings'])) return;
+    if (!attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'goal_revision', 'reference', 'criteria', 'findings'])) return;
     if (!text(record.reference)) problems.push(`${at}.reference: an immutable report reference`);
     if (!Array.isArray(record.findings) || !record.findings.every(text)) problems.push(`${at}.findings: an array of findings, possibly empty`);
     if (!Array.isArray(record.criteria) || !record.criteria.length) problems.push(`${at}.criteria: explicit criterion observations`);
@@ -132,7 +129,7 @@ export function validateAutonomousEvidence(value) {
   if (value.confirmation !== null) {
     const at = 'confirmation';
     const record = value.confirmation;
-    if (attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'role', 'programme_revision', 'goal_revision', 'reference'])) {
+    if (attribution(record, at, ['id', 'run_id', 'project_id', 'programme_id', 'role', 'goal_revision', 'reference'])) {
       if (record.role !== 'plan') problems.push('confirmation.role: only plan confirms a goal');
       if (!text(record.reference)) problems.push('confirmation.reference: the planner decision reference');
     }
@@ -149,7 +146,7 @@ export function evidenceForRevision(project, evidence) {
   const problems = [...validateAutonomousProject(project).problems, ...validateAutonomousEvidence(evidence).problems];
   if (problems.length) throw new Error(problems.join('; '));
   const current = (record) => record.project_id === project.project_id && record.programme_id === project.programme.id
-    && record.goal_revision === project.goal_revision && record.programme_revision === project.programme.revision;
+    && record.goal_revision === project.goal_revision;
   const ids = new Set(project.success_criteria.map((criterion) => criterion.id));
   return {
     builder: evidence.builder.filter((record) => current(record) && ids.has(record.criterion_id)),

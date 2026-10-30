@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateAutonomousProject, validateAutonomousEvidence } from './autonomous-project.js';
-import { STABLE_ID_RE } from './programme-contract.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 
 export const RECOVERY_ATTEMPT_LIMIT = 3;
 export const MAX_RECOVERY_WAIT_MS = 24 * 60 * 60 * 1000;

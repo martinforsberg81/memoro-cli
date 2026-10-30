@@ -28,7 +28,9 @@ precondition; `start` taking a build class, a control profile and a reviewer;
 goals created only by the headless plan through a `decide` envelope under a
 lease; `landed` kept apart from `confirmed`, with archive waiting for the
 latter. Martin's answers (ruling 60) change that shape. What follows is the
-model as agreed.
+model as agreed, including the autonomy-off and explicit phase-completion
+clarification accepted by Martin with "Go." on 2026-10-29 (appended to ruling
+60).
 
 ## The model
 
@@ -38,9 +40,11 @@ brief under `docs/project/<programme>/`. It holds, side by side:
 - **projects** with fixed steps: `mc project` verbs, the register, the review
   step mc appends, the legacy merge door. Nothing here changes for them.
 - **phases**, ordered, each a name and a line of purpose: *1 grunden*, *2
-  pilot*. A phase is open while any of its goals is not done; the next phase
-  opens when the previous one's goals are all done. Phases are the only
-  implicit ordering.
+  pilot*. A phase stays open until a shared planning operation explicitly
+  completes it, after all its goals have landed and all follow-ups have
+  measured evidence.
+  An empty phase never advances automatically. Phases are the only
+  programme-level ordering.
 - **goals** inside phases. A goal is the unit of autonomous work: one
   repository, one branch, one PR, criteria with stable ids and a verification
   phase (`premerge` or `after-integration`), a work class (`fast` or `large`,
@@ -66,6 +70,7 @@ programme  mc                       brief in docs/project/mc/, autonomy on|off
 
 ```
 mc programme phase add <programme> <n> "<name>"
+mc programme phase complete <programme> <n>  # explicit; all goals landed, follow-ups measured
 mc goal new <programme>/<goal> --phase <n> --repo <repo> --class fast|large \
     --goal … --contract … --out-of-scope …
 mc goal criterion add <programme>/<goal> --id <id> --criterion … --instruction … \
@@ -128,8 +133,9 @@ event the headless plan wakes on. Criteria verified after integration (a
 deploy, a measurement in the running app) do not hold the merge and do not
 make a second "confirmed" state: they are a follow-up row on the phase until
 somebody, headless or interactive, measures them and runs `mc goal done`. A
-phase closes when its goals are done and no follow-up is open. Archiving a
-programme waits for that, as it waits for a project's close-out today, and
+phase can be completed explicitly by either planning session when all its
+goals have landed and no follow-up is open; an empty phase never advances
+automatically. Archiving a programme waits for that, as it waits for a project's close-out today, and
 not for a planner's confirmation ceremony.
 
 ### The event queue
@@ -143,7 +149,8 @@ automatically:
 
 - With **autonomy off** (the default, and what every programme has today),
   the events are drawn on the page and in `mc programme status` for the
-  interactive plan session.
+  interactive plan session. Only new headless planner claims are disabled;
+  already sent goals continue to build, review and merge.
 - With **autonomy on**, a headless plan session is started per event with the
   programme's brief, its phases and goals, the event and the queue. It is a
   plan session: it reads the code, judges and uses the verbs above. It is
@@ -156,9 +163,9 @@ automatically:
 
 `autonomy on` takes an optional stop condition in prose, read by the headless
 plan; without one, the programme stops when its last phase is done. `off`
-stops new sessions and new merges; work in flight finishes to its publication
-and its events wait, exactly as pause does today. Turning autonomy on is
-Martin's act, like start was; it is refused while the installation's
+disables only new headless planner claims. Already sent goals continue to
+build, review and merge; their events wait for foreground planning or a later
+headless claim. Turning autonomy on is Martin's act, like start was; it is refused while the installation's
 capability report says any control capability is missing.
 
 ## What changes against main
