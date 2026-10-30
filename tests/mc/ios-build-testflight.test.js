@@ -257,12 +257,32 @@ describe('the question', () => {
     assert.equal(readIosBuilds(t.env)[0].outcome, 'failed', 'the fake builder did not start');
   });
 
-  it('is refused without a terminal unless --no-upload', async () => {
+  it('is refused without a terminal unless --yes or --no-upload', async () => {
     const t = await testflight({ argv: ['ios', '--testflight'], isInteractive: false });
     assert.equal(t.code, 2);
-    assert.equal(t.err, 'mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --no-upload\n');
+    assert.equal(t.err, 'mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload\n');
     assert.deepEqual(t.runFake.calls, []);
     assert.deepEqual(readIosBuilds(t.env), []);
+  });
+
+  it('--yes uploads without asking, even without a terminal', async () => {
+    const t = await testflight({ argv: ['ios', '--testflight', '--yes'], isInteractive: false });
+    assert.deepEqual(t.asked, []);
+    assert.equal(t.started[0].upload, true);
+    assert.equal(t.started[0].kind, 'testflight');
+  });
+
+  it('--yes and --no-upload together are a bad argument', async () => {
+    const t = await testflight({ argv: ['ios', '--testflight', '--yes', '--no-upload'] });
+    assert.equal(t.code, 2);
+    assert.deepEqual(t.started, []);
+    assert.deepEqual(t.runFake.calls, []);
+  });
+
+  it('--yes without --testflight is a bad argument', async () => {
+    const t = await testflight({ argv: ['ios', '--yes'] });
+    assert.equal(t.code, 2);
+    assert.deepEqual(t.started, []);
   });
 
   it('--no-upload asks nothing, even without a terminal', async () => {
