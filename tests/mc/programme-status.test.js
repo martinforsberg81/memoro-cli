@@ -5,7 +5,7 @@ import test from 'node:test';
 import { run } from '../../src/mc/commands/programme.js';
 import { CONTROL_CAPABILITIES } from '../../src/mc/programme-control.js';
 import { programmeStatus, renderProgrammeStatus, autonomySection } from '../../src/mc/programme-status.js';
-import { claimProgrammeJob, reconcileProgrammeQueue, setProgrammeJobMode } from '../../src/mc/programme-jobs.js';
+import { claimProgrammeJob, reconcileProgrammeQueue, recordProgrammeTrigger, setProgrammeJobMode } from '../../src/mc/programme-jobs.js';
 import { readAutonomousState, startAutonomousBuild } from '../../src/mc/autonomous-state.js';
 import { createSessionControl } from '../../src/mc/session-control.js';
 import { autonomousChoice } from '../../src/mc/autonomous-run.js';
@@ -161,6 +161,29 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);
   assert.match(text, /publish {4}handoff_committed · head bbbbbbb · #42/u);
   assert.match(text, /plan {8}owns goals and follow-ups · no session · 1 pending event/u);
+});
+
+test('pending events show with autonomy off: age, next actor, and phase premerge and follow-up counts', async t => {
+  const f = fixture(t);
+  assert.equal(await f.cli(['phase', 'add', f.programme, '1', 'build', '--purpose', 'Ship the first goal.']), 0, f.err());
+  recordProgrammeTrigger({ ...f.options(), now: NOW - 5_400_000 }, { id: 'landed-1', type: 'landed', reference: 'measurements/landed-1' });
+  f.release(); f.building();
+  assert.equal(await f.cli(['status', f.programme, '--json']), 0, f.err());
+  const json = JSON.parse(f.out());
+  assert.equal(json.mode, 'off');
+  assert.deepEqual(json.plan.events, [{ id: 'landed-1', type: 'landed', at: new Date(NOW - 5_400_000).toISOString(), age_ms: 5_400_000 }]);
+  assert.equal(json.plan.next_actor, 'foreground planner — autonomy off; no headless claim');
+  assert.equal(await f.cli(['status', f.programme]), 0, f.err());
+  const text = f.out();
+  assert.match(text, /^ {2}events {6}1 pending · oldest 1h — landed 1h · next actor: foreground planner — autonomy off; no headless claim$/mu);
+  assert.match(text, /^ {2}1 build — Ship the first goal\. · open · 0\/1 landed · 1 follow-up · 1 of 1 premerge reported$/mu);
+});
+
+test('with autonomy on the events row names the headless planner as the next actor', async t => {
+  const f = fixture(t);
+  assert.equal(await f.start(), 0, f.err());
+  assert.equal(await f.cli(['status', f.programme]), 0, f.err());
+  assert.match(f.out(), /^ {2}events {6}1 pending · oldest 0m — activation 0m · next actor: headless planner — queued; no consumer is installed here$/mu);
 });
 
 test('a pending goal names its merge route or dependency before the unavailable planner', t => {

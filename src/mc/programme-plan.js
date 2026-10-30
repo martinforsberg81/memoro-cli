@@ -73,6 +73,9 @@ export function programmePlanContext(options) {
   const agreement = state.metadata;
   const context = {
     schema: 'mc-programme-plan-context', version: 1, programme: agreement,
+    // The programme's shape and stop condition: a session needs them in full.
+    phases: (state.phases || []).map(item => ({ n: item.n, name: item.name, purpose: item.purpose, closed: item.closed?.reference ?? null })),
+    autonomy: { enabled: !!state.autonomy?.enabled, stop: state.autonomy?.stop ?? null },
     state_revision: state.revision, job: { id: lease.job_id, event_ids: lease.event_ids,
       events: state.planner_jobs.events.filter(item => lease.event_ids.includes(item.id)), token: lease.token },
     pending_operations: state.planner_jobs.operations.filter(item => item.status === 'pending'),

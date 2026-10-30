@@ -48,7 +48,7 @@ function jobs(state) {
   }
   const ids = value.events.map(event => event.id);
   if (new Set(ids).size !== ids.length || value.events.some(event => !stable(event.id) || !PROGRAMME_JOB_TRIGGERS.includes(event.type)
-      || typeof event.reference !== 'string' || !event.reference.trim())
+      || typeof event.reference !== 'string' || !event.reference.trim() || (event.at !== undefined && !positive(event.at)))
     || value.pending?.event_ids.some(id => !ids.includes(id))
     || new Set(value.pending?.event_ids).size !== (value.pending?.event_ids.length || 0)
     || value.lease?.event_ids.some(id => !ids.includes(id))
@@ -65,6 +65,8 @@ function transact(options, change) {
     if (!options.anyRevision) expected(state, options.revision);
     const journal = jobs(state);
     const next = change(state, journal, paths);
+    // When each trigger was first observed. Identity never depends on it.
+    for (const event of journal.events) event.at ??= instant(options);
     return next || { ...state, planner_jobs: journal };
   }, options.deps);
 }
@@ -74,7 +76,8 @@ function enqueue(state, journal, event) {
     || Object.keys(event).some(key => !['id', 'type', 'reference'].includes(key))) throw new Error('invalid programme trigger');
   const previous = journal.events.find(item => item.id === event.id);
   if (previous) {
-    if (!isDeepStrictEqual(previous, event)) throw new Error('programme event ID already used with different content');
+    const observed = { ...previous }; delete observed.at;
+    if (!isDeepStrictEqual(observed, event)) throw new Error('programme event ID already used with different content');
     return;
   }
   journal.events.push(structuredClone(event));

@@ -142,6 +142,17 @@ function legacyGoals(root, programme) {
     }).map(item => item.name).sort();
 }
 
+/** Who acts on pending events next. Autonomy off means no headless claim at all. */
+function nextActor({ lease, pending, autonomy, mode }) {
+  if (lease) return `headless planner ${lease.run_id} (leased)`;
+  if (!pending) return 'none — no events pending';
+  if (!autonomy) return 'foreground planner — autonomy off; no headless claim';
+  if (mode === 'waiting') return 'headless planner — after its wait';
+  if (mode === 'stopped') return 'foreground planner — planned stop reached';
+  if (mode === 'exception') return 'foreground planner — exception needs diagnosis';
+  return 'headless planner — queued; no consumer is installed here';
+}
+
 function programmeAction(status, journal) {
   const mode = status.mode;
   if (mode === 'off') return status.in_flight.length
@@ -173,6 +184,7 @@ export function programmeStatus(root, programme, deps = {}) {
   catch (error) { return { programme, mode: UNKNOWN, problem: error.message, execution, goals: [], legacy: [], in_flight: [], next_action: `${UNKNOWN} — programme state preserved for recovery` }; }
   const journal = state.planner_jobs || { mode: 'inactive', wait: null, stop: null, pending: null, lease: null, operations: [] };
   const metadata = state.metadata;
+  const now = deps.now ? Number(deps.now()) : Date.now();
   const dir = join(root, PROGRAMS_HOME, programme);
   const projects = readdirSync(dir, { withFileTypes: true }).filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name)
     && existsSync(join(dir, item.name, AUTONOMOUS_STATE_FILE))).map(item => item.name).sort();
@@ -186,6 +198,10 @@ export function programmeStatus(root, programme, deps = {}) {
   ];
   const pendingOperations = (journal.operations || []).filter(item => item.status === 'pending').map(item => `${item.intent.kind} ${item.intent.id}`);
   const inPhase = n => goals.filter(goal => goal.programme_phase === n);
+  // A goal whose state cannot be read makes a count unknown, never zero.
+  const counted = (members, pick) => (members.every(goal => goal.evidence) ? members.reduce((sum, goal) => sum + pick(goal.evidence), 0) : UNKNOWN);
+  const pending = (journal.pending?.event_ids || []).map(id => journal.events?.find(item => item.id === id)).filter(Boolean)
+    .map(event => ({ id: event.id, type: event.type, at: iso(event.at), age_ms: Number.isSafeInteger(event.at) ? Math.max(0, now - event.at) : null }));
   const status = {
     // `mode` is the planner's; the user's preference is `autonomy`, kept whole
     // when a stop is reached.
@@ -193,10 +209,15 @@ export function programmeStatus(root, programme, deps = {}) {
     metadata,
     autonomy: { enabled: !!state.autonomy?.enabled, stop: state.autonomy?.stop ?? null, by: state.autonomy?.by ?? null, at: state.autonomy?.at ?? null,
       reached: journal.mode === 'stopped' ? { stop: journal.stop, reference: journal.reached_stop?.reference ?? null } : null },
-    phases: (state.phases || []).map(item => ({ n: item.n, name: item.name, purpose: item.purpose, closed: item.closed?.reference ?? null,
-      goals: inPhase(item.n).length, landed: inPhase(item.n).filter(goal => goal.done).length,
-      pending_follow_ups: inPhase(item.n).flatMap(goal => goal.pending_follow_ups || []).length })),
-    plan: { owner: 'plan', active_run: state.active_run, lease, pending_events: journal.pending?.event_ids.length || 0,
+    phases: (state.phases || []).map(item => {
+      const members = inPhase(item.n);
+      return { n: item.n, name: item.name, purpose: item.purpose, closed: item.closed?.reference ?? null,
+        goals: members.length, landed: members.filter(goal => goal.done).length,
+        pending_follow_ups: members.flatMap(goal => goal.pending_follow_ups || []).length,
+        premerge_verified: counted(members, evidence => evidence.premerge_verified), premerge_total: counted(members, evidence => evidence.premerge_total) };
+    }),
+    plan: { owner: 'plan', active_run: state.active_run, lease, pending_events: journal.pending?.event_ids.length || 0, events: pending,
+      next_actor: nextActor({ lease, pending: journal.pending?.event_ids.length || 0, autonomy: !!state.autonomy?.enabled, mode: journal.mode }),
       pending_operations: pendingOperations },
     wait: journal.mode === 'waiting' ? { kind: journal.wait.kind, reason: journal.wait.reason, until: journal.wait.until === null ? null : iso(journal.wait.until) } : null,
     exception: journal.mode === 'exception' ? { code: journal.exception.code || null, reason: journal.exception.reason } : null,
@@ -235,6 +256,14 @@ const clip = (value, max) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
+/** Event age in the largest whole unit; unknown when the observation time is not recorded. */
+const age = ms => {
+  if (!Number.isSafeInteger(ms)) return UNKNOWN;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 172_800_000) return `${Math.floor(ms / 3_600_000)}h`;
+  return `${Math.floor(ms / 86_400_000)}d`;
+};
+
 export function renderCapabilities(report) {
   const out = [report.supported ? 'autonomous execution — supported by this installation'
     : `autonomous execution — not supported here: ${report.reason || 'unsupported'}`];
@@ -265,13 +294,15 @@ export function renderProgrammeStatus(status) {
   row('stop', `${autonomy.stop ? clip(autonomy.stop, 70) : 'none set'}${autonomy.reached ? ` · reached ${autonomy.reached.stop}${autonomy.reached.reference ? ` — ${clip(autonomy.reached.reference, 50)}` : ''}` : ''}`);
   const plan = status.plan;
   row('plan', `owns goals and follow-ups · ${plan.lease ? `session ${plan.lease.run_id} until ${plan.lease.expires_at}` : 'no session'} · ${plan.pending_events} pending event${plan.pending_events === 1 ? '' : 's'}${plan.pending_operations.length ? ` · unreconciled: ${plan.pending_operations.join(', ')}` : ''}`);
+  const oldest = plan.events.reduce((max, item) => (item.age_ms === null ? max : Math.max(max ?? 0, item.age_ms)), null);
+  row('events', `${plan.events.length ? `${plan.events.length} pending · oldest ${age(oldest)} — ${clip(plan.events.map(item => `${item.type} ${age(item.age_ms)}`).join(', '), 120)}` : 'none pending'} · next actor: ${plan.next_actor}`);
   if (status.wait) row('wait', `${status.wait.kind}: ${status.wait.reason}${status.wait.until ? ` · until ${status.wait.until}` : ' · external'}`);
   if (status.exception) row('exception', `${status.exception.code || UNKNOWN}: ${status.exception.reason}`);
   row('in flight', status.in_flight.length ? status.in_flight.join('; ') : 'nothing');
   row('next', status.next_action);
   if (status.phases.length) { out.push(''); out.push('PHASES'); }
   for (const item of status.phases) {
-    out.push(`  ${item.n} ${item.name} — ${clip(item.purpose, 70)} · ${item.closed ? `closed: ${clip(item.closed, 50)}` : 'open'} · ${item.landed}/${item.goals} landed · ${item.pending_follow_ups} follow-up${item.pending_follow_ups === 1 ? '' : 's'}`);
+    out.push(`  ${item.n} ${item.name} — ${clip(item.purpose, 70)} · ${item.closed ? `closed: ${clip(item.closed, 50)}` : 'open'} · ${item.landed}/${item.goals} landed · ${item.pending_follow_ups} follow-up${item.pending_follow_ups === 1 ? '' : 's'} · ${item.premerge_verified} of ${item.premerge_total} premerge reported`);
   }
   out.push('');
   out.push('GOALS');
