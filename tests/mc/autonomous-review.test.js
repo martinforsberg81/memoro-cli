@@ -162,9 +162,9 @@ test('review command/state guards deny scope, criterion status, publication, mer
   for (const [command, args] of [[publishCommand, []], [mergeCommand, ['memoro-cli', '42', '--admin']],
     [legacyProjectCommand, ['criterion', 'met', '1']], [stepCommand, ['ready']]]) assert.equal(await command(args, deps), 1);
   assert.match(output, /only examine and report/u);
-  for (const argv of [['programme', 'approve'], ['run'], ['work', 'add'], ['project', 'amend'], ['autonomous-project', 'finish']]) assert.ok(reviewCommandRefusal(argv, deps));
+  for (const argv of [['programme', 'approve'], ['run'], ['work', 'add'], ['project', 'amend'], ['goal', 'finish']]) assert.ok(reviewCommandRefusal(argv, deps));
   assert.equal(reviewCommandRefusal(['publish'], { env: {} }), null, 'legacy review is unchanged');
-  assert.equal(reviewCommandRefusal(['autonomous-project', 'report'], deps), null);
+  assert.equal(reviewCommandRefusal(['goal', 'report'], deps), null);
   const cli = fileURLToPath(new URL('../../src/mc-cli.js', import.meta.url));
   const response = spawnSync(process.execPath, [cli, 'run'], { env: { ...process.env, ...deps.env }, encoding: 'utf8', timeout: 10000 });
   assert.equal(response.status, 1); assert.match(response.stderr, /only examine and report/u);

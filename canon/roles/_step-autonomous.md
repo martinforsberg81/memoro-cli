@@ -18,7 +18,7 @@ A focused check is not evidence of the whole relevant selection. Failed,
 interrupted or unknown attempts are incomplete, never a normal green handoff.
 Do not use legacy `mc step done`, fixed-step publication or project completion.
 
-To finish, call `mc autonomous-project finish <programme>/<project>
+To finish, call `mc goal finish <programme>/<goal>
 --expected-revision <n> --input-file <json>`. The input has exactly
 `goal_revision`, `message` (commit message), `title`, `body` (PR description)
 and `result` (the bounded mc-session-result). Leave its handoff's

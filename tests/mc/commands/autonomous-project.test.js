@@ -24,13 +24,13 @@ const report = { id: 'review-proof', reference: 'reports/review-proof.json', fin
 ] };
 const sha = 'a'.repeat(40);
 
-test('real CLI routes guarded programme and v2 commands in a temporary root without launching sessions', () => {
+test('real CLI routes programme and ordinary goal commands without launching sessions', () => {
   const f = stateFixture();
   try {
     const env = { MC_WORK_ROOT: f.root, MC_HOME: f.root, MC_REPOS_HOME: join(f.root, 'repos'),
       MC_STEP: '', MC_AUTONOMOUS_RUN: foreground.run_id, MC_AUTONOMOUS_ROLE: foreground.role };
     const cli = (args, actor = foreground) => runMcCli(args, { ...env, MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: actor.role }, { cwd: f.root });
-    for (const verb of ['programme', 'autonomous-project']) {
+    for (const verb of ['programme', 'goal']) {
       const help = cli([verb, '--help']); assert.equal(help.status, 0, help.stderr); assert.match(help.stdout, /^usage/u);
     }
     releaseProgrammeRun(f.root, f.programme, foreground, 1);
@@ -38,21 +38,24 @@ test('real CLI routes guarded programme and v2 commands in a temporary root with
     assert.equal(result.status, 0, result.stderr);
     result = cli(['programme', 'show', f.programme]);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
-    result = cli(['autonomous-project', 'create', `${f.programme}/${f.project}`, '--expected-revision', '3', '--input-file', f.file(autonomousProject())]);
+    result = cli(['goal', 'new', `${f.programme}/${f.project}`, '--phase', '1', '--repo', 'memoro-cli', '--class', 'fast', '--goal', 'Implement explicit contracts.', '--contract', 'Preserve v1.', '--out-of-scope', 'Live activation.']);
     assert.equal(result.status, 0, result.stderr);
-    result = cli(['autonomous-project', 'revise', `${f.programme}/${f.project}`, '--expected-revision', '1', '--input-file', f.file(autonomousProject({ goal_revision: 2 }))]);
+    result = cli(['goal', 'criterion', 'add', `${f.programme}/${f.project}`, '--id', 'schema', '--criterion', 'The schema validates.', '--instruction', 'Validate the opt-in contract.', '--check', 'mc gate tests/mc/goal-contract.test.js', '--verify', 'premerge', '--expected-revision', '1']);
     assert.equal(result.status, 0, result.stderr);
     result = cli(['project', f.project, '--json', '--offline']);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).goal_revision, 2);
-    result = cli(['project', 'send', f.project, '--expected-revision', '2']);
+    result = cli(['goal', 'send', `${f.programme}/${f.project}`, '--expected-revision', '2']);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
-    assert.deepEqual(f.json(join(f.paths.projectDir, 'PLAN.json')), autonomousProject({ goal_revision: 2 }));
-    assert.equal('steps' in f.json(join(f.paths.projectDir, 'PLAN.json')), false);
+    const sentGoal = f.json(join(f.paths.projectDir, 'PLAN.json'));
+    assert.equal(sentGoal.goal_revision, 2); assert.deepEqual(sentGoal.goal, ['Implement explicit contracts.']);
+    assert.deepEqual(sentGoal.success_criteria.map(item => item.id), ['schema']);
+    assert.equal('steps' in sentGoal, false);
     const repo = join(env.MC_REPOS_HOME, 'memoro-cli'); mkdirSync(join(repo, '.git'), { recursive: true });
     const before = readFileSync(f.paths.project, 'utf8');
     result = cli(['status', f.project, '--json', '--offline']);
     assert.equal(result.status, 0, result.stderr);
     const status = JSON.parse(result.stdout); assert.equal(status.machine.runnable, false);
+    assert.ok(status.autonomous, JSON.stringify(status));
     assert.equal(status.autonomous.phase, 'plan_pending'); assert.deepEqual(status.problems, []);
     result = cli(['project', f.project, '--offline']);
     assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /execution disabled/u); assert.doesNotMatch(result.stdout, /STEPS/u);
@@ -65,46 +68,13 @@ test('real CLI routes guarded programme and v2 commands in a temporary root with
   } finally { f.cleanup(); }
 });
 
-test('v2 send checks state, approved contract, ownership and expected revision under lock', async () => {
+test('the legacy project route refuses v2 send; assignments use mc goal send', async () => {
   const f = stateFixture();
   try {
     f.setupProject(); const sent = join(f.paths.projectDir, 'PLAN.json');
-    const args = ['send', f.project, '--expected-revision', '1'];
-    const deps = { ...f.deps, home: join(f.root, 'programs') };
-    for (const actor of [builder, reviewer, foreground, { ...planner, run_id: 'stale-plan' }]) {
-      assert.equal(await projectCommand(args, { ...deps, actor }), 1); assert.equal(existsSync(sent), false);
-    }
-    assert.equal(await projectCommand(['send', f.project], deps), 2);
-    assert.equal(await projectCommand(['send', f.project, '--expected-revision', '0'], deps), 1);
-    const agreement = readFileSync(f.paths.programme, 'utf8');
-    const state = f.json(f.paths.programme); state.metadata.id = 'foreign-programme'; writeFileSync(f.paths.programme, JSON.stringify(state));
-    assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
-    writeFileSync(f.paths.programme, agreement);
-    const before = readFileSync(f.paths.project, 'utf8');
-    const staleInsideLock = (_root, fn) => { const changed = f.json(f.paths.project); changed.revision++; writeFileSync(f.paths.project, JSON.stringify(changed)); return fn(); };
-    assert.equal(await projectCommand(args, { ...deps, lock: staleInsideLock }), 1); assert.equal(existsSync(sent), false);
-    writeFileSync(f.paths.project, before);
-    assert.equal(await projectCommand(args, { ...deps, writePlan: () => { throw new Error('atomic publication failed'); } }), 1);
+    assert.equal(await projectCommand(['send', f.project, '--expected-revision', '1'], { ...f.deps, home: join(f.root, 'programs') }), 1);
     assert.equal(existsSync(sent), false);
-    const sentState = readFileSync(f.paths.project, 'utf8');
-    assert.equal(JSON.parse(sentState).plan_sent, true);
-    writeFileSync(f.paths.project, before);
-    const contract = f.json(f.paths.project); contract.contract.execution = {}; writeFileSync(f.paths.project, JSON.stringify(contract));
-    assert.equal(await projectCommand(args, deps), 1); assert.equal(existsSync(sent), false);
-    writeFileSync(f.paths.project, before);
-    // A damaged projection is never adopted; publication uses the locked state contract.
-    writeFileSync(f.paths.draft, '{');
-    for (const value of [null, autonomousProject({ version: 99 }), autonomousProject({ goal_revision: 2 })]) {
-      writeFileSync(sent, JSON.stringify(value));
-      assert.equal(await invoke(f, 'send', 1), 1);
-      assert.deepEqual(f.json(sent), value, 'a different or unsupported PLAN is never overwritten');
-      rmSync(sent);
-    }
-    assert.equal(await projectCommand(args, deps), 0, f.err.join(''));
-    assert.deepEqual(f.json(sent), autonomousProject()); assert.deepEqual(withReviewStep(f.json(sent)), autonomousProject());
-    const published = readFileSync(f.paths.project, 'utf8');
-    assert.equal(await run(['send', `${f.programme}/${f.project}`, '--expected-revision', '2'], f.deps), 0, 'same publication is idempotent');
-    assert.equal(readFileSync(f.paths.project, 'utf8'), published, 'replaying send does not reserve a run or duplicate history');
+    assert.match(f.err.join(''), /mc goal send/u);
   } finally { f.cleanup(); }
 });
 

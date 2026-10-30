@@ -12,7 +12,7 @@ or absent evidence is never a clean result. Never invent a successful check.
 
 Submit exactly {criteria: [{criterion_id, status, evidence: [text],
 uncertainty: [text]}], defects: [text], uncertainty: [text]} via
-`mc autonomous-project report <programme>/<project> --expected-revision <n>
+`mc goal report <programme>/<goal> --expected-revision <n>
 --input-file <file in $MC_SCRATCH>`. Read the current revision with show first.
 Exit after submission. The runner validates the unchanged checkout and records
 an immutable report for plan; your submission alone grants no merge authority.

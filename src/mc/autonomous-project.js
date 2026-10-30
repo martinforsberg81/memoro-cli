@@ -20,7 +20,7 @@ function keys(value, allowed, at, problems) {
 }
 
 /** Validate assignments only: programme identity is not approval authority. */
-export function validateAutonomousProject(value, { programme } = {}) {
+export function validateAutonomousProject(value, { programme, allowEmptyCriteria = false } = {}) {
   const problems = [];
   if (!plain(value)) return { ok: false, problems: ['the autonomous project must be a JSON object'] };
   if (plain(value.programme) && 'revision' in value.programme) problems.push('unsupported pre-ruling-60 goal format; preserve existing files; automatic migration is not supported');
@@ -45,7 +45,9 @@ export function validateAutonomousProject(value, { programme } = {}) {
   for (const field of ['goal', 'instruction', 'contract', 'out_of_scope']) {
     if (!prose(value[field])) problems.push(`${field}: at least one paragraph`);
   }
-  problems.push(...criterionProblems(value.success_criteria, { instruction: true }));
+  if (allowEmptyCriteria && Array.isArray(value.success_criteria) && value.success_criteria.length === 0) {
+    // A goal may be composed as a draft before its first criterion is added.
+  } else problems.push(...criterionProblems(value.success_criteria, { instruction: true }));
   if (!Array.isArray(value.documents)) problems.push('documents: an array, possibly empty');
   else value.documents.forEach((doc, index) => {
     const at = `documents[${index}]`;
@@ -66,7 +68,7 @@ export function validateAutonomousProject(value, { programme } = {}) {
 
 /** Every assignment change gets a revision; identity and repository do not. */
 export function autonomousRevisionProblems(previous, next) {
-  const problems = [...validateAutonomousProject(previous).problems.map((p) => `current.${p}`), ...validateAutonomousProject(next).problems];
+  const problems = [...validateAutonomousProject(previous, { allowEmptyCriteria: true }).problems.map((p) => `current.${p}`), ...validateAutonomousProject(next).problems];
   if (problems.length) return problems;
   for (const key of ['project_id', 'repo']) if (previous[key] !== next[key]) problems.push(`${key}: a revision cannot change project ownership`);
   if (previous.programme.id !== next.programme.id) problems.push('programme.id: a revision cannot change programme ownership');

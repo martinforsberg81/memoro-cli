@@ -38,8 +38,6 @@ import { runDocsMerge } from '../docs-merge.js';
 import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan, validateProject } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, legacyMutationProblem, readDraftOrPlan, sendProblems, STEP_MODELS, STEP_MODEL_WORDS, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
-import { readAutonomousState } from '../autonomous-state.js';
-import { autonomousCommandContext, run as autonomousProject } from './autonomous-project.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -47,6 +45,8 @@ import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 import { runAmend } from './project-amend.js';
+import { autonomousCommandContext } from './autonomous-project.js';
+import { readAutonomousState } from '../autonomous-state.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope', '--tool'];
@@ -180,12 +180,8 @@ function sendPlan(scanned, deps) {
   const sentFile = join(found.dir, PLAN_FILE);
 
   try {
-    const held = existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'));
-    const filed = held ? null : readDraftOrPlan(found.file, { allowVersioned: true });
-    if (held || filed?.version === 2) {
-      const revision = scanned.flags['expected-revision'];
-      return autonomousProject(['send', `${found.programme}/${project}`, ...(revision === null ? [] : ['--expected-revision', revision])], deps);
-    }
+    const filed = readDraftOrPlan(found.file, { allowVersioned: true });
+    if (filed?.version === 2 || existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'))) throw new Error('v2 assignments are sent with mc goal send <programme>/<goal> --expected-revision <n>');
     if (scanned.flags['expected-revision'] !== null) { stderr.write('mc: v1 send takes no --expected-revision\n'); return 2; }
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 

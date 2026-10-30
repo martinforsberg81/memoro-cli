@@ -108,7 +108,7 @@ function recordPlanningOperation(next, actor, operation, revision) {
 }
 function projectState(paths) {
   const state = checkState(read(paths.project), 'mc-autonomous-state');
-  valid(validateAutonomousProject(state.contract));
+  valid(validateAutonomousProject(state.contract, { allowEmptyCriteria: !state.plan_sent }));
   valid(validateAutonomousEvidence(state.evidence));
   if (state.contract.project_id !== paths.projectId || state.contract.programme.id !== paths.id
     || state.goal_revision !== state.contract.goal_revision
@@ -116,7 +116,7 @@ function projectState(paths) {
     || !Array.isArray(state.runs) || !Array.isArray(state.confirmations) || !Array.isArray(state.commits)
     || !state.ownership || typeof state.confirmed !== 'boolean') throw new Error('invalid autonomous state identity or history');
   state.contracts.forEach((contract, index) => {
-    valid(validateAutonomousProject(contract));
+    valid(validateAutonomousProject(contract, { allowEmptyCriteria: index === 0 }));
     if (index === 0 && contract.goal_revision !== 1) throw new Error('goal history must start at revision 1');
     if (index > 0) {
       const problems = autonomousRevisionProblems(state.contracts[index - 1], contract);
@@ -306,11 +306,30 @@ export function sendAutonomousProject(root, programme, project, { actor, revisio
     const operationActor = planningActor(agreement, actor, deps);
     plannerBoundary(root, programme, state);
     assignmentInProgramme(agreement, state.contract);
+    const after = deps.after || [];
+    if (!Array.isArray(after) || after.some(item => typeof item !== 'string' || !STABLE_ID_RE.test(item))) throw new Error('dependencies must be goal names');
+    if (new Set(after).size !== after.length) throw new Error('duplicate goal dependency');
+    if (after.includes(project)) throw new Error('a goal cannot depend on itself');
+    const walk = (candidate, visited = new Set()) => {
+      if (candidate === project) throw new Error('goal dependencies cannot form a cycle');
+      if (visited.has(candidate)) return;
+      visited.add(candidate);
+      const dependencyPaths = autonomousPaths(root, programme, candidate);
+      if (!existsSync(dependencyPaths.project)) throw new Error(`unknown goal dependency: ${candidate}`);
+      const dependency = projectState(dependencyPaths);
+      for (const item of dependency.plan_dependencies || []) walk(item.project, visited);
+    };
+    for (const candidate of after) walk(candidate);
+    const dependencies = after.map(item => ({ project: item, goal_revision: projectState(autonomousPaths(root, programme, item)).goal_revision }));
     const file = join(paths.projectDir, PLAN_FILE);
     if (existsSync(file) && !isDeepStrictEqual(read(file), state.contract)) throw new Error('a different PLAN.json already exists');
-    if (state.plan_sent && existsSync(file)) return structuredClone(state.contract);
+    if (state.plan_sent && existsSync(file)) {
+      if (!isDeepStrictEqual(state.plan_dependencies || [], dependencies)) throw new Error('sent goal dependencies are immutable; revise the goal before changing them');
+      return structuredClone(state.contract);
+    }
     const next = structuredClone(state);
     next.plan_sent = true;
+    if (dependencies.length || state.plan_dependencies) next.plan_dependencies = dependencies;
     recordPlanningOperation(next, operationActor, 'send', revision);
     const saved = projectSave(paths, state, next, deps);
     (deps.writePlan || writeJsonAtomic)(file, saved.contract);
@@ -376,7 +395,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
       (deps.writeDraft || writeJsonAtomic)(paths.draft, current.contract);
       return structuredClone(current);
     }
-    assignmentInProgramme(state, input);
+    valid(validateAutonomousProject(input, { programme: state.metadata, allowEmptyCriteria: true }));
     if (input.project_id !== project || input.programme.id !== programme || input.goal_revision !== 1) throw new Error('new draft needs matching identity and goal revision 1');
     if (existsSync(paths.project)) projectState(paths); // diagnose old format without overwriting it
     if ([PLAN_FILE, 'DRAFT.json', 'STATE.json', AUTONOMOUS_STATE_FILE].some(file => existsSync(join(paths.projectDir, file)))) throw new Error('project already exists');

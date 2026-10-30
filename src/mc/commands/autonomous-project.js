@@ -24,7 +24,7 @@ export function operationArguments(argv, verbs) {
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
   if ((deps.env || process.env).MC_AUTONOMOUS_ROLE === 'plan') {
-    const refusal = reviewCommandRefusal(['autonomous-project', ...argv], deps);
+    const refusal = reviewCommandRefusal(['goal', ...argv], deps);
     if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
   }
   let args;

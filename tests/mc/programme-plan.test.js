@@ -252,10 +252,13 @@ test('headless flavor replaces foreground authority and command guards deny lega
   assert.equal(role.name, 'plan');
   const instructions = instructionsFor('codex', role.overlay);
   assert.match(instructions, /headless autonomous flavor/u); assert.doesNotMatch(instructions, /with Martin at the terminal/u);
-  for (const argv of [['programme', 'approve'], ['project', 'amend'], ['step', 'ready'], ['publish'], ['merge'], ['plan'], ['autonomous-project', 'revise']]) {
+  for (const argv of [['programme', 'approve'], ['project', 'amend'], ['step', 'ready'], ['publish'], ['merge'], ['plan']]) {
     assert.match(reviewCommandRefusal(argv, { actor: { role: 'plan' }, env: { MC_PROGRAMME_LEASE: 'test-lease' } }), /denied/u);
   }
-  for (const argv of [['programme', 'decide'], ['programme', 'complete'], ['autonomous-project', 'show']]) assert.equal(reviewCommandRefusal(argv, { actor: { role: 'plan' } }), null);
+  for (const argv of [['goal', 'new'], ['goal', 'criterion'], ['goal', 'send'], ['goal', 'revise'], ['goal', 'show'], ['goal', 'done']]) {
+    assert.equal(reviewCommandRefusal(argv, { actor: { role: 'plan' }, env: { MC_PROGRAMME_LEASE: 'test-lease' } }), null);
+  }
+  for (const argv of [['programme', 'decide'], ['programme', 'complete'], ['goal', 'show']]) assert.equal(reviewCommandRefusal(argv, { actor: { role: 'plan' } }), null);
 });
 
 test('the real headless CLI exposes guarded decisions/completion and denies agreement edits', t => {
