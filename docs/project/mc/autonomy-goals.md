@@ -69,8 +69,8 @@ programme  mc                       brief in docs/project/mc/, autonomy on|off
 ### Verbs
 
 ```
-mc programme phase add <programme> <n> "<name>"
-mc programme phase complete <programme> <n>  # explicit; all goals landed, follow-ups measured
+mc programme phase add <programme> <n> "<name>" --purpose "<purpose>"
+mc programme phase close <programme> <n> --reference <evidence>  # explicit; all goals landed, follow-ups measured
 mc goal new <programme>/<goal> --phase <n> --repo <repo> --class fast|large \
     --goal … --contract … --out-of-scope …
 mc goal criterion add <programme>/<goal> --id <id> --criterion … --instruction … \
@@ -80,6 +80,7 @@ mc goal revise <programme>/<goal> …        # a new goal revision on the same b
 mc goal show <programme>/<goal>
 mc goal done <programme>/<goal>            # after-integration criteria measured, or none
 mc programme autonomy <programme> on|off [--stop "<condition>"]
+mc programme stop <programme> --reference <evidence>  # records a reached stop; autonomy stays as set
 mc programme status <programme>
 ```
 

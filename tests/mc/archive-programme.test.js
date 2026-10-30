@@ -130,7 +130,7 @@ describe('archiveVerdict', () => {
     const goals = [{ repo: 'memoro', project: 'g', phase: 'landing', done: false, pending_follow_ups: [] }];
     const held = archiveVerdict({ programme: 'x', plans: [v2], homes: [{}], autonomy: { goals, mode: 'active', planner: null } });
     assert.deepEqual(held.lines, ['memoro x/g is an autonomous goal without verified landing (landing) — its records stay with the programme',
-      'x is active — an autonomous programme is archived before its start or at a reached planned stop']);
+      'x is active — an autonomous programme is archived with autonomy off or at a reached stop']);
     const unreadable = archiveVerdict({ programme: 'x', plans: [v2], homes: [{}],
       autonomy: { goals: [{ ...goals[0], phase: null, problem: 'invalid JSON' }], mode: null, problem: 'invalid JSON' } });
     assert.deepEqual(unreadable.lines, ['memoro x/g is an autonomous goal whose state is unreadable (invalid JSON) — its records stay with the programme',

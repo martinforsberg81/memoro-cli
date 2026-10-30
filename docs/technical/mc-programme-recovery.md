@@ -1,9 +1,9 @@
 # Programme-owned recovery (inactive)
 
 Planner operation records and recovery rules remain durable, but their former
-public programme command envelope and headless queue launcher are removed. This
-installation has no headless queue consumer; status reports planner
-unavailability and leaves events pending. Ordinary foreground assignment
+public programme command envelope is removed. The installed runner passes no
+headless queue consumer capability; status reports planner unavailability and
+leaves events pending. Ordinary foreground assignment
 changes use `mc goal`; the scanner still observes verified dependency landings.
 
 This extends the injected programme jobs/plan seam. It does **not** enable live
@@ -25,7 +25,9 @@ measurements with criterion ID, goal revision, integrated SHA, reference and
 current measurement for every follow-up passed; it never writes a landing.
 No new permission to deploy follows from a deferred check.
 
-`diagnose-project` uses the usual project decision envelope and basis, with:
+`mc goal diagnose` records a `diagnose-project` operation, and `mc goal retry` a
+`resume-project` one, through the [planning journal](mc-programme-jobs.md), for
+either planner. The operation's input is:
 
 ```
 {action: "retry", attempt_ids: [all incomplete attempt IDs],

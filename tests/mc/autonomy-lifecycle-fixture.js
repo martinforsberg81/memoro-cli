@@ -253,9 +253,7 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
     return out.join('');
   };
   w.start = (extra = {}) => {
-    const input = join(root, 'start.json');
-    writeFileSync(input, JSON.stringify({ by: 'Martin', build: { class: 'fast', profile }, review: { model: { tool: 'claude', model: 'opus', effort: 'high' } } }));
-    return w.cli(['start', PROGRAMME, '--expected-revision', String(w.programme().revision), '--stop', 'design-review', '--input-file', input], extra);
+    return w.cli(['autonomy', PROGRAMME, 'on', '--expected-revision', String(w.programme().revision), '--stop', 'design-review', '--by', 'Martin'], extra);
   };
 
   /** Test-only simulated queue lease for later lifecycle/recovery measurements. */

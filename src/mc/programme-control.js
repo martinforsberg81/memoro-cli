@@ -1,28 +1,22 @@
-/** Operator start/pause/resume of one programme, and the installation's
- * capability report. Recording an activation is not a launch: the runner still
+/** Operator autonomy on/off for one programme, and the installation's
+ * capability report. Recording a preference is not a launch: the runner still
  * dispatches v2 only through its injected capability, and this installation
- * supports none. Headless roles cannot change the mode. */
+ * supports none. Headless roles cannot change the preference. */
 import { createHash } from 'node:crypto';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
-import { validateControlProfile } from './session-control.js';
-import { autonomousModelIdentity, independentModel } from './autonomous-models.js';
-import { STABLE_ID_RE } from './goal-contract.js';
-import { CLASSES, DEFAULT_CATALOG } from './model-config.js';
 
 export const CONTROL_CAPABILITIES = Object.freeze(['programme-jobs', 'programme-plan', 'build', 'review', 'control-signals', 'interrupt']);
 const text = value => typeof value === 'string' && value.trim().length > 0;
-const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
 // The installed runner is `runLoop`'s `createRunner({ merge, deps })`: no
 // autonomous capability, so it skips every v2 goal.
 const NOT_WIRED = 'the installed runner (runLoop, src/mc/run.js) passes no autonomous capability';
 const NO_CLOCK = 'no production awake clock that excludes machine suspend';
 const NO_PROVIDER = 'not observed with a provider (model) process';
-const NO_PLANNER = 'headless planner queue consumption is not implemented';
 
 /** What this installation has, capability by capability: what is built, what
  * proved it and what is still missing. Built and proven by fixtures is not
- * supported, so `supported` is empty and start refuses. Transport facts are
+ * supported, so `supported` is empty and autonomy on refuses. Transport facts are
  * the 2026-10-28 version/help probes (docs/technical/mc-session-observation.md);
  * no model session was launched to measure them. */
 const INSTALLATION = Object.freeze({
@@ -31,8 +25,8 @@ const INSTALLATION = Object.freeze({
   capabilities: Object.freeze([
     { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
       proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
-    { name: 'programme-plan', built: 'durable planner journal and event queue; no queue consumer',
-      proven: 'journal effects and recovery: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NO_PLANNER },
+    { name: 'programme-plan', built: 'durable planner journal, event queue and queue consumer (src/mc/programme-plan-run.js)',
+      proven: 'journal effects, recovery and scripted sessions through the consumer: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_PROVIDER}` },
     { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
       proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_CLOCK}` },
     { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',
@@ -68,91 +62,46 @@ function supportedCapabilities(deps) {
   return [...CONTROL_CAPABILITIES];
 }
 
-/** A headless plan, step or review session never starts, pauses or resumes. */
+/** Autonomy is the operator's; a headless plan, step or review never sets it. */
 export function operatorRefusal(env = process.env) {
   const role = env.MC_AUTONOMOUS_ROLE;
-  return role && role !== 'foreground-plan' ? 'programme start, pause and resume belong to the operator, not a headless session' : null;
-}
-
-/** `{ by, build: { class, profile }, review: { model } }`: the builder class
- * must keep a model after the reviewer is reserved from it. */
-export function startInputProblems(input, catalog = DEFAULT_CATALOG) {
-  const problems = [];
-  if (!plain(input)) return ['start input is { by, build, review }'];
-  for (const key of Object.keys(input)) if (!['by', 'build', 'review'].includes(key)) problems.push(`${key}: unknown key`);
-  if (!text(input.by)) problems.push('by: the person starting the programme');
-  if (!plain(input.build) || Object.keys(input.build).some(key => !['class', 'profile'].includes(key))) problems.push('build: { class, profile }');
-  else {
-    if (!CLASSES.includes(input.build.class)) problems.push(`build.class: one of ${CLASSES.join(', ')}`);
-    try { validateControlProfile(input.build.profile); } catch (error) { problems.push(`build.profile: ${error.message}`); }
-  }
-  if (!plain(input.review) || Object.keys(input.review).some(key => key !== 'model')) problems.push('review: { model }');
-  else {
-    try {
-      autonomousModelIdentity(input.review.model);
-      const pool = catalog[input.build?.class] || [];
-      if (CLASSES.includes(input.build?.class) && !pool.some(model => independentModel(input.review.model, [model]))) {
-        problems.push('review.model: no builder remains in the class after reserving the reviewer');
-      }
-    } catch (error) { problems.push(`review.model: ${error.message}`); }
-  }
-  return problems;
+  return role && role !== 'foreground-plan' ? 'programme autonomy on and off belong to the operator, not a headless session' : null;
 }
 
 const stamp = now => new Date(now).toISOString();
 const logged = (journal, entry) => { journal.control = [...(journal.control || []), entry]; };
 
-/** Inactive → active, once, with the activation trigger persisted in the same
- * write. The stop and the profiles are recorded. */
-export function startProgramme({ root, programme, revision, stop, now = Date.now(), deps = {} }, input) {
+/** The user's preference, with an optional stop condition in prose read by the
+ * planner. Each `on` states the whole preference. A first or post-stop `on`
+ * persists the activation trigger in the same write; a wait or an exception
+ * stays what it was. A repeated `on` is a read. */
+export function programmeAutonomyOn({ root, programme, revision, stop = null, by, now = Date.now(), deps = {} }) {
+  if (!text(by)) throw new Error('autonomy names who set it');
+  if (stop !== null && !text(stop)) throw new Error('--stop is a condition in prose');
   const capabilities = supportedCapabilities(deps);
-  const problems = startInputProblems(input, deps.catalog ? deps.catalog() : DEFAULT_CATALOG);
-  if (problems.length) throw new Error(problems.join('; '));
   return updateProgrammeJobs({ root, programme, revision, deps }, (state, journal, paths) => {
-    if (journal.mode !== 'inactive') throw new Error(`programme is already ${journal.mode}; ${journal.mode === 'paused' ? 'resume it' : 'start applies once'}`);
-    if (typeof stop !== 'string' || !STABLE_ID_RE.test(stop)) throw new Error('start names an explicit stable stop ID');
+    if (state.autonomy?.enabled && state.autonomy.stop === stop && journal.mode !== 'stopped') return state;
     const at = stamp(now);
-    const id = `activation-${createHash('sha256').update(JSON.stringify([programme, stop, at])).digest('hex').slice(0, 40)}`;
-    enqueueProgrammeEvent(state, journal, { id, type: 'activation',
-      reference: `${paths.programme}#planner_jobs/activation` });
-    journal.activation = { id, stop, by: input.by, at,
-      profiles: { build: structuredClone(input.build), review: structuredClone(input.review) }, capabilities };
-    journal.mode = 'active'; journal.wait = null; journal.stop = null; journal.exception = null;
-    logged(journal, { operation: 'start', by: input.by, at, state_revision: state.revision });
+    state.autonomy = { enabled: true, stop, by, at };
+    if (['inactive', 'stopped'].includes(journal.mode)) {
+      const id = `activation-${createHash('sha256').update(JSON.stringify([programme, state.revision])).digest('hex').slice(0, 40)}`;
+      enqueueProgrammeEvent(state, journal, { id, type: 'activation', reference: `${paths.programme}#planner_jobs/activation` });
+      journal.activation = { id, by, at };
+      journal.mode = 'active'; journal.wait = null; journal.stop = null; journal.reached_stop = null; journal.exception = null;
+    }
+    logged(journal, { operation: 'autonomy-on', by, at, state_revision: state.revision, capabilities });
   });
 }
 
-/** Stops only new headless planner claims. Sent goals and work already
- * started finishes and is recorded; nothing is signalled or reverted. A
- * repeated pause is a read, not another revision. */
-export function pauseProgramme({ root, programme, revision = null, by, now = Date.now(), deps = {} }) {
-  if (!text(by)) throw new Error('pause names who paused it');
+/** Stops only new headless planner claims. Sent goals, reviews, admitted merges
+ * and a held lease finish; nothing is signalled or reverted, and the queue
+ * keeps filling. A repeated off is a read. */
+export function programmeAutonomyOff({ root, programme, revision = null, by, now = Date.now(), deps = {} }) {
+  if (!text(by)) throw new Error('autonomy names who set it');
   return updateProgrammeJobs({ root, programme, revision, anyRevision: revision === null, deps }, (state, journal) => {
-    if (journal.mode === 'paused') return state;
-    if (journal.mode === 'inactive') throw new Error('programme was never started; nothing to pause');
-    if (journal.mode === 'stopped') throw new Error(`programme already rests at planned stop ${journal.stop}`);
+    if (!state.autonomy?.enabled) return state;
     const at = stamp(now);
-    journal.pause = { by, at, previous: { mode: journal.mode, wait: journal.wait } };
-    journal.mode = 'paused'; journal.wait = null;
-    logged(journal, { operation: 'pause', by, at, state_revision: state.revision });
-  });
-}
-
-/** Paused → what it was: an unexpired wait keeps waiting, an exception stays an
- * exception for plan. Rechecks support and the activation's stop. */
-export function resumeProgramme({ root, programme, revision, by, now = Date.now(), deps = {} }) {
-  if (!text(by)) throw new Error('resume names who resumed it');
-  const capabilities = supportedCapabilities(deps);
-  return updateProgrammeJobs({ root, programme, revision, deps }, (state, journal) => {
-    if (journal.mode !== 'paused') throw new Error(`programme is ${journal.mode}; resume applies to a paused programme`);
-    const activation = journal.activation;
-    if (!activation) throw new Error('programme was never started here; start it with mc programme start');
-    const previous = journal.pause?.previous || { mode: 'active', wait: null };
-    // A due wait becomes active at reconciliation, with its retry event.
-    if (previous.mode === 'waiting' && previous.wait) { journal.mode = 'waiting'; journal.wait = previous.wait; }
-    else if (previous.mode === 'exception' && journal.exception) journal.mode = 'exception';
-    else { journal.mode = 'active'; journal.wait = null; }
-    journal.pause = null;
-    logged(journal, { operation: 'resume', by, at: stamp(now), state_revision: state.revision, capabilities });
+    state.autonomy = { ...state.autonomy, enabled: false, by, at };
+    logged(journal, { operation: 'autonomy-off', by, at, state_revision: state.revision });
   });
 }

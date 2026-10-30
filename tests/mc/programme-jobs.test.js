@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { programmeAutonomyOff } from '../../src/mc/programme-control.js';
 import { readFileSync, readdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  claimProgrammeJob, completeProgrammeOperation, createProgrammeJobProject, finishProgrammeJob,
+  claimProgrammeJob, completeProgrammeOperation, completeProgrammePlan, createProgrammeJobProject, finishProgrammeJob,
   MAX_PLANNER_LEASE_MS, prepareProgrammeOperation, reconcileProgrammeJobs, reconcileProgrammeQueue,
   recordProgrammeTrigger, renewProgrammeJob, setProgrammeJobMode,
 } from '../../src/mc/programme-jobs.js';
@@ -18,6 +19,10 @@ import { builder, planner } from './autonomous-state-fixture.js';
 
 function fixture(t) { const f = programmeJobsFixture(); t.after(f.cleanup); return f; }
 const scan = (f, extra = {}, dependencies = []) => reconcileProgrammeJobs(f.options(extra), { dependencies });
+const account = (f, owner, extra = {}) => {
+  completeProgrammePlan(owner(extra), { event_ids: f.read().planner_jobs.lease.event_ids, reference: 'decisions/accounted' });
+  finishProgrammeJob(owner(extra));
+};
 
 describe('durable programme trigger coalescing and planner ownership (inactive)', () => {
   it('persists activation before claim and coalesces all trigger kinds into one owner', t => {
@@ -35,7 +40,7 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
     assert.equal(f.read().revision, revision);
     assert.equal(f.read().active_run.run_id, 'job-plan-1');
     assert.throws(() => reserveProgrammeRun(f.root, f.programme, planner, revision), /active run/u);
-    finishProgrammeJob(options());
+    account(f, options);
     assert.equal(f.read().planner_jobs.pending, null);
     assert.equal(f.read().active_run, null);
     assert.equal(f.read().execution_enabled, false);
@@ -71,7 +76,7 @@ describe('durable programme trigger coalescing and planner ownership (inactive)'
     recordProgrammeTrigger(f.options(), f.event('late-review', 'review'));
     assert.equal(f.read().revision, before);
     assert.throws(() => recordProgrammeTrigger(f.options(), { ...f.event('late-review', 'review'), reference: 'different' }), /different content/u);
-    finishProgrammeJob(owner());
+    account(f, owner);
     assert.deepEqual(f.read().planner_jobs.pending.event_ids, ['late-review']);
     f.claim({ actor: { run_id: 'job-plan-2', role: 'plan' } });
     assert.deepEqual(f.read().planner_jobs.lease.event_ids, ['late-review']);
@@ -122,7 +127,7 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     assert.deepEqual(renewed.event_ids, original.event_ids);
     assert.equal(renewed.expires_at, now + 1500);
     assert.deepEqual(f.read().planner_jobs.recoveries, []);
-    finishProgrammeJob(owner({ now: now + 1100 }));
+    account(f, owner, { now: now + 1100 });
   });
 
   it('recovers a dead owner before expiry, retains events and fences its old writer', t => {
@@ -136,7 +141,7 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     assert.throws(() => finishProgrammeJob(owner()), /ownership/u);
     assert.throws(() => createAutonomousDraft(f.root, f.programme, 'stale-project', autonomousProject({ project_id: 'stale-project' }),
       { actor: owner().actor, revision: f.read().revision }), /ownership/u);
-    finishProgrammeJob(replacement());
+    account(f, replacement);
   });
 
   it('expires a live but orphaned lease, and never lets the old generation renew or write', t => {
@@ -152,9 +157,9 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     assert.throws(() => renewProgrammeJob(owner({ now: expiry })), /ownership/u);
   });
 
-  it('keeps paused, quota and external waits explicit without losing late events', t => {
+  it('keeps autonomy off, quota and external waits explicit without losing late events', t => {
     const f = fixture(t); f.activate();
-    setProgrammeJobMode(f.options(), { mode: 'paused' });
+    programmeAutonomyOff({ root: f.root, programme: f.programme, by: 'Martin' });
     f.claim(); assert.equal(f.read().active_run, null);
     recordProgrammeTrigger(f.options(), f.event('while-paused', 'failure'));
     assert.throws(() => setProgrammeJobMode(f.options(), { mode: 'waiting', wait: { kind: 'quota', reason: 'reset unknown', until: null } }), /bounded/u);
@@ -202,11 +207,11 @@ describe('planner leases, restart reconciliation and explicit waits', () => {
     const revision = f.read().revision;
     scan(f, {}, [dependency]);
     assert.equal(f.read().revision, revision);
-    const owner = f.claim(); finishProgrammeJob(owner());
+    const owner = f.claim(); account(f, owner);
     scan(f, {}, [dependency]);
     assert.equal(f.read().planner_jobs.pending.event_ids.length, 1);
     assert.equal(f.read().planner_jobs.events.at(-1).type, 'idle');
-    const idle = f.claim({ actor: { run_id: 'idle-plan', role: 'plan' } }); finishProgrammeJob(idle());
+    const idle = f.claim({ actor: { run_id: 'idle-plan', role: 'plan' } }); account(f, idle);
     const before = f.read().revision; scan(f);
     assert.equal(f.read().revision, before, 'unchanged idle scans must not spin up planners');
   });
@@ -314,11 +319,11 @@ describe('durable planner operations and exactly-once project effects', () => {
     assert.throws(() => createProgrammeJobProject(owner(), f.intent('create-goal-2')), /project effect/u);
   });
 
-  it('does not acknowledge a different effect, apply stale programme decisions or apply while paused', t => {
+  it('does not acknowledge a different effect, apply stale programme decisions or apply while waiting', t => {
     const f = fixture(t); f.activate(); const owner = f.claim(); const intent = f.intent();
     assert.throws(() => prepareProgrammeOperation(owner(), { ...intent, input: { ...intent.input, programme: { id: f.programme, revision: 2 } } }), /unsupported pre-ruling-60/u);
     prepareProgrammeOperation(owner(), intent);
-    setProgrammeJobMode(f.options(), { mode: 'paused' });
+    setProgrammeJobMode(f.options(), { mode: 'waiting', wait: { kind: 'external', reason: 'Deployment result not observed.', until: null } });
     assert.throws(() => createProgrammeJobProject(owner(), intent), /waits/u);
     assert.equal(existsSync(autonomousPaths(f.root, f.programme, intent.project).project), false);
     setProgrammeJobMode(f.options(), { mode: 'active' });
@@ -365,7 +370,7 @@ describe('durable planner operations and exactly-once project effects', () => {
       mutateAutonomousProject(f.root, f.programme, intent.project, 'release', null, { actor: owner().actor, revision: reserved.revision });
       assert.equal(readdirSync(f.paths.dir).filter(name => name === intent.project).length, 1);
       assert.equal(f.read().planner_jobs.operations.length, 1);
-      finishProgrammeJob(owner());
+      account(f, owner);
       const done = f.read().revision;
       recordProgrammeTrigger(f.options(), f.event());
       assert.equal(f.read().revision, done);

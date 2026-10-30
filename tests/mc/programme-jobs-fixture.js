@@ -1,5 +1,6 @@
 import { readProgrammeState, releaseProgrammeRun, createAutonomousDraft } from '../../src/mc/autonomous-state.js';
 import { claimProgrammeJob, setProgrammeJobMode, prepareProgrammeOperation, completeProgrammeOperation } from '../../src/mc/programme-jobs.js';
+import { planningOperationId, runPlanningOperation } from '../../src/mc/programme-plan.js';
 import { planner, stateFixture } from './autonomous-state-fixture.js';
 import { autonomousProject } from './autonomy-fixtures.js';
 
@@ -54,4 +55,23 @@ if (process.argv[2] === 'contend') {
     if (!/stale programme state revision/u.test(error.message)) throw error;
     process.stdout.write('not-claimed');
   }
+}
+
+// A foreground planner that dies inside its journal: `prepared` before any
+// effect, `committed` after the state write and before the receipt is read back.
+if (process.argv[2] === 'crash-goal') {
+  const [, , , root, programme, project, revision, where] = process.argv;
+  const options = { root, programme, now: Date.now(), anyRevision: true };
+  const intent = { id: planningOperationId('send-goal', project, Number(revision), { after: [] }), kind: 'send-goal', project, expected_revision: Number(revision), input: { after: [] } };
+  if (where === 'prepared') { prepareProgrammeOperation({ ...options, deps: { env: {} } }, intent); process.exit(86); }
+  runPlanningOperation({ ...options, deps: { env: {}, writePlan: () => process.exit(86) } }, { kind: 'send-goal', project, input: { after: [] }, revision: Number(revision) });
+}
+
+if (process.argv[2] === 'author') {
+  const [, , , root, programme, project, revision, contract] = process.argv;
+  try {
+    const { input, ...operation } = JSON.parse(contract);
+    runPlanningOperation({ root, programme, now: Date.now(), deps: { env: {} } }, { ...operation, input, project, revision: Number(revision) });
+    process.stdout.write('applied');
+  } catch (error) { process.stdout.write(`refused: ${error.message}`); }
 }

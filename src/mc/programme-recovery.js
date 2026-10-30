@@ -60,6 +60,18 @@ export function boundedRecoveryWait(wait, now) {
       || Number.isSafeInteger(wait.until) && wait.until > now && wait.until <= now + MAX_RECOVERY_WAIT_MS);
 }
 
+/** Waits are bounded per condition across runs and both planners, so a new
+ * session cannot wait forever by restating what it is waiting for. */
+export function recordRecoveryWait(journal, intent, runId) {
+  journal.wait_history = [...(journal.wait_history || []), { ...intent, run_id: runId }];
+  const attempts = journal.wait_history.filter(item => item.condition === intent.condition).length;
+  if (attempts >= RECOVERY_ATTEMPT_LIMIT) {
+    journal.mode = 'exception'; journal.exception = { code: 'wait-exhausted', condition: intent.condition, reason: intent.wait.reason, reference: intent.reference, attempts };
+  } else {
+    journal.mode = 'waiting'; journal.wait = { ...intent.wait, operation: intent.id };
+  }
+}
+
 export const programmeIncidentsPath = root => join(root, 'runner', 'programme-incidents.json');
 export function readProgrammeIncidents(root) {
   const file = programmeIncidentsPath(root);
