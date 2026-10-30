@@ -157,3 +157,4 @@ existed?
 | 2026-10-29 | mc | autonomy-contracts | delivered | Review the project against its goal | [docs/technical/mc-autonomous-programmes.md](../technical/mc-autonomous-programmes.md) | [#1157](https://github.com/martinforsberg81/memoro-cli/pull/1157) |
 | 2026-10-29 | mc | autonomy-gate-evidence | delivered | Review the project against its goal | none | [#1158](https://github.com/martinforsberg81/memoro-cli/pull/1158) |
 | 2026-10-29 | mc | autonomy-session-control | delivered | Review the project against its goal | none | [#1159](https://github.com/martinforsberg81/memoro-cli/pull/1159) |
+| 2026-10-30 | mc | autonomy-build-loop | delivered | Review the project against its goal | none | [#1160](https://github.com/martinforsberg81/memoro-cli/pull/1160) |
