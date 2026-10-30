@@ -16,7 +16,8 @@
  * `--testflight` runs the same preflights with an `Apple Distribution`
  * identity and no phone, asks App Store Connect for the next build number
  * (`listBuilds`), and asks at the terminal before anything is built whether
- * the verified IPA may be uploaded — the yes travels in the job. With
+ * the verified IPA may be uploaded — the yes travels in the job. `--yes` is
+ * that yes given on the command line, for a headless session. With
  * `--no-upload` nothing leaves the machine, so nothing is asked.
  *
  * Exit codes: 0 for an answer, a recorded seed, or an installed, built or
@@ -48,8 +49,8 @@ export function usage() {
     'usage — mc build ios                          does memoro need a new iOS binary? builds nothing\n',
     '        mc build ios --device [--sha <ref>] [--device-id <id>]\n',
     '                                              build the commit production runs, install it on the paired iPhone\n',
-    '        mc build ios --testflight [--no-upload] [--sha <ref>]\n',
-    '                                              build, verify and, after one question, upload to TestFlight\n',
+    '        mc build ios --testflight [--yes | --no-upload] [--sha <ref>]\n',
+    '                                              build, verify and, after one question (--yes answers it), upload to TestFlight\n',
     '        mc build ios --shipped <build> <sha>  record a binary built before this verb existed\n',
     '        mc build ios --follow                 watch the build that is running\n',
   ].join('');
@@ -69,7 +70,7 @@ export function parseBuildArgs(argv) {
     words.splice(at, 3);
   }
   const scanned = scanArgs(words, {
-    booleans: ['--device', '--testflight', '--no-upload', '--follow', '--json'],
+    booleans: ['--device', '--testflight', '--no-upload', '--yes', '--follow', '--json'],
     strictValues: ['--sha', '--device-id'],
   });
   if (scanned.error) return { error: scanned.error };
@@ -82,6 +83,7 @@ export function parseBuildArgs(argv) {
     device: flags.device,
     testflight: flags.testflight,
     noUpload: flags['no-upload'],
+    yes: flags.yes,
     follow: flags.follow,
     json: flags.json,
     sha: flags.sha,
@@ -106,6 +108,8 @@ export async function run(argv, deps = {}) {
   const misplaced = [
     opts.device && opts.testflight && '--device and --testflight are two builds — one at a time',
     opts.noUpload && !opts.testflight && '--no-upload goes with --testflight',
+    opts.yes && !opts.testflight && '--yes goes with --testflight',
+    opts.yes && opts.noUpload && '--yes and --no-upload contradict each other — one or the other',
     opts.deviceId && !opts.device && '--device-id goes with --device',
     opts.sha && !opts.device && !opts.testflight && '--sha goes with --device or --testflight',
   ].find(Boolean);
@@ -195,7 +199,7 @@ async function buildDevice(opts, deps) {
 
 /**
  * `mc build ios --testflight`: the terminal first (the question needs one,
- * unless `--no-upload`), the preflights, the number from App Store Connect,
+ * unless `--yes` or `--no-upload`), the preflights, the number from App Store Connect,
  * the question, the row, and the builder started and followed as
  * `--device`'s is.
  */
@@ -203,8 +207,8 @@ async function buildTestflight(opts, deps) {
   const { env, stdout, stderr } = deps;
   const alive = deps.alive || processAlive;
   const interactive = deps.interactive || realInteractive;
-  if (!opts.noUpload && !interactive(env)) {
-    stderr.write('mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --no-upload\n');
+  if (!opts.noUpload && !opts.yes && !interactive(env)) {
+    stderr.write('mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload\n');
     return 2;
   }
   const pre = await devicePreflight({
@@ -229,7 +233,9 @@ async function buildTestflight(opts, deps) {
   stdout.write(`mc: App Store Connect has up to build ${next - 1} — this one is ${next}\n`);
 
   let upload = false;
-  if (!opts.noUpload) {
+  if (opts.yes) {
+    upload = true;
+  } else if (!opts.noUpload) {
     const answer = (deps.ask || realAsk)(
       `upload memoro me (build ${next}) from ${short(sha)} — production runs ${short(live)} — to TestFlight after it is built and verified? [y/N]`,
       { stdout },

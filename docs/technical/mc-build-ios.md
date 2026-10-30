@@ -108,9 +108,12 @@ At a terminal, before the builder starts (`interactive`/`ask` from
 
 Anything but yes writes a `refused` row and exits 1. The yes travels into the
 builder's job as `upload: true`; the builder uploads nothing without it.
-`--no-upload` skips the question, because nothing leaves the machine. Without
-a terminal, `--testflight` alone is refused with exit 2:
-`mc build ios --testflight asks before it uploads — run it in a terminal, or add --no-upload`.
+`--yes` is that yes given on the command line, so a headless session can
+upload: it asks nothing and needs no terminal, and the verification before the
+upload is the same. `--no-upload` skips the question, because nothing leaves
+the machine. The two together are a bad argument. Without a terminal,
+`--testflight` alone is refused with exit 2:
+`mc build ios --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload`.
 
 ## The builder's order
 

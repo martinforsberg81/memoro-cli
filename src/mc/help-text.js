@@ -44,7 +44,7 @@ THE PAGE
   mc deploy --follow               Watch the deploy that is running
   mc build ios                     Does memoro need a new iOS binary? Builds nothing
   mc build ios --device            The commit production runs, on the paired iPhone
-  mc build ios --testflight [--no-upload]
+  mc build ios --testflight [--yes | --no-upload]
                                     The same, verified, uploaded after one question
   mc build ios --shipped <build> <sha>
                                     Record a binary built before mc build existed
@@ -429,10 +429,12 @@ IN FULL
                                     follows ~/mc/runner/log/ios-build.log;
                                     ^C stops watching, not the build
   mc build ios --follow            Watch the iOS build that is running
-  mc build ios --testflight [--no-upload]
+  mc build ios --testflight [--yes | --no-upload]
                                    Build, verify the IPA and, after one
                                     question, upload it to TestFlight;
-                                    --no-upload stops at the verified IPA
+                                    --yes answers the question, for a
+                                    headless session; --no-upload stops at
+                                    the verified IPA
   mc build ios --shipped <build> <sha>
                                    Record a binary built before the verb
                                     existed as the last shipped one
