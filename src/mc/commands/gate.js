@@ -17,11 +17,11 @@
  * the shared runner bounds concurrency and test duration. The final merge
  * still verifies the candidate with the current base.
  *
- * The tests run in the repository's gate lane (`gate-lane-wait.js`): the
- * detached worker takes the lane's lock for its own pid before it starts, and
- * waits while a merge round, a deploy, an iOS build or another session's gate
- * holds it. So no two test runs share the cores of one lane, and the merger
- * waits for a session's few seconds of tests as it waits for any round.
+ * The tests run in the session lane (`gate-lane-wait.js`), or the light lane
+ * of a repository declared light: the detached worker takes the lane's lock
+ * for its own pid before it starts, and waits while another session's gate
+ * holds it, or a deploy or an iOS build runs. A merge round runs beside it, so
+ * the merger never waits for a session.
  *
  * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
  * system temp directory otherwise — as it is written; when the tests end the
@@ -45,6 +45,7 @@ import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '.
 import { selectorCommand } from '../session-gate-run.js';
 import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '../gate-local.js';
 import { tryGit } from '../git.js';
+import { sessionLaneOf } from '../gate-lock.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
 import { repoNameOf, repositoryDir } from '../repos.js';
@@ -94,7 +95,7 @@ const SYSTEM = {
 export function gateReservation(cwd, env = process.env, io = SYSTEM) {
   const common = io.git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const primary = common ? repositoryDir(common) : cwd;
-  return { root: mcHome(env), lane: io.lane(primary, { env }), repo: basename(primary) };
+  return { root: mcHome(env), lane: sessionLaneOf(io.lane(primary, { env })), repo: basename(primary) };
 }
 
 /** Read-only re-selection for the autonomous publication boundary. Use the
@@ -326,7 +327,7 @@ export function usage() {
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
     '\n',
     'The merge gate still verifies the candidate with the current base; --full is refused.\n',
-    'The tests run in the repository\'s gate lane, one run at a time beside merge rounds, deploys and other sessions\' gates.\n',
+    'The tests run in the session lane, one gate at a time, beside merge rounds; a deploy or iOS build goes first. A light repository uses its light lane.\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
     'Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n',
   ].join('');

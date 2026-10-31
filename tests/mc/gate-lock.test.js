@@ -21,6 +21,7 @@ import { describe, it } from 'node:test';
 
 import {
   GATE_LANES, describeRunning, gateLockPath, noteGatePhase, releaseGateLock, runningRound, runningRounds, takeGateLock,
+  SESSION_LANE, sessionLaneOf,
 } from '../../src/mc/gate-lock.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-gate-lock-'));
@@ -109,6 +110,22 @@ describe('one round per lane (ruling 34)', () => {
     assert.equal(gateLockPath('/h'), join('/h', 'gate-running.json'));
     assert.equal(gateLockPath('/h', 'heavy'), join('/h', 'gate-running.json'));
     assert.equal(gateLockPath('/h', 'light'), join('/h', 'gate-running-light.json'));
+  });
+
+  it('sessions have their own lane: its own file, and no lane of rounds', () => {
+    assert.equal(gateLockPath('/h', SESSION_LANE), join('/h', 'gate-running-session.json'));
+    assert.equal(GATE_LANES.includes(SESSION_LANE), false);
+    assert.equal(sessionLaneOf('heavy'), SESSION_LANE);
+    assert.equal(sessionLaneOf('light'), 'light');
+  });
+
+  it('a session gate holds nothing a merge round or a deploy waits for', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-lane-'));
+    try {
+      assert.equal(takeGateLock({ repo: 'memoro', mode: 'session-gate', root, alive: ALIVE, lane: SESSION_LANE }).ok, true);
+      assert.deepEqual(Object.values(runningRounds({ root, alive: ALIVE })).filter(Boolean), []);
+      assert.equal(takeGateLock({ repo: 'memoro', pr: 1, mode: 'merge', root, alive: ALIVE, lane: 'heavy' }).ok, true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('a heavy and a light round are held at once, and each is read in its own lane', () => {
@@ -217,7 +234,7 @@ describe('what it does not do', () => {
   it('has no force, no holder, no errand, no verbs — the whole surface is the round and its phase', async () => {
     const module = await import('../../src/mc/gate-lock.js');
     assert.deepEqual(Object.keys(module).sort(), [
-      'GATE_LANES', 'describeRunning', 'gateLockPath', 'noteGatePhase', 'releaseGateLock', 'runningRound', 'runningRounds', 'takeGateLock',
+      'GATE_LANES', 'SESSION_LANE', 'describeRunning', 'gateLockPath', 'noteGatePhase', 'releaseGateLock', 'runningRound', 'runningRounds', 'sessionLaneOf', 'takeGateLock',
     ]);
   });
 

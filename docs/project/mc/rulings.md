@@ -2105,6 +2105,21 @@ The Anthropic Platform workspace limit is the spending bound; mc does not
 maintain a second dollar cap. This supersedes ruling 59's temporary exclusion
 of credits from class routing and retires the `auto` billing mode.
 
+## The session lane
+
+Martin, 2026-10-31: *"Det måste finnas utrymme för en egen lane åt
+sessionerna! Skapa det direkt."*
+
+This amends the 2026-10-24 decision that a session's `mc gate` waits in the
+heavy lane, and the 2026-10-19 decision that it waits for a merge round. A
+session's gate on a heavy repository takes the `session` lane, one gate at a
+time. The merger and a deploy do not wait for that lane. A gate does not start
+while a deploy or an iOS build runs. A gate and a merge round may share the
+machine.
+
+Martin, the same day: *"Deploy ska ske när pågående merge i memoro kön är
+klar."* A deploy waits for the rounds in flight, never for a session's gate.
+
 ## 60 · A goal is the unit of autonomous work, beside unchanged projects; headless plan is goal-driven, not a decision catalogue
 
 `ruling · 2026-10-29` · raised in the `mc` planning session after the seven
