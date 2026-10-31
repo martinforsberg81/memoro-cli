@@ -2182,3 +2182,17 @@ clarifies the original ruling; it does not replace the answer recorded above.
 
 These settled semantics govern `goals-foundation` and `goals-programme-plan`;
 neither project activates the live autonomous runner.
+
+### Clarification to ruling 60 · the awake clock is measured from what the machine already logged
+
+Martin's answer on 2026-10-31, to the question of how the awake clock in
+`goals-awake-clock` should be measured:
+
+> "Det är inte aktuellt att stanna av allt arbete för mätning. Du får hitta en annan väg framåt."
+
+In English: stopping all work to measure is not on the table; find another
+way forward. This names `goals-awake-clock`. No work is paused for sleep
+measurement. The clock is checked against what the machine already logged
+(`pmset -g log`, `kern.sleeptime`, `kern.waketime`), and long sleep is left to
+the provider pilot. The sleep-experiment method in `autonomy-goals.md` could
+not have worked and is replaced.
