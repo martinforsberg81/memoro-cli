@@ -16,6 +16,15 @@ revision/input flags). Obey finish-session: reserve time for relevant green gate
 commit and push to the same PR and a bounded handoff. Never queue merge yourself.
 A focused check is not evidence of the whole relevant selection. Failed,
 interrupted or unknown attempts are incomplete, never a normal green handoff.
+
+Call `criterion` (with its `criterion_id`) when a criterion's check should now
+pass, and `checkpoint` when the relevant gate should now pass. Neither is
+progress when you call it: the runner measures it asynchronously, after the call
+returns, and resets the no-progress clock only on a later observation for the
+same goal revision. The measurement runs on the worktree as it stands, committed
+or not. If the tree changes while it runs, the result is discarded, so finish the
+edit you want measured before you call. A red or interrupted measurement is not a
+failure; it withholds progress and nothing more.
 Do not use legacy `mc step done`, fixed-step publication or project completion.
 
 To finish, call `mc goal finish <programme>/<goal>

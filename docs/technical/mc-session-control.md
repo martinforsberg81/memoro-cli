@@ -71,6 +71,34 @@ failures. An unresolved pending-plan result refuses another build session, even
 with a larger supplied profile. Revision mismatches fail closed; this seam does not implement plan
 revision/recovery orchestration or silently relabel old evidence.
 
+### Measured progress
+
+`src/mc/checkpoint-verifier.js` (`checkpoint-verifier`) is the runner's
+measurement behind `projectSessionObserver.verify`. A checkpoint measures the
+relevant gate: it runs `mc gate --json` in the worktree and passes only on exit 0
+with `ok: true`. A criterion measures its own `check` from the goal contract
+(premerge criteria only) through `/bin/sh` in the worktree, inside the session
+lane. The check text never comes from the request, and a callback's text is never
+executed; the request supplies only the criterion ID and the observation sequence.
+Each request (operation, reference, criterion, sequence) is measured once; a repeat
+is ignored.
+
+The measurement is asynchronous. `verify` starts it and returns at once, and its
+result is delivered on a later observation, only while the goal revision is the one
+measured. One measurement runs at a time; a request that arrives during one is not
+started and may be sent again. It is bounded by the `mc gate` budget (540 seconds).
+
+Content binding: the worktree is captured before and after the check, committed or
+uncommitted as it stands. If the tree changed while the check ran, the result is
+discarded. A pass is recorded as `measured-<digest>`. The digest covers the goal
+revision, the subject (the criterion ID, or `checkpoint`), the check text, and the
+tree and content fingerprint; the reference names the HEAD commit.
+
+A red, timed-out, interrupted or closed measurement withholds progress and records
+no failure: the no-progress clock keeps running. Failure accounting for red checks
+is outside this contract. The default verifier reports no progress, and the runner
+does not yet call the verifier.
+
 ## Atomic persistence and common callbacks
 
 Trusted `startProjectSessionControl` and `observeProjectSessionControl` in

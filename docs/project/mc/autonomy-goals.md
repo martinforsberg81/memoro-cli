@@ -227,9 +227,11 @@ of this programme once the verbs above exist:
 2. **Awake clock.** `awake_ms` must exclude machine suspend; Node has no such
    clock. Measure here first (wall against monotonic drift across a sleep,
    with `stay-awake.js`'s caffeinate held), then build.
-3. **Checkpoint verifier.** The default verifier reports no progress, so the
-   no-progress clock always runs; a trusted one measures the criterion's
-   check.
+3. **Checkpoint verifier.** Built: `checkpoint-verifier.js` measures a criterion's
+   check or the relevant gate, asynchronously and bound to the tree's content
+   ([contract](../../technical/mc-session-control.md#clocks-tools-and-progress)).
+   It waits on the runner wiring; until that lands the default verifier reports
+   no progress, so the no-progress clock always runs.
 4. **Review session whose runner dies** has no recovery path (it stays owned).
 5. **Provider pilot.** Control signals, interruption and context readings are
    proven only with fixture processes. One goal built end to end with real
