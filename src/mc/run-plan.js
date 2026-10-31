@@ -16,6 +16,7 @@
  * ran every tool as claude on opus, it wrote plans it had invented, and it
  * started projects off answered decision files.
  */
+import { CLAUDE_TOOLS } from '../adapters/claude-code.js';
 import { parseRuns } from './brief-collect.js';
 import { redLines } from './merge-red.js';
 import { deliverableStep, EFFORT_LEVELS, REVIEW_CLASS, WORK_CLASSES } from './plan-schema.js';
@@ -1003,7 +1004,7 @@ export function builtPreamble(built) {
  * `subagents: on`, which also gets `Agent` and mc's own `STEP_WORKER_AGENTS`
  * and nothing a repository defines.
  */
-export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
+export { CLAUDE_TOOLS };
 
 /**
  * The one subagent a step with `runner.subagents: on` may call, passed whole
