@@ -17,6 +17,11 @@
  * lane. Heavy and light rounds may run side by side, but two rounds in the
  * same lane exclude each other. The status files keep their previous names;
  * old workers should finish before an update starts new ones.
+ *
+ * A session's `mc gate` on a heavy repository has its own lane (Martin,
+ * 2026-10-31: *"Det måste finnas utrymme för en egen lane åt sessionerna"*).
+ * In the heavy lane 74 session gates in four hours left the merge queue 32
+ * minutes of it, and the deploy waiting for that lane held the queue as well.
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -34,8 +39,23 @@ import { readClaim, releaseClaim, takeClaim } from './resource-claim.js';
  */
 export const GATE_LANES = Object.freeze(['heavy', 'light']);
 
+/**
+ * The lane session gates run in, one at a time, beside the two above. It is
+ * not in `GATE_LANES`, because those are the lanes with rounds: the merger
+ * serves them, a repository declares one, and a deploy waits for them. A deploy
+ * or the merger waiting here would be the starvation this lane ends.
+ */
+export const SESSION_LANE = 'session';
+
+/** Where a session's gate runs: its own lane, unless the repository is declared light. */
+export function sessionLaneOf(lane) {
+  return lane === 'light' ? 'light' : SESSION_LANE;
+}
+
+const LOCK_FILES = Object.freeze({ light: 'gate-running-light.json', [SESSION_LANE]: 'gate-running-session.json' });
+
 export function gateLockPath(root = mcHome(), lane = 'heavy') {
-  return join(root, lane === 'light' ? 'gate-running-light.json' : 'gate-running.json');
+  return join(root, LOCK_FILES[lane] || 'gate-running.json');
 }
 
 /** The round running right now in this lane, or null. A file that will not parse is nobody. */

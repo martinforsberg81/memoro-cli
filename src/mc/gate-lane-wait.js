@@ -16,11 +16,18 @@
  * beside it. After the tests the shell runs this again to give it back; a
  * shell that is killed leaves a lock whose pid is gone, which is nobody's.
  *
+ * Since 2026-10-31 that queue is the session lane on a heavy repository
+ * (`SESSION_LANE`, gate-lock.js), so session gates exclude each other and no
+ * longer stand in the way of a merge round or a deploy. A deploy or an iOS
+ * build still goes first: a gate in the session lane does not start while
+ * either holds the heavy lane (rulings of 2026-10-18 and 2026-10-19 on the
+ * bundle). A gate already running is not paused.
+ *
  *   node gate-lane-wait.js take <lane> <pid> <repo>
  *   node gate-lane-wait.js release <lane> <pid>
  */
-import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
-import { holdName } from './await-deploy.js';
+import { SESSION_LANE, describeRunning, releaseGateLock, runningRound, takeGateLock } from './gate-lock.js';
+import { DEPLOY_MODE, IOS_BUILD_MODE, holdName } from './await-deploy.js';
 import { mcHome } from './paths.js';
 
 /** The `mode` a session's `mc gate` writes into the lane's lock. */
@@ -36,6 +43,12 @@ function holder(running) {
   return describeRunning(running, running?.lane).replace(/^another gate round is running on this machine/u, 'a gate round');
 }
 
+/** The deploy or iOS build a gate in the session lane does not start beside, or null. */
+export function buildHolding({ root = mcHome(), read = runningRound } = {}) {
+  const round = read({ root, lane: 'heavy' });
+  return [DEPLOY_MODE, IOS_BUILD_MODE].includes(round?.mode) ? round : null;
+}
+
 /**
  * Wait until the lane is free, then hold it for `pid`. Says once what it
  * waits for and once that it starts. Resolves with how many polls it slept.
@@ -46,11 +59,13 @@ export async function takeLane({
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   write = (line) => process.stdout.write(line),
   signal,
+  build = (at) => buildHolding({ root: at }),
 } = {}) {
   let polls = 0;
   for (;;) {
     if (signal?.aborted) throw new Error('waiting for the gate lane was interrupted');
-    const held = take({ repo, pr: null, mode, root, lane, pid });
+    const building = lane === SESSION_LANE ? build(root) : null;
+    const held = building ? { ok: false, running: building } : take({ repo, pr: null, mode, root, lane, pid });
     if (held.ok) break;
     if (held.error) throw new Error(held.error);
     if (!polls) write(`mc gate: waiting for ${holder(held.running)} in the ${lane} lane — the tests start when it is done\n`);

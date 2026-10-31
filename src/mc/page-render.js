@@ -47,6 +47,7 @@
  * Lines rather than one string, so a test can look
  * at a row without splitting a page apart again.
  */
+import { SESSION_GATE_MODE } from './gate-lane-wait.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import { clip, pad, painter, width } from './status-render.js';
@@ -840,7 +841,7 @@ function landingLine(c, wide, landing) {
   const name = landing.name ? `${clip(landing.name, nameWidth(wide) - 1)}${landing.step ? ` step ${landing.step}` : ''}  ` : '';
   const head = `  ${MARK.running} ${where} ${number}${name}`;
   const tail = landing.batch_of != null ? [{ text: `same round as #${landing.batch_of}`, styles: ['grey'] }] : trailing([
-    { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
+    { text: landing.mode === SESSION_GATE_MODE ? 'session gate, not landing' : landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
     landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
     landing.phase ? { text: landing.phase } : null,
     { text: ageWords(landing.age_seconds), styles: ['grey'] },
@@ -935,7 +936,10 @@ function mergesLines(lines, c, wide, merges) {
   const fixing = merges.fixing?.items || [];
   const parts = [];
   const landings = merges.landings || [].concat(merges.landing || []);
-  if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
+  // A session's gate has a row of its own and lands nothing (2026-10-31: read
+  // as a merge starting over, its clock new with every gate).
+  const landed = landings.filter((landing) => landing.mode !== SESSION_GATE_MODE);
+  if (landed.length) parts.push({ text: `${landed.length} landing`, styles: ['grey'] });
   if (mends.length) parts.push({ text: `${mends.length} mending`, styles: ['yellow'] });
   if (fixing.length) parts.push({ text: `${fixing.length} fixing`, styles: ['yellow'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
