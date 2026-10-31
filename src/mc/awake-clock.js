@@ -97,11 +97,14 @@ function readStoredState(path) {
     if (error.code === 'ENOENT') return null;
     throw error;
   }
+  let stored = null;
   try {
-    return JSON.parse(text);
+    stored = JSON.parse(text);
   } catch {
-    throw new Error(`awake clock state is corrupt: ${path}`);
+    // Reported below: only a missing file means there is no state.
   }
+  if (stored === null) throw new Error(`awake clock state is corrupt: ${path}`);
+  return stored;
 }
 
 /** A finite, non-negative clock reading rounded to whole milliseconds. */

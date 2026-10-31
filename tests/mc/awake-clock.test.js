@@ -158,17 +158,46 @@ test('unreadable or malformed stored state throws and is never reset', () => {
   }
 });
 
-test('a state file that is not JSON throws and is left as it is', () => {
-  const statePath = join(mkdtempSync(join(tmpdir(), 'mc-awake-clock-')), 'awake-clock.json');
-  writeFileSync(statePath, '{ not json');
-  const sample = createAwakeClock({ statePath, platform: 'darwin', read: () => 5_000, bootSession: () => 'boot-A', now: () => 1_000_000 });
-  assert.throws(() => sample(), /corrupt/);
-  assert.equal(readFileSync(statePath, 'utf8'), '{ not json');
+test('a state file that is not a stored state throws and is left as it is', () => {
+  for (const contents of ['{ not json', '', 'null\n']) {
+    const statePath = join(mkdtempSync(join(tmpdir(), 'mc-awake-clock-')), 'awake-clock.json');
+    writeFileSync(statePath, contents);
+    const sample = createAwakeClock({ statePath, platform: 'darwin', read: () => 5_000, bootSession: () => 'boot-A', now: () => 1_000_000 });
+    assert.throws(() => sample(), /corrupt/, JSON.stringify(contents));
+    assert.equal(readFileSync(statePath, 'utf8'), contents);
+  }
 });
 
-test('the real uptime read advances over a 50 ms wait', { skip: process.platform !== 'darwin' && 'the awake clock is Darwin only' }, async () => {
+test('a state file that cannot be read throws instead of starting again', () => {
+  const statePath = mkdtempSync(join(tmpdir(), 'mc-awake-clock-')); // a directory: reading it is EISDIR
+  const sample = createAwakeClock({ statePath, platform: 'darwin', read: () => 5_000, bootSession: () => 'boot-A', now: () => 1_000_000 });
+  assert.throws(() => sample(), /EISDIR/);
+});
+
+const darwinOnly = { skip: process.platform !== 'darwin' && 'the awake clock is Darwin only' };
+
+test('the real uptime read advances over a 50 ms wait', darwinOnly, async () => {
   const before = readAwakeMs();
   await new Promise((resolve) => setTimeout(resolve, 50));
   const elapsed = readAwakeMs() - before;
   assert.ok(elapsed >= 45 && elapsed < 2_000, `elapsed ${elapsed} ms`);
+});
+
+test('the production clock, with no injected dep, creates its state and keeps every rule', darwinOnly, async () => {
+  assert.deepEqual(probeAwakeClock(), { ok: true });
+  const statePath = join(mkdtempSync(join(tmpdir(), 'mc-awake-clock-')), 'not-yet', 'awake-clock.json');
+  const sample = createAwakeClock({ statePath });
+  const first = sample();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const second = sample();
+  assert.ok(Number.isSafeInteger(first.at_ms) && Number.isSafeInteger(first.awake_ms));
+  const wall = second.at_ms - first.at_ms;
+  const awake = second.awake_ms - first.awake_ms;
+  assert.ok(wall >= 45, `wall ${wall} ms`);
+  assert.ok(awake > 0 && awake <= wall, `awake ${awake} ms of wall ${wall} ms`);
+  const stored = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.match(stored.boot_session, /^[0-9A-Fa-f-]{36}$/);
+  assert.equal(stored.base_ms, 0);
+  assert.equal(stored.last_awake_ms, second.awake_ms);
+  assert.equal(stored.last_at_ms, second.at_ms);
 });
