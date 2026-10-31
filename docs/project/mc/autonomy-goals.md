@@ -16,10 +16,10 @@ sessions on one branch and PR, independent review, the autonomous merge door,
 the programme job queue with leases, headless plan sessions, recovery, and the
 operator's status, start, pause and resume. `mc programme capabilities` on
 this machine reports all six control capabilities built and none supported:
-the installed runner passes no autonomous capability, there is no production
-awake clock that excludes machine suspend, no trusted checkpoint verifier, and
-no provider process has ever been observed on the new path. `start` therefore
-refuses everywhere, by design.
+the installed runner passes no autonomous capability, the production awake
+clock that excludes machine suspend is built but the runner does not read it
+yet, there is no trusted checkpoint verifier, and no provider process has ever
+been observed on the new path. `start` therefore refuses everywhere, by design.
 
 Before closing those gaps, the model itself was reviewed. The implementation
 plan had made the autonomous mode a second system: an approved programme
@@ -224,9 +224,20 @@ of this programme once the verbs above exist:
    gate` adapter, publication requirements and deps, conflict integration,
    the checkpoint verifier, job and plan consumers. `installationCapabilities`
    then reports what the runner actually passes instead of a frozen constant.
-2. **Awake clock.** `awake_ms` must exclude machine suspend; Node has no such
-   clock. Measure here first (wall against monotonic drift across a sleep,
-   with `stay-awake.js`'s caffeinate held), then build.
+2. **Awake clock.** Built in `src/mc/awake-clock.js`: `awake_ms` reads
+   `CLOCK_UPTIME_RAW`, which excludes suspend, and never falls back to a clock
+   that counts it. The runner does not read it yet; that wiring belongs with
+   the runner work above. Measured from what the machine already logged, not
+   from a sleep experiment. Between boot on 2026-10-27 and 2026-10-31 the wall and
+   awake clocks differ by 19 772 s across 47 logged sleeps. `pmset -g log`
+   gives 19 980 s, which is about 19 795 s after allowing about 4 s of log lag
+   per sleep (the lag was seen on one sleep, by comparing `kern.sleeptime` and
+   `kern.waketime`). The runner's caffeinate, pid 15019, held from 16:40 to
+   19:55 on 2026-10-30, and the machine still slept on battery with the lid
+   closed. No sleep in the window exceeded 30 minutes, so long sleep is
+   measured by the provider pilot. The method first written here could not
+   have worked: Node's monotonic clock counts suspend, so wall against
+   monotonic drift across a sleep shows nothing.
 3. **Checkpoint verifier.** Built: `checkpoint-verifier.js` measures a criterion's
    check or the relevant gate, asynchronously and bound to the tree's content
    ([contract](../../technical/mc-session-control.md#clocks-tools-and-progress)).
