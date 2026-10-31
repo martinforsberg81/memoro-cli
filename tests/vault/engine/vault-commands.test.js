@@ -632,16 +632,83 @@ describe('mc vault — full lifecycle (in-process)', () => {
   it('rotate reports a revision conflict and does not overwrite the row', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'stale-rotate', '--no-confirm', '--json'], { portal });
+    const before = server.inspect().secrets;
     server.forceNextWriteConflict();
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['rotate', 'stale-rotate', '--no-confirm', '--json'], { portal });
     cap.restore();
     const out = JSON.parse(cap.out.join('\n'));
     assert.equal(rc, 1);
+    assert.equal(out.conflict, true);
     assert.match(out.error, /changed since it was read/);
-    assert.equal(server.inspect().secrets.length, 2, 'the backup is retained, but the stale row is not overwritten');
+    const after = server.inspect().secrets;
+    assert.deepEqual(after.map((row) => [row.id, row.encrypted_data]),
+      before.map((row) => [row.id, row.encrypted_data]),
+      'a conflict leaves no -prev behind and the row as it was');
+    assert.equal(server.calls.filter((call) => call.method === 'PUT').length, 1, 'nothing is retried');
     const update = server.calls.find((call) => call.method === 'PUT');
     assert.equal(update.body.expectedRevision, 1);
+  });
+
+  it('rotate keeps an earlier -prev when the update conflicts', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'kept-prev', '--no-confirm', '--json'], { portal });
+    await vaultRun(['rotate', 'kept-prev', '--no-confirm', '--json'], { portal });
+    const before = server.inspect().secrets;
+    assert.equal(before.length, 2);
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rotate', 'kept-prev', '--no-confirm', '--json'], { portal });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /changed since it was read/);
+    assert.deepEqual(server.inspect().secrets.map((row) => [row.id, row.encrypted_data]),
+      before.map((row) => [row.id, row.encrypted_data]));
+  });
+
+  it('rotate says so when a conflict stash cannot be taken back out', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'stuck-stash', '--no-confirm', '--json'], { portal });
+    server.forceNextWriteConflict();
+    const refusingDelete = {
+      ...portal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        if (opts?.method === 'DELETE') throw new Error('Memoro 500: down');
+        return portal.memoroFetch(apiUrl, path, opts);
+      },
+    };
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rotate', 'stuck-stash', '--no-confirm', '--json'], { portal: refusingDelete });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.match(out.error, /was not overwritten/);
+    assert.match(out.error, /mc vault rm stuck-stash-prev/);
+  });
+
+  it('rotate keeps a changed earlier -prev and reports the rotation that landed', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'changed-prev', '--no-confirm', '--json'], { portal });
+    await vaultRun(['rotate', 'changed-prev', '--no-confirm', '--json'], { portal });
+    const earlierPrev = server.inspect().secrets.find((row) => row.revision === 1);
+    const bumpingPortal = {
+      ...portal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await portal.memoroFetch(apiUrl, path, opts);
+        if (opts?.method === 'PUT') server.bumpRevision(earlierPrev.id);
+        return result;
+      },
+    };
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rotate', 'changed-prev', '--no-confirm', '--json'], { portal: bumpingPortal });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.equal(out.rotated.label, 'changed-prev');
+    assert.match(out.error, /changed since it was read and was kept/);
+    const after = server.inspect().secrets;
+    assert.equal(after.length, 3);
+    assert.ok(after.some((row) => row.id === earlierPrev.id), 'the changed row is not removed');
   });
 
   it('rotate twice replaces the stale -prev rather than erroring', async () => {
@@ -728,10 +795,45 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const out = JSON.parse(cap.out.join('\n'));
     assert.equal(rc, 1);
     assert.match(out.error, /revision conflict/);
-    assert.match(out.error, /remaining entries were not attempted/);
+    assert.match(out.error, /the rest were not attempted/);
+    assert.equal(out.conflict, true);
+    assert.equal(out.re_encrypted, 0);
+    assert.deepEqual(out.not_attempted, ['k1']);
     const updates = server.calls.filter((call) => call.method === 'PUT');
     assert.equal(updates.length, 1, 'no following row is retried or attempted after conflict');
     assert.equal(updates[0].body.expectedRevision, 1);
+  });
+
+  it('change-password names what landed and what it left when a later row conflicts', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    for (const label of ['k1', 'k2', 'k3']) {
+      await vaultRun(['set', label, '--no-confirm', '--json'], { portal });
+    }
+    const [, second] = server.inspect().secrets;
+    const bumpingPortal = {
+      ...portal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await portal.memoroFetch(apiUrl, path, opts);
+        if (opts?.method === 'PUT') server.bumpRevision(second.id);
+        return result;
+      },
+    };
+    cap.restore(); cap = captureConsole();
+    delete process.env.MC_VAULT_PASSPHRASE;
+    const NEW_PW = 'a-third-master-password-67890';
+    const promptStub = (prompt) => Promise.resolve(
+      prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
+    );
+    const rc = await vaultRun(['change-password', '--json'], { portal: bumpingPortal, promptStub });
+    cap.restore();
+    process.env.MC_VAULT_PASSPHRASE = PW;
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.equal(out.re_encrypted, 1);
+    assert.deepEqual(out.not_attempted, ['k1']);
+    assert.match(out.error, /k2 changed since it was read/);
+    assert.match(out.error, /Not re-encrypted: k2, k1/);
+    assert.equal(server.calls.filter((call) => call.method === 'PUT').length, 2);
   });
 
   it('change-password refuses when current password is wrong', async () => {
@@ -766,6 +868,35 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(rc, 0, cap.out.join('\n'));
     const update = server.calls.find((call) => call.method === 'PUT');
     assert.equal(update.body.expectedRevision, 1);
+  });
+
+  it('migrate stops at a revision conflict, says so, and writes nothing to that row', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'custody-seed', '--no-confirm', '--json'], { portal: custodyPortal });
+    const config = server.inspect().config;
+    const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+    for (const label of ['legacy-one', 'legacy-two']) {
+      const encrypted = await encryptSecretPayload(vaultKey, label, { value: 'opaque' });
+      await server.memoroFetch('x', '/api/vault/secrets', {
+        method: 'POST',
+        body: { secretType: 'api_key', ...encrypted },
+      });
+    }
+    const before = server.inspect().secrets;
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['migrate', '--json'], { portal: custodyPortal });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.equal(out.ok, false);
+    assert.equal(out.conflict, true);
+    assert.equal(out.migrated, 0);
+    assert.match(out.error, /changed since it was read; its write was not applied/);
+    assert.equal(server.calls.filter((call) => call.method === 'PUT').length, 1, 'nothing is retried or attempted after it');
+    assert.deepEqual(server.inspect().secrets.map((row) => row.encrypted_data),
+      before.map((row) => row.encrypted_data));
   });
 
   it('adopt sends the revision from the existing custody row and refuses a stale write', async () => {
