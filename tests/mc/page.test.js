@@ -1052,6 +1052,13 @@ describe('MERGES', () => {
       lines.join('\n'));
   });
 
+  it('a session gate is drawn as a session gate and counted as no landing', () => {
+    const merges = mergesSection({ landing: [{ repo: 'memoro.git', pr: null, mode: 'session-gate', lane: 'session', age_seconds: 39 }], queued: [] });
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /memoro\.git +session gate, not landing · session lane/u.test(line)), lines.join('\n'));
+    assert.equal(lines.some((line) => /MERGES +\d+ landing/u.test(line)), false, lines.join('\n'));
+  });
+
   /**
    * Two rounds at once — a memoro round in the heavy lane and a memoro-cli
    * round in the light one (ruling 34) — are two rows, each naming its lane.

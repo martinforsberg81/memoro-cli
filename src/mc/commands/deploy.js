@@ -73,6 +73,7 @@ import {
   runningDeploy,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
+import { SESSION_GATE_MODE } from '../gate-lane-wait.js';
 import { releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
@@ -788,7 +789,7 @@ export const GATE_POLL_MS = 5 * 1000;
  * 26 minutes (2026-10-10). The merger starts no round while the deploy's row
  * says `running`; this waits for the ones already in flight — any gate round,
  * `mc test`'s too, in either lane (ruling 34): a light round beside the bundle
- * is still a round beside the bundle. With a merger alive the gate must be free on two reads a
+ * is still a round beside the bundle. A session's gate is no round here. With a merger alive the gate must be free on two reads a
  * poll apart: a merger that read no deploy just before the row was written
  * takes the lock within that time.
  */
@@ -797,9 +798,12 @@ export async function waitForGate(job, deps = {}) {
   const root = job.root || workRoot(deps.env || process.env);
   // The first round in flight in any lane, heavy first, or null. The lock
   // files are in mc's home (`gate-lock.js`), not under the work root: read
-  // there, this saw no round at all until 2026-10-10.
+  // there, this saw no round at all until 2026-10-10. A session's gate is not
+  // waited for: gates follow one another, so the deploy of 2026-10-31 needed
+  // both lanes free at one of its polls and waited an hour after the merge
+  // round it was meant to follow. The deploy goes when the round is done.
   const rounds = deps.runningRounds || (() => runningRounds());
-  const round = deps.runningRound || (() => Object.values(rounds() || {}).find(Boolean) || null);
+  const round = deps.runningRound || (() => Object.values(rounds() || {}).find((one) => one && one.mode !== SESSION_GATE_MODE) || null);
   const merger = deps.readMerger || (() => readMerger({ root }));
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   const deploy = (deps.mode ?? DEPLOY_MODE) === DEPLOY_MODE;
@@ -846,6 +850,9 @@ export async function holdHeavyLane(job, deps = {}) {
     const held = take({ repo: mode, pr: null, mode, root, lane: 'heavy' });
     if (held.ok) return held.took;
     if (held.error) throw new Error(held.error);
+    // Only a session gate started before the session lane can be in the way
+    // here, and `waitForGate` does not wait for one: without this, a busy loop.
+    await (deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); })))(GATE_POLL_MS);
   }
 }
 
