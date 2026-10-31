@@ -5,7 +5,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, r
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree, sameContent } from './session-gate-evidence.js';
-import { releaseGateLock } from './gate-lock.js';
+import { GATE_LANES, SESSION_LANE, releaseGateLock } from './gate-lock.js';
 import { processAlive } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateControlState } from './session-control.js';
@@ -37,7 +37,7 @@ export function reconcileSessionGate(gitDir, { alive = processAlive } = {}) {
     const exit = readFileSync(`${lock.log}.exit`, 'utf8').trim();
     if (typeof result.ok !== 'boolean' || !Number.isSafeInteger(result.code) || result.code < 0
       || !/^[0-9]+$/u.test(exit) || Number(exit) !== result.code
-      || !['heavy', 'light'].includes(request.reservation?.lane) || !request.reservation.root) throw new Error('unknown gate completion');
+      || ![...GATE_LANES, SESSION_LANE].includes(request.reservation?.lane) || !request.reservation.root) throw new Error('unknown gate completion');
   } catch { return { ok: false, reason: 'gate-children-unknown', pid: lock?.pid ?? null }; }
   // releaseGateLock checks both pid and claim generation; a successor is kept.
   releaseGateLock({ ...request.reservation, pid: lock.pid });

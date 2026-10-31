@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { releaseGateLock, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
-import { SESSION_GATE_MODE, takeLane } from '../../src/mc/gate-lane-wait.js';
+import { SESSION_GATE_MODE, buildHolding, takeLane } from '../../src/mc/gate-lane-wait.js';
 
 const SCRIPT = fileURLToPath(new URL('../../src/mc/gate-lane-wait.js', import.meta.url));
 
@@ -59,6 +59,60 @@ describe('takeLane', () => {
     try {
       takeGateLock({ repo: 'memoro', mode: 'merge', root: fx.root, lane: 'heavy' });
       assert.equal(await takeLane({ lane: 'light', pid: process.pid, repo: 'memoro-cli', root: fx.root, sleep: async () => { throw new Error('waited'); } }), 0);
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('the session lane', () => {
+  it('a merge round in the heavy lane is no reason to wait', async () => {
+    const fx = home();
+    try {
+      takeGateLock({ repo: 'memoro', pr: 7, mode: 'merge', root: fx.root, lane: 'heavy' });
+      assert.equal(await takeLane({ lane: 'session', pid: process.pid, repo: 'memoro', root: fx.root, sleep: async () => { throw new Error('waited'); } }), 0);
+      assert.equal(runningRound({ root: fx.root, lane: 'session' }).pid, process.pid);
+    } finally { fx.cleanup(); }
+  });
+
+  for (const mode of ['deploy', 'ios-build']) {
+    it(`a gate does not start while a ${mode} holds the heavy lane`, async () => {
+      const fx = home();
+      try {
+        takeGateLock({ repo: mode, mode, root: fx.root, lane: 'heavy' });
+        const said = [];
+        let slept = 0;
+        const polls = await takeLane({
+          lane: 'session', pid: 1, repo: 'memoro', root: fx.root, write: (l) => said.push(l),
+          sleep: async () => {
+            assert.equal(runningRound({ root: fx.root, lane: 'session' }), null);
+            slept += 1;
+            if (slept === 2) releaseGateLock({ root: fx.root, lane: 'heavy' });
+          },
+        });
+        assert.equal(polls, 2);
+        assert.match(said[0], /^mc gate: waiting for the (deploy|iOS build) \(pid \d+/u);
+        assert.equal(said[1], 'mc gate: the session lane is free — starting\n');
+        assert.equal(runningRound({ root: fx.root, lane: 'session' }).pid, 1);
+      } finally { fx.cleanup(); }
+    });
+  }
+
+  it('only a deploy and an iOS build count as a build', () => {
+    const read = (mode) => () => ({ pid: 9, mode });
+    assert.equal(buildHolding({ read: read('merge') }), null);
+    assert.equal(buildHolding({ read: read('deploy') }).pid, 9);
+    assert.equal(buildHolding({ read: () => null }), null);
+  });
+
+  it('two session gates exclude each other', async () => {
+    const fx = home();
+    try {
+      takeGateLock({ repo: 'memoro', mode: SESSION_GATE_MODE, root: fx.root, lane: 'session' });
+      const said = [];
+      await takeLane({
+        lane: 'session', pid: 1, repo: 'memoro', root: fx.root, write: (l) => said.push(l),
+        sleep: async () => { releaseGateLock({ root: fx.root, lane: 'session' }); },
+      });
+      assert.match(said[0], /^mc gate: waiting for another session's mc gate/u);
     } finally { fx.cleanup(); }
   });
 });

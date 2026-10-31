@@ -91,6 +91,7 @@ describe('mc gate <test files…>', () => {
     assert.match(out.spawned[0].args[0], /session-gate-run\.js$/u);
     assert.equal(out.spawned[0].args[1], `${LOG}.request.json`);
     assert.deepEqual(out.lanes, ['/repo/memoro']);
+    assert.equal(JSON.parse(files.get(`${LOG}.request.json`)).reservation.lane, 'session');
     assert.deepEqual([out.spawned[0].opts.cwd, out.spawned[0].opts.detached, out.spawned[0].opts.stdio], ['/w/x', true, ['ignore', 9, 9]]);
     assert.deepEqual([out.spawned[0].opts.env.CI, out.spawned[0].opts.env.FORCE_COLOR, out.spawned[0].opts.env.NO_COLOR], ['1', '0', '1']);
     assert.equal(out.spawned[0].opts.env.MC_GATE_FAIL_FAST, undefined);
@@ -135,7 +136,7 @@ describe('mc gate <test files…>', () => {
   it('RUNNING says so when the time went to waiting for the lane', async () => {
     const { out, deps } = harness({ tests: ['a.test.js'], log: 'mc gate: waiting for the merge round (pid 9) in the heavy lane — the tests start when it is done\n' });
     assert.equal(await run(['a.test.js', '--budget', '4'], deps), 3);
-    assert.match(out.stdout, /^RUNNING — node --test a\.test\.js — 4s so far, still waiting for the heavy lane \(pid 4242\)\n/u);
+    assert.match(out.stdout, /^RUNNING — node --test a\.test\.js — 4s so far, still waiting for the session lane \(pid 4242\)\n/u);
   });
 
   it('a red names a re-run line with the failing names, before the whole output', async () => {
@@ -328,7 +329,7 @@ it('autonomous finish binds the existing affected gate worker to its reserved se
   assert.match(request.select, /--changed-path 'implementation.js'/u);
   assert.equal(request.measurement.session_run, 'build-1');
   assert.equal(request.measurement.goal_revision, 3);
-  assert.equal(request.reservation.lane, 'heavy');
+  assert.equal(request.reservation.lane, 'session');
 });
 
 it('concurrent callers launch only one worker, and repeated waits never launch another', async () => {
