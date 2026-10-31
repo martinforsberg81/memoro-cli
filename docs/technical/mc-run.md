@@ -747,7 +747,7 @@ A step gets it; the helper and intake turns, which share
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
 
-Every claude launch of the runner's gets the tool allowlist
+Every claude launch of mc's, foreground and tmux too, gets the tool allowlist
 `--tools Bash,Read,Edit,Write,Grep,Glob` (`CLAUDE_TOOLS`) and
 `--strict-mcp-config`, and so has those six tools and no other — no `Agent`,
 no `Skill`, no Cron, Web or Task tool, no user-level MCP server — whatever

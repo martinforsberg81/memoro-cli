@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { sessionArgs } from '../../src/adapters/claude-code.js';
+import { sessionArgs, toolArgs } from '../../src/adapters/claude-code.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
@@ -29,7 +29,7 @@ const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 
 // Every claude launch carries these: no CLAUDE.md, no auto-memory, and the
 // role's prompt-cache TTL — an hour unless the caller says otherwise.
-const SETTINGS = sessionArgs();
+const SETTINGS = [...toolArgs(), ...sessionArgs()];
 const QUOTED_SETTINGS = SETTINGS.map((arg) => `'${arg}'`).join(' ');
 
 /** A work area plus a tool store, both throwaway. */
@@ -432,7 +432,7 @@ describe('startInBackground and --model', () => {
     const { areaRoot, worktree, env } = fixture();
     const fresh = tmux();
     startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', cache: '5m', env, run: fresh.run });
-    assert.equal(creation(fresh.calls), `'claude' ${sessionArgs({ cache: '5m' }).map((arg) => `'${arg}'`).join(' ')} 'go'`);
+    assert.equal(creation(fresh.calls), `'claude' ${[...toolArgs(), ...sessionArgs({ cache: '5m' })].map((arg) => `'${arg}'`).join(' ')} 'go'`);
     assert.match(creation(fresh.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"/u);
 
     const resumed = tmux();

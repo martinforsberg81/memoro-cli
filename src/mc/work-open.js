@@ -105,7 +105,7 @@ export async function openInWorkArea({
   const handed = resuming ? [] : profileArgs(toolId, instructions);
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
   // where only the role text is left off.
-  const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
+  const session = sessionSwitches(launch, cache);
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
   const baseArgs = resuming
     ? [...resumeWith(toolId, resumed, session), ...(resumePrompt ? [resumePrompt] : [])]
@@ -350,6 +350,11 @@ export function startInBackground({
   return { ok: true, target, tool: launch.id, resumed: conversation?.id || null };
 }
 
+/** What a session carries, new or resumed: its tools first, then the adapter's settings. */
+function sessionSwitches(launch, cache) {
+  return [...(launch.adapter?.toolArgs?.() ?? []), ...(launch.adapter?.sessionArgs?.({ cache }) ?? [])];
+}
+
 /** All interactive entry points pass through the adapter, including resumes. */
 function interactiveArgs(launch, args, context) {
   const options = interactiveAccessOptions(launch.spec, interactiveWorkspaceDirectories(context));
@@ -393,7 +398,7 @@ function launchCommand(launch, {
   // A conversation to resume changes everything about the argv: its history
   // already holds any overlay, and the model — resolved by
   // the caller, flag over transcript — rides on the resume flags.
-  const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
+  const session = sessionSwitches(launch, cache);
   const baseArgs = conversation
     ? [
       ...resumeWith(launch.id, launch.adapter?.resumeArgs?.({ sessionId: conversation.id, model: conversation.model || null }) || [], session),
