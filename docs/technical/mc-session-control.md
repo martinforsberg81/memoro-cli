@@ -77,8 +77,8 @@ revision/recovery orchestration or silently relabel old evidence.
 measurement behind `projectSessionObserver.verify`. A checkpoint measures the
 relevant gate: it runs `mc gate --json` in the worktree and passes only on exit 0
 with `ok: true`. A criterion measures its own `check` from the goal contract
-(premerge criteria only) through `/bin/sh` in the worktree, inside the session
-lane. The check text never comes from the request, and a callback's text is never
+(premerge criteria only) through `/bin/sh` in the worktree, holding the lane a
+session gate of that repository holds. The check text never comes from the request, and a callback's text is never
 executed; the request supplies only the criterion ID and the observation sequence.
 Each request (operation, reference, criterion, sequence) is measured once; a repeat
 is ignored.
@@ -86,7 +86,8 @@ is ignored.
 The measurement is asynchronous. `verify` starts it and returns at once, and its
 result is delivered on a later observation, only while the goal revision is the one
 measured. One measurement runs at a time; a request that arrives during one is not
-started and may be sent again. It is bounded by the `mc gate` budget (540 seconds).
+started and may be sent again. It is bounded by the `mc gate` budget (540 seconds),
+lane wait included. A gate that needs longer is stopped and gives no progress.
 
 Content binding: the worktree is captured before and after the check, committed or
 uncommitted as it stands. If the tree changed while the check ran, the result is

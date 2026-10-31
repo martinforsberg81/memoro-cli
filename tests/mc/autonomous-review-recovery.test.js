@@ -25,9 +25,11 @@ async function started(t, { submit = true } = {}) {
     { actor: f.options.actor, revision: f.stateNow().revision });
   return { ...f, session };
 }
+// A liveness bound, not a speed limit: on a loaded machine these spawns outlasted 15 s.
+const CRASH_BOUND_MS = 60_000;
 function crash(f, boundary, mode) {
   const result = spawnSync(process.execPath, [PROCESS, JSON.stringify({ ...f.options, checkout: f.session.checkout }), boundary, ...(mode ? [mode] : [])],
-    { encoding: 'utf8', timeout: 15000 });
+    { encoding: 'utf8', timeout: CRASH_BOUND_MS });
   assert.equal(result.status, 0, result.stderr);
 }
 const recover = f => recoverAutonomousReview(f.options, { gh: f.gh });

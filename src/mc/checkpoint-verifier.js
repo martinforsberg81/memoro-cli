@@ -50,8 +50,10 @@ export function createCheckpointVerifier({ root, programme, project, worktree, e
   let pending = null;
   let closed = false;
 
+  /** Runs from timers and process events, so nothing here may throw: a group that
+   * cannot be signalled is no progress, and the final bound still ends the wait. */
   const signalGroup = (pid, name) => {
-    try { io.signal(pid, name); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    try { io.signal(pid, name); } catch { /* gone, or refused; progress stays withheld */ }
   };
 
   /** One shell, one process group, the whole group ended on a halt. The promise

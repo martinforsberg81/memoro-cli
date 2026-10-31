@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { createCheckpointVerifier } from '../../src/mc/checkpoint-verifier.js';
+import { run as runGate } from '../../src/mc/commands/gate.js';
 import { STABLE_ID_RE } from '../../src/mc/goal-contract.js';
 import { gateLockPath, runningRound } from '../../src/mc/gate-lock.js';
 import { captureWorktree } from '../../src/mc/session-gate-evidence.js';
@@ -100,6 +101,10 @@ test('the same criterion asked at a new observation is measured again; a changed
   const second = fx.verify(ask('c-one', 2), current);
   assert.equal(fx.log.spawned.length, 2);
   assert.equal(second.id, first.id, 'identical content cannot reset the clock twice');
+  fx.child = null;
+  fx.verify(ask('c-one', 2, 'other words'), current); await fx.started(); await fx.end(0);
+  assert.equal(fx.log.spawned.length, 3);
+  assert.equal(fx.verify(ask('c-one', 2), current).id, first.id);
 });
 
 test('the request text never reaches the shell and the environment holds no provider key', async () => {
@@ -185,6 +190,21 @@ test('a time limit of the gate budget ends the whole group, SIGTERM then SIGKILL
   assert.deepEqual(fx.log.signals, [[4242, 'SIGTERM'], [4242, 'SIGKILL']]);
   await fx.end(0);
   assert.equal(fx.verify(ask('c-one'), current), null, 'an exit after the limit is no progress');
+  assert.equal(fx.log.released, 1);
+});
+
+test('a group that refuses its signals cannot throw out of a timer, and the wait still ends', async () => {
+  const refused = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+  const fx = rig({ signal: () => { throw refused; } });
+  const current = state([criterion('c-one', 'sleep 1000')]);
+  fx.verify(ask('c-one'), current);
+  await fx.started();
+  fx.log.timers.find(timer => timer.ms === 540_000).run();
+  const escalation = fx.log.timers.find(timer => timer.ms === 1000);
+  escalation.run();
+  fx.log.timers.find(timer => timer.ms === 1000 && timer !== escalation).run();
+  await fx.settle();
+  assert.equal(fx.verify(ask('c-one'), current), null);
   assert.equal(fx.log.released, 1);
 });
 
@@ -354,8 +374,8 @@ test('a real check on a temporary repository: output in scratch, lane released, 
   const output = readFileSync(join(scratch, 'c-real-1.log'), 'utf8');
   assert.equal(Buffer.byteLength(output), 8192);
   assert.ok(output.endsWith('end'));
-  assert.equal(runningRound({ root: home, lane: 'heavy' }), null, 'the lane is free again');
-  assert.ok(!existsSync(`${gateLockPath(home, 'heavy')}.claim`));
+  assert.equal(runningRound({ root: home, lane: 'session' }), null, 'the lane is free again');
+  assert.ok(!existsSync(`${gateLockPath(home, 'session')}.claim`));
 
   assert.equal((await result(verify, ask('c-real', 2), current)).id, first.id);
   writeFileSync(join(dir, 'file.txt'), 'two\n');
@@ -366,7 +386,7 @@ test('a real check on a temporary repository: output in scratch, lane released, 
 test('a real check that edits the tree is discarded and a red one withheld', async () => {
   const { dir } = repository();
   const home = mkdtempSync(join(tmpdir(), 'mc-verifier-home-'));
-  const env = { ...process.env, MC_HOME: home };
+  const env = { ...process.env, MC_HOME: home, MC_SCRATCH: home };
   const current = state([criterion('c-edit', 'echo edit >> file.txt'), criterion('c-red', 'exit 7')]);
   const before = captureWorktree(dir).fingerprint;
   const verify = createCheckpointVerifier({ root: home, programme: 'prog', project: 'proj', worktree: dir, env });
@@ -380,7 +400,7 @@ test('the time limit kills a real child process and its descendants', async () =
   const { dir } = repository();
   const home = mkdtempSync(join(tmpdir(), 'mc-verifier-home-'));
   const pidFile = join(home, 'group');
-  const env = { ...process.env, MC_HOME: home };
+  const env = { ...process.env, MC_HOME: home, MC_SCRATCH: home };
   const current = state([criterion('c-slow', `echo $$ > '${pidFile}'; trap '' TERM; sleep 100 & wait; sleep 100`)]);
   const verify = createCheckpointVerifier({ root: home, programme: 'prog', project: 'proj', worktree: dir, env, limitMs: 5000, termMs: 100 });
   verify(ask('c-slow'), current);
@@ -390,10 +410,52 @@ test('the time limit kills a real child process and its descendants', async () =
   assert.ok(written(), 'the check started');
   const group = Number(readFileSync(pidFile, 'utf8'));
   assert.ok(groupAlive(group));
+  const held = runningRound({ root: home, lane: 'session' });
+  assert.equal(held.pid, process.pid, 'the check runs inside the session lane');
+  assert.equal(held.mode, 'session-gate');
   while (groupAlive(group) && Date.now() < until) await delay(20);
   assert.equal(groupAlive(group), false);
   await delay(50);
   assert.equal(verify(ask('c-slow'), current), null);
-  assert.equal(runningRound({ root: home, lane: 'heavy' }), null);
+  assert.equal(runningRound({ root: home, lane: 'session' }), null);
   await verify.close();
+});
+
+test('a real checkpoint: the gate worker measures the tree, and close ends the worker and its tests', { timeout: 300_000 }, async () => {
+  const { dir, git } = repository();
+  const home = mkdtempSync(join(tmpdir(), 'mc-verifier-home-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'mc-verifier-out-'));
+  const ready = join(home, 'ready');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n');
+  writeFileSync(join(dir, 'a.test.js'), "import { test } from 'node:test';\ntest('passes', () => {});\n");
+  const selection = JSON.stringify({ files: ['a.test.js'], commands: [] });
+  const declaration = { select: `${JSON.stringify(process.execPath)} -e 'console.log(${JSON.stringify(selection)})' --`, pr_tests_flags: ['--no-warnings'] };
+  const verify = createCheckpointVerifier({
+    root: home, programme: 'prog', project: 'proj', worktree: dir,
+    env: { ...process.env, MC_HOME: home, MC_SCRATCH: scratch, MC_TEST_LANES: '2' },
+    gate: (argv, options) => runGate(argv, { ...options, declaration: () => ({ ok: true, declaration }), lane: () => 'light' }),
+  });
+  const current = state([]);
+  const progress = await result(verify, askCheckpoint(1), current, 120_000);
+  assert.ok(progress, 'measured green');
+  assert.equal(progress.criterion_id, null);
+  assert.ok(progress.reference.includes(git('rev-parse', 'HEAD')));
+  assert.equal(JSON.parse(readFileSync(join(scratch, 'checkpoint-1.log'), 'utf8')).ok, true);
+
+  writeFileSync(join(dir, 'a.test.js'), `import { test } from 'node:test';
+import { writeFileSync } from 'node:fs';
+import { setTimeout } from 'node:timers/promises';
+test('hangs', async () => { writeFileSync(${JSON.stringify(ready)}, String(process.pid)); await setTimeout(600000); });\n`);
+  assert.equal(verify(askCheckpoint(2), current), null);
+  const until = Date.now() + 120_000;
+  while (!existsSync(ready) && Date.now() < until) await delay(25);
+  assert.ok(existsSync(ready), 'the gate started its test');
+  const worker = JSON.parse(readFileSync(join(dir, '.git', 'mc-gate.json'), 'utf8'));
+  assert.ok(groupAlive(worker.pid));
+  await verify.close();
+  assert.equal(groupAlive(worker.pid), false);
+  assert.equal(readFileSync(`${worker.log}.exit`, 'utf8').trim(), '1');
+  assert.throws(() => process.kill(Number(readFileSync(ready, 'utf8')), 0), { code: 'ESRCH' });
+  assert.equal(verify(askCheckpoint(3), current), null);
 });
