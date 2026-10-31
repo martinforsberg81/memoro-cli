@@ -132,10 +132,11 @@ export async function run(argv, opts = {}) {
     // Friendly error wrapping. Specific errors (vault locked, token
     // missing, etc.) are handled in-line; this catches the long tail.
     const json = argv.includes('--json');
+    const message = isSecretRevisionConflict(err) ? SECRET_CONFLICT_MESSAGE : err.message;
     if (json) {
-      console.log(JSON.stringify({ ok: false, error: err.message }));
+      console.log(JSON.stringify({ ok: false, error: message }));
     } else {
-      console.error(`mc vault: ${err.message}`);
+      console.error(`mc vault: ${message}`);
     }
     return 1;
   }
@@ -1060,7 +1061,9 @@ async function cmdRm(argv, opts = {}) {
     }
   }
 
-  const res = await VaultApi.deleteSecret(portal, found.id);
+  const res = await VaultApi.deleteSecret(portal, found.id, {
+    expectedRevision: found.raw.row_revision,
+  });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'delete failed' });
     return 1;
@@ -1124,17 +1127,17 @@ async function cmdRotate(argv, opts = {}) {
     targetLocation: flags.targetLocation ?? existingPayload.target_location,
   });
 
-  // Step 1: stash the old value as <label>-prev. Auto-purge after 24h
-  // is NOT implemented in phase 1 — the user must `mc vault rm
+  // Step 1: stash the old value as a new <label>-prev row. Auto-purge
+  // after 24h is NOT implemented in phase 1 — the user must `mc vault rm
   // <label>-prev` once the new token is confirmed working. The
   // command output makes this explicit; documented as a follow-up.
+  //
+  // The order is what keeps a conflict from writing: the stash goes first
+  // so the old value is never only in memory, an earlier -prev goes last
+  // so a refused update can take its own stash back out and leave the
+  // vault as it found it.
   const prevLabel = `${label}-prev`;
   const prevExisting = await findSecretByLabel(portal, vaultKey, prevLabel, crk);
-  if (prevExisting) {
-    // Replace any stale -prev silently — its presence means the user
-    // rotated before and never cleaned up; the new rotation supersedes.
-    await VaultApi.deleteSecret(portal, prevExisting.id).catch(() => {});
-  }
   const prevEnc = await encryptForWrite({
     vaultKey, crk, label: prevLabel,
     data: normaliseSecretPayload(existing.data) || existing.data,
@@ -1150,13 +1153,49 @@ async function cmdRotate(argv, opts = {}) {
 
   // Step 2: overwrite the original with the new value.
   const newEnc = await encryptForWrite({ vaultKey, crk, label, data: newPayload });
-  const updRes = await VaultApi.updateSecret(portal, existing.id, {
-    secretType: WIRE_SECRET_TYPE,
-    ...newEnc,
-  });
+  let updRes;
+  try {
+    updRes = await VaultApi.updateSecret(portal, existing.id, {
+      secretType: WIRE_SECRET_TYPE,
+      ...newEnc,
+      ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
+    });
+  } catch (error) {
+    if (!isSecretRevisionConflict(error)) throw error;
+    const removed = await removeRowThisRunWrote(portal, prevRes.secret?.id);
+    emit(flags.json, {
+      ok: false,
+      conflict: true,
+      error: removed
+        ? SECRET_CONFLICT_MESSAGE
+        : `"${label}" changed since it was read and was not overwritten, but the "${prevLabel}" written for this rotation could not be removed. Delete it with \`mc vault rm ${prevLabel}\`.`,
+    });
+    return 1;
+  }
   if (!updRes?.ok) {
     emit(flags.json, { ok: false, error: `failed to update "${label}": ${updRes?.error || 'unknown'}` });
     return 1;
+  }
+
+  // Step 3: the earlier -prev is superseded — its presence means the user
+  // rotated before and never cleaned up. This run did not write that row,
+  // so the delete sends the revision from its list read.
+  if (prevExisting) {
+    try {
+      await VaultApi.deleteSecret(portal, prevExisting.id, {
+        expectedRevision: prevExisting.raw.row_revision,
+      });
+    } catch (error) {
+      if (isSecretRevisionConflict(error)) {
+        emit(flags.json, {
+          ok: false,
+          conflict: true,
+          rotated: { id: existing.id, label, prev_label: prevLabel },
+          error: `Rotated "${label}", but the earlier "${prevLabel}" changed since it was read and was kept, so two "${prevLabel}" entries exist. Delete the one you do not need.`,
+        });
+        return 1;
+      }
+    }
   }
 
   emit(flags.json,
@@ -1222,8 +1261,9 @@ async function cmdChangePassword(argv, opts = {}) {
   // If step 3 fails partway, we never call /change-password — the vault
   // stays usable under the old password. If step 5 fails, we've already
   // rotated the auth hash, so we keep going (best effort) and surface
-  // which secrets need manual re-set. This is a narrow window but
-  // documented in the error message.
+  // which secrets need manual re-set. A revision conflict in step 5 stops
+  // the loop instead, and the same report names the entries it left. This
+  // is a narrow window but documented in the error message.
 
   const newSaltBytes = new Uint8Array(32);
   globalThis.crypto.getRandomValues(newSaltBytes);
@@ -1243,7 +1283,7 @@ async function cmdChangePassword(argv, opts = {}) {
     try {
       const { label, data } = await decryptSecretPayload(vaultKey, s);
       const enc = await encryptSecretPayload(newVaultKey, label, data);
-      restaged.push({ id: s.id, label, enc });
+      restaged.push({ id: s.id, label, enc, expectedRevision: s.row_revision });
     } catch (err) {
       emit(flags.json, {
         ok: false,
@@ -1298,14 +1338,21 @@ async function cmdChangePassword(argv, opts = {}) {
 
   // Step 5: push re-encrypted blobs.
   const failures = [];
+  let landed = 0;
   for (const item of restaged) {
     const updRes = await VaultApi.updateSecret(portal, item.id, {
       encryptedLabel: item.enc.encryptedLabel,
       encryptedData: item.enc.encryptedData,
       iv: item.enc.iv,
       labelIv: item.enc.labelIv,
-    }).catch((err) => ({ ok: false, error: err.message }));
-    if (!updRes?.ok) failures.push({ id: item.id, label: item.label, error: updRes?.error });
+      ...(item.expectedRevision === undefined ? {} : { expectedRevision: item.expectedRevision }),
+    }).catch((err) => ({ ok: false, error: err.message, conflict: isSecretRevisionConflict(err) }));
+    if (!updRes?.ok) {
+      failures.push({ id: item.id, label: item.label, error: updRes?.error, conflict: updRes?.conflict });
+      if (updRes?.conflict) break;
+    } else {
+      landed += 1;
+    }
   }
 
   // §12f: any cached vault-key is now stale (the password change
@@ -1315,11 +1362,17 @@ async function cmdChangePassword(argv, opts = {}) {
   await cacheVaultKey(newVaultKeyBytes, { deps: opts.cacheDeps });
 
   if (failures.length) {
+    const conflict = failures.find((failure) => failure.conflict);
+    const notAttempted = restaged.slice(landed + failures.length).map((item) => item.label);
+    const notEncrypted = [...failures.map((failure) => failure.label), ...notAttempted];
     emit(flags.json, {
       ok: false,
       changed_password: true,
       failures,
-      error: `password changed; ${failures.length}/${restaged.length} secret(s) failed to re-encrypt on the server. Affected labels: ${failures.map(f => f.label).join(', ')}. Use \`mc vault set\` to re-store them.`,
+      ...(conflict ? { conflict: true, re_encrypted: landed, not_attempted: notAttempted } : {}),
+      error: conflict
+        ? `password changed; revision conflict: ${conflict.label} changed since it was read, so that write was not applied. ${landed} secret(s) re-encrypted before the conflict; the rest were not attempted. Not re-encrypted: ${notEncrypted.join(', ')}. Use \`mc vault set\` to re-store them.`
+        : `password changed; ${failures.length}/${restaged.length} secret(s) failed to re-encrypt on the server. Affected labels: ${failures.map(f => f.label).join(', ')}. Use \`mc vault set\` to re-store them.`,
     });
     return 1;
   }
@@ -1518,6 +1571,7 @@ async function cmdMigrate(argv, opts = {}) {
   let migrated = 0;
   let alreadyEnvelope = 0;
   let failed = 0;
+  let conflictId = null;
   for (const s of wire) {
     if (isEnvelopeSecret(s)) { alreadyEnvelope += 1; continue; }
     try {
@@ -1526,16 +1580,28 @@ async function cmdMigrate(argv, opts = {}) {
       const res = await VaultApi.updateSecret(portal, s.id, {
         secretType: s.secret_type || WIRE_SECRET_TYPE,
         ...enc,
+        ...(s.row_revision === undefined ? {} : { expectedRevision: s.row_revision }),
       });
       if (res?.ok) migrated += 1; else failed += 1;
-    } catch { failed += 1; }
+    } catch (error) {
+      failed += 1;
+      if (isSecretRevisionConflict(error)) { conflictId = s.id; break; }
+    }
   }
 
+  const failureMessage = conflictId
+    ? `Migration stopped: entry ${conflictId} changed since it was read; its write was not applied. ${migrated} secret(s) migrated before the conflict.`
+    : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`;
   emit(flags.json,
-    { ok: failed === 0, migrated, already_envelope: alreadyEnvelope, failed },
-    failed === 0
-      ? `Migrated ${migrated} secret(s) to the custody envelope (${alreadyEnvelope} already migrated).`
-      : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`,
+    {
+      ok: failed === 0,
+      migrated,
+      already_envelope: alreadyEnvelope,
+      failed,
+      ...(conflictId ? { conflict: true } : {}),
+      ...(failed === 0 ? {} : { error: failureMessage }),
+    },
+    `Migrated ${migrated} secret(s) to the custody envelope (${alreadyEnvelope} already migrated).`,
   );
   return failed === 0 ? 0 : 1;
 }
@@ -1711,7 +1777,11 @@ async function cmdAdopt(argv, opts = {}) {
   });
   const existing = await findSecretByLabel(portal, vaultKey, captured.label, crk);
   const res = existing
-    ? await VaultApi.updateSecret(portal, existing.id, { secretType: WIRE_SECRET_TYPE, ...enc })
+    ? await VaultApi.updateSecret(portal, existing.id, {
+      secretType: WIRE_SECRET_TYPE,
+      ...enc,
+      ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
+    })
     : await VaultApi.createSecret(portal, { secretType: WIRE_SECRET_TYPE, ...enc });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'store failed' });
@@ -1814,6 +1884,27 @@ async function findSecretByLabel(portal, vaultKey, label, crk = null) {
     } catch { /* skip undecryptable */ }
   }
   return null;
+}
+
+const SECRET_CONFLICT_MESSAGE = 'Vault entry changed since it was read; nothing was written to that entry.';
+
+function isSecretRevisionConflict(error) {
+  return error?.status === 409
+    && ['VAULT_SECRET_CONFLICT', 'VAULT_SECRET_REVISION_CONFLICT'].includes(error?.data?.code);
+}
+
+// Undoes a row this run created. The create answers no revision, so the
+// delete sends the one a fresh list gives, absent on a server before it
+// serves them. Reports whether the row is gone; never throws.
+async function removeRowThisRunWrote(portal, id) {
+  if (!id) return false;
+  const listed = await VaultApi.listSecrets(portal).catch(() => null);
+  const row = listed?.secrets?.find((entry) => entry?.id === id);
+  if (!row) return false;
+  const res = await VaultApi.deleteSecret(portal, id, {
+    expectedRevision: row.row_revision,
+  }).catch(() => null);
+  return res?.ok === true;
 }
 
 /**
