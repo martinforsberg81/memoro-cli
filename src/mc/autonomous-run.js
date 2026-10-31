@@ -23,6 +23,7 @@ import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes
 import { takeClaim, releaseClaim } from './resource-claim.js';
 import { gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
+import { providerObserver } from './provider-observations.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
   const skip = (reason, text) => ({ kind: null, reason, skip: text });
@@ -64,7 +65,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     say(`${record.project}: independent review continuation: ${routed.queued ? 'queued for merger' : routed.reason}`);
     return 'ran';
   }
-  if (choice.kind === 'review' && !choice.recovery) return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+  if (choice.kind === 'review' && !choice.recovery) return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps, capability,
     waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult });
   const name = record.project; const programme = record.programme;
   if (choice.recovery) {
@@ -202,6 +203,8 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     deps.mkdir(paths.scratch);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
     const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const observeProvider = providerObserver({ root, capability, tool: settings.tool, bin: launch.spec.bin, role: 'step', runId: actor.run_id, project: name,
+      directory, control: () => readAutonomousState(root, programme, name).session_control, deps, say });
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, prompt,
       env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
         MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: directory },
@@ -210,6 +213,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
         directory, pollMs: capability.pollMs },
     });
     observeResult(launch.id, result);
+    observeProvider(result);
     if (!result.normal_exit || !result.recovery_ready || !result.control_persisted) throw new Error(result.reason || 'incomplete autonomous process');
     const closing = readAutonomousState(root, programme, name);
     if (closing.publication?.run_id === actor.run_id) {
@@ -234,7 +238,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
 }
 
 /** Same lane/slot accounting as builders; never the builder checkout or overlay. */
-export async function runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+export async function runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps, capability,
   waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult }) {
   const name = record.project; const programme = record.programme;
   const state = readAutonomousState(root, programme, name);
@@ -271,6 +275,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     currentWritten = true;
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
     const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const observeProvider = providerObserver({ root, capability, tool: settings.tool, bin: launch.spec.bin, role: 'review', runId: actor.run_id, project: name, deps, say });
     beginReviewProcess(options);
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: session.checkout, prompt,
       reviewProcess: { options, tool: launch.id },
@@ -278,6 +283,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
         MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
       unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'] });
     observeResult(launch.id, result);
+    observeProvider(result);
     const invalidReasons = [];
     try { await verifyPr(session); } catch (error) { invalidReasons.push(error.message); }
     const finished = completeAutonomousReview(options, result, { invalidReasons });

@@ -171,7 +171,7 @@ function programmeAction(status, journal) {
 /** Everything `mc programme status` says. `capabilities` defaults to what this
  * installation reports. Damaged programme state is reported as a problem. */
 export function programmeStatus(root, programme, deps = {}) {
-  const report = installationCapabilities(deps);
+  const report = installationCapabilities({ root, ...deps });
   const missing = missingCapabilities(report);
   const execution = { supported: !missing.length, missing, reason: missing.length ? report.reason || null : null };
   // No state file is no autonomous programme — a mistyped name or v1 only — never damage.
@@ -233,8 +233,10 @@ export function autonomySection({ root, deps = {} } = {}) {
   let names = [];
   try { names = listAutonomousProgrammes(root); } catch { return null; }
   if (!names.length) return null;
+  // Measured once: the report runs each tool's --version.
+  const capabilities = installationCapabilities({ root, ...deps });
   return { programmes: names.map(name => {
-    const status = programmeStatus(root, name, deps);
+    const status = programmeStatus(root, name, { ...deps, capabilities });
     return { programme: name, mode: status.mode, goals: status.goals.length, in_flight: status.in_flight.length,
       stop: status.autonomy?.stop || null, next_action: status.next_action, problem: status.problem || null };
   }) };

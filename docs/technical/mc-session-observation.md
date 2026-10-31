@@ -129,4 +129,26 @@ before it has a chance to read the control command. The exit-outcome fixtures
 time frozen, so slow startup cannot reach a boundary and kill them before they
 print the events under test. Policy thresholds are unchanged.
 
+## Provider observations
+
+`mc programme capabilities` reports support only from real sessions, recorded in
+`runner/provider-observations.json` (`src/mc/provider-observations.js`). Each
+entry holds `tool`, `tool_version` (from `<bin> --version`, taken before the
+process starts), `role`, `signal`, `run_id`, `project` and `at`.
+
+| Signal | Recorded when |
+| --- | --- |
+| `session` | a build ended with `normal_exit` and `control_persisted`, or a review with `normal_exit`: the review transport keeps no session control |
+| `control` | the process wrote a session-control request, or read status, which leaves a mark in its `MC_SCRATCH` because a read changes no state |
+| `interrupt` | supervision signalled the process group (`signalled` on the session result) |
+
+A capability is supported when the production capability can be built here and
+every tool in the model catalog has, at its installed version, what it needs:
+`build` a step `session`, `review` a review `session`, `control-signals` a
+`control`, `interrupt` an `interrupt`, `programme-jobs` and `programme-plan` any
+`session`. A new tool version has no support until observed again. That refuses
+`autonomy on` only: `assertProgrammeDispatch` does not consult capabilities, so a
+sent goal runs with autonomy off and with no support. A capability with
+`fixture: true` records nothing.
+
 Verification: `mc gate tests/mc/session-observation.test.js tests/mc/session-control.test.js tests/mc/run-session.test.js tests/mc/run-plan.test.js`.

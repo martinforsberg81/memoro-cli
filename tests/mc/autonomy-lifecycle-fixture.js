@@ -213,7 +213,7 @@ export function programmeWorld(t, { profile = PROFILE } = {}) {
       call.stdout.write(JSON.stringify({ evidence: { path: persistGateReceipt({ root: env.MC_HOME, receipt }) } }));
       return 0;
     } };
-  w.capability = { profile, pollMs: 10, review: true, clock: () => ({ at_ms: 1000, awake_ms: 0 }),
+  w.capability = { fixture: true, profile, pollMs: 10, review: true, clock: () => ({ at_ms: 1000, awake_ms: 0 }),
     gate: async () => 0, publication: w.publication };
   w.another = () => createRunner({ deps: w.deps, autonomous: w.capability });
   w.runner = w.another();

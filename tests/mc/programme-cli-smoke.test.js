@@ -27,6 +27,7 @@ const PROGRAMME = 'disposable-programme';
 const FAKE_TOOL = `#!${process.execPath}
 const { appendFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
+if (process.argv[2] === '--version') { console.log('0.0.0 (fake)'); process.exit(0); }
 const tool = require('node:path').basename(process.argv[1]);
 appendFileSync(process.env.FAKE_TOOL_LOG, JSON.stringify({ tool, argv: process.argv.slice(2), role: process.env.MC_AUTONOMOUS_ROLE || null }) + '\\n');
 if (!process.env.FAKE_TOOL_DRIVE) process.exit(0);

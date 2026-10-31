@@ -1,40 +1,40 @@
 /** Operator autonomy on/off for one programme, and the installation's
  * capability report. Recording a preference is not a launch: the runner still
- * dispatches v2 only through its injected capability, and this installation
- * supports none. Headless roles cannot change the preference. */
+ * dispatches v2 only through its injected capability, and support comes only
+ * from observed provider runs. A sent goal consults none of this. Headless
+ * roles cannot change the preference. */
 import { createHash } from 'node:crypto';
+import { resolveLaunch } from '../adapters/index.js';
+import { productionAutonomy } from './autonomous-capability.js';
+import { readModels } from './model-config.js';
+import { workRoot } from './paths.js';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
+import { observationGaps, readObservations, toolVersion } from './provider-observations.js';
 
 export const CONTROL_CAPABILITIES = Object.freeze(['programme-jobs', 'programme-plan', 'build', 'review', 'control-signals', 'interrupt']);
 const text = value => typeof value === 'string' && value.trim().length > 0;
 
-// The installed runner is `runLoop`'s `createRunner({ merge, deps })`: no
-// autonomous capability, so it skips every v2 goal.
-const NOT_WIRED = 'the installed runner (runLoop, src/mc/run.js) passes no autonomous capability';
-const NO_CLOCK = 'no production awake clock that excludes machine suspend';
-const NO_PROVIDER = 'not observed with a provider (model) process';
+const NOT_ACTIVATED = 'autonomous execution is not activated in this installation';
 
-/** What this installation has, capability by capability: what is built, what
- * proved it and what is still missing. Built and proven by fixtures is not
- * supported, so `supported` is empty and autonomy on refuses. Transport facts are
- * the 2026-10-28 version/help probes (docs/technical/mc-session-observation.md);
- * no model session was launched to measure them. */
+/** What is built and what proved it, capability by capability. Fixtures prove
+ * code, not support: support and `missing` are measured per call. Transport
+ * facts are the 2026-10-28 version/help probes
+ * (docs/technical/mc-session-observation.md); no model session was launched to
+ * measure them. */
 const INSTALLATION = Object.freeze({
-  supported: Object.freeze([]),
-  reason: 'autonomous execution is not activated in this installation',
   capabilities: Object.freeze([
     { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
-      proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+      proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js' },
     { name: 'programme-plan', built: 'durable planner journal, event queue and queue consumer (src/mc/programme-plan-run.js)',
-      proven: 'journal effects, recovery and scripted sessions through the consumer: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_PROVIDER}` },
+      proven: 'journal effects, recovery and scripted sessions through the consumer: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js' },
     { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
-      proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js', missing: `${NOT_WIRED}; ${NO_CLOCK}` },
+      proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js' },
     { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',
-      proven: 'scripted review sessions: tests/mc/autonomous-review.test.js, tests/mc/autonomy-lifecycle.test.js', missing: NOT_WIRED },
+      proven: 'scripted review sessions: tests/mc/autonomous-review.test.js, tests/mc/autonomy-lifecycle.test.js' },
     { name: 'control-signals', built: 'durable mc session-control status|checkpoint|criterion, the one path both tools read',
-      proven: 'real fixture processes in both prompt shapes read the actual status command (tests/mc/session-observation.test.js)', missing: NO_PROVIDER },
+      proven: 'real fixture processes in both prompt shapes read the actual status command (tests/mc/session-observation.test.js)' },
     { name: 'interrupt', built: 'process-group SIGTERM, then SIGKILL after a bounded grace (src/mc/session-supervision.js)',
-      proven: 'a real fixture process that ignores finish-session and SIGTERM is closed with its child (tests/mc/session-observation.test.js)', missing: `${NO_PROVIDER}; ${NO_CLOCK}` },
+      proven: 'a real fixture process that ignores finish-session and SIGTERM is closed with its child (tests/mc/session-observation.test.js)' },
   ].map(Object.freeze)),
   transport: Object.freeze([
     { tool: 'codex', prompt: 'positional argument; stdin ignored', live_control: 'none; durable session-control only',
@@ -46,10 +46,44 @@ const INSTALLATION = Object.freeze({
   ].map(Object.freeze)),
 });
 
-/** What this installation can control: the report above. Tests inject one;
- * fixtures are not support. */
+/** Every tool the catalog can launch, at the version installed now. */
+function installedTools(deps, env) {
+  const catalog = deps.catalog ? deps.catalog() : readModels(env);
+  const names = [...new Set([...catalog.fast, ...catalog.large, catalog.review].map(item => item.tool))];
+  const launch = deps.launch || resolveLaunch;
+  const version = deps.toolVersion || toolVersion;
+  return names.map(tool => {
+    const resolved = launch(tool);
+    return { tool, version: resolved?.ok ? version(resolved.spec.bin) : null };
+  });
+}
+
+/** A capability is supported when the runner can build its capability here and
+ * every catalog tool, at its installed version, has the observation it needs.
+ * Anything unreadable supports nothing. */
+function observedCapabilities(deps) {
+  const env = deps.env || process.env;
+  const root = deps.root || workRoot(env);
+  let refusal = null;
+  const built = (deps.productionAutonomy || productionAutonomy)({ root, env,
+    deps: { awakeClock: deps.awakeClock, log: line => { refusal = line; } } });
+  let tools = []; let observations = []; let unreadable = null;
+  try {
+    tools = installedTools(deps, env);
+    observations = readObservations(root);
+  } catch (error) { unreadable = error.message; }
+  const blockers = [built ? null : refusal || 'autonomous capability unavailable', unreadable].filter(Boolean);
+  const capabilities = INSTALLATION.capabilities.map(item => {
+    const missing = [...blockers, ...observationGaps(item.name, tools, observations)];
+    return Object.freeze({ ...item, ...(missing.length ? { missing: missing.join('; ') } : {}) });
+  });
+  return { supported: capabilities.filter(item => !item.missing).map(item => item.name), reason: NOT_ACTIVATED,
+    capabilities, transport: INSTALLATION.transport };
+}
+
+/** What this installation can control, measured now. Tests inject one. */
 export function installationCapabilities(deps = {}) {
-  return deps.capabilities || INSTALLATION;
+  return deps.capabilities || observedCapabilities(deps);
 }
 export function missingCapabilities(report) {
   const supported = Array.isArray(report?.supported) ? report.supported : [];
@@ -78,7 +112,7 @@ const logged = (journal, entry) => { journal.control = [...(journal.control || [
 export function programmeAutonomyOn({ root, programme, revision, stop = null, by, now = Date.now(), deps = {} }) {
   if (!text(by)) throw new Error('autonomy names who set it');
   if (stop !== null && !text(stop)) throw new Error('--stop is a condition in prose');
-  const capabilities = supportedCapabilities(deps);
+  const capabilities = supportedCapabilities({ root, ...deps });
   return updateProgrammeJobs({ root, programme, revision, deps }, (state, journal, paths) => {
     if (state.autonomy?.enabled && state.autonomy.stop === stop && journal.mode !== 'stopped') return state;
     const at = stamp(now);

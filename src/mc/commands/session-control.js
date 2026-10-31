@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { projectSessionCheckpoint } from '../autonomous-state.js';
 import { goalCommandContext as autonomousCommandContext } from './goal.js';
 import { scanArgs } from './flags.js';
+import { markControlRead } from '../provider-observations.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
@@ -19,6 +20,9 @@ export async function run(argv, deps = {}) {
     const { root, actor } = autonomousCommandContext(deps);
     const result = projectSessionCheckpoint(root, ...parts, operation, input,
       { ...deps, actor, revision: Number(revision) });
+    // A read leaves no state; a lost mark costs an observation, never the session's answer.
+    const directory = (deps.env || process.env).MC_SCRATCH;
+    if (operation === 'status' && directory) { try { markControlRead(directory, actor.run_id); } catch { /* unobserved */ } }
     stdout.write(`${JSON.stringify(result, null, 2)}\n`); return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }

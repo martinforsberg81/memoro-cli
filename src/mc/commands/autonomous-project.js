@@ -51,7 +51,7 @@ export async function run(argv, deps = {}) {
         : mutateAutonomousProject(root, programme, project, args.operation, input, options);
     const response = result.session_control && ['show', 'progress'].includes(args.operation)
       ? { ...result, control: controlResponse(result.session_control) } : result;
-    stdout.write(`${JSON.stringify(args.operation === 'send' ? { contract: result, execution_enabled: false } : response, null, 2)}\n`);
+    stdout.write(`${JSON.stringify(args.operation === 'send' ? { contract: result } : response, null, 2)}\n`);
     return 0;
   } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }

@@ -180,7 +180,7 @@ export function usage() {
     + '        mc programme metadata <programme> --expected-revision <n> --input-file <json>\n'
     + '        Autonomy controls only new headless planner claims: sent goals, reviews and admitted merges continue.\n'
     + '        autonomy on refuses unless this installation supports every control capability —\n'
-    + '        mc programme capabilities says what it has and lacks; the installed runner supports none.\n'
+    + '        mc programme capabilities says what it has and lacks; support comes from observed provider runs.\n'
     + '        Phases close explicitly, in order; only the earliest unclosed phase dispatches. Use mc goal for assignments.\n'
     + '        Events persist with autonomy on or off; only a named ack consumes one, never a process exit.\n';
 }

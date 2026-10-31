@@ -117,7 +117,7 @@ function shortSession(work, observer, extra = {}) {
 }
 for (const tool of ['codex', 'claude']) it(`${tool}: observed cooperative process exit is distinct from green publication evidence`, async t => {
   const work = repo(t); const result = await shortSession(work, localObserver(tool), { tool });
-  assert.equal(result.status, 0, result.stderr); assert.equal(result.normal_exit, true); assert.equal(result.recovery_ready, true);
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.normal_exit, true); assert.equal(result.recovery_ready, true); assert.equal(result.signalled, false);
   assert.equal(result.control.result, null, 'transport completion does not manufacture a handoff/gate result');
   assert.equal(existsSync(join(work.directory, 'attempt', 'snapshot', 'checkpoint.json')), true);
 });
@@ -206,6 +206,7 @@ for (const tool of ['codex', 'claude']) it(`${tool}: ignored durable closure and
     prompt: tool === 'claude' ? 'synthetic fixture assignment' : null, onSpawn: value => { pid = value; },
     autonomous: { version: 1, tool, ...observer, clock, directory: join(work.directory, 'attempt'), pollMs: 20, termMs: 100 } });
   assert.equal(result.status !== 0, true, result.stderr); assert.equal(result.normal_exit, false); assert.equal(result.interrupted, true);
+  assert.equal(result.signalled, true, 'supervision ended a real process');
   assert.equal(result.recovery_ready, true, JSON.stringify(result.recovery)); assert.equal(groupAlive(pid), false);
   assert.match(result.stdout, /fixture-child:\d+/); assert.equal(JSON.parse(readFileSync(closing, 'utf8')).next_action, 'finish-session');
   assert.equal(result.control.result.normal_exit, false); assert.equal(result.control.context.quality, 'unknown');
