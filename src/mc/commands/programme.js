@@ -104,6 +104,10 @@ export async function run(argv, deps = {}) {
     if (actor?.role === 'plan' && env.MC_PROGRAMME && env.MC_PROGRAMME !== args.target) throw new Error('planner target must match the owning programme');
     const options = { root, programme: args.target, actor, token: deps.token || env.MC_PROGRAMME_LEASE,
       revision: args.revision, now: deps.now ? Number(deps.now()) : Date.now(), deps };
+    if (args.operation === 'show' && !existsSync(autonomousPaths(root, args.target).programme)) {
+      stderr.write(`mc: programme ${args.target} has no state yet — a first mc programme phase add or mc programme metadata creates it\n`);
+      return 1;
+    }
     const result = args.operation === 'show' ? readProgrammeState(root, args.target, deps)
       : mutateProgramme(root, args.target, args.operation, input, { ...deps, actor, revision: args.revision,
         operation: { id: planningOperationId('metadata', args.target, args.revision, input), kind: 'programme-metadata', input } });

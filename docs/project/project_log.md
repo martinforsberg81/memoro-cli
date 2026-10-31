@@ -162,3 +162,4 @@ existed?
 | 2026-10-30 | mc | autonomy-programme-plan | delivered | Review the project against its goal | none | [#1162](https://github.com/martinforsberg81/memoro-cli/pull/1162) |
 | 2026-10-30 | mc | autonomy-operations | delivered | Review the project against its goal | [docs/technical/mc-autonomous-programmes.md](../technical/mc-autonomous-programmes.md) | [#1170](https://github.com/martinforsberg81/memoro-cli/pull/1170) |
 | 2026-10-31 | mc | goals-review-recovery | delivered | Review the project against its goal | none | [#1174](https://github.com/martinforsberg81/memoro-cli/pull/1174) |
+| 2026-10-31 | mc | goals-foundation | delivered | Review the project against its goal | none | [#1178](https://github.com/martinforsberg81/memoro-cli/pull/1178) |
