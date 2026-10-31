@@ -41,9 +41,11 @@ its index, files and branch remain intact until recovery explicitly allows a
 fresh session. This dispatcher does not replay an old conversation.
 
 Fresh starts fetch/merge main using the runner's `syncMain`, without v1's theirs-only `.gitignore` shortcut. If conflicts remain,
-the injected capability must provide `integrateConflicts`, an integration-only
-step operation on the same reserved run (not a repair agent). It receives the
-bounded assignment and autonomous step instructions. The dispatcher verifies
+the capability must provide `integrateConflicts`, an integration-only step
+operation on the same reserved run (not a repair agent). The production one
+(`src/mc/autonomous-capability.js`) is one supervised headless session on the
+build's launch path, with the bounded assignment, the conflict list and the
+autonomous step instructions; a non-normal exit stops the attempt. The dispatcher verifies
 conflict resolution, merge completion, branch identity and main ancestry before
 checking the starting gate and launching implementation. Missing/unfinished
 integration preserves the merge and records an incomplete attempt for plan.

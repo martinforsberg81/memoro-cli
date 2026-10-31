@@ -167,11 +167,24 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const prompt = buildSessionStart({ assignment: state.contract, programme: agreement, runId: actor.run_id,
       previous: previousHandoff, previousRunId });
     if (previousRunId) retirePreviousSession(sessionGitDir(worktree), previousRunId);
+    // One launch path: main integration and the build differ in prompt and scratch directory only.
+    const command = ({ instructions: text, prompt: payload }) => gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin,
+      args: headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions: text, prompt: payload, profileArgs, cache: role.cache }), billing: route.billing });
+    const sessionEnv = scratch => ({ MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
+      MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: scratch });
+    const unsetEnv = [...PROVIDER_API_ENV_NAMES, 'MC_STEP'];
+    const directory = join(paths.scratch, actor.run_id);
+    deps.mkdir(paths.scratch);
     const synced = syncMain(worktree, name, { resolveIgnore: false });
     if (synced.conflicts.length) {
       if (typeof capability.integrateConflicts !== 'function') throw new Error('main conflicts require step integration before building');
-      await capability.integrateConflicts({ ...options, worktree, conflicts: synced.conflicts, instructions, prompt });
+      const integration = `${directory}-integration`;
+      await capability.integrateConflicts({ ...options, worktree, conflicts: synced.conflicts, instructions, prompt,
+        launch: { tool: launch.id, command, env: sessionEnv(integration), unsetEnv, directory: integration },
+        observeResult: result => observeResult(launch.id, result) });
       if (git(['diff', '--name-only', '--diff-filter=U']) || deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) throw new Error('main integration is unfinished');
+      // Its snapshot is the merge it finished; the build supervises the tree from here.
+      retirePreviousSession(sessionGitDir(worktree), actor.run_id);
     } else if (!synced.ok) throw new Error(`main integration failed: ${synced.why}`);
     if (git(['branch', '--show-current']) !== branch || !deps.git(worktree, ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']).ok) throw new Error('current main is not integrated on the owned branch');
     await deps.attachDeps(worktree);
@@ -199,16 +212,11 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     verifier = capability.verifier ? capability.verifier({ root, programme, project: name, worktree, env: deps.env }) : null;
     const observer = projectSessionObserver({ ...options, verify: verifier ?? capability.verify });
     if (observer.control.phase !== 'running') throw new Error('starting integration/gate exhausted the session budget');
-    const directory = join(paths.scratch, actor.run_id);
-    deps.mkdir(paths.scratch);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
-    const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const tool = command({ instructions, prompt });
     const observeProvider = providerObserver({ root, capability, tool: settings.tool, bin: launch.spec.bin, role: 'step', runId: actor.run_id, project: name,
       directory, control: () => readAutonomousState(root, programme, name).session_control, deps, say });
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, prompt,
-      env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
-        MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: directory },
-      unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'],
+      env: sessionEnv(directory), unsetEnv,
       autonomous: { version: 1, tool: launch.id, ...observer, clock: capability.clock,
         directory, pollMs: capability.pollMs },
     });

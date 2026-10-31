@@ -1,9 +1,10 @@
-# Autonomous transport observation and interruption (inactive)
+# Autonomous transport observation and interruption
 
 `streamSession` has an explicit `autonomous` version-1 runner seam. No existing
 v1 caller supplies it; `watchFor`, `sessionStanding`, result-grace, Claude
 check-ins/silence watches and unwatched Codex sessions keep their old behavior.
-This does **not** enable autonomous scheduling or change any deployed programme.
+The runner supplies it for goal builds and for their main integration, whose
+activity is observed as `{ kind: 'tool', id: 'main-integration' }`.
 
 ## Observations, not invented context
 
