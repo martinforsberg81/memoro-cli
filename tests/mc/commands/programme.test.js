@@ -90,6 +90,23 @@ test('programme input grammar, malformed state and held locks fail closed', asyn
   assert.throws(() => autonomousPaths(f.root, '../escape'), /stable/);
 });
 
+test('show on a programme with no state says so plainly and prints nothing to stdout', async t => {
+  const f = fixture(t); rmSync(f.paths.programme);
+  assert.equal(await run(['show', f.programme], f.deps), 1);
+  assert.equal(f.err.join(''), `mc: programme ${f.programme} has no state yet — a first mc programme phase add or mc programme metadata creates it\n`);
+  assert.deepEqual(f.out, []);
+});
+
+test('show on a present but invalid programme state keeps failing with the state error', async t => {
+  const f = fixture(t); writeFileSync(f.paths.programme, '{');
+  let existing = null;
+  try { readProgrammeState(f.root, f.programme); } catch (error) { existing = error.message; }
+  assert.ok(existing, 'readProgrammeState must reject the invalid state');
+  assert.equal(await run(['show', f.programme], f.deps), 1);
+  assert.equal(f.err.join(''), `mc: ${existing}\n`);
+  assert.doesNotMatch(f.err.join(''), /has no state yet/);
+});
+
 test('foreground ownership refusal is checked inside the write lock', async t => {
   const f = fixture(t);
   const lock = (_root, fn) => {
