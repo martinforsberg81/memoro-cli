@@ -120,6 +120,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   if (!held.ok) { dropSlot(); return 'skipped:autonomous-owned'; }
   let owned = false;
   let currentWritten = false;
+  let verifier = null;
   try {
     // Another runner can have claimed while this one waited for capacity.
     let state = readAutonomousState(root, programme, name);
@@ -193,7 +194,9 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
       say(`${name}: starting gate remains red on the assigned main incident; repair must still publish a complete green gate`);
     }
     observeActivity({ kind: 'model', id: null });
-    const observer = projectSessionObserver({ ...options, verify: capability.verify });
+    // A verifier built for this run measures in this worktree; fixtures keep their own `verify`.
+    verifier = capability.verifier ? capability.verifier({ root, programme, project: name, worktree, env: deps.env }) : null;
+    const observer = projectSessionObserver({ ...options, verify: verifier ?? capability.verify });
     if (observer.control.phase !== 'running') throw new Error('starting integration/gate exhausted the session budget');
     const directory = join(paths.scratch, actor.run_id);
     deps.mkdir(paths.scratch);
@@ -222,6 +225,8 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     }
     return owned ? 'ran' : 'skipped:autonomous-owned';
   } finally {
+    // No measurement outlives its session: closing ends a running check before the lane is given back.
+    await verifier?.close?.();
     if (currentWritten) remove(currentPath);
     releaseClaim(claimPath, held.marker);
     dropSlot();

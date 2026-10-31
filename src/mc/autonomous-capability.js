@@ -1,7 +1,7 @@
 /**
  * The capability `createRunner({ autonomous })` takes in production: the awake
  * clock, the session control profile and the switches that let v2 goals build,
- * be reviewed and be planned.
+ * be reviewed and be planned, and the verifier that measures what a session asks.
  *
  * It fails closed. A machine whose awake clock cannot be read, or a profile
  * file that is not a valid profile, means no capability, so v2 goals are skipped
@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createAwakeClock, probeAwakeClock } from './awake-clock.js';
+import { createCheckpointVerifier } from './checkpoint-verifier.js';
 import { validateControlProfile } from './session-control.js';
 
 const MINUTE_MS = 60 * 1000;
@@ -76,5 +77,7 @@ export function productionAutonomy({ root, deps = {} }) {
   } catch (error) {
     return refuse(error.message);
   }
-  return { clock, pollMs: POLL_MS, review: true, programmeJobs: true, programmePlan: true, publication: {}, profile };
+  // A factory, not an instance: each run measures in its own worktree and closes its own measurement.
+  const verifier = options => createCheckpointVerifier(options);
+  return { clock, pollMs: POLL_MS, review: true, programmeJobs: true, programmePlan: true, publication: {}, profile, verifier };
 }
