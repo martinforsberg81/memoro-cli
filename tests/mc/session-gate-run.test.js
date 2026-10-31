@@ -93,7 +93,8 @@ process.exitCode = await run(['--budget', '0.02'], {
     assert.equal(existsSync(lockPath), true);
     if (interrupt) process.kill(workerPid, 'SIGTERM');
     else writeFileSync(finish, 'done');
-    await until(() => existsSync(`${log}.exit`));
+    // The file can exist before its code is in it, and Number('') is 0.
+    await until(() => existsSync(`${log}.exit`) && readFileSync(`${log}.exit`, 'utf8').trim());
     assert.equal(Number(readFileSync(`${log}.exit`, 'utf8')), interrupt ? 1 : 0);
     await until(() => !alive(workerPid));
     await until(() => !alive(testPid));

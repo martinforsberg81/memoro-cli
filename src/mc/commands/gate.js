@@ -56,7 +56,7 @@ import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
 
 /** How long the answer waits for the gate, in seconds, unless `--budget` says otherwise. */
-const DEFAULT_BUDGET = 540;
+export const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
 /** What a test file is called: `….test.js`, `.mjs`, `.cjs`, `.ts`. */
@@ -89,6 +89,14 @@ const SYSTEM = {
   declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
   lane: (repoPath, { env }) => gateLaneOf(repoPath, { root: mcHome(env) }),
 };
+
+/** The lane a session's gate reserves. It is the primary checkout's: a worktree
+ * of memoro is memoro. */
+export function gateReservation(cwd, env = process.env, io = SYSTEM) {
+  const common = io.git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const primary = common ? repositoryDir(common) : cwd;
+  return { root: mcHome(env), lane: sessionLaneOf(io.lane(primary, { env })), repo: basename(primary) };
+}
 
 /** Read-only re-selection for the autonomous publication boundary. Use the
  * same declaration, diff, added tests and flags as the lane-owning gate. */
@@ -199,10 +207,8 @@ export async function run(argv, deps = {}) {
       return 2;
     }
 
-    // The lane is the primary checkout's: a worktree of memoro is memoro.
-    const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const primary = common ? repositoryDir(common) : root;
-    const lane = sessionLaneOf(io.lane(primary, { env }));
+    const reservation = gateReservation(root, env, io);
+    const { lane } = reservation;
     // The free cores, not the core count: a session's gate has no round mode, so
     // `testLanes` answers the free cores here (a merge round takes at least four).
     const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
@@ -217,8 +223,8 @@ export async function run(argv, deps = {}) {
     try {
       io.mkdir(dir);
       io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
-        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(primary), run, base: frozenBase, candidate, configuration,
-          session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, reservation: { root: mcHome(env), lane, repo: basename(primary) } }));
+        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(reservation.repo), run, base: frozenBase, candidate, configuration,
+          session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, reservation }));
       const fd = io.open(logPath);
       // The worker owns the reservation, the test children and the result.
       // A short-lived command or shell cannot release its lane early.

@@ -11,6 +11,9 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { takeClaim, releaseClaim } from './resource-claim.js';
 import { assertSessionDirectory, groupAlive, preserveSession, reconcilePreviousSession, reconcileSessionGate, sessionGitDir } from './session-recovery.js';
 
+/** How long a process group gets between SIGTERM and SIGKILL. */
+export const SESSION_TERM_MS = 1000;
+
 /** Atomic durable connector; callbacks can race a sample's expected revision,
  * which fails closed rather than overwriting a checkpoint request. `verify`
  * is trusted runner measurement, never the model's callback payload itself. */
@@ -34,7 +37,7 @@ export function projectSessionObserver({ root, programme, project, actor, verify
 export async function streamAutonomousSession({ bin, args, cwd, env, unsetEnv = [], prompt = null,
   onSpawn = null, spawn: spawnFn = spawn, autonomous }) {
   const { version, tool, control: initial, clock, observe, interrupt, directory,
-    pollMs, termMs = 1000, contextWindow = null, activity = () => null } = autonomous;
+    pollMs, termMs = SESSION_TERM_MS, contextWindow = null, activity = () => null } = autonomous;
   validateControlState(initial);
   if (!['running', 'closing'].includes(initial.phase)) throw new Error('terminal control cannot launch a builder');
   if (version !== 1 || typeof clock !== 'function' || typeof observe !== 'function' || typeof interrupt !== 'function'
