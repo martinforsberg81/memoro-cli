@@ -154,10 +154,11 @@ export async function renewSecretRefreshLease(portal, id, {
   );
 }
 
-export async function deleteSecret(portal, id) {
+export async function deleteSecret(portal, id, { expectedRevision } = {}) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, `/api/vault/secrets/${encodeURIComponent(id)}`, {
     token: p.token, method: 'DELETE',
+    ...(expectedRevision === undefined ? {} : { body: { expectedRevision } }),
   });
 }
 

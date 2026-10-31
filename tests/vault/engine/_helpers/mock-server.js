@@ -22,6 +22,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
   let secrets = []; // [{ id, secret_type, encrypted_label, encrypted_data, iv, label_iv, ... }]
   let unlocked = false;
   let idCounter = 0;
+  let conflictNextWrite = false;
   const calls = [];
 
   function hashAuthHash(authHash) {
@@ -124,7 +125,10 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (!unlocked) {
         const err = new Error('Memoro 403: Vault is locked'); err.status = 403; throw err;
       }
-      return { ok: true, secrets };
+      return {
+        ok: true,
+        secrets: secrets.map((secret) => ({ ...secret, row_revision: secret.revision })),
+      };
     }
 
     if (path === '/api/vault/secrets' && method === 'POST') {
@@ -224,6 +228,10 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (!s) {
         const err = new Error('Memoro 404: Secret not found'); err.status = 404; throw err;
       }
+      if (conflictNextWrite) {
+        conflictNextWrite = false;
+        s.revision += 1;
+      }
       const leaseDigest = typeof body.refreshLeaseToken === 'string'
         ? createHash('sha256').update(body.refreshLeaseToken).digest('hex')
         : null;
@@ -242,7 +250,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
         const err = new Error('Memoro 409: Vault secret revision is stale');
         err.status = 409;
         err.data = {
-          code: 'VAULT_SECRET_REVISION_CONFLICT',
+          code: 'VAULT_SECRET_CONFLICT',
           currentRevision: s.revision,
         };
         throw err;
@@ -272,6 +280,24 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
         const err = new Error('Memoro 403: Vault is locked'); err.status = 403; throw err;
       }
       const id = decodeURIComponent(delMatch[1]);
+      const s = secrets.find(x => x.id === id);
+      if (!s) {
+        const err = new Error('Memoro 404: Secret not found'); err.status = 404; throw err;
+      }
+      if (conflictNextWrite) {
+        conflictNextWrite = false;
+        s.revision += 1;
+      }
+      if (body?.expectedRevision !== undefined
+        && body.expectedRevision !== s.revision) {
+        const err = new Error('Memoro 409: Vault secret revision is stale');
+        err.status = 409;
+        err.data = {
+          code: 'VAULT_SECRET_CONFLICT',
+          currentRevision: s.revision,
+        };
+        throw err;
+      }
       const before = secrets.length;
       secrets = secrets.filter(x => x.id !== id);
       if (secrets.length === before) {
@@ -294,6 +320,11 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       secrets: secrets.map(s => ({ ...s })),
     }),
     forceLock: () => { unlocked = false; },
+    forceNextWriteConflict: () => { conflictNextWrite = true; },
+    bumpRevision: (id) => {
+      const secret = secrets.find((entry) => entry.id === id);
+      if (secret) secret.revision += 1;
+    },
     userId,
   };
 }

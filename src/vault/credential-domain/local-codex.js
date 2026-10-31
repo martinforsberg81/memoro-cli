@@ -1355,39 +1355,54 @@ export async function persistCustodyCodexAuth({
   } catch {
     return safeFailure(LOCAL_CODEX_CUSTODY_LOCKED);
   }
-  const listed = await api.listSecrets(effectivePortal).catch(() => null);
-  if (!listed?.ok || !Array.isArray(listed.secrets)) {
-    return safeFailure(LOCAL_CODEX_CUSTODY_LOCKED);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const listed = await api.listSecrets(effectivePortal).catch(() => null);
+    if (!listed?.ok || !Array.isArray(listed.secrets)) {
+      return safeFailure(LOCAL_CODEX_CUSTODY_LOCKED);
+    }
+    const wire = listed.secrets.find((entry) => entry?.id === secretId);
+    if (!wire || !isEnvelopeSecret(wire) || wire.class !== 'tool-auth') {
+      return safeFailure('managed-domain-custody-record-mismatch');
+    }
+    let opened;
+    try {
+      opened = await decryptEnvelopeSecret(crk, wire);
+    } catch {
+      return safeFailure('managed-domain-custody-record-mismatch');
+    }
+    if (opened.label !== TOOL_AUTH_LABEL && opened.label !== LEGACY_TOOL_AUTH_LABEL) {
+      return safeFailure('managed-domain-custody-record-mismatch');
+    }
+    const nextData = updateCodexAuthPayload(opened.data, authBody);
+    if (!nextData) return safeFailure('managed-domain-refresh-invalid');
+    const encrypted = await encryptForWrite({
+      vaultKey: cache.vaultKey,
+      crk,
+      label: opened.label,
+      data: nextData,
+      secretClass: 'tool-auth',
+    });
+    let updated;
+    try {
+      updated = await api.updateSecret(effectivePortal, secretId, {
+        secretType: WIRE_SECRET_TYPE,
+        ...encrypted,
+        ...(wire.row_revision === undefined ? {} : { expectedRevision: wire.row_revision }),
+      });
+    } catch (error) {
+      if (attempt === 0 && isSecretRevisionConflict(error)) continue;
+      return safeFailure('managed-domain-refresh-not-persisted');
+    }
+    return updated?.ok
+      ? { ok: true, persisted: true }
+      : safeFailure('managed-domain-refresh-not-persisted');
   }
-  const wire = listed?.secrets?.find((entry) => entry?.id === secretId);
-  if (!wire || !isEnvelopeSecret(wire) || wire.class !== 'tool-auth') {
-    return safeFailure('managed-domain-custody-record-mismatch');
-  }
-  let opened;
-  try {
-    opened = await decryptEnvelopeSecret(crk, wire);
-  } catch {
-    return safeFailure('managed-domain-custody-record-mismatch');
-  }
-  if (opened.label !== TOOL_AUTH_LABEL && opened.label !== LEGACY_TOOL_AUTH_LABEL) {
-    return safeFailure('managed-domain-custody-record-mismatch');
-  }
-  const nextData = updateCodexAuthPayload(opened.data, authBody);
-  if (!nextData) return safeFailure('managed-domain-refresh-invalid');
-  const encrypted = await encryptForWrite({
-    vaultKey: cache.vaultKey,
-    crk,
-    label: opened.label,
-    data: nextData,
-    secretClass: 'tool-auth',
-  });
-  const updated = await api.updateSecret(effectivePortal, secretId, {
-    secretType: WIRE_SECRET_TYPE,
-    ...encrypted,
-  }).catch(() => null);
-  return updated?.ok
-    ? { ok: true, persisted: true }
-    : safeFailure('managed-domain-refresh-not-persisted');
+  return safeFailure('managed-domain-refresh-not-persisted');
+}
+
+function isSecretRevisionConflict(error) {
+  return error?.status === 409
+    && ['VAULT_SECRET_CONFLICT', 'VAULT_SECRET_REVISION_CONFLICT'].includes(error?.data?.code);
 }
 
 export function inspectCodexRelease({

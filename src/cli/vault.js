@@ -132,10 +132,13 @@ export async function run(argv, opts = {}) {
     // Friendly error wrapping. Specific errors (vault locked, token
     // missing, etc.) are handled in-line; this catches the long tail.
     const json = argv.includes('--json');
+    const message = isSecretRevisionConflict(err)
+      ? 'Vault entry changed since it was read; nothing was written to that entry.'
+      : err.message;
     if (json) {
-      console.log(JSON.stringify({ ok: false, error: err.message }));
+      console.log(JSON.stringify({ ok: false, error: message }));
     } else {
-      console.error(`mc vault: ${err.message}`);
+      console.error(`mc vault: ${message}`);
     }
     return 1;
   }
@@ -1060,7 +1063,9 @@ async function cmdRm(argv, opts = {}) {
     }
   }
 
-  const res = await VaultApi.deleteSecret(portal, found.id);
+  const res = await VaultApi.deleteSecret(portal, found.id, {
+    expectedRevision: found.raw.row_revision,
+  });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'delete failed' });
     return 1;
@@ -1133,7 +1138,12 @@ async function cmdRotate(argv, opts = {}) {
   if (prevExisting) {
     // Replace any stale -prev silently — its presence means the user
     // rotated before and never cleaned up; the new rotation supersedes.
-    await VaultApi.deleteSecret(portal, prevExisting.id).catch(() => {});
+    // This row is not written in this rotation; use the revision from its list read.
+    await VaultApi.deleteSecret(portal, prevExisting.id, {
+      expectedRevision: prevExisting.raw.row_revision,
+    }).catch((error) => {
+      if (isSecretRevisionConflict(error)) throw error;
+    });
   }
   const prevEnc = await encryptForWrite({
     vaultKey, crk, label: prevLabel,
@@ -1153,6 +1163,7 @@ async function cmdRotate(argv, opts = {}) {
   const updRes = await VaultApi.updateSecret(portal, existing.id, {
     secretType: WIRE_SECRET_TYPE,
     ...newEnc,
+    ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
   });
   if (!updRes?.ok) {
     emit(flags.json, { ok: false, error: `failed to update "${label}": ${updRes?.error || 'unknown'}` });
@@ -1243,7 +1254,7 @@ async function cmdChangePassword(argv, opts = {}) {
     try {
       const { label, data } = await decryptSecretPayload(vaultKey, s);
       const enc = await encryptSecretPayload(newVaultKey, label, data);
-      restaged.push({ id: s.id, label, enc });
+      restaged.push({ id: s.id, label, enc, expectedRevision: s.row_revision });
     } catch (err) {
       emit(flags.json, {
         ok: false,
@@ -1298,14 +1309,21 @@ async function cmdChangePassword(argv, opts = {}) {
 
   // Step 5: push re-encrypted blobs.
   const failures = [];
+  let landed = 0;
   for (const item of restaged) {
     const updRes = await VaultApi.updateSecret(portal, item.id, {
       encryptedLabel: item.enc.encryptedLabel,
       encryptedData: item.enc.encryptedData,
       iv: item.enc.iv,
       labelIv: item.enc.labelIv,
-    }).catch((err) => ({ ok: false, error: err.message }));
-    if (!updRes?.ok) failures.push({ id: item.id, label: item.label, error: updRes?.error });
+      ...(item.expectedRevision === undefined ? {} : { expectedRevision: item.expectedRevision }),
+    }).catch((err) => ({ ok: false, error: err.message, conflict: isSecretRevisionConflict(err) }));
+    if (!updRes?.ok) {
+      failures.push({ id: item.id, label: item.label, error: updRes?.error, conflict: updRes?.conflict });
+      if (updRes?.conflict) break;
+    } else {
+      landed += 1;
+    }
   }
 
   // §12f: any cached vault-key is now stale (the password change
@@ -1315,11 +1333,14 @@ async function cmdChangePassword(argv, opts = {}) {
   await cacheVaultKey(newVaultKeyBytes, { deps: opts.cacheDeps });
 
   if (failures.length) {
+    const conflict = failures.some((failure) => failure.conflict);
     emit(flags.json, {
       ok: false,
       changed_password: true,
       failures,
-      error: `password changed; ${failures.length}/${restaged.length} secret(s) failed to re-encrypt on the server. Affected labels: ${failures.map(f => f.label).join(', ')}. Use \`mc vault set\` to re-store them.`,
+      error: conflict
+        ? `password changed; revision conflict: ${failures.find((failure) => failure.conflict).label} changed since it was read, so that write was not applied. ${landed} secret(s) re-encrypted before the conflict; remaining entries were not attempted.`
+        : `password changed; ${failures.length}/${restaged.length} secret(s) failed to re-encrypt on the server. Affected labels: ${failures.map(f => f.label).join(', ')}. Use \`mc vault set\` to re-store them.`,
     });
     return 1;
   }
@@ -1518,6 +1539,7 @@ async function cmdMigrate(argv, opts = {}) {
   let migrated = 0;
   let alreadyEnvelope = 0;
   let failed = 0;
+  let conflict = false;
   for (const s of wire) {
     if (isEnvelopeSecret(s)) { alreadyEnvelope += 1; continue; }
     try {
@@ -1526,14 +1548,20 @@ async function cmdMigrate(argv, opts = {}) {
       const res = await VaultApi.updateSecret(portal, s.id, {
         secretType: s.secret_type || WIRE_SECRET_TYPE,
         ...enc,
+        ...(s.row_revision === undefined ? {} : { expectedRevision: s.row_revision }),
       });
       if (res?.ok) migrated += 1; else failed += 1;
-    } catch { failed += 1; }
+    } catch (error) {
+      failed += 1;
+      if (isSecretRevisionConflict(error)) { conflict = true; break; }
+    }
   }
 
   emit(flags.json,
     { ok: failed === 0, migrated, already_envelope: alreadyEnvelope, failed },
-    failed === 0
+    conflict
+      ? `Migration stopped: the entry changed since it was read; its write was not applied. ${migrated} secret(s) migrated before the conflict.`
+      : failed === 0
       ? `Migrated ${migrated} secret(s) to the custody envelope (${alreadyEnvelope} already migrated).`
       : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`,
   );
@@ -1711,7 +1739,11 @@ async function cmdAdopt(argv, opts = {}) {
   });
   const existing = await findSecretByLabel(portal, vaultKey, captured.label, crk);
   const res = existing
-    ? await VaultApi.updateSecret(portal, existing.id, { secretType: WIRE_SECRET_TYPE, ...enc })
+    ? await VaultApi.updateSecret(portal, existing.id, {
+      secretType: WIRE_SECRET_TYPE,
+      ...enc,
+      ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
+    })
     : await VaultApi.createSecret(portal, { secretType: WIRE_SECRET_TYPE, ...enc });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'store failed' });
@@ -1814,6 +1846,11 @@ async function findSecretByLabel(portal, vaultKey, label, crk = null) {
     } catch { /* skip undecryptable */ }
   }
   return null;
+}
+
+function isSecretRevisionConflict(error) {
+  return error?.status === 409
+    && ['VAULT_SECRET_CONFLICT', 'VAULT_SECRET_REVISION_CONFLICT'].includes(error?.data?.code);
 }
 
 /**

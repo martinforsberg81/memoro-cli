@@ -21,6 +21,8 @@ import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { run as vaultRunRaw } from '../../../src/cli/vault.js';
+import { deriveVaultKeys, encryptSecretPayload } from '../../../src/vault/engine/client-crypto.js';
+import { mintCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
 
 const PW = 'this-is-a-long-test-master-password';
@@ -60,6 +62,21 @@ function captureConsole() {
   return {
     out, err,
     restore: () => { console.log = origLog; console.error = origErr; },
+  };
+}
+
+async function portalWithCustody(server, portal) {
+  const config = server.inspect().config;
+  const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+  const custody = await mintCustodyRoot(vaultKey);
+  return {
+    ...portal,
+    memoroFetch: async (apiUrl, path, opts) => {
+      const result = await portal.memoroFetch(apiUrl, path, opts);
+      return path === '/api/vault/status'
+        ? { ...result, vault: { ...result.vault, wrapped_crk: custody.wrapped_crk, crk_iv: custody.crk_iv } }
+        : result;
+    },
   };
 }
 
@@ -537,6 +554,43 @@ describe('mc vault — full lifecycle (in-process)', () => {
     cap.restore();
     assert.equal(rc, 0);
     assert.equal(server.inspect().secrets.length, 0);
+    const deletion = server.calls.find((call) => call.method === 'DELETE');
+    assert.equal(deletion.body.expectedRevision, 1);
+  });
+
+  it('rm refuses a stale row without deleting it', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'stale-rm', '--no-confirm', '--json'], { portal });
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rm', 'stale-rm', '--no-confirm', '--json'], { portal });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.match(out.error, /changed since it was read/);
+    assert.match(out.error, /nothing was written to that entry/);
+    assert.equal(server.inspect().secrets.length, 1);
+    assert.equal(server.calls.find((call) => call.method === 'DELETE').body.expectedRevision, 1);
+  });
+
+  it('rm omits the revision when the server has not deployed row revisions', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'legacy-server', '--no-confirm', '--json'], { portal });
+    const legacyPortal = {
+      ...portal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await portal.memoroFetch(apiUrl, path, opts);
+        if (path === '/api/vault/secrets' && opts?.method !== 'POST') {
+          return { ...result, secrets: result.secrets.map(({ row_revision, ...secret }) => secret) };
+        }
+        return result;
+      },
+    };
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rm', 'legacy-server', '--no-confirm', '--json'], { portal: legacyPortal });
+    cap.restore();
+    assert.equal(rc, 0);
+    assert.equal(server.calls.find((call) => call.method === 'DELETE').body?.expectedRevision, undefined);
   });
 
   it('rm of unknown label returns 1 with helpful error', async () => {
@@ -571,6 +625,23 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const listJson = JSON.parse(cap.out.join('\n'));
     const labels = listJson.secrets.map(s => s.label).sort();
     assert.deepEqual(labels, ['mykey', 'mykey-prev']);
+    const update = server.calls.find((call) => call.method === 'PUT');
+    assert.equal(update.body.expectedRevision, 1);
+  });
+
+  it('rotate reports a revision conflict and does not overwrite the row', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'stale-rotate', '--no-confirm', '--json'], { portal });
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rotate', 'stale-rotate', '--no-confirm', '--json'], { portal });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.match(out.error, /changed since it was read/);
+    assert.equal(server.inspect().secrets.length, 2, 'the backup is retained, but the stale row is not overwritten');
+    const update = server.calls.find((call) => call.method === 'PUT');
+    assert.equal(update.body.expectedRevision, 1);
   });
 
   it('rotate twice replaces the stale -prev rather than erroring', async () => {
@@ -634,8 +705,33 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const listJson = JSON.parse(cap.out.join('\n'));
     assert.equal(listJson.secrets.length, 1);
     assert.equal(listJson.secrets[0].label, 'k1', 'secret label must survive re-encryption');
+    const update = server.calls.find((call) => call.method === 'PUT');
+    assert.equal(update.body.expectedRevision, 1);
 
     process.env.MC_VAULT_PASSPHRASE = PW;
+  });
+
+  it('change-password stops at a revision conflict and reports writes already landed', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'k1', '--no-confirm', '--json'], { portal });
+    await vaultRun(['set', 'k2', '--no-confirm', '--json'], { portal });
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    delete process.env.MC_VAULT_PASSPHRASE;
+    const NEW_PW = 'another-new-master-password-12345';
+    const promptStub = (prompt) => Promise.resolve(
+      prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
+    );
+    const rc = await vaultRun(['change-password', '--json'], { portal, promptStub });
+    cap.restore();
+    process.env.MC_VAULT_PASSPHRASE = PW;
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.match(out.error, /revision conflict/);
+    assert.match(out.error, /remaining entries were not attempted/);
+    const updates = server.calls.filter((call) => call.method === 'PUT');
+    assert.equal(updates.length, 1, 'no following row is retried or attempted after conflict');
+    assert.equal(updates[0].body.expectedRevision, 1);
   });
 
   it('change-password refuses when current password is wrong', async () => {
@@ -651,6 +747,46 @@ describe('mc vault — full lifecycle (in-process)', () => {
     cap.restore();
     process.env.MC_VAULT_PASSPHRASE = PW;
     assert.equal(rc, 1);
+  });
+
+  it('migrate sends the revision from the legacy row it read', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'custody-seed', '--no-confirm', '--json'], { portal: custodyPortal });
+    const config = server.inspect().config;
+    const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+    const encrypted = await encryptSecretPayload(vaultKey, 'legacy-entry', { value: 'opaque' });
+    await server.memoroFetch('x', '/api/vault/secrets', {
+      method: 'POST',
+      body: { secretType: 'api_key', ...encrypted },
+    });
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['migrate', '--json'], { portal: custodyPortal });
+    cap.restore();
+    assert.equal(rc, 0, cap.out.join('\n'));
+    const update = server.calls.find((call) => call.method === 'PUT');
+    assert.equal(update.body.expectedRevision, 1);
+  });
+
+  it('adopt sends the revision from the existing custody row and refuses a stale write', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    const toolAuthDeps = {
+      platform: 'linux',
+      exists: () => true,
+      readFile: () => JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'token' } }),
+    };
+    let rc = await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: custodyPortal, toolAuthDeps });
+    assert.equal(rc, 0);
+    server.forceNextWriteConflict();
+    cap.restore(); cap = captureConsole();
+    rc = await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: custodyPortal, toolAuthDeps });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /changed since it was read/);
+    const update = server.calls.find((call) => call.method === 'PUT');
+    assert.equal(update.body.expectedRevision, 1);
+    assert.equal(server.inspect().secrets.length, 1);
   });
 });
 
