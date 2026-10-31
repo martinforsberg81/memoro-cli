@@ -256,3 +256,23 @@ test('an existing unowned project-named worktree is preserved, not adopted or sy
   assert.equal(git(cwd, 'diff', '--name-only', '--diff-filter=U'), '');
   assert.ok(f.state().attempts[0].reason.includes('unowned worktree'));
 });
+
+test('a large assignment routes on the large class and is recorded as large', async t => {
+  const f = fixture(t, { assignment: { work_class: 'large' } }); let recorded = null;
+  assert.equal(f.record.plan.work_class, 'large');
+  f.deps.session = async call => { f.calls.push(call); recorded = JSON.parse(readFileSync(runner.paths.currentFor('memoro-cli'), 'utf8')); return completed; };
+  const runner = createRunner({ deps: f.deps, autonomous: f.capability });
+  assert.equal(await runner.runStep(f.project, f.world(f.record)), 'ran');
+  // The reserved reviewer (claude opus) is excluded from the large pool, so only
+  // the large class's codex candidate can be chosen; fast would pick haiku.
+  assert.equal(recorded.class, 'large'); assert.equal(recorded.tool, 'codex'); assert.equal(recorded.model, 'gpt-6.1-sol');
+});
+
+test('a fast assignment keeps the fast class and its haiku candidate', async t => {
+  const f = fixture(t); let recorded = null;
+  assert.equal(f.record.plan.work_class, 'fast');
+  f.deps.session = async call => { f.calls.push(call); recorded = JSON.parse(readFileSync(runner.paths.currentFor('memoro-cli'), 'utf8')); return completed; };
+  const runner = createRunner({ deps: f.deps, autonomous: f.capability });
+  assert.equal(await runner.runStep(f.project, f.world(f.record)), 'ran');
+  assert.equal(recorded.class, 'fast'); assert.equal(recorded.tool, 'claude'); assert.equal(recorded.model, 'haiku');
+});
