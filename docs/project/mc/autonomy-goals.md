@@ -224,9 +224,19 @@ of this programme once the verbs above exist:
    gate` adapter, publication requirements and deps, conflict integration,
    the checkpoint verifier, job and plan consumers. `installationCapabilities`
    then reports what the runner actually passes instead of a frozen constant.
-2. **Awake clock.** `awake_ms` must exclude machine suspend; Node has no such
-   clock. Measure here first (wall against monotonic drift across a sleep,
-   with `stay-awake.js`'s caffeinate held), then build.
+2. **Awake clock.** Built in `src/mc/awake-clock.js`: `awake_ms` reads
+   `CLOCK_UPTIME_RAW`, which excludes suspend, and never falls back to a clock
+   that counts it. Measured from what the machine already logged, not from a
+   sleep experiment. Between boot on 2026-10-27 and 2026-10-31 the wall and
+   awake clocks differ by 19 772 s across 47 logged sleeps. `pmset -g log`
+   gives 19 980 s, which is about 19 795 s after allowing about 4 s of log lag
+   per sleep (the lag was seen on one sleep, by comparing `kern.sleeptime` and
+   `kern.waketime`). The runner's caffeinate, pid 15019, held from 16:40 to
+   19:55 on 2026-10-30, and the machine still slept on battery with the lid
+   closed. No sleep in the window exceeded 30 minutes, so long sleep is
+   measured by the provider pilot. The method first written here could not
+   have worked: Node's monotonic clock counts suspend, so wall against
+   monotonic drift across a sleep shows nothing.
 3. **Checkpoint verifier.** The default verifier reports no progress, so the
    no-progress clock always runs; a trusted one measures the criterion's
    check.

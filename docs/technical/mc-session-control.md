@@ -44,7 +44,7 @@ committed/pushed content and observed successful process completion.
 ## Clocks, tools and progress
 
 Every sample has integer millisecond `at_ms` (wall time), `awake_ms` (a normalized
-monotonic clock excluding machine suspend) and a contiguous `sequence`. The old
+monotonic clock excluding machine suspend, read by `src/mc/awake-clock.js`) and a contiguous `sequence`. The old
 sample's activity accounts for the intervening awake interval: `model`, `lane`,
 `tool` or `gate`, with a stable job ID except for model work. Wall minus awake is
 recorded sleep. Only model time consumes active/no-progress budgets; known waits
