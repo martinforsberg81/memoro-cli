@@ -99,7 +99,8 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
       dropSlot();
     }
   }
-  const route = routeClass('fast', readAutonomousState(root, programme, name));
+  const workClass = record.plan.work_class;
+  const route = routeClass(workClass, readAutonomousState(root, programme, name));
   if (!route.ok) return 'skipped:no-capacity';
   const settings = routedSettings(null, null, { kind: 'step', candidate: route.candidate });
   // The autonomous flavor deliberately excludes v1's fixed-step/merge overlay.
@@ -129,7 +130,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
         activity: { kind: 'tool', id: 'main-integration' }, context: null, progress: null, failure: null } });
     owned = true;
     writeJson(currentPath, { name, step: null, kind: 'step', flavor: 'autonomous', run_id: actor.run_id,
-      repo: repo.name, lane, tool: settings.tool, model: settings.model, effort: settings.effort, class: 'fast',
+      repo: repo.name, lane, tool: settings.tool, model: settings.model, effort: settings.effort, class: workClass,
       billing: route.billing || 'plan', started: stamp(), pid, worktree, role: roleRecord({ name: 'step', source: roleSourceOf(role) || 'canon', overlay, instructions }) });
     currentWritten = true;
     const existingTree = deps.exists(worktree);
