@@ -168,6 +168,6 @@ lockfile-unchanged path installs nothing, a moved lockfile installs once, the
 manifest written is the repository's minus `scripts` and `bin`, a repository
 that is not on the list is refused by name, a failed install is reported rather
 than thrown, and `mc work add` leaves the tree beside the area rather than in
-it. [`tests/mc/dependency-tree.test.js`](../../tests/mc/dependency-tree.test.js)
-holds the parent walk, including the half-installed tree an existence check
-called present.
+it. The parent walk, including the half-installed tree an existence check
+called present, had a test until 2026-11-01; it was removed with the tests
+that never caught anything (the module had not changed in 90 days).
