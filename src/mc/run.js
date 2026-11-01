@@ -2026,7 +2026,8 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       }
     } finally {
       waiters.splice(waiters.indexOf(waiter), 1);
-      saveWaiters();
+      // The file is for reading: failing to write it must not leak a taken slot.
+      try { saveWaiters(); } catch (error) { say(`${name}: runner/waiting.json not written — ${error.message}`); }
     }
   }
 

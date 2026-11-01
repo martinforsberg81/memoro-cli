@@ -117,6 +117,20 @@ test('an unsent draft is listed but is not counted in the runner queue', async t
   assert.equal(value.next.items.length, 0, 'drafts do not change the runner pick order');
 });
 
+test('the page survives unreadable programme state with a ready goal', async t => {
+  const f = programmeJobsFixture(); t.after(f.cleanup);
+  const state = JSON.parse(readFileSync(f.paths.project, 'utf8'));
+  state.phase = 'ready'; state.plan_sent = true;
+  writeFileSync(f.paths.project, JSON.stringify(state));
+  writeFileSync(join(f.root, 'programs', f.programme, 'PROGRAMME_STATE.json'), 'not json');
+  const plans = [{ project: f.project, programme: f.programme, repo: 'memoro-cli', plan: state.contract, ...planSummary(state.contract) }];
+  const value = await collectPage({ env: { MC_WORK_ROOT: f.root, MC_HOME: f.root }, now: NOW,
+    repos: [], offline: true, git: () => null, run: () => ({ status: 1, stdout: '' }), checkout: null,
+    alive: () => false, laneCount: () => ({ per_repo: 1, total: null }), merges: () => [], claudeSettings: () => null,
+    cache: { loadPlans: () => ({ plans, sources: [] }), loadPrs: () => ({ prs: [], fetched: NOW.toISOString(), age_seconds: 0 }) } });
+  assert.ok(value.programmes); assert.ok(draw(value));
+});
+
 test('goal metrics and state fit a narrow terminal without changing row numbers', () => {
   const plan = record('a-very-long-goal-name-that-must-give-way');
   const programmes = programmesSection({ plans: [plan], goals: { [`mc/${plan.project}`]: goal(1) } });
