@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test --import ./tests/_isolate-home.mjs --test-timeout=60000 'tests/**/*.test.js'",
+    "test": "node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 'tests/**/*.test.js'",
     "test:affected": "node scripts/affected-tests.js --why",
     "reach": "node scripts/reach.mjs",
     "security:credential-boundary": "node scripts/security/credential-boundary-probe.mjs",

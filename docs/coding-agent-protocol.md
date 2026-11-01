@@ -304,6 +304,13 @@ it: a finished step's pull request goes through `runMergeRound`
 `merged` only when GitHub says the base it landed on was `main`. So the gate
 measures every landing, whoever started it.
 
+**Tests start no git.** `tests/_isolate-home.mjs` answers every git a test file
+spawns from the repository model in `tests/mc/_helpers/fake-git.js`, in the file
+and in what it starts. A file that reaches real git anyway ends red. The files
+that need git's own behaviour are named in `tests/_real-git-files.mjs`; that
+list only shrinks, and a new test file does not go on it. A command the model
+does not know is an error naming it: teach the model that command.
+
 One thing to keep saying out loud all the same:
 
 - **Never claim a run you did not make.** Say in the PR body what was run and
