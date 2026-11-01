@@ -1968,6 +1968,10 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * spends no session at all. What it costs is a reading thrown away when the
    * machine turns out to be full — seconds against the hour a session is.
    *
+   * Between two sessions of one project the lane keeps the slot (`carried`):
+   * a project holds its lane from its first step to its review, so nobody
+   * else takes the moment in which the next session is being picked.
+   *
    * Which waiting lane gets a freed slot is whichever looks first, and that
    * is arbitrary. Measured 2026-09-05: 26 memoro plans with a ready step
    * against memoro-cli's 3, and a median step of 14 minutes (p90 58). The
@@ -1988,12 +1992,15 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * Take a slot, or don't — in one tick, with no await between the test and the
    * take. `stepsHeld` reads its files synchronously, so that holds here too.
    */
-  function takeSlot() {
+  const carried = new Set();
+  function takeSlot(name = null) {
     const cap = capNow();
-    const held = cap === null ? running : running + stepsHeld().filter((h) => h.other).length;
+    const kept = [...carried].filter((held) => held !== name).length;
+    const held = cap === null ? running : running + kept + stepsHeld().filter((h) => h.other).length;
     seen = { held, cap };
     if (cap !== null && held >= cap) return false;
     running += 1;
+    carried.delete(name);
     return true;
   }
   const dropSlot = () => { running -= 1; };
@@ -2009,13 +2016,13 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * that is meant to end within one step's length into two.
    */
   async function waitForSlot(name) {
-    if (takeSlot()) return 'ok';
+    if (takeSlot(name)) return 'ok';
     say(`${name}: ${seen.held} of ${seen.cap} steps in flight on this machine — waiting for a lane`);
     for (;;) {
       await deps.sleep(TOTAL_POLL_MS);
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'update';
-      if (takeSlot()) return 'ok';
+      if (takeSlot(name)) return 'ok';
     }
   }
 
@@ -2948,13 +2955,16 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * running process knows: what the lanes are holding, and what this pass has
    * already been refused on.
    */
-  function nextStep({ repo = null, world = {}, passed = new Set() } = {}) {
+  function nextStep({ repo = null, world = {}, passed = new Set(), first = null } = {}) {
     // The projects another runner is in a step on are claimed here as well:
     // after a handover the old runner is still landing what it holds, and a
     // fresh pick of the same name would start that step a second time
     // (ruling 28).
     const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
-    return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
+    // The project this lane just ran goes first: it keeps the lane until it has
+    // nothing to run, and only then does the queue's order speak.
+    const names = first && world.names?.includes(first) ? [first, ...world.names.filter((name) => name !== first)] : world.names;
+    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
       autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs,
         worktree: join(areaPath(record.project), record.repo) }) : null });
   }
@@ -3027,7 +3037,19 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * would otherwise start again the second it finished, for ever. So that one
    * name waits for the next pass.
    */
-  async function pass({
+  async function pass(options = {}) {
+    const before = options.last?.name ?? null;
+    let ran = null;
+    try {
+      const result = await passOnce(options);
+      ran = result.ran ? result.name : null;
+      return result;
+    } finally {
+      if (before && before !== ran) carried.delete(before);
+      if (ran && !stopRequested() && !updateRequested()) carried.add(ran);
+    }
+  }
+  async function passOnce({
     repo = null, lane = 0, tag = null, world = null, last = null, passed: already = [],
   } = {}) {
     const label = tag || repo || 'run';
@@ -3056,9 +3078,10 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
-      const pick = nextStep({ repo, world: known, passed });
+      const pick = nextStep({ repo, world: known, passed, first: last?.name });
       if (!pick) return { ran: 0 };
-      if (last && pick.name === last.name && stepOf(pick.name) === last.step) {
+      // A goal has no step number: what it may do next is its own state's answer, build or review.
+      if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
         say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
         passed.add(pick.name);
         continue;
