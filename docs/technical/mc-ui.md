@@ -45,11 +45,11 @@ fetched or not.
 
 ## The sections
 
-In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF, NEXT,
+In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF,
 RUNNER, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
 still keeps the rule the page had — **what does not move above what does**.
 PROGRAMMES and WORK are the page as a listing; the two desks change when
-somebody sits down; NEXT changes with every pick and RUNNER every frame;
+somebody sits down; RUNNER changes with every pick and every frame;
 MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
 of them: while a language run has stopped inside an `opens_gap` window it
@@ -61,12 +61,16 @@ has scrolled off the top cannot be written to — which is what
 below is about.
 
 - **PROGRAMMES** — one heading per programme with its own `x ready · y waiting · z blocked`
-  and the room for its planning session, filled or empty; then one numbered row
+  and its open planning-session counts per provider (`plan claude 1 · codex 2`),
+  or `no plan session`; then one numbered row
   per project under it: the repository it lives in, the project's state (one
-  word, one colour — see *The palette*), how many of its steps are done, `next`,
-  the open PR. A waiting project keeps its row; a blocked one collapses under
-  its heading unless it has an open pull request. `next` is the step's title,
-  then the state's detail, on every row. A project's `●` means the runner has a
+  word, one colour — see *The palette*), how many of its steps are done, and
+  the open PR. The next-step detail and last run remain in JSON, not on the row. A waiting project keeps its row; a blocked one collapses under
+  its heading unless it has an open pull request. Goals are grouped by phase
+  under their programme, with criteria measured, sessions run and status now.
+  They keep the same project numbers and open through the same menu. There is
+  no separate AUTONOMY block; `data.autonomy` and `mc programme status` keep
+  their full detail. A project's `●` means the runner has a
   step in flight on it, and nothing else. A programme is drawn
   whether or not any of its projects have a plan the runner can read; one that
   exists only as an open planning session is drawn too, and says `no project
@@ -122,25 +126,14 @@ below is about.
   (`stale-blockers.js`). Only a `project` blocker; a `decision` waits on
   Martin and there is no artefact to read it against. It reports and nothing
   more — flipping the step back to `ready` is a plan edit somebody makes.
-- **NEXT** — what `mc run` would start, as **one list**: repository, project,
-  `step n/m` in the kind's own colour, and that step's title. The heading is
-  the one number anybody used — how many are runnable. The order is
-  `assembleQueue`'s, the runner's own (`run-plan.js`): the names
-  `~/mc/queue.md` puts first, then every other plan under `~/mc/programs/`,
-  alphabetically; the picks are the runner's own picker's —
-  `nextFor` asked repeatedly with each pick claimed, which is what the lanes
-  do ([`mc-run.md`](mc-run.md) § *The pick, in order*) — so a name here is one
-  the runner would actually start, as what it would start it as. **Four rows
-  per repository at the most** (`LANE_DEEP`), and the four are each
-  repository's own: a repository with one runnable project keeps its row
-  however long the other's queue is. It was a block per repository with a
-  heading each, a line for what was skipped and why, and the blocked rollup
-  under that; how much `queue.md` chose, the skips by reason and the rest of
-  each lane are in `mc --json` (`next.from_queue`, `next.skipped`,
-  `next.lanes[].more`), and what is blocked is BRIEF's.
+- **Queue data** — NEXT is not drawn. `mc --json` still carries `data.next`,
+  including the runner's order, lane picks, skip reasons and stale blockers.
+  `nextFor` and `assembleQueue` are unchanged; RUNNER carries counts instead.
 - **RUNNER** — the heading carries the answer: how many steps are **in
   flight** (bold green while it is not zero, `not running` in bold yellow when
-  there is no process) and how many lanes there are to hold them. Under it
+  there is no process), how many lanes there are to hold them, and queued
+  project/goal counts. Sent goals ready for build or review count even with
+  programme autonomy off; active sessions and unsent drafts do not. Under it
   **one row per lane**, numbered through: the slots the runner can actually
   fill — `total` from `mc run lanes` when there is one, `per_repo` times the
   repositories otherwise. They were one row per repository lane (`memoro #2`),
@@ -462,7 +455,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a project state have one colour each, wherever
-they are printed.** RUNNER, NEXT and PROGRAMMES all say `step` in the same
+they are printed.** RUNNER says `step` in the same
 green, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -502,7 +495,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |
@@ -526,12 +519,6 @@ person set it to.
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
 | WORK | the workareas no project explains: their numbers, the file | grey |
-| NEXT | a lane's repository, how much of it is runnable | bold, grey |
-| NEXT | the project starting now, the ones behind it | bold, plain |
-| NEXT | `step n/m` on a row | the step kind's colour |
-| NEXT | how the order was arrived at, `… N more`, why a project was skipped | grey |
-| NEXT | `blocker finished N` and the steps under it | bold yellow, yellow |
-| NEXT | the rollup: `N blocked`, and the rest of that line | red, grey |
 | MERGES | the round landing now: `● repo #pr name title` | green |
 | MERGES | the round's `landing` (or `measuring, not landing`), phase, age | plain, plain, grey |
 | MERGES | the queue line: `· waiting`, the numbers in landing order, `(longest …)` | grey, green, grey |
@@ -551,9 +538,9 @@ person set it to.
 | MC | update available; update requested; up to date | bold yellow, green, grey |
 | MC | a process — the merger, the repo watch — on another commit than the checkout: its pid, its commit, the checkout's | yellow |
 | PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold |
-| PROGRAMMES | a quiet project's name and `next` | plain, plain |
+| PROGRAMMES | a quiet project's name | plain |
 | PROGRAMMES | the programme heading | bold cyan |
-| PROGRAMMES | a programme's open planning session | cyan |
+| PROGRAMMES | a programme's open planning-session counts per provider | grey |
 | PROGRAMMES | a programme with no planning session | grey |
 | PROGRAMMES | a programme's own count of ready, of blocked, of nothing | green, red, grey |
 | PROGRAMMES | a programme with no project yet | grey |
@@ -561,7 +548,7 @@ person set it to.
 | PROGRAMMES | the repository a project lives in | grey |
 | PROGRAMMES | the open PR's column after the steps, `#pr` or `#pr+N` | bold cyan |
 | PROGRAMMES | that column when the PR has been quiet a day; when the merger has it | bold yellow, bold green |
-| PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
+| PROGRAMMES | the number, the steps done, the no-workarea line | grey |
 | footer | the cache line, the notes | grey |
 
 Five things hold that table up:

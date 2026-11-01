@@ -85,7 +85,7 @@ import { overlayPlans, readEntry, realLock } from './register.js';
 import { gitDirOf } from './repos.js';
 import { readTailEntries } from './conversations.js';
 import { claudeTail, codexTail } from './work-status.js';
-import { planState, unmetCriteria } from './plan-schema.js';
+import { planState, planSummary, unmetCriteria } from './plan-schema.js';
 import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import {
@@ -93,7 +93,8 @@ import {
 } from './project-prs.js';
 import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
-import { autonomySection } from './programme-status.js';
+import { autonomySection, goalStatus, listAutonomousProgrammes, programmeStatus } from './programme-status.js';
+import { readAutonomousState } from './autonomous-state.js';
 import {
   REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
   readCurrents,
@@ -376,12 +377,16 @@ export function sessionsSection({
   // to no programme, and cannot be started again. It stays in the list below
   // with everything else nothing explains.
   const planning = {};
+  const planningSessions = {};
   for (const item of open) {
     if (item.verb !== 'plan') continue;
     const area = areaKindOf(item.area || '');
-    if (area?.kind === 'plan') planning[area.name] = item;
+    if (area?.kind === 'plan') {
+      planning[area.name] = item;
+      (planningSessions[area.name] ||= []).push(item);
+    }
   }
-  const claimed = new Set(Object.values(planning));
+  const claimed = new Set(Object.values(planningSessions).flat());
 
   // A tmux window is a session too, and the only kind mc knows nothing else
   // about — no verb, no tool, no model, just a name and how long it has been
@@ -406,8 +411,9 @@ export function sessionsSection({
   return {
     desks,
     planning,
+    planning_sessions: planningSessions,
     others,
-    count: DESKS.filter((verb) => desks[verb]).length + Object.keys(planning).length + others.length,
+    count: DESKS.filter((verb) => desks[verb]).length + claimed.size + others.length,
   };
 }
 
@@ -1240,7 +1246,7 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
+  planning = {}, planningSessions = {}, goals = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -1265,6 +1271,12 @@ export function programmesSection({
     const state = stateOf({ status: plan.status || null, blocker: blocked_by });
     return {
       name,
+      ...(plan.plan?.version === 2 ? { goal: {
+        programme_phase: plan.plan.programme_phase, phase: 'unknown',
+        criteria: (plan.plan.success_criteria || []).map(item => ({ id: item.id, builder: 'unknown' })),
+        sessions_run: null, next_action: 'state unavailable — mc programme status',
+        ...goals[`${plan.programme}/${name}`],
+      } } : {}),
       repo: plan.repo,
       programme: plan.programme,
       status: plan.status || null,
@@ -1329,6 +1341,7 @@ export function programmesSection({
   const names = [...new Set([
     ...projects.map((project) => project.programme),
     ...Object.keys(planning),
+    ...Object.keys(planningSessions),
     ...programmes,
   ])].filter(Boolean).sort((a, b) => a.localeCompare(b));
 
@@ -1339,6 +1352,7 @@ export function programmesSection({
       projects: own,
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
+      planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
       // The heading's own answer: how many of this programme's projects are
       // ready and how many are stopped. An empty object is a programme with no
       // project yet, which the heading says in words.
@@ -1672,9 +1686,33 @@ export async function collectPage({
     ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
     currents, alive, entry: (project) => readEntry(root, project),
   });
+  const planningSessions = Object.fromEntries(Object.entries(sessions.planning_sessions).map(([name, items]) => [name, [...items]]));
+  for (const current of currents.filter(item => item.kind === 'plan' && alive(item.pid))) {
+    const programme = current.programme || (/^programme:(.+)$/u.exec(current.name || '') || [])[1];
+    if (programme) (planningSessions[programme] ||= []).push(current);
+  }
+  // Drafts have durable goal state but no sent PLAN.json. They belong on the
+  // page, never in the runner's legacy queue reading below.
+  const pagePlans = [...plans];
+  for (const programme of listAutonomousProgrammes(root)) {
+    for (const goal of programmeStatus(root, programme).goals) {
+      if (pagePlans.some(record => record.programme === programme && record.project === goal.project)) continue;
+      try {
+        const { contract } = readAutonomousState(root, programme, goal.project);
+        pagePlans.push({ project: goal.project, programme, repo: contract.repo, plan: contract, ...planSummary(contract) });
+      } catch { /* unreadable state is reported by programme status */ }
+    }
+  }
   const programmes = programmesSection({
-    plans, areas, rows, openPrs: prs.prs, live: liveNames,
+    plans: pagePlans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
+    planningSessions,
+    goals: Object.fromEntries(pagePlans.filter(record => record.plan?.version === 2).map(record => {
+      const status = goalStatus(root, record.programme, record.project);
+      let sessions_run = null;
+      try { sessions_run = readAutonomousState(root, record.programme, record.project).runs.filter(run => run.role !== 'plan').length; } catch { /* unknown, not zero */ }
+      return [`${record.programme}/${record.project}`, { ...status, sessions_run }];
+    })),
     running: runner.steps.map((step) => step.name).filter(Boolean),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),

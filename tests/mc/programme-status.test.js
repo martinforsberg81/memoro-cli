@@ -311,7 +311,7 @@ test('unknown and damaged state stays unknown, and v1 projects in the programme 
   assert.equal(await f.cli(['status', 'no-such-programme']), 1); assert.doesNotMatch(f.out(), /recovery/u);
 });
 
-test('the page draws AUTONOMY only for programmes with autonomous state and mc status says the mode', async t => {
+test('the page keeps autonomy data without drawing it and mc status says the mode', async t => {
   const f = fixture(t);
   const pageData = over => ({
     runner: runnerSection({ rows: [], now: new Date(NOW), alive: () => false }),
@@ -332,11 +332,7 @@ test('the page draws AUTONOMY only for programmes with autonomous state and mc s
   assert.deepEqual(autonomy.programmes, [{ programme: f.programme, mode: 'off', goals: 1, in_flight: 1, stop: 'design-review',
     next_action: 'no new planner — autonomy off; 1 started operation finishing', problem: null }]);
   const page = renderPageLines(pageData({ autonomy }), { columns: 140, now: NOW });
-  const at = page.findIndex(line => /^ {2}AUTONOMY {2}1 programme/u.test(line));
-  assert.ok(at > 0, page.join('\n'));
-  assert.match(page[at + 1], /^ {4}test-programme · off · 1 goal · 1 in flight · stops at design-review · next: no new planner — autonomy off/u);
-  // Legacy page lines are unchanged apart from the added block.
-  assert.deepEqual(page.filter((line, index) => index < at || index > at + 2), legacyPage);
+  assert.deepEqual(page, legacyPage, 'autonomy remains data-only; programme status keeps its full detail');
 
   const state = readAutonomousState(f.root, f.programme, f.project);
   const text = renderProject({ name: f.project, repo: 'memoro-cli', programme: f.programme, path: '/p/PLAN.json', plan: state.contract,

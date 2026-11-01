@@ -258,6 +258,8 @@ function runnerLines(lines, c, wide, runner) {
       : { text: 'not running', styles: ['yellow', 'bold'] },
   ];
   if ((alive || flight) && lanes.length) counts.push({ text: `${lanes.length} lane${lanes.length === 1 ? '' : 's'}`, styles: ['grey'] });
+  const queued = now.queue || { projects: 0, goals: 0 };
+  counts.push({ text: `${queued.projects + queued.goals} queued (${queued.projects} projects · ${queued.goals} goals)`, styles: ['grey'] });
   heading(lines, c, wide, 'RUNNER', between(counts, ' · '), 'mc run');
   if (lanes.length && (alive || flight)) {
     for (const lane of lanes) lines.push(laneLine(c, wide, lane));
@@ -761,39 +763,6 @@ function elapsedTone(step) {
   return [];
 }
 
-/** The widths of a NEXT row: the repository, the project, and its step. */
-const NEXT_REPO = 11;
-const NEXT_KIND = 12;
-
-/**
- * NEXT — what `mc run` would start, as one list: repository, project, which
- * step of its plan, and what that step is called.
- *
- * It was a block per repository with a heading each, a line for what was
- * skipped and why, and the blocked rollup under that; the one number anybody
- * used was how many are runnable, and it is the heading now (Martin,
- * 2026-09-19). What is blocked is BRIEF's — it waits on a person, and this
- * section is what does not.
- *
- * Four rows per repository at the most (`LANE_DEEP`, page-collect.js), and the
- * four are each repository's own: a repository with one runnable project keeps
- * its row however long the other's queue is, because its lanes start that one
- * whatever the other is doing. The picks and their order are the runner's
- * (`nextFor`), so the list is what will happen and not a second opinion.
- */
-function nextLines(lines, c, wide, next) {
-  heading(lines, c, wide, 'NEXT', next.depth ? `${next.runnable} runnable` : 'nothing on main to run', 'mc status <name>');
-  for (const lane of next.lanes || []) {
-    for (const item of lane.items) {
-      const repo = c(pad(clip(lane.repo || '—', NEXT_REPO - 1), NEXT_REPO), 'grey');
-      const name = pad(clip(item.name, nameWidth(wide) - 1), nameWidth(wide));
-      const at = item.step && item.steps ? ` ${item.step}/${item.steps}` : '';
-      const kind = paint(c, [{ text: pad(`${item.kind}${at}`, NEXT_KIND), styles: kindTone(item.kind) }]);
-      lines.push(row(c, wide, `     ${repo} ${name} ${kind}`, item.title || '', null));
-    }
-  }
-}
-
 /** How many queued pull requests the page names before it only counts them. */
 export const QUEUED_DRAWN = 6;
 
@@ -1141,8 +1110,8 @@ function projectColumns(wide) {
 
 /**
  * One project row: the number the menu opens it by, which repository it lives
- * in, where the plan stands, how far through its steps it is, and what happens
- * next.
+ * in, where the plan stands, how far through its steps it is, and its PR.
+ * Next-step and last-run details stay on the data object, not on the page.
  *
  * The name is the project's alone — the programme is the heading above it now,
  * and repeating it on every row said the same word four times in a column
@@ -1177,13 +1146,7 @@ function projectLine(c, wide, project) {
     + repo
     + `${c(pad(clip(word || '—', column.status), column.status), ...statusTone(word))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
-  // The right-hand column is the last runner step, which is what says whether
-  // anything has happened; the pull request has a column of its own.
-  const right = paint(c, [
-    { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
-    { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
-  ]);
-  return row(c, wide, `${left} ${prCell(c, project)} `, project.next || '', right);
+  return `${left} ${prCell(c, project)}`;
 }
 
 /** `#13242+1` — the widest a project's pull request cell gets. */
@@ -1250,15 +1213,6 @@ function programmeCounts(c, group, columns) {
 }
 
 /**
- * Three ways of saying that nobody is planning this programme, longest first.
- *
- * The counts took the room the sentence used to have, and a clipped `no plan
- * sessio` says less than the glyph on its own does — so the widest one that
- * fits is drawn rather than the only one there was.
- */
-const NO_PLAN = [`${MARK.quiet}  no plan session`, `${MARK.quiet}  no plan`, MARK.quiet];
-
-/**
  * One programme heading: its name, its own counts, and the room for its
  * planning session — filled or empty.
  *
@@ -1276,18 +1230,19 @@ function programmeLine(c, wide, group) {
   const session = group.planning;
   const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
   const counts = programmeCounts(c, group, column.counts);
-  const space = Math.max(0, wide - 4 - column.name - column.counts);
-  const meta = session
-    ? paint(c, [
-      { text: `${MARK.running} `, styles: ['cyan'] },
-      ...between([
-        { text: `plan ${openFor(session.age_seconds).replace(/^open /u, '')}`, styles: ageTone(session.age_seconds) },
-        { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
-        { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
-      ], ' · '),
-    ], space)
-    : c(NO_PLAN.find((text) => text.length <= space) ?? '', 'grey');
-  return `${left} ${counts} ${meta}`.replace(/[ ]+$/u, '');
+  const providers = {};
+  for (const item of group.planning_sessions || (session ? [session] : [])) {
+    const provider = item.tool === 'claude-code' ? 'claude' : item.tool || 'unknown';
+    providers[provider] = (providers[provider] || 0) + 1;
+  }
+  const meta = Object.entries(providers).sort(([a], [b]) => a.localeCompare(b))
+    .map(([provider, n]) => `${provider} ${n}`).join(' · ');
+  const detail = meta ? `plan ${meta}` : '·  no plan session';
+  // Provider counts take precedence over the programme's rollup on a narrow
+  // terminal; the headline and JSON still carry that rollup.
+  const prefix = meta && width(left) + width(counts) + detail.length + 2 > wide
+    ? `${left} ` : `${left} ${counts} `;
+  return `${prefix}${c(clip(detail, Math.max(0, wide - width(prefix))), 'grey')}`.trimEnd();
 }
 
 /** How many blockers a collapsed row and the rollup line name before they stop. */
@@ -1394,34 +1349,32 @@ function programmesLines(lines, c, wide, programmes, expand) {
     // request is work that exists, and collapsing it is how one was lost.
     const collapsed = expand ? null : group.blocked;
     const held = new Set(collapsed ? collapsed.names : []);
-    for (const project of group.projects) {
+    for (const project of group.projects.filter(project => !project.goal)) {
       if (held.has(project.name) && !project.prs?.length) continue;
       lines.push(projectLine(c, wide, project));
+    }
+    const goals = group.projects.filter(project => project.goal);
+    const phases = [...new Set(goals.map(project => project.goal.programme_phase))]
+      .sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+    for (const phase of phases) {
+      say(lines, c, wide, 4, `phase ${phase ?? 'unknown'}`);
+      for (const project of goals.filter(project => project.goal.programme_phase === phase)) {
+        const goal = project.goal;
+        const criteria = goal.criteria || [];
+        const verified = criteria.filter(item => item.builder === 'verified').length;
+        const lead = `  ${String(project.number).padStart(3)} ${project.running ? MARK.running : MARK.quiet} `;
+        const phaseWord = goal.phase || 'unknown';
+        const meta = ` · ${verified}/${criteria.length} criteria · ${goal.sessions_run ?? 'unknown'} ${wide < 90 ? 'runs' : 'sessions'} · `;
+        const name = clip(project.name, Math.max(1, wide - lead.length - meta.length - phaseWord.length));
+        lines.push(`${lead}${name}${c(meta, 'grey')}${c(phaseWord, ...statusTone(phaseWord))}`);
+        say(lines, c, wide, 8, goal.next_action || goal.problem || 'unknown', ['grey']);
+      }
     }
   }
   if (programmes.no_workarea) {
     say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
   }
 
-}
-
-/**
- * AUTONOMY — one line per programme that keeps autonomous state: its mode, how
- * many goals and started operations it has, and what happens next without
- * anybody typing. Drawn only when such a programme exists, so a page of v1
- * projects is the page it was; `mc programme status <name>` has the detail.
- */
-function autonomyLines(lines, c, wide, autonomy) {
-  const list = autonomy?.programmes || [];
-  if (!list.length) return false;
-  heading(lines, c, wide, 'AUTONOMY', `${list.length} programme${list.length === 1 ? '' : 's'}`, 'mc programme status <name>');
-  for (const item of list) {
-    const tone = item.problem || item.mode === 'exception' ? ['red'] : item.mode === 'active' ? ['green'] : ['grey'];
-    const counts = item.problem ? `problem: ${item.problem}`
-      : `${item.goals} goal${item.goals === 1 ? '' : 's'} · ${item.in_flight} in flight${item.stop ? ` · stops at ${item.stop}` : ''}`;
-    say(lines, c, wide, 4, `${item.programme} · ${item.mode} · ${counts} · next: ${item.next_action}`, tone);
-  }
-  return true;
 }
 
 /**
@@ -1568,16 +1521,16 @@ export function renderPageLines(data, {
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
-  if (autonomyLines(lines, c, wide, data.autonomy)) lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
   lines.push('');
   helperLines(lines, c, wide, sessions.desks?.helper, data.intake);
   lines.push('');
   briefLines(lines, c, wide, sessions.desks?.brief, data.intake, data.programmes, data.next?.stale);
   lines.push('');
-  nextLines(lines, c, wide, data.next);
-  lines.push('');
-  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
+  const goals = (data.programmes?.programmes || []).flatMap(group => group.projects || []).filter(project => project.goal);
+  const queuedGoals = goals.filter(project => !project.goal.active_run && ['ready', 'review_ready'].includes(project.goal.phase)).length;
+  const queuedProjects = (data.next?.items || []).filter(item => item.runnable && !goals.some(project => project.name === item.name)).length;
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at, queue: { projects: queuedProjects, goals: queuedGoals } });
   if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
   mergesLines(lines, c, wide, data.merges);

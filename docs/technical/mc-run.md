@@ -1122,10 +1122,12 @@ a file is written after a step begins, and two lanes counting files in the same
 tick would both see the same free slot. A lane with
 no slot polls every 15 s and says one line when the wait begins, and gives the
 wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
-read no lane starts a step. There is no ordering rule between waiting lanes:
-whoever polls first wins, so a busy repository can hold the machine while a
-quiet one waits. That is measured, not designed, and it is the thing to watch
-first if a cap turns out to starve one side.
+read no lane starts a step. Waiting lanes take slots first come, first served: a
+new arrival cannot overtake a waiter even if it polls first. `runner/waiting.json`
+records the ordered waiters (project, repository, lane, runner pid and arrival
+time). Admission, STOP, UPDATE and a failed wait remove the ticket. With no
+total cap, no ticket is enqueued. This changes only machine-slot admission,
+not `nextFor` or `assembleQueue`.
 
 **Which pair is chosen decides whether that hazard can bite at all**, and this
 is the one arithmetic worth knowing about the two numbers together. `per_repo`

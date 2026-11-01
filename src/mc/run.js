@@ -1968,14 +1968,8 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * spends no session at all. What it costs is a reading thrown away when the
    * machine turns out to be full — seconds against the hour a session is.
    *
-   * Which waiting lane gets a freed slot is whichever looks first, and that
-   * is arbitrary. Measured 2026-09-05: 26 memoro plans with a ready step
-   * against memoro-cli's 3, and a median step of 14 minutes (p90 58). The
-   * repository with the work is the one that keeps asking, so under a cap the
-   * small queue can wait behind the large one for as long as the large one
-   * has steps. That hazard is named here rather than answered — no ordering
-   * rule is built in this step, and none should be built before somebody has
-   * watched what the cap actually does.
+   * Slot admission is FIFO, independently of the runner's project pick order.
+   * The durable waiting list also lets the operator inspect held lanes.
    */
   let running = 0;
   let seen = { held: 0, cap: null };
@@ -1988,34 +1982,36 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * Take a slot, or don't — in one tick, with no await between the test and the
    * take. `stepsHeld` reads its files synchronously, so that holds here too.
    */
-  function takeSlot() {
+  const waitingPath = join(root, 'runner', 'waiting.json');
+  const waiters = [];
+  const saveWaiters = () => writeJson(waitingPath, { waiters });
+  function takeSlot(waiter) {
     const cap = capNow();
     const held = cap === null ? running : running + stepsHeld().filter((h) => h.other).length;
     seen = { held, cap };
-    if (cap !== null && held >= cap) return false;
+    if (cap !== null && (held >= cap || (waiters.length && waiters[0] !== waiter))) return false;
     running += 1;
     return true;
   }
   const dropSlot = () => { running -= 1; };
-  /**
-   * `ok` when the slot is held, `stop` or `update` when the wait was given up
-   * on. One line when the waiting starts and none per attempt: runner.log
-   * already carries ten thousand `, skip` lines and this is the kind of loop
-   * that would add ten thousand more.
-   *
-   * It gives up on STOP for the obvious reason and on UPDATE for a contract
-   * one: from the moment an UPDATE is read no lane starts a step, and a lane
-   * that launched one after waiting out somebody else's would stretch a drain
-   * that is meant to end within one step's length into two.
-   */
-  async function waitForSlot(name) {
-    if (takeSlot()) return 'ok';
-    say(`${name}: ${seen.held} of ${seen.cap} steps in flight on this machine — waiting for a lane`);
-    for (;;) {
-      await deps.sleep(TOTAL_POLL_MS);
-      if (stopRequested()) return 'stop';
-      if (updateRequested()) return 'update';
-      if (takeSlot()) return 'ok';
+  /** STOP, UPDATE and failed waits retire their tickets; an uncapped machine
+   * never enqueues a lane. No await separates admission from taking a slot. */
+  async function waitForSlot(name, { repo = null, lane = 0 } = {}) {
+    if (takeSlot(null)) return 'ok';
+    const waiter = { name, repo, lane, pid, since: stamp() };
+    waiters.push(waiter);
+    try {
+      saveWaiters();
+      say(`${name}: ${seen.held} of ${seen.cap} steps in flight on this machine — waiting for a lane`);
+      for (;;) {
+        await deps.sleep(TOTAL_POLL_MS);
+        if (stopRequested()) return 'stop';
+        if (updateRequested()) return 'update';
+        if (takeSlot(waiter)) return 'ok';
+      }
+    } finally {
+      waiters.splice(waiters.indexOf(waiter), 1);
+      saveWaiters();
     }
   }
 
@@ -2095,7 +2091,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       return runAutonomousBuild({ root, record, repo, worktree: join(areaPath(name), repo.name), areaName: areaName(name),
         lane, pid, paths, deps: { ...deps, gh }, capability: autonomous,
         openPrs: openPrsFor({ prs, name, names: plans.map(item => item.project), repo: repo.name }),
-        waitForSlot, dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
+        waitForSlot: name => waitForSlot(name, { repo: repo.name, lane }), dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
         observeResult: (toolId, result) => {
           if (toolId === 'claude-code') observeCapacity(state => observeClaudeStream(state, result.stdout, deps.now()));
           const read = readSessionOutput({ toolId, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, now: deps.now() });
@@ -2331,7 +2327,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // and `machineState` would have to guess at it.
     // A concrete step waits out a quota in another lane, as it always has (quotaHold, above, names why it is not every step).
     if (!cls) await quotaHold();
-    const slot = await waitForSlot(name);
+    const slot = await waitForSlot(name, { repo: repo.name, lane });
     if (slot !== 'ok') {
       abandonMerge(slot === 'stop' ? 'STOP is present' : 'an UPDATE is pending');
       if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
@@ -3047,7 +3043,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       const name = `programme:${programme}`;
       if (last?.name === name || passed.has(name) || stopRequested() || updateRequested()) continue;
       const outcome = await runProgrammePlan({ root, programme, repos, repo: repos.find(item => item.name === repo), lane, pid,
-        paths, deps, capability: autonomous, waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say });
+        paths, deps, capability: autonomous, waitForSlot: name => waitForSlot(name, { repo: repo || repos[0]?.name || null, lane }), dropSlot, routeClass, writeJson, remove, stamp, say });
       if (outcome === 'stop') return { ran: 0, stop: true };
       if (outcome === 'ran') return { ran: 1, name, step: null };
     }
