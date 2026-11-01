@@ -1148,6 +1148,41 @@ function projectLine(c, wide, project) {
   return `${left} ${prCell(c, project)}`;
 }
 
+/**
+ * One goal, in a project row's columns (Martin, 2026-11-01): its row number, a
+ * mark while a session is on it, `g · <name>`, its first repository, its state,
+ * and how many sessions it has had. The grey tail after that is what the last
+ * session said is next (or its comment, when it said nothing next). A goal whose
+ * GOAL.md does not parse says its first problem in red there instead.
+ *
+ * `open` is green while a session is on it and grey otherwise, `blocked` is the
+ * blocked colour, and `done` is grey — the project rows' colours for the same words.
+ */
+function goalLine(c, wide, goal) {
+  const column = projectColumns(wide);
+  const mark = goal.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  const word = goal.status ?? '—';
+  const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
+    : (goal.status === 'blocked' ? statusTone('blocked') : ['grey']);
+  const repo = column.repo
+    ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
+    : '';
+  const name = pad(clip(`g · ${goal.name}`, column.name), column.name);
+  const sessionsWords = goal.sessions === 1 ? '1 session' : `${goal.sessions} sessions`;
+  // Padded to the project row's steps and PR cells together, so the tail lands
+  // where a project's pull request does.
+  const left = `  ${c(String(goal.number).padStart(3), 'grey')} ${mark} `
+    + `${goal.running ? c(name, 'bold') : name} `
+    + repo
+    + `${c(pad(clip(word, column.status), column.status), ...tone)} `
+    + c(pad(sessionsWords, column.steps + 1 + PR_CELL), 'grey');
+  const room = wide - width(left);
+  if (room <= 0) return left;
+  if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
+  const said = goal.last?.next ?? goal.last?.comment ?? null;
+  return said ? `${left}${c(clip(one(said), room), 'grey')}` : left;
+}
+
 /** `#13242+1` — the widest a project's pull request cell gets. */
 const PR_CELL = 8;
 
@@ -1196,9 +1231,16 @@ function programmeColumns(wide) {
  * of nothing reads as the bookkeeping it is.
  */
 function programmeCounts(c, group, columns) {
+  // A programme's goals are counted after its projects' own words, and the cell
+  // is wider by exactly those words when it has any: the projects' counts are
+  // never cut to make room for them. No goal, and the cell is as it was.
+  const goals = (group.goals || []).length;
+  const goalWords = goals ? ` · ${goals} goal${goals === 1 ? '' : 's'}` : '';
+  const room = columns + goalWords.length;
+  const goalsPart = goals ? [{ text: goalWords, styles: ['grey'] }] : [];
   const statuses = group.statuses || {};
   const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
-  if (!total) return pad(c(clip('no project yet', columns), 'grey'), columns);
+  if (!total) return pad(paint(c, [{ text: 'no project yet', styles: ['grey'] }, ...goalsPart], room), room);
   const ready = statuses.ready || 0;
   const waiting = statuses.waiting || 0;
   const blocked = statuses.blocked || 0;
@@ -1208,7 +1250,8 @@ function programmeCounts(c, group, columns) {
     { text: `${waiting} waiting`, styles: waiting ? statusTone('waiting') : ['grey'] },
     { text: ' · ', styles: ['grey'] },
     { text: `${blocked} blocked`, styles: blocked ? statusTone('blocked') : ['grey'] },
-  ], columns), columns);
+    ...goalsPart,
+  ], room), room);
 }
 
 /**
@@ -1352,6 +1395,8 @@ function programmesLines(lines, c, wide, programmes, expand) {
       if (held.has(project.name) && !project.prs?.length) continue;
       lines.push(projectLine(c, wide, project));
     }
+    // A goal is not collapsed: it is work that exists whatever the blocked rows do.
+    for (const goal of group.goals || []) lines.push(goalLine(c, wide, goal));
   }
   if (programmes.no_workarea) {
     say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);

@@ -255,12 +255,19 @@ export function runnerOrder(answer) {
   return [verb, ...rest];
 }
 
+/** `mc goal <argv>` — the goal verbs, loaded when a goal's number is typed. */
+async function showGoalVerb(argv, io) {
+  const goal = await import('./goal.js');
+  return goal.run(argv, io);
+}
+
 /**
  * The way on from the page.
  *
- * The numbers are PROJECTS' numbers — the page above the prompt is the
- * listing, so the menu has none of its own, and a number opens its project
- * whether or not a row was drawn for it: a programme's blocked projects are one
+ * The numbers are the page's — the page above the prompt is the listing, so the
+ * menu has none of its own. A project's number opens the project, and a goal's
+ * number shows it (`mc goal show`). A number opens its project whether or not a
+ * row was drawn for it: a programme's blocked projects are one
  * collapsed row, and `a` is what draws them all again. Everything a number cannot say is a letter,
  * and anything else is read as a `mc work` command, because a prompt invites
  * one and the verbs are the same verbs. `mc work discard x`, `discard x`,
@@ -281,6 +288,9 @@ export async function menu(first, {
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
+  // `mc goal <verb>` for a goal's number — a dependency, as runOrder is, so a
+  // test drives the menu without a goal on disk.
+  showGoal = null,
   // The page on newer code, when a frame said mc moved under it (`RESTART`).
   restart = () => 0,
 }) {
@@ -300,6 +310,9 @@ export async function menu(first, {
       ...data.programmes.programmes.flatMap((group) => group.projects),
       ...(data.programmes.unplanned?.shown || []),
     ];
+    // A goal is reached by its number only: a typed name is a project's or a
+    // workarea's, and a goal's name may be one of those too.
+    const goals = data.programmes.programmes.flatMap((group) => group.goals || []);
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
@@ -346,6 +359,16 @@ export async function menu(first, {
       const project = await import('./status-project.js');
       stdout.write('\n');
       await project.run([words[1]], { stdout, stderr });
+      data = await redraw();
+      continue;
+    }
+
+    // A goal's number shows the goal, and the page is drawn again under the
+    // prompt, as `s` does: a goal is looked at, not opened.
+    const goal = goals.find((item) => item.number === Number(answer));
+    if (goal) {
+      stdout.write('\n');
+      await (showGoal || showGoalVerb)(['show', `${goal.programme}/${goal.name}`], { stdout, stderr });
       data = await redraw();
       continue;
     }

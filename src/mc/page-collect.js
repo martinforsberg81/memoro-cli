@@ -58,6 +58,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
+import { goalName, programsGoals, sessions as goalSessions } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
@@ -79,7 +80,7 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, programsHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry, realLock } from './register.js';
@@ -1245,7 +1246,7 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, planningSessions = {}, goals = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
+  planning = {}, planningSessions = {}, goals = {}, goalRows = [], running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -1322,6 +1323,11 @@ export function programmesSection({
 
   let number = 0;
   for (const project of projects) { number += 1; project.number = number; }
+  // A goal continues the numbering after every project's, in the order the page
+  // draws the goals (programme, then name), so the menu reaches each by number.
+  const goalList = goalRows.map((goal) => ({ ...goal }))
+    .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
+  for (const goal of goalList) { number += 1; goal.number = number; }
   const drawn = orphans.slice(0, Math.max(0, shown));
   // Numbered, and nothing else asked about them. Each used to cost two `git`
   // calls for how much was uncommitted and when it was last committed to —
@@ -1341,6 +1347,7 @@ export function programmesSection({
     ...projects.map((project) => project.programme),
     ...Object.keys(planning),
     ...Object.keys(planningSessions),
+    ...goalList.map((goal) => goal.programme),
     ...programmes,
   ])].filter(Boolean).sort((a, b) => a.localeCompare(b));
 
@@ -1349,6 +1356,8 @@ export function programmesSection({
     return {
       programme: name,
       projects: own,
+      // The programme's goals, after its project rows (programmesLines).
+      goals: goalList.filter((goal) => goal.programme === name),
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
@@ -1384,6 +1393,26 @@ export function programmesSection({
     // drawn under `not an area mc knows`. Nothing removes one.
     unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length), strays },
   };
+}
+
+/**
+ * The goals under the programmes home, as PROGRAMMES draws them (`goals.js`):
+ * the status, the sessions, the last entry, and whether a live current file
+ * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
+ * and a current file whose process is gone is not a session, as `nowBlock` reads
+ * them. `goals` is `programsGoals`' answer, and nothing is read here.
+ */
+export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
+  return goals.map((goal) => ({
+    name: goal.goal,
+    programme: goal.programme,
+    repos: goal.repos,
+    status: goal.status,
+    sessions: goalSessions(goal.log),
+    last: goal.log.at(-1) ?? null,
+    running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
+    problems: goal.problems,
+  }));
 }
 
 /* ----------------------------------------------------------------- readers */
@@ -1699,6 +1728,7 @@ export async function collectPage({
     planning: sessions.planning,
     planningSessions,
     running: runner.steps.map((step) => step.name).filter(Boolean),
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),
     now,
