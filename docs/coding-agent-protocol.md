@@ -208,10 +208,14 @@ endpoint the agent can repurpose as a credential proxy.
   enforced separation of principals, namespaces, mounts, process inspection,
   sockets, IPC, and egress between the credential owner and model-directed
   execution.
-- Never pass a managed credential to arbitrary project code, even in a separate
-  process. Such code is LLM-editable and can become a credential oracle. Use
-  only immutable, signed, policy-bound typed adapters with a narrow schema and
-  redacted output.
+- A managed credential reaches project code only through `mc keys run`: a script
+  declared in the committed `.mc-keys.json`, whose source equals `origin/main`,
+  receives the keys declared for it in its own environment and nowhere else, and
+  its output is filtered before a session sees it. Code a session has edited gets
+  no key until it has landed, so it cannot become a credential oracle.
+  [`docs/technical/mc-keys.md`](technical/mc-keys.md) states what this protects
+  against and what it does not. Never pass a credential to project code any other
+  way.
 - If a coding tool or integration cannot keep its login/provider credential out
   of the model-directed executor and cannot prevent its transport from becoming
   an unrestricted proxy, it is unsupported for managed portable bootstrap and
@@ -222,7 +226,9 @@ endpoint the agent can repurpose as a credential proxy.
   process,** command, file, environment, argv, output, log, transcript, browser
   payload, credential helper, or inspectable peer process. They are never
   materialised for Codex, Claude, generic adapters, or repo dotenv files —
-  `mc vault get` and `mc vault bind` refuse for exactly this reason. This
+  `mc vault get` and `mc vault bind` refuse for exactly this reason. A landed
+  script under `mc keys run` is not such a process: its source is `origin/main`,
+  not the session's. This
   paragraph is the normative copy; the plan it was quoted from
   (`docs/plans/credential-blind-capabilities.md`) went with mc-cut.
 - GitHub credentials are not mc vault material. App private keys and durable

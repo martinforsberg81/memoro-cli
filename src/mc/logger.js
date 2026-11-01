@@ -114,6 +114,8 @@ export function invocationShape(argv = []) {
   const verb = args[0] && !args[0].startsWith('-') ? args[0] : null;
   const sub = args[1] && !args[1].startsWith('-') ? args[1] : null;
   const freeText = FREE_TEXT_TAILS.has(verb) || FREE_TEXT_TAILS.has(sub);
+  // Script arguments are opaque: never record their positionals or flag names.
+  if (verb === 'keys') return { verb, sub: ['run', 'list'].includes(sub) ? sub : null, args: [], flags: [], argc: args.length };
   const flags = [];
   const rest = [];
   for (const [index, arg] of args.entries()) {

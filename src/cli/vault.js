@@ -55,6 +55,7 @@ import {
 import * as VaultApi from '../vault/engine/api.js';
 
 import { readFileSync } from 'node:fs';
+import { rememberRuntimeSecretNames } from '../mc/runtime-secrets.js';
 import { isAbsolute, join } from 'node:path';
 
 import { getSecret as keychainGet, deleteSecret as keychainDelete } from '../lib/keychain.js';
@@ -400,6 +401,8 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
   if (!got) return 1;
   const { vaultKey, crk } = got;
 
+  // Register names before storing values so subsequent sessions scrub them.
+  rememberRuntimeSecretNames(plan.candidates.filter(candidate => candidate.selected).map(candidate => candidate.name));
   const values = readDotenvValueMap(file, { cwd });
   const existingLabels = await listVaultLabels(portal, vaultKey, crk);
   const imported = [];
