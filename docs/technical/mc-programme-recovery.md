@@ -42,6 +42,9 @@ without another verified criterion retain a `no-progress` exception. Neither a
 new run, new commits, a goal revision nor restarting plan resets that count.
 A current retry diagnosis of every attempt also lets the next build start on the
 uncommitted tree those attempts left; without one that tree is refused.
+A closed session whose attempt is on record no longer holds the tree: a later run
+may have merged main since, so its snapshot need not match. Its process group and
+gate are still checked, and the build that takes over retires its manifest.
 Verified criterion IDs, not output volume or repeated evidence IDs, define
 progress. Exception handling stays with plan, never an invented design stop.
 
