@@ -69,13 +69,12 @@ THE PAGE
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
+  mc goal new <p>/<g> --repo <r> --class fast|large --title "…"
+                                    A goal: GOAL.md, LOG.md, a worktree per repository
+  mc goal log|open|blocked|done|show|list  A session's entry, its status, one goal whole, or every goal
   mc work <name>                  Open that workarea, ~/mc/work/<name>
   mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
-  mc goal new <p>/<g> --repo <r> --class fast|large --title "…"   A goal: GOAL.md, LOG.md, a worktree per repository
-  mc goal log|open|blocked|done [<p>/<g>]   Append a session's entry; open, blocked or done sets the status
-  mc goal show <p>/<g>             A goal: its brief, its last three entries, its worktrees
-  mc goal list [<p>]               Every goal, one line each
-  mc repos                         Where mc's two repositories live
+  mc repos                        Where mc's two repositories live
 
 IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
@@ -140,6 +139,24 @@ IN FULL
   mc layout migrate --apply        The move: the plan made again, each move
                                     done in order and logged; the first that
                                     fails stops it, a second run continues
+  mc goal new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…"
+                                    A goal beside projects: GOAL.md and LOG.md under
+                                    ~/mc/programs/<p>/goals/<g>/, and one worktree per
+                                    repository on goal/<g>, from origin/main. Each
+                                    repository is fetched first; a failed fetch leaves
+                                    nothing behind
+  mc goal log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]
+                                    One session's entry appended to LOG.md, tagged with
+                                    MC_TOOL and MC_MODEL (person when neither is set).
+                                    --status sets the goal's status too. The goal is
+                                    MC_GOAL's when none is named
+  mc goal open|blocked|done [<p>/<g>] [--reason "…"]
+                                    Sets the status, and logs the reason
+  mc goal show <p>/<g>             The brief, the last three entries, and each
+                                    worktree: changed files, commits past origin/main,
+                                    the last commit's date
+  mc goal list [<p>]               Every goal, one line each: repositories, status,
+                                    sessions, the last entry's Nästa
   mc repos [--json]                The two repositories: bare or primary, the git
                                     directory, the checkout mc serves, and the
                                     linked worktrees each has

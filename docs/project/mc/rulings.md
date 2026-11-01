@@ -2211,6 +2211,39 @@ autonomy-off clarification above to the provider pilot.
   them. A new tool version has no support until it is observed again, which
   refuses `autonomy on` and nothing else.
 
+### Clarification to ruling 60 · a goal is two text files and a worktree
+
+`2026-11-01` · raised in the `mc` planning session on the `goals-plain` plan,
+after the autonomous goal machinery of 2026-10-28 and 2026-10-29 was built and
+not wired in
+
+Martin, 2026-11-01:
+
+> "jag ser framför mig något mycket enklare och smidigare; typ såhär I programmet så får varje goal en egen worktree i <program>/goals/<goal>/memoro respe /memoro-cli; vem som helst kan arbeta i det worktree; det finns inga begränsningar. En goal-step är en headless session som läser goals, jobbar i worktree, avslutar med att dokumentera vad som är gjort plus kommentar. Det är så mycket överkrångligt som ska rivas ut."
+
+> "VI ska skilja på publish, skapa och push pr. Med merge. Det förstnämnda är det jag tänker att mc goal ska göra."
+
+What this settles:
+
+- The autonomous state, revisions, leases, the capability report, and the
+  goal's own review and merge door of the 2026-10-28 and 2026-10-29 plans are
+  removed. The `goals-plain` plan removes them; nothing of them stays.
+- A goal is GOAL.md, LOG.md and one worktree per repository. Anyone may work in
+  the worktree. A goal session is headless, works in the worktree, and ends by
+  logging what it did and what comes next.
+- A goal session publishes its pull request with `mc publish --no-merge` and
+  never merges. `mc publish`, `mc merge`, the merger and the merge boundary have
+  one path again, with no autonomous door. `mc merge` is a person's or a plan
+  session's act.
+- The headless plan session (`autonomy on`) and phases are deferred until goal
+  sessions have run for real.
+- The eighteen shortcomings Martin listed on 2026-11-01 are answered by removal,
+  not by repair.
+
+`docs/project/mc/autonomy-goals.md` is superseded by
+[`docs/technical/mc-goals.md`](../../technical/mc-goals.md) and this
+clarification. It is kept as the record of what was asked.
+
 ## 61 · One merge lane per repository; a session waits for nobody
 
 Martin, 2026-11-01: *"Hela konceptet light/heavy lane ska rivas ut. det ska

@@ -290,6 +290,13 @@ into the removed directory are rewritten to these in the same pull request
 
 **A project under `~/mc/programs/` is not written into `closeout/`.** Its closeout is `CLOSEOUT.json` beside its `PLAN.json` in mc, and its repository gets only its `project_log.md` row ([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *What archiving does*).
 
+## Goals beside projects
+
+A goal has no `PLAN.json`, steps or register. It is `GOAL.md`, `LOG.md` and one
+worktree per repository under `~/mc/programs/<programme>/goals/<goal>/`, and it
+never merges: a goal session publishes with `mc publish --no-merge`. See
+[`docs/technical/mc-goals.md`](../technical/mc-goals.md).
+
 ## Citing a decision
 
 Decisions are raised as files under a `decisions/` directory at the root of the
