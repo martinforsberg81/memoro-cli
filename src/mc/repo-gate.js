@@ -2430,12 +2430,23 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
+    // The measured cost of each file (test-times.js), as in `realTests`: a
+    // second reporter beside the TAP, through NODE_OPTIONS since the suite is
+    // a command line. `noteTimes` was called here without being defined (#1195),
+    // and every full-suite round died on the close event.
+    const timesFile = times ? join(tmpdir(), `mc-test-times-${randomUUID()}.jsonl`) : null;
+    const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
+    const noteTimes = () => {
+      if (!timesFile) return;
+      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      rmSync(timesFile, { force: true });
+    };
     const child = spawn(command, {
       cwd,
       shell: true,
       // The round's lane count, for a suite that runs its own runner (memoro's
       // `runner.mjs` reads it); a caller that set one keeps it.
-      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
+      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} ${reporters}`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });

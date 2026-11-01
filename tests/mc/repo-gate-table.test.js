@@ -358,7 +358,7 @@ describe('pr_tests_flags', () => {
     const other = repo('stranger', { name: 'stranger' });
     try {
       assert.deepEqual(memoro.ask().declaration.pr_tests_flags, ['--import', './tests/_helpers/browser-paths.mjs']);
-      assert.deepEqual(cli.ask().declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs']);
+      assert.deepEqual(cli.ask().declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs', '--test-timeout=300000']);
       other.override({ stranger: { prepare: null, extra_gates: [], merge_log: null } });
       assert.deepEqual(other.ask().declaration.pr_tests_flags, []);
     } finally { memoro.cleanup(); cli.cleanup(); other.cleanup(); }
@@ -398,7 +398,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         extra_gates: [],
         derived: [],
         merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
-        pr_tests_flags: ['--import', './tests/_isolate-home.mjs'],
+        pr_tests_flags: ['--import', './tests/_isolate-home.mjs', '--test-timeout=300000'],
+        round_seconds: 120,
         affected: null,
         serial_paths: null,
         deps_notes: [],
