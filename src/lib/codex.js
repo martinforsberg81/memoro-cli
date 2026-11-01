@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { run as runGit } from '../mc/git.js';
+import { run as runGit } from './git-process.js';
 
 export const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex');
 export const CODEX_SESSIONS_DIR = join(CODEX_HOME, 'sessions');
