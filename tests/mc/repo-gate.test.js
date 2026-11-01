@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { directGitDir, gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -2921,6 +2921,13 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
 });
 
 describe('the suite\'s environment and its time', () => {
+  it('selectFiles: main_only leaves a pull request\'s selection, unless it is all that was selected', async () => {
+    const select = (files, mainOnly) => selectFiles({ command: `printf '%s' '${JSON.stringify({ files })}'`, cwd: tmpdir(), env: process.env, say: () => {}, mainOnly });
+    assert.deepEqual((await select(['a.test.js', 'ratchet.test.js'], ['ratchet.test.js'])).files, ['a.test.js']);
+    assert.deepEqual((await select(['ratchet.test.js'], ['ratchet.test.js'])).files, ['ratchet.test.js']);
+    assert.deepEqual((await select(['a.test.js', 'ratchet.test.js'])).files, ['a.test.js', 'ratchet.test.js']);
+  });
+
   it('directGitDir: a link to the toolchain git on macOS, nothing elsewhere or when none answers', () => {
     const home = mkdtempSync(join(tmpdir(), 'mc-direct-git-'));
     try {
