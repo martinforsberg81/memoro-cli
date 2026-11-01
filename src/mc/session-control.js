@@ -156,7 +156,8 @@ function decide(previous, observation, initial, criteria = [], finishing = false
   // Emergency takes precedence over progress/failures and never reports green.
   // Finish's gate is bounded by the gate itself and by total_awake_ms. It may outlast
   // closing and a tool wait, and a verdict in hand ends this as soon as the model is back.
-  const gating = finishing && observation.activity.kind !== 'model';
+  // The starting gate is the same wait, and ends on the observation that hands over to the model.
+  const gating = old.activity.id === 'starting-gate' || (finishing && observation.activity.kind !== 'model');
   const expiredWait = !gating && mode !== 'model' && elapsedWait >= (mode === 'lane' ? p.lane_wait_ms : p.tool_wait_ms);
   if (state.totals.active_ms >= p.emergency_active_ms || state.totals.awake_ms >= p.total_awake_ms
     || (fraction !== null && fraction >= p.emergency_context)

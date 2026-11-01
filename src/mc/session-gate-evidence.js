@@ -1,11 +1,11 @@
 /** Immutable local measurements. A receipt describes checks, not permission to
  * publish or merge. Limited runs never enter the merger's full-selection cache. */
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GATE_MEASUREMENT_VERSION, checksHash, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -23,7 +23,7 @@ export function captureWorktree(cwd) {
       Object.assign(env, { GIT_INDEX_FILE: index, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.fsmonitor',
         GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'core.untrackedCache', GIT_CONFIG_VALUE_1: 'false' });
     }
-    const run = spawnSync('git', args, { cwd, env, input, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 << 20 });
+    const run = runGit(cwd, args, { env, input, timeoutMs: 60_000, maxBuffer: 64 << 20 });
     if (run.error || run.status !== 0) throw new Error(`cannot fingerprint worktree: git ${args[0]} (${run.error?.code || run.status})`);
     return run.stdout;
   };
@@ -152,7 +152,7 @@ export function findPublicationReceipt({ root, cwd, repo, run, sessionRun = null
     || !Array.isArray(selection?.files) || !Array.isArray(selection.commands)) return null;
   try {
     const git = (ref) => {
-      const result = spawnSync('git', ['rev-parse', '--verify', ref], { cwd, encoding: 'utf8', timeout: 60_000 });
+      const result = runGit(cwd, ['rev-parse', '--verify', ref], { timeoutMs: 60_000 });
       if (result.status !== 0 || result.error) throw new Error('commit unavailable');
       return result.stdout.trim();
     };

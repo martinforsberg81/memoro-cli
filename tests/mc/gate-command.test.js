@@ -113,6 +113,14 @@ describe('mc gate <test files…>', () => {
     assert.equal(JSON.parse(whole.files.get(`${LOG}.request.json`)).defer, false);
   });
 
+  it('a repository that declares session_whole leaves nothing to the merge round', async () => {
+    const out = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    const declaration = out.deps.declaration;
+    out.deps.declaration = (...args) => { const declared = declaration(...args); return { ...declared, declaration: { ...declared.declaration, session_whole: true } }; };
+    assert.equal(await run([], out.deps), 0);
+    assert.equal(JSON.parse(out.files.get(`${LOG}.request.json`)).defer, false);
+  });
+
   it('a green that left files to the merge round says so', async () => {
     const { out, deps, files } = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
     files.set(`${LOG}.request.json.result`, JSON.stringify({ deferred: ['b.test.js', 'c.test.js'] }));

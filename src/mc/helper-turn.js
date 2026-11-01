@@ -40,6 +40,7 @@ import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { defaultRepos, listPlans, listProposals, proposalSystem } from './brief-collect.js';
+import { runAsync as runGitAsync } from './git.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
 import { programsPlans } from './plan-source.js';
 import { profileArgs } from './portrait.js';
@@ -168,9 +169,8 @@ function realSession({ bin, args, cwd, timeoutMs, env }) {
 }
 
 function realGit(cwd, args) {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 20_000 }, (error, stdout) => resolve(error ? null : stdout.trimEnd()));
-  });
+  return runGitAsync(undefined, ['-C', cwd, ...args], { timeoutMs: 20_000 })
+    .then((r) => (r.error || r.status !== 0 ? null : String(r.stdout || '').trimEnd()));
 }
 
 /**

@@ -33,6 +33,7 @@ import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans } from '../brief-collect.js';
 import { closable, closeArea } from '../close-workarea.js';
+import { run as runGit } from '../git.js';
 import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan, validateProject } from '../plan-schema.js';
@@ -1022,7 +1023,7 @@ function readBytesOrNull(path) {
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */
 function gitIn(cwd, args) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const r = runGit(undefined, ['-C', cwd, ...args]);
   return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 

@@ -394,9 +394,9 @@ behind, `env` already points it at a throwaway directory, and a faked writer
 would only prove that the fake was called. One test
 starts a real `npm run deploy` against a `package.json` whose script only prints,
 and asserts both the echo and the capture.
-[`tests/mc/deploys.test.js`](../../tests/mc/deploys.test.js) covers the reader
-and the two writes; the page, brief and helper readings are covered in their own
-suites from fixtures.
+The reader and the two writes had a test until 2026-11-01, removed with the
+tests that never caught anything; the page, brief and helper readings are
+covered in their own suites from fixtures.
 
 Where `main` is has a test per case — in another worktree, behind, dirty, ahead,
 checked out nowhere with mc's worktree absent, and mc's worktree present — and

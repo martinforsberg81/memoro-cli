@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
+import { run as runGit } from './git.js';
 import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
 
@@ -29,7 +30,7 @@ export const BEHIND_WARNING = 50;
 /** The escape a command carries when the turn really means the raw tool. */
 export const ALLOW_MARK = 'MC_HOOK_ALLOW=1';
 
-const gitIn = (cwd) => (args) => spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 5_000 });
+const gitIn = (cwd) => (args) => runGit(cwd, args, { timeoutMs: 5_000 });
 
 /**
  * The repository a directory belongs to, when it is one mc knows: the name

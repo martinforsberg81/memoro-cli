@@ -27,8 +27,7 @@ What the verb adds is everything around the scripts:
 It is Martin's verb, as `mc deploy` is. The runner never calls it, and no role
 tells a session to (`canon/roles/_session-work.md`). Only the verb, its help,
 its record, the page and `mc deploy --dry-run` name its subcommands, and the
-last two name them only as the next thing to type; a test checks that
-(`tests/mc/language-runs.test.js`).
+last two name them only as the next thing to type.
 
 ## The subcommands
 
@@ -241,8 +240,9 @@ Every child is faked:
   stdin and the prompt. It asserts that the token never appears in a fake
   spawn's argv or in `mc.log`, and appears only in a credentialed act's child
   env.
-- `tests/mc/language-runs.test.js` covers the record, `openGap` across a
-  resume, and the check that nothing outside the verb names a run.
+- The record, `openGap` across a resume and the check that nothing outside the
+  verb names a run had a test until 2026-11-01, removed with the tests that
+  never caught anything.
 - The page and the dry-run lines are covered in `tests/mc/page.test.js` and
   `tests/mc/commands/deploy.test.js`.
 

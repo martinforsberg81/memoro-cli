@@ -60,7 +60,7 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // `retry_once` joined on 2026-10-17 (ruling 44 § 5), and
       // `select_changed_path` on 2026-10-18 (ruling 47): dropped, the round
       // says so and measures without the delta reuse — nothing else changes.
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'retry_once_why']);
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'main_only', 'retry_once_why']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -358,7 +358,7 @@ describe('pr_tests_flags', () => {
     const other = repo('stranger', { name: 'stranger' });
     try {
       assert.deepEqual(memoro.ask().declaration.pr_tests_flags, ['--import', './tests/_helpers/browser-paths.mjs']);
-      assert.deepEqual(cli.ask().declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs']);
+      assert.deepEqual(cli.ask().declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs', '--test-timeout=30000']);
       other.override({ stranger: { prepare: null, extra_gates: [], merge_log: null } });
       assert.deepEqual(other.ask().declaration.pr_tests_flags, []);
     } finally { memoro.cleanup(); cli.cleanup(); other.cleanup(); }
@@ -398,7 +398,9 @@ describe('a repository that declares itself in .mc/test.json', () => {
         extra_gates: [],
         derived: [],
         merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
-        pr_tests_flags: ['--import', './tests/_isolate-home.mjs'],
+        pr_tests_flags: ['--import', './tests/_isolate-home.mjs', '--test-timeout=30000'],
+        session_whole: true,
+        main_only: [],
         affected: null,
         serial_paths: null,
         deps_notes: [],

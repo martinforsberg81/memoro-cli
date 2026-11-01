@@ -165,3 +165,6 @@ existed?
 | 2026-10-31 | mc | goals-foundation | delivered | Review the project against its goal | none | [#1178](https://github.com/martinforsberg81/memoro-cli/pull/1178) |
 | 2026-10-31 | mc | goals-programme-plan | delivered | Review the project against its goal | none | [#1180](https://github.com/martinforsberg81/memoro-cli/pull/1180) |
 | 2026-11-01 | vault | vault-cli-revision | delivered | Review the project against its goal | none | [#1184](https://github.com/martinforsberg81/memoro-cli/pull/1184) |
+| 2026-11-01 | mc | goals-checkpoint-verifier | delivered | Review the project against its goal | [docs/technical/mc-session-control.md](../technical/mc-session-control.md) | [#1187](https://github.com/martinforsberg81/memoro-cli/pull/1187) |
+| 2026-11-01 | mc | goals-activation-fixes | delivered | Review the project against its goal | none | [#1185](https://github.com/martinforsberg81/memoro-cli/pull/1185) |
+| 2026-11-01 | mc | goals-awake-clock | delivered | Review the project against its goal | [docs/technical/mc-session-control.md](../technical/mc-session-control.md) | [#1188](https://github.com/martinforsberg81/memoro-cli/pull/1188) |

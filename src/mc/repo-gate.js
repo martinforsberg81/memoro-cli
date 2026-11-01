@@ -52,7 +52,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
@@ -61,6 +61,7 @@ import { probeMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { runShell as runShellAsync, runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { log } from './logger.js';
 import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -213,7 +214,7 @@ export async function runGate({
   // different one is answering a question nobody asked, and it is why a test
   // that put a stub `gh` on the PATH still reached the real one.
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
-  const askGit = git || run('git');
+  const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askGh = gh || run('gh');
   // The selector's resource classes, once the round has read them: a file
   // classed `sqlite` or `heavy` runs after the standard batch, `heavy` one at
@@ -869,7 +870,7 @@ export async function runGate({
     let selection = null;
     if (selects) {
       selection = await timed('selection', () => selectFiles({
-        command: declared.declaration.select, cwd: headDir, env, say,
+        command: declared.declaration.select, cwd: headDir, env, say, mainOnly: declared.declaration.main_only,
       }));
       if (!selection.ok) return finish('selection', selection.reason);
       fileClasses = selection.classes || {};
@@ -1329,7 +1330,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
-export async function selectFiles({ command, cwd, env, say, signal }) {
+export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [] }) {
   const run = await shell(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
@@ -1342,7 +1343,11 @@ export async function selectFiles({ command, cwd, env, say, signal }) {
   if (!Array.isArray(files)) {
     return { ok: false, reason: `${command} printed JSON with no \`files\` array` };
   }
-  const clean = files.map(String).filter(Boolean);
+  // What the repository measures on main only leaves a pull request's selection,
+  // unless it is all that was selected: a gate that measures nothing says nothing.
+  const named = files.map(String).filter(Boolean);
+  const pullRequest = named.filter((file) => !mainOnly.includes(file));
+  const clean = pullRequest.length ? pullRequest : named;
   // A selector may say it gave up and returned everything. memoro-cli's does
   // that whenever a changed path is not source it can trace, and the round has
   // to repeat the admission rather than present the whole suite as a narrow
@@ -2156,8 +2161,48 @@ export const TEST_TIMEOUT_MS = 10 * 60_000;
  */
 export function suiteEnv(env) {
   const clean = { ...env };
+  const home = env.MC_HOME;
   for (const key of ['NODE_TEST_CONTEXT', 'MC_WORK_ROOT', 'MC_HOME']) delete clean[key];
+  const direct = directGitDir({ home });
+  if (direct && clean.PATH) clean.PATH = `${direct}:${clean.PATH}`;
   return clean;
+}
+
+/**
+ * The toolchain's own git, once per process. Read from the two places Xcode
+ * puts a developer directory (and `DEVELOPER_DIR` when set), not asked of
+ * `xcode-select -p`: the merger's path starts no synchronous child
+ * (child-async.test.js), and the answer is a path that exists or not.
+ */
+let developerGit;
+function toolchainGit(env = process.env) {
+  if (developerGit !== undefined) return developerGit;
+  const roots = [env.DEVELOPER_DIR, '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'].filter(Boolean);
+  developerGit = roots.map((root) => join(root, 'usr/bin/git')).find((path) => existsSync(path)) ?? null;
+  return developerGit;
+}
+
+/**
+ * A directory holding only a link to the toolchain's git, for a suite's PATH.
+ * macOS's `/usr/bin/git` is a shim that asks xcrun which git to run on every
+ * call: 67 ms a call against 23 ms direct (2026-11-01), and memoro-cli's
+ * autonomy tests make 400 calls each. One test went from 40 s to 24 s under
+ * twice the load. Null off macOS and whenever the link cannot be made; a suite
+ * then finds git as it always did.
+ */
+export function directGitDir({ home = mcHome(), platform = process.platform, target = toolchainGit } = {}) {
+  if (platform !== 'darwin') return null;
+  try {
+    const git = target();
+    if (!git) return null;
+    const dir = join(home || mcHome(), 'direct-git');
+    const link = join(dir, 'git');
+    if (!existsSync(link)) {
+      mkdirSync(dir, { recursive: true });
+      try { symlinkSync(git, link); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    return existsSync(link) ? dir : null;
+  } catch { return null; }
 }
 
 /**
@@ -2383,12 +2428,23 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
+    // The measured cost of each file (test-times.js), as in `realTests`: a
+    // second reporter beside the TAP, through NODE_OPTIONS since the suite is
+    // a command line. `noteTimes` was called here without being defined (#1195),
+    // and every full-suite round died on the close event.
+    const timesFile = times ? join(tmpdir(), `mc-test-times-${randomUUID()}.jsonl`) : null;
+    const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
+    const noteTimes = () => {
+      if (!timesFile) return;
+      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      rmSync(timesFile, { force: true });
+    };
     const child = spawn(command, {
       cwd,
       shell: true,
       // The round's lane count, for a suite that runs its own runner (memoro's
       // `runner.mjs` reads it); a caller that set one keeps it.
-      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
+      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} ${reporters}`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });

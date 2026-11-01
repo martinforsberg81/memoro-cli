@@ -5,21 +5,12 @@
  * dispatch / command layer is itself synchronous in shape. Async would
  * just add ceremony without latency wins.
  */
-import { spawnSync } from 'node:child_process';
+import { GIT_TIMEOUT_MS, run, runAsync, useGitRunner } from '../lib/git-process.js';
 
-/**
- * How long one git call may take before it is stopped. Five minutes is more
- * than twice the 120 s the runner's own `sh()` gives every fetch, push and
- * `worktree add` it makes in both repositories, so nothing that finishes
- * today is cut off. What it is for is the call that never finishes: with the
- * login keychain locked, `git credential-osxkeychain` waits on a modal nobody
- * is there to answer, and without a limit the mc command under it waited too
- * (2026-09-20). A caller that knows better passes `timeoutMs`.
- */
-export const GIT_TIMEOUT_MS = 300_000;
+export { GIT_TIMEOUT_MS, run, runAsync, useGitRunner };
 
 export function git(cwd, args, { allowFailure = false, timeoutMs = GIT_TIMEOUT_MS } = {}) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: timeoutMs });
+  const r = run(cwd, args, { timeoutMs });
   if (r.error?.code === 'ETIMEDOUT') {
     if (allowFailure) return null;
     const err = new Error(

@@ -98,6 +98,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join } from 'node:path';
 
 import { runTool } from './child-async.js';
+import { run as runGit } from './git.js';
 import {
   workDepsLockPath,
   workDepsManifestPath,
@@ -267,9 +268,10 @@ function repoFiles(repo) {
 
 function gitText(cwd, args) {
   try {
-    return execFileSync('git', ['-C', cwd, ...args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    const r = runGit(undefined, ['-C', cwd, ...args], {
+      stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
     });
+    return r.error || r.status !== 0 ? null : r.stdout;
   } catch { return null; }
 }
 

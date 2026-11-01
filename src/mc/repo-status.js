@@ -14,11 +14,12 @@
  * not a second implementation that can drift from it. The only thing this
  * writes anywhere is a `git fetch`, and `--offline` removes even that.
  */
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { run as runGit, runAsync as runGitAsync } from './git.js';
 import { nightlyReading } from './nightly-history.js';
 import { selectorMissReading } from './selector-miss.js';
 import { mcHome } from './paths.js';
@@ -312,8 +313,8 @@ async function baseRef(root) {
  */
 async function fetchQuiet(root, base) {
   const remote = base.split('/')[0];
-  return run('git', ['-C', root, 'fetch', '--quiet', remote], { timeout: CALL_MS })
-    .then(() => true, () => false);
+  return runGitAsync(undefined, ['-C', root, 'fetch', '--quiet', remote], { timeoutMs: CALL_MS })
+    .then((r) => !r.error && r.status === 0, () => false);
 }
 
 async function mainHead(root, base) {
@@ -398,8 +399,9 @@ async function deployState(root, base, install) {
 
 async function git(cwd, args) {
   try {
-    const { stdout } = await run('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: CALL_MS });
-    return stdout.trim() || null;
+    const r = await runGitAsync(undefined, ['-C', cwd, ...args], { timeoutMs: CALL_MS });
+    if (r.error || r.status !== 0) return null;
+    return String(r.stdout || '').trim() || null;
   } catch { return null; }
 }
 
@@ -424,8 +426,8 @@ function executable(path) {
 
 function topLevel(cwd) {
   try {
-    return execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim() || null;
+    const r = runGit(undefined, ['-C', cwd, 'rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (r.error || r.status !== 0) return null;
+    return String(r.stdout || '').trim() || null;
   } catch { return null; }
 }

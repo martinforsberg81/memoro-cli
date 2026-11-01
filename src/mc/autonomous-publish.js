@@ -18,7 +18,7 @@ import { run as publishCommand } from './commands/publish.js';
 
 /** Seconds finish waits for its answer: past `mc gate`'s default 540 a wide
  * selection answers RUNNING, which is no verdict. The gate bounds itself. */
-const FINISH_GATE_BUDGET = '10800';
+export const FINISH_GATE_BUDGET = '10800';
 const git = (cwd, args) => sessionGit(cwd, args).trim();
 const read = options => readAutonomousState(options.root, options.programme, options.project);
 function owned(options) {
@@ -77,6 +77,13 @@ function assertCommit(options, publication) {
 
 /** Model-callable prepare: always uses mc gate's complete affected selection.
  * Input contains interpretation and references, never observed gate/push facts. */
+/** The run whose handoff this one follows. An incomplete attempt writes none, so
+ * after a retry the last step run is not necessarily a predecessor at all. */
+export function handoffPredecessor(state, runId) {
+  if (!state.current_handoff) return null;
+  return state.runs.filter(run => run.role === 'step' && run.run_id !== runId).at(-1)?.run_id ?? null;
+}
+
 export async function finishAutonomousPublication(options, input, deps = {}) {
   options = { env: process.env, ...options };
   const { state: initial, context } = owned(options);
@@ -194,7 +201,7 @@ export async function completeAutonomousPublication(options, processResult, deps
       evidenceRoot: mcHome(options.env), configuration: requirements.configuration, selection: requirements.selection };
     if (!findPublicationReceipt({ ...evidence, root: evidence.evidenceRoot, repo: state.contract.repo,
       sessionRun: options.actor.run_id, goalRevision: state.goal_revision })) throw new Error('publication evidence changed');
-    const previousRun = state.runs.filter(run => run.role === 'step' && run.run_id !== options.actor.run_id).at(-1)?.run_id ?? null;
+    const previousRun = handoffPredecessor(state, options.actor.run_id);
     // A predecessor built before plan revised the goal is read against its own revision.
     const history = { assignments: state.contracts };
     const handoff = persistSessionResult({ root: options.root, ...context, result, publication: evidence, history,

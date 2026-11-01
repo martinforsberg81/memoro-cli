@@ -4199,6 +4199,28 @@ test('runLoop: no total set — every lane starts, exactly as before', async (t)
  * sessions block: every lane that could start piles up against the cap at
  * once rather than passing through it one at a time.
  */
+test('a lane keeps the project it just ran, and lets go only when that has nothing to run', () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } } });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  assert.equal(runner.nextStep({ repo: 'memoro', world }).name, 'a');
+  assert.equal(runner.nextStep({ repo: 'memoro', world, first: 'b' }).name, 'b');
+  assert.equal(runner.nextStep({ repo: 'memoro', world, first: 'b', passed: new Set(['b']) }).name, 'a');
+});
+
+test('a project between two sessions keeps its machine slot; it goes when the project has nothing to run', async () => {
+  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': { c: ready } }, session: okSession() });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'a');
+  let waits = 0;
+  // The other repository is held until the lane finds nothing more to run on a.
+  f.deps.sleep = async () => { waits += 1; await runner.pass({ repo: 'memoro', last: { name: 'a', step: 0 }, passed: ['a'] }); };
+  const other = await runner.pass({ repo: 'memoro-cli' });
+  assert.equal(other.name, 'c', 'the lane let go, so the slot is free');
+  assert.equal(waits, 1, 'and not before');
+});
+
 test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async (t) => {
   const r = laneRace({ total: 2 });
   // A failed assert must not leave the loop polling for a STOP nobody writes:

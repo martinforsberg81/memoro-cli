@@ -24,21 +24,18 @@ const NOT_ACTIVATED = 'autonomous execution is not activated in this installatio
  * code, not support: support and `missing` are measured per call. Transport
  * facts are the 2026-10-28 version/help probes
  * (docs/technical/mc-session-observation.md); no model session was launched to
- * measure them. */
+ * measure them. The autonomy tests that proved these were removed on
+ * 2026-11-01 (Martin: tests come when the autonomy is finished, not while it
+ * is built), so `proven` says that, not the name of a file that is gone. */
+const UNPROVEN = 'no test: the autonomy tests were removed 2026-11-01 while this is built; measured only by use';
 const INSTALLATION = Object.freeze({
   capabilities: Object.freeze([
-    { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)',
-      proven: 'temporary state and repositories: tests/mc/programme-jobs.test.js, tests/mc/autonomy-lifecycle.test.js' },
-    { name: 'programme-plan', built: 'durable planner journal, event queue and queue consumer (src/mc/programme-plan-run.js)',
-      proven: 'journal effects, recovery and scripted sessions through the consumer: tests/mc/programme-plan.test.js, tests/mc/autonomy-lifecycle.test.js' },
-    { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)',
-      proven: 'scripted sessions on real temporary repositories: tests/mc/autonomous-run.test.js, tests/mc/autonomy-lifecycle.test.js' },
-    { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)',
-      proven: 'scripted review sessions: tests/mc/autonomous-review.test.js, tests/mc/autonomy-lifecycle.test.js' },
-    { name: 'control-signals', built: 'durable mc session-control status|checkpoint|criterion, the one path both tools read',
-      proven: 'real fixture processes in both prompt shapes read the actual status command (tests/mc/session-observation.test.js)' },
-    { name: 'interrupt', built: 'process-group SIGTERM, then SIGKILL after a bounded grace (src/mc/session-supervision.js)',
-      proven: 'a real fixture process that ignores finish-session and SIGTERM is closed with its child (tests/mc/session-observation.test.js)' },
+    { name: 'programme-jobs', built: 'plan events, lease, intents, waits and reconciliation (src/mc/programme-jobs.js)', proven: UNPROVEN },
+    { name: 'programme-plan', built: 'durable planner journal, event queue and queue consumer (src/mc/programme-plan-run.js)', proven: UNPROVEN },
+    { name: 'build', built: 'fresh build sessions on one branch and PR, green publication (src/mc/autonomous-run.js, src/mc/autonomous-publish.js)', proven: UNPROVEN },
+    { name: 'review', built: 'independent review, report and routing to plan or merge (src/mc/autonomous-review.js, src/mc/autonomous-outcomes.js)', proven: UNPROVEN },
+    { name: 'control-signals', built: 'durable mc session-control status|checkpoint|criterion, the one path both tools read', proven: UNPROVEN },
+    { name: 'interrupt', built: 'process-group SIGTERM, then SIGKILL after a bounded grace (src/mc/session-supervision.js)', proven: UNPROVEN },
   ].map(Object.freeze)),
   transport: Object.freeze([
     { tool: 'codex', prompt: 'positional argument; stdin ignored', live_control: 'none; durable session-control only',

@@ -46,10 +46,20 @@ import { openInWorkArea } from '../work-open.js';
 import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
+import { run as runGit } from '../git.js';
 import { scanArgs } from './flags.js';
 
 function sh(cmd, args, { cwd } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** The entrance under another name, for `ensurePlanArea`, whose own `runGit` shadows the import. */
+const gitRun = runGit;
+
+/** `sh`, for git: the same shape, through the one git entrance. */
+function shGit(args, { cwd } = {}) {
+  const r = runGit(cwd, args, { maxBuffer: 64 << 20 });
   return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -124,7 +134,7 @@ export async function run(argv, deps = {}) {
       stdout,
       stderr,
       deps: {
-        git: deps.git || ((cwd, args) => sh('git', ['-C', cwd, ...args])),
+        git: deps.git || ((cwd, args) => shGit(['-C', cwd, ...args])),
         gh: deps.gh || ((cwd, args) => sh('gh', args, { cwd })),
         docsMerge: deps.docsMerge || runDocsMerge,
         release: deps.release || releaseWorkArea,
@@ -194,7 +204,7 @@ export async function run(argv, deps = {}) {
 export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null, attach = attachRepoDeps } = {}) {
   const name = planArea(programme, env);
   const branch = planBranch(programme);
-  const runGit = git || ((args) => spawnSync('git', args, { stdio: 'ignore' }));
+  const runGit = git || ((args) => gitRun(undefined, args, { stdio: 'ignore' }));
   let area = inspectWorkArea(name, env);
   // Made here rather than by the first `addWorktree`, so a programme whose
   // repositories all fail leaves this call holding the empty directory — and

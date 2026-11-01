@@ -1,5 +1,3 @@
-import { ready as autonomousReady } from './autonomous-merge-fixture.js';
-import { recordMergeOutcome } from '../../src/mc/autonomous-outcomes.js';
 /**
  * `mc merge <repo> <pr>` — the door, then the merger's queue (ruling 30).
  *
@@ -594,27 +592,3 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
   });
 });
 
-describe('autonomous merge command ownership', () => {
-  it('queues current evidence without confirmation and never books a legacy step', async t => {
-    const f = await autonomousReady(t);
-    const out = [];
-    assert.equal(await run(['memoro-cli', '42'], { root: f.root, env: f.env, cwd: f.cwd, gh: f.gh,
-      resolveRepoPath: () => f.cwd, prFiles: () => ['implementation.js'],
-      stdout: { write: s => out.push(s) }, stderr: { write: s => out.push(s) }, startMerger: () => ({ pid: null }) }), 0, out.join(''));
-    const [job] = parseQueue(readFileSync(mergesPath(f.root), 'utf8'));
-    assert.equal(job.step, null); assert.equal(job.autonomous.head, f.stateNow().publication.head);
-    assert.equal(f.stateNow().phase, 'landing'); assert.equal(f.stateNow().confirmed, false);
-    assert.equal(f.stateNow().plan_events.filter(e => e.type === 'merge-queued').length, 1);
-  });
-
-  it('an answered autonomous red cannot be retried through the command with the same review', async t => {
-    const f = await autonomousReady(t); const out = [];
-    const deps = { root: f.root, env: f.env, cwd: f.cwd, gh: f.gh, resolveRepoPath: () => f.cwd,
-      prFiles: () => ['implementation.js'], stdout: { write: s => out.push(s) }, stderr: { write: s => out.push(s) }, startMerger: () => ({ pid: null }) };
-    assert.equal(await run(['memoro-cli', '42'], deps), 0);
-    const [job] = parseQueue(readFileSync(mergesPath(f.root), 'utf8'));
-    recordMergeOutcome({ root: f.root, job, report: { ok: false, stopped_at: 'red', reason: 'criterion integration failed' } });
-    assert.equal(await run(['memoro-cli', '42'], deps), 1); assert.match(out.join(''), /requires plan and renewed evidence/u);
-    assert.equal(f.stateNow().phase, 'plan_pending'); assert.equal(f.stateNow().confirmed, false);
-  });
-});

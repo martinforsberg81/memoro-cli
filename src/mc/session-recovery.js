@@ -1,6 +1,5 @@
 /** Fail-closed recovery for the autonomous runner seam. Never signal
  * a pid read from disk; live/unknown previous workers keep the workarea held. */
-import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -8,9 +7,10 @@ import { captureWorktree, sameContent } from './session-gate-evidence.js';
 import { processAlive } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateControlState } from './session-control.js';
+import { run as runGit } from './git.js';
 
 export function sessionGit(cwd, args, encoding = 'utf8') {
-  const result = spawnSync('git', args, { cwd, encoding, timeout: 60_000, maxBuffer: 64 << 20 });
+  const result = runGit(cwd, args, { encoding, timeoutMs: 60_000, maxBuffer: 64 << 20 });
   if (result.error || result.status !== 0) throw new Error(`session snapshot: git ${args[0]} failed`);
   return result.stdout;
 }
@@ -73,7 +73,7 @@ export function preserveSession({ cwd, directory, control, telemetry, process: p
   return target;
 }
 
-export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
+export function reconcilePreviousSession(gitDir, { publication = null, settled = [] } = {}) {
   const path = join(gitDir, 'mc-autonomous-session.json');
   if (!existsSync(path)) return reconcileSessionGate(gitDir);
   try {
@@ -84,6 +84,10 @@ export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
       || !previous.snapshot || !existsSync(join(previous.snapshot, 'checkpoint.json'))) {
       return { ok: false, reason: 'previous-snapshot-required', pid: previous.pid };
     }
+    // A closed session whose attempt is on record is history. A later run of the
+    // same goal may have merged main since, so its snapshot no longer describes
+    // this tree, and that says nothing about what is running now.
+    if (settled.includes(previous.run_id)) return reconcileSessionGate(gitDir);
     const checkpoint = JSON.parse(readFileSync(join(previous.snapshot, 'checkpoint.json'), 'utf8'));
     validateControlState(checkpoint.control);
     if (!isDeepStrictEqual(checkpoint.control.binding, previous.binding) || checkpoint.control.binding.run_id !== previous.run_id
@@ -112,14 +116,23 @@ export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
 /** The prior normal run was reconciled before fresh main integration. Keep its
  * manifest with its immutable snapshot so the new supervisor does not mistake
  * deliberate main integration for changes by a still-running predecessor. */
-export function retirePreviousSession(gitDir, runId) {
+export function retirePreviousSession(gitDir, runId, { settled = [] } = {}) {
   const path = join(gitDir, 'mc-autonomous-session.json');
   if (!existsSync(path)) return;
   const bytes = readFileSync(path, 'utf8');
   const manifest = JSON.parse(bytes);
-  if (manifest.run_id !== runId || !reconcilePreviousSession(gitDir).ok) throw new Error('previous normal session is not reconciled');
+  if (manifest.run_id !== runId || !reconcilePreviousSession(gitDir, { settled }).ok) throw new Error('previous normal session is not reconciled');
   const archived = join(dirname(manifest.snapshot), 'retired-manifest.json');
   try { writeFileSync(archived, bytes, { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error.code !== 'EEXIST' || readFileSync(archived, 'utf8') !== bytes) throw error; }
   rmSync(path);
+}
+
+/** A build that takes over a diagnosed tree retires the manifest of the attempt
+ * that left it, or the new supervisor would read that attempt as its predecessor. */
+export function retireSettledSession(gitDir, settled) {
+  const path = join(gitDir, 'mc-autonomous-session.json');
+  if (!existsSync(path)) return;
+  const runId = JSON.parse(readFileSync(path, 'utf8')).run_id;
+  if (settled.includes(runId)) retirePreviousSession(gitDir, runId, { settled });
 }
