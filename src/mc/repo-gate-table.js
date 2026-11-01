@@ -150,6 +150,9 @@ export const SHIPPED = Object.freeze({
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
     pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
+    // Martin, 2026-11-01: a memoro-cli merge may take 120 s, however loaded the
+    // machine. The round runs what fits by measured cost; the rest is deferred.
+    round_seconds: 120,
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -575,6 +578,8 @@ function normalise(entry, env) {
       gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
     },
     retry_once_why: entry.retry_once_why ?? null,
+    // The estimated seconds a merge round spends on its selection. Null: all of it.
+    round_seconds: Number(entry.round_seconds) > 0 ? Number(entry.round_seconds) : null,
   };
 }
 

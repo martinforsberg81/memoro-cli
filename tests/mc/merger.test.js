@@ -206,7 +206,7 @@ describe('landJob — one job, landed or answered', () => {
     register();
     let polls = 0;
     const m = machine([green], { readRunningDeploy: () => (polls++ < 2 ? { pid: 7, sha: 'c6b53f26a6f7' } : null) });
-    await landJob(JOB, m.deps);
+    await landJob(JOB, { ...m.deps, lane: 'memoro' });
     assert.equal(m.rounds.length, 1, 'no round while the deploy runs');
     assert.equal(m.said.filter((line) => /waiting behind the deploy of c6b53f2 \(pid 7\)/u.test(line)).length, 1);
     assert.equal(stepNow().status, 'done');
