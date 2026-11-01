@@ -118,7 +118,7 @@ describe('the decision shape every role writes', () => {
  * the assembler.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'step', 'worker'];
+  const CANON_ROLES = ['brief', 'goal', 'helper', 'intake', 'plan', 'step', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
   const ROUTE = phrase('The practical route to `main` is yours to settle');
 

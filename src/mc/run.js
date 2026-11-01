@@ -107,8 +107,6 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { streamAutonomousSession } from './session-supervision.js';
-import { streamReviewSession } from './autonomous-review-process.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import { logRows } from './archive-plan.js';
@@ -122,12 +120,8 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
-import { productionAutonomy } from './autonomous-capability.js';
-import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
-import { reconcileProgrammeQueue } from './programme-jobs.js';
-import { runProgrammePlan } from './programme-plan-run.js';
-import { chooseAutonomousModel } from './autonomous-models.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
+import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, LOG_FILE, logStamp, nextGoal, parseGoal, parseLog, programsGoals, setStatus } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -175,7 +169,7 @@ import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
-  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
+  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPrompt, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
@@ -320,9 +314,7 @@ function shGit(args, { timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0, reviewProcess = null }) {
-  if (reviewProcess !== null) return streamReviewSession({ bin, args, cwd, env, unsetEnv, prompt, spawn: spawnFn, reviewProcess });
-  if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, maxRunMs = 0 }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     let childEnv = env;
@@ -663,16 +655,12 @@ export function realDeps(env = process.env) {
       return child.pid ?? null;
     },
     log: (line) => process.stdout.write(`${line}\n`),
-    // The capability `runLoop` hands `createRunner` (autonomous-capability.js).
-    // A dependency so a fixture without it stays on `autonomous: null` and
-    // never spawns the awake clock's perl.
-    productionAutonomy,
   };
 }
 
 /* --------------------------------------------------------------- runner */
 
-export function createRunner({ merge = true, deps = realDeps(), autonomous = null } = {}) {
+export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const root = workRoot(deps.env);
   // A project's runner area, by name relative to the root and as a path:
   // `step/<project>`, or `<project>` for an area from before `step/` that is
@@ -685,6 +673,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
   // runner's tests queued the real programmes' projects beside their fixture's
   // and one hung for hours waiting for a STOP it never wrote (2026-10-19).
   const programs = () => programsPlans({ home: programsHome(deps.env), list: deps.list, read: deps.read });
+  const goals = () => programsGoals({ home: programsHome(deps.env), list: deps.list, read: deps.read });
   const paths = {
     queue: join(root, 'queue.md'),
     log: join(root, 'runner', 'log'),
@@ -1129,10 +1118,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls, autonomousState = null, role = 'step') {
+  function routeClass(cls) {
     try {
-      const choose = autonomousState ? chooseAutonomousModel : chooseCandidate;
-      const chosen = choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -1410,7 +1398,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * guard. A codex session gets none of it — its prompt is its last
    * positional and nothing watches it — so its stdin stays closed.
    */
-  function watchFor(launch, settings, { prompt, name, onCheckIn = null }) {
+  function watchFor(launch, settings, { prompt, name, onCheckIn = null, checkInText = checkInPrompt }) {
     if (launch.id === 'codex') return {};
     return {
       prompt,
@@ -1419,7 +1407,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       checkIn: (minutes, count) => {
         say(`${name}: check-in ${count} at ${minutes} min`);
         onCheckIn?.(count, minutes);
-        return checkInPrompt({ project: name, minutes, count });
+        return checkInText({ project: name, minutes, count });
       },
       onQuiet: (minutes, tasks) => {
         say(`${name}: silent ${minutes} min with ${tasks.length} background task(s) running — asked, not killed`);
@@ -2082,6 +2070,239 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * past the second. Read and cleared by `pass`.
    */
   const persistent = new Set();
+
+  /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
+  async function billingFor(launch, route) {
+    return route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
+      provider: launch.id === 'codex' ? 'codex' : 'claude',
+      capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
+    });
+  }
+
+  /**
+   * What a refusal says about the billing it came on: a plan refusal is
+   * `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
+   * named none — which moves the next launch to the API; an exhausted or
+   * rejected credit is unusable for `CREDITS_RETRY_MS`, or until the date a
+   * spent workspace limit names (`creditsUntil`, ruling 45 § 1). A 429 on a
+   * credits session is the API's own rate limit and touches neither. Returns
+   * `{ from, to }` when the next launch would get another billing than this
+   * one ran on — a hand-over instead of a sleep — or null.
+   */
+  function recordRefusal({ name, launch, route }, { interrupted: kind, quota, quotaReset, creditsUntil }, billing) {
+    if (launch.id !== 'claude-code' || !deps.billing?.patchState) return null;
+    const nowMs = deps.now().getTime();
+    try {
+      if (quota && billing === 'plan') {
+        const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
+        deps.billing.patchState({ plan: { refused_until: until.toISOString() } });
+      } else if ((kind === 'credits' || kind === 'key' || (quota && route)) && billing === 'credits') {
+        const named = creditsUntil instanceof Date;
+        const reset = named && creditsUntil.getTime() > nowMs ? creditsUntil
+          : quota && quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset
+            : new Date(nowMs + (quota ? QUOTA_SLEEP_MS : CREDITS_RETRY_MS));
+        const until = reset.toISOString();
+        const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : kind === 'key' ? 'API key rejected' : 'API rate limit reached';
+        deps.billing.patchState({ credits: { unusable_until: until, why } });
+        say(`${name}: API reserve refused (${why}); recorded retry time ${until}`);
+      } else {
+        return null;
+      }
+    } catch (error) {
+      say(`${name}: the refusal was not recorded (${error.message})`);
+    }
+    const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
+    return next.billing === billing ? null : { from: billing, to: next.billing };
+  }
+
+  /** The plan's 5-hour and seven-day windows, as a claude stream last carried them: for status and subscription routing, and for the class router's snapshot (ruling 59). */
+  function noteWindows({ name, launch }, stdout) {
+    if (launch.id !== 'claude-code') return;
+    if (deps.billing?.patchState) {
+      const windows = planWindows(stdout);
+      try {
+        if (windows) deps.billing.patchState({ plan: { ...windows, seen: stamp() } });
+      } catch (error) {
+        say(`${name}: the plan's windows were not recorded (${error.message})`);
+      }
+    }
+    observeCapacity((state) => observeClaudeStream(state, stdout, deps.now()));
+  }
+
+  /**
+   * The goal a lane without a runnable step takes, run: the oldest eligible one
+   * (`nextGoal`). A goal is held by a current file on this machine, or by a claim
+   * while its lane is on the way to writing one: the claim is taken in the tick
+   * of the pick, as a step's is. A project step always comes first, because this
+   * is only asked when `nextStep` has answered nothing.
+   */
+  async function goalPass({ repo, lane, label, passed }) {
+    const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
+    const goal = nextGoal(goals(), { repos: repo ? [repo] : repos.map((item) => item.name), held });
+    if (!goal) return { ran: 0 };
+    const name = goalName(goal);
+    say(`${label}: no step to run — next, ${name}`);
+    claims.add(name);
+    let outcome;
+    try {
+      outcome = await runGoal(goal, { lane });
+    } finally {
+      claims.delete(name);
+    }
+    if (outcome === 'stop') return { ran: 0, stop: true };
+    if (outcome !== 'ran') return { ran: 0 };
+    const ran = { ran: 1, name, step: null, goal: true };
+    if (stopRequested()) {
+      say(`${label}: STOP — ${name} has ended, this lane takes nothing more; ${stillHeld()}`);
+      return { ...ran, stop: true };
+    }
+    return ran;
+  }
+
+  /**
+   * Every repository's worktree of a goal is there, or the reason one is not.
+   * Anyone may work in a goal's worktree, so one that has gone is made again
+   * rather than refused.
+   */
+  function placeGoalWorktrees(goal, name) {
+    for (const repoName of goal.repos) {
+      const path = join(goal.dir, repoName);
+      if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) continue;
+      const repo = repos.find((item) => item.name === repoName);
+      if (!repo) return `${repoName} is not a repository this runner knows`;
+      say(`${name}: ${path} is not a worktree — creating it on goal/${goal.goal}`);
+      const added = addGoalWorktree({ git: deps.git, bare: repo.path, path, goal: goal.goal });
+      if (!added.ok) return `${repoName}'s worktree could not be made (${String(added.stderr ?? '').trim() || 'git failed'})`;
+    }
+    return null;
+  }
+
+  /**
+   * The runner's own log entry, for a session that left none: status unchanged.
+   * Three of them in a row block the goal, which is the only guard there is
+   * against a session that fails the same way for ever (the loop that ran 2 803
+   * times); there is no attempt counter, only the log.
+   */
+  function goalWithoutWord(goal, name, comment) {
+    const { dir } = goal;
+    const entry = (status, text) => ({ at: logStamp(deps.now()), tool: 'runner', model: null, status, done: null, comment: text, next: null });
+    const status = parseGoal(deps.read(join(dir, GOAL_FILE)) ?? '').status ?? goal.status;
+    appendEntry({ dir, entry: entry(status, comment), read: deps.read, write: deps.write });
+    say(`${name}: ${comment}`);
+    const last = parseLog(deps.read(join(dir, LOG_FILE)) ?? '').slice(-3);
+    if (status !== 'open' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
+    const text = 'three sessions ended without a word — see the logs under runner/log';
+    const blocked = setStatus({ dir, status: 'blocked', entry: entry('blocked', text), read: deps.read, write: deps.write });
+    say(blocked.problems ? `${name}: could not be blocked (${blocked.problems.join('; ')})` : `${name}: blocked — ${text}`);
+  }
+
+  /**
+   * One goal session: the lane and total caps, the class routing and the billing
+   * of a step, in the goal's worktree with the goal role. Returns 'ran', 'stop'
+   * or a `skipped` word, as `runStep` does.
+   *
+   * It is not `runStep`, because nearly all of that is the plan and the register
+   * a goal has neither of. A session cut off by the API is not resumed either,
+   * here: it ends, its goal is picked again, and the next session reads `LOG.md`
+   * and the branch. The worktree gets no checkpoint: `refs/mc/checkpoint/`
+   * snapshots a tree only the runner works in, and anyone may work in this one,
+   * so a session that dies leaves its work where it was, in the tree. Nothing is
+   * merged, aborted or committed here for the same reason.
+   */
+  async function runGoal(goal, { lane = 0 } = {}) {
+    const name = goalName(goal);
+    const logPath = join(goal.dir, LOG_FILE);
+    const [repoName] = goal.repos;
+    const worktree = join(goal.dir, repoName);
+    const role = deps.role('goal');
+    if (!role?.overlay) { say(`${name}: canon/roles/goal.md is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const route = routeClass(goal.class);
+    if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
+    const lost = placeGoalWorktrees(goal, name);
+    if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+    const attached = await deps.attachDeps(worktree);
+    if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+    if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
+    const picked = await billingFor(launch, route);
+    if (picked.billing === 'unavailable') {
+      dropSlot();
+      say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
+      return 'skipped:no-capacity';
+    }
+
+    const branch = `goal/${goal.goal}`;
+    const prompt = goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch });
+    const instructions = instructionsFor(launch.id, role.overlay);
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+    const ts = stamp().replace(/[-:]/gu, '');
+    // A goal's name holds a `/`, which a file stem may not.
+    const stem = `goal-${goal.programme}-${goal.goal}-${ts}`;
+    const out = join(paths.log, stem);
+    const entriesBefore = parseLog(deps.read(logPath) ?? '').length;
+    say(`${name}: goal starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
+    const t0 = deps.now().getTime();
+    // As a step's: there exactly as long as the session is, so in flight and
+    // slot are one fact, and the eligibility of this goal is that same fact.
+    const currentPath = paths.currentFor(repoName, lane);
+    const current = {
+      name, step: null, kind: 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
+      effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
+      check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
+      started: stamp(), pid, worktree,
+      role: roleRecord({ name: role.name || 'goal', source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
+    };
+    writeJson(currentPath, current);
+    const scratch = join(paths.scratch, stem);
+    let scratchEnv = {};
+    try {
+      deps.mkdir(scratch);
+      scratchEnv = { MC_SCRATCH: scratch };
+    } catch (error) {
+      say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
+    }
+    let result;
+    try {
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      result = await deps.session({
+        bin: tool.bin,
+        args: tool.args,
+        cwd: worktree,
+        logPath: `${out}.jsonl`,
+        ...watchFor(launch, settings, {
+          prompt, name, checkInText: goalCheckInPrompt,
+          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+        }),
+        env: {
+          MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
+          ...(settings.model ? { MC_MODEL: settings.model } : {}),
+          ...scratchEnv,
+        },
+        unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
+      });
+    } finally {
+      remove(currentPath);
+      dropSlot();
+    }
+    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+    writeSessionLogs(out, result);
+    noteWindows({ name, launch }, result.stdout);
+    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
+    recordRefusal({ name, launch, route }, read, picked.billing);
+    const provider = launch.id === 'codex' ? 'codex' : 'claude';
+    if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
+    const spoke = parseLog(deps.read(logPath) ?? '').length > entriesBefore;
+    if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
+    const note = spoke ? read.note : `${read.note},no-log`;
+    logRun({ ts: stamp(), name, kind: 'goal', exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+    say(`${name}: goal done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+    return 'ran';
+  }
+
   async function runStep(name, world = {}, { lane = 0, claimed = false } = {}) {
     if (!claimed && claims.has(name)) { say(`${name}: in flight in another lane, skip`); return 'skipped'; }
     claims.add(name);
@@ -2095,26 +2316,6 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
 
   async function runStepClaimed(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
-    const record = plans.find(item => item.project === name);
-    if (record?.plan?.version === 2) {
-      if (stopRequested()) return 'stop';
-      if (!autonomous) return 'skipped:autonomous-disabled';
-      if (prsFailed.includes(record.repo)) return 'skipped:prs-unknown';
-      const repo = repoOf(name, plans);
-      if (!repo) return 'skipped:no-plan';
-      // The runner's gh is `(cwd, args)`; the review, routing and merge doors ask `(args, { cwd })`.
-      const gh = (args, options = {}) => deps.gh(options.cwd || repo.path, args);
-      return runAutonomousBuild({ root, record, repo, worktree: join(areaPath(name), repo.name), areaName: areaName(name),
-        lane, pid, paths, deps: { ...deps, gh }, capability: autonomous,
-        openPrs: openPrsFor({ prs, name, names: plans.map(item => item.project), repo: repo.name }),
-        waitForSlot: name => waitForSlot(name, { repo: repo.name, lane }), dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
-        observeResult: (toolId, result) => {
-          if (toolId === 'claude-code') observeCapacity(state => observeClaudeStream(state, result.stdout, deps.now()));
-          const read = readSessionOutput({ toolId, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, now: deps.now() });
-          if (read.quota || read.interrupted === 'login') refuseProvider(toolId === 'codex' ? 'codex' : 'claude', read.quotaReset);
-        },
-      });
-    }
     // Every way out of this round that is not a session goes through here, so
     // that what the round refused on is a word and not only a line in the log.
     // `machineState` answers `mc status` in the same words, and the agreement
@@ -2388,10 +2589,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
 
     // At each launch, use the provider's plan until a window is full or the
     // plan has refused. The gateway wrapper opens the key for API sessions.
-    const pickBilling = async () => route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
-      provider: launch.id === 'codex' ? 'codex' : 'claude',
-      capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
-    });
+    const pickBilling = () => billingFor(launch, route);
     // The billing of the launch in hand, and of the last one once it is over.
     let picked = await pickBilling();
     if (picked.billing === 'unavailable') {
@@ -2399,39 +2597,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       abandonMerge(`Anthropic credits unavailable: ${picked.why}`);
       return refuse('no-capacity', `Anthropic credits unavailable (${picked.why}) — skip`);
     }
-    // What a refusal says about the billing it came on: a plan refusal is
-    // `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
-    // named none — which moves the next launch to the API; an exhausted or
-    // rejected credit is unusable for `CREDITS_RETRY_MS`, or until the date a
-    // spent workspace limit names (`creditsUntil`, ruling 45 § 1). A 429 on a
-    // credits session is the API's own rate limit and touches neither. Returns
-    // `{ from, to }` when the next launch would get another billing than this
-    // one ran on — a hand-over instead of a sleep — or null.
-    const noteRefusal = ({ interrupted: kind, quota, quotaReset, creditsUntil }, billing) => {
-      if (launch.id !== 'claude-code' || !deps.billing?.patchState) return null;
-      const nowMs = deps.now().getTime();
-      try {
-        if (quota && billing === 'plan') {
-          const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
-          deps.billing.patchState({ plan: { refused_until: until.toISOString() } });
-        } else if ((kind === 'credits' || kind === 'key' || (quota && route)) && billing === 'credits') {
-          const named = creditsUntil instanceof Date;
-          const reset = named && creditsUntil.getTime() > nowMs ? creditsUntil
-            : quota && quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset
-              : new Date(nowMs + (quota ? QUOTA_SLEEP_MS : CREDITS_RETRY_MS));
-          const until = reset.toISOString();
-          const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : kind === 'key' ? 'API key rejected' : 'API rate limit reached';
-          deps.billing.patchState({ credits: { unusable_until: until, why } });
-          say(`${name}: API reserve refused (${why}); recorded retry time ${until}`);
-        } else {
-          return null;
-        }
-      } catch (error) {
-        say(`${name}: the refusal was not recorded (${error.message})`);
-      }
-      const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
-      return next.billing === billing ? null : { from: billing, to: next.billing };
-    };
+    const noteRefusal = (read, billing) => recordRefusal({ name, launch, route }, read, billing);
     // Set when a refusal hands the step to the other billing; `noted` when the
     // last attempt's refusal has been written already.
     let handOver = null;
@@ -2618,18 +2784,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     writeSessionLogs(out, result);
-    // The plan's 5-hour and seven-day windows, as the stream last carried
-    // them, for status and subscription routing.
-    if (launch.id === 'claude-code' && deps.billing?.patchState) {
-      const windows = planWindows(result.stdout);
-      try {
-        if (windows) deps.billing.patchState({ plan: { ...windows, seen: stamp() } });
-      } catch (error) {
-        say(`${name}: the plan's windows were not recorded (${error.message})`);
-      }
-    }
-    // The same windows into the capacity snapshot, where the class router reads them (ruling 59).
-    if (launch.id === 'claude-code') observeCapacity((state) => observeClaudeStream(state, result.stdout, deps.now()));
+    noteWindows({ name, launch }, result.stdout);
 
     // The abort survives the kind it was written for, and for the reason it
     // was written: a merge the session did not commit leaves unmerged paths,
@@ -2929,9 +3084,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         write: writeJson,
       });
     } catch { /* the page says how old its cache is */ }
-    const programmeJobs = autonomous?.programmeJobs
-      ? reconcileProgrammeQueue(root, { now: deps.now().getTime(), say }) : [];
-    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed, ...(autonomous?.programmeJobs ? { programmeJobs } : {}) };
+    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed };
   }
 
   /**
@@ -2969,9 +3122,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // The project this lane just ran goes first: it keeps the lane until it has
     // nothing to run, and only then does the queue's order speak.
     const names = first && world.names?.includes(first) ? [first, ...world.names.filter((name) => name !== first)] : world.names;
-    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
-      autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs,
-        worktree: join(areaPath(record.project), record.repo) }) : null });
+    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed });
   }
 
   /**
@@ -3047,7 +3198,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     let ran = null;
     try {
       const result = await passOnce(options);
-      ran = result.ran ? result.name : null;
+      // A goal keeps no slot between its sessions: it is one more candidate at
+      // the next pick, not a project on its way through its steps.
+      ran = result.ran && !result.goal ? result.name : null;
       return result;
     } finally {
       if (before && before !== ran) carried.delete(before);
@@ -3070,22 +3223,13 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       return { ran: 0, waited: 'skipped:disk' };
     }
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
-    if (autonomous?.programmePlan) for (const programme of known.programmeJobs || []) {
-      const name = `programme:${programme}`;
-      if (last?.name === name || passed.has(name) || stopRequested() || updateRequested()) continue;
-      const outcome = await runProgrammePlan({ root, programme, repos, repo: repos.find(item => item.name === repo), lane, pid,
-        paths, deps, capability: autonomous, waitForSlot: name => waitForSlot(name, { repo: repo || repos[0]?.name || null, lane }), dropSlot, routeClass, writeJson, remove, stamp, say });
-      if (outcome === 'stop') return { ran: 0, stop: true };
-      if (outcome === 'ran') return { ran: 1, name, step: null };
-    }
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
       const pick = nextStep({ repo, world: known, passed, first: last?.name });
-      if (!pick) return { ran: 0 };
-      // A goal has no step number: what it may do next is its own state's answer, build or review.
+      if (!pick) return goalPass({ repo, lane, label, passed });
       if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
         say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
         passed.add(pick.name);
@@ -3353,14 +3497,7 @@ export async function runLoop({
   // lane above it. `total` is read by `takeSlot` each time a step is about to
   // start.
   const laneSetting = (deps.laneCount || readLaneCount)();
-  // Only a runner that merges can carry a goal to its landing. Why there is no
-  // capability is held for `runner.say`, which does not exist until the runner
-  // does, and said after the start line.
-  const capabilityLines = [];
-  const autonomous = merge
-    ? deps.productionAutonomy?.({ root: workRoot(deps.env), env: deps.env, deps: { ...deps, log: (line) => capabilityLines.push(line) } }) ?? null
-    : null;
-  const runner = createRunner({ merge, deps, autonomous });
+  const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
   // the same work root simply overwrote the first and became invisible to
@@ -3424,7 +3561,6 @@ export async function runLoop({
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
-  for (const line of capabilityLines) runner.say(line);
   if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the steps it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is

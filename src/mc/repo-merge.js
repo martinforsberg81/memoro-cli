@@ -36,13 +36,10 @@ import { freshenBranchForLanding } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
-import { mcHome, workRoot } from './paths.js';
+import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
-import { autonomousMergeDoor } from './autonomous-pr.js';
-import { recordAutonomousMergeEvent, readAutonomousState } from './autonomous-state.js';
-import { recordMergeOutcome, reportBinding } from './autonomous-outcomes.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
@@ -102,8 +99,6 @@ export async function runMergeRound({
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
-  // Undefined for a direct round; queued jobs must carry their original IDs.
-  autonomous = undefined,
 } = {}) {
   const startedAt = clock();
   // Kept as well as printed — see the note on the gate's own `say`. This is
@@ -159,7 +154,6 @@ export async function runMergeRound({
     duration_ms: null,
   };
 
-  const outcomeJob = { repo_path: repoPath, pr: numbers[0], ...(autonomous != null ? { autonomous } : {}) };
   const finish = (stoppedAt, reason) => {
     report.stopped_at = stoppedAt;
     report.reason = reason;
@@ -167,30 +161,8 @@ export async function runMergeRound({
     const ended = clock();
     report.finished_at = new Date(ended).toISOString();
     report.duration_ms = ended - startedAt;
-    if (!batch && mode === 'merge') {
-      try { recordMergeOutcome({ root: workRoot(env), job: outcomeJob, report }); }
-      catch (error) { report.outcome_error = error.message; } // queue owner retains/replays if persistence is unavailable
-    }
     return report;
   };
-
-  // Recheck resumed queue entries too, before taking a lease or measuring.
-  const admissions = new Map();
-  for (const number of numbers) {
-    const door = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, git: askGit, env, root: workRoot(env), expected: autonomous });
-    if (!door.ok) return finish(door.stop, door.problems.join('; '));
-    if (door.checked) {
-      if (batch) return finish('autonomous-review-required', 'autonomous admission requires one PR per leased gate round');
-      admissions.set(number, door);
-      outcomeJob.autonomous = door.autonomous;
-      if (mode === 'merge') {
-        const ticket = door.autonomous;
-        const state = readAutonomousState(workRoot(env), ticket.programme, ticket.project);
-        recordAutonomousMergeEvent(workRoot(env), ticket.programme, ticket.project,
-          { binding: reportBinding(state.review_reports.at(-1)), type: 'merge-queued', ticket });
-      }
-    } else if (autonomous) return finish('autonomous-review-required', 'queued autonomous PR ownership metadata is missing');
-  }
 
   // One lease across the whole round. The gate would take its own and give it
   // straight back, which would open exactly the window this round must not have.
@@ -208,7 +180,6 @@ export async function runMergeRound({
   try {
     const verdict = await gate({
       repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals, signal,
-      ...(admissions.size ? { evidence: admissions.get(numbers[0]).evidence } : {}),
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
@@ -321,9 +292,6 @@ export async function runMergeRound({
       // the branch was freshened to when that was needed. A round that cannot
       // say which head it means squashes none — and says so.
       let pin = batch ? (verdict.prs || []).find((item) => item.number === number)?.head_sha : verdict.pr.head_sha;
-      if (admissions.has(number) && pin !== admissions.get(number).autonomous.head) {
-        return finish('autonomous-review-required', 'autonomous gate must identify exactly the published reviewed head before landing');
-      }
       // Freshened before its squash: every later branch of a batch, because
       // the squash before it is a commit the branch does not have; and any
       // branch at all when the gate had to regenerate derived artifacts after
@@ -354,19 +322,6 @@ export async function runMergeRound({
         }
       } else {
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
-      }
-      // The gate is not review authority. Re-read current assignment, head,
-      // review and receipt under this same lease immediately before landing.
-      const admission = admissions.get(number);
-      const finalDoor = await autonomousMergeDoor({ repoPath, pr: number, gh: askGh, git: askGit, env, root: workRoot(env),
-        expected: admission?.autonomous ?? autonomous, base: expected, head: pin });
-      if (!finalDoor.ok) return finish(finalDoor.stop, finalDoor.problems.join('; '));
-      if (admission && !finalDoor.checked) return finish('autonomous-review-required', 'autonomous ownership disappeared during measurement');
-      if (finalDoor.checked && !admission) return finish('autonomous-review-required', 'autonomous ownership appeared after measurement started; a new admitted round is required');
-      if (admission) {
-        const lease = readLease(repoPath, { root });
-        if (!lease.held || lease.holder !== holder.name) return finish('lease', 'the lease was lost during autonomous admission — nothing was merged');
-        if (signal?.aborted) return finish('gone', String(signal.reason?.message || signal.reason || 'the round was stopped'));
       }
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {

@@ -27,14 +27,6 @@ already decided.
 Read the code first. Where a plan cannot be written until Martin chooses, ask
 him the one thing.
 
-A plan is mc-plan v1 with fixed steps, or an ordinary versioned goal assignment
-authored with `mc goal`. Programme metadata is context, not approval authority.
-A headless planner runs only where the runner carries that capability; this
-session never turns programme autonomy on or off. Phases are planning: `mc programme phase add` and
-`phase close` are yours when their conditions hold. `mc programme events list`
-shows what happened since the last planning session; `events ack` names the
-events you dealt with, and only those are consumed.
-
 @include _session-work.md
 
 @include _plan-writing.md

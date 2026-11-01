@@ -47,7 +47,7 @@ reconstructs success from log output. Missing/truncated receipts are not green;
 start a fresh measurement with a new run ID rather than overwrite an attempt.
 An absent cache entry simply causes the merger to measure again.
 
-## Coverage and autonomous consumers
+## Coverage and bound consumers
 
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
@@ -56,9 +56,8 @@ cache, after its receipt is durable. Version 3 of the shared measurement
 contract invalidates older cache entries. Added-test discovery, repository
 imports, resource batching and lane reservations remain the existing gate's.
 
-Receipts alone grant no autonomous execution, publication or merge authority.
-`findPublicationReceipt` is used by the autonomous finish boundary,
-not by v1 publication. The caller supplies the frozen local commit and
+Receipts alone grant no execution, publication or merge authority.
+`findPublicationReceipt` has no caller in `mc publish` or the merger. The caller supplies the frozen local commit and
 an independently observed remote SHA; both must be the current local HEAD. Its
 tree and current raw worktree content must match the receipt. An equal-tree
 commit after an uncommitted measurement is valid, including additions/deletions;
@@ -68,7 +67,7 @@ must match the full, unfiltered receipt, including test flags and command
 invocation semantics. Focused checks are never broadened into that selection.
 
 Receipts also retain a hash of the effective repository gate declaration and
-test flags, covering operator-table changes outside Git. Autonomous callers of
+test flags, covering operator-table changes outside Git. Bound callers of
 `runGate` explicitly supply an `evidence` binding (`repository`, gate `run`,
 optional `sessionRun` and `goalRevision`). Exact reuse reads the durable receipt
 and checks the current declaration, content tree and complete selection. Delta
@@ -79,9 +78,3 @@ configuration, untraceable ancestry or uncertain selector output cause normal
 relevant measurement, never assumed green. Required merge gates and PR-specific
 tests still run. Legacy cache entries remain readable to v1 callers, not to
 opt-in receipt-bound callers.
-
-The [autonomous finish operation](mc-autonomous-publish.md) binds its complete
-session gate to the reserved run/goal revision and revalidates this evidence at
-publication and settled process completion. Evidence lives under mc home;
-handoff artifacts remain under work root. This does not alter v1
-publication/admission lifecycle dispatch.

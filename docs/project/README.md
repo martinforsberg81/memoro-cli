@@ -12,34 +12,10 @@ projects that do not serve that do not belong under it.
 
 ## What a PLAN.json is
 
-### Explicit versions
+### Versions
 
-The fixed-step contract below is **mc-plan v1**, still the default. Its `send`
-validation, appended final review, register, publish, merge and recovery rules
-are unchanged. Empty v1 steps never opt into autonomous execution.
-
-Explicit `mc-plan` **version 2** uses `execution.kind: "autonomous"`, a goal
-revision and stable criterion IDs instead of fixed steps. Programme metadata is
-descriptive context, not an approval authority. Use ordinary `mc goal` verbs
-for guarded assignment operations, not legacy v1 edit verbs or raw PLAN edits.
-Mutations check the active role/run and expected state revision under lock.
-Goal assignments retain append-only history and completion is at verified
-landing, with after-integration evidence measured as follow-ups. Independent
-review records findings rather than implementing repairs. The durable planner
-event journal remains; `mc run` consumes it headlessly only with programme
-autonomy on, and programme status shows pending events either way.
-
-`mc goal new`, `criterion add`, `send` and `revise` author and publish v2 goal
-assignments. Sending an unblocked goal makes it ready; exact-revision
-dependencies release through the existing scanner after verified landing.
-`mc goal show|done` expose state and completion evidence. Programme status lists
-v1 projects unchanged beside goals. Invalid v2 and unknown versions are
-reported, never reinterpreted as v1/unplanned work or automatically archived;
-a goal is archived with its programme only after verified landing and any
-required follow-ups. No existing project is migrated. See
-[the v2 contract, its v1 boundaries and rollout state](../technical/mc-autonomous-programmes.md),
-[programme operations](../technical/mc-programme-operations.md)
-and [revisioned storage and ownership](../technical/mc-autonomous-state.md).
+A plan is **mc-plan v1**, with fixed steps. Any other version is reported as
+unsupported and never reinterpreted as v1 or unplanned work.
 
 ### Fixed-step v1
 
@@ -313,6 +289,13 @@ into the removed directory are rewritten to these in the same pull request
 (ruling 46).
 
 **A project under `~/mc/programs/` is not written into `closeout/`.** Its closeout is `CLOSEOUT.json` beside its `PLAN.json` in mc, and its repository gets only its `project_log.md` row ([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *What archiving does*).
+
+## Goals beside projects
+
+A goal has no `PLAN.json`, steps or register. It is `GOAL.md`, `LOG.md` and one
+worktree per repository under `~/mc/programs/<programme>/goals/<goal>/`, and it
+never merges: a goal session publishes with `mc publish --no-merge`. See
+[`docs/technical/mc-goals.md`](../technical/mc-goals.md).
 
 ## Citing a decision
 

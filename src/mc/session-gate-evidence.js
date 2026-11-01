@@ -143,7 +143,7 @@ function freeze(value) {
   return value;
 }
 
-/** Future autonomous finish boundary. The caller supplies a frozen local head
+/** A receipt for a frozen head. The caller supplies a frozen local head
  * and an independently observed pushed SHA (not a tracking-ref assumption).
  * This lookup grants no publication/merge authority and performs no push. */
 export function findPublicationReceipt({ root, cwd, repo, run, sessionRun = null, goalRevision = null,

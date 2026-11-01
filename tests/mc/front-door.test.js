@@ -414,4 +414,36 @@ describe('the menu under the page', () => {
     assert.equal(code, 0);
     assert.deepEqual(modes, [true, false], 'a shows them all, a again puts them back');
   });
+
+  // A goal's number shows the goal with `mc goal show`, and the page is drawn
+  // again under the prompt, as `s` does; the goal is never opened as a project.
+  it("a goal's number opens mc goal show", async () => {
+    const goalData = {
+      programmes: programmesSection({
+        plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'a' }],
+        areas: [],
+        goalRows: [{
+          name: 'rollout', programme: 'mc', repos: ['memoro-cli'], status: 'open', sessions: 0, last: null, running: false, problems: [],
+        }],
+      }),
+    };
+    const shown = [];
+    const opened = [];
+    const answers = ['2', 'q'];
+    const written = [];
+    const stdout = { columns: 100, write: (text) => written.push(text) };
+    let drawn = 0;
+    const code = await menu(goalData, {
+      stdout,
+      stderr: stdout,
+      page: async () => { drawn += 1; return { data: goalData, lines: ['  PROGRAMMES'] }; },
+      reader: plainReader({ stdout, ask: () => answers.shift() ?? null }),
+      open: async (name) => { opened.push(name); return 0; },
+      showGoal: async (argv) => { shown.push(argv.join(' ')); return 0; },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(shown, ['show mc/rollout'], 'the goal is shown by its programme and name');
+    assert.deepEqual(opened, [], 'a goal is not opened as a project');
+    assert.equal(drawn, 1, 'the page is drawn again under the goal');
+  });
 });

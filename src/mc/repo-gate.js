@@ -180,7 +180,7 @@ export async function runGate({
   signals = true,
   // Whether a red file is red on the base too (selector-miss.js).
   probeMain = probeMainRed,
-  // Explicit receipt binding for future autonomous callers; null preserves v1.
+  // Explicit receipt binding for a caller that has one; null is every round today.
   evidence = null,
 } = {}) {
   const startedAt = clock();

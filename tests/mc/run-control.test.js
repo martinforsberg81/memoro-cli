@@ -617,6 +617,12 @@ describe('mc run --update', () => {
     assert.match(out.lines[1], /^draining since/u);
   });
 
+  it('drainLine: a goal session is named as a goal, with no step', () => {
+    const fx = fixture({ files: { [paths.update]: '2026-08-30T17:50:00Z\n', [`${paths.dir}/current-memoro-cli.json`]: JSON.stringify({ name: 'goal:mc/plain', step: null, started: '2026-08-30T17:58:00Z' }) } });
+    const state = drainState({ paths, read: fx.deps.read, list: fx.deps.list, now: fx.deps.now(), lanes: 2 });
+    assert.match(drainLine(state), /waiting on goal mc\/plain \(memoro-cli#1, /u);
+  });
+
   it('drainLine: nothing in flight, a first lane, and no UPDATE at all', () => {
     const fx = fixture({ files: { [paths.update]: '2026-08-30T17:50:00Z\n', [`${paths.dir}/current-memoro-cli.json`]: JSON.stringify({ name: 'mc-ui', started: '2026-08-30T17:58:00Z' }) } });
     const state = drainState({ paths, read: fx.deps.read, list: fx.deps.list, now: fx.deps.now(), lanes: 2 });

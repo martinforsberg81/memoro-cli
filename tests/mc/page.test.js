@@ -1899,7 +1899,7 @@ describe('the page', () => {
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
-    assert.match(text, /RUNNER {2}1 in flight · 2 lanes · 2 queued \(2 projects · 0 goals\)\s+mc run/u);
+    assert.match(text, /RUNNER {2}1 in flight · 2 lanes · 2 queued\s+mc run/u);
     assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
     assert.match(text, /RUNNER .*2 queued/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');

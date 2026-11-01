@@ -417,32 +417,28 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
 
   // The plan's last step lands only with every success criterion met
   // (Martin, 2026-10-18) — `criteriaDoor`.
-  let autonomous;
-  {
-    const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, root, env,
-      step: step ? { project: step.project, index: step.index } : null });
-    if (door.checked && !door.ok) {
-      const now = deps.now ? deps.now() : new Date();
-      recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
-      recordRound({
-        ok: false,
-        stopped_at: door.stop || 'unmet-criteria',
-        reason: door.problems.join('; '),
-        repo: repoPath,
-        pr: { number: opts.pr },
-        started_at: now.toISOString(),
-        finished_at: now.toISOString(),
-      }, { mode });
-      for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
-      return 1;
-    }
-    autonomous = door.autonomous;
+  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, root, env,
+    step: step ? { project: step.project, index: step.index } : null });
+  if (door.checked && !door.ok) {
+    const now = deps.now ? deps.now() : new Date();
+    recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
+    recordRound({
+      ok: false,
+      stopped_at: door.stop || 'unmet-criteria',
+      reason: door.problems.join('; '),
+      repo: repoPath,
+      pr: { number: opts.pr },
+      started_at: now.toISOString(),
+      finished_at: now.toISOString(),
+    }, { mode });
+    for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
+    return 1;
   }
 
   let queued;
   try {
     queued = queueMerge({
-      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent, autonomous,
+      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent,
       now: deps.now ? deps.now() : new Date(), env, ...io,
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });

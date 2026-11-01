@@ -55,10 +55,6 @@ import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
-import { autonomousPrOwner } from './autonomous-pr.js';
-import { assertAutonomousQueueAdmission } from './autonomous-merge.js';
-import { recordAutonomousMergeEvent } from './autonomous-state.js';
-import { autonomousJob, autonomousLandingReadback, recordMergeOutcome } from './autonomous-outcomes.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { tsvHeader, tsvRow } from './run-plan.js';
@@ -234,25 +230,11 @@ function sameCommit(a, b) {
  * merger is landing this very pull request now.
  */
 export function queueMerge({
-  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null, autonomous = undefined,
+  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, start = startMerger,
 } = {}) {
-  const identity = autonomousPrOwner({ root, repoPath, pr, view: { headRefName: branch } });
-  if (!identity.ok) throw new Error(identity.problems.join('; '));
-  if (identity.checked || autonomous !== undefined) {
-    if (!identity.owner || repo !== identity.owner.repo || branch !== identity.owner.branch || step || parent) {
-      throw new Error('current autonomous admission is required; repository/branch must match and legacy step/stack ownership is not allowed');
-    }
-    assertAutonomousQueueAdmission({ root, owner: identity.owner, pr, ticket: autonomous });
-    const binding = { report_id: autonomous.review_id, report_digest: autonomous.review_digest,
-      goal_revision: autonomous.goal_revision,
-      head: autonomous.head, branch: autonomous.branch, pr: autonomous.pr };
-    // Intent precedes queue persistence/start; the runner recovers this gap.
-    recordAutonomousMergeEvent(root, identity.owner.programme, identity.owner.project,
-      { binding, type: 'merge-queued', ticket: autonomous });
-  }
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
   if (step) {
     updateStep({ root, project: step.project, index: step.index, patch: landingPatch({ pr, branch }), now: stamp, read, write, lock });
@@ -261,7 +243,6 @@ export function queueMerge({
     repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
     step: step ? { project: step.project, index: step.index } : null,
     parent,
-    ...(autonomous !== undefined ? { autonomous } : {}),
   };
   const entries = lock(root, () => {
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
@@ -365,13 +346,13 @@ const realGh = (args, options = {}) => runTool('gh', args, { cwd: options.cwd })
  * `MERGED`, `CLOSED` or `OPEN`, or null when `gh` fails or says nothing — a
  * null is no answer, and the round decides as it always did.
  */
-async function prStateOf(job, gh, autonomous = false) {
+async function prStateOf(job, gh) {
   try {
-    const seen = await gh(['pr', 'view', String(job.pr), '--json', autonomous ? 'state,mergeCommit,baseRefName,headRefOid' : 'state,mergeCommit,baseRefName'], { cwd: job.repo_path });
+    const seen = await gh(['pr', 'view', String(job.pr), '--json', 'state,mergeCommit,baseRefName'], { cwd: job.repo_path });
     if (!seen || seen.error || (Number.isInteger(seen.status) && seen.status !== 0)) return null;
     const facts = JSON.parse(seen.stdout || 'null');
     const state = facts?.state;
-    if (state === 'MERGED') return facts.mergeCommit?.oid ? { state, sha: facts.mergeCommit.oid, base: facts.baseRefName || null, head: facts.headRefOid || null } : null;
+    if (state === 'MERGED') return facts.mergeCommit?.oid ? { state, sha: facts.mergeCommit.oid, base: facts.baseRefName || null } : null;
     return state === 'CLOSED' || state === 'OPEN' ? { state } : null;
   } catch { return null; }
 }
@@ -459,14 +440,10 @@ export async function sweepMergedReds({
   const reds = parseQueue(read(mergesPath(root))).filter((entry) => entry.state === 'red');
   const gone = [];
   for (const entry of reds) {
-    const facts = await prStateOf(entry, ask, autonomousJob(root, entry));
+    const facts = await prStateOf(entry, ask);
     if (facts?.state === 'MERGED' || facts?.state === 'CLOSED') gone.push({ entry, facts });
   }
   if (!gone.length) return 0;
-  for (const { entry, facts } of gone) {
-    if (autonomousJob(root, entry)) recordMergeOutcome({ root, job: entry, report: facts.state === 'MERGED'
-      ? autonomousLandingReadback(entry, facts) : closedOnGitHub(entry) });
-  }
   const dropped = lock(root, () => {
     let entries = parseQueue(read(mergesPath(root)));
     const out = gone.filter(({ entry }) => queuedFor(entries, entry.repo, entry.pr)?.state === 'red');
@@ -476,7 +453,7 @@ export async function sweepMergedReds({
   });
   for (const { entry, facts } of dropped) {
     if (facts.state === 'MERGED') {
-      const report = autonomousJob(root, entry) ? autonomousLandingReadback(entry, facts) : alreadyMerged(facts);
+      const report = alreadyMerged(facts);
       await tell(entry, report.ok, report, {
         root, say, gh, now, read, write, lock, appendRun: null, dropFromPage: dropPr, seconds: 0,
       });
@@ -550,10 +527,9 @@ export async function landJob(batch, {
   const answers = [];
   const answer = async (job, landed, report) => {
     // A round the watch stopped for a new push: back in line at its place.
-    const autonomous = autonomousJob(root, job);
-    const back = !autonomous && !landed && report?.stopped_at === 'pushed';
-    const mending = !autonomous && !landed && !back && mayMend(job, report);
-    const requeued = !autonomous && !landed && !back && !mending && mayRequeue(job, report);
+    const back = !landed && report?.stopped_at === 'pushed';
+    const mending = !landed && !back && mayMend(job, report);
+    const requeued = !landed && !back && !mending && mayRequeue(job, report);
     const flags = { ...(mending ? { mending: true } : {}), ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}) };
     answers.push({ job, landed, report, ...flags });
     await tell(job, landed, report, {
@@ -571,11 +547,6 @@ export async function landJob(batch, {
   };
   const jobs = [];
   for (const job of [].concat(batch)) {
-    if (autonomousJob(root, job) && (job.parent || job.step)) {
-      await answer(job, false, { ok: false, merged: false, stopped_at: 'autonomous-review-required',
-        reason: 'autonomous jobs cannot use legacy step/stack recovery ownership' });
-      continue;
-    }
     // Built on a job that has landed since: onto main first, or the round
     // measures the one below a second time and the squash conflicts with it.
     // One that cannot be moved is answered now and leaves the batch.
@@ -590,12 +561,11 @@ export async function landJob(batch, {
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
   const ask = gh || realGh;
   for (const one of [...jobs]) {
-    const facts = await prStateOf(one, ask, autonomousJob(root, one));
+    const facts = await prStateOf(one, ask);
     if (facts?.state === 'MERGED') {
-      const report = autonomousJob(root, one) ? autonomousLandingReadback(one, facts) : alreadyMerged(facts);
+      const report = alreadyMerged(facts);
       await answer(one, report.ok, report);
-    }
-    else if (facts?.state === 'CLOSED') await answer(one, false, closedOnGitHub(one));
+    } else if (facts?.state === 'CLOSED') await answer(one, false, closedOnGitHub(one));
     else continue;
     jobs.splice(jobs.indexOf(one), 1);
   }
@@ -655,15 +625,11 @@ export async function landJob(batch, {
     try {
       report = await mergeRound({
         repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge', signals: false,
-        autonomous: job.autonomous ?? null,
         env: { ...process.env, MC_WORK_ROOT: root },
         ...(job.holder ? { holder: job.holder } : {}),
         onProgress: (message) => say(`${label}: ${message}`),
         signal: controller.signal,
       });
-    } catch (error) {
-      if (!autonomousJob(root, job)) throw error;
-      report = { ok: false, merged: false, stopped_at: 'threw', reason: `the round threw (${error.message})` };
     } finally {
       stopWatch();
     }
@@ -671,12 +637,11 @@ export async function landJob(batch, {
     record(report, { mode: 'merge' });
     // Stopped by the watch: answered as GitHub says. A 'gone' nobody asked for falls through as any other stop.
     if (report?.stopped_at === 'gone' && gone) {
-      report = gone.kind === 'merged' ? (autonomousJob(root, job) ? autonomousLandingReadback(job, gone) : alreadyMerged({ sha: gone.sha, base: gone.base }))
+      report = gone.kind === 'merged' ? alreadyMerged({ sha: gone.sha, base: gone.base })
         : gone.kind === 'closed' ? closedOnGitHub(job)
         : { ok: false, merged: false, stopped_at: 'pushed', reason: gone.reason };
       break;
     }
-    if (autonomousJob(root, job) && !shouldWait(report)) break;
     if (report?.stopped_at === 'file-killed' && !killedOnce) {
       killedOnce = true;
       const files = (report.killed_files || []).map((one) => one.file).join(', ') || 'a test file';
@@ -744,15 +709,11 @@ export const REQUEUE_DELAY_MS = 15 * 60_000;
 
 /** Whether this answer is a requeue: one of `REQUEUE_STOPS`, with requeues left. */
 export function mayRequeue(job, report) {
-  return !Object.hasOwn(job, 'autonomous') && Boolean(report) && !report.ok && REQUEUE_STOPS.includes(report.stopped_at) && (job?.requeues || 0) < MAX_REQUEUES;
+  return Boolean(report) && !report.ok && REQUEUE_STOPS.includes(report.stopped_at) && (job?.requeues || 0) < MAX_REQUEUES;
 }
 
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
 async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false, requeued = false, back = false }) {
-  const autonomous = autonomousJob(root, job);
-  // Must commit before the caller removes/answers the queue row. Failure is
-  // not a courtesy-write failure: retain the job for readback/replay.
-  if (autonomous) recordMergeOutcome({ root, job, report });
   const label = `${job.repo} #${job.pr}`;
   // Set aside for its one mend: the step stays `landing`, so the runner
   // leaves it alone, and the mend's outcome is what writes the register.
@@ -773,7 +734,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
   // A requeued or pushed step stays `landing`: the runner leaves it alone, and the next round answers it.
-  if (!autonomous && job.step && !mending && !requeued && !back) {
+  if (job.step && !mending && !requeued && !back) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
     const io = { read, lock, ...(write ? { write } : {}) };
     try {
@@ -970,10 +931,6 @@ export async function serve({
   // a mend read `landing` for the 9 minutes of the others' round). Called
   // after `tell`, outside any lock, so it takes the queue's lock itself.
   const writeAnswer = async ({ job, landed: isLanded, report, mending, requeued, back }) => {
-    if (autonomousJob(root, job)) {
-      recordMergeOutcome({ root, job, report });
-      mending = false; requeued = false; back = false;
-    }
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
     lock(root, () => {
@@ -1089,10 +1046,8 @@ export async function serve({
       // What is left here is what `onAnswer` did not write: a round that
       // threw, or a `land` that does not tell its answers as it gives them.
       const answered = now().toISOString();
-      const left = answers.filter((one) => !written.has(keyOf(one.job))).map(one => autonomousJob(root, one.job)
-        ? { ...one, mending: false, requeued: false, back: false } : one);
-      for (const one of left) if (autonomousJob(root, one.job)) recordMergeOutcome({ root, job: one.job, report: one.report });
-      const toMend = left.filter((one) => one.mending && mends && !autonomousJob(root, one.job));
+      const left = answers.filter((one) => !written.has(keyOf(one.job)));
+      const toMend = left.filter((one) => one.mending && mends);
       if (left.length) {
         lock(root, () => {
           let entries = parseQueue(read(mergesPath(root)));

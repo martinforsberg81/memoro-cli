@@ -330,7 +330,7 @@ it('freezes the base and launch content for the worker; filtered requests remain
   assert.match(request.select, new RegExp(base, 'u'));
 });
 
-it('autonomous finish binds the existing affected gate worker to its reserved session and goal revision', async () => {
+it('a measurement binding carries the affected gate worker to its reserved session and goal revision', async () => {
   const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
   const original = h.deps.git;
   const base = 'a'.repeat(40);

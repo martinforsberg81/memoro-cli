@@ -1,200 +1,287 @@
-/** Ordinary assignment verbs for autonomous goals; fixed-step projects stay separate. */
-import { existsSync, readFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
-import { autonomousPaths, mutateAutonomousProject, mutateProgramme, planningContention, readAutonomousState, readProgrammeState } from '../autonomous-state.js';
-import { validateAutonomousProject } from '../autonomous-project.js';
-import { STABLE_ID_RE } from '../goal-contract.js';
-import { goalCompletion } from '../goal-followup.js';
-import { runPlanningOperation } from '../programme-plan.js';
-import { workRoot } from '../paths.js';
+/**
+ * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
+ *
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"
+ *                                  GOAL.md, LOG.md and a worktree per repository on goal/<goal>, from origin/main
+ *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|blocked|done]
+ *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
+ *   mc goal open|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
+ *   mc goal show <programme>/<goal>      the front matter, the body, the last three entries, each worktree's state
+ *   mc goal list [<programme>]           every goal, one line each
+ *
+ * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
+ * the worktree is anyone's, and mc writes the status line and the log, nothing else.
+ */
+import { join } from 'node:path';
+
+import { writeFileAtomic } from '../atomic-write.js';
+import { run as runGit } from '../git.js';
+import { addGoalWorktree, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, sessions, setStatus, STATUSES } from '../goals.js';
+import { NAME_RE } from '../plan-schema.js';
+import { programsHome } from '../paths.js';
+import { repoNameOf } from '../repos.js';
+import { knownRepositories } from '../work-area.js';
 import { scanArgs } from './flags.js';
-import { autonomousCommandContext, run as legacyOperations } from './autonomous-project.js';
 
-const text = value => typeof value === 'string' && value.trim().length > 0;
-const output = (stream, value) => stream.write(`${JSON.stringify(value, null, 2)}\n`);
-export const goalCommandContext = autonomousCommandContext;
-const splitTarget = target => {
-  const parts = target?.split('/');
-  if (!parts || parts.length !== 2 || parts.some(part => !STABLE_ID_RE.test(part))) throw new Error('target must be <programme>/<goal>');
-  return parts;
+/** Every flag any verb takes as a value. */
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--done', '--comment', '--next', '--status', '--reason'];
+/** The flags each verb takes; any other given is refused with exit 2. */
+const VERB_FLAGS = {
+  new: ['--repo', '--class', '--title'],
+  log: ['--done', '--comment', '--next', '--status'],
+  status: ['--reason'],
+  show: [],
+  list: [],
 };
-
-/** Every assignment verb goes through the shared planning journal. */
-function plan(deps, programme, operation) {
-  const { root, env, context } = deps;
-  return runPlanningOperation({ root, programme, actor: context.actor, token: deps.token || env.MC_PROGRAMME_LEASE,
-    now: deps.now ? Number(deps.now()) : Date.now(), deps: { ...deps, env } }, operation);
-}
+const STATUS_VERBS = ['open', 'blocked', 'done'];
 
 export async function run(argv, deps = {}) {
-  const stdout = deps.stdout || process.stdout; const stderr = deps.stderr || process.stderr;
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const context = autonomousCommandContext(deps);
-  const root = deps.root || workRoot(env);
-  const scanned = scanArgs(argv, {
-    booleans: ['--exception'],
-    strictValues: ['--phase', '--repo', '--class', '--id', '--criterion', '--instruction', '--check', '--verify', '--expected-revision', '--input-file', '--reference', '--integrated-sha', '--outcome', '--diagnosis', '--approach'],
-    repeatable: ['--goal', '--contract', '--out-of-scope', '--after', '--attempt'],
-  });
+  const scanned = scanArgs(argv, { strictValues: VALUE_FLAGS });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  const [operation, suboperation, ...tail] = scanned.positional;
-  try {
-    if (operation === 'new') return createGoal(scanned, [suboperation, ...tail].filter(Boolean), { ...deps, context, root, env, stdout, stderr });
-    if (operation === 'criterion' && suboperation === 'add') return addCriterion(scanned, tail, { ...deps, context, root, env, stdout, stderr });
-    if (operation === 'criterion' && suboperation === 'evidence') return evidence(scanned, tail, { ...deps, context, root, env, stdout, stderr });
-    const allowed = ['send', 'revise', 'retry', 'diagnose', 'show', 'done', 'finish', 'report', 'recover', 'attempt', 'release'];
-    if (!allowed.includes(operation) || !suboperation) throw new Error('an operation and <programme>/<goal> are required');
-    const [programme, goal] = splitTarget(suboperation);
-    if (['finish', 'report', 'recover', 'attempt', 'release'].includes(operation)) {
-      const flags = ['--expected-revision', ...(operation === 'finish' || operation === 'report' || operation === 'attempt' ? ['--input-file'] : [])];
-      rejectFlags(scanned, flags);
-      return legacyOperations([operation, `${programme}/${goal}`, ...(scanned.flags['expected-revision'] ? ['--expected-revision', scanned.flags['expected-revision']] : []), ...(scanned.flags['input-file'] ? ['--input-file', scanned.flags['input-file']] : [])], deps);
-    }
-    rejectFlags(scanned, { send: ['--expected-revision', '--after'], revise: ['--expected-revision', '--input-file'], retry: ['--expected-revision'],
-      diagnose: ['--expected-revision', '--attempt', '--diagnosis', '--approach', '--exception'] }[operation] || []);
-    if (operation === 'show') {
-      if (tail.length) throw new Error('show takes one target');
-      output(stdout, readAutonomousState(root, programme, goal, deps)); return 0;
-    }
-    if (operation === 'send') {
-      if (tail.length) throw new Error('send takes one target');
-      const state = readAutonomousState(root, programme, goal, deps);
-      const revision = revisionOrCurrent(scanned, state);
-      plan({ ...deps, root, env, context }, programme, { kind: 'send-goal', project: goal, input: { after: scanned.flags.after }, revision });
-      output(stdout, { contract: readAutonomousState(root, programme, goal, deps).contract }); return 0;
-    }
-    if (operation === 'revise') {
-      if (tail.length) throw new Error('revise takes one target');
-      const revision = expectedRevision(scanned);
-      const input = inputFile(scanned, deps);
-      plan({ ...deps, root, env, context }, programme, { kind: 'revise-goal', project: goal, input, revision });
-      output(stdout, readAutonomousState(root, programme, goal, deps)); return 0;
-    }
-    if (operation === 'retry' || operation === 'diagnose') {
-      if (tail.length) throw new Error(`${operation} takes one target`);
-      const revision = revisionOrCurrent(scanned, readAutonomousState(root, programme, goal, deps));
-      const input = operation === 'retry' ? {} : diagnosisInput(scanned);
-      plan({ ...deps, root, env, context }, programme, { kind: operation === 'retry' ? 'resume-project' : 'diagnose-project', project: goal, input, revision });
-      output(stdout, readAutonomousState(root, programme, goal, deps)); return 0;
-    }
-    if (operation === 'done') {
-      if (tail.length) throw new Error('done takes one target');
-      const state = readAutonomousState(root, programme, goal, deps);
-      const completion = goalCompletion(state);
-      if (completion.pending_follow_ups.length) throw new Error(`follow-ups need successful current measurements: ${completion.pending_follow_ups.join(', ')}`);
-      output(stdout, { goal, phase: state.phase, ...completion });
-      return 0;
-    }
-    throw new Error('unknown goal operation');
-  } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  const [verb, ...rest] = scanned.positional;
+
+  const verbFlags = STATUS_VERBS.includes(verb) ? VERB_FLAGS.status : (Object.hasOwn(VERB_FLAGS, verb) ? VERB_FLAGS[verb] : null);
+  if (!verbFlags) { stderr.write(usage()); return 2; }
+  const extra = onlyFlags(scanned, verbFlags);
+  if (extra) { stderr.write(`mc: ${verb} takes no ${extra}\n`); return 2; }
+
+  const ctx = {
+    stdout, stderr, env,
+    home: deps.home || programsHome(env),
+    now: deps.now ? deps.now() : new Date(),
+    read: deps.read || readTextOrNull,
+    write: deps.write || writeFileAtomic,
+    list: deps.list || listDirsOf,
+    git: deps.git || gitIn,
+    known: deps.known || (() => knownRepositories(env)),
+  };
+  const { flags } = scanned;
+
+  if (verb === 'new') return newGoal(rest, flags, ctx);
+  if (verb === 'log') return logEntry(rest, { status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
+  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { status: verb, done: null, comment: flags.reason, next: null }, ctx);
+  if (verb === 'show') return showGoal(rest, ctx);
+  return listGoals(rest, ctx);
 }
 
-function rejectFlags(scanned, allowed) {
-  const set = new Set(allowed);
-  for (const [key, value] of Object.entries(scanned.flags)) {
-    if (Array.isArray(value) ? value.length > 0 : value !== null && value !== false) {
-      const flag = `--${key}`;
-      if (!set.has(flag)) throw new Error(`${flag} is not accepted here`);
+/**
+ * `mc goal new <programme>/<goal>` — makes a goal. The programme must be a
+ * directory under the programmes home, the goal must not exist, and every
+ * repository named must be one mc knows. Each repository is fetched first, so
+ * a fetch that fails leaves nothing behind; then GOAL.md and LOG.md are
+ * written, and a worktree of each repository on `goal/<goal>`, from
+ * origin/main, or on that branch as it is when it already exists.
+ */
+function newGoal(args, flags, ctx) {
+  const { stdout, stderr, home, now } = ctx;
+  if (args.length !== 1) { stderr.write(usage()); return 2; }
+  const [name] = args;
+  const parts = name.split('/');
+  if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
+    stderr.write(`mc: ${name} is not <programme>/<goal> — lower-case letters, digits and hyphens\n`);
+    return 2;
+  }
+  const [programme, goal] = parts;
+
+  const missing = [['--repo', flags.repo], ['--class', flags.class], ['--title', flags.title]]
+    .filter(([, value]) => value === null || value.trim() === '')
+    .map(([flag]) => flag);
+  if (missing.length) { stderr.write(`mc: new needs ${missing.join(', ')}\n`); return 2; }
+  if (!CLASSES.includes(flags.class)) { stderr.write(`mc: --class is ${CLASSES.join(' or ')}, not ${flags.class}\n`); return 2; }
+  const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
+  if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
+
+  const known = ctx.known();
+  const unknown = repos.filter((repo) => !known.some((path) => repoNameOf(path) === repo));
+  if (unknown.length) {
+    stderr.write(`mc: ${unknown.join(', ')} is not a repository mc knows — ${known.map(repoNameOf).join(', ')}\n`);
+    return 2;
+  }
+  if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
+  const dir = goalDirIn(home, programme, goal);
+  if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal)) { stderr.write(`mc: ${programme}/${goal} exists — ${dir}\n`); return 1; }
+
+  const bares = repos.map((repo) => ({ repo, bare: known.find((path) => repoNameOf(path) === repo) }));
+  for (const { repo, bare } of bares) {
+    const fetched = ctx.git(bare, ['fetch', '-q', 'origin']);
+    if (!fetched.ok) { stderr.write(`mc: could not fetch ${repo} — ${fetched.stderr.trim()}\n`); return 1; }
+  }
+
+  const created = stampSeconds(now);
+  const body = `# ${flags.title}\n\n## Goal\n\n## Criteria\n\n## Out of scope\n`;
+  ctx.write(join(dir, GOAL_FILE), renderGoal({ status: 'open', repos, class: flags.class, created, body }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }));
+  stdout.write(`mc: ${programme}/${goal} — ${dir}\n`);
+
+  for (const { repo, bare } of bares) {
+    const path = join(dir, repo);
+    const added = addGoalWorktree({ git: ctx.git, bare, path, goal });
+    if (!added.ok) {
+      stderr.write(`mc: ${repo}'s worktree is not made — ${added.stderr.trim()}; the goal's files stand in ${dir}\n`);
+      return 1;
     }
+    stdout.write(`  ${repo}  ${path}  ${added.existed ? `${added.branch}, as it was` : `${added.branch} from origin/main`}\n`);
   }
+  stdout.write(`GOAL.md is to be filled in: ${join(dir, GOAL_FILE)}\n`);
+  return 0;
 }
-function expectedRevision(scanned) {
-  const raw = scanned.flags['expected-revision'];
-  if (raw === null || !/^(0|[1-9][0-9]*)$/u.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error('--expected-revision <n> is required');
-  return Number(raw);
-}
-function revisionOrCurrent(scanned, state) {
-  const raw = scanned.flags['expected-revision'];
-  if (raw === null) return state.revision;
-  if (!/^(0|[1-9][0-9]*)$/u.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error('--expected-revision must be a nonnegative safe integer');
-  return Number(raw);
-}
-function inputFile(scanned, deps) {
-  const file = scanned.flags['input-file'];
-  if (!file) throw new Error('--input-file <json> is required');
-  return JSON.parse((deps.readInput || (path => readFileSync(path, 'utf8')))(file));
-}
-function parseTarget(args) {
-  if (args.length !== 1) throw new Error('one <programme>/<goal> target is required');
-  return splitTarget(args[0]);
-}
-function programmeSetup(root, programme, env, deps) {
-  const paths = autonomousPaths(root, programme, null);
-  if (existsSync(paths.programme)) return readProgrammeState(root, programme, deps);
-  return mutateProgramme(root, programme, 'metadata', { id: programme, brief: `docs/project/${programme}/` }, { ...deps, revision: 0, env });
-}
-function diagnosisInput(scanned) {
-  const { attempt, diagnosis, approach, exception } = scanned.flags;
-  if (!attempt.length || !text(diagnosis) || !!approach === exception) throw new Error('diagnose needs every --attempt, --diagnosis and either --approach or --exception');
-  return { action: exception ? 'exception' : 'retry', attempt_ids: attempt, diagnosis, ...(approach ? { approach } : {}) };
-}
-function createGoal(scanned, tail, deps) {
-  rejectFlags(scanned, ['--phase', '--repo', '--class', '--goal', '--contract', '--out-of-scope']);
-  const [programme, goal] = parseTarget(tail);
-  const { root, env, context } = deps;
-  const phase = scanned.flags.phase; const repo = scanned.flags.repo; const workClass = scanned.flags.class;
-  if (!phase || !/^[1-9][0-9]*$/u.test(phase) || !Number.isSafeInteger(Number(phase))) throw new Error('--phase <n> is required');
-  if (!repo || !STABLE_ID_RE.test(repo)) throw new Error('--repo <repo> must be a stable repository name');
-  if (!['fast', 'large'].includes(workClass)) throw new Error('--class must be fast or large');
-  const goalText = scanned.flags.goal;
-  const contract = scanned.flags.contract;
-  const outOfScope = scanned.flags['out-of-scope'];
-  if (!goalText.length || goalText.some(value => !text(value))) throw new Error('--goal needs at least one text value');
-  if (!contract.length || contract.some(value => !text(value))) throw new Error('--contract needs at least one text value');
-  if (!outOfScope.length || outOfScope.some(value => !text(value))) throw new Error('--out-of-scope needs at least one text value');
-  const programmeState = programmeSetup(root, programme, env, deps);
-  const assignment = { schema: 'mc-plan', version: 2, project_id: goal, repo, execution: { kind: 'autonomous' },
-    programme: { id: programme }, goal_revision: 1, work_class: workClass, programme_phase: Number(phase), goal: goalText,
-    instruction: contract, contract, out_of_scope: outOfScope, success_criteria: [], documents: [] };
-  const validation = validateAutonomousProject(assignment, { allowEmptyCriteria: true });
-  if (!validation.ok) throw new Error(validation.problems.join('; '));
-  plan(deps, programme, { kind: 'new-goal', project: goal, input: assignment, revision: 0 });
-  output(deps.stdout, readAutonomousState(root, programme, goal, deps)); return 0;
-}
-function addCriterion(scanned, tail, deps) {
-  rejectFlags(scanned, ['--id', '--criterion', '--instruction', '--check', '--verify', '--expected-revision']);
-  const [programme, goal] = parseTarget(tail);
-  const criterion = { id: scanned.flags.id, criterion: scanned.flags.criterion, instruction: [scanned.flags.instruction], check: scanned.flags.check, verification: scanned.flags.verify };
-  const state = readAutonomousState(deps.root, programme, goal, deps);
-  if (!criterion.id || !criterion.criterion || !criterion.instruction[0] || !criterion.check || !criterion.verification) throw new Error('criterion add needs --id, --criterion, --instruction, --check and --verify');
-  // The criterion is the effect: finding it is the replay, whatever revision was read.
-  if (state.contract.success_criteria.some(item => isDeepStrictEqual(item, criterion))) { output(deps.stdout, state); return 0; }
-  const stateRevision = revisionOrCurrent(scanned, state);
-  if (state.revision !== stateRevision) throw planningContention('stale state revision — read the current state');
-  const assignment = { ...state.contract, goal_revision: state.goal_revision + 1, success_criteria: [...state.contract.success_criteria, criterion] };
-  plan(deps, programme, { kind: 'revise-goal', project: goal, input: assignment, revision: stateRevision });
-  output(deps.stdout, readAutonomousState(deps.root, programme, goal, deps)); return 0;
-}
-function evidence(scanned, tail, deps) {
-  rejectFlags(scanned, ['--id', '--reference', '--expected-revision', '--integrated-sha', '--outcome']);
-  const [programme, goal] = parseTarget(tail);
-  const revision = expectedRevision(scanned); const state = readAutonomousState(deps.root, programme, goal, deps);
-  if (state.revision !== revision) throw new Error('stale state revision — read the current state');
-  const criterion = state.contract.success_criteria.find(item => item.id === scanned.flags.id);
-  if (!criterion) throw new Error('unknown criterion ID');
-  if (!text(scanned.flags.reference)) throw new Error('--reference <evidence> is required');
-  if (criterion.verification === 'after-integration') {
-    if (!scanned.flags['integrated-sha'] || !scanned.flags.outcome) throw new Error('after-integration evidence needs --integrated-sha and --outcome passed|failed|unknown');
-    const measured = { criterion_id: criterion.id, goal_revision: state.goal_revision,
-      integrated_sha: scanned.flags['integrated-sha'], reference: scanned.flags.reference, outcome: scanned.flags.outcome };
-    const id = `follow-up-${createHash('sha256').update(JSON.stringify([measured, revision])).digest('hex').slice(0, 40)}`;
-    plan(deps, programme, { kind: 'follow-up-goal', project: goal, input: { id, ...measured }, revision });
-    output(deps.stdout, readAutonomousState(deps.root, programme, goal, deps)); return 0;
+
+/**
+ * `mc goal log` and `mc goal open|blocked|done` — appends one entry to the
+ * goal's LOG.md, tagged with MC_TOOL and MC_MODEL (`person` when neither is
+ * set). With a status the front matter is rewritten too. A goal whose GOAL.md
+ * does not parse is refused.
+ */
+function logEntry(args, fields, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  if (fields.status !== null && !STATUSES.includes(fields.status)) {
+    stderr.write(`mc: --status is ${STATUSES.join(', ')}, not ${fields.status}\n`);
+    return 2;
   }
-  if (scanned.flags['integrated-sha'] || scanned.flags.outcome) throw new Error('--integrated-sha and --outcome are only for after-integration measurements');
-  const actor = deps.context.actor || { run_id: `foreground-${process.pid}`, role: 'step' };
-  const result = mutateAutonomousProject(deps.root, programme, goal, 'progress', { id: `evidence-${randomUUID()}`, criterion_id: scanned.flags.id, status: 'verified', reference: scanned.flags.reference }, { ...deps, actor, revision });
-  output(deps.stdout, result); return 0;
+  if ([fields.done, fields.comment, fields.next, fields.status].every((value) => value === null)) {
+    stderr.write('mc: log needs --done, --comment, --next or --status\n');
+    return 2;
+  }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  const status = fields.status ?? goal.status;
+  const entry = {
+    at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
+    done: fields.done, comment: fields.comment, next: fields.next,
+  };
+  if (fields.status !== null) {
+    const outcome = setStatus({ dir: target.dir, status, entry, read, write });
+    if (outcome.problems) {
+      for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+      return 1;
+    }
+  } else {
+    appendEntry({ dir: target.dir, entry, read, write });
+  }
+  stdout.write(`mc: ${target.name} · ${status}\n`);
+  return 0;
 }
+
+/**
+ * `mc goal show <programme>/<goal>` — the front matter as one line, the body,
+ * the last three log entries, and for each repository's worktree its changed
+ * files, its commits past origin/main and its last commit's date.
+ */
+function showGoal(args, ctx) {
+  const { stdout, stderr, read, git } = ctx;
+  if (args.length !== 1) { stderr.write(usage()); return 2; }
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    stderr.write(`mc: ${target.name} does not parse:\n`);
+    for (const problem of goal.problems) stderr.write(`  ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`${target.name} · ${goal.status} · ${goal.repos.join(', ')} · ${goal.class} · created ${goal.created ?? '—'}\n`);
+  const body = goal.body.trim();
+  if (body) stdout.write(`\n${body}\n`);
+
+  const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
+  stdout.write('\nLOG\n');
+  if (log.length === 0) stdout.write('  no entries yet\n');
+  for (const entry of log.slice(-3)) stdout.write(renderEntry(entry));
+
+  stdout.write('\nWORKTREES\n');
+  for (const repo of goal.repos) {
+    const path = join(target.dir, repo);
+    const status = git(path, ['status', '--short']);
+    if (!status.ok) { stdout.write(`  ${repo}  ${path} — no worktree\n`); continue; }
+    const changed = status.stdout.split('\n').filter((line) => line.trim() !== '').length;
+    const ahead = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
+    const last = git(path, ['log', '-1', '--format=%cI']);
+    const lastDate = last.ok && last.stdout.trim() ? last.stdout.trim() : 'none';
+    stdout.write(`  ${repo}  ${path}  ${changed} changed · ${ahead.ok ? ahead.stdout.trim() : '?'} commits past origin/main · last commit ${lastDate}\n`);
+  }
+  return 0;
+}
+
+/**
+ * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
+ * status · n sessions · the last entry's Nästa`. A goal that does not parse is
+ * listed with its first problems, not skipped.
+ */
+function listGoals(args, ctx) {
+  const { stdout, stderr, home, list, read } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const [programme] = args;
+  if (programme !== undefined && !NAME_RE.test(programme)) {
+    stderr.write(`mc: ${programme} is not a programme name — lower-case letters, digits and hyphens\n`);
+    return 2;
+  }
+  const goals = programsGoals({ home, list, read }).filter((goal) => programme === undefined || goal.programme === programme);
+  if (goals.length === 0) { stdout.write('mc: no goals\n'); return 0; }
+  for (const goal of goals) {
+    const name = `${goal.programme}/${goal.goal}`;
+    if (goal.problems.length) {
+      stdout.write(`${name} · does not parse — ${goal.problems.join('; ')}\n`);
+      continue;
+    }
+    const next = (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
+    stdout.write(`${name} · ${goal.repos.join(',')} · ${goal.status} · ${sessions(goal.log)} sessions · ${next}\n`);
+  }
+  return 0;
+}
+
+/**
+ * The goal a verb names: `<programme>/<goal>` as given, or MC_GOAL's when none
+ * is, as `{ programme, goal, name, dir }`; `{ error }` when neither is a goal name.
+ */
+function goalNamed(arg, { env, home }) {
+  const given = arg ?? env.MC_GOAL;
+  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
+  const parts = given.split('/');
+  if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
+    return { error: `${given} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
+  }
+  const [programme, goal] = parts;
+  return { programme, goal, name: given, dir: goalDirIn(home, programme, goal) };
+}
+
+/** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */
+function gitIn(cwd, args) {
+  const r = runGit(undefined, ['-C', cwd, ...args]);
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** The first flag `scanned` was given that `allowed` does not name, with its dashes, or null. */
+function onlyFlags(scanned, allowed) {
+  for (const [key, value] of Object.entries(scanned.flags)) {
+    const given = Array.isArray(value) ? value.length > 0 : value !== null && value !== false;
+    if (given && !allowed.includes(`--${key}`)) return `--${key}`;
+  }
+  return null;
+}
+
+/** `2026-11-01T20:00:00Z`: the second a goal is created at, as the front matter writes it. */
+function stampSeconds(date) {
+  return date.toISOString().replace(/\.\d{3}Z$/u, 'Z');
+}
+
 export function usage() {
-  return 'usage — mc goal new <programme>/<goal> --phase <n> --repo <repo> --class fast|large --goal <text>... --contract <text>... --out-of-scope <text>...\n'
-    + '        mc goal criterion add <programme>/<goal> --id <id> --criterion <text> --instruction <text> --check <command> --verify premerge|after-integration\n'
-    + '        mc goal send <programme>/<goal> [--after <goal>]\n'
-    + '        mc goal revise <programme>/<goal> --input-file <assignment.json> --expected-revision <n>\n'
-    + '        mc goal diagnose <programme>/<goal> --attempt <id>... --diagnosis <text> --approach <text>|--exception [--expected-revision <n>]\n'
-    + '        mc goal retry <programme>/<goal> [--expected-revision <n>]\n'
-    + '        mc goal show|done <programme>/<goal>\n'
-    + '        mc goal criterion evidence <programme>/<goal> --id <id> --reference <evidence> --expected-revision <n> [--integrated-sha <sha> --outcome passed|failed|unknown]\n'
-    + '        mc goal finish|report|recover|attempt|release <programme>/<goal> [role-specific flags]\n';
+  return [
+    'usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main\n',
+    '        mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|blocked|done]   append a session\'s entry to LOG.md; the goal is MC_GOAL\'s when none is named\n',
+    '        mc goal open|blocked|done [<programme>/<goal>] [--reason "…"]   set the goal\'s status, and log the reason\n',
+    '        mc goal show <programme>/<goal>   the goal, its last three log entries, and each worktree\'s state\n',
+    '        mc goal list [<programme>]   every goal, one line each\n',
+  ].join('');
 }

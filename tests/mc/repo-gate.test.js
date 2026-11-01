@@ -2344,7 +2344,7 @@ describe('a repository that selects by diff', () => {
     });
   });
 
-  describe('opt-in autonomous receipt reuse', () => {
+  describe('opt-in receipt reuse', () => {
     const files = ['tests/a.test.js', 'tests/b.test.js'];
     const commands = [{ packageScript: 'lint', passBaseRef: true }];
     const tree = 'c'.repeat(40);
@@ -2365,8 +2365,8 @@ describe('a repository that selects by diff', () => {
       table.repo.extra_gates = [{ name: 'required', command: 'npm run required' }];
       writeJson(tablePath, table);
       const declaration = declarationFor(fx.repoPath, { root: fx.mcHome }).declaration;
-      const evidence = { repository, run: 'gate-autonomous',
-        sessionRun: 'session-autonomous', goalRevision: 1 };
+      const evidence = { repository, run: 'gate-bound',
+        sessionRun: 'session-bound', goalRevision: 1 };
       const candidate = { repository: evidence.repository, tree, fingerprint: 'raw-content' };
       const receipt = gateReceipt({ measurement: { repo: 'repo', run: evidence.run, session_run: evidence.sessionRun,
         goal_revision: evidence.goalRevision, configuration: gateConfiguration(declaration, declaration.pr_tests_flags),

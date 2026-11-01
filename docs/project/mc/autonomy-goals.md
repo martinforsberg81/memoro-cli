@@ -1,5 +1,10 @@
 # Autonomy goals: a goal is the unit of autonomous work, beside unchanged projects
 
+> **Status: superseded** on 2026-11-01 by
+> [`docs/technical/mc-goals.md`](../../technical/mc-goals.md) and the
+> clarification to ruling 60 of the same date in [`rulings.md`](rulings.md).
+> The machinery this brief describes is removed. Kept unchanged as the record.
+
 System: memoro-cli (the `mc goal` and `mc programme` verbs, the runner, the
 page, the plan role). Worked out with Martin on 2026-10-29 (ruling 60) after
 the seven `autonomy-*` projects of the 2026-10-28 implementation plan landed

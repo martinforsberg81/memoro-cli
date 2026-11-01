@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
-import { productionAutonomy } from '../../src/mc/autonomous-capability.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
+import { parseLog } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, TIDY_KIND, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -5638,45 +5638,200 @@ test('initSource reads apiKeySource off the first init line only', () => {
   assert.equal(initSource(''), null);
 });
 
-/* ------------------------------------------------- the production capability */
+/* ------------------------------------------------------------------ goals */
 
-/** A clock that answers without perl: the real `productionAutonomy`, faked at its one seam. */
-const AWAKE_OK = { platform: 'darwin', read: () => 1000, bootSession: () => 'boot', now: () => 1000 };
+const GOALS = '/w/programs/prog/goals';
+const goalLog = (...stamps) => stamps.map((at) => `## ${at} · claude opus · open\n\nGjort: arbete\n`).join('\n');
+const runnerEntry = (at) => `## ${at} · runner · open\n\nKommentar: session ended without a log entry (exit 1, 3 s)\n`;
 
-test('runLoop: with no v2 plans a capability changes nothing in a round: same queue, order and logs', async () => {
-  const round = async (capability) => {
-    const f = fixture({ plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { c: ready } }, session: okSession() });
-    Object.assign(f.deps, capability);
-    const inner = f.deps.session;
-    f.deps.session = (call) => { if (f.calls.sessions.length >= 2) f.files['/w/runner/STOP'] = ''; return inner(call); };
-    assert.equal(await runLoop({ deps: f.deps }), 0);
-    return { log: f.files['/w/runner/log/runner.log'], order: f.calls.sessions.map((call) => call.cwd), queue: f.files['/w/runner/log/runs.tsv'], git: f.calls.git };
-  };
-  const without = await round({});
-  const built = [];
-  const carried = await round({ productionAutonomy: (options) => { const capability = productionAutonomy(options); built.push(capability); return capability; }, awakeClock: AWAKE_OK });
-  assert.equal(built.length, 1); assert.notEqual(built[0], null, 'the round really carried a capability');
-  assert.ok(without.order.length >= 2, 'the round ran steps');
-  assert.deepEqual(carried, without);
+/**
+ * A fixture holding goals under `prog`: `{ name: { status, log, repos, worktree } }`.
+ * The worktree is there unless `worktree: false`. The router reads a claude plan
+ * with room, so a goal's class has a candidate.
+ */
+function goalFixture(goals, options = {}) {
+  const f = fixture({ capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call), ...options });
+  f.answer = okSession();
+  for (const [name, { status = 'open', log = '', repos = 'memoro', worktree = true }] of Object.entries(goals)) {
+    f.files[`${GOALS}/${name}/GOAL.md`] = `---\nstatus: ${status}\nrepos: ${repos}\nclass: large\ncreated: 2026-11-01T20:00:00Z\n---\n# ${name}\n`;
+    f.files[`${GOALS}/${name}/LOG.md`] = log;
+    if (worktree) f.dirs.add(`${GOALS}/${name}/memoro`);
+  }
+  return f;
+}
+
+/** A session that says its piece, as `mc goal log` does. */
+const logsItself = (f, name, inner = okSession()) => (call) => {
+  const path = `${GOALS}/${name}/LOG.md`;
+  f.files[path] = `${f.files[path]}\n${goalLog('2026-08-29T10:00Z')}`;
+  return inner(call);
+};
+
+test('a lane with no runnable step starts the oldest open goal', async () => {
+  const f = goalFixture({
+    newer: { log: goalLog('2026-08-20T10:00Z', '2026-08-28T10:00Z') },
+    older: { log: goalLog('2026-08-27T10:00Z') },
+  });
+  f.answer = logsItself(f, 'older');
+  const runner = createRunner({ deps: f.deps });
+
+  const r = await runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#2' });
+
+  assert.equal(r.ran, 1);
+  assert.equal(r.name, 'goal:prog/older');
+  assert.equal(r.step, null);
+  const [call] = f.calls.sessions;
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(call.cwd, `${GOALS}/older/memoro`);
+  assert.equal(call.env.MC_GOAL, 'prog/older');
+  assert.equal(call.env.MC_REPO, 'memoro');
+  assert.equal(call.env.MC_WORKAREA, `${GOALS}/older/memoro`);
+  assert.equal(call.env.MC_TOOL, 'claude');
+  assert.ok(call.env.MC_MODEL);
+  assert.ok(call.env.MC_SCRATCH.startsWith('/w/runner/scratch/goal-prog-older-'));
+  assert.equal('MC_STEP' in call.env, false);
+  assert.equal('MC_PROJECT' in call.env, false);
+  assert.match(call.prompt, /`\/w\/programs\/prog\/goals\/older`/u);
+  assert.match(call.prompt, /`goal\/older`/u);
+  assert.equal(call.prompt.includes('\n'), false, 'the prompt is one paragraph');
+  assert.match(call.args.join('\n'), /ROLE goal/u);
+
+  // Its current file stood for as long as the session did, and is gone.
+  const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
+  assert.equal(during.name, 'goal:prog/older');
+  assert.equal(during.step, null);
+  assert.equal(during.kind, 'goal');
+  assert.equal('/w/runner/current-memoro-1.json' in f.files, false);
+
+  const [row] = runRows(f.files);
+  assert.equal(row.name, 'goal:prog/older');
+  assert.equal(row.kind, 'goal');
+  assert.equal(row.class, 'large');
+  assert.equal(row.note, 'success');
+  assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/runner/projects/')), [], 'nothing in the register');
 });
 
-test('runLoop: the capability is built once, and only when merging', async () => {
-  const built = [];
-  const session = okSession();
-  const merging = fixture({ plans: {}, session });
-  merging.deps.productionAutonomy = (options) => { built.push(options.root); return null; };
-  assert.equal(await runLoop({ once: true, deps: merging.deps }), 0);
-  assert.deepEqual(built, ['/w']);
-  assert.equal(await runLoop({ once: true, merge: false, deps: merging.deps }), 0);
-  assert.deepEqual(built, ['/w'], 'a runner that does not merge builds none');
+test('a lane with a runnable step leaves the goals alone', async () => {
+  const f = goalFixture({ waiting: {} }, { plans: { memoro: { alpha: ready } } });
+  f.answer = landsItself(f, 'alpha', 7);
+  const runner = createRunner({ deps: f.deps });
+  const r = await runner.pass({ repo: 'memoro' });
+  assert.equal(r.name, 'alpha');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(`${GOALS}/waiting/LOG.md` in f.files && f.files[`${GOALS}/waiting/LOG.md`], '');
 });
 
-test('runLoop: no capability is said once, after the start line', async () => {
-  const f = fixture({ plans: {}, session: okSession() });
-  Object.assign(f.deps, { productionAutonomy, awakeClock: { platform: 'linux' } });
-  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.equal(log.match(/autonomous capability unavailable/gu).length, 1);
-  assert.match(log, /runner start[^]*not Darwin \(linux\)/u);
+test('a goal of another repository is not this lane\'s', async () => {
+  const f = goalFixture({ theirs: { repos: 'memoro-cli, memoro' } });
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
+});
+
+test('a goal with a current file is not started twice', async () => {
+  const f = goalFixture({ busy: {}, free: { log: goalLog('2026-08-28T10:00Z') } });
+  f.files['/w/runner/current-memoro-1.json'] = JSON.stringify({ name: 'goal:prog/busy', step: null, pid: 4242 });
+  f.answer = logsItself(f, 'free');
+  const runner = createRunner({ deps: f.deps });
+
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/free');
+
+  delete f.files[`${GOALS}/free/GOAL.md`];
+  const r = await runner.pass({ repo: 'memoro' });
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('two lanes picking in one moment do not start one goal twice', async () => {
+  const f = goalFixture({ only: {} });
+  let open = null;
+  f.answer = logsItself(f, 'only', () => new Promise((resolve) => { open = () => resolve(okSession()()); }));
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ repo: 'memoro', lane: 0 });
+  const second = await runner.pass({ repo: 'memoro', lane: 1 });
+  assert.equal(second.ran, 0);
+  for (let wait = 0; !open && wait < 50; wait += 1) await new Promise((resolve) => { setImmediate(resolve); });
+  open();
+  assert.equal((await first).ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a goal session that writes no log entry gets a runner entry, and three in a row block the goal', async () => {
+  const f = goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } });
+  f.answer = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
+  const runner = createRunner({ deps: f.deps });
+  const entries = () => parseLog(f.files[`${GOALS}/mute/LOG.md`]);
+
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(entries().length, 2);
+  assert.equal(entries()[1].tool, 'runner');
+  assert.equal(entries()[1].status, 'open');
+  assert.match(entries()[1].comment, /^session ended without a log entry \(exit 1, 0 s\)$/u);
+  assert.match(f.files[`${GOALS}/mute/GOAL.md`], /^status: open$/mu);
+  assert.match(runRows(f.files)[0].note, /,no-log$/u);
+
+  await runner.pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/mute/GOAL.md`], /^status: open$/mu, 'two are not three');
+  await runner.pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/mute/GOAL.md`], /^status: blocked$/mu);
+  assert.equal(entries().at(-1).status, 'blocked');
+  assert.equal(entries().at(-1).comment, 'three sessions ended without a word — see the logs under runner/log');
+
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(runRows(f.files).length, 3);
+});
+
+test('a session with a word between runner entries keeps the goal open', async () => {
+  const log = [runnerEntry('2026-08-20T10:00Z'), goalLog('2026-08-21T10:00Z'), runnerEntry('2026-08-22T10:00Z')].join('\n');
+  const f = goalFixture({ goal: { log } });
+  f.answer = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/goal/GOAL.md`], /^status: open$/mu);
+  assert.equal(parseLog(f.files[`${GOALS}/goal/LOG.md`]).length, 4);
+});
+
+test('a blocked or done goal is never started', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked' }, finished: { status: 'done' } });
+  f.files[`${GOALS}/broken/GOAL.md`] = 'no front matter\n';
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+});
+
+test('a goal that has lost its worktree gets it back on its branch, and says so', async () => {
+  const f = goalFixture({ lost: { worktree: false } });
+  f.answer = logsItself(f, 'lost');
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const add = f.calls.git.find(([cwd, ...args]) => cwd === '/home/memoro' && args[0] === 'worktree' && args[1] === 'add');
+  assert.ok(add.includes(`${GOALS}/lost/memoro`));
+  assert.ok(add.includes('goal/lost'));
+  assert.ok(f.log.some((line) => /goal:prog\/lost: .* is not a worktree — creating it on goal\/lost/u.test(line)));
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a goal whose worktree was deleted is pruned from git before its branch is added again', async () => {
+  const f = goalFixture({ lost: { worktree: false } });
+  f.answer = logsItself(f, 'lost');
+  const { git } = f.deps;
+  // The branch outlives the directory, and git still has the worktree registered.
+  f.deps.git = (cwd, args) => (args[0] === 'show-ref' ? { ok: true, stdout: '', stderr: '' } : git(cwd, args));
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const at = (verb) => f.calls.git.findIndex(([cwd, ...args]) => cwd === '/home/memoro' && args[0] === 'worktree' && args[1] === verb);
+  assert.ok(at('prune') >= 0, 'pruned');
+  assert.ok(at('prune') < at('add'), 'before the add');
+  assert.equal(f.calls.git[at('add')].at(-1), 'goal/lost');
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a goal keeps no slot once its session has ended', async () => {
+  const f = goalFixture({ capped: {} }, { plans: { memoro: { alpha: ready } } });
+  f.deps.laneCount = () => ({ per_repo: 2, total: 1 });
+  // The first pick has no step (alpha is held in this pass), so the goal runs;
+  // the second has one, and takes the machine's one slot without a wait.
+  f.answer = logsItself(f, 'capped');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro', passed: ['alpha'] })).name, 'goal:prog/capped');
+  f.answer = landsItself(f, 'alpha', 7);
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 1 })).name, 'alpha');
+  assert.equal(f.log.some((line) => /waiting for a lane/u.test(line)), false);
 });

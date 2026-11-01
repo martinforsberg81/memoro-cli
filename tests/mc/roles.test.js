@@ -216,7 +216,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'helper', 'intake', 'review', 'step', 'worker']) {
+    for (const name of ['brief', 'goal', 'helper', 'intake', 'review', 'step', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -370,20 +370,12 @@ describe('reserved names', () => {
 });
 
 describe('the role catalogue', () => {
-  it('ships the autonomous instructions as a step flavor, not another agent role', () => {
-    const instructions = instructionsFor('codex', '@include _step-autonomous.md');
-    assert.ok(instructions.includes('autonomous flavor of step'));
-    assert.ok(instructions.includes('Never queue merge yourself'));
-    assert.ok(!instructions.includes('@include'));
-    assert.ok(!instructions.includes('steps[0]'));
-  });
-
   // A role that goes is removed on purpose, and one that arrives is added on
   // purpose: `repair.md` went with ruling 21 and nothing would have said so
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-autonomous.md', '_plan-writing.md', '_review-autonomous.md', '_session-work.md', '_step-autonomous.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'goal.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
     ]);
   });
 });

@@ -94,6 +94,15 @@ mc merge    → the gate, then the squash
 - **`status: ready` is what starts the runner on a plan.** Nothing else is a
   queue. Do not set it on a plan that is not ready to be executed unattended.
 
+Beside projects there are **goals**. A goal is `GOAL.md` (its brief and its
+`status`), `LOG.md` (one entry per session) and a worktree per repository on
+`goal/<goal>`, under `~/mc/programs/<programme>/goals/<goal>/`. Anyone may work
+in the worktree. A session on a goal does the work, commits, pushes its pull
+request with `mc publish --no-merge`, and ends with `mc goal log` saying what it
+did and what comes next. A goal has no steps, register or merge door: `mc merge`
+stays a person's or a plan session's act. See
+[`docs/technical/mc-goals.md`](technical/mc-goals.md).
+
 ## Working on this codebase as a coding agent
 
 For focused work, inspect, implement, verify, and publish directly. For larger

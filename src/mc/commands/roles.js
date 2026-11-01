@@ -48,9 +48,10 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'check') return check(opts, { stdout, stderr, deps });
 
   if (opts.verb === 'show') {
-    const role = readRole(opts.name);
+    // A catalogue's own file first, then the role mc ships, as `check` and a launch find it.
+    const role = readRole(opts.name) || readCanonRole(opts.name);
     if (!role) {
-      stderr.write(`mc: no role "${opts.name}" — looked for ${rolesDir()}/${opts.name}.md\n`);
+      stderr.write(`mc: no role "${opts.name}" — looked for ${rolesDir()}/${opts.name}.md and ${canonRolesDir()}\n`);
       return 1;
     }
     if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, role }, null, 2)}\n`); return 0; }

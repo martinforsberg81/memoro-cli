@@ -40,12 +40,7 @@ let ended = false;
 log('mc.start', { ...shape, cwd: process.cwd(), holder: await holderName() });
 
 try {
-  const reviewRefusal = ['review', 'plan'].includes(process.env.MC_AUTONOMOUS_ROLE)
-    ? (await import('./mc/autonomous-review-guard.js')).reviewCommandRefusal(argv) : null;
-  if (reviewRefusal) {
-    console.error(`mc: ${reviewRefusal}`);
-    process.exitCode = 1;
-  } else if (first === '--help' || first === '-h' || first === 'help') {
+  if (first === '--help' || first === '-h' || first === 'help') {
     const { HELP_TEXT } = await import('./mc/help-text.js');
     console.log(HELP_TEXT);
     process.exitCode = 0;
