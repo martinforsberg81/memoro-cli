@@ -22,7 +22,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { profileArgs } from './portrait.js';
 import { gateRedFiles, redHandoff, redLines } from './merge-red.js';
 import { readEntry } from './register.js';
@@ -202,7 +202,7 @@ function realSession({ bin, args, cwd, timeoutMs, env, onPid = () => {} }) {
 }
 
 const realGit = async (cwd, args) => {
-  const r = await runTool('git', ['-C', cwd, ...args]);
+  const r = await runGitAsync(undefined, ['-C', cwd, ...args]);
   return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
 };
 

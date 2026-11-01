@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, utimesSync } from 'node:f
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { serversUnder, stopServer } from './dev-servers.js';
+import { run as runGit } from './git.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { actionGap, errorLines, reportLines, runCapture } from './shot.js';
@@ -38,7 +39,7 @@ const OPTIONAL_FIELDS = ['background_color', 'color'];
  * pictures would be the same picture.
  */
 export function compareTree(worktree, ref, deps = {}) {
-  const git = deps.git || ((args) => spawnSync('git', args, { encoding: 'utf8' }));
+  const git = deps.git || ((args) => runGit(undefined, args));
   const root = deps.root || join(mcHome(deps.env || process.env), 'compare');
   const sha = String(git(['-C', worktree, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).stdout || '').trim();
   if (!sha) return { ok: false, code: 2, error: `no commit ${ref} in ${worktree} (git fetch origin?)` };

@@ -5,9 +5,9 @@
  *                                directory, its checkout, its linked worktrees
  *   mc repos [--json]           the same, as one object
  */
-import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
+import { run as runGit } from '../git.js';
 import { tildePath } from '../layout-migrate.js';
 import { parseWorktrees } from '../project-prs.js';
 import { defaultRepos } from '../repos.js';
@@ -36,10 +36,11 @@ export async function run(argv, deps = {}) {
 /** Linked worktrees of a repository: every worktree but its main one. Null when git cannot say. */
 function linkedWorktrees(repo) {
   try {
-    const listed = execFileSync('git', repo.bare
+    const r = runGit(undefined, repo.bare
       ? ['--git-dir', repo.git, 'worktree', 'list', '--porcelain']
-      : ['-C', repo.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    return Math.max(parseWorktrees(listed).length - 1, 0);
+      : ['-C', repo.path, 'worktree', 'list', '--porcelain'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (r.error || r.status !== 0) return null;
+    return Math.max(parseWorktrees(String(r.stdout || '')).length - 1, 0);
   } catch { return null; }
 }
 

@@ -20,7 +20,8 @@ import { appendFileSync, mkdirSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import { runShell, runTool } from './child-async.js';
+import { runShell } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { declarationFor } from './repo-gate-table.js';
 import { realTests, selectFiles } from './repo-gate.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
@@ -53,7 +54,7 @@ export async function measureDocs({
   const controller = new AbortController();
   const interrupted = () => controller.abort();
   const io = {
-    git: deps.git ?? ((args, { cwd }) => runTool('git', args, { cwd, env })),
+    git: deps.git ?? ((args, { cwd }) => runGitAsync(cwd, args, { env })),
     shell: deps.shell ?? ((command, { cwd }) => runShell(command, { cwd, env, signal: controller.signal, timeoutMs: 60 * 60_000 })),
     declaration: deps.declaration ?? declarationFor,
     select: deps.select ?? selectFiles,

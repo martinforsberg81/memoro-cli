@@ -34,6 +34,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { getPackageVersion } from '../../lib/version.js';
+import { run as runGit } from '../git.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import { PRS_STALE_SECONDS } from '../page-cache.js';
 import { collectPage } from '../page-collect.js';
@@ -143,7 +144,7 @@ export async function run(argv, deps = {}) {
 }
 
 /** The commit of the checkout mc runs from, or null: not a checkout, or git did not answer. */
-export function codeCommit({ checkout = mcCheckout(), spawn = spawnSync } = {}) {
+export function codeCommit({ checkout = mcCheckout(), spawn = (_git, args) => runGit(undefined, args) } = {}) {
   if (!checkout) return null;
   const out = spawn('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
   return out.status === 0 ? String(out.stdout).trim() || null : null;

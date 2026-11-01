@@ -25,6 +25,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
+import { run as runGit } from './git.js';
 import {
   PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, areaKindOf, layoutVersion, programsHome, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
 } from './paths.js';
@@ -377,7 +378,15 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   else if (exists) args.push(target, branch);
   else args.push('-b', branch, target, ...(base.ref ? [base.ref] : []));
   try {
-    execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // What `execFileSync` threw: an error carrying `status` and `stderr`,
+    // which `whyItFailed` reads.
+    const r = runGit(undefined, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    if (r.error || r.status !== 0) {
+      const failure = r.error || new Error(`Command failed: git ${args.join(' ')}\n${r.stderr || ''}`);
+      failure.status = r.status;
+      failure.stderr = r.stderr;
+      throw failure;
+    }
   } catch (error) {
     if (madeTheArea) dropEmptyArea(workAreaPath(name, env));
     return { ok: false, reason: whyItFailed(error), path: target };
@@ -680,14 +689,17 @@ function repoName(repo) {
 
 function git(cwd, args) {
   try {
-    return execFileSync('git', ['-C', cwd, ...args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim() || null;
+    const r = runGit(undefined, ['-C', cwd, ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (r.error || r.status !== 0) return null;
+    return String(r.stdout || '').trim() || null;
   } catch { return null; }
 }
 
 function run(args) {
-  try { execFileSync('git', args, { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch { return false; }
+  try {
+    const r = runGit(undefined, args, { stdio: 'ignore' });
+    return !r.error && r.status === 0;
+  } catch { return false; }
 }
 
 /**

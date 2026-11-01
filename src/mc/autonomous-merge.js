@@ -4,7 +4,7 @@ import { mainIncidentHold } from './programme-recovery.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { mcHome } from './paths.js';
 import { PLAN_FILE } from './plan-source.js';
 import { readAutonomousState, readProgrammeState, currentAutonomousEvidence } from './autonomous-state.js';
@@ -114,7 +114,7 @@ export async function autonomousAdmission({ root, repoPath, pr, owner, view, env
     requireThat(view?.number === Number(pr) && view.state === 'OPEN' && view.headRefName === owner.branch
       && view.headRefOid === p.head && view.baseRefName === 'main' && (head === null || head === p.head),
     'published autonomous PR head or base moved or is unknown');
-    const ask = git || ((args, options) => runTool('git', args, { ...options, env }));
+    const ask = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
     const command = async args => {
       const result = await ask(args, { cwd: repoPath });
       requireThat(result?.status === 0 || result?.ok === true, `autonomous merge cannot read git ${args[0]}`);

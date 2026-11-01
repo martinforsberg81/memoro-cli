@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { run as runGit } from '../mc/git.js';
 
 export const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex');
 export const CODEX_SESSIONS_DIR = join(CODEX_HOME, 'sessions');
@@ -10,10 +11,9 @@ export const CODEX_SESSIONS_DIR = join(CODEX_HOME, 'sessions');
 export function resolveWorkspaceRoot(cwd = process.cwd()) {
   if (!cwd) return process.cwd();
   try {
-    const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const r = runGit(undefined, ['-C', cwd, 'rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (r.error || r.status !== 0) return cwd;
+    const out = String(r.stdout || '').trim();
     return out || cwd;
   } catch {
     return cwd;

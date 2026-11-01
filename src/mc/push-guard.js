@@ -32,6 +32,8 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
+import { run as runGit } from './git.js';
+
 export const MARKER = '# mc push-guard (D-0164) — replaced by mc, never by hand';
 
 /**
@@ -243,7 +245,7 @@ function ago(iso, now) {
 }
 
 function defaultGit(args) {
-  const r = spawnSync('git', args, { encoding: 'utf8' });
+  const r = runGit(undefined, args);
   return r.status === 0 ? (r.stdout.trim() || '') : null;
 }
 

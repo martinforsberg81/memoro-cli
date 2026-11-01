@@ -38,6 +38,7 @@ import { reviewCommandRefusal } from '../autonomous-review-guard.js';
  */
 import { spawnSync } from 'node:child_process';
 
+import { run as runGit } from '../git.js';
 import { currentIndex, listEntries, parseStepEnv, readEntry, updateStep } from '../register.js';
 import { workRoot } from '../paths.js';
 import { defaultRepos, listPlans } from '../brief-collect.js';
@@ -266,7 +267,7 @@ function waitContext(entry, nowMs, deps, env) {
     stepsOf: () => entry.steps,
     deploys: deps.deploys ? deps.deploys() : readDeploys(env),
     contains: deps.contains || ((sha, rowSha) => !!path
-      && spawnSync('git', ['merge-base', '--is-ancestor', sha, rowSha], { cwd: path, stdio: 'ignore' }).status === 0),
+      && runGit(path, ['merge-base', '--is-ancestor', sha, rowSha], { stdio: 'ignore' }).status === 0),
   };
 }
 
@@ -309,7 +310,7 @@ function closePr(repo, pr, branch, comment, env) {
   if (!path) return false;
   const closed = spawnSync('gh', ['pr', 'close', String(pr), '--comment', comment], { cwd: path, encoding: 'utf8', env });
   if (closed.status !== 0) return false;
-  spawnSync('git', ['push', '--quiet', 'origin', '--delete', branch], { cwd: path, encoding: 'utf8', env });
+  runGit(path, ['push', '--quiet', 'origin', '--delete', branch], { env });
   return true;
 }
 

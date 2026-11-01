@@ -44,6 +44,7 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos } from './brief-collect.js';
+import { run as runGit } from './git.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
 import { closeoutPath } from './closeout.js';
@@ -194,9 +195,10 @@ export function areaOf(cwd, root) {
 
 function realGit(cwd, args) {
   try {
-    return execFileSync('git', ['-C', cwd, ...args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    const r = runGit(undefined, ['-C', cwd, ...args], {
+      stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
     });
+    return r.error || r.status !== 0 ? null : r.stdout;
   } catch { return null; }
 }
 
