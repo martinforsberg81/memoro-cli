@@ -32,7 +32,7 @@ describe('the running round, as a sentence', () => {
     const root = home();
     try {
       const repoPath = '/work/memoro-cli';
-      takeGateLock({ repo: repoFileSlug(repoPath), pr: 485, mode: 'check', root });
+      takeGateLock({ repo: repoFileSlug(repoPath), pr: 485, mode: 'check', root, lane: 'memoro-cli' });
       const running = runningMerge({ root, repos: [{ name: 'memoro-cli', path: repoPath }] });
       assert.equal(running.repo, 'memoro-cli');
       assert.equal(running.pr, 485);
@@ -45,7 +45,7 @@ describe('the running round, as a sentence', () => {
   it('a slug matching nothing in the list falls back to the slug itself', () => {
     const root = home();
     try {
-      takeGateLock({ repo: 'unknown-deadbeef', pr: 1, root });
+      takeGateLock({ repo: 'unknown-deadbeef', pr: 1, root, lane: 'unknown' });
       const running = runningMerge({ root, repos: [{ name: 'memoro', path: '/work/memoro' }] });
       assert.equal(running.repo, 'unknown-deadbeef');
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -55,7 +55,7 @@ describe('the running round, as a sentence', () => {
     const root = home();
     try {
       const repoPath = '/work/memoro';
-      writeFileSync(join(root, 'gate-running.json'), JSON.stringify({
+      writeFileSync(join(root, 'gate-running-memoro.json'), JSON.stringify({
         pid: process.pid, repo: 'memoro-deadbeef', pr: 9, mode: 'merge', since: '2026-09-12T09:00:00.000Z', phase: 'running the suite', phase_at: '2026-09-12T09:00:05.000Z',
       }));
       const running = runningMerge({
@@ -73,7 +73,7 @@ describe('the running round, as a sentence', () => {
       claimLease({
         repoPath, holder: { name: 'martin@laptop', kind: 'shell' }, errand: 'reviewing #485', root,
       });
-      takeGateLock({ repo: repoFileSlug(repoPath), pr: 485, root });
+      takeGateLock({ repo: repoFileSlug(repoPath), pr: 485, root, lane: 'memoro-cli' });
       const running = runningMerge({ root, repos: [{ name: 'memoro-cli', path: repoPath }] });
       assert.equal(running.holder, 'martin@laptop');
       assert.equal(running.errand, 'reviewing #485');

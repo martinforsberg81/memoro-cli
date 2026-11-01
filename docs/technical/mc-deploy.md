@@ -204,7 +204,7 @@ where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
 kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
 when the first is done.
 
-### The heavy lane is the deploy's while it builds (2026-10-18)
+### Memoro's lane is the deploy's while it builds (2026-10-18)
 
 No repository lease, but the machine's heavy gate lock: once the rounds in
 flight are done (`waitForGate`), the deployer takes `gate-running.json` with

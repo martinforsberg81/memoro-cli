@@ -221,10 +221,10 @@ for (const tool of ['codex', 'claude']) it(`${tool}: ignored durable closure and
   assert.equal(projectSessionCheckpoint(fx.root, fx.programme, fx.project, 'status', {}, { actor: builder, revision: durable.revision }).next_action, 'stop-session');
 });
 
-it('gate reconciliation holds live/unknown detached children and preserves a successor lane owner', t => {
+it('gate reconciliation holds live/unknown detached children and never touches a lane', t => {
   const work = repo(t); const root = join(work.directory, 'mc'); mkdirSync(root);
   const request = join(work.directory, 'gate.request'); const log = join(work.directory, 'gate.log'); const lockPath = join(work.gitDir, 'mc-gate.json');
-  writeFileSync(request, JSON.stringify({ reservation: { root, lane: 'light' } }));
+  writeFileSync(request, JSON.stringify({ gate: { root, repo: 'repo' } }));
   const lock = { pid: 2147483000, request, log };
   writeFileSync(lockPath, JSON.stringify(lock));
   assert.equal(reconcileSessionGate(work.gitDir, { alive: () => true }).reason, 'gate-worker-alive');
@@ -232,11 +232,11 @@ it('gate reconciliation holds live/unknown detached children and preserves a suc
   assert.ok(existsSync(lockPath));
   writeFileSync(`${request}.result`, JSON.stringify({ ok: true, code: 0 })); writeFileSync(`${log}.exit`, '\n');
   assert.equal(reconcileSessionGate(work.gitDir).reason, 'gate-children-unknown', 'an empty exit record is not exit zero');
-  assert.equal(takeGateLock({ root, lane: 'light', pid: process.pid }).ok, true);
-  const claim = readClaim(`${gateLockPath(root, 'light')}.claim`);
+  assert.equal(takeGateLock({ root, lane: 'repo', pid: process.pid }).ok, true);
+  const claim = readClaim(`${gateLockPath(root, 'repo')}.claim`);
   writeFileSync(`${request}.result`, JSON.stringify({ ok: false, code: 1 })); writeFileSync(`${log}.exit`, '1\n');
   assert.equal(reconcileSessionGate(work.gitDir).ok, true); assert.equal(existsSync(lockPath), false);
-  assert.equal(readClaim(`${gateLockPath(root, 'light')}.claim`).marker, claim.marker);
+  assert.equal(readClaim(`${gateLockPath(root, 'repo')}.claim`).marker, claim.marker);
 });
 it('an unobserved predecessor or missing snapshot refuses another builder without signalling it', t => {
   const work = repo(t); const path = join(work.gitDir, 'mc-autonomous-session.json');

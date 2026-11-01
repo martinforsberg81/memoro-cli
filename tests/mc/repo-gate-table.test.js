@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  SHIPPED, UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath,
+  SHIPPED, UNKNOWN, declarationFor, gateLaneOf, gateLanes, repoDeclarationPath, tablePath,
 } from '../../src/mc/repo-gate-table.js';
 import { gateRoot } from '../../src/mc/repo-gate.js';
 import { workDepsPath } from '../../src/mc/paths.js';
@@ -68,29 +68,20 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
   });
 });
 
-describe('gate lanes (ruling 34)', () => {
-  it('memoro-cli is light and says why; a repository that declares nothing is heavy', () => {
+describe('a lane per repository', () => {
+  it('the lane is the name of the repository', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-lane-'));
     try {
-      assert.equal(SHIPPED['memoro-cli'].gate_lane, 'light');
-      assert.ok(SHIPPED['memoro-cli'].gate_lane_why);
-      assert.equal(declarationFor('/x/memoro-cli', { root }).declaration.gate_lane, 'light');
-      assert.equal(declarationFor('/x/memoro', { root }).declaration.gate_lane, 'heavy');
-      assert.equal(gateLaneOf('memoro-cli', { root }), 'light');
-      assert.equal(gateLaneOf('/repos/memoro', { root }), 'heavy');
-      assert.equal(gateLaneOf('nobody-knows', { root }), 'heavy');
+      assert.equal(gateLaneOf('memoro-cli'), 'memoro-cli');
+      assert.equal(gateLaneOf('/repos/memoro'), 'memoro');
+      assert.equal(gateLaneOf('/repos/memoro.git'), 'memoro', 'a bare clone is the same repository');
+      assert.equal(gateLaneOf('nobody-knows'), 'nobody-knows');
+      assert.ok(gateLanes({ root }).includes('memoro-cli'));
+      assert.equal('gate_lane' in SHIPPED['memoro-cli'], false);
+      assert.equal('gate_lane' in declarationFor('/x/memoro-cli', { root }).declaration, false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a lane mc does not have is a declaration error, not a quiet heavy', () => {
-    const root = mkdtempSync(join(tmpdir(), 'mc-lane-'));
-    try {
-      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({ 'memoro-cli': { ...SHIPPED['memoro-cli'], gate_lane: 'fast' } }));
-      const out = declarationFor('/x/memoro-cli', { root });
-      assert.equal(out.ok, false);
-      assert.match(out.reason, /gate_lane "fast"/u);
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
 });
 
 /** A repository directory with the manifest a test wants it to have. */
@@ -411,8 +402,6 @@ describe('a repository that declares itself in .mc/test.json', () => {
         affected: null,
         serial_paths: null,
         deps_notes: [],
-        gate_lane: SHIPPED['memoro-cli'].gate_lane,
-        gate_lane_why: SHIPPED['memoro-cli'].gate_lane_why,
         retry_once: { files: [], gates: [] },
         retry_once_why: null,
       });

@@ -125,7 +125,7 @@ command goes through one `step` that prints `▸ <label>`, streams the output to
 the log, keeps the last 64 KB for the failure note, and stops a command past
 its timeout with SIGTERM and then SIGKILL.
 
-(a) The heavy lane, held (below).
+(a) memoro's lane, held (below).
 
 (b) mc's own worktree of memoro at `~/.memoro/mc/build/memoro`, put on exactly
 the commit: `worktree add --detach`, or `checkout --detach --force` and
@@ -217,7 +217,7 @@ production ran, the artifact, the delivery id and the pid. The last
 `uploaded` TestFlight row, or `seed` row, is the binary people have, and it
 is what the bare question compares against.
 
-## The heavy lane
+## Memoro's lane
 
 The builder holds the heavy gate lock as a deploy does (`holdHeavyLane`
 from `commands/deploy.js`, with `mode: 'ios-build'`). It first waits for the

@@ -261,7 +261,7 @@ for (const mode of ['ignores-closure', 'telemetry-lost']) test(`a real process t
 
 test('a long valid gate keeps its lane and its builder: no second builder, no recovery, no early stop', async t => {
   const w = await opened(t);
-  const lane = { root: w.env.MC_HOME, lane: 'light', repo: 'memoro-cli', pid: process.pid };
+  const lane = { root: w.env.MC_HOME, lane: 'memoro-cli', repo: 'memoro-cli', pid: process.pid };
   const seen = {};
   w.gateHook = async call => {
     // The gate worker holds its lane reservation and its checkout's gate lock.

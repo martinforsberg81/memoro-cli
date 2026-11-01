@@ -33,8 +33,8 @@ const lock = (_root, fn) => fn();
 // One loop for every repository: the tests of order and batching across
 // repositories predate the lanes (ruling 34), which land memoro and
 // memoro-cli side by side; `lanes (merge-throughput step 2)` tests those.
-const ONE_LANE = { lanes: ['heavy'], laneOf: () => 'heavy' };
-const LANE_OF = (job) => (job.repo === 'memoro-cli' ? 'light' : 'heavy');
+const ONE_LANE = { lanes: ['memoro'], laneOf: () => 'memoro' };
+const LANE_OF = (job) => job.repo;
 const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(mergesPath(root), 'utf8') : null);
 
 function register(stepOver = {}) {
@@ -1023,18 +1023,18 @@ describe('lanes (merge-throughput step 2)', () => {
       },
     });
     assert.deepEqual(events, ['start memoro #1', 'start memoro-cli #2', 'answered memoro-cli #2', 'end memoro #1', 'start memoro #3']);
-    assert.deepEqual(lanesOf, [[1, 'heavy'], [2, 'light'], [3, 'heavy']]);
+    assert.deepEqual(lanesOf, [[1, 'memoro'], [2, 'memoro-cli'], [3, 'memoro']]);
     assert.deepEqual(queue(), []);
   });
 
   it('a job waits only on a round in its own lane', async () => {
     register();
     const lanesAsked = [];
-    const heavyBusy = ({ lane }) => { lanesAsked.push(lane); return lane === 'heavy' ? { pid: 9, repo: 'memoro', pr: 1, lane } : null; };
-    const m = machine([green], { readRunningRound: heavyBusy, lane: 'light' });
+    const memoroBusy = ({ lane }) => { lanesAsked.push(lane); return lane === 'memoro' ? { pid: 9, repo: 'memoro', pr: 1, lane } : null; };
+    const m = machine([green], { readRunningRound: memoroBusy, lane: 'memoro-cli' });
     await landJob(JOB, m.deps);
     assert.equal(m.rounds.length, 1);
-    assert.deepEqual([...new Set(lanesAsked)], ['light']);
+    assert.deepEqual([...new Set(lanesAsked)], ['memoro-cli']);
     assert.equal(m.said.some((line) => /waiting behind/u.test(line)), false, 'a heavy round does not hold a light job');
   });
 
@@ -1042,11 +1042,11 @@ describe('lanes (merge-throughput step 2)', () => {
     register();
     let polls = 0;
     const m = machine([green], {
-      lane: 'light',
-      readRunningRound: ({ lane }) => (lane === 'light' && polls++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 5, lane } : null),
+      lane: 'memoro-cli',
+      readRunningRound: ({ lane }) => (lane === 'memoro-cli' && polls++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 5, lane } : null),
     });
     await landJob(JOB, m.deps);
-    assert.ok(m.said.some((line) => /waiting behind another gate round in the light lane \(memoro-cli #5, pid 9\)/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /waiting behind another gate round in the memoro-cli lane \(memoro-cli #5, pid 9\)/u.test(line)), m.said.join('\n'));
   });
 
   it('asked to stop, each lane leaves between its jobs and the merger leaves once both have', async () => {
@@ -1559,7 +1559,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
           lightGoneAtHeavyEnd = !queue().some((e) => e.pr === 2);
           events.push('heavy end');
         } else {
-          events.push('light');
+          events.push('memoro-cli');
         }
         return green;
       },
@@ -1574,10 +1574,10 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
       land: landerFor({ ...m.deps, say }),
     });
     assert.equal(code, 0);
-    assert.deepEqual(events, ['heavy start', 'light', 'heavy end']);
+    assert.deepEqual(events, ['heavy start', 'memoro-cli', 'heavy end']);
     assert.equal(lightGoneAtHeavyEnd, true, 'the light job was answered and dequeued before the heavy round resolved');
     assert.equal(lightInTime, true, 'the light job was answered while the heavy round was held open');
-    assert.deepEqual(lanesAsked, ['heavy', 'light'], 'each job reads the round in its own lane');
+    assert.deepEqual(lanesAsked, ['memoro', 'memoro-cli'], 'each job reads the round in its own lane');
     assert.deepEqual(signals, [false, false], 'the gate installs no signal handler in the merger');
     assert.deepEqual(queue(), []);
   });
@@ -1596,7 +1596,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
       if (/^memoro-cli #671: merged/u.test(line)) answeredAt = Date.now();
     };
     const code = await serve({
-      root, lock, take, release, laneOf: (job) => (job.repo === 'memoro' ? 'heavy' : 'light'), stopping: () => stop, say, now: m.deps.now,
+      root, lock, take, release, laneOf: () => 'memoro-cli', stopping: () => stop, say, now: m.deps.now,
       sleep: () => pause(5),
       land: landerFor({ ...m.deps, say }),
     });

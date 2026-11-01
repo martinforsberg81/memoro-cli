@@ -8,7 +8,7 @@ import { it } from 'node:test';
 import { runSessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
 import { run as gateCommand } from '../../src/mc/commands/gate.js';
 import { readGreenReceipt } from '../../src/mc/gate-greens.js';
-import { gateLockPath, releaseGateLock, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
+import { runningRounds } from '../../src/mc/gate-lock.js';
 import { realTests } from '../../src/mc/repo-gate.js';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
@@ -17,7 +17,7 @@ const alive = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
 // Liveness bounds, not speed limits: about 6 s idle, but the merger runs this
-// beside the other lane's round, where every git and node spawn is slower.
+// beside another repository's round, where every git and node spawn is slower.
 const BOUNDARY_MS = 60_000;
 async function until(check) {
   const deadline = Date.now() + BOUNDARY_MS;
@@ -27,7 +27,7 @@ async function until(check) {
   }
 }
 
-for (const interrupt of [false, true]) it(`a detached worker ${interrupt ? 'interrupts its children' : 'survives the command exit'} before releasing its lane`, { timeout: 4 * BOUNDARY_MS }, async () => {
+for (const interrupt of [false, true]) it(`a detached worker ${interrupt ? 'interrupts its children' : 'survives the command exit'} before it ends`, { timeout: 4 * BOUNDARY_MS }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'mc-worker-recovery-'));
   const cwd = join(root, 'repo');
   const state = join(root, 'state');
@@ -57,14 +57,12 @@ test('controlled completion', async () => {
     git('commit', '-qm', 'initial');
     git('update-ref', 'refs/remotes/origin/main', 'HEAD');
     writeFileSync(join(cwd, 'work.txt'), 'uncommitted change measured by the gate');
-    const reservation = { root: state, lane: 'light', repo: 'repo' };
     const selection = { files: ['a.test.js'], commands: [], resourceClasses: { 'a.test.js': 'heavy' } };
     const select = `${JSON.stringify(process.execPath)} -e 'console.log(${JSON.stringify(JSON.stringify(selection))})' --`;
-    assert.equal(takeGateLock(reservation).ok, true, 'another owner initially holds the lane');
     const declaration = { select, pr_tests_flags: ['--no-warnings'] };
     const launcher = `import { run } from ${JSON.stringify(new URL('../../src/mc/commands/gate.js', import.meta.url).href)};
 process.exitCode = await run(['--budget', '0.02'], {
-  cwd: ${JSON.stringify(cwd)}, declaration: () => ({ ok: true, declaration: ${JSON.stringify(declaration)} }), lane: () => 'light',
+  cwd: ${JSON.stringify(cwd)}, declaration: () => ({ ok: true, declaration: ${JSON.stringify(declaration)} }),
 });`;
     const command = spawnSync(process.execPath, ['--input-type=module', '-e', launcher], {
       cwd, encoding: 'utf8', timeout: BOUNDARY_MS,
@@ -80,14 +78,9 @@ process.exitCode = await run(['--budget', '0.02'], {
     let output = '';
     const deps = { cwd, env: { ...process.env, MC_HOME: state }, stdout: { write: (s) => { output += s; } },
       stderr: { write: (s) => { output += s; } } };
-    await until(() => readFileSync(log, 'utf8').includes('waiting for'));
-    assert.equal(await gateCommand(['--wait', '--budget', '0.02'], deps), 3);
-    assert.match(output, /still waiting for the light lane/u);
-    assert.equal(existsSync(ready), false);
-    assert.equal(releaseGateLock(reservation), true);
     await until(() => existsSync(ready));
     const testPid = Number(readFileSync(ready, 'utf8'));
-    assert.equal(runningRound({ root: state, lane: 'light' }).pid, workerPid, 'the worker, not the command, owns the lane');
+    assert.deepEqual(Object.values(runningRounds({ root: state })).filter(Boolean), [], 'a session gate holds no lane');
     assert.equal(existsSync(join(state, 'gate-evidence', `${measurement.run}.json`)), false);
     assert.equal(await gateCommand(['--wait', '--budget', '0.02'], deps), 3);
     assert.equal(existsSync(lockPath), true);
@@ -98,8 +91,6 @@ process.exitCode = await run(['--budget', '0.02'], {
     assert.equal(Number(readFileSync(`${log}.exit`, 'utf8')), interrupt ? 1 : 0);
     await until(() => !alive(workerPid));
     await until(() => !alive(testPid));
-    assert.equal(runningRound({ root: state, lane: 'light' }), null);
-    assert.equal(existsSync(`${gateLockPath(state, 'light')}.claim`), false);
     output = '';
     assert.equal(await gateCommand(['--wait', '--json'], deps), interrupt ? 1 : 0);
     const result = JSON.parse(output);
@@ -115,8 +106,6 @@ process.exitCode = await run(['--budget', '0.02'], {
       assert.deepEqual(readGreenReceipt(context), receipt, 'a subsequent session discovers the same receipt');
       assert.equal(readFileSync(result.evidence.path, 'utf8'), bytes);
     }
-    assert.equal(takeGateLock(reservation).ok, true, 'the next run can reserve the released resource');
-    releaseGateLock(reservation);
   } finally {
     if (workerPid && alive(workerPid)) { process.kill(workerPid, 'SIGTERM'); await until(() => !alive(workerPid)); }
     rmSync(root, { recursive: true, force: true });
@@ -129,7 +118,7 @@ it('receipt measurement preserves resource batching, lane counts and execution o
   const batches = [];
   let saved;
   const result = await runSessionGate({ cwd: '/repo', select: 'selector', flags: ['--no-warnings'],
-    reservation: { root: '/state' }, measurement: { repo: 'repo', run: 'resources', base: 'b'.repeat(40), candidate } }, {
+    gate: { root: '/state', repo: 'repo' }, measurement: { repo: 'repo', run: 'resources', base: 'b'.repeat(40), candidate } }, {
     snapshot: () => candidate, write: () => {},
     select: async () => ({ ok: true, files, commands: [], classes: { 'db.test.js': 'sqlite', 'heavy.test.js': 'heavy' } }),
     tests: (options) => realTests({ ...options, lanes: 4, runBatch: async ({ files: batch, lanes, flags }) => {
