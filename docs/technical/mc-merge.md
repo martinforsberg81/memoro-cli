@@ -428,6 +428,14 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A repository may declare a round budget** (`round_seconds`; memoro-cli: 120,
+Martin 2026-11-01). A merge round then runs its selection cheapest first while
+the estimate from `test-times.js`, divided by the lanes, fits, and names the rest
+`deferred_files`. It is an estimate, not a stop: a round is not killed at the
+limit, the pull request's own tests still run after it, and a deferred file is
+unmeasured until `mc test memoro-cli --full`. A receipt-bound autonomous
+measurement is never budgeted.
+
 **A suite finds the toolchain's git first** (`directGitDir` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
 shim that asks xcrun on every call, 67 ms against 23 ms for the git behind it

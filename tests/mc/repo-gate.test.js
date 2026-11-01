@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { directGitDir, gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, roundFiles, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -2921,6 +2921,13 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
 });
 
 describe('the suite\'s environment and its time', () => {
+  it('roundFiles: a budget runs the cheapest that fit and defers the rest; none runs everything', () => {
+    const times = { 'slow.test.js': 1400, 'quick.test.js': 4, 'mid.test.js': 100 };
+    const files = ['slow.test.js', 'mid.test.js', 'quick.test.js'];
+    assert.deepEqual(roundFiles(files, { seconds: 120, times, lanes: 4 }), { run: ['quick.test.js', 'mid.test.js'], deferred: ['slow.test.js'] });
+    assert.deepEqual(roundFiles(files, { times }), { run: files, deferred: [] });
+  });
+
   it('directGitDir: a link to the toolchain git on macOS, nothing elsewhere or when none answers', () => {
     const home = mkdtempSync(join(tmpdir(), 'mc-direct-git-'));
     try {
