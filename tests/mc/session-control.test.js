@@ -316,3 +316,38 @@ it('aggregate awake work also reserves an entire closing window before its hard 
   assert.equal(controlResponse(state).allows_new_work, false);
   assert.throws(() => validateControlProfile({ ...profile(), closing_ms: 900 }), /reserve/);
 });
+it('the same tree measured again closes a retried session and resets no clock', () => {
+  const a = fresh(); const proof = progress('schema-proof', 'schema');
+  const first = decideSessionControl(a.state, a.tick(1, { progress: proof }));
+  const b = fresh(profile(), JSON.parse(JSON.stringify(first)), 'build-2');
+  const worked = decideSessionControl(b.state, b.tick(50), { criteria: ['schema'] });
+  const again = decideSessionControl(worked, b.tick(1, { progress: proof }), { criteria: ['schema'] });
+  assert.equal(again.reason, 'criteria-complete');
+  assert.equal(again.history.no_progress_ms, worked.history.no_progress_ms + 1, 'a repeat is no new progress');
+  assert.deepEqual(again.history.checkpoints, ['schema-proof']);
+});
+it('finish\'s gate outlasts closing and a tool wait; the model back in hand ends the allowance', () => {
+  const tool = { kind: 'tool', id: 'finish' };
+  const { tick, state } = fresh();
+  const closing = decideSessionControl(state, tick(1, { progress: progress('schema-proof', 'schema') }), { criteria: ['schema'] });
+  assert.equal(closing.phase, 'closing');
+  const started = decideSessionControl(closing, tick(1, { activity: tool }), { finishing: true });
+  const held = decideSessionControl(started, tick(400, { activity: tool }), { finishing: true });
+  assert.equal(held.phase, 'closing', 'past closing_ms and tool_wait_ms while the gate runs');
+  const back = decideSessionControl(held, tick(1), { finishing: true });
+  assert.equal(back.phase, 'incomplete');
+  const other = fresh();
+  const shut = decideSessionControl(other.state, other.tick(1, { progress: progress('schema-proof', 'schema') }), { criteria: ['schema'] });
+  const waiting = decideSessionControl(shut, other.tick(1, { activity: tool }));
+  assert.equal(decideSessionControl(waiting, other.tick(400, { activity: tool })).phase, 'incomplete', 'no publication under way, the bounds stand');
+});
+it('a measured criterion is verified builder evidence, once, and a checkpoint is none', t => {
+  const fx = controlled(t); const proof = progress('schema-proof', 'schema');
+  fx.observe(fx.tick(1, { progress: progress('gate-proof') }));
+  assert.deepEqual(fx.current().evidence.builder, []);
+  fx.observe(fx.tick(1, { progress: proof }));
+  fx.observe(fx.tick(1, { progress: proof }));
+  const [record, ...rest] = fx.current().evidence.builder;
+  assert.deepEqual(rest, []);
+  assert.deepEqual([record.criterion_id, record.status, record.reference, record.run_id], ['schema', 'verified', proof.reference, builder.run_id]);
+});

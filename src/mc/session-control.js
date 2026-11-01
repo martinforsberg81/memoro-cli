@@ -117,8 +117,8 @@ export function createSessionControl({ binding, profile, observation, previous =
  * recorded sleep, never inferred active model work. `criteria` names every
  * premerge criterion of the assignment: a session has no other way to reach
  * closing below a bound, and finishing needs closing. */
-export function decideSessionControl(previous, observation, { criteria = [] } = {}) {
-  return decide(previous, observation, false, criteria);
+export function decideSessionControl(previous, observation, { criteria = [], finishing = false } = {}) {
+  return decide(previous, observation, false, criteria, finishing);
 }
 
 /** Trusted supervisor only: unexpected exit and failed observation/preservation
@@ -130,7 +130,7 @@ export function interruptSessionControl(previous, reason) {
   if (!['incomplete', 'plan_pending'].includes(state.phase)) stop(state, 'incomplete', reason);
   return state;
 }
-function decide(previous, observation, initial, criteria = []) {
+function decide(previous, observation, initial, criteria = [], finishing = false) {
   checkObservation(observation); validateControlState(previous);
   if (!initial && observation.sequence === previous.observation.sequence) {
     if (!isDeepStrictEqual(observation, previous.observation)) throw new Error('conflicting observation replay');
@@ -154,18 +154,23 @@ function decide(previous, observation, initial, criteria = []) {
       source: observation.context?.source ?? null, quality: 'unknown' };
   const fraction = state.context.fraction;
   // Emergency takes precedence over progress/failures and never reports green.
-  const expiredWait = mode !== 'model' && elapsedWait >= (mode === 'lane' ? p.lane_wait_ms : p.tool_wait_ms);
+  // Finish's gate is bounded by the gate itself and by total_awake_ms. It may outlast
+  // closing and a tool wait, and a verdict in hand ends this as soon as the model is back.
+  const gating = finishing && observation.activity.kind !== 'model';
+  const expiredWait = !gating && mode !== 'model' && elapsedWait >= (mode === 'lane' ? p.lane_wait_ms : p.tool_wait_ms);
   if (state.totals.active_ms >= p.emergency_active_ms || state.totals.awake_ms >= p.total_awake_ms
     || (fraction !== null && fraction >= p.emergency_context)
-    || (state.phase === 'closing' && state.totals.awake_ms - state.closing_awake_ms >= p.closing_ms) || expiredWait) {
+    || (!gating && state.phase === 'closing' && state.totals.awake_ms - state.closing_awake_ms >= p.closing_ms) || expiredWait) {
     stop(state, 'incomplete', expiredWait ? `${mode}-wait-exhausted` : 'emergency-boundary'); return state;
   }
-  let criterionCompleted = false; let criterionMeasured = false;
+  let criterionCompleted = false;
+  // A repeat on an unchanged tree is no new progress, and is still a measurement:
+  // a retried session on measured work closes on it, with the no-progress clock untouched.
+  const criterionMeasured = !!observation.progress?.criterion_id;
   if (observation.progress && !h.checkpoints.includes(observation.progress.id)) {
     if (h.checkpoints.length >= 256) { stop(state, 'plan_pending', 'checkpoint-history-full'); return state; }
     h.checkpoints.push(observation.progress.id); h.no_progress_ms = 0; h.stagnant_sessions = 0; state.run_progress = true;
     h.last_progress = { ...observation.progress, run_id: state.binding.run_id, at_ms: observation.at_ms };
-    criterionMeasured = !!observation.progress.criterion_id;
     if (observation.progress.criterion_id && !h.criteria.includes(observation.progress.criterion_id)) {
       h.criteria.push(observation.progress.criterion_id); criterionCompleted = true;
     }

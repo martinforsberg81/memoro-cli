@@ -7,6 +7,7 @@ import { autonomousProject } from './autonomy-fixtures.js';
 import { planner, builder, foreground } from './autonomous-state-fixture.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { measuredLanding } from './goal-followup-fixture.js';
+import { recoveryCarriesTree } from '../../src/mc/programme-recovery.js';
 import { ready, clean } from './autonomous-merge-fixture.js';
 import { decideProgrammePlan, programmePlanContext } from '../../src/mc/programme-plan.js';
 import { claimProgrammeJob, reconcileProgrammeJobs, finishProgrammeJob, yieldProgrammeJob, cancelProgrammeOperation,
@@ -456,4 +457,16 @@ test('a real clean landing releases the next selected goal while after-integrati
   f.scan(); assert.equal(f.state('next-goal').revision, released.revision);
   assert.equal(released.plan_events.filter(item => item.type === 'dependency-released').length, 1);
   assert.equal(f.read().execution_enabled, false);
+});
+
+test('only a current retry diagnosis of every attempt carries an unfinished tree', () => {
+  const state = (diagnosis, attempts = ['a', 'b']) => ({ goal_revision: 3, evidence: { builder: [] },
+    attempts: attempts.map(id => ({ id, progress: [] })), recovery_diagnoses: diagnosis ? [diagnosis] : [] });
+  const retry = { action: 'retry', goal_revision: 3, attempt_ids: ['a', 'b'] };
+  assert.equal(recoveryCarriesTree(state(retry)), true);
+  assert.equal(recoveryCarriesTree(state(null)), false, 'undiagnosed');
+  assert.equal(recoveryCarriesTree(state({ ...retry, action: 'exception' })), false);
+  assert.equal(recoveryCarriesTree(state({ ...retry, goal_revision: 2 })), false, 'an older revision');
+  assert.equal(recoveryCarriesTree(state({ ...retry, attempt_ids: ['a'] })), false, 'an attempt since');
+  assert.equal(recoveryCarriesTree(state(null, [])), false, 'a first build has no earlier work');
 });

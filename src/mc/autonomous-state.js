@@ -762,9 +762,20 @@ export function observeProjectSessionControl(root, programme, project, { actor, 
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
     const criteria = state.contract.success_criteria.filter(item => item.verification === 'premerge').map(item => item.id);
-    const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation), { criteria });
-    return save(paths.project, state, { ...state, session_control }, deps);
+    const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation),
+      { criteria, finishing: state.publication?.phase === 'started' });
+    return save(paths.project, state, { ...state, session_control, evidence: measuredEvidence(state, actor, observation.progress) }, deps);
   }, deps);
+}
+/** A criterion the runner measured passing is verified builder evidence. The
+ * session never reports what the runner saw; the same tree records once. */
+function measuredEvidence(state, actor, progress) {
+  if (!progress?.criterion_id) return state.evidence;
+  const id = `evidence-${progress.id}`;
+  if (state.evidence.builder.some(item => item.id === id)) return state.evidence;
+  return { ...state.evidence, builder: [...state.evidence.builder, { id, criterion_id: progress.criterion_id, status: 'verified',
+    reference: progress.reference, run_id: actor.run_id, project_id: state.contract.project_id,
+    programme_id: state.contract.programme.id, goal_revision: state.goal_revision }] };
 }
 export function interruptProjectSessionControl(root, programme, project, { actor, revision, reason, ...deps }) {
   return locked(root, programme, project, paths => {

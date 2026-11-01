@@ -85,7 +85,7 @@ export function fixture(t, { close = true, existing = null, assignment = {} } = 
   const deps = { stdout: { write: text => output.push(text) }, stderr: { write: text => output.push(text) }, requirements,
     publishDeps: { gh, merge: () => assert.fail('autonomous publication never queues merge') },
     gate: async (args, call) => {
-      assert.deepEqual(args, ['--json']); calls.push(['gate']); count++;
+      assert.deepEqual(args, ['--json', '--budget', '10800']); calls.push(['gate']); count++;
       const required = await requirements(); const candidate = captureWorktree(cwd);
       const receipt = gateReceipt({ measurement: { repo: 'memoro-cli', run: `gate-${count}`, ...call.measurementBinding,
         configuration: required.configuration, candidate, base: required.base }, before: candidate, after: candidate,
