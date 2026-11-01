@@ -13,6 +13,7 @@ import { reconcilePreviousSession, retirePreviousSession, sessionGitDir } from '
 import { instructionsFor, roleRecord, roleSourceOf } from './roles.js';
 import { headlessArgs, routedSettings } from './run-plan.js';
 import { profileArgs } from './portrait.js';
+import { FINISH_GATE_BUDGET } from './autonomous-publish.js';
 import { run as gateCommand } from './commands/gate.js';
 import { autonomousBuildClaim, autonomousBuildHeld, incompleteAutonomousBuild, recoverAutonomousBuild, settlePublishedBuild } from './autonomous-recovery.js';
 import { prepareAutonomousReview, completeAutonomousReview } from './autonomous-review.js';
@@ -175,6 +176,16 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const unsetEnv = [...PROVIDER_API_ENV_NAMES, 'MC_STEP'];
     const directory = join(paths.scratch, actor.run_id);
     deps.mkdir(paths.scratch);
+    // A retried tree can touch what main touched, and git refuses that merge
+    // with no conflict to hand over. Committed, it merges or conflicts like any
+    // other work; publication keeps a HEAD that already holds the measured tree.
+    if (git(['status', '--porcelain'])) {
+      git(['fetch', '-q', 'origin']);
+      if (!deps.git(worktree, ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']).ok) {
+        git(['add', '-A']);
+        git(['commit', '-q', '--no-verify', '-m', `${name}: the tree the last attempt left`]);
+      }
+    }
     const synced = syncMain(worktree, name, { resolveIgnore: false });
     if (synced.conflicts.length) {
       if (typeof capability.integrateConflicts !== 'function') throw new Error('main conflicts require step integration before building');
@@ -200,7 +211,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
           activity, context: null, progress: null, failure: null } });
     };
     observeActivity({ kind: 'gate', id: 'starting-gate' });
-    const gate = await (capability.gate || gateCommand)(repair ? ['--json'] : [], { cwd: worktree, env: deps.env, stdout: output, stderr: output });
+    const gate = await (capability.gate || gateCommand)([...(repair ? ['--json'] : []), '--budget', FINISH_GATE_BUDGET], { cwd: worktree, env: deps.env, stdout: output, stderr: output });
     if (gate !== 0) {
       let allowed = false;
       try { allowed = repair && mainRepairPreflight({ root, programme, project: name, summary: JSON.parse(startingOutput), content: captureWorktree(worktree), base: git(['rev-parse', 'origin/main']) }); } catch { /* unknown is not a diagnosed red */ }

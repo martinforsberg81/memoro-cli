@@ -55,7 +55,7 @@ function gateState(state) {
 
 function goalAction(root, state, holds) {
   const run = state.active_run;
-  if (run?.role === 'step') return `build session ${run.run_id} ${state.session_control?.phase || state.phase}`;
+  if (run?.role === 'step' && state.phase !== 'plan_pending') return `build session ${run.run_id} ${state.session_control?.phase || state.phase}`;
   if (run?.role === 'review') return `independent review ${run.run_id} running`;
   if (run?.role === 'plan') return `plan run ${run.run_id} holds the goal`;
   if (holds.incident) return `wait for shared main repair ${holds.incident}`;
@@ -95,6 +95,8 @@ export function goalStatus(root, programme, project) {
       && last.session.head === state.publication?.head,
     findings: state.evidence.reviews.find(item => item.id === last.id)?.findings || [] } : null;
   const control = state.session_control || null;
+  // A run that stopped before its session started leaves the control as it opened; the attempt says how it ended.
+  const ended = state.phase === 'plan_pending' && ['running', 'closing'].includes(control?.phase);
   const context = control?.context;
   const holds = { incident: mainIncidentHold(root, programme, project)?.id || null, claim: null, phase: null };
   if (['ready', 'review_ready'].includes(state.phase)) holds.phase = programmePhaseHold(readProgrammeState(root, programme), state.contract.programme_phase);
@@ -114,7 +116,8 @@ export function goalStatus(root, programme, project) {
     review: report,
     models: { builders: [...new Set(builders)], reviewer_reserved: state.reviewer_model ? model(state.reviewer_model) : null,
       reviewer_actual: last ? model(last.session.model) : state.review_session ? model(state.review_session.model) : null },
-    session: control ? { run_id: control.binding.run_id, phase: control.phase, reason: control.reason,
+    session: control ? { run_id: control.binding.run_id, phase: ended ? 'ended' : control.phase,
+      reason: ended ? state.attempts.at(-1)?.reason ?? null : control.reason,
       activity: control.observation.activity.kind,
       context: context && context.fraction !== null ? { fraction: context.fraction, quality: context.quality, source: context.source }
         : { fraction: UNKNOWN, quality: context?.quality || UNKNOWN, source: context?.source || null },
@@ -192,7 +195,7 @@ export function programmeStatus(root, programme, deps = {}) {
   const lease = journal.lease ? { run_id: journal.lease.actor.run_id, expires_at: iso(journal.lease.expires_at), job_id: journal.lease.job_id } : null;
   const in_flight = [
     ...(lease ? [`plan ${lease.run_id} (lease until ${lease.expires_at})`] : []),
-    ...goals.filter(goal => goal.active_run).map(goal => `${goal.active_run.role} ${goal.active_run.run_id} on ${goal.project} (${goal.phase})`),
+    ...goals.filter(goal => goal.active_run && goal.phase !== 'plan_pending').map(goal => `${goal.active_run.role} ${goal.active_run.run_id} on ${goal.project} (${goal.phase})`),
     ...goals.filter(goal => !goal.active_run && goal.waits?.some(item => item.startsWith('builder claim'))).map(goal => `builder claim on ${goal.project}`),
     ...goals.filter(goal => goal.merge?.status === 'pending').map(goal => `merge of #${goal.merge.pr} for ${goal.project} (sent goal; independent evidence rechecked at the merge door)`),
   ];

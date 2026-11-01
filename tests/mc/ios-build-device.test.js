@@ -335,11 +335,11 @@ describe('buildIos — the builder', () => {
     ]);
   });
 
-  it('takes the heavy lane as ios-build and the row goes running → installed', async () => {
+  it('takes its repository lane as ios-build and the row goes running → installed', async () => {
     const b = builder();
     assert.equal(readIosBuilds(b.env)[0].outcome, 'running');
     await buildIos(b.job, b.deps);
-    assert.deepEqual(b.lane, [['take', 'ios-build', 'heavy'], ['release', 'heavy']]);
+    assert.deepEqual(b.lane, [['take', 'ios-build', 'memoro'], ['release', 'memoro']]);
     const [row] = readIosBuilds(b.env);
     assert.equal(row.outcome, 'installed');
     assert.equal(row.version, '1.0');
@@ -356,7 +356,7 @@ describe('buildIos — the builder', () => {
     assert.equal(row.outcome, 'failed');
     assert.equal(row.stopped_at, 'read-back');
     assert.match(row.note, /server\.url is http:\/\/localhost:8787, expected https:\/\/example\.test/u);
-    assert.deepEqual(b.lane, [['take', 'ios-build', 'heavy'], ['release', 'heavy']]);
+    assert.deepEqual(b.lane, [['take', 'ios-build', 'memoro'], ['release', 'memoro']]);
   });
 
   it('goes running → failed at the step that failed, releasing the lane', async () => {
@@ -367,7 +367,7 @@ describe('buildIos — the builder', () => {
     assert.equal(row.stopped_at, 'npm ci');
     assert.equal(row.note, 'npm ci exited 1 — npm error code EUSAGE');
     assert.equal(b.step.calls.some((c) => c.label === 'xcodebuild'), false);
-    assert.deepEqual(b.lane, [['take', 'ios-build', 'heavy'], ['release', 'heavy']]);
+    assert.deepEqual(b.lane, [['take', 'ios-build', 'memoro'], ['release', 'memoro']]);
   });
 
   it('fails at worktree when HEAD is not the commit', async () => {
@@ -394,7 +394,7 @@ describe('buildIos — the builder', () => {
     const [row] = readIosBuilds(b.env);
     assert.equal(row.outcome, 'failed');
     assert.equal(row.stopped_at, 'worktree');
-    assert.deepEqual(b.lane, [['take', 'ios-build', 'heavy'], ['release', 'heavy']]);
+    assert.deepEqual(b.lane, [['take', 'ios-build', 'memoro'], ['release', 'memoro']]);
   });
 });
 

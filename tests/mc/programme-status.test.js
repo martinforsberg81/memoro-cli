@@ -186,6 +186,16 @@ test('with autonomy on the events row names the headless planner as the next act
   assert.match(f.out(), /^ {2}events {6}1 pending · oldest 0m — activation 0m · next actor: headless planner — queued for the runner$/mu);
 });
 
+test('a build stopped before its session started is not drawn as running or in flight', async t => {
+  const f = fixture(t); f.building();
+  f.patch(state => { state.phase = 'plan_pending'; state.attempts = [{ id: state.active_run.run_id, reason: 'starting gate did not complete successfully' }]; });
+  const status = programmeStatus(f.root, f.programme);
+  assert.equal(status.in_flight.length, 0);
+  assert.equal(status.goals[0].session.phase, 'ended');
+  assert.equal(status.goals[0].session.reason, 'starting gate did not complete successfully');
+  assert.ok(!status.goals[0].next_action.startsWith('build session'));
+});
+
 test('a pending goal names its merge route or dependency before plan', t => {
   const f = fixture(t);
   f.release(); f.building(); f.reviewed({ clean: true });

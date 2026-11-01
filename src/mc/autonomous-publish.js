@@ -18,7 +18,7 @@ import { run as publishCommand } from './commands/publish.js';
 
 /** Seconds finish waits for its answer: past `mc gate`'s default 540 a wide
  * selection answers RUNNING, which is no verdict. The gate bounds itself. */
-const FINISH_GATE_BUDGET = '10800';
+export const FINISH_GATE_BUDGET = '10800';
 const git = (cwd, args) => sessionGit(cwd, args).trim();
 const read = options => readAutonomousState(options.root, options.programme, options.project);
 function owned(options) {
