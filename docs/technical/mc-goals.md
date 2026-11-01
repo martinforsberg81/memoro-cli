@@ -141,8 +141,8 @@ person; the runner sets `blocked` only in step 5. `open` goals are picked.
 - **No owner, lease, revision or capability report.** Anyone may work in the
   worktree; the last entry says what was done.
 - **No review of its own.** A person or a plan session reads the pull request.
-- **No merge door.** `mc merge <repo> <pr>` is a person's or a plan session's
-  act. A goal session's pull request is not queued for the merger.
+- **No merge door.** `mc merge` is a person's or a plan session's act. The role
+  holds a goal session to `--no-merge`; neither `mc merge` nor `mc publish` checks.
 - **No close-out.** No archive verb; a `done` goal stays where it is.
 
 The headless plan session (`autonomy on`) and phases are not built; they wait

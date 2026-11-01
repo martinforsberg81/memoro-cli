@@ -5809,6 +5809,20 @@ test('a goal that has lost its worktree gets it back on its branch, and says so'
   assert.equal(f.calls.sessions.length, 1);
 });
 
+test('a goal whose worktree was deleted is pruned from git before its branch is added again', async () => {
+  const f = goalFixture({ lost: { worktree: false } });
+  f.answer = logsItself(f, 'lost');
+  const { git } = f.deps;
+  // The branch outlives the directory, and git still has the worktree registered.
+  f.deps.git = (cwd, args) => (args[0] === 'show-ref' ? { ok: true, stdout: '', stderr: '' } : git(cwd, args));
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const at = (verb) => f.calls.git.findIndex(([cwd, ...args]) => cwd === '/home/memoro' && args[0] === 'worktree' && args[1] === verb);
+  assert.ok(at('prune') >= 0, 'pruned');
+  assert.ok(at('prune') < at('add'), 'before the add');
+  assert.equal(f.calls.git[at('add')].at(-1), 'goal/lost');
+  assert.equal(f.calls.sessions.length, 1);
+});
+
 test('a goal keeps no slot once its session has ended', async () => {
   const f = goalFixture({ capped: {} }, { plans: { memoro: { alpha: ready } } });
   f.deps.laneCount = () => ({ per_repo: 2, total: 1 });

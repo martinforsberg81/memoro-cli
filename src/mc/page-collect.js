@@ -1246,7 +1246,7 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, planningSessions = {}, goals = {}, goalRows = [], running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
+  planning = {}, planningSessions = {}, goalRows = [], running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -1271,12 +1271,6 @@ export function programmesSection({
     const state = stateOf({ status: plan.status || null, blocker: blocked_by });
     return {
       name,
-      ...(plan.plan?.version === 2 ? { goal: {
-        programme_phase: plan.plan.programme_phase, phase: 'unknown',
-        criteria: (plan.plan.success_criteria || []).map(item => ({ id: item.id, builder: 'unknown' })),
-        sessions_run: null, next_action: 'state unavailable — mc programme status',
-        ...goals[`${plan.programme}/${name}`],
-      } } : {}),
       repo: plan.repo,
       programme: plan.programme,
       status: plan.status || null,
@@ -1718,15 +1712,10 @@ export async function collectPage({
     ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
     currents, alive, entry: (project) => readEntry(root, project),
   });
-  const planningSessions = Object.fromEntries(Object.entries(sessions.planning_sessions).map(([name, items]) => [name, [...items]]));
-  for (const current of currents.filter(item => item.kind === 'plan' && alive(item.pid))) {
-    const programme = current.programme || (/^programme:(.+)$/u.exec(current.name || '') || [])[1];
-    if (programme) (planningSessions[programme] ||= []).push(current);
-  }
   const programmes = programmesSection({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
-    planningSessions,
+    planningSessions: sessions.planning_sessions,
     running: runner.steps.map((step) => step.name).filter(Boolean),
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
