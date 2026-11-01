@@ -870,7 +870,7 @@ export async function runGate({
     let selection = null;
     if (selects) {
       selection = await timed('selection', () => selectFiles({
-        command: declared.declaration.select, cwd: headDir, env, say,
+        command: declared.declaration.select, cwd: headDir, env, say, mainOnly: declared.declaration.main_only,
       }));
       if (!selection.ok) return finish('selection', selection.reason);
       fileClasses = selection.classes || {};
@@ -1330,7 +1330,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
-export async function selectFiles({ command, cwd, env, say, signal }) {
+export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [] }) {
   const run = await shell(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
@@ -1343,7 +1343,11 @@ export async function selectFiles({ command, cwd, env, say, signal }) {
   if (!Array.isArray(files)) {
     return { ok: false, reason: `${command} printed JSON with no \`files\` array` };
   }
-  const clean = files.map(String).filter(Boolean);
+  // What the repository measures on main only leaves a pull request's selection,
+  // unless it is all that was selected: a gate that measures nothing says nothing.
+  const named = files.map(String).filter(Boolean);
+  const pullRequest = named.filter((file) => !mainOnly.includes(file));
+  const clean = pullRequest.length ? pullRequest : named;
   // A selector may say it gave up and returned everything. memoro-cli's does
   // that whenever a changed path is not source it can trace, and the round has
   // to repeat the admission rather than present the whole suite as a narrow

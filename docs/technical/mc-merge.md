@@ -428,6 +428,14 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A repository may declare what only main measures** (`main_only`; memoro: eleven
+ratchets and snapshots, Martin 2026-11-01). `selectFiles` takes those files out of
+a pull request's selection, in the merge round and in `mc gate` alike, so both
+hash the same selection. They still run in the whole suite on main, in a pull
+request that edits the test itself, and when nothing else was selected. A change
+that moves a pinned number therefore lands, and turns main red until it is
+re-pinned.
+
 **A suite finds the toolchain's git first** (`directGitDir` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
 shim that asks xcrun on every call, 67 ms against 23 ms for the git behind it

@@ -217,7 +217,7 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
         log: logPath, defer: !files.length && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
           session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));

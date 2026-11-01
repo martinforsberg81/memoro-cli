@@ -268,6 +268,25 @@ export const SHIPPED = Object.freeze({
       ]),
       gates: Object.freeze(['sql:pr-ci', 'core:startup:jsc:check']),
     }),
+    // Ratchets and snapshots: red when a change moved a pinned number, not when
+    // it broke something, and 95 % of the red pull requests landed later
+    // (Martin, 2026-11-01). The most often red of that kind in the 2 483
+    // merge rounds of 2026-10-02 to 2026-11-01. They run in the whole suite on
+    // main, in a pull request that edits the test itself, and when nothing else
+    // was selected.
+    main_only: Object.freeze([
+      'tests/architecture/card-corpus.test.js',
+      'tests/architecture/card-html-digests.test.js',
+      'tests/architecture/class-coverage.test.js',
+      'tests/architecture/core-bundle-jsc.test.js',
+      'tests/architecture/core-bundle-size.test.js',
+      'tests/architecture/css-dead-rules.test.js',
+      'tests/architecture/enacted-affordance.test.js',
+      'tests/architecture/outside-ui-reach.test.js',
+      'tests/architecture/reduce-first-coverage.test.js',
+      'tests/scripts/sql-budget-delta.test.mjs',
+      'tests/scripts/sql-operating-budgets.test.mjs',
+    ]),
     retry_once_why: 'measured in gate-rounds.jsonl to 2026-10-16: fast red-then-green flips with no change — '
       + 'the JSC start-up budget 19 (2026-10-07, now `core:startup:jsc:check`), the `sql:pr-ci` command gate 15, '
       + 'dead-CSS 6 (css-dead-rules.test.js), build-bundle.test.js under load (#13470 at load ~38); '
@@ -587,6 +606,8 @@ function normalise(entry, env) {
     retry_once_why: entry.retry_once_why ?? null,
     // A session's gate runs all it selected, leaving nothing to the merge round.
     session_whole: entry.session_whole === true,
+    // The test files a pull request's selection leaves to the run on main.
+    main_only: Array.isArray(entry.main_only) ? entry.main_only.map(String) : [],
   };
 }
 
