@@ -4,10 +4,14 @@
  * from observed provider runs. A sent goal consults none of this. Headless
  * roles cannot change the preference. */
 import { createHash } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { productionAutonomy } from './autonomous-capability.js';
+import { AUTONOMOUS_STATE_FILE, PROGRAMME_STATE_FILE, readAutonomousState } from './autonomous-state.js';
+import { STABLE_ID_RE } from './goal-contract.js';
 import { readModels } from './model-config.js';
-import { workRoot } from './paths.js';
+import { PROGRAMS_HOME, workRoot } from './paths.js';
 import { updateProgrammeJobs, enqueueProgrammeEvent } from './programme-jobs.js';
 import { observationGaps, readObservations, toolVersion } from './provider-observations.js';
 
@@ -43,15 +47,34 @@ const INSTALLATION = Object.freeze({
   ].map(Object.freeze)),
 });
 
-/** Every tool the catalog can launch, at the version installed now. */
-function installedTools(deps, env) {
+const subdirectories = (dir, file) => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : [])
+  .filter(item => item.isDirectory() && STABLE_ID_RE.test(item.name) && existsSync(join(dir, item.name, file)))
+  .map(item => item.name);
+
+/** The reviewer each goal that has not landed reserved, by tool. Unreadable goal state throws. */
+function unlandedReviewers(root) {
+  const reviewers = [];
+  for (const programme of subdirectories(join(root, PROGRAMS_HOME), PROGRAMME_STATE_FILE)) {
+    for (const project of subdirectories(join(root, PROGRAMS_HOME, programme), AUTONOMOUS_STATE_FILE)) {
+      const state = readAutonomousState(root, programme, project);
+      if (state.reviewer_model && state.phase !== 'landed') reviewers.push(state.reviewer_model.tool);
+    }
+  }
+  return reviewers;
+}
+
+/** Every tool the catalog can launch or a goal reserved, at the version installed now.
+ * `reviewer` marks the tools that can review: catalog.review's, and any reserved one. */
+function installedTools(deps, env, root) {
   const catalog = deps.catalog ? deps.catalog() : readModels(env);
-  const names = [...new Set([...catalog.fast, ...catalog.large, catalog.review].map(item => item.tool))];
+  const reserved = unlandedReviewers(root);
+  const reviewers = new Set([catalog.review.tool, ...reserved]);
+  const names = [...new Set([...catalog.fast, ...catalog.large, catalog.review].map(item => item.tool).concat(reserved))];
   const launch = deps.launch || resolveLaunch;
   const version = deps.toolVersion || toolVersion;
   return names.map(tool => {
     const resolved = launch(tool);
-    return { tool, version: resolved?.ok ? version(resolved.spec.bin) : null };
+    return { tool, version: resolved?.ok ? version(resolved.spec.bin) : null, reviewer: reviewers.has(tool) };
   });
 }
 
@@ -66,7 +89,7 @@ function observedCapabilities(deps) {
     deps: { awakeClock: deps.awakeClock, log: line => { refusal = line; } } });
   let tools = []; let observations = []; let unreadable = null;
   try {
-    tools = installedTools(deps, env);
+    tools = installedTools(deps, env, root);
     observations = readObservations(root);
   } catch (error) { unreadable = error.message; }
   const blockers = [built ? null : refusal || 'autonomous capability unavailable', unreadable].filter(Boolean);

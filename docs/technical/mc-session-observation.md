@@ -143,9 +143,13 @@ process starts), `role`, `signal`, `run_id`, `project` and `at`.
 
 A capability is supported when the production capability can be built here and
 every tool in the model catalog has, at its installed version, what it needs:
-`build` a step `session`, `review` a review `session`, `control-signals` a
-`control`, `interrupt` an `interrupt`, `programme-jobs` and `programme-plan` any
-`session`. A new tool version has no support until observed again. That refuses
+`build` a step `session`, `control-signals` a `control`, `interrupt` an
+`interrupt`, `programme-jobs` and `programme-plan` any `session`. `review` owes a
+review `session` only from the tools that can review: catalog `review`'s tool,
+and the tool of any `reviewer_model` reserved by a goal that has not landed. So
+a codex reviewer that nothing reserves owes nothing, and a reserved one owes its
+review session until that goal lands. A new tool version has no support until
+observed again. Unreadable catalog, observations or goal state supports nothing. That refuses
 `autonomy on` only: `assertProgrammeDispatch` does not consult capabilities, so a
 sent goal runs with autonomy off and with no support. A capability with
 `fixture: true` records nothing.

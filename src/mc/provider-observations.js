@@ -21,12 +21,14 @@ import { releaseClaim, takeClaim } from './resource-claim.js';
 
 export const SIGNALS = Object.freeze(['session', 'control', 'interrupt']);
 
-/** Each control capability's one observation; no `role` means any role shows it. */
+/** Each control capability's one observation; no `role` means any role shows it.
+ * `reviewers` limits the owed tools to those that can review: catalog.review's
+ * tool and the tool of any reviewer a goal that has not landed reserved. */
 const NEEDS = Object.freeze({
   'programme-jobs': { signal: 'session' },
   'programme-plan': { signal: 'session' },
   build: { signal: 'session', role: 'step' },
-  review: { signal: 'session', role: 'review' },
+  review: { signal: 'session', role: 'review', reviewers: true },
   'control-signals': { signal: 'control' },
   interrupt: { signal: 'interrupt' },
 });
@@ -124,11 +126,11 @@ export function providerObserver({ root, capability, tool, bin, role, runId, pro
   };
 }
 
-/** One text per observation `capability` lacks across `tools` ([{ tool, version }]). Empty is supported. */
+/** One text per observation `capability` lacks across `tools` ([{ tool, version, reviewer }]). Empty is supported. */
 export function observationGaps(capability, tools, observations) {
-  const { signal, role } = NEEDS[capability];
+  const { signal, role, reviewers = false } = NEEDS[capability];
   const lacking = [signal === 'interrupt' ? 'an' : 'a', role, signal].filter(Boolean).join(' ');
-  return tools.flatMap(({ tool, version }) => {
+  return tools.filter(item => !reviewers || item.reviewer === true).flatMap(({ tool, version }) => {
     if (!version) return [`${tool} (version unknown): ${lacking} not observed`];
     const seen = observations.some(item => item.tool === tool && item.tool_version === version
       && item.signal === signal && (!role || item.role === role));
