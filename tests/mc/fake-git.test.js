@@ -221,6 +221,6 @@ describe("the model's edges", () => {
     // tests/_isolate-home.mjs logs every real git call this process and its
     // children make; the model answered them all.
     const log = process.env.MC_GIT_CALLS ? readFileSync(process.env.MC_GIT_CALLS, 'utf8') : '';
-    assert.equal(log, '');
+    assert.deepEqual(log.split('\n').filter((line) => line.startsWith(`${process.env.MC_GIT_TEST}\t`)), []);
   });
 });

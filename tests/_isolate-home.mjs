@@ -12,9 +12,12 @@
  *
  * Loaded via --import before any test module (see the npm test script).
  */
-import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { REAL_GIT_FILES } from './_real-git-files.mjs';
 
 // Four variables a suite inherits isolated: HOME, TMPDIR, MC_HOME and
 // MC_WORK_ROOT. A git identity comes with the home (below), so every commit a
@@ -61,15 +64,15 @@ if (!process.env.MC_HOME) {
 // on origin/main: 64 of 248 test files reach git, 99 % of the suite's measured
 // time, and one autonomy test makes ~380 git processes at ≥47 ms each.
 //
-// Until the count is zero this is a meter, not a stop. Each test file's
-// process puts a `git` first on PATH that appends `<test file>\t<args>` to
-// its log and runs the real git, and prints its count to stderr on exit —
-// `# git calls during tests: 22 in 1 file` in the TAP, under the file. What
-// the process spawns inherits PATH, the log and MC_GIT_TEST, so an `mc` or a
-// nested suite a test starts counts against that test's file. (The runner
-// process measures too, but node starts its children with the environment
-// it was itself started with, so each file reports for itself.) When the
-// count reaches zero the report becomes a red exit (MC_GIT_CALLS_STOP).
+// So a test file answers git from a repository model (`_fake-git-default.mjs`)
+// and starts none; the files that keep real git are named one by one in
+// `_real-git-files.mjs`, a list that only shrinks. The runner puts a `git`
+// first on PATH that appends `<test file>\t<args>` to its log and runs the real
+// git, or answers from the model where a child has one. What a process spawns
+// inherits PATH, the log and MC_GIT_TEST, so an `mc` or a script a test starts
+// counts against that test's file, and a file off the list that reached git
+// ends red. The runner prints the count to stderr on exit; MC_GIT_CALLS_KEEP
+// names a file to keep the log in.
 const testFile = /\.test\.[cm]?js$/u.test(process.argv[1] || '') ? relative(process.cwd(), process.argv[1]) : null;
 if (testFile) process.env.MC_GIT_TEST = testFile;
 if (!process.env.MC_GIT_CALLS) {
@@ -82,6 +85,8 @@ if (!process.env.MC_GIT_CALLS) {
     mkdirSync(bin);
     writeFileSync(join(bin, 'git'), [
       '#!/bin/sh',
+      // A process outside node's reach — a shell script — asks the model too.
+      `[ -n "$MC_FAKE_GIT_STATE" ] && exec '${process.execPath}' '${fileURLToPath(new URL('./_fake-git-cli.mjs', import.meta.url))}' "$@"`,
       `[ -n "$MC_GIT_CALLS" ] && printf '%s\\t%s\\n' "$MC_GIT_TEST" "$*" >> "$MC_GIT_CALLS"`,
       `exec '${realGit.replace(/'/gu, "'\\''")}' "$@"`,
       '',
@@ -101,9 +106,23 @@ if (!process.env.MC_GIT_CALLS) {
       }
       const top = [...perFile].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([file, n]) => `  ${String(n).padStart(6)}  ${file}`);
       process.stderr.write(`git calls during tests: ${lines.length} in ${perFile.size} file${perFile.size === 1 ? '' : 's'} — the goal is 0\n${top.join('\n')}\n`);
-      if (process.env.MC_GIT_CALLS_STOP) process.exitCode = 1;
+      if (process.env.MC_GIT_CALLS_KEEP) appendFileSync(process.env.MC_GIT_CALLS_KEEP, `${lines.join('\n')}\n`);
     });
   }
+}
+
+if (testFile && !REAL_GIT_FILES.has(testFile)) {
+  const { installFakeGitDefault } = await import('./_fake-git-default.mjs');
+  installFakeGitDefault();
+  // The stop. A file off the list that reached git anyway fails by its own exit
+  // code, whatever its tests said: a new git call is a red, not a slower suite.
+  process.prependOnceListener('exit', () => {
+    let lines = [];
+    try { lines = readFileSync(process.env.MC_GIT_CALLS, 'utf8').split('\n').filter((line) => line.startsWith(`${testFile}\t`)); } catch { /* nothing logged */ }
+    if (!lines.length) return;
+    process.stderr.write(`${testFile} started git ${lines.length} time(s), and tests make no git call: ${lines[0].split('\t')[1]}\n`);
+    process.exitCode = 1;
+  });
 }
 
 // The work root too — the channel lives there. A gate test that ran the real

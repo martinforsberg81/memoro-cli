@@ -144,7 +144,7 @@ export const SHIPPED = Object.freeze({
     // is always the whole suite" produce the same command and are not the
     // same claim, and only the first one is checkable.
     suite: 'npm test',
-    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=60000 '
+    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 '
       + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
@@ -153,9 +153,10 @@ export const SHIPPED = Object.freeze({
     // second is misbuilt and is rebuilt). It started at 300 s on 2026-11-01,
     // when the slowest test measured 151 s alone (~380 git processes); the
     // autonomy tests went the same day and the slowest left is branch-landed
-    // at 29 s, so 60 s. Every change that rebuilds a file lowers it, until it
+    // at 29 s, so 60 s; with git out of the suite the slowest test fits 30 s on a
+    // loaded machine (2026-11-01), so 30 s. Every change that rebuilds a file lowers it, until it
     // reads 1000.
-    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=60000']),
+    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=30000']),
     // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
     // here is costly enough to leave to the merge round.
     session_whole: true,

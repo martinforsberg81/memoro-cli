@@ -142,6 +142,7 @@ export class FakeGit {
     }
     this.calls.push({ cwd: dir, args: [...args] });
     const command = argv.shift();
+    if (command === '--version') return this.cmd_version() && ok(this.cmd_version());
     const handler = this[`cmd_${command?.replace(/-/gu, '_')}`];
     if (!handler) return this.refuse(args, `no such command in the model: ${command}`);
     try {
@@ -218,11 +219,23 @@ export class FakeGit {
         const rel = relative(worktree, full).split(sep).join('/');
         if (ignore(rel, entry.isDirectory())) continue;
         if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) files.set(rel, this.blob(repo, readFileSync(full)));
+        else if (entry.isFile()) files.set(rel, this.blob(repo, this.normalized(worktree, rel)));
       }
     };
     walk(worktree);
     return files;
+  }
+
+  /** A file's bytes as git would store them: `*.ext text eol=lf` in .gitattributes turns CRLF to LF. */
+  normalized(worktree, rel) {
+    const bytes = readFileSync(join(worktree, rel));
+    let rules = '';
+    try { rules = readFileSync(join(worktree, '.gitattributes'), 'utf8'); } catch { return bytes; }
+    const applies = rules.split('\n').some((line) => {
+      const [pattern, ...attributes] = line.trim().split(/\s+/u);
+      return attributes.includes('eol=lf') && (pattern === '*' || (pattern.startsWith('*.') && rel.endsWith(pattern.slice(1))) || pattern === rel);
+    });
+    return applies ? Buffer.from(bytes.toString('latin1').replace(/\r\n/gu, '\n'), 'latin1') : bytes;
   }
 
   /** `.gitignore` at the root, the shapes fixtures write: `name`, `dir/`, `*.ext`, `/rooted`. */
@@ -360,7 +373,7 @@ export class FakeGit {
     if (!bare) {
       mkdirSync(repo.gitDir, { recursive: true });
       writeFileSync(join(repo.gitDir, 'HEAD'), 'ref: refs/heads/main\n');
-      writeFileSync(join(repo.gitDir, 'index'), '');
+      writeFileSync(join(repo.gitDir, 'index'), 'DIRC\n');
       repo.worktrees.set(dir, { head: 'refs/heads/main', index: new Map() });
       this.worktreeOwner.set(dir, repo);
     } else {
@@ -371,7 +384,8 @@ export class FakeGit {
   }
 
   remoteRepo(repo, name) {
-    const url = repo.remotes.get(name);
+    // A path works where a name does: `git push -q <dir> HEAD:refs/heads/x`.
+    const url = repo.remotes.get(name) ?? (name.includes('/') ? name : null);
     if (!url) this.die(`fatal: '${name}' does not appear to be a git repository`);
     const target = this.repoByPath(url);
     if (!target) this.die(`fatal: '${url}' does not appear to be a git repository`);
@@ -423,13 +437,23 @@ export class FakeGit {
     if (flags["pathspec-from-file"] === "-") specs = String(input ?? "").split('\0').filter(Boolean);
     const all = flags.A || flags.all || specs.includes('.');
     if (all) {
-      for (const path of [...index.keys()]) if (!files.has(path)) index.delete(path);
+      if (flags.force || flags.f) for (const spec of specs) if (spec !== '.' && existsSync(join(worktree, spec)) && statSync(join(worktree, spec)).isFile()) index.set(spec, this.blob(repo, this.normalized(worktree, spec)));
+      for (const path of [...index.keys()]) {
+        if (files.has(path)) continue;
+        // Tracked stays tracked though .gitignore now names it, while the file is there.
+        if (existsSync(join(worktree, path))) index.set(path, this.blob(repo, this.normalized(worktree, path)));
+        else index.delete(path);
+      }
       for (const [path, blob] of files) index.set(path, blob);
       return '';
     }
     for (const spec of specs) {
       const rel = spec.replace(/\/$/u, '');
       let matched = false;
+      if ((flags.force || flags.f) && !files.has(rel) && existsSync(join(worktree, rel)) && statSync(join(worktree, rel)).isFile()) {
+        index.set(rel, this.blob(repo, this.normalized(worktree, rel)));
+        continue;
+      }
       for (const [path, blob] of files) if (path === rel || path.startsWith(`${rel}/`)) { index.set(path, blob); matched = true; }
       if (!matched) {
         if (index.has(rel)) { index.delete(rel); matched = true; }
@@ -503,7 +527,7 @@ export class FakeGit {
   }
 
   cmd_status({ dir, gitDir, argv }) {
-    const flags = parse(argv, { 'untracked-files': 1, porcelain: 0 }, ['porcelain', 'porcelain=v1', 'short', 's', 'b']);
+    const flags = parse(argv, { 'untracked-files': 1, porcelain: 0 }, ['z', 'porcelain', 'porcelain=v1', 'short', 's', 'b']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
     const files = this.workingFiles(repo, worktree);
     const head = this.headTree(repo, state);
@@ -520,10 +544,10 @@ export class FakeGit {
       if (x === ' ' && y === ' ') continue;
       lines.push(`${x}${y} ${path}`);
     }
-    void flags;
     // As git prints it: tracked changes first, then the untracked files.
     lines.push(...untracked);
-    return lines.length ? `${lines.join('\n')}\n` : '';
+    const end = flags.z ? '\0' : '\n';
+    return lines.length ? `${lines.join(end)}${end}` : '';
   }
 
   cmd_rev_parse({ dir, gitDir, argv }) {
@@ -545,6 +569,14 @@ export class FakeGit {
           if (!upstream) this.die(`fatal: no upstream configured for branch '${branch}'`);
           out.push(upstream); continue;
         }
+      }
+      const colon = rev.indexOf(':');
+      if (colon > 0) {
+        const tree = this.resolveRev(repo, state, `${rev.slice(0, colon)}^{tree}`);
+        const blob = tree && repo.trees.get(tree)?.get(rev.slice(colon + 1));
+        if (!blob) this.die(`fatal: path '${rev.slice(colon + 1)}' does not exist in '${rev.slice(0, colon)}'`);
+        out.push(blob);
+        continue;
       }
       const sha = this.resolveRev(repo, state, rev);
       if (!sha) {
@@ -649,6 +681,11 @@ export class FakeGit {
     const flags = parse(argv, [], ['verify', 'quiet', 'q', 'heads']);
     const { repo } = this.repoAt(dir, gitDir);
     const [ref] = flags.rest;
+    if (flags.heads && !ref) {
+      const lines = [...repo.refs].filter(([name]) => name.startsWith('refs/heads/')).sort(([x], [y]) => (x < y ? -1 : 1)).map(([name, sha]) => `${sha} ${name}\n`);
+      if (!lines.length) this.die('', 1);
+      return lines.join('');
+    }
     if (!repo.refs.has(ref)) this.die('', 1);
     return flags.quiet || flags.q ? '' : `${repo.refs.get(ref)} ${ref}\n`;
   }
@@ -831,6 +868,7 @@ export class FakeGit {
     if (verb === 'add') { if (repo.remotes.has(name)) this.die(`error: remote ${name} already exists.`, 3); repo.remotes.set(name, resolve(dir, url)); return ''; }
     if (verb === 'get-url') { if (!repo.remotes.has(name)) this.die(`error: No such remote '${name}'`, 2); return `${repo.remotes.get(name)}\n`; }
     if (verb === 'remove' || verb === 'rm') { repo.remotes.delete(name); return ''; }
+    if (verb === 'rename') { const url2 = repo.remotes.get(name); repo.remotes.delete(name); repo.remotes.set(url, url2); for (const [ref, sha] of [...repo.refs]) if (ref.startsWith(`refs/remotes/${name}/`)) { repo.refs.delete(ref); repo.refs.set(ref.replace(`refs/remotes/${name}/`, `refs/remotes/${url}/`), sha); } return ''; }
     if (verb === 'set-url') { repo.remotes.set(name, resolve(dir, url)); return ''; }
     return this.refuse(['remote', ...argv], 'remote verb');
   }
@@ -851,8 +889,8 @@ export class FakeGit {
       if (repo.bare) repo.refs.set(ref, sha);
       else repo.refs.set(`refs/remotes/origin/${ref.slice('refs/heads/'.length)}`, sha);
     }
+    repo.remotes.set('origin', real(resolve(dir, source)));
     if (!repo.bare) {
-      repo.remotes.set('origin', real(resolve(dir, source)));
       const branch = flags.b ?? flags.branch ?? (sourceHead.startsWith('refs/heads/') ? sourceHead.slice('refs/heads/'.length) : 'main');
       const sha = from.refs.get(`refs/heads/${branch}`);
       const state = repo.worktrees.get(real(target));
@@ -985,8 +1023,11 @@ export class FakeGit {
       const state = { head, index: new Map() };
       repo.worktrees.set(realPath, state);
       this.worktreeOwner.set(realPath, repo);
-      mkdirSync(join(realPath, '.git'), { recursive: true });
-      writeFileSync(join(realPath, '.git', 'index'), '');
+      // What a linked worktree has: a file naming its directory under the repository.
+      const admin = join(repo.gitDir, 'worktrees', realPath.split(sep).pop());
+      mkdirSync(admin, { recursive: true });
+      writeFileSync(join(admin, 'index'), 'DIRC\n');
+      writeFileSync(join(realPath, '.git'), `gitdir: ${admin}\n`);
       this.checkout(repo, state, realPath, sha);
       return '';
     }
@@ -1014,12 +1055,20 @@ export class FakeGit {
   }
 
   cmd_merge({ dir, gitDir, argv }) {
-    const flags = parse(argv, { m: 1 }, ['q', 'quiet', 'ff-only', 'no-ff', 'no-edit', 'ff']);
+    const flags = parse(argv, { m: 1 }, ['q', 'quiet', 'ff-only', 'no-ff', 'no-edit', 'ff', 'squash']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
     const [rev] = flags.rest;
     const theirs = this.resolveRev(repo, state, rev);
     const ours = this.headSha(repo, state);
     if (!theirs) this.die(`merge: ${rev} - not something we can merge`);
+    if (flags.squash) {
+      const { merged, conflicts, ourTree } = this.threeWay(repo, ours, theirs);
+      if (conflicts.length) this.die(`CONFLICT (content): Merge conflict in ${conflicts.join(', ')}\nSquash commit -- not updating HEAD\nAutomatic merge failed; fix conflicts and then commit the result.`, 1);
+      for (const [path, blob] of merged) { const full = join(worktree, path); mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, repo.blobs.get(blob)); }
+      for (const path of ourTree.keys()) if (!merged.has(path)) rmSync(join(worktree, path), { force: true });
+      state.index = new Map(merged);
+      return 'Squash commit -- not updating HEAD\n';
+    }
     if (this.ancestors(repo, ours).has(theirs)) return 'Already up to date.\n';
     if (this.ancestors(repo, theirs).has(ours)) { this.checkout(repo, state, worktree, theirs); if (state.head.startsWith('refs/')) repo.refs.set(state.head, theirs); else state.head = theirs; return '';
     }
@@ -1135,6 +1184,33 @@ export class FakeGit {
     const bytes = flags.stdin ? Buffer.from(String(input ?? '')) : readFileSync(resolve(dir, flags.rest[0]));
     return `${this.blob(repo, bytes)}\n`;
   }
+  cmd_rm({ dir, gitDir, argv, env }) {
+    const flags = parse(argv, [], ['q', 'quiet', 'f', 'force', 'r', 'cached']);
+    const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
+    const index = this.indexFor(repo, state, env);
+    for (const arg of flags.rest.filter((item) => item !== '--')) {
+      const path = relative(worktree, resolve(real(dir), arg));
+      const paths = [...index.keys()].filter((entry) => entry === path || entry.startsWith(`${path}/`));
+      if (!paths.length) this.die(`fatal: pathspec '${arg}' did not match any files`);
+      for (const entry of paths) { index.delete(entry); if (!flags.cached) rmSync(join(worktree, entry), { force: true }); }
+    }
+    return '';
+  }
+
+  cmd_mv({ dir, gitDir, argv, env }) {
+    const flags = parse(argv, [], ['q', 'quiet', 'f', 'force', 'k']);
+    const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
+    const index = this.indexFor(repo, state, env);
+    const [from, to] = flags.rest.map((arg) => relative(worktree, resolve(real(dir), arg)));
+    if (!index.has(from)) this.die(`fatal: not under version control, source=${from}, destination=${to}`);
+    mkdirSync(dirname(join(worktree, to)), { recursive: true });
+    writeFileSync(join(worktree, to), readFileSync(join(worktree, from)));
+    rmSync(join(worktree, from), { force: true });
+    index.set(to, index.get(from));
+    index.delete(from);
+    return '';
+  }
+
   cmd_update_index({ dir, gitDir, argv, env }) {
     const flags = parse(argv, { cacheinfo: 1 }, ['add', 'remove', 'refresh', 'q', 'really-refresh']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
