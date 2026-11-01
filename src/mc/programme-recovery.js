@@ -2,10 +2,10 @@
  * inside autonomous-state's programme + strict root register transaction. */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
+import { run as runGit } from './git.js';
 import { validateAutonomousProject, validateAutonomousEvidence } from './autonomous-project.js';
 import { STABLE_ID_RE } from './goal-contract.js';
 import { reviewedLanding } from './goal-followup.js';
@@ -32,6 +32,13 @@ export function projectRecovery(state) {
   return { attempt_ids: attempts.map(item => item.id), no_progress,
     exception: no_progress >= RECOVERY_ATTEMPT_LIMIT ? { code: 'no-progress', reason: `${no_progress} incomplete attempts without a new verified criterion`, reference: 'attempts' } : null,
     latest_diagnosis: state.recovery_diagnoses?.at(-1) || null };
+}
+/** An incomplete attempt leaves its work uncommitted. A planner's current retry
+ * diagnosis of every attempt is the deliberate decision to continue on that tree. */
+export function recoveryCarriesTree(state) {
+  const { attempt_ids, latest_diagnosis: diagnosis } = projectRecovery(state);
+  return attempt_ids.length > 0 && diagnosis?.action === 'retry' && diagnosis.goal_revision === state.goal_revision
+    && isDeepStrictEqual(diagnosis.attempt_ids, attempt_ids);
 }
 export function assertProjectRecovery(state) {
   const report = state.review_reports?.at(-1);
@@ -164,7 +171,7 @@ function mainRepairMeasurement(state, incident, evidenceRoot) {
       || !receipt.coverage.files.includes(incident.failure)) continue;
     // base alone is not proof: a dirty/branch candidate can be measured against
     // main. Require the actual integrated commit's tree, in the same repository.
-    const git = args => spawnSync('git', ['--git-dir', publication.repository, ...args], { encoding: 'utf8', timeout: 10_000 });
+    const git = args => runGit(undefined, ['--git-dir', publication.repository, ...args], { timeoutMs: 10_000 });
     const tree = git(['rev-parse', `${receipt.base}^{tree}`]);
     if (tree.status !== 0 || tree.stdout.trim() !== receipt.tree) continue;
     if (git(['merge-base', '--is-ancestor', landing.merge_commit, receipt.base]).status !== 0

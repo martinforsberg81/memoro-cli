@@ -868,14 +868,14 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     const code = await ship(job, {
       ...deps(),
       stdout,
-      runningRounds: () => ({ heavy: null, light: reads++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 838, lane: 'light' } : null }),
+      runningRounds: () => ({ memoro: null, 'memoro-cli': reads++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 838, lane: 'memoro-cli' } : null }),
       readMerger: () => null,
       sleep: async () => { order.push('sleep'); },
       spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
     });
     assert.equal(code, 0);
-    assert.equal(out.stdout.match(/waiting for the gate round of memoro-cli #838 in the light lane \(pid 9\)/gu).length, 1);
-    assert.equal(order.filter((step) => step === 'sleep').length, 2, 'polled until the light round was gone');
+    assert.equal(out.stdout.match(/waiting for the gate round of memoro-cli #838 in the memoro-cli lane \(pid 9\)/gu).length, 1);
+    assert.equal(order.filter((step) => step === 'sleep').length, 2, 'polled until the round was gone');
     assert.equal(order.at(-1), 'build');
   });
 
@@ -896,7 +896,7 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(order.at(-1), 'build');
   });
 
-  it('the deployer holds the heavy gate lock as a deploy while it builds, and gives it back', async () => {
+  it('the deployer holds the lane of memoro as a deploy while it builds, and gives it back', async () => {
     const calls = [];
     const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
     const code = await ship(job, {
@@ -909,10 +909,10 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
       spawnDeploy: async () => { calls.push(['build']); return { code: 3 }; },
     });
     assert.equal(code, 3);
-    assert.deepEqual(calls, [['take', 'deploy', 'heavy'], ['build'], ['release', 'heavy']], 'held for the build, released even when it fails');
+    assert.deepEqual(calls, [['take', 'deploy', 'memoro'], ['build'], ['release', 'memoro']], 'held for the build, released even when it fails');
   });
 
-  it('a round that took the heavy lane between the wait and the take is waited for again', async () => {
+  it('a round that took the lane between the wait and the take is waited for again', async () => {
     let takes = 0;
     const order = [];
     const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };

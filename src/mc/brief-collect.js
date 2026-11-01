@@ -15,10 +15,10 @@
  * `mc status` and `mc step` where they live. The file kept its name because
  * a dozen modules import from it.
  */
-import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
+import { run as runGitSync } from './git.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { PROJECT_DIR, programsArchived, programsPlans } from './plan-source.js';
 
@@ -239,7 +239,7 @@ export function summariseRuns(rows) {
 
 /** `git -C <cwd> …` as text, or `null` when it fails — the default `git` of the readers above. */
 function runGit(cwd, args) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const r = runGitSync(undefined, ['-C', cwd, ...args]);
   return r.status === 0 ? r.stdout.trimEnd() : null;
 }
 

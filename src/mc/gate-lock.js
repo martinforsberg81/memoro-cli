@@ -7,59 +7,41 @@
  * floor was invented to absorb. So one round runs, and the second is told to
  * wait.
  *
+ * The lane is the repository (Martin, 2026-11-01: *"det ska finnas en merge-lane
+ * för respektive repo så de inte körs samtidigt"*): two rounds of one repository
+ * exclude each other and two repositories run side by side. There are no
+ * classes of lane, because a class is a claim about a suite's cost, and the
+ * one memoro-cli carried had gone unmeasured from 60 s to seventeen minutes.
+ * A session's `mc gate` takes no lane at all (session-gate-run.js).
+ *
  * Each lane uses an atomic directory claim owned by a live process, plus a
  * JSON status file for existing readers. Concurrent claimants cannot both
  * acquire it. A dead process's claim can be reclaimed; reservation errors
  * refuse the run. There is no expiry that could mistake a slow run for a
  * dead one.
  *
- * Code merges, documents' tests and local gates all reserve their declared
- * lane. Heavy and light rounds may run side by side, but two rounds in the
- * same lane exclude each other. The status files keep their previous names;
- * old workers should finish before an update starts new ones.
- *
- * A session's `mc gate` on a heavy repository has its own lane (Martin,
- * 2026-10-31: *"Det måste finnas utrymme för en egen lane åt sessionerna"*).
- * In the heavy lane 74 session gates in four hours left the merge queue 32
- * minutes of it, and the deploy waiting for that lane held the queue as well.
+ * Code merges, documents' tests, the nightly run, a deploy and an iOS build
+ * reserve a lane. A deploy and an iOS build reserve memoro's (`BUILD_LANE`).
  */
-import { readFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
 import { readClaim, releaseClaim, takeClaim } from './resource-claim.js';
 
-/**
- * The lanes a gate round runs in, one round at a time in each. They exist
- * because a light round does not pin the cores the way memoro's seven-lane
- * suite does, and that pinning was the whole reason for one-at-a-time (see
- * above). `heavy` is memoro and any repository that declares nothing;
- * `light` is a repository whose declaration says `gate_lane: 'light'`.
- */
-export const GATE_LANES = Object.freeze(['heavy', 'light']);
+/** The lane a deploy and an iOS build hold: they build memoro, and go between its rounds. */
+export const BUILD_LANE = 'memoro';
 
-/**
- * The lane session gates run in, one at a time, beside the two above. It is
- * not in `GATE_LANES`, because those are the lanes with rounds: the merger
- * serves them, a repository declares one, and a deploy waits for them. A deploy
- * or the merger waiting here would be the starvation this lane ends.
- */
-export const SESSION_LANE = 'session';
+const LOCK_NAME = /^gate-running-(.+)\.json$/u;
 
-/** Where a session's gate runs: its own lane, unless the repository is declared light. */
-export function sessionLaneOf(lane) {
-  return lane === 'light' ? 'light' : SESSION_LANE;
-}
-
-const LOCK_FILES = Object.freeze({ light: 'gate-running-light.json', [SESSION_LANE]: 'gate-running-session.json' });
-
-export function gateLockPath(root = mcHome(), lane = 'heavy') {
-  return join(root, LOCK_FILES[lane] || 'gate-running.json');
+export function gateLockPath(root = mcHome(), lane) {
+  if (!lane || /[/\\\0]/u.test(lane)) throw new Error(`a gate lane is a repository's name, not ${JSON.stringify(lane)}`);
+  return join(root, `gate-running-${lane}.json`);
 }
 
 /** The round running right now in this lane, or null. A file that will not parse is nobody. */
-export function runningRound({ root = mcHome(), alive = isAlive, lane = 'heavy' } = {}) {
+export function runningRound({ root = mcHome(), alive = isAlive, lane } = {}) {
   const claim = readClaim(`${gateLockPath(root, lane)}.claim`);
   let raw = null;
   try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { /* a claim may precede its status file */ }
@@ -71,9 +53,12 @@ export function runningRound({ root = mcHome(), alive = isAlive, lane = 'heavy' 
   return { ...raw, lane };
 }
 
-/** The round in each lane, `{ heavy, light }`, for a reader that means any round. */
+/** The round in each repository's lane, by name, for a reader that means any round. */
 export function runningRounds({ root = mcHome(), alive = isAlive } = {}) {
-  return Object.fromEntries(GATE_LANES.map((lane) => [lane, runningRound({ root, alive, lane })]));
+  let names = [];
+  try { names = readdirSync(root); } catch { /* no home, no rounds */ }
+  const lanes = new Set(names.map((name) => LOCK_NAME.exec(name.replace(/\.claim$/u, ''))?.[1]).filter(Boolean));
+  return Object.fromEntries([...lanes].map((lane) => [lane, runningRound({ root, alive, lane })]));
 }
 
 /**
@@ -83,12 +68,12 @@ export function runningRounds({ root = mcHome(), alive = isAlive } = {}) {
  * running }` when somebody else does — `running` is what to tell the operator,
  * and it is the other round's own words rather than a guess.
  *
- * `pid` is the holder, this process unless said otherwise: a session's `mc
- * gate` worker owns the lane while its tests run, and the lock is litter
- * once that worker is gone.
+ * `pid` is the holder, this process unless said otherwise: a docs gate
+ * hands in the worker that owns the lane while its tests run, and the lock is
+ * litter once that worker is gone.
  */
 export function takeGateLock({
-  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane = 'heavy', pid = process.pid,
+  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane, pid = process.pid,
 } = {}) {
   const mine = {
     pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
@@ -119,7 +104,7 @@ export function takeGateLock({
  * dying. Deleting the file blindly would then release somebody else's round,
  * which is the one way a lock this simple could do real damage.
  */
-export function releaseGateLock({ root = mcHome(), lane = 'heavy', pid = process.pid } = {}) {
+export function releaseGateLock({ root = mcHome(), lane, pid = process.pid } = {}) {
   const path = `${gateLockPath(root, lane)}.claim`;
   const claim = readClaim(path);
   if (claim && claim.pid !== pid) return false;
@@ -148,7 +133,7 @@ export function releaseGateLock({ root = mcHome(), lane = 'heavy', pid = process
  * within the last second of the one already on disk is not written again —
  * one write a second is plenty for a page nobody refreshes faster than that.
  */
-export function noteGatePhase({ root = mcHome(), message, now = new Date(), lane = 'heavy' } = {}) {
+export function noteGatePhase({ root = mcHome(), message, now = new Date(), lane } = {}) {
   let raw = null;
   try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { return false; }
   if (raw?.pid !== process.pid) return false;
@@ -172,7 +157,7 @@ export function describeRunning(running, lane = running?.lane) {
   if (!running) return `another gate round is running on this machine${where}`;
   const what = [running.repo, running.pr == null ? null : `#${running.pr}`].filter(Boolean).join(' ');
   return `another gate round is running on this machine${where} (pid ${running.pid}${what ? `, ${what}` : ''}`
-    + `${running.since ? `, since ${running.since}` : ''}) — one at a time in each lane`;
+    + `${running.since ? `, since ${running.since}` : ''}) — one at a time in each repository's lane`;
 }
 
 function isAlive(pid) {

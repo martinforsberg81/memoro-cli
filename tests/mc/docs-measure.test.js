@@ -18,6 +18,7 @@ import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 const GATE = mkdtempSync(join(tmpdir(), 'docs-measure-'));
 const REPO = '/repos/memoro';
 const PR = 14188;
+const LANE = 'memoro';
 const DIR = join(GATE, repoFileSlug(REPO), `docs-${PR}`);
 const FILES = ['tests/docs/doc-links.test.js', 'tests/docs/msr.test.js'];
 
@@ -73,14 +74,14 @@ function measure(log, overrides = {}) {
 }
 
 describe('measureDocs — the tests the selector draws for a documents-only pull request', () => {
-  it('reserves its declared lane before preparation and releases it after cleanup, even on failure', async () => {
+  it('reserves the lane of its repository before preparation and releases it after cleanup, even on failure', async () => {
     const log = recorder();
     const events = [];
     const result = await measure(log, {
-      declaration: () => ({ ok: true, declaration: { select: 'select', gate_lane: 'light' } }),
-      takeLane: async ({ lane }) => { assert.equal(lane, 'light'); events.push('reserved'); },
+      declaration: () => ({ ok: true, declaration: { select: 'select' } }),
+      takeLane: async ({ lane }) => { assert.equal(lane, LANE); events.push('reserved'); },
       select: async () => { assert.deepEqual(events, ['reserved']); throw new Error('selector crashed'); },
-      releaseLane: ({ lane }) => { assert.equal(lane, 'light'); assert.equal(existsSync(DIR), false); events.push('released'); },
+      releaseLane: ({ lane }) => { assert.equal(lane, LANE); assert.equal(existsSync(DIR), false); events.push('released'); },
     });
     assert.equal(result.ok, false);
     assert.deepEqual(events, ['reserved', 'released']);

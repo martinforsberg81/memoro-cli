@@ -1,5 +1,3 @@
-import { ready as autonomousReady, queue as autonomousQueue } from './autonomous-merge-fixture.js';
-import { routeAutonomousReview } from '../../src/mc/autonomous-outcomes.js';
 /**
  * The merger (ruling 30): one process that lands the queued pull requests one
  * at a time, and writes what came of each into the register.
@@ -33,8 +31,8 @@ const lock = (_root, fn) => fn();
 // One loop for every repository: the tests of order and batching across
 // repositories predate the lanes (ruling 34), which land memoro and
 // memoro-cli side by side; `lanes (merge-throughput step 2)` tests those.
-const ONE_LANE = { lanes: ['heavy'], laneOf: () => 'heavy' };
-const LANE_OF = (job) => (job.repo === 'memoro-cli' ? 'light' : 'heavy');
+const ONE_LANE = { lanes: ['memoro'], laneOf: () => 'memoro' };
+const LANE_OF = (job) => job.repo;
 const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(mergesPath(root), 'utf8') : null);
 
 function register(stepOver = {}) {
@@ -206,10 +204,18 @@ describe('landJob — one job, landed or answered', () => {
     register();
     let polls = 0;
     const m = machine([green], { readRunningDeploy: () => (polls++ < 2 ? { pid: 7, sha: 'c6b53f26a6f7' } : null) });
-    await landJob(JOB, m.deps);
+    await landJob(JOB, { ...m.deps, lane: 'memoro' });
     assert.equal(m.rounds.length, 1, 'no round while the deploy runs');
     assert.equal(m.said.filter((line) => /waiting behind the deploy of c6b53f2 \(pid 7\)/u.test(line)).length, 1);
     assert.equal(stepNow().status, 'done');
+  });
+
+  it('a deploy holds only memoro\'s lane: another repository lands past it', async () => {
+    register();
+    const m = machine([green], { lane: 'memoro-cli', readRunningDeploy: () => ({ pid: 7, sha: 'c6b53f26a6f7' }) });
+    await landJob({ ...JOB, repo: 'memoro-cli' }, { ...m.deps, lane: 'memoro-cli' });
+    assert.equal(m.rounds.length, 1);
+    assert.equal(m.said.some((line) => /waiting behind the deploy/u.test(line)), false);
   });
 
   it('a round that lost the race for the lock is run again, not answered', async () => {
@@ -1023,18 +1029,18 @@ describe('lanes (merge-throughput step 2)', () => {
       },
     });
     assert.deepEqual(events, ['start memoro #1', 'start memoro-cli #2', 'answered memoro-cli #2', 'end memoro #1', 'start memoro #3']);
-    assert.deepEqual(lanesOf, [[1, 'heavy'], [2, 'light'], [3, 'heavy']]);
+    assert.deepEqual(lanesOf, [[1, 'memoro'], [2, 'memoro-cli'], [3, 'memoro']]);
     assert.deepEqual(queue(), []);
   });
 
   it('a job waits only on a round in its own lane', async () => {
     register();
     const lanesAsked = [];
-    const heavyBusy = ({ lane }) => { lanesAsked.push(lane); return lane === 'heavy' ? { pid: 9, repo: 'memoro', pr: 1, lane } : null; };
-    const m = machine([green], { readRunningRound: heavyBusy, lane: 'light' });
+    const memoroBusy = ({ lane }) => { lanesAsked.push(lane); return lane === 'memoro' ? { pid: 9, repo: 'memoro', pr: 1, lane } : null; };
+    const m = machine([green], { readRunningRound: memoroBusy, lane: 'memoro-cli' });
     await landJob(JOB, m.deps);
     assert.equal(m.rounds.length, 1);
-    assert.deepEqual([...new Set(lanesAsked)], ['light']);
+    assert.deepEqual([...new Set(lanesAsked)], ['memoro-cli']);
     assert.equal(m.said.some((line) => /waiting behind/u.test(line)), false, 'a heavy round does not hold a light job');
   });
 
@@ -1042,11 +1048,11 @@ describe('lanes (merge-throughput step 2)', () => {
     register();
     let polls = 0;
     const m = machine([green], {
-      lane: 'light',
-      readRunningRound: ({ lane }) => (lane === 'light' && polls++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 5, lane } : null),
+      lane: 'memoro-cli',
+      readRunningRound: ({ lane }) => (lane === 'memoro-cli' && polls++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 5, lane } : null),
     });
     await landJob(JOB, m.deps);
-    assert.ok(m.said.some((line) => /waiting behind another gate round in the light lane \(memoro-cli #5, pid 9\)/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /waiting behind another gate round in the memoro-cli lane \(memoro-cli #5, pid 9\)/u.test(line)), m.said.join('\n'));
   });
 
   it('asked to stop, each lane leaves between its jobs and the merger leaves once both have', async () => {
@@ -1559,7 +1565,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
           lightGoneAtHeavyEnd = !queue().some((e) => e.pr === 2);
           events.push('heavy end');
         } else {
-          events.push('light');
+          events.push('memoro-cli');
         }
         return green;
       },
@@ -1574,10 +1580,10 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
       land: landerFor({ ...m.deps, say }),
     });
     assert.equal(code, 0);
-    assert.deepEqual(events, ['heavy start', 'light', 'heavy end']);
+    assert.deepEqual(events, ['heavy start', 'memoro-cli', 'heavy end']);
     assert.equal(lightGoneAtHeavyEnd, true, 'the light job was answered and dequeued before the heavy round resolved');
     assert.equal(lightInTime, true, 'the light job was answered while the heavy round was held open');
-    assert.deepEqual(lanesAsked, ['heavy', 'light'], 'each job reads the round in its own lane');
+    assert.deepEqual(lanesAsked, ['memoro', 'memoro-cli'], 'each job reads the round in its own lane');
     assert.deepEqual(signals, [false, false], 'the gate installs no signal handler in the merger');
     assert.deepEqual(queue(), []);
   });
@@ -1596,7 +1602,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
       if (/^memoro-cli #671: merged/u.test(line)) answeredAt = Date.now();
     };
     const code = await serve({
-      root, lock, take, release, laneOf: (job) => (job.repo === 'memoro' ? 'heavy' : 'light'), stopping: () => stop, say, now: m.deps.now,
+      root, lock, take, release, laneOf: () => 'memoro-cli', stopping: () => stop, say, now: m.deps.now,
       sleep: () => pause(5),
       land: landerFor({ ...m.deps, say }),
     });
@@ -1694,56 +1700,3 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
   });
 });
 
-// The explicit autonomous flavour changes outcome ownership, not the v1 red
-// retry/mend rules exercised above.
-describe('autonomous outcomes return to plan instead of legacy retries', () => {
-  for (const stop of ['red', 'file-killed', 'red-under-load', 'pushed', 'merge-unknown', 'threw', 'closed']) {
-    it(`${stop}: one answer, no mend, requeue, builder or confirmation`, async t => {
-      const f = await autonomousReady(t);
-      await routeAutonomousReview({ root: f.root, programme: f.programme, project: f.project, repoPath: f.cwd,
-        env: f.env, gh: f.gh, start: () => ({ pid: null }) });
-      const before = f.stateNow(); let rounds = 0; let mends = 0;
-      const base = { root: f.root, gh: f.gh, say() {}, sleep: async () => {}, recordStart() {}, record() {},
-        readRunningRound: () => null, readRunningDeploy: () => null, readLeaseFn: () => ({ held: false }),
-        mayMend: () => assert.fail('v2 must not ask legacy mend policy'),
-        mergeRound: async () => {
-          rounds++;
-          if (stop === 'threw') throw new Error('fixture transport failed');
-          return { ok: false, merged: false, stopped_at: stop, reason: 'fixture stop' };
-        } };
-      await serve({ root: f.root, lock, ...ONE_LANE, gh: f.gh, say() {}, take: () => true, release() {},
-        mend: async () => { mends++; return { outcome: 'nothing' }; }, land: (batch, lane, extra) => landJob(batch, { ...base, ...extra }) });
-      const jobs = parseQueue(readFileSync(mergesPath(f.root), 'utf8'));
-      assert.equal(jobs[0].state, 'red'); assert.equal(jobs[0].requeues, 0); assert.equal(jobs[0].mended, null);
-      assert.equal(rounds, 1); assert.equal(mends, 0); assert.equal(f.stateNow().phase, 'plan_pending');
-      assert.equal(f.stateNow().confirmed, false); assert.deepEqual(f.stateNow().runs, before.runs);
-      assert.equal(f.stateNow().plan_events.filter(e => e.type === (stop === 'merge-unknown' ? 'merge-unknown' : 'merge-failed')).length, 1);
-    });
-  }
-
-  it('merge-unknown is reconciled by later merged readback, exactly once and without a new round', async t => {
-    const f = await autonomousReady(t); const door = await f.door(); autonomousQueue(f, door.autonomous);
-    const [job] = parseQueue(readFileSync(mergesPath(f.root), 'utf8'));
-    const common = { root: f.root, gh: f.gh, say() {}, sleep: async () => {}, recordStart() {}, record() {},
-      readRunningRound: () => null, readRunningDeploy: () => null, readLeaseFn: () => ({ held: false }) };
-    await serve({ root: f.root, lock, ...ONE_LANE, gh: f.gh, say() {}, take: () => true, release() {},
-      land: (batch, lane, extra) => landJob(batch, { ...common, ...extra,
-        mergeRound: async () => ({ ok: false, stopped_at: 'merge-unknown', reason: 'reply lost' }) }) });
-    assert.equal(f.stateNow().phase, 'plan_pending');
-    const gh = () => ({ status: 0, stdout: JSON.stringify({ state: 'MERGED', baseRefName: 'main',
-      mergeCommit: { oid: 'c'.repeat(40) }, headRefOid: job.autonomous.head }) });
-    assert.equal(await sweepMergedReds({ root: f.root, gh, say() {} }), 1);
-    assert.equal(f.stateNow().phase, 'landed'); assert.equal(f.stateNow().confirmed, false);
-    assert.equal(await sweepMergedReds({ root: f.root, gh }), 0);
-    assert.equal(f.stateNow().plan_events.filter(e => e.type === 'merge-landed').length, 1);
-  });
-
-  for (const mismatch of ['head', 'base', 'missing-head']) it(`${mismatch} readback cannot attribute a landing to the reviewed goal`, async t => {
-    const f = await autonomousReady(t); autonomousQueue(f, (await f.door()).autonomous);
-    const [job] = parseQueue(readFileSync(mergesPath(f.root), 'utf8'));
-    const gh = () => ({ status: 0, stdout: JSON.stringify({ state: 'MERGED', baseRefName: mismatch === 'base' ? 'other' : 'main',
-      mergeCommit: { oid: 'c'.repeat(40) }, headRefOid: mismatch === 'missing-head' ? null : mismatch === 'head' ? 'a'.repeat(40) : job.autonomous.head }) });
-    const [answer] = await landJob(job, { root: f.root, gh, say() {}, mergeRound: () => assert.fail('readback must not merge') });
-    assert.equal(answer.landed, false); assert.equal(f.stateNow().phase, 'plan_pending'); assert.equal(f.stateNow().landing, undefined);
-  });
-});

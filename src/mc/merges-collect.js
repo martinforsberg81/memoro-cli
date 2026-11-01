@@ -13,7 +13,7 @@
  * stays importing nothing about leases or a list of repositories — the
  * "whole surface is the round and its phase" that its own tests pin.
  */
-import { SESSION_LANE, runningRound, runningRounds } from './gate-lock.js';
+import { runningRounds } from './gate-lock.js';
 import { readLease } from './repo-lease.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { mcHome } from './paths.js';
@@ -40,8 +40,7 @@ export function runningMerges({
   root = mcHome(), repos = [], alive = undefined, now = new Date(),
 } = {}) {
   const rounds = runningRounds({ root, ...(alive ? { alive } : {}) });
-  const session = runningRound({ root, lane: SESSION_LANE, ...(alive ? { alive } : {}) });
-  return [...Object.values(rounds), session].filter(Boolean).map((running) => named(running, { root, repos, now }));
+  return Object.values(rounds).filter(Boolean).map((running) => named(running, { root, repos, now }));
 }
 
 function named(running, { root, repos, now }) {
@@ -55,7 +54,7 @@ function named(running, { root, repos, now }) {
   return {
     repo: match ? match.name : running.repo,
     slug: running.repo,
-    lane: running.lane || 'heavy',
+    lane: running.lane,
     pr: running.pr ?? null,
     pid: running.pid,
     mode: running.mode || null,

@@ -28,9 +28,9 @@
  * once in one lane. There is a lock per gate lane (ruling 34, gate-lock.js),
  * and the merger runs one loop per lane: memoro-cli's minute-long rounds no
  * longer wait behind memoro's fifteen. Still one process and one pid. The merger waits them out; it has nobody to give up to. It waits out
- * a running deploy the same way, before a round and never inside one: the
- * deployer lets the round in flight finish, builds alone, and the queue goes
- * on after it.
+ * a running deploy the same way in memoro's lane, before a round and never
+ * inside one: the deployer lets the round in flight finish, builds alone, and
+ * that queue goes on after it. Another repository's lane does not wait for it.
  */
 import { spawn as realSpawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
@@ -40,9 +40,10 @@ import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
-import { GATE_LANES, runningRound } from './gate-lock.js';
+import { BUILD_LANE, runningRound } from './gate-lock.js';
 import {
   dequeue, enqueue, heldBy, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
@@ -51,7 +52,7 @@ import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { bookBuilt, landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
-import { gateLaneOf } from './repo-gate-table.js';
+import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
 import { autonomousPrOwner } from './autonomous-pr.js';
@@ -297,7 +298,7 @@ export function stepsBeforeDone(root, { read = realRead } = {}) {
 // Without holding the event loop: a restack of a memoro branch took 29 s on
 // 2026-10-10, and the other lane stood still for all of it.
 const realGit = async (cwd, args) => {
-  const r = await runTool('git', args, { cwd });
+  const r = await runGitAsync(cwd, args);
   return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
 };
 
@@ -534,9 +535,8 @@ export async function landJob(batch, {
   moveOntoMain = restack,
   // The page's PR cache, told at once (page-cache.js `dropPr`).
   dropFromPage = dropPr,
-  // The gate lane the batch's repository runs in: the round waited for is
-  // the one in this lane, and a round in the other lane is no reason to wait.
-  lane = 'heavy',
+  // The repository's lane: the round waited for is the one in this lane.
+  lane = null,
   // Whether a red gets its one mend first (mend.js `mayMend`). Off unless
   // the caller mends: `serve` with a `mend` is what sets such a job aside.
   mayMend = () => false,
@@ -625,13 +625,16 @@ export async function landJob(batch, {
     // the queue goes on after it (Martin, 2026-10-10). Its `running` row is
     // written before the deployer starts, so it is seen here before the
     // deployer looks at the gate.
-    const deploying = readRunningDeploy();
-    const running = readRunningRound({ alive, lane });
+    // Only memoro's lane: the deploy builds memoro, and a light repository's
+    // round neither touches that build nor can be touched by it. memoro-cli
+    // sat behind a 76-minute deploy on 2026-11-01 for no reason but this check.
+    const deploying = (lane ?? gateLaneOf(job.repo)) === BUILD_LANE ? readRunningDeploy() : null;
+    const running = readRunningRound({ alive, lane: lane ?? gateLaneOf(job.repo) });
     const lease = readLeaseFn(job.repo_path);
     const blocking = lease?.held && !lease.orphaned;
     if (deploying || running || blocking) {
       const why = deploying ? `the deploy of ${String(deploying.sha || '').slice(0, 7) || '?'} (pid ${deploying.pid})`
-        : running ? `another gate round in the ${lane} lane (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
+        : running ? `another gate round in the ${lane ?? gateLaneOf(job.repo)} lane (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
       if (why !== said) { say(`${label}: waiting behind ${why}`); said = why; }
       await sleep(MERGER_POLL_MS);
       continue;
@@ -844,7 +847,9 @@ export async function serve({
   laneOf = (job) => gateLaneOf(job.repo),
   // The most jobs one round lands (merge-queue.js): one, unless a test asks.
   batchMax = MERGE_BATCH_MAX,
-  lanes = GATE_LANES,
+  // A loop for each declared repository, so a job queued during another's round
+  // starts at once; a job of any other repository opens its own.
+  lanes = gateLanes({ root }),
   // How long a loop with nothing in its lane waits before it looks again while
   // the other is landing: a job queued meanwhile saw this merger alive and
   // started none, so this loop is the one that has to find it.
@@ -989,7 +994,12 @@ export async function serve({
     changed();
   };
 
+  // One loop per repository with work, opened as its first job is seen.
+  const loops = new Map();
+  const openLane = (lane) => { if (lane && !loops.has(lane)) loops.set(lane, loop(lane)); };
+  const openLanes = (entries) => { for (const job of entries) openLane(laneOf(job)); };
   const loop = async (lane) => {
+    await null; // Its first pass after the caller's own, never inside the queue lock.
     for (;;) {
       if (leaving) return;
       if (stopping()) {
@@ -1002,6 +1012,7 @@ export async function serve({
       // started the successor, so no new batch here. A round in flight in the
       // other lane is answered and that lane leaves at the top of its loop.
       if (await codeMoved()) { leaving = true; changed(); return; }
+      let pending = [];
       const batch = lock(root, () => {
         let entries = parseQueue(read(mergesPath(root)));
         // A mend whose merger is gone goes back in line on this pass too.
@@ -1010,7 +1021,7 @@ export async function serve({
         entries = swept;
         // A job a dead merger was landing whose earlier step is no longer
         // `done` goes back in line rather than being landed out of order.
-        const back = heldLanding(entries, { ordered, held }).filter((job) => (laneOf(job) || 'heavy') === lane);
+        const back = heldLanding(entries, { ordered, held }).filter((job) => laneOf(job) === lane);
         for (const job of back) {
           entries = markQueued(entries, job);
           say(`${job.repo} #${job.pr}: back in line — ${job.step.project} step ${job.step.index} is not done`);
@@ -1021,12 +1032,14 @@ export async function serve({
           entries = next.reduce((all, job) => markLanding(all, job, started, pid), entries);
         }
         if (next.length || back.length || restored) write(mergesPath(root), entries);
+        pending = entries;
         return next;
       });
+      openLanes(pending);
       if (!batch.length) {
         await sweepReds();
         idle.add(lane);
-        if (idle.size < lanes.length || mends?.busy()) {
+        if (idle.size < loops.size || mends?.busy()) {
           // The other lane is landing. Looked at again when it answers a job,
           // when it has nothing either, or after a poll — whichever is first.
           // A mend running or waiting is looked at again when it settles: it
@@ -1045,7 +1058,8 @@ export async function serve({
         // that one's next `mc merge` starts a merger again.
         release();
         const entries = parseQueue(read(mergesPath(root)));
-        if (!lanes.some((one) => batchIn(entries, one).length) || !take()) {
+        openLanes(entries);
+        if (![...loops.keys()].some((one) => batchIn(entries, one).length) || !take()) {
           say('nothing the merger may take — leaving');
           leaving = true; changed(); return;
         }
@@ -1105,7 +1119,10 @@ export async function serve({
   };
 
   try {
-    await Promise.all(lanes.map(loop));
+    openLanes(parseQueue(read(mergesPath(root))));
+    for (const lane of lanes) openLane(lane);
+    // A job of a new repository opens a loop while the others run.
+    for (let settled = 0; settled < loops.size; settled = loops.size) await Promise.all(loops.values());
     // Asked to stop or leaving for new code, a mend not started yet is
     // dropped (its entry stays `mending`, and the next merger puts it back in
     // line); a running one is waited for, up to its own wall clock.

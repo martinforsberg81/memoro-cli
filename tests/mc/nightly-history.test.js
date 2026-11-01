@@ -278,7 +278,7 @@ describe('the tick writes it', () => {
     const root = home();
     try {
       store(root, measured(0, ['data-bus event names']));
-      writeFileSync(gateLockPath(root), JSON.stringify({
+      writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({
         pid: process.pid, repo: 'memoro', pr: 11082, since: day(1),
       }));
       await nightlyTick({ root, repos: [{ name: 'memoro', path: REPO }], round: () => { throw new Error('the tick ran a round'); } });

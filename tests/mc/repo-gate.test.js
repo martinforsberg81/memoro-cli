@@ -18,7 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -705,7 +705,7 @@ describe('one gate round at a time', () => {
     const fx = fixture();
     try {
       // A live round: this test's own pid is the one thing certain to be alive.
-      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({
+      writeFileSync(gateLockPath(fx.mcHome, 'repo'), JSON.stringify({
         pid: process.pid, repo: 'other-repo', pr: 77, since: '2026-08-30T09:00:00.000Z',
       }));
       const result = await fx.run();
@@ -715,7 +715,7 @@ describe('one gate round at a time', () => {
       assert.match(result.reason, /one at a time/u);
       assert.deepEqual(fx.ran('suite'), [], 'no suite ran alongside another round');
       assert.equal(fx.lease().held, false, 'the repository lease was given back');
-      assert.equal(runningRound({ root: fx.mcHome }).pr, 77, 'and the other round was not touched');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }).pr, 77, 'and the other round was not touched');
     } finally { fx.cleanup(); }
   });
 
@@ -726,7 +726,7 @@ describe('one gate round at a time', () => {
       const result = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(result.stopped_at, 'red');
       assert.ok(progress.some((line) => /^gate round started \(pid \d+\) — one at a time/u.test(line)), progress.join('\n'));
-      assert.equal(runningRound({ root: fx.mcHome }), null, 'released even though the round was red');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'released even though the round was red');
     } finally { fx.cleanup(); }
   });
 
@@ -736,10 +736,10 @@ describe('one gate round at a time', () => {
       // What a killed round leaves behind. There is no clock that can tell a
       // slow round from a dead one — a round is supposed to take minutes — so
       // the only honest question is whether the pid exists.
-      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({ pid: 999_999, repo: 'x', pr: 1 }));
+      writeFileSync(gateLockPath(fx.mcHome, 'repo'), JSON.stringify({ pid: 999_999, repo: 'x', pr: 1 }));
       const result = await fx.run();
       assert.notEqual(result.stopped_at, 'busy', 'a dead round does not block the next one');
-      assert.equal(runningRound({ root: fx.mcHome }), null);
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null);
     } finally { fx.cleanup(); }
   });
 
@@ -748,7 +748,7 @@ describe('one gate round at a time', () => {
     try {
       const file = join(root, 'file');
       writeFileSync(file, 'not a directory');
-      const out = takeGateLock({ repo: 'x', pr: 1, root: file });
+      const out = takeGateLock({ repo: 'x', pr: 1, root: file, lane: 'repo' });
       assert.equal(out.ok, false);
       assert.match(out.error, /cannot reserve/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -2921,6 +2921,26 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
 });
 
 describe('the suite\'s environment and its time', () => {
+  it('selectFiles: main_only leaves a pull request\'s selection, unless it is all that was selected', async () => {
+    const select = (files, mainOnly) => selectFiles({ command: `printf '%s' '${JSON.stringify({ files })}'`, cwd: tmpdir(), env: process.env, say: () => {}, mainOnly });
+    assert.deepEqual((await select(['a.test.js', 'ratchet.test.js'], ['ratchet.test.js'])).files, ['a.test.js']);
+    assert.deepEqual((await select(['ratchet.test.js'], ['ratchet.test.js'])).files, ['ratchet.test.js']);
+    assert.deepEqual((await select(['a.test.js', 'ratchet.test.js'])).files, ['a.test.js', 'ratchet.test.js']);
+  });
+
+  it('directGitDir: a link to the toolchain git on macOS, nothing elsewhere or when none answers', () => {
+    const home = mkdtempSync(join(tmpdir(), 'mc-direct-git-'));
+    try {
+      const target = join(home, 'real-git'); writeFileSync(target, '');
+      assert.equal(directGitDir({ home, platform: 'linux', target: () => target }), null);
+      assert.equal(directGitDir({ home, platform: 'darwin', target: () => null }), null);
+      const dir = directGitDir({ home, platform: 'darwin', target: () => target });
+      assert.equal(dir, join(home, 'direct-git'));
+      assert.equal(readlinkSync(join(dir, 'git')), target);
+      assert.equal(directGitDir({ home, platform: 'darwin', target: () => target }), dir, 'a second suite finds the link');
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it('suiteEnv: a suite never inherits the runner\'s own ~/mc or a nested test context', () => {
   const env = suiteEnv({ MC_WORK_ROOT: '/Users/me/mc', MC_HOME: '/Users/me/.memoro/mc', NODE_TEST_CONTEXT: 'child', MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
   assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', PATH: '/bin' });

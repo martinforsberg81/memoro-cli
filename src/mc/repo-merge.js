@@ -30,6 +30,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
@@ -122,7 +123,7 @@ export async function runMergeRound({
   // Without holding the event loop (child-async.js): the merger's other lane
   // lands while this round fetches, freshens and merges.
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
-  const askGit = git || run('git');
+  const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askGh = gh || run('gh');
 
   const report = {

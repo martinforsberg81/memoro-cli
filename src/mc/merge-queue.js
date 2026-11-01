@@ -265,10 +265,10 @@ export const MERGE_BATCH_MAX = 1;
  * names (another live merger's) are not taken, a `landing` one included.
  */
 export function nextBatch(entries, {
-  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy', now = null,
+  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = (entry) => entry.repo, now = null,
   held = () => false,
 } = {}) {
-  const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
+  const mine = lane ? entries.filter((entry) => laneOf(entry) === lane) : entries;
   const line = queueOrder(inLine(mine).filter(takeable).filter(due(now)).filter((entry) => !held(entry)));
   // A resumed member whose earlier step is no longer `done` is not landed:
   // the merger puts it back in line (`heldLanding`).

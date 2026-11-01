@@ -20,13 +20,15 @@ import { appendFileSync, mkdirSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import { runShell, runTool } from './child-async.js';
+import { runShell } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { declarationFor } from './repo-gate-table.js';
 import { realTests, selectFiles } from './repo-gate.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { mcHome, workGatePath } from './paths.js';
 import { takeLane } from './gate-lane-wait.js';
 import { releaseGateLock } from './gate-lock.js';
+import { gateLaneOf } from './repo-gate-table.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { redFiles, redNames, redTests, tapTotals } from './tap-red.js';
 
@@ -52,7 +54,7 @@ export async function measureDocs({
   const controller = new AbortController();
   const interrupted = () => controller.abort();
   const io = {
-    git: deps.git ?? ((args, { cwd }) => runTool('git', args, { cwd, env })),
+    git: deps.git ?? ((args, { cwd }) => runGitAsync(cwd, args, { env })),
     shell: deps.shell ?? ((command, { cwd }) => runShell(command, { cwd, env, signal: controller.signal, timeoutMs: 60 * 60_000 })),
     declaration: deps.declaration ?? declarationFor,
     select: deps.select ?? selectFiles,
@@ -75,7 +77,7 @@ export async function measureDocs({
   }
 
   const dir = join(io.gateDir, repoFileSlug(repoPath), `docs-${pr}`);
-  const lane = declared.declaration.gate_lane || 'heavy';
+  const lane = gateLaneOf(repoPath);
   const reservation = { root: mcHome(env), lane, repo: repoFileSlug(repoPath), mode: 'docs-gate' };
   const logPath = join(io.outputDir, `docs-${repoFileSlug(repoPath)}-${pr}-${randomUUID()}.log`);
   let holding = false;

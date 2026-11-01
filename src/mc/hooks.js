@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
+import { run as runGit } from './git.js';
 import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
 
@@ -29,7 +30,7 @@ export const BEHIND_WARNING = 50;
 /** The escape a command carries when the turn really means the raw tool. */
 export const ALLOW_MARK = 'MC_HOOK_ALLOW=1';
 
-const gitIn = (cwd) => (args) => spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 5_000 });
+const gitIn = (cwd) => (args) => runGit(cwd, args, { timeoutMs: 5_000 });
 
 /**
  * The repository a directory belongs to, when it is one mc knows: the name
@@ -228,9 +229,9 @@ export const BASH_RULES = [
     reason: SUITE_REASON,
   },
   {
-    // The suite, or a run of test files beside the gate lane: every test run
-    // a session starts goes through `mc gate`, which waits its turn in the
-    // lane (2026-10-24). `npm run test:<x>` is a script of its own and passes.
+    // The suite, or a run of test files beside `mc gate`: every test run a
+    // session starts goes through it, at low priority and bounded by measured
+    // time. `npm run test:<x>` is a script of its own and passes.
     id: 'npm-test',
     test: /(^|[;&|(]\s*|\s)npm\s+(run\s+)?test(?![\w:-])/u,
     reason: SUITE_REASON,

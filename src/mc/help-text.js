@@ -295,11 +295,10 @@ IN FULL
                                     ones are reported and never removed
   mc gate <test files…> [--test-name-pattern <p>] [--json] [--budget <s>]
                                     The named test files with this
-                                    repository's node --test flags, run in its
-                                    gate lane: the worker waits while a merge
-                                    round, a deploy, an iOS build or another
-                                    session's gate holds the lane, so no two
-                                    runs share its cores. The whole output in a
+                                    repository's node --test flags, started at
+                                    once at low priority beside merge rounds;
+                                    only a deploy or iOS build of memoro goes
+                                    first. The whole output in a
                                     file and at most 2 KB printed: GREEN or RED,
                                     the counts, the failing lines and their
                                     locations, the re-run line, the file's path.

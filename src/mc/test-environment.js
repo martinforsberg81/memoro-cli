@@ -31,6 +31,7 @@ import { join, resolve } from 'node:path';
 
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
+import { run as runGit } from './git.js';
 import {
   admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer,
 } from './dev-servers.js';
@@ -143,7 +144,7 @@ export function sharedWorktree(env = process.env) {
  * A worktree is what git says it is, not what the path looks like.
  */
 export function callerWorktree(cwd = process.cwd(), deps = {}) {
-  const git = deps.git || ((args) => spawnSync('git', args, { cwd, encoding: 'utf8' }));
+  const git = deps.git || ((args) => runGit(cwd, args));
   const asked = git(['rev-parse', '--show-toplevel']);
   if (asked.status !== 0) return null;
   const path = String(asked.stdout || '').trim();
@@ -250,7 +251,7 @@ export function startArgvFor(worktree, declaration, { service: wanted = null } =
 export function builtFromMoved(server, worktree, deps = {}) {
   const was = String(server?.built_from?.commit || '').trim();
   if (!was) return null;
-  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const git = deps.git || ((args) => runGit(worktree, args));
   const asked = git(['rev-parse', 'HEAD']);
   if (asked.status !== 0) return null;
   const now = String(asked.stdout || '').trim();
@@ -279,7 +280,7 @@ export function editedSince(server, worktree, deps = {}) {
   if (!server?.built_from) return null;
   const startedMs = Date.parse(server.started_at || '');
   if (!Number.isFinite(startedMs)) return null;
-  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const git = deps.git || ((args) => runGit(worktree, args));
   const asked = git(['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
   if (asked.status !== 0) return null;
   const stat = deps.statSync || statSync;

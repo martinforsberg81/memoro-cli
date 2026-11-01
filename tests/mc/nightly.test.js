@@ -93,7 +93,7 @@ describe('a tick', () => {
     try {
       // A live pid, because a dead one is litter rather than a holder — the
       // whole of `gate-lock`'s reaping.
-      writeFileSync(gateLockPath(root), JSON.stringify({
+      writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({
         pid: process.pid, repo: 'memoro', pr: 11082, since: '2026-09-03T02:00:00.000Z',
       }));
       const said = [];
@@ -270,7 +270,7 @@ describe('a tick, when the branch has not moved', () => {
     const root = home();
     try {
       seed(root);
-      writeFileSync(gateLockPath(root), JSON.stringify({ pid: process.pid, repo: 'memoro', pr: 1, since: '2026-09-03T02:00:00.000Z' }));
+      writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({ pid: process.pid, repo: 'memoro', pr: 1, since: '2026-09-03T02:00:00.000Z' }));
       let probed = 0;
       const { outcome, asked } = await tick(root, () => { probed += 1; return SHA; });
       assert.equal(probed, 0);

@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { commitsAhead, git as mcGit, GIT_TIMEOUT_MS, resolveDefaultBranch, tryGit } from '../../src/mc/git.js';
+import { commitsAhead, git as mcGit, GIT_TIMEOUT_MS, resolveDefaultBranch, run, runAsync, tryGit, useGitRunner } from '../../src/mc/git.js';
 
 const GIT_ENV = {
   ...process.env,
@@ -204,4 +204,41 @@ test('tryGit() answers null for a call that timed out', (t) => {
 
 test('git() gives a call five minutes by default', () => {
   assert.equal(GIT_TIMEOUT_MS, 300_000);
+});
+
+test('useGitRunner() stands in for every git call in the process, sync and async, and restores', async () => {
+  const calls = [];
+  const restore = useGitRunner((cwd, args, options) => {
+    calls.push({ cwd, args, options });
+    return { status: args[0] === 'fail' ? 1 : 0, stdout: `ran ${args.join(' ')}\n`, stderr: args[0] === 'fail' ? 'no\n' : '' };
+  });
+  try {
+    assert.equal(mcGit('/nowhere', ['rev-parse', 'HEAD']), 'ran rev-parse HEAD');
+    assert.equal(tryGit('/nowhere', ['fail']), null);
+    assert.throws(() => mcGit('/nowhere', ['fail']), /git fail failed \(1\): no/u);
+    const raw = run('/nowhere', ['status'], { env: { A: '1' }, input: 'x', timeoutMs: 7, maxBuffer: 9 });
+    assert.deepEqual(raw, { status: 0, stdout: 'ran status\n', stderr: '' });
+    assert.deepEqual(await runAsync('/nowhere', ['log']), { status: 0, stdout: 'ran log\n', stderr: '' });
+    assert.deepEqual(calls.map((call) => call.cwd), ['/nowhere', '/nowhere', '/nowhere', '/nowhere', '/nowhere']);
+    assert.deepEqual(calls[3].options, { env: { A: '1' }, input: 'x', timeoutMs: 7, maxBuffer: 9, encoding: 'utf8' });
+    assert.equal(calls[4].options.timeoutMs, GIT_TIMEOUT_MS);
+  } finally { restore(); }
+  // Restored: a real git answers, in the shape spawnSync gives.
+  const real = run(process.cwd(), ['--version']);
+  assert.equal(real.status, 0);
+  assert.match(real.stdout, /^git version /u);
+  const realAsync = await runAsync(process.cwd(), ['--version']);
+  assert.equal(realAsync.status, 0);
+  assert.match(realAsync.stdout, /^git version /u);
+});
+
+test('runAsync() reports a failing status, a missing cwd and a timeout the way spawnSync does', async (t) => {
+  const failed = await runAsync(process.cwd(), ['rev-parse', '--verify', 'refs/heads/no-such-branch-ever']);
+  assert.equal(failed.status, 128);
+  assert.match(failed.stderr, /fatal/u);
+  const missing = await runAsync('/no/such/dir', ['status']);
+  assert.ok(missing.error, 'a cwd that does not exist is an error, not a status');
+  const dir = slowGit(t);
+  const slow = await runAsync(dir, ['fetch'], { timeoutMs: 300 });
+  assert.equal(slow.error?.code, 'ETIMEDOUT');
 });

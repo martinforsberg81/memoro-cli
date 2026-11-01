@@ -1,17 +1,16 @@
 /** Fail-closed recovery for the autonomous runner seam. Never signal
  * a pid read from disk; live/unknown previous workers keep the workarea held. */
-import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree, sameContent } from './session-gate-evidence.js';
-import { GATE_LANES, SESSION_LANE, releaseGateLock } from './gate-lock.js';
 import { processAlive } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateControlState } from './session-control.js';
+import { run as runGit } from './git.js';
 
 export function sessionGit(cwd, args, encoding = 'utf8') {
-  const result = spawnSync('git', args, { cwd, encoding, timeout: 60_000, maxBuffer: 64 << 20 });
+  const result = runGit(cwd, args, { encoding, timeoutMs: 60_000, maxBuffer: 64 << 20 });
   if (result.error || result.status !== 0) throw new Error(`session snapshot: git ${args[0]} failed`);
   return result.stdout;
 }
@@ -23,24 +22,20 @@ export function groupAlive(pid) {
 
 /** The worker writes its result only after bounded children settle. A dead
  * worker without that evidence may have orphaned detached test groups: wait
- * for controlled recovery, never reap its lane just because its pid is dead. */
+ * for controlled recovery, never assume it finished just because its pid is dead. */
 export function reconcileSessionGate(gitDir, { alive = processAlive } = {}) {
   const path = join(gitDir, 'mc-gate.json');
   if (!existsSync(path)) return { ok: true };
-  let lock; let request; let result;
+  let lock; let result;
   try {
     lock = JSON.parse(readFileSync(path, 'utf8'));
     if (!Number.isSafeInteger(lock.pid) || lock.pid <= 0) throw new Error('invalid gate pid');
     if (alive(lock.pid)) return { ok: false, reason: 'gate-worker-alive', pid: lock.pid };
-    request = JSON.parse(readFileSync(lock.request, 'utf8'));
     result = JSON.parse(readFileSync(`${lock.request}.result`, 'utf8'));
     const exit = readFileSync(`${lock.log}.exit`, 'utf8').trim();
     if (typeof result.ok !== 'boolean' || !Number.isSafeInteger(result.code) || result.code < 0
-      || !/^[0-9]+$/u.test(exit) || Number(exit) !== result.code
-      || ![...GATE_LANES, SESSION_LANE].includes(request.reservation?.lane) || !request.reservation.root) throw new Error('unknown gate completion');
+      || !/^[0-9]+$/u.test(exit) || Number(exit) !== result.code) throw new Error('unknown gate completion');
   } catch { return { ok: false, reason: 'gate-children-unknown', pid: lock?.pid ?? null }; }
-  // releaseGateLock checks both pid and claim generation; a successor is kept.
-  releaseGateLock({ ...request.reservation, pid: lock.pid });
   const current = JSON.parse(readFileSync(path, 'utf8'));
   if (current.request === lock.request && current.pid === lock.pid) rmSync(path);
   return { ok: true, gate: { pid: lock.pid, code: result.code } };
@@ -78,7 +73,7 @@ export function preserveSession({ cwd, directory, control, telemetry, process: p
   return target;
 }
 
-export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
+export function reconcilePreviousSession(gitDir, { publication = null, settled = [] } = {}) {
   const path = join(gitDir, 'mc-autonomous-session.json');
   if (!existsSync(path)) return reconcileSessionGate(gitDir);
   try {
@@ -89,6 +84,10 @@ export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
       || !previous.snapshot || !existsSync(join(previous.snapshot, 'checkpoint.json'))) {
       return { ok: false, reason: 'previous-snapshot-required', pid: previous.pid };
     }
+    // A closed session whose attempt is on record is history. A later run of the
+    // same goal may have merged main since, so its snapshot no longer describes
+    // this tree, and that says nothing about what is running now.
+    if (settled.includes(previous.run_id)) return reconcileSessionGate(gitDir);
     const checkpoint = JSON.parse(readFileSync(join(previous.snapshot, 'checkpoint.json'), 'utf8'));
     validateControlState(checkpoint.control);
     if (!isDeepStrictEqual(checkpoint.control.binding, previous.binding) || checkpoint.control.binding.run_id !== previous.run_id
@@ -117,14 +116,23 @@ export function reconcilePreviousSession(gitDir, { publication = null } = {}) {
 /** The prior normal run was reconciled before fresh main integration. Keep its
  * manifest with its immutable snapshot so the new supervisor does not mistake
  * deliberate main integration for changes by a still-running predecessor. */
-export function retirePreviousSession(gitDir, runId) {
+export function retirePreviousSession(gitDir, runId, { settled = [] } = {}) {
   const path = join(gitDir, 'mc-autonomous-session.json');
   if (!existsSync(path)) return;
   const bytes = readFileSync(path, 'utf8');
   const manifest = JSON.parse(bytes);
-  if (manifest.run_id !== runId || !reconcilePreviousSession(gitDir).ok) throw new Error('previous normal session is not reconciled');
+  if (manifest.run_id !== runId || !reconcilePreviousSession(gitDir, { settled }).ok) throw new Error('previous normal session is not reconciled');
   const archived = join(dirname(manifest.snapshot), 'retired-manifest.json');
   try { writeFileSync(archived, bytes, { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error.code !== 'EEXIST' || readFileSync(archived, 'utf8') !== bytes) throw error; }
   rmSync(path);
+}
+
+/** A build that takes over a diagnosed tree retires the manifest of the attempt
+ * that left it, or the new supervisor would read that attempt as its predecessor. */
+export function retireSettledSession(gitDir, settled) {
+  const path = join(gitDir, 'mc-autonomous-session.json');
+  if (!existsSync(path)) return;
+  const runId = JSON.parse(readFileSync(path, 'utf8')).run_id;
+  if (settled.includes(runId)) retirePreviousSession(gitDir, runId, { settled });
 }

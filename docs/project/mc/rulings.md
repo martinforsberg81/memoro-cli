@@ -2210,3 +2210,18 @@ autonomy-off clarification above to the provider pilot.
   support only from observed provider runs, bound to the tool version that made
   them. A new tool version has no support until it is observed again, which
   refuses `autonomy on` and nothing else.
+
+## 61 · One merge lane per repository; a session waits for nobody
+
+Martin, 2026-11-01: *"Hela konceptet light/heavy lane ska rivas ut. det ska
+finnas en merge-lane för respektive repo så de inte körs samtidigt. De tyngsta
+testerna måste hanteras på något sätt men det får hanteras på ett smart sätt
+inom mc test. Inte på det här sättet att alla sessioner bara sitter och väntar.
+Detta är akut prio då nuvarande kod förstör allt annat arbete."*
+
+This replaces ruling 34, the session lane of 2026-10-31 and the waiting of
+ruling 52. Each repository has one merge lane. A session's `mc gate` takes no
+lane: it runs at once at low priority, and an unnamed gate leaves test files
+that cost too much, by measured time, to the merge round, which runs them all.
+A deploy or iOS build of memoro still goes first (2026-10-18).
+

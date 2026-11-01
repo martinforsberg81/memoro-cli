@@ -27,6 +27,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { installSettings } from './commands/hook.js';
 import { claudeHome, encodePath, readHead } from './conversations.js';
 import { listServers } from './dev-servers.js';
+import { run as runGit } from './git.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
 import { readMerger } from './merger.js';
 import {
@@ -415,7 +416,21 @@ const FINDER_MARK = '.DS_Store';
 /** git and the clock, as the moves use them. */
 export function realApplyDeps() {
   return {
-    git: (args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+    git: (args) => {
+      // What `execFileSync` did: the output on success, else a throw carrying
+      // git's stderr — which `applyLayoutMove` prefers to the message.
+      const r = runGit(undefined, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      if (r.error) { r.error.stderr ??= r.stderr; throw r.error; }
+      if (r.status !== 0) {
+        const err = new Error(`Command failed: git ${args.join(' ')}\n${r.stderr || ''}`);
+        err.status = r.status;
+        err.signal = r.signal;
+        err.stdout = r.stdout;
+        err.stderr = r.stderr;
+        throw err;
+      }
+      return r.stdout;
+    },
     installSettings: (path) => installSettings(path),
     now: () => new Date(),
   };

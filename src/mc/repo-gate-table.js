@@ -79,7 +79,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { GATE_LANES } from './gate-lock.js';
 import { mcHome, workRoot } from './paths.js';
 import { repoNameOf } from './repos.js';
 
@@ -145,20 +144,22 @@ export const SHIPPED = Object.freeze({
     // is always the whole suite" produce the same command and are not the
     // same claim, and only the first one is checkable.
     suite: 'npm test',
-    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs "tests/**/*.test.js"` '
-      + '— a glob over the whole tree, not a selector; read off package.json 2026-09-02',
+    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 '
+      + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
-    // The flag its own `test` script gives node, stated rather than parsed.
-    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
-    // Its own lock, beside memoro's (ruling 34, gate-lock.js). One round at a
-    // time was about memoro pinning the cores, and this suite does not: on
-    // 2026-10-09/10 its rounds took 24-212 s, and each one waited behind a
-    // memoro round of three to fifteen minutes.
-    gate_lane: 'light',
-    gate_lane_why: 'measured 2026-10-09/10 in merger.log: its suite is one `node --test` over its own '
-      + 'tests, about 60-75 s on this machine, with no npm ci and no browser — it does not pin the '
-      + 'cores the way memoro\'s seven-lane test:full does, so it need not wait for one',
+    // The flags its own `test` script gives node, stated rather than parsed.
+    // The per-test ceiling is a ratchet (Martin, 2026-11-01: a test over one
+    // second is misbuilt and is rebuilt). It started at 300 s on 2026-11-01,
+    // when the slowest test measured 151 s alone (~380 git processes); the
+    // autonomy tests went the same day and the slowest left is branch-landed
+    // at 29 s, so 60 s; with git out of the suite the slowest test fits 30 s on a
+    // loaded machine (2026-11-01), so 30 s. Every change that rebuilds a file lowers it, until it
+    // reads 1000.
+    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=30000']),
+    // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
+    // here is costly enough to leave to the merge round.
+    session_whole: true,
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -267,6 +268,25 @@ export const SHIPPED = Object.freeze({
       ]),
       gates: Object.freeze(['sql:pr-ci', 'core:startup:jsc:check']),
     }),
+    // Ratchets and snapshots: red when a change moved a pinned number, not when
+    // it broke something, and 95 % of the red pull requests landed later
+    // (Martin, 2026-11-01). The most often red of that kind in the 2 483
+    // merge rounds of 2026-10-02 to 2026-11-01. They run in the whole suite on
+    // main, in a pull request that edits the test itself, and when nothing else
+    // was selected.
+    main_only: Object.freeze([
+      'tests/architecture/card-corpus.test.js',
+      'tests/architecture/card-html-digests.test.js',
+      'tests/architecture/class-coverage.test.js',
+      'tests/architecture/core-bundle-jsc.test.js',
+      'tests/architecture/core-bundle-size.test.js',
+      'tests/architecture/css-dead-rules.test.js',
+      'tests/architecture/enacted-affordance.test.js',
+      'tests/architecture/outside-ui-reach.test.js',
+      'tests/architecture/reduce-first-coverage.test.js',
+      'tests/scripts/sql-budget-delta.test.mjs',
+      'tests/scripts/sql-operating-budgets.test.mjs',
+    ]),
     retry_once_why: 'measured in gate-rounds.jsonl to 2026-10-16: fast red-then-green flips with no change — '
       + 'the JSC start-up budget 19 (2026-10-07, now `core:startup:jsc:check`), the `sql:pr-ci` command gate 15, '
       + 'dead-CSS 6 (css-dead-rules.test.js), build-bundle.test.js under load (#13470 at load ~38); '
@@ -401,16 +421,6 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + `or, if it is a fact about this machine, in ${tablePath(root)}: `
           + `{"${name}": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} `
           + '— or "prepare": null with the evidence that its suite runs from a clean checkout.',
-      };
-    }
-    // A lane mc does not have is a declaration error like any other: a round
-    // taken in a lane nobody else looks at would exclude nothing.
-    if (declared.gate_lane != null && !GATE_LANES.includes(declared.gate_lane)) {
-      return {
-        ok: false,
-        name,
-        reason: `${name} declares gate_lane ${JSON.stringify(declared.gate_lane)}, which is not a lane mc has — `
-          + `one of ${GATE_LANES.map((lane) => `"${lane}"`).join(', ')}, or nothing for "heavy".`,
       };
     }
     // A retry list the round cannot read would retry nothing in silence.
@@ -586,10 +596,6 @@ function normalise(entry, env) {
     deps_notes: Array.isArray(entry.deps_notes)
       ? entry.deps_notes.map(({ name, argv }) => ({ name: String(name), argv: argv.map(String) }))
       : [],
-    // Which gate lock its rounds take (gate-lock.js `GATE_LANES`). Nothing
-    // declared is `heavy`: one at a time with memoro, as every round was.
-    gate_lane: entry.gate_lane ?? 'heavy',
-    gate_lane_why: entry.gate_lane_why ?? null,
     // The test files and selected command gates a red in which is run once
     // more alone before it is red (ruling 44 § 5). Nothing declared retries
     // nothing.
@@ -598,6 +604,10 @@ function normalise(entry, env) {
       gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
     },
     retry_once_why: entry.retry_once_why ?? null,
+    // A session's gate runs all it selected, leaving nothing to the merge round.
+    session_whole: entry.session_whole === true,
+    // The test files a pull request's selection leaves to the run on main.
+    main_only: Array.isArray(entry.main_only) ? entry.main_only.map(String) : [],
   };
 }
 
@@ -610,15 +620,16 @@ function validRetryOnce(value) {
 }
 
 /**
- * The gate lane a repository's rounds run in, by its name — for the merger,
- * which sorts its jobs into one loop per lane before any round has read a
- * declaration. The operator's entry, else the shipped one, as the round reads
- * them; a lane mc does not have, or nothing declared, is `heavy`.
+ * The lane a repository's rounds run in: its own, by name, so two rounds of one
+ * repository exclude each other and two repositories do not. A checkout and a
+ * bare clone of one repository are one lane.
  */
-export function gateLaneOf(repo, { root = mcHome() } = {}) {
-  const name = basenameOf(repo || '');
-  const entry = readOverrides(root)[name] || SHIPPED[name];
-  return GATE_LANES.includes(entry?.gate_lane) ? entry.gate_lane : 'heavy';
+export function gateLanes({ root = mcHome() } = {}) {
+  return [...new Set([...Object.keys(SHIPPED), ...Object.keys(readOverrides(root))])];
+}
+
+export function gateLaneOf(repo) {
+  return basenameOf(repo || '').replace(/\.git$/u, '');
 }
 
 /**

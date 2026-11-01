@@ -65,6 +65,10 @@ Cumulative token counts are not accepted as current-context fields. Responses
 include the observation timestamp/sequence, so cached control is not represented
 as a fresh telemetry sample.
 
+A measured criterion is recorded as verified builder evidence, once per tree. A
+repeat on the same tree resets nothing, but counts as measured for closing, so a
+retried session on measured work can finish.
+
 Only runner-verified `progress: { id, reference, criterion_id }` resets the
 no-progress clock. A null criterion ID is a measured checkpoint; a new criterion
 ID also provides a criterion boundary. Output bytes and model callback claims do

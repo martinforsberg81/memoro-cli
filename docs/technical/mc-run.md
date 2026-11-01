@@ -899,13 +899,12 @@ files, against 236 before, and its suite took 179 s at the median against 91.
 Batches mostly formed while the queue was long; most rounds were still one
 pull request.
 
-**And it serves two lanes at once.** The merger is one process with one loop
-per gate lane (`GATE_LANES`: `heavy` — memoro and any repository that
-declares nothing — and `light`, memoro-cli by its `gate_lane`). Each loop
-takes only its own lane's jobs, so a memoro-cli round runs while a memoro
+**And it serves every repository at once.** The merger is one process with one
+loop per repository: each declared one, and any other a job names. Each loop
+takes only its own repository's jobs, so a memoro-cli round runs while a memoro
 round is in flight and two memoro rounds never do. A loop with nothing to take
-waits for the other to answer a job, or `MERGER_POLL_MS`, and the merger
-leaves only when neither lane has anything. On new code it does not wait for
+waits for another to answer a job, or `MERGER_POLL_MS`, and the merger leaves
+only when no lane has anything. On new code it does not wait for
 its rounds: it releases `merger.json` and starts its successor as soon as it
 sees the new checkout, finishes only the jobs it holds, and the successor skips
 `landing` and `mending` entries whose `merger` pid is alive; measured 2026-10-17
@@ -1064,6 +1063,10 @@ does not wait for one that is busy.
   decides it when there is no workarea yet. Martin's order holds *within* the
   repository.
 - **Its own steps, one at a time.** A lane runs one step and picks again.
+  A project or goal holds its lane from its first step to its review: the name
+  the lane just ran goes first in the next pick, and under a total the slot is
+  kept between the two sessions. The lane goes to the next name when that name
+  has nothing to run: blocked, failed, on a decision, or in the merge queue.
 - **Its own reading of the world.** `queue({ only })` fetches one repository,
   so two lanes of two repositories never run `git fetch` in the same checkout
   at the same moment.

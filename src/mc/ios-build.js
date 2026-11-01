@@ -19,7 +19,7 @@
  *
  * The build (`--device`) is here too: the preflights the asking process runs
  * (`devicePreflight`), and the builder (`buildIos`) that runs in its own
- * process (`ios-build-run.js`) the way the deployer does — holding the heavy
+ * process (`ios-build-run.js`) the way the deployer does — holding memoro's
  * lane, in mc's own worktree of the exact commit, every external command
  * through one `step`, the built app read back against the declaration
  * (`readBack`) before `devicectl` installs it. `--testflight` is the same
@@ -36,8 +36,9 @@ import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { stripAnsi } from '../lib/prompt.js';
 import { IOS_BUILD_MODE } from './await-deploy.js';
 import { defaultRepos } from './brief-collect.js';
-import { holdHeavyLane } from './commands/deploy.js';
-import { releaseGateLock } from './gate-lock.js';
+import { holdBuildLane } from './commands/deploy.js';
+import { BUILD_LANE, releaseGateLock } from './gate-lock.js';
+import { run as runGit } from './git.js';
 import {
   BUILT, FAILED, INSTALLED, lastShipped as lastShippedRow, recordEnd, recordStart, runningIosBuild, SEED, TESTFLIGHT,
   UPLOADED,
@@ -66,7 +67,7 @@ const short = (sha) => (sha ? String(sha).slice(0, 7) : '');
  * default, and a lockfile cut off would read as no packages at all.
  */
 export function gitRead(cwd, args, { timeoutMs = 60_000 } = {}) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024 });
+  const r = runGit(cwd, args, { timeoutMs, maxBuffer: 256 * 1024 * 1024 });
   if (r.error || r.status !== 0) return null;
   return (r.stdout || '').trim();
 }
@@ -512,8 +513,8 @@ export function listBuilds({
  * Null when it was written, else the line that says why not.
  */
 export function exportAtRev(repoPath, rev, path, dir) {
-  const archive = spawnSync('git', ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
-    timeout: 60_000, maxBuffer: 1024 * 1024 * 1024,
+  const archive = runGit(undefined, ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
+    timeoutMs: 60_000, maxBuffer: 1024 * 1024 * 1024, encoding: 'buffer',
   });
   if (archive.error || archive.status !== 0) {
     return `git archive ${rev} ${path}: ${reasonLine(archive.error?.message || String(archive.stderr || '')) || `exit ${archive.status}`}`;
@@ -770,7 +771,7 @@ export function attachCommand(version, build) {
 }
 
 /**
- * The builder, in its own process (`ios-build-run.js`): the heavy lane held,
+ * The builder, in its own process (`ios-build-run.js`): memoro's lane held,
  * mc's worktree put on exactly `job.sha` with nothing generated surviving,
  * a real `npm ci`, the declaration's setup and sync with the commit in the
  * environment and no build number, `xcodebuild`, the read-back, and the
@@ -793,7 +794,7 @@ export async function buildIos(job, deps = {}) {
   const testflight = job.kind === TESTFLIGHT;
   const { worktree, derived, spm } = buildPaths(env);
   const app = builtApp(derived);
-  let at = 'heavy lane';
+  let at = 'memoro lane';
   let holding = false;
 
   const fail = (stoppedAt, note) => {
@@ -919,7 +920,7 @@ export async function buildIos(job, deps = {}) {
   };
 
   try {
-    holding = await (deps.holdHeavyLane || holdHeavyLane)(job, { ...deps, stdout, env, mode: IOS_BUILD_MODE });
+    holding = await (deps.holdBuildLane || holdBuildLane)(job, { ...deps, stdout, env, mode: IOS_BUILD_MODE });
 
     // (b) The worktree, on exactly the commit, with nothing generated left:
     // `clean -ffdx` takes `ios/` and `node_modules` with it.
@@ -991,6 +992,6 @@ export async function buildIos(job, deps = {}) {
     recordEnd(key, { outcome: FAILED, stopped_at: at, note: `mc: ${error?.message || error}` }, env);
     throw error;
   } finally {
-    if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: 'heavy' });
+    if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: BUILD_LANE });
   }
 }

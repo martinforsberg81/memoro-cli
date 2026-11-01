@@ -54,6 +54,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 
 import { lastDeploy } from './deploys.js';
+import { runAsync as runGitAsync } from './git.js';
 import { defaultRepos } from './repos.js';
 import { cliFailing, cliRows as cliCollect, renderCliSections } from './helper-cli-collect.js';
 import { writeLiveVersion } from './live-version.js';
@@ -805,11 +806,8 @@ async function getJsonDefault(url, token) {
 }
 
 function runGitDefault(cwd, args) {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 20_000 }, (error, stdout) => {
-      resolve(error ? null : stdout.trim());
-    });
-  });
+  return runGitAsync(undefined, ['-C', cwd, ...args], { timeoutMs: 20_000 })
+    .then((r) => (r.error || r.status !== 0 ? null : String(r.stdout || '').trim()));
 }
 
 /**

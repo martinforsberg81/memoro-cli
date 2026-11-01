@@ -1,6 +1,5 @@
 /**
- * `mc gate` — run the tests a change reaches, in the gate lane, and read only
- * the verdict.
+ * `mc gate` — run the tests a change reaches and read only the verdict.
  *
  *   mc gate <files…> [--test-name-pattern <p>]
  *                             the named test files, with the node --test flags the repository declares
@@ -17,11 +16,12 @@
  * the shared runner bounds concurrency and test duration. The final merge
  * still verifies the candidate with the current base.
  *
- * The tests run in the session lane (`gate-lane-wait.js`), or the light lane
- * of a repository declared light: the detached worker takes the lane's lock
- * for its own pid before it starts, and waits while another session's gate
- * holds it, or a deploy or an iOS build runs. A merge round runs beside it, so
- * the merger never waits for a session.
+ * No lane and no queue: the detached worker starts at once, at low priority,
+ * beside any merge round (only a deploy or iOS build of memoro goes first).
+ * With no files named, the selection's costly files are left to the merge
+ * round by measured time (test-times.js): a green here says so, and the round
+ * measures them. The tests this change touches always run, and so does all of
+ * a goal's measured gate.
  *
  * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
  * system temp directory otherwise — as it is written; when the tests end the
@@ -29,7 +29,7 @@
  * budget: GREEN or RED, the counts, the failing lines with their locations,
  * and the file's path, at most 2 KB. Past the budget it answers `RUNNING` and
  * exits 3; the tests run on, and `mc gate --wait` prints the verdict from the
- * same log. Time spent waiting for the lane is in the budget.
+ * same log.
  *
  * One gate per worktree: a lock beside the git directory names the running
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
@@ -38,17 +38,16 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
 import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '../gate-local.js';
 import { tryGit } from '../git.js';
-import { sessionLaneOf } from '../gate-lock.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
-import { repoNameOf, repositoryDir } from '../repos.js';
+import { repositoryDir } from '../repos.js';
 import { captureWorktree } from '../session-gate-evidence.js';
 import { gateConfiguration } from '../gate-greens.js';
 import { selectFiles, testLanes } from '../repo-gate.js';
@@ -62,7 +61,7 @@ const POLL_MS = 2000;
 /** What a test file is called: `….test.js`, `.mjs`, `.cjs`, `.ts`. */
 const TEST_FILE = /\.test\.[cm]?[jt]s$/u;
 
-/** The worker owns the lane from selection through completion. */
+/** The worker owns the test children from selection through completion. */
 const SESSION_RUN = fileURLToPath(new URL('../session-gate-run.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
@@ -87,19 +86,16 @@ const SYSTEM = {
   claim: takeClaim,
   release: releaseClaim,
   declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
-  lane: (repoPath, { env }) => gateLaneOf(repoPath, { root: mcHome(env) }),
 };
 
-/** The lane a session's gate reserves. It is the primary checkout's: a worktree
- * of memoro is memoro. */
-export function gateReservation(cwd, env = process.env, io = SYSTEM) {
+/** Whose gate this is: the primary checkout's repository. A worktree of memoro is memoro. */
+export function gateOwner(cwd, env = process.env, io = SYSTEM) {
   const common = io.git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  const primary = common ? repositoryDir(common) : cwd;
-  return { root: mcHome(env), lane: sessionLaneOf(io.lane(primary, { env })), repo: basename(primary) };
+  return { root: mcHome(env), repo: gateLaneOf(common ? repositoryDir(common) : cwd) };
 }
 
 /** Read-only re-selection for the autonomous publication boundary. Use the
- * same declaration, diff, added tests and flags as the lane-owning gate. */
+ * same declaration, diff, added tests and flags as the gate. */
 export async function publicationGateSelection(cwd, env = process.env, deps = {}) {
   const io = { ...SYSTEM, ...deps };
   const base = deps.baseCommit || io.git(cwd, ['rev-parse', 'origin/main^{commit}']);
@@ -207,8 +203,7 @@ export async function run(argv, deps = {}) {
       return 2;
     }
 
-    const reservation = gateReservation(root, env, io);
-    const { lane } = reservation;
+    const gate = gateOwner(root, env, io);
     // The free cores, not the core count: a session's gate has no round mode, so
     // `testLanes` answers the free cores here (a merge round takes at least four).
     const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
@@ -222,12 +217,12 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base,
-        log: logPath, measurement: candidate && frozenBase ? { repo: repoNameOf(reservation.repo), run, base: frozenBase, candidate, configuration,
-          session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, reservation }));
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
+        log: logPath, defer: !files.length && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
+        measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
+          session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));
       const fd = io.open(logPath);
-      // The worker owns the reservation, the test children and the result.
-      // A short-lived command or shell cannot release its lane early.
+      // The worker owns the test children and the result.
       child = io.spawn(process.execPath, [SESSION_RUN, requestPath], {
         cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
       });
@@ -238,7 +233,7 @@ export async function run(argv, deps = {}) {
     }
     child.unref();
     io.write(`${logPath}.pid`, `${child.pid}\n`);
-    lock = { pid: child.pid, log: logPath, request: requestPath, started: startedAt.toISOString(), lane, command };
+    lock = { pid: child.pid, log: logPath, request: requestPath, started: startedAt.toISOString(), command };
     io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
   } finally { io.release(launchPath, launch.marker); }
   return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout });
@@ -254,9 +249,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   const seconds = Math.round((io.now().getTime() - Date.parse(lock.started)) / 1000);
   const shown = lock.command.shown || lock.command.run;
   if (outcome.budget) {
-    const log = readText(io, lock.log);
-    const queued = log.includes('mc gate: waiting for ') && !log.includes('lane is free — starting');
-    stdout.write(`RUNNING — ${shown} — ${seconds}s so far, ${queued ? `still waiting for the ${lock.lane} lane` : 'still running'} (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
+    stdout.write(`RUNNING — ${shown} — ${seconds}s so far, still running (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
     return 3;
   }
   const current = readLock(io, lockPath);
@@ -273,10 +266,12 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   if (result?.red_tests?.length) summary.failures = result.red_tests.slice(0, 5).flatMap((test) => [
     `✖ ${test.name}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
   ]);
+  const deferred = result?.deferred?.length || 0;
+  const left = deferred ? `\n${deferred} costly test files left to the merge round, which runs them all — this green does not cover them` : '';
   if (json) {
     stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}${left}\n`);
   }
   return summary.ok ? 0 : 1;
 }
@@ -327,7 +322,7 @@ export function usage() {
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
     '\n',
     'The merge gate still verifies the candidate with the current base; --full is refused.\n',
-    'The tests run in the session lane, one gate at a time, beside merge rounds; a deploy or iOS build goes first. A light repository uses its light lane.\n',
+    'The gate starts at once at low priority, beside merge rounds; a deploy or iOS build of memoro goes first.\nCostly affected tests are left to the merge round by measured time; those this change touches always run.\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
     'Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n',
   ].join('');

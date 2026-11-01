@@ -25,7 +25,7 @@ const TEST_SCRIPT = 'node --test --import ./tests/_isolate-home.mjs \'tests/**/*
 function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [], changed = [], lane = 'heavy', log = null } = {}) {
   const files = new Map();
   const alive = new Set(live);
-  const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false, lanes: [] };
+  const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false };
   let clock = Date.parse('2026-09-25T10:00:00Z');
   if (lock) files.set(LOCK, JSON.stringify(lock));
   if (log != null) files.set(lock?.log || LOG, log);
@@ -66,7 +66,6 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
     },
     alive: (pid) => alive.has(pid),
     declaration: () => ({ ok: true, declaration: { select: 'node select.js --base-ref origin/main' } }),
-    lane: (repoPath) => { out.lanes.push(repoPath); return lane; },
     sleep: async (ms) => {
       clock += ms;
       out.ticks += 1;
@@ -80,18 +79,19 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
   return { out, deps, files };
 }
 
-const oldGate = (pid, extra = {}) => ({ pid, log: OLD_LOG, started: '2026-09-25T09:50:00.000Z', lane: 'heavy', command: { run: 'node --test a.test.js', script: 'node --test', files: ['a.test.js'] }, ...extra });
+const oldGate = (pid, extra = {}) => ({ pid, log: OLD_LOG, started: '2026-09-25T09:50:00.000Z', command: { run: 'node --test a.test.js', script: 'node --test', files: ['a.test.js'] }, ...extra });
 const GREEN = 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n';
 
 describe('mc gate <test files…>', () => {
-  it('runs the named files in the repository\'s gate lane, prints the verdict and clears the lock', async () => {
+  it('runs the named files at once, prints the verdict and clears the lock', async () => {
     const { out, deps, files } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 3, output: `✔ a (1ms)\n${GREEN}` });
     assert.equal(await run(['a.test.js'], deps), 0);
     assert.equal(out.spawned[0].file, process.execPath);
     assert.match(out.spawned[0].args[0], /session-gate-run\.js$/u);
     assert.equal(out.spawned[0].args[1], `${LOG}.request.json`);
-    assert.deepEqual(out.lanes, ['/repo/memoro']);
-    assert.equal(JSON.parse(files.get(`${LOG}.request.json`)).reservation.lane, 'session');
+    const asked = JSON.parse(files.get(`${LOG}.request.json`));
+    assert.equal(asked.gate.repo, 'memoro', 'a worktree of memoro is memoro');
+    assert.equal(asked.defer, false, 'named files are what was asked for');
     assert.deepEqual([out.spawned[0].opts.cwd, out.spawned[0].opts.detached, out.spawned[0].opts.stdio], ['/w/x', true, ['ignore', 9, 9]]);
     assert.deepEqual([out.spawned[0].opts.env.CI, out.spawned[0].opts.env.FORCE_COLOR, out.spawned[0].opts.env.NO_COLOR], ['1', '0', '1']);
     assert.equal(out.spawned[0].opts.env.MC_GATE_FAIL_FAST, undefined);
@@ -103,10 +103,30 @@ describe('mc gate <test files…>', () => {
     assert.deepEqual(out.removed, [LOCK]);
   });
 
-  it('a light repository\'s tests wait in the light lane', async () => {
-    const { out, deps, files } = harness({ tests: ['a.test.js'], lane: 'light', finishAfter: 1, output: GREEN });
+  it('an unnamed gate may leave costly files to the merge round; a goal\'s measurement may not', async () => {
+    const plain = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    assert.equal(await run([], plain.deps), 0);
+    assert.equal(JSON.parse(plain.files.get(`${LOG}.request.json`)).defer, true);
+    const whole = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    whole.deps.wholeSelection = true;
+    assert.equal(await run([], whole.deps), 0);
+    assert.equal(JSON.parse(whole.files.get(`${LOG}.request.json`)).defer, false);
+  });
+
+  it('a repository that declares session_whole leaves nothing to the merge round', async () => {
+    const out = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    const declaration = out.deps.declaration;
+    out.deps.declaration = (...args) => { const declared = declaration(...args); return { ...declared, declaration: { ...declared.declaration, session_whole: true } }; };
+    assert.equal(await run([], out.deps), 0);
+    assert.equal(JSON.parse(out.files.get(`${LOG}.request.json`)).defer, false);
+  });
+
+  it('a green that left files to the merge round says so', async () => {
+    const { out, deps, files } = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
+    files.set(`${LOG}.request.json.result`, JSON.stringify({ deferred: ['b.test.js', 'c.test.js'] }));
+    deps.write = ((write) => (path, text) => { if (path !== `${LOG}.request.json`) write(path, text); else files.set(path, text); })(deps.write);
     assert.equal(await run(['a.test.js'], deps), 0);
-    assert.equal(JSON.parse(files.get(`${LOG}.request.json`)).reservation.lane, 'light');
+    assert.match(out.stdout, /2 costly test files left to the merge round/u);
   });
 
   it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
@@ -131,12 +151,6 @@ describe('mc gate <test files…>', () => {
     assert.equal(out.stdout, `RUNNING — node --test a.test.js — 10s so far, still running (pid ${CHILD})\nlog: ${LOG} — mc gate --wait waits for it and prints the verdict\n`);
     assert.equal(files.has(LOCK), true);
     assert.deepEqual(out.removed, []);
-  });
-
-  it('RUNNING says so when the time went to waiting for the lane', async () => {
-    const { out, deps } = harness({ tests: ['a.test.js'], log: 'mc gate: waiting for the merge round (pid 9) in the heavy lane — the tests start when it is done\n' });
-    assert.equal(await run(['a.test.js', '--budget', '4'], deps), 3);
-    assert.match(out.stdout, /^RUNNING — node --test a\.test\.js — 4s so far, still waiting for the session lane \(pid 4242\)\n/u);
   });
 
   it('a red names a re-run line with the failing names, before the whole output', async () => {
@@ -329,7 +343,7 @@ it('autonomous finish binds the existing affected gate worker to its reserved se
   assert.match(request.select, /--changed-path 'implementation.js'/u);
   assert.equal(request.measurement.session_run, 'build-1');
   assert.equal(request.measurement.goal_revision, 3);
-  assert.equal(request.reservation.lane, 'session');
+  assert.equal(request.defer, false, 'a goal is measured whole');
 });
 
 it('concurrent callers launch only one worker, and repeated waits never launch another', async () => {
