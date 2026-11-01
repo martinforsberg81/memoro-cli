@@ -17,6 +17,7 @@ export const VERB_MODULES = {
   merge: './mc/commands/merge.js',
   test: './mc/commands/test.js',
   gate: './mc/commands/gate.js',
+  keys: './mc/commands/keys.js',
   shot: './mc/commands/shot.js',
   hook: './mc/commands/hook.js',
   publish: './mc/commands/publish.js',
@@ -85,7 +86,7 @@ export async function runModule(path, argv, { stdout = process.stdout } = {}) {
   // the verbs write to process.stdout themselves.
   quietOnClosedReader(process.stdout);
   const module = await import(path);
-  if (wantsHelp(argv)) {
+  if (wantsHelp(argv) && !module.handlesHelp?.(argv)) {
     const text = module.usage();
     stdout.write(text.endsWith('\n') ? text : `${text}\n`);
     return 0;

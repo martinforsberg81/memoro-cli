@@ -1,3 +1,8 @@
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { mcHome } from './paths.js';
+
 export const RUNTIME_SECRET_ENV_NAMES = Object.freeze([
   'MEMORO_TOKEN',
   'MEMORO_BROKER_TOKEN',
@@ -53,13 +58,13 @@ export const PROVIDER_API_ENV_NAMES = Object.freeze([
 
 export function scrubProviderApiKeysFromEnv(env = process.env) {
   const next = { ...(env || {}) };
-  for (const name of PROVIDER_API_ENV_NAMES) delete next[name];
+  for (const name of [...PROVIDER_API_ENV_NAMES, ...registeredRuntimeSecretNames(env)]) delete next[name];
   return next;
 }
 
 export function scrubRuntimeSecretsFromEnv(env = process.env) {
   const next = { ...(env || {}) };
-  for (const name of RUNTIME_SECRET_ENV_NAMES) {
+  for (const name of [...RUNTIME_SECRET_ENV_NAMES, ...registeredRuntimeSecretNames(env)]) {
     delete next[name];
   }
   return next;
@@ -67,8 +72,40 @@ export function scrubRuntimeSecretsFromEnv(env = process.env) {
 
 export function scrubRuntimeSecretsInPlace(env) {
   if (!env || typeof env !== 'object') return env;
-  for (const name of RUNTIME_SECRET_ENV_NAMES) {
+  for (const name of [...RUNTIME_SECRET_ENV_NAMES, ...registeredRuntimeSecretNames(env)]) {
     delete env[name];
   }
   return env;
+}
+
+/** Nonsecret, global name metadata: no worktree setup, and no vault decrypt at launch. */
+function runtimeNamesDirectory(env) { return join(mcHome({ ...process.env, ...env }), 'runtime-secret-names'); }
+export function rememberRuntimeSecretNames(names, env = process.env) {
+  const directory = runtimeNamesDirectory(env);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  for (const name of names) {
+    if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) throw new Error('invalid runtime secret name');
+    // A hash filename also supports long dotenv names. Contents are names only.
+    const file = join(directory, createHash('sha256').update(name).digest('hex'));
+    try { writeFileSync(file, name, { flag: 'wx', mode: 0o600 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  }
+}
+function registeredRuntimeSecretNames(env) {
+  const directory = runtimeNamesDirectory(env);
+  let files;
+  try { files = readdirSync(directory); }
+  catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw new Error('cannot read script-key name registry');
+  }
+  try {
+    return files.map(file => {
+      const name = readFileSync(join(directory, file), 'utf8');
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)
+        || createHash('sha256').update(name).digest('hex') !== file) throw new Error('invalid registry');
+      return name;
+    });
+  }
+  catch { throw new Error('cannot read script-key name registry'); }
 }

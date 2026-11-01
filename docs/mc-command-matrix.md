@@ -327,6 +327,16 @@ laptop's package manager a precondition for merging. The property worth keeping
 is that **every movement of the floor, in either direction, is in somebody's
 diff.**
 
+## Script keys
+
+| Command | Does |
+|---|---|
+| `mc keys run <script> [args…]` | Runs a declared Node script only with its origin/main-matching fixed source closure, releasing exactly its declared envelope keys to the child and filtering its output. |
+| `mc keys list` | Shows declared names and whether each is held; never exports a value. |
+
+The committed manifest, custody, audit and same-OS-user boundary are documented
+in [mc-keys.md](technical/mc-keys.md).
+
 ## The one capability
 
 | Command | Does |

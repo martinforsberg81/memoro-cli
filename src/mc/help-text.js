@@ -34,6 +34,8 @@ THE PAGE
   mc run --billing                  Plan usage and next billing for Claude and Codex
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc test dev | prod               The app running, measured — locally or live
+  mc keys run <script> [args…]    Run a main-matching script with its declared vault keys
+  mc keys list                    Declared names and custody status, never values
   mc gate <test files…>            The tests a change reaches, in the gate lane, in 2 KB
   mc shot dev | prod <target>      A PNG of the running app; prints its path
   mc publish                       Push this branch, open its PR, queue it to merge
