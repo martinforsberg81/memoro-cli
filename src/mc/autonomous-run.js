@@ -9,7 +9,7 @@ import { programmePhaseHold, readAutonomousState, readProgrammeState, startAuton
 import { validateAutonomousProject } from './autonomous-project.js';
 import { buildSessionStart, readCurrentHandoff } from './session-handoff.js';
 import { projectSessionObserver } from './session-supervision.js';
-import { reconcilePreviousSession, retirePreviousSession, sessionGitDir } from './session-recovery.js';
+import { reconcilePreviousSession, retirePreviousSession, retireSettledSession, sessionGitDir } from './session-recovery.js';
 import { instructionsFor, roleRecord, roleSourceOf } from './roles.js';
 import { headlessArgs, routedSettings } from './run-plan.js';
 import { profileArgs } from './portrait.js';
@@ -150,10 +150,12 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
       if (!result.ok) throw new Error(`git ${args[0]} failed`);
       return result.stdout.trim();
     };
-    const previous = reconcilePreviousSession(sessionGitDir(worktree));
+    const settled = state.attempts.map(item => item.id);
+    const previous = reconcilePreviousSession(sessionGitDir(worktree), { settled });
     if (!previous.ok) throw new Error(`recovery required: ${previous.reason}`);
     if (git(['branch', '--show-current']) !== branch) throw new Error('checkout does not match the owned branch');
     if (git(['status', '--porcelain']) && !recoveryCarriesTree(state)) throw new Error('unfinished tree requires deliberate recovery');
+    retireSettledSession(sessionGitDir(worktree), settled);
     const agreement = readProgrammeState(root, programme).metadata;
     let previousHandoff = null;
     let previousRunId = null;
