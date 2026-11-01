@@ -28,7 +28,7 @@ function fixture(t) {
   git(cwd, 'add', '.');
   git(cwd, 'commit', '-qm', 'initial');
   const base = git(cwd, 'rev-parse', 'HEAD');
-  const request = () => ({ cwd, files: ['a.test.js'], reservation: { root: join(root, 'state') },
+  const request = () => ({ cwd, files: ['a.test.js'], gate: { root: join(root, 'state') },
     measurement: { repo: 'repo', run: 'gate-one', session_run: 'session-one', goal_revision: 3, configuration: gateConfiguration({ select: 'selector' }), base, candidate: captureWorktree(cwd) } });
   return { cwd, root, base, request };
 }
@@ -39,7 +39,7 @@ it('recovery before and after receipt persistence never invents or loses a compl
   for (const window of ['before', 'after']) {
     const { request } = fixture(t);
     const req = { ...request(), files: null, select: 'selector' };
-    const context = { root: req.reservation.root, repo: req.measurement.repo,
+    const context = { root: req.gate.root, repo: req.measurement.repo,
       repository: req.measurement.candidate.repository, run: req.measurement.run,
       sessionRun: req.measurement.session_run, goalRevision: req.measurement.goal_revision,
       configuration: req.measurement.configuration };
@@ -50,7 +50,7 @@ it('recovery before and after receipt persistence never invents or loses a compl
       if (window === 'after') saved = persistGateReceipt(args);
       throw new Error(`crash ${window} persistence`);
     } }), /crash/u);
-    assert.equal(existsSync(join(req.reservation.root, 'gate-greens.jsonl')), false);
+    assert.equal(existsSync(join(req.gate.root, 'gate-greens.jsonl')), false);
     const recovered = readGreenReceipt(context);
     if (window === 'before') {
       assert.equal(recovered, null);
@@ -176,8 +176,8 @@ it('a completed measurement persists immutable identity, base, scope, version, t
   assert.ok(Date.parse(receipt.ended) >= Date.parse(receipt.started));
   assert.deepEqual(receipt.coverage.files, ['a.test.js']);
   assert.equal(receipt.coverage.kind, 'named');
-  assert.equal(persistGateReceipt({ root: req.reservation.root, receipt }), result.evidence.path);
-  assert.throws(() => persistGateReceipt({ root: req.reservation.root, receipt: { ...receipt, tree: 'replacement' } }), /EEXIST/u);
+  assert.equal(persistGateReceipt({ root: req.gate.root, receipt }), result.evidence.path);
+  assert.throws(() => persistGateReceipt({ root: req.gate.root, receipt: { ...receipt, tree: 'replacement' } }), /EEXIST/u);
 });
 
 it('changes while waiting or testing invalidate the measurement, including generated untracked code', async (t) => {
@@ -210,13 +210,13 @@ it('running, empty, unknown-exit, interrupted and red attempts never mint green'
     const result = await runSessionGate(req, { ...quiet, tests: async () => run });
     assert.equal(result.ok, false);
     assert.notEqual(receiptOf(result).outcome, 'green');
-    assert.equal(existsSync(join(req.reservation.root, 'gate-greens.jsonl')), false);
+    assert.equal(existsSync(join(req.gate.root, 'gate-greens.jsonl')), false);
   }
   const { request } = fixture(t);
   const req = request();
   let release;
   const pending = runSessionGate(req, { ...quiet, tests: () => new Promise((resolve) => { release = resolve; }) });
-  assert.equal(existsSync(join(req.reservation.root, 'gate-evidence')), false);
+  assert.equal(existsSync(join(req.gate.root, 'gate-evidence')), false);
   release({ code: 0, tap: GREEN });
   await pending;
 });
@@ -251,10 +251,10 @@ it('named or pattern-filtered runs never populate broader selector coverage; com
     assert.equal(receipt.coverage.pattern, req.pattern);
     assert.equal(receipt.coverage.commands.length, req.files ? 0 : 1);
     assert.equal(receipt.execution.commands.length, req.files ? 0 : 1);
-    const cached = findGreen({ root: req.reservation.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(selected) });
+    const cached = findGreen({ root: req.gate.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(selected) });
     assert.equal(Boolean(cached), mode === 'affected');
-    assert.equal(Boolean(findGreenForHead({ root: req.reservation.root, repo: 'repo', headTree: receipt.tree })), mode === 'affected');
-    assert.equal(readdirSync(join(req.reservation.root, 'gate-evidence')).length, 1);
+    assert.equal(Boolean(findGreenForHead({ root: req.gate.root, repo: 'repo', headTree: receipt.tree })), mode === 'affected');
+    assert.equal(readdirSync(join(req.gate.root, 'gate-evidence')).length, 1);
   }
 });
 
@@ -302,7 +302,7 @@ async function measured(t, { files = null, pattern = null, flags = [], commands 
     tests: async () => ({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }),
   });
   const receipt = receiptOf(result);
-  const context = { root: req.reservation.root, repo: 'repo', repository: receipt.repository, run: req.measurement.run,
+  const context = { root: req.gate.root, repo: 'repo', repository: receipt.repository, run: req.measurement.run,
     sessionRun: 'session-one', goalRevision: 3, configuration: req.measurement.configuration };
   const lookup = (overrides = {}) => {
     const head = git(fx.cwd, 'rev-parse', 'HEAD');
@@ -321,7 +321,7 @@ it('publication accepts the measured uncommitted content after an equal-tree com
   const selected = { ok: true, files: ['b.test.js'], commands: [] };
   const result = await runSessionGate(req, { ...quiet, select: async () => selected, tests: async () => ({ code: 0, tap: GREEN }) });
   const receipt = receiptOf(result);
-  const args = { root: req.reservation.root, cwd: fx.cwd, repo: 'repo', run: 'gate-one', sessionRun: 'session-one',
+  const args = { root: req.gate.root, cwd: fx.cwd, repo: 'repo', run: 'gate-one', sessionRun: 'session-one',
     goalRevision: 3, configuration: req.measurement.configuration, selection: selected };
   const old = git(fx.cwd, 'rev-parse', 'HEAD');
   assert.equal(findPublicationReceipt({ ...args, head: old, pushed: old }), null, 'uncommitted content is not published');
@@ -433,7 +433,7 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const selection = await selectFiles({ cwd: fx.cwd, command: selectorCommand(command, { base: baseCommit }), env: process.env, say: () => {} });
     const evidence = { repository: receipt.repository, run: receipt.run, sessionRun: 'session-one', goalRevision: 3, configuration };
     const args = { git: (args, { cwd }) => spawnSync('git', args, { cwd, encoding: 'utf8' }), cwd: fx.cwd,
-      root: req.reservation.root, repo: 'repo', headSha, baseCommit, command, env: process.env, selection, evidence };
+      root: req.gate.root, repo: 'repo', headSha, baseCommit, command, env: process.env, selection, evidence };
     const delta = await deltaFromGreen(args);
     assert.equal(delta.kind, 'reuse');
     assert.deepEqual(delta.paths, [mainPath]);

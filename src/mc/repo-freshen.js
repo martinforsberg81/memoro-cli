@@ -39,7 +39,8 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { runShell, runTool } from './child-async.js';
+import { runShell } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { gateRoot } from './repo-gate.js';
 import { regenerateDerived } from './repo-derived.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -73,7 +74,7 @@ import { repoFileSlug } from './repo-snapshot.js';
 export async function freshenBranchForLanding({
   repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {},
 } = {}) {
-  const askGit = git || ((args, options = {}) => runTool('git', args, { cwd: options.cwd, env }));
+  const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askShell = shell || ((command, options = {}) => runShell(command, { cwd: options.cwd, env }));
   const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
   await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });

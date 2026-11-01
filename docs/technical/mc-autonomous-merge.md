@@ -120,14 +120,14 @@ future operations work.
 
 ## Verification
 
-`mc gate tests/mc/autonomous-merge.test.js tests/mc/merge-boundary.test.js`
+`mc gate tests/mc/autonomous-merge.test.js tests/mc/autonomous-merge-evidence.test.js tests/mc/merge-boundary.test.js`
 exercises real temporary repositories, bare remotes, published handoffs,
 receipt readers, detached review checkouts and selectors. Controlled gate and
 GitHub adapters test pinned leased landings, changes during measurement,
 missing/corrupt/stale evidence, main relevance, docs/admin/direct doors and
 restarted queue metadata without hosted model calls or live programmes.
 
-`mc gate tests/mc/autonomous-merge.test.js tests/mc/merge-command.test.js tests/mc/merger.test.js`
+`mc gate tests/mc/autonomous-merge-routing.test.js tests/mc/merge-command.test.js tests/mc/merger.test.js`
 also exercises trusted runner auto-routing, duplicate report/event delivery,
 report/queue-intent/landing crash gaps, unavailable state persistence,
 head/main movement, lost merge replies and later readback, no premature

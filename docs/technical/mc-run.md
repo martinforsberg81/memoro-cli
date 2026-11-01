@@ -1063,6 +1063,10 @@ does not wait for one that is busy.
   decides it when there is no workarea yet. Martin's order holds *within* the
   repository.
 - **Its own steps, one at a time.** A lane runs one step and picks again.
+  A project or goal holds its lane from its first step to its review: the name
+  the lane just ran goes first in the next pick, and under a total the slot is
+  kept between the two sessions. The lane goes to the next name when that name
+  has nothing to run: blocked, failed, on a decision, or in the merge queue.
 - **Its own reading of the world.** `queue({ only })` fetches one repository,
   so two lanes of two repositories never run `git fetch` in the same checkout
   at the same moment.

@@ -60,7 +60,8 @@ export async function recoverAutonomousBuild(options, deps = {}) {
       if (!held.ok) return state;
       claims.push([path, held.marker]);
     }
-    const quiet = reconcilePreviousSession(gitDir, { publication: state.publication });
+    const settled = state.attempts.map(item => item.id).filter(id => id !== options.actor.run_id);
+    const quiet = reconcilePreviousSession(gitDir, { publication: state.publication, settled });
     if (!quiet.ok && ['previous-process-group-alive', 'gate-worker-alive'].includes(quiet.reason)) return state;
     if (!quiet.ok) throw new Error(`recovery required: ${quiet.reason}`);
     if (state.phase === 'plan_pending') return mutateAutonomousProject(options.root, options.programme, options.project, 'release', null, { actor: options.actor, revision: read(options).revision });

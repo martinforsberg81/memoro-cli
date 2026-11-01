@@ -21,6 +21,8 @@ import {
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { run as runGit } from './git.js';
+
 import { mcHome } from './paths.js';
 import {
   DEFAULT_INTERVAL_MS,
@@ -113,13 +115,29 @@ export function startWatcher({ intervalMs = DEFAULT_INTERVAL_MS, root = mcHome()
  * read at its start, and what its successor would run when read later.
  */
 export function checkoutHead({
-  dir = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, ''), run = execFileSync,
+  dir = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, ''), run = gitExecFileSync,
 } = {}) {
   try {
     return String(run('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
     })).trim() || null;
   } catch { return null; }
+}
+
+/**
+ * `execFileSync` for git, through the one git seam (git.js): stdout on
+ * success, a throw carrying `status` and `stderr` otherwise — the shape
+ * `checkoutHead`'s `run` has always had.
+ */
+function gitExecFileSync(cmd, args, { timeout, stdio, encoding } = {}) {
+  const r = runGit(undefined, args, { timeoutMs: timeout, stdio, encoding });
+  if (r.error || r.status !== 0) {
+    const error = r.error || new Error(`Command failed: ${cmd} ${args.join(' ')}`);
+    error.status = r.status;
+    error.stderr = r.stderr;
+    throw error;
+  }
+  return r.stdout;
 }
 
 /**

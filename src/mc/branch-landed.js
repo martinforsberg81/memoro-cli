@@ -30,14 +30,10 @@
  */
 import { execFileSync } from 'node:child_process';
 
+import { run as runGit } from './git.js';
+
 export function branchLanded(dir, branch, { base = 'origin/main', run = null } = {}) {
-  const git = run || ((args) => {
-    try {
-      return execFileSync('git', ['-C', dir, ...args], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
-    } catch { return null; }
-  });
+  const git = run || ((args) => defaultGit(dir, args));
   const baseTree = git(['rev-parse', `${base}^{tree}`]);
   if (!baseTree) return 'unknown';
   const merged = git(['merge-tree', '--write-tree', base, branch]);
@@ -124,9 +120,8 @@ export function landedThroughRemote(dir, branch, { gh = null, run = null } = {})
 
 function defaultGit(dir, args) {
   try {
-    return execFileSync('git', ['-C', dir, ...args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const r = runGit(undefined, ['-C', dir, ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+    return r.error || r.status !== 0 ? null : String(r.stdout || '').trim();
   } catch { return null; }
 }
 
@@ -140,9 +135,5 @@ function defaultGh(dir, args) {
 }
 
 function readTip(dir, branch) {
-  try {
-    return execFileSync('git', ['-C', dir, 'rev-parse', branch], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim() || null;
-  } catch { return null; }
+  return defaultGit(dir, ['rev-parse', branch]) || null;
 }

@@ -115,6 +115,7 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
+import { run as runGit } from './git.js';
 import { gitDirOf } from './repos.js';
 import { runningRound } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -263,6 +264,12 @@ export function dockerNote(docker) {
 
 function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20, env: env ? { ...process.env, ...env } : undefined });
+  return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** `sh` for git — the same limits and answer, started through the one git seam (git.js). */
+function shGit(args, { timeout = 120_000, env } = {}) {
+  const r = runGit(undefined, args, { timeoutMs: timeout, maxBuffer: 64 << 20, ...(env ? { env: { ...process.env, ...env } } : {}) });
   return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -503,7 +510,7 @@ export function realDeps(env = process.env) {
     env,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
-    git: (cwd, args, { env } = {}) => sh('git', ['-C', cwd, ...args], { env }),
+    git: (cwd, args, { env } = {}) => shGit(['-C', cwd, ...args], { env }),
     gh: (cwd, args) => sh('gh', args, { cwd }),
     // Why a `gh pr list` failed: a locked keychain or a bad token, two calls
     // of two seconds at most (github-backoff.js).
@@ -1968,7 +1975,12 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * spends no session at all. What it costs is a reading thrown away when the
    * machine turns out to be full — seconds against the hour a session is.
    *
-   * Slot admission is FIFO, independently of the runner's project pick order.
+   * Between two sessions of one project the lane keeps the slot (`carried`):
+   * a project holds its lane from its first step to its review, so nobody
+   * else takes the moment in which the next session is being picked.
+   *
+   * Admission to a free slot is FIFO, independently of the project pick order.
+   * A project continuing in its held slot is not competing for a free one.
    * The durable waiting list also lets the operator inspect held lanes.
    */
   let running = 0;
@@ -1985,19 +1997,22 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
   const waitingPath = join(root, 'runner', 'waiting.json');
   const waiters = [];
   const saveWaiters = () => writeJson(waitingPath, { waiters });
-  function takeSlot(waiter) {
+  const carried = new Set();
+  function takeSlot(name, waiter = null) {
     const cap = capNow();
-    const held = cap === null ? running : running + stepsHeld().filter((h) => h.other).length;
+    const kept = [...carried].filter((held) => held !== name).length;
+    const held = cap === null ? running : running + kept + stepsHeld().filter((h) => h.other).length;
     seen = { held, cap };
-    if (cap !== null && (held >= cap || (waiters.length && waiters[0] !== waiter))) return false;
+    if (cap !== null && (held >= cap || (!carried.has(name) && waiters.length && waiters[0] !== waiter))) return false;
     running += 1;
+    carried.delete(name);
     return true;
   }
   const dropSlot = () => { running -= 1; };
   /** STOP, UPDATE and failed waits retire their tickets; an uncapped machine
    * never enqueues a lane. No await separates admission from taking a slot. */
   async function waitForSlot(name, { repo = null, lane = 0 } = {}) {
-    if (takeSlot(null)) return 'ok';
+    if (takeSlot(name)) return 'ok';
     const waiter = { name, repo, lane, pid, since: stamp() };
     waiters.push(waiter);
     try {
@@ -2007,7 +2022,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         await deps.sleep(TOTAL_POLL_MS);
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'update';
-        if (takeSlot(waiter)) return 'ok';
+        if (takeSlot(name, waiter)) return 'ok';
       }
     } finally {
       waiters.splice(waiters.indexOf(waiter), 1);
@@ -2944,13 +2959,16 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * running process knows: what the lanes are holding, and what this pass has
    * already been refused on.
    */
-  function nextStep({ repo = null, world = {}, passed = new Set() } = {}) {
+  function nextStep({ repo = null, world = {}, passed = new Set(), first = null } = {}) {
     // The projects another runner is in a step on are claimed here as well:
     // after a handover the old runner is still landing what it holds, and a
     // fresh pick of the same name would start that step a second time
     // (ruling 28).
     const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
-    return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
+    // The project this lane just ran goes first: it keeps the lane until it has
+    // nothing to run, and only then does the queue's order speak.
+    const names = first && world.names?.includes(first) ? [first, ...world.names.filter((name) => name !== first)] : world.names;
+    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
       autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs,
         worktree: join(areaPath(record.project), record.repo) }) : null });
   }
@@ -3023,7 +3041,19 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
    * would otherwise start again the second it finished, for ever. So that one
    * name waits for the next pass.
    */
-  async function pass({
+  async function pass(options = {}) {
+    const before = options.last?.name ?? null;
+    let ran = null;
+    try {
+      const result = await passOnce(options);
+      ran = result.ran ? result.name : null;
+      return result;
+    } finally {
+      if (before && before !== ran) carried.delete(before);
+      if (ran && !stopRequested() && !updateRequested()) carried.add(ran);
+    }
+  }
+  async function passOnce({
     repo = null, lane = 0, tag = null, world = null, last = null, passed: already = [],
   } = {}) {
     const label = tag || repo || 'run';
@@ -3052,9 +3082,10 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
-      const pick = nextStep({ repo, world: known, passed });
+      const pick = nextStep({ repo, world: known, passed, first: last?.name });
       if (!pick) return { ran: 0 };
-      if (last && pick.name === last.name && stepOf(pick.name) === last.step) {
+      // A goal has no step number: what it may do next is its own state's answer, build or review.
+      if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
         say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
         passed.add(pick.name);
         continue;

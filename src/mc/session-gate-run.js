@@ -63,7 +63,7 @@ async function executeSessionGate(request, {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
   if (request.select) {
-    const selected = await select({ command: request.select, cwd, env, signal, say: (line) => write(`${line}\n`) });
+    const selected = await select({ command: request.select, cwd, env, signal, say: (line) => write(`${line}\n`), mainOnly: request.mainOnly });
     if (!selected.ok) { write(`Error: selection failed — ${selected.reason}\n`); return { ok: false, code: 1, stopped_at: 'selection' }; }
     selection = request.files ? { ...selection, classes: selected.classes || {} } : selected;
   }

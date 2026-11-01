@@ -5,7 +5,8 @@
  *
  * A session's gate reads it to leave the costly files to the merge round
  * (`sessionFiles`), so nobody waits for them and the machine stays free. The
- * merge round runs them all, so a deferred file is unmeasured, never green.
+ * merge round runs them all; a deferred file is unmeasured, never green. A
+ * repository that declares `session_whole` defers nothing.
  */
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';

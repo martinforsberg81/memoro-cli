@@ -144,12 +144,22 @@ export const SHIPPED = Object.freeze({
     // is always the whole suite" produce the same command and are not the
     // same claim, and only the first one is checkable.
     suite: 'npm test',
-    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs "tests/**/*.test.js"` '
-      + '— a glob over the whole tree, not a selector; read off package.json 2026-09-02',
+    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 '
+      + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
-    // The flag its own `test` script gives node, stated rather than parsed.
-    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
+    // The flags its own `test` script gives node, stated rather than parsed.
+    // The per-test ceiling is a ratchet (Martin, 2026-11-01: a test over one
+    // second is misbuilt and is rebuilt). It started at 300 s on 2026-11-01,
+    // when the slowest test measured 151 s alone (~380 git processes); the
+    // autonomy tests went the same day and the slowest left is branch-landed
+    // at 29 s, so 60 s; with git out of the suite the slowest test fits 30 s on a
+    // loaded machine (2026-11-01), so 30 s. Every change that rebuilds a file lowers it, until it
+    // reads 1000.
+    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=30000']),
+    // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
+    // here is costly enough to leave to the merge round.
+    session_whole: true,
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -258,6 +268,25 @@ export const SHIPPED = Object.freeze({
       ]),
       gates: Object.freeze(['sql:pr-ci', 'core:startup:jsc:check']),
     }),
+    // Ratchets and snapshots: red when a change moved a pinned number, not when
+    // it broke something, and 95 % of the red pull requests landed later
+    // (Martin, 2026-11-01). The most often red of that kind in the 2 483
+    // merge rounds of 2026-10-02 to 2026-11-01. They run in the whole suite on
+    // main, in a pull request that edits the test itself, and when nothing else
+    // was selected.
+    main_only: Object.freeze([
+      'tests/architecture/card-corpus.test.js',
+      'tests/architecture/card-html-digests.test.js',
+      'tests/architecture/class-coverage.test.js',
+      'tests/architecture/core-bundle-jsc.test.js',
+      'tests/architecture/core-bundle-size.test.js',
+      'tests/architecture/css-dead-rules.test.js',
+      'tests/architecture/enacted-affordance.test.js',
+      'tests/architecture/outside-ui-reach.test.js',
+      'tests/architecture/reduce-first-coverage.test.js',
+      'tests/scripts/sql-budget-delta.test.mjs',
+      'tests/scripts/sql-operating-budgets.test.mjs',
+    ]),
     retry_once_why: 'measured in gate-rounds.jsonl to 2026-10-16: fast red-then-green flips with no change — '
       + 'the JSC start-up budget 19 (2026-10-07, now `core:startup:jsc:check`), the `sql:pr-ci` command gate 15, '
       + 'dead-CSS 6 (css-dead-rules.test.js), build-bundle.test.js under load (#13470 at load ~38); '
@@ -575,6 +604,10 @@ function normalise(entry, env) {
       gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
     },
     retry_once_why: entry.retry_once_why ?? null,
+    // A session's gate runs all it selected, leaving nothing to the merge round.
+    session_whole: entry.session_whole === true,
+    // The test files a pull request's selection leaves to the run on main.
+    main_only: Array.isArray(entry.main_only) ? entry.main_only.map(String) : [],
   };
 }
 

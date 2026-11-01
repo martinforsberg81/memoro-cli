@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { mayMend, runMend } from './mend.js';
 import { landerFor, runsAppender, serve, succeed } from './merger.js';
 import { workRoot } from './paths.js';
@@ -48,7 +49,7 @@ const gh = (args, options = {}) => runTool('gh', args, { cwd: options.cwd });
 // batch whether the checkout has moved past it.
 const checkout = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, '');
 const headNow = async () => {
-  const r = await runTool('git', ['-C', checkout, 'rev-parse', '--short', 'HEAD'], { timeoutMs: 5000 });
+  const r = await runGitAsync(undefined, ['-C', checkout, 'rev-parse', '--short', 'HEAD'], { timeoutMs: 5000 });
   return r.status === 0 ? String(r.stdout).trim() || null : null;
 };
 const commit = (await headNow()) || 'unknown';

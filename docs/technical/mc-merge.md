@@ -428,6 +428,21 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A repository may declare what only main measures** (`main_only`; memoro: eleven
+ratchets and snapshots, Martin 2026-11-01). `selectFiles` takes those files out of
+a pull request's selection, in the merge round and in `mc gate` alike, so both
+hash the same selection. They still run in the whole suite on main, in a pull
+request that edits the test itself, and when nothing else was selected. A change
+that moves a pinned number therefore lands, and turns main red until it is
+re-pinned.
+
+**A suite finds the toolchain's git first** (`directGitDir` in
+[`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
+shim that asks xcrun on every call, 67 ms against 23 ms for the git behind it
+(2026-11-01), and memoro-cli's autonomy tests make about 400 calls each. `suiteEnv`
+puts `$MC_HOME/direct-git`, a directory holding one link, first on the suite's
+PATH. Off macOS, or when no link can be made, PATH is unchanged.
+
 **A merge round runs at least four lanes.** `realTests` passes
 `--test-concurrency=<testLanes()>` — unless the repository's own flags already
 name a concurrency. A session's `mc gate` takes the free cores,
@@ -464,7 +479,8 @@ others cheapest first while the estimate fits 180 s, and names the rest as left
 to the merge round, which runs them all. Its coverage is then `partial`, which
 is never reusable evidence, and the green says what it does not cover. Named
 files and a goal's measured gate (`measurementBinding`, `wholeSelection`) defer
-nothing.
+nothing, and neither does a repository that declares `session_whole`
+(memoro-cli, whose whole suite took 128 s in a session's gate on 2026-11-01).
 
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
@@ -796,7 +812,7 @@ landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
 **A test that never ends is a red by name** (`TEST_TIMEOUT_MS` in
-`src/mc/repo-gate.js`). Every selected file runs with `--test-timeout=600000
+`src/mc/repo-gate.js`). Every selected file runs with `--test-timeout=300000
 --test-force-exit` unless the repository declares its own `--test-timeout`; a
 test that runs past ten minutes is a red named `test timed out after 600000ms`,
 not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).

@@ -1,11 +1,11 @@
 /** Inert v2 session contracts. Model interpretation is never an observed gate,
  * publication fact, planner confirmation or permission to start another run. */
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { writeJsonAtomic } from './atomic-write.js';
+import { run as runGit } from './git.js';
 import { validateAutonomousProject } from './autonomous-project.js';
 import { STABLE_ID_RE } from './goal-contract.js';
 import { realLock } from './register.js';
@@ -206,7 +206,7 @@ export function persistSessionResult({ root, result, publication = null, complet
   if (normal(result)) {
     if (!completed(completion)) throw new Error('normal result requires observed successful process completion, not an interrupted or unknown exit');
     if (!publication || publication.head !== result.handoff.published_sha) throw new Error('published SHA does not match the handoff');
-    const branch = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: publication.cwd, encoding: 'utf8', timeout: 60_000 });
+    const branch = runGit(publication.cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { timeoutMs: 60_000 });
     if (branch.error || branch.status !== 0 || branch.stdout.trim() !== ownership.branch) throw new Error('branch ownership mismatch');
     const receipt = findPublicationReceipt({ ...publication, root: publication.evidenceRoot || root, repo: context.assignment.repo,
       sessionRun: expected.run_id, goalRevision: expected.goal_revision });

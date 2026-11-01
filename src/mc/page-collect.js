@@ -51,6 +51,7 @@
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 import { join } from 'node:path';
 
 import {
@@ -1390,11 +1391,15 @@ export function programmesSection({
 /* ----------------------------------------------------------------- readers */
 
 function runGit(cwd, args) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const r = runGitSync(undefined, ['-C', cwd, ...args]);
   return r.status === 0 ? r.stdout.trimEnd() : null;
 }
 
 function execAsync(cmd, args, opts = {}) {
+  if (cmd === 'git') {
+    return runGitAsync(opts.cwd, args, { timeoutMs: opts.timeout ?? 20_000, maxBuffer: opts.maxBuffer ?? (8 << 20) })
+      .then((r) => ({ ok: !r.error && r.status === 0, stdout: r.stdout || '' }));
+  }
   return new Promise((resolve) => {
     execFile(cmd, args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 8 << 20, ...opts }, (error, stdout) => resolve({ ok: !error, stdout: stdout || '' }));
   });

@@ -29,13 +29,14 @@
  * after it, in the same call (`reportLines`). A token or a
  * session is never printed, never in `--json`, never in argv.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { deleteSecret, getSecret, setSecret } from '../../lib/keychain.js';
 import { openCommandFor } from '../../lib/device-flow.js';
+import { run as runGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
@@ -382,7 +383,7 @@ async function account(verb, argv, { stdout, stderr, deps }) {
  * edited worktree against its own HEAD printed `@ <commit>` on both sides).
  */
 export function servedTree(worktree, server, deps = {}) {
-  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const git = deps.git || ((args) => runGit(worktree, args));
   const branch = String(git(['branch', '--show-current']).stdout || '').trim() || '(detached)';
   const commit = String(server?.built_from?.commit || git(['rev-parse', 'HEAD']).stdout || '').trim().slice(0, 10);
   const dirty = server?.built_from?.dirty;
