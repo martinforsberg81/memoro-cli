@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-/** The local gate's detached worker. It holds the repository lane.
- * Selection and test execution use the merge gate's implementations. */
+/** The local gate's detached worker. Selection and test execution use the
+ * merge gate's implementations. It takes no lane and waits for nobody but a
+ * build (await-deploy.js): it runs at low priority, so a merge round has the
+ * cores, and it leaves what costs too much to that round (test-times.js). */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { setPriority } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runShell } from './child-async.js';
 import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js';
 import { redTests, tapTotals } from './tap-red.js';
-import { takeLane } from './gate-lane-wait.js';
-import { releaseGateLock } from './gate-lock.js';
+import { awaitDeploy, deployHolding } from './await-deploy.js';
+import { BUILD_LANE } from './gate-lock.js';
+import { readTestTimes, sessionFiles } from './test-times.js';
 import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
@@ -42,8 +46,8 @@ export async function runSessionGate(request, {
   }
   if (deps.signal?.aborted) result = { ...result, ok: false, code: 1, stopped_at: 'interrupted' };
   const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now() });
-  const path = persist({ root: request.reservation.root, receipt });
-  try { record({ root: request.reservation.root, receipt, path }); }
+  const path = persist({ root: request.gate.root, receipt });
+  try { record({ root: request.gate.root, receipt, path }); }
   catch (error) {
     // Cache failure cannot turn a durable completed measurement into a red
     // attempt. The merger simply measures again when the cache is absent.
@@ -63,11 +67,16 @@ async function executeSessionGate(request, {
     if (!selected.ok) { write(`Error: selection failed — ${selected.reason}\n`); return { ok: false, code: 1, stopped_at: 'selection' }; }
     selection = request.files ? { ...selection, classes: selected.classes || {} } : selected;
   }
-  const files = [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
-  if (files.some((file) => !/\.test\.[cm]?[jt]s$/u.test(file) || resolve(cwd, file) === resolve(cwd) || !resolve(cwd, file).startsWith(`${resolve(cwd)}/`))) {
+  const selected = [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
+  if (selected.some((file) => !/\.test\.[cm]?[jt]s$/u.test(file) || resolve(cwd, file) === resolve(cwd) || !resolve(cwd, file).startsWith(`${resolve(cwd)}/`))) {
     write('Error: selector named a test outside the worktree or a non-test file\n');
     return { ok: false, code: 1, stopped_at: 'selection' };
   }
+  // Named files are what was asked for, and a goal's measurement must be whole.
+  const { run: files, deferred } = request.defer
+    ? sessionFiles(selected, { times: readTestTimes(request.gate), keep: request.addedTests })
+    : { run: selected, deferred: [] };
+  if (deferred.length) write(`deferred to the merge round, too costly here (${deferred.length}): ${deferred.join(' ')}\n`);
   if (!files.length && !selection.commands?.length) {
     write('NOTHING RUN — the repository selector selected no checks\n');
     return { ok: false, code: 2, stopped_at: 'no-checks', files };
@@ -76,7 +85,7 @@ async function executeSessionGate(request, {
   let details = [];
   let testResult = null;
   if (files.length) {
-    const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal });
+    const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate });
     write(`${run.tap || ''}\n${run.stderr || ''}`);
     details = redTests(run.tap, files, { cwd });
     const totals = tapTotals(run.tap);
@@ -105,8 +114,9 @@ async function executeSessionGate(request, {
     if (!ok) code = 1;
   }
   if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
-  return { ok: code === 0, code, files, commands, red_tests: details,
-    coverage: { kind: request.files ? 'named' : 'affected', files, commands: selection.commands || [],
+  return { ok: code === 0, code, files, deferred, commands, red_tests: details,
+    // `partial` is never reusable evidence: the merge round measures the whole selection.
+    coverage: { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
       flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null },
     execution: { tests: testResult, commands },
   };
@@ -116,17 +126,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const path = process.argv[2];
   const controller = new AbortController();
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => controller.abort());
-  let holding = false;
   let request;
   let result = { ok: false, code: 1 };
   try {
     request = JSON.parse(readFileSync(path, 'utf8'));
-    await takeLane({ ...request.reservation, signal: controller.signal });
-    holding = true;
+    try { setPriority(10); } catch { /* the gate still runs */ }
+    if (request.gate.repo === BUILD_LANE) await awaitDeploy({ holding: () => deployHolding({ root: request.gate.root }) });
     result = await runSessionGate(request, { signal: controller.signal });
   } catch (error) { process.stderr.write(`Error: ${error.message}\n`); }
   finally {
-    if (holding) releaseGateLock(request.reservation);
     writeFileSync(`${path}.result`, JSON.stringify(result));
     if (request?.log) writeFileSync(`${request.log}.exit`, `${result.code}\n`);
     process.exitCode = result.code;

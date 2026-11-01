@@ -27,6 +27,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { mcHome, workGatePath } from './paths.js';
 import { takeLane } from './gate-lane-wait.js';
 import { releaseGateLock } from './gate-lock.js';
+import { gateLaneOf } from './repo-gate-table.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { redFiles, redNames, redTests, tapTotals } from './tap-red.js';
 
@@ -75,7 +76,7 @@ export async function measureDocs({
   }
 
   const dir = join(io.gateDir, repoFileSlug(repoPath), `docs-${pr}`);
-  const lane = declared.declaration.gate_lane || 'heavy';
+  const lane = gateLaneOf(repoPath);
   const reservation = { root: mcHome(env), lane, repo: repoFileSlug(repoPath), mode: 'docs-gate' };
   const logPath = join(io.outputDir, `docs-${repoFileSlug(repoPath)}-${pr}-${randomUUID()}.log`);
   let holding = false;

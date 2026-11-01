@@ -74,19 +74,13 @@ the merge-log line are all described where they live —
 [`docs/mc-command-matrix.md`](../mc-command-matrix.md). There is still no flag
 that merges a red gate. The squash is pinned with `--match-head-commit` to the head the round measured or freshened, once GitHub reports it (ruling 43).
 
-**The lane** (ruling 34). A repository's gate table entry may say
-`gate_lane: 'light'`, with a `gate_lane_why`; nothing declared is `heavy`, and
-a lane mc does not have is a declaration error. The round reads its
-declaration before it takes the gate lock, because the lane names the lock:
-`gate-running.json` for `heavy` (the old file, so a round on old code and one
-on new code still see each other) and `gate-running-light.json` for `light`
-(`gate-lock.js`). Two rounds in one lane exclude each other; a heavy and a
-light round run side by side. memoro-cli declares `light`: its suite is one
-`node --test` over its own tree, 60–75 s here with no `npm ci` and no browser,
-and does not pin the cores the way memoro's seven-lane `test:full` does —
-which was the whole reason for one at a time — yet on 2026-10-09/10 each of
-its rounds waited behind a memoro round of three to fifteen minutes. A refusal
-and the page name the lane they wait on.
+**The lane** (ruling 61). Every repository has one merge lane, its own, named by
+the repository (`gateLaneOf`, lock `gate-running-<repo>.json`, `gate-lock.js`).
+Two rounds of one repository exclude each other; two repositories run side by
+side. There is nothing to declare and no class of lane: `light` and `heavy`
+were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
+seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
+the page name the lane they wait on.
 
 ## The door
 
@@ -454,15 +448,23 @@ or `heavy` runs after the standard batch, each class in its own `node --test`,
 2026-10-24: its files share nothing; 646 files green at four lanes, 247–300 s
 against 770 s at one) — as memoro's own runner runs them — and the batches' TAP
 is read as one run. A session's
-`mc gate` runs in the lane too (ruling 52, [`src/mc/gate-lane-wait.js`](../../src/mc/gate-lane-wait.js)):
-its detached worker takes the lane's lock for its own pid, with `mode:
-'session-gate'`, waiting while a merge round, a deploy, an iOS build or another
-session's gate holds it, and gives it back after the tests. The merger waits
-for a session's run as for any round in its lane. A session's gate uses affected selection or explicitly named files, with
+`mc gate` takes no lane and waits for nobody (ruling 61): its detached worker
+starts at once at low priority beside any merge round, and only a deploy or an
+iOS build of memoro goes first (`await-deploy.js`). A session's gate uses affected selection or explicitly named files, with
 resource-class batching, bounded concurrency and timeouts. Completed local
 measurements now leave [immutable evidence](mc-gate-evidence.md): exact content,
 frozen base and check scope. Only complete, unchanged, unfiltered affected
 selections populate the existing green cache; named runs remain limited.
+
+**A session's gate leaves what costs too much to the merge round.** Every run
+records each test file's measured seconds in `~/mc/test-times/<repo>.json`
+(`test-times.js`, a second reporter beside TAP; half the new measurement, half
+the old). An unnamed `mc gate` runs the test files the change touches, then the
+others cheapest first while the estimate fits 180 s, and names the rest as left
+to the merge round, which runs them all. Its coverage is then `partial`, which
+is never reusable evidence, and the green says what it does not cover. Named
+files and a goal's measured gate (`measurementBinding`, `wholeSelection`) defer
+nothing.
 
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
@@ -552,19 +554,19 @@ records the evidence taken, not a new measurement.
 **`mc gate` selects from code changes** ([`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
 With no files named, the repository selector receives all paths changed against
 the merge base, including staged, unstaged and untracked paths and both sides
-of renames. Its tests and command gates run in the repository's lane. Newly
+of renames. Newly
 added test files are included even before staging. Named files use the same
 bounded test runner and the selector's resource classes. There is no 30-file
 limit; `--full` remains refused. No changes is `NOTHING CHANGED`; a changed
 branch with no selected checks is not green. The merge still measures its
 candidate with the current base; local results do not bypass it.
 
-The detached worker owns both the lane and the test subprocesses. An interrupt
-stops its active test group before releasing the reservation. Unique log names
+The detached worker owns the test subprocesses. An interrupt stops its active
+test group. Unique log names
 prevent simultaneous worktrees from sharing output; the full output and
 structured failures remain available through `mc gate --wait` and `--json`.
 Budget expiry is `RUNNING` (exit 3), never green evidence: waiting again observes
-the same worker without starting tests or releasing its lane. A dead worker
+the same worker without starting tests. A dead worker
 without an exit marker is red. Completed immutable receipts survive command
 exit and can be rediscovered by run ID even if a crash prevented updating the
 reuse cache; missing evidence falls back to measurement. The
@@ -928,8 +930,8 @@ job a round: `MERGE_BATCH_MAX` is 1, because a batch of four cost about 430 s pe
 landed pull request against 210 s alone on memoro's merge rounds of 2026-10-17
 to 10-24. The batch machinery stays for a merger resuming a batch it died under:
 it takes that repository's `landing` jobs again, in one round, and answers each
-by itself. It runs one loop per gate lane, so a light round
-and a heavy one are in flight at once — see [`mc-run.md`](mc-run.md)
+by itself. It runs one loop per repository, so
+two repositories' rounds are in flight at once — see [`mc-run.md`](mc-run.md)
 § *The merge* for both. A merger killed mid-round leaves its
 job `landing`, and the next merger — started by the next `mc merge`, or by
 the runner when it reads a queue with jobs and no live merger — lands that

@@ -228,9 +228,9 @@ export const BASH_RULES = [
     reason: SUITE_REASON,
   },
   {
-    // The suite, or a run of test files beside the gate lane: every test run
-    // a session starts goes through `mc gate`, which waits its turn in the
-    // lane (2026-10-24). `npm run test:<x>` is a script of its own and passes.
+    // The suite, or a run of test files beside `mc gate`: every test run a
+    // session starts goes through it, at low priority and bounded by measured
+    // time. `npm run test:<x>` is a script of its own and passes.
     id: 'npm-test',
     test: /(^|[;&|(]\s*|\s)npm\s+(run\s+)?test(?![\w:-])/u,
     reason: SUITE_REASON,

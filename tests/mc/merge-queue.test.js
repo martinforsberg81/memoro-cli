@@ -23,12 +23,12 @@ const job = (over = {}) => ({
 });
 
 test('with a lane, a batch is only that lane\'s jobs', () => {
-  const laneOf = (entry) => (entry.repo === 'memoro-cli' ? 'light' : 'heavy');
+  const laneOf = (entry) => (entry.repo === 'memoro-cli' ? 'memoro-cli' : 'memoro');
   const entries = queueEntries([
     job({ repo: 'memoro', pr: 1, since: 'a' }), job({ pr: 2, since: 'b' }), job({ repo: 'memoro', pr: 3, since: 'c' }),
   ]);
-  assert.deepEqual(nextBatch(entries, { lane: 'heavy', laneOf, max: 4 }).map((e) => e.pr), [1, 3]);
-  assert.deepEqual(nextBatch(entries, { lane: 'light', laneOf, max: 4 }).map((e) => e.pr), [2]);
+  assert.deepEqual(nextBatch(entries, { lane: 'memoro', laneOf, max: 4 }).map((e) => e.pr), [1, 3]);
+  assert.deepEqual(nextBatch(entries, { lane: 'memoro-cli', laneOf, max: 4 }).map((e) => e.pr), [2]);
   assert.deepEqual(nextBatch(entries, { max: 4 }).map((e) => e.pr), [1, 3], 'no lane is every job');
 });
 

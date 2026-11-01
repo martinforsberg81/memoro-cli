@@ -50,7 +50,8 @@
  * and so is any red the probe does not call main's.
  */
 import { spawn } from 'node:child_process';
-import { availableParallelism, loadavg } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -70,7 +71,8 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
+import { TIMES_REPORTER, recordTestTimes } from './test-times.js';
+import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
@@ -198,9 +200,8 @@ export async function runGate({
   // round that is killed still says how far it had got and what it had decided
   // by then — the thing that was missing on 2026-08-30. One funnel, so a line
   // cannot reach one and miss the other.
-  // The gate lane this round's lock is in (gate-lock.js), read off the
-  // declaration below before the lock is taken.
-  let lane = 'heavy';
+  // The repository's lane (gate-lock.js), which this round's lock is in.
+  const lane = gateLaneOf(repoPath);
   const say = (message) => {
     log('gate.say', { text: message });
     noteGatePhase({ root, message, lane });
@@ -232,7 +233,7 @@ export async function runGate({
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = testLanes({ env, load, mode: gateMode });
   const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal }));
-  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal }));
+  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal, times: { root, repo: lane } }));
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
@@ -353,15 +354,14 @@ export async function runGate({
   // What this repository needs, read before any work is done. A round that
   // cannot know whether the suite will be complete is a round whose green
   // means nothing, so it stops here rather than after two suite runs. Read
-  // before the lock, because the declaration names the lane the lock is in.
+  // before the lock.
   const declared = declarationFor(repoPath, { root, env });
   if (!declared.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     return finish('declaration', declared.reason);
   }
-  lane = declared.declaration.gate_lane || 'heavy';
 
-  // One gate round at a time in each lane on this machine (gate-lock.js). A full suite
+  // One gate round at a time per repository (gate-lock.js). A full suite
   // pins the cores for a minute and a half, and this round runs two; two
   // rounds at once make both slower and both flakier, and the flakiness lands
   // on whichever pull request happened to be measured.
@@ -377,7 +377,7 @@ export async function runGate({
     return finish(held.error ? 'reservation' : 'busy', held.error || describeRunning(held.running, lane));
   }
   const ownGateLock = held.took;
-  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane on this machine`);
+  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane`);
   else say('the round lock could not be written — running anyway; another round could overlap this one');
 
   // The other half of the way back. A SIGTERM — a shell's timeout, a closed
@@ -2210,16 +2210,16 @@ export function testBatches(files, classes = {}, lanes = 1) {
  * as one result: the TAP of each batch in order (`tapTotals` adds up one
  * summary per process), the first non-zero exit, and the time budget shared.
  */
-export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, runBatch = runTestBatch } = {}) {
+export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, times = null, runBatch = runTestBatch } = {}) {
   const batches = testBatches(files, classes, lanes);
-  if (batches.length <= 1) return runBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal });
+  if (batches.length <= 1) return runBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal, times });
   const started = Date.now();
   let tap = '';
   let stderr = '';
   let code = 0;
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
-    const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal });
+    const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal, times });
     tap += ran.tap;
     stderr += ran.stderr || '';
     if (ran.error) return { code: -1, tap, stderr, error: ran.error };
@@ -2233,7 +2233,7 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   return { code, tap, stderr, timedOut: false, timeoutMs, lanes };
 }
 
-function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null } = {}) {
+function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
@@ -2250,7 +2250,18 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     // repository that declares its own `--test-timeout` keeps it.
     const perTest = declared.some((flag) => String(flag).startsWith('--test-timeout')) ? [] : [`--test-timeout=${TEST_TIMEOUT_MS}`];
     const forceExit = declared.includes('--test-force-exit') ? [] : ['--test-force-exit'];
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
+    // The measured cost of each file (test-times.js), in a second reporter so
+    // that the TAP this reads stays as it was.
+    const timesFile = times ? join(tmpdir(), `mc-test-times-${randomUUID()}.jsonl`) : null;
+    const reporters = timesFile
+      ? ['--test-reporter=tap', '--test-reporter-destination=stdout', `--test-reporter=${TIMES_REPORTER}`, `--test-reporter-destination=${timesFile}`]
+      : ['--test-reporter=tap'];
+    const noteTimes = () => {
+      if (!timesFile) return;
+      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      rmSync(timesFile, { force: true });
+    };
+    const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -2282,7 +2293,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
+    child.on('close', (code) => { noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
   });
 }
 
@@ -2351,7 +2362,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null } = {}) {
+function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
@@ -2410,6 +2421,6 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted }); });
+    child.on('close', (code) => { noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted }); });
   });
 }

@@ -5,7 +5,6 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, r
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { captureWorktree, sameContent } from './session-gate-evidence.js';
-import { GATE_LANES, SESSION_LANE, releaseGateLock } from './gate-lock.js';
 import { processAlive } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateControlState } from './session-control.js';
@@ -23,24 +22,20 @@ export function groupAlive(pid) {
 
 /** The worker writes its result only after bounded children settle. A dead
  * worker without that evidence may have orphaned detached test groups: wait
- * for controlled recovery, never reap its lane just because its pid is dead. */
+ * for controlled recovery, never assume it finished just because its pid is dead. */
 export function reconcileSessionGate(gitDir, { alive = processAlive } = {}) {
   const path = join(gitDir, 'mc-gate.json');
   if (!existsSync(path)) return { ok: true };
-  let lock; let request; let result;
+  let lock; let result;
   try {
     lock = JSON.parse(readFileSync(path, 'utf8'));
     if (!Number.isSafeInteger(lock.pid) || lock.pid <= 0) throw new Error('invalid gate pid');
     if (alive(lock.pid)) return { ok: false, reason: 'gate-worker-alive', pid: lock.pid };
-    request = JSON.parse(readFileSync(lock.request, 'utf8'));
     result = JSON.parse(readFileSync(`${lock.request}.result`, 'utf8'));
     const exit = readFileSync(`${lock.log}.exit`, 'utf8').trim();
     if (typeof result.ok !== 'boolean' || !Number.isSafeInteger(result.code) || result.code < 0
-      || !/^[0-9]+$/u.test(exit) || Number(exit) !== result.code
-      || ![...GATE_LANES, SESSION_LANE].includes(request.reservation?.lane) || !request.reservation.root) throw new Error('unknown gate completion');
+      || !/^[0-9]+$/u.test(exit) || Number(exit) !== result.code) throw new Error('unknown gate completion');
   } catch { return { ok: false, reason: 'gate-children-unknown', pid: lock?.pid ?? null }; }
-  // releaseGateLock checks both pid and claim generation; a successor is kept.
-  releaseGateLock({ ...request.reservation, pid: lock.pid });
   const current = JSON.parse(readFileSync(path, 'utf8'));
   if (current.request === lock.request && current.pid === lock.pid) rmSync(path);
   return { ok: true, gate: { pid: lock.pid, code: result.code } };

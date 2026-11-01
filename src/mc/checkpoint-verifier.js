@@ -7,9 +7,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEFAULT_BUDGET, gateReservation, run as runGate } from './commands/gate.js';
-import { takeLane } from './gate-lane-wait.js';
-import { releaseGateLock } from './gate-lock.js';
+import { DEFAULT_BUDGET, run as runGate } from './commands/gate.js';
 import { tryGit } from './git.js';
 import { runnerScratchDir } from './paths.js';
 import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
@@ -40,7 +38,6 @@ export function createCheckpointVerifier({ root, programme, project, worktree, e
   for (const name of PROVIDER_API_ENV_NAMES) delete childEnv[name];
   const io = {
     capture: captureWorktree, head: cwd => tryGit(cwd, ['rev-parse', 'HEAD']), gate: runGate,
-    reservation: cwd => gateReservation(cwd, childEnv), take: takeLane, release: releaseGateLock,
     spawn, signal: (pid, name) => process.kill(-pid, name), groupAlive,
     setTimer: setTimeout, clearTimer: clearTimeout, termMs: SESSION_TERM_MS, limitMs: LIMIT_MS, ...deps,
   };
@@ -96,7 +93,7 @@ export function createCheckpointVerifier({ root, programme, project, worktree, e
     let worker = null; let answer = Buffer.alloc(0);
     const stop = () => { if (worker) signalGroup(worker, 'SIGTERM'); };
     const options = {
-      cwd: worktree, env: childEnv, stdout: { write: (text) => { answer = Buffer.concat([answer, Buffer.from(text)]); onOutput(text); } },
+      cwd: worktree, env: childEnv, wholeSelection: true, stdout: { write: (text) => { answer = Buffer.concat([answer, Buffer.from(text)]); onOutput(text); } },
       stderr: { write: onOutput },
       spawn: (...args) => { const child = io.spawn(...args); worker = child.pid; return child; },
     };
@@ -130,16 +127,6 @@ export function createCheckpointVerifier({ root, programme, project, worktree, e
     };
   };
 
-  const holdingLane = async (signal, write, work) => {
-    const reservation = io.reservation(worktree);
-    const sleep = ms => new Promise((resolve) => {
-      const timer = io.setTimer(resolve, ms);
-      signal.addEventListener('abort', () => { io.clearTimer(timer); resolve(); }, { once: true });
-    });
-    await io.take({ ...reservation, signal, sleep, write });
-    try { return await work(); } finally { io.release(reservation); }
-  };
-
   /** Everything here runs after `verify` returned. */
   const measure = async (plan) => {
     await new Promise((resolve) => { setImmediate(resolve); });
@@ -153,10 +140,8 @@ export function createCheckpointVerifier({ root, programme, project, worktree, e
     const deadline = io.setTimer(stop, io.limitMs);
     try {
       if (plan.criterion_id === null) return await measured(plan, () => runCheckpoint(halted, remember));
-      return await holdingLane(aborted.signal, remember, () => {
-        if (halted()) return null;
-        return measured(plan, () => runCheck(plan.check, halted, remember));
-      });
+      if (halted()) return null;
+      return await measured(plan, () => runCheck(plan.check, halted, remember));
     } catch { return null; } finally {
       io.clearTimer(deadline); halt = null;
       try {

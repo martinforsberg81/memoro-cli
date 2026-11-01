@@ -1052,28 +1052,21 @@ describe('MERGES', () => {
       lines.join('\n'));
   });
 
-  it('a session gate is drawn as a session gate and counted as no landing', () => {
-    const merges = mergesSection({ landing: [{ repo: 'memoro.git', pr: null, mode: 'session-gate', lane: 'session', age_seconds: 39 }], queued: [] });
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /memoro\.git +session gate, not landing · session lane/u.test(line)), lines.join('\n'));
-    assert.equal(lines.some((line) => /MERGES +\d+ landing/u.test(line)), false, lines.join('\n'));
-  });
-
   /**
-   * Two rounds at once — a memoro round in the heavy lane and a memoro-cli
-   * round in the light one (ruling 34) — are two rows, each naming its lane.
+   * Two rounds at once — a memoro round and a memoro-cli round, each in
+   * its repository's lane — are two rows, each naming its lane.
    */
   it('draws both rounds when one runs in each lane, and names the lane of each', () => {
     const merges = mergesSection({
-      landing: [{ ...LANDING, lane: 'heavy' }, { ...LANDING, repo: 'memoro-cli', pr: 838, phase: 'node --test', lane: 'light' }],
+      landing: [{ ...LANDING, lane: 'memoro' }, { ...LANDING, repo: 'memoro-cli', pr: 838, phase: 'node --test', lane: 'memoro-cli' }],
       queued: [{ repo: 'memoro-cli', pr: 838, since: '2026-10-10T12:00:00Z', state: 'landing' }],
     });
-    assert.equal(merges.count, 2, 'the light one is not counted twice as a waiter');
+    assert.equal(merges.count, 2, 'the second is not counted twice as a waiter');
     assert.equal(merges.landings.length, 2);
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
     assert.ok(lines.some((line) => /MERGES.*2 landing/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}landing · heavy lane · running 17 test files/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /● memoro-cli {2}#838 {2}landing · light lane · node --test/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}landing · memoro lane · running 17 test files/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● memoro-cli {2}#838 {2}landing · memoro-cli lane · node --test/u.test(line)), lines.join('\n'));
   });
 
   /**
@@ -2263,7 +2256,7 @@ describe('collectPage', () => {
     // merger's MC_HOME reaches the suite. The page reads the home its `env`
     // names and sees none of it (2026-10-10 #13390, 2026-10-11 #13467). A
     // lock already there is a real round — the same case — and stays theirs.
-    const lock = gateLockPath(mcHome());
+    const lock = gateLockPath(mcHome(), 'memoro');
     let wrote = false;
     try {
       mkdirSync(mcHome(), { recursive: true });

@@ -73,8 +73,7 @@ import {
   runningDeploy,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
-import { SESSION_GATE_MODE } from '../gate-lane-wait.js';
-import { releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
+import { BUILD_LANE, releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
@@ -798,12 +797,10 @@ export async function waitForGate(job, deps = {}) {
   const root = job.root || workRoot(deps.env || process.env);
   // The first round in flight in any lane, heavy first, or null. The lock
   // files are in mc's home (`gate-lock.js`), not under the work root: read
-  // there, this saw no round at all until 2026-10-10. A session's gate is not
-  // waited for: gates follow one another, so the deploy of 2026-10-31 needed
-  // both lanes free at one of its polls and waited an hour after the merge
-  // round it was meant to follow. The deploy goes when the round is done.
+  // there, this saw no round at all until 2026-10-10. The deploy goes when the
+  // round is done.
   const rounds = deps.runningRounds || (() => runningRounds());
-  const round = deps.runningRound || (() => Object.values(rounds() || {}).find((one) => one && one.mode !== SESSION_GATE_MODE) || null);
+  const round = deps.runningRound || (() => Object.values(rounds() || {}).find(Boolean) || null);
   const merger = deps.readMerger || (() => readMerger({ root }));
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   const deploy = (deps.mode ?? DEPLOY_MODE) === DEPLOY_MODE;
@@ -841,17 +838,16 @@ export async function waitForGate(job, deps = {}) {
  * An iOS build holds it the same way, as `deps.mode` `'ios-build'`
  * (`buildIos`, ios-build.js): the two exclude each other through this lock.
  */
-export async function holdHeavyLane(job, deps = {}) {
+export async function holdBuildLane(job, deps = {}) {
   const take = deps.takeGateLock || takeGateLock;
   const root = job.lockRoot || mcHome(deps.env || process.env);
   const mode = deps.mode ?? DEPLOY_MODE;
   for (;;) {
     await waitForGate(job, deps);
-    const held = take({ repo: mode, pr: null, mode, root, lane: 'heavy' });
+    const held = take({ repo: mode, pr: null, mode, root, lane: BUILD_LANE });
     if (held.ok) return held.took;
     if (held.error) throw new Error(held.error);
-    // Only a session gate started before the session lane can be in the way
-    // here, and `waitForGate` does not wait for one: without this, a busy loop.
+    // A round that took the lane between the wait and the take: without this, a busy loop.
     await (deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); })))(GATE_POLL_MS);
   }
 }
@@ -863,7 +859,7 @@ export async function holdHeavyLane(job, deps = {}) {
  * shipped. No repository lease is held — the worktree is moved by nothing
  * but this, and the merger lands nothing while the row says `running`
  * (rulings 26, 30) — but the heavy gate lock is, for the whole deploy
- * (`holdHeavyLane`).
+ * (`holdBuildLane`).
  */
 export async function ship(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -874,7 +870,7 @@ export async function ship(job, deps = {}) {
   let tail = '';
   let holding = false;
   try {
-    holding = await holdHeavyLane(job, { ...deps, stdout });
+    holding = await holdBuildLane(job, { ...deps, stdout });
     // The one movement of somebody else's checkout this verb may make.
     // `origin/main` is what ships — whatever is on `main` is meant to — so it
     // is fast-forwarded to `origin/main` as it is now, which may be later than
@@ -967,7 +963,7 @@ export async function ship(job, deps = {}) {
     recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
     throw error;
   } finally {
-    if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: 'heavy' });
+    if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: BUILD_LANE });
   }
 }
 

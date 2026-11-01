@@ -705,7 +705,7 @@ describe('one gate round at a time', () => {
     const fx = fixture();
     try {
       // A live round: this test's own pid is the one thing certain to be alive.
-      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({
+      writeFileSync(gateLockPath(fx.mcHome, 'repo'), JSON.stringify({
         pid: process.pid, repo: 'other-repo', pr: 77, since: '2026-08-30T09:00:00.000Z',
       }));
       const result = await fx.run();
@@ -715,7 +715,7 @@ describe('one gate round at a time', () => {
       assert.match(result.reason, /one at a time/u);
       assert.deepEqual(fx.ran('suite'), [], 'no suite ran alongside another round');
       assert.equal(fx.lease().held, false, 'the repository lease was given back');
-      assert.equal(runningRound({ root: fx.mcHome }).pr, 77, 'and the other round was not touched');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }).pr, 77, 'and the other round was not touched');
     } finally { fx.cleanup(); }
   });
 
@@ -726,7 +726,7 @@ describe('one gate round at a time', () => {
       const result = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(result.stopped_at, 'red');
       assert.ok(progress.some((line) => /^gate round started \(pid \d+\) — one at a time/u.test(line)), progress.join('\n'));
-      assert.equal(runningRound({ root: fx.mcHome }), null, 'released even though the round was red');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'released even though the round was red');
     } finally { fx.cleanup(); }
   });
 
@@ -736,10 +736,10 @@ describe('one gate round at a time', () => {
       // What a killed round leaves behind. There is no clock that can tell a
       // slow round from a dead one — a round is supposed to take minutes — so
       // the only honest question is whether the pid exists.
-      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({ pid: 999_999, repo: 'x', pr: 1 }));
+      writeFileSync(gateLockPath(fx.mcHome, 'repo'), JSON.stringify({ pid: 999_999, repo: 'x', pr: 1 }));
       const result = await fx.run();
       assert.notEqual(result.stopped_at, 'busy', 'a dead round does not block the next one');
-      assert.equal(runningRound({ root: fx.mcHome }), null);
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null);
     } finally { fx.cleanup(); }
   });
 
@@ -748,7 +748,7 @@ describe('one gate round at a time', () => {
     try {
       const file = join(root, 'file');
       writeFileSync(file, 'not a directory');
-      const out = takeGateLock({ repo: 'x', pr: 1, root: file });
+      const out = takeGateLock({ repo: 'x', pr: 1, root: file, lane: 'repo' });
       assert.equal(out.ok, false);
       assert.match(out.error, /cannot reserve/u);
     } finally { rmSync(root, { recursive: true, force: true }); }

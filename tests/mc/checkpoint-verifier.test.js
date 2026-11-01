@@ -10,7 +10,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createCheckpointVerifier } from '../../src/mc/checkpoint-verifier.js';
 import { run as runGate } from '../../src/mc/commands/gate.js';
 import { STABLE_ID_RE } from '../../src/mc/goal-contract.js';
-import { gateLockPath, runningRound } from '../../src/mc/gate-lock.js';
 import { captureWorktree } from '../../src/mc/session-gate-evidence.js';
 import { groupAlive } from '../../src/mc/session-recovery.js';
 
@@ -31,17 +30,14 @@ class Child extends EventEmitter {
   }
 }
 
-/** A verifier on injected process, lane and clock. `end()` ends the running check. */
+/** A verifier on injected process and clock. `end()` ends the running check. */
 function rig(overrides = {}) {
-  const log = { spawned: [], signals: [], lane: [], released: 0, timers: [], gates: [] };
+  const log = { spawned: [], signals: [], timers: [], gates: [] };
   const rig = { log, child: null, contents: [], capture: () => rig.contents.shift() ?? content() };
   const verify = createCheckpointVerifier({
     root: '/mc', programme: 'prog', project: 'proj', worktree: '/work',
     env: { PATH: '/bin', ANTHROPIC_API_KEY: 'secret', OPENAI_API_KEY: 'secret', KEEP: 'yes' }, scratch: mkdtempSync(join(tmpdir(), 'mc-verifier-scratch-')),
     capture: () => rig.capture(), head: () => 'a'.repeat(40),
-    reservation: () => ({ root: '/mc', lane: 'light', repo: 'memoro-cli' }),
-    take: async (options) => { log.lane.push(options); },
-    release: () => { log.released++; },
     spawn: (bin, args, options) => { rig.child = new Child(); log.spawned.push({ bin, args, options }); return rig.child; },
     signal: (pid, name) => { log.signals.push([pid, name]); },
     groupAlive: () => false,
@@ -125,19 +121,6 @@ test('the request text never reaches the shell and the environment holds no prov
   assert.ok(!fx.verify(ask('c-one', 1, injected), current).reference.includes('rm -rf'));
 });
 
-test('the check holds the session gate lane and gives it back', async () => {
-  const fx = rig();
-  const current = state([criterion('c-one', 'true')]);
-  fx.verify(ask('c-one'), current);
-  await fx.started();
-  assert.equal(fx.log.lane[0].lane, 'light');
-  assert.equal(fx.log.lane[0].repo, 'memoro-cli');
-  assert.equal(fx.log.lane[0].mode, undefined, 'takeLane defaults to the session gate mode');
-  assert.equal(fx.log.released, 0);
-  await fx.end(0);
-  assert.equal(fx.log.released, 1);
-});
-
 test('unknown, after-integration and unmeasurable requests run nothing', async () => {
   const fx = rig();
   const current = state([criterion('later', 'true', 'after-integration')]);
@@ -150,7 +133,7 @@ test('unknown, after-integration and unmeasurable requests run nothing', async (
   assert.equal(fx.verify(ask('later', 2), current), null);
 });
 
-test('a red check, a signal, a spawn error and a thrown lane withhold progress', async () => {
+test('a red check, a signal and a spawn error withhold progress', async () => {
   const current = state([criterion('c-one', 'false')]);
   const red = rig();
   red.verify(ask('c-one'), current); await red.started(); await red.end(1);
@@ -164,15 +147,10 @@ test('a red check, a signal, a spawn error and a thrown lane withhold progress',
   broken.verify(ask('c-one'), current); await broken.settle();
   assert.equal(broken.verify(ask('c-one'), current), null);
 
-  const refused = rig({ take: async () => { throw new Error('lane'); } });
-  refused.verify(ask('c-one'), current); await refused.settle();
-  assert.equal(refused.verify(ask('c-one'), current), null);
-  assert.equal(refused.log.released, 0, 'a lane never held is not released');
 
   const noCapture = rig({ capture: () => { throw new Error('cannot fingerprint'); } });
   noCapture.verify(ask('c-one'), current); await noCapture.settle();
   assert.equal(noCapture.verify(ask('c-one'), current), null);
-  assert.equal(noCapture.log.released, 1);
 });
 
 test('a time limit of the gate budget ends the whole group, SIGTERM then SIGKILL', async () => {
@@ -190,7 +168,6 @@ test('a time limit of the gate budget ends the whole group, SIGTERM then SIGKILL
   assert.deepEqual(fx.log.signals, [[4242, 'SIGTERM'], [4242, 'SIGKILL']]);
   await fx.end(0);
   assert.equal(fx.verify(ask('c-one'), current), null, 'an exit after the limit is no progress');
-  assert.equal(fx.log.released, 1);
 });
 
 test('a group that refuses its signals cannot throw out of a timer, and the wait still ends', async () => {
@@ -205,7 +182,6 @@ test('a group that refuses its signals cannot throw out of a timer, and the wait
   fx.log.timers.find(timer => timer.ms === 1000 && timer !== escalation).run();
   await fx.settle();
   assert.equal(fx.verify(ask('c-one'), current), null);
-  assert.equal(fx.log.released, 1);
 });
 
 test('a group that outlives its shell is ended and is no progress', async () => {
@@ -266,7 +242,7 @@ test('a checkpoint is mc gate --json in the worktree, with a null criterion', as
   assert.deepEqual(calls[0].argv, ['--json']);
   assert.equal(calls[0].options.cwd, '/work');
   assert.ok(!('ANTHROPIC_API_KEY' in calls[0].options.env));
-  assert.equal(fx.log.lane.length, 0, 'the gate worker takes its own lane');
+  assert.equal(calls[0].options.wholeSelection, true, 'a goal\'s measurement defers nothing');
   const progress = fx.verify(askCheckpoint(), current);
   assert.equal(progress.criterion_id, null);
   assert.match(progress.id, STABLE_ID_RE);
@@ -314,18 +290,6 @@ test('close ends a running check, and a closed verifier measures nothing', async
   await fx.verify.close();
 });
 
-test('close during the lane wait starts no check', async () => {
-  let aborted = null;
-  const fx = rig({
-    take: ({ signal }) => new Promise((resolve, reject) => { aborted = signal; signal.addEventListener('abort', () => reject(new Error('interrupted'))); }),
-  });
-  fx.verify(ask('c-one'), state([criterion('c-one', 'true')]));
-  await fx.settle();
-  await fx.verify.close();
-  assert.equal(aborted.aborted, true);
-  assert.equal(fx.log.spawned.length, 0);
-});
-
 test('close ends a running gate with SIGTERM so its worker can settle', async () => {
   let finishGate = null;
   const fx = rig({
@@ -360,7 +324,7 @@ async function result(verify, request, current, ms = 15_000) {
   return null;
 }
 
-test('a real check on a temporary repository: output in scratch, lane released, edit gives a new ID', async () => {
+test('a real check on a temporary repository: output in scratch, edit gives a new ID', async () => {
   const { dir, git } = repository();
   const home = mkdtempSync(join(tmpdir(), 'mc-verifier-home-'));
   const scratch = mkdtempSync(join(tmpdir(), 'mc-verifier-out-'));
@@ -374,8 +338,6 @@ test('a real check on a temporary repository: output in scratch, lane released, 
   const output = readFileSync(join(scratch, 'c-real-1.log'), 'utf8');
   assert.equal(Buffer.byteLength(output), 8192);
   assert.ok(output.endsWith('end'));
-  assert.equal(runningRound({ root: home, lane: 'session' }), null, 'the lane is free again');
-  assert.ok(!existsSync(`${gateLockPath(home, 'session')}.claim`));
 
   assert.equal((await result(verify, ask('c-real', 2), current)).id, first.id);
   writeFileSync(join(dir, 'file.txt'), 'two\n');
@@ -410,14 +372,10 @@ test('the time limit kills a real child process and its descendants', async () =
   assert.ok(written(), 'the check started');
   const group = Number(readFileSync(pidFile, 'utf8'));
   assert.ok(groupAlive(group));
-  const held = runningRound({ root: home, lane: 'session' });
-  assert.equal(held.pid, process.pid, 'the check runs inside the session lane');
-  assert.equal(held.mode, 'session-gate');
   while (groupAlive(group) && Date.now() < until) await delay(20);
   assert.equal(groupAlive(group), false);
   await delay(50);
   assert.equal(verify(ask('c-slow'), current), null);
-  assert.equal(runningRound({ root: home, lane: 'session' }), null);
   await verify.close();
 });
 
@@ -434,7 +392,7 @@ test('a real checkpoint: the gate worker measures the tree, and close ends the w
   const verify = createCheckpointVerifier({
     root: home, programme: 'prog', project: 'proj', worktree: dir,
     env: { ...process.env, MC_HOME: home, MC_SCRATCH: scratch, MC_TEST_LANES: '2' },
-    gate: (argv, options) => runGate(argv, { ...options, declaration: () => ({ ok: true, declaration }), lane: () => 'light' }),
+    gate: (argv, options) => runGate(argv, { ...options, declaration: () => ({ ok: true, declaration }) }),
   });
   const current = state([]);
   const progress = await result(verify, askCheckpoint(1), current, 120_000);

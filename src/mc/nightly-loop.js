@@ -155,9 +155,9 @@ export async function nightlyTick({
       stopped = true;
       break;
     }
-    // The lane of the repository it measures (ruling 34): its round takes
-    // that lane's lock, so a round in the other lane is in nobody's way.
-    const lane = gateLaneOf(repo.path || repo.name, { root });
+    // The lane of the repository it measures: another repository's round is in
+    // nobody's way.
+    const lane = gateLaneOf(repo.path || repo.name);
     const running = runningRounds({ root })[lane];
     if (running) {
       skipped = skip(repo, running, clock, { root, lane });
@@ -319,7 +319,7 @@ function unchangedSince(repo, head, { root }) {
 }
 
 /** What was not measured, and whose round it was. */
-function skip(repo, running, clock, { root, lane = 'heavy', reason = null } = {}) {
+function skip(repo, running, clock, { root, lane, reason = null } = {}) {
   return {
     repo: repo.name,
     path: repo.path,
