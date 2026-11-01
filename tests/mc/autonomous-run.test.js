@@ -106,7 +106,7 @@ test('independent v2 projects have distinct durable run IDs and share lanes', as
 
 test('fresh build integrates current main and checks the starting affected gate before launch', async t => {
   const f = fixture(t); const head = f.advanceMain('new main\n'); const events = [];
-  f.capability.gate = async (args, { cwd }) => { assert.deepEqual(args, []); assert.equal(git(cwd, 'rev-parse', 'HEAD'), head); events.push('gate'); return 0; };
+  f.capability.gate = async (args, { cwd }) => { assert.deepEqual(args, ['--budget', '10800']); assert.equal(git(cwd, 'rev-parse', 'HEAD'), head); events.push('gate'); return 0; };
   f.deps.session = async call => { events.push('build'); assert.equal(readFileSync(join(call.cwd, 'base.txt'), 'utf8'), 'new main\n'); return completed; };
   await createRunner({ deps: f.deps, autonomous: f.capability }).runStep(f.project, f.world(f.record));
   assert.deepEqual(events, ['gate', 'build']);
@@ -159,6 +159,24 @@ test('conflicts are resolved by step integration before the starting gate and im
   f.deps.session = async () => { order.push('build'); return completed; };
   await createRunner({ deps: f.deps, autonomous: f.capability }).runStep(f.project, f.world(f.record));
   assert.deepEqual(order, ['resolve', 'gate', 'build']); assert.equal(git(cwd, 'branch', '--show-current'), f.project);
+});
+
+test('a retried tree that touches what main touched goes through integration, its work committed first', async t => {
+  const f = fixture(t); const cwd = f.cwd(f.project); mkdirSync(join(f.root, 'step', f.project), { recursive: true });
+  git(f.primary, 'worktree', 'add', '-qb', f.project, cwd, 'origin/main');
+  const state = f.state();
+  writeFileSync(f.paths.project, JSON.stringify({ ...state, ownership: { ...state.ownership, branch: f.project },
+    attempts: [{ id: 'build-old', progress: [], goal_revision: state.goal_revision, outcome: 'incomplete' }],
+    recovery_diagnoses: [{ action: 'retry', goal_revision: state.goal_revision, attempt_ids: ['build-old'] }] }));
+  writeFileSync(join(cwd, 'base.txt'), 'carried intent\n'); git(cwd, 'add', '.'); f.advanceMain('main intent\n');
+  let conflicts = null;
+  f.capability.integrateConflicts = async call => {
+    conflicts = call.conflicts; writeFileSync(join(cwd, 'base.txt'), 'carried intent\nmain intent\n');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'Keep both intents');
+  };
+  await createRunner({ deps: f.deps, autonomous: f.capability }).runStep(f.project, f.world(f.record));
+  assert.deepEqual(conflicts, ['base.txt']); assert.equal(f.calls.length, 1);
+  assert.equal(readFileSync(join(cwd, 'base.txt'), 'utf8'), 'carried intent\nmain intent\n');
 });
 
 test('unresolved integration is preserved as an incomplete attempt, never aborted or built', async t => {

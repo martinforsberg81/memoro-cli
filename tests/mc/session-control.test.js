@@ -99,6 +99,14 @@ it('closing permits a bounded gate and fixes, not an exemption from emergency ti
   assert.equal(stopped.phase, 'incomplete'); assert.equal(stopped.result.normal_exit, false);
   assert.equal(controlResponse(stopped).next_action, 'stop-session');
 });
+it('the starting gate is bounded by total awake time, not the tool wait', () => {
+  const { tick, state } = fresh();
+  const gate = { activity: { kind: 'gate', id: 'starting-gate' } };
+  const waiting = decideSessionControl(decideSessionControl(state, tick(0, gate)), tick(130, gate));
+  assert.equal(waiting.phase, 'running');
+  assert.equal(decideSessionControl(waiting, tick(10)).phase, 'running');
+});
+
 it('each known tool/gate has a bounded wait even if status output continues', () => {
   for (const kind of ['tool', 'gate', 'lane']) {
     const { tick, state } = fresh(); const activity = { kind, id: 'job-1' };
