@@ -164,3 +164,4 @@ existed?
 | 2026-10-31 | mc | goals-review-recovery | delivered | Review the project against its goal | none | [#1174](https://github.com/martinforsberg81/memoro-cli/pull/1174) |
 | 2026-10-31 | mc | goals-foundation | delivered | Review the project against its goal | none | [#1178](https://github.com/martinforsberg81/memoro-cli/pull/1178) |
 | 2026-10-31 | mc | goals-programme-plan | delivered | Review the project against its goal | none | [#1180](https://github.com/martinforsberg81/memoro-cli/pull/1180) |
+| 2026-11-01 | vault | vault-cli-revision | delivered | Review the project against its goal | none | [#1184](https://github.com/martinforsberg81/memoro-cli/pull/1184) |
