@@ -38,6 +38,7 @@ export const VERB_MODULES = {
   log: './mc/commands/log.js',
   step: './mc/commands/step.js',
   project: './mc/commands/project.js',
+  goal: './mc/commands/goal.js',
 };
 
 /**

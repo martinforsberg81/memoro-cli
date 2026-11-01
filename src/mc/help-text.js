@@ -71,6 +71,10 @@ THE PAGE
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
   mc work <name>                  Open that workarea, ~/mc/work/<name>
   mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
+  mc goal new <p>/<g> --repo <r> --class fast|large --title "…"   A goal: GOAL.md, LOG.md, a worktree per repository
+  mc goal log|open|blocked|done [<p>/<g>]   Append a session's entry; open, blocked or done sets the status
+  mc goal show <p>/<g>             A goal: its brief, its last three entries, its worktrees
+  mc goal list [<p>]               Every goal, one line each
   mc repos                         Where mc's two repositories live
 
 IN FULL
