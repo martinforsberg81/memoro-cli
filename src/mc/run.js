@@ -107,8 +107,6 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { streamAutonomousSession } from './session-supervision.js';
-import { streamReviewSession } from './autonomous-review-process.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import { logRows } from './archive-plan.js';
@@ -122,11 +120,6 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
-import { productionAutonomy } from './autonomous-capability.js';
-import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
-import { reconcileProgrammeQueue } from './programme-jobs.js';
-import { runProgrammePlan } from './programme-plan-run.js';
-import { chooseAutonomousModel } from './autonomous-models.js';
 import { branchFlow, deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
@@ -320,9 +313,7 @@ function shGit(args, { timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, autonomous = null, maxRunMs = 0, reviewProcess = null }) {
-  if (reviewProcess !== null) return streamReviewSession({ bin, args, cwd, env, unsetEnv, prompt, spawn: spawnFn, reviewProcess });
-  if (autonomous !== null) return streamAutonomousSession({ bin, args, cwd, env, unsetEnv, prompt, onSpawn, spawn: spawnFn, autonomous });
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, maxRunMs = 0 }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     let childEnv = env;
@@ -663,16 +654,12 @@ export function realDeps(env = process.env) {
       return child.pid ?? null;
     },
     log: (line) => process.stdout.write(`${line}\n`),
-    // The capability `runLoop` hands `createRunner` (autonomous-capability.js).
-    // A dependency so a fixture without it stays on `autonomous: null` and
-    // never spawns the awake clock's perl.
-    productionAutonomy,
   };
 }
 
 /* --------------------------------------------------------------- runner */
 
-export function createRunner({ merge = true, deps = realDeps(), autonomous = null } = {}) {
+export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const root = workRoot(deps.env);
   // A project's runner area, by name relative to the root and as a path:
   // `step/<project>`, or `<project>` for an area from before `step/` that is
@@ -1129,10 +1116,9 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls, autonomousState = null, role = 'step') {
+  function routeClass(cls) {
     try {
-      const choose = autonomousState ? chooseAutonomousModel : chooseCandidate;
-      const chosen = choose({ ...(autonomousState ? { state: autonomousState, role } : {}), cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -2095,26 +2081,6 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
 
   async function runStepClaimed(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
-    const record = plans.find(item => item.project === name);
-    if (record?.plan?.version === 2) {
-      if (stopRequested()) return 'stop';
-      if (!autonomous) return 'skipped:autonomous-disabled';
-      if (prsFailed.includes(record.repo)) return 'skipped:prs-unknown';
-      const repo = repoOf(name, plans);
-      if (!repo) return 'skipped:no-plan';
-      // The runner's gh is `(cwd, args)`; the review, routing and merge doors ask `(args, { cwd })`.
-      const gh = (args, options = {}) => deps.gh(options.cwd || repo.path, args);
-      return runAutonomousBuild({ root, record, repo, worktree: join(areaPath(name), repo.name), areaName: areaName(name),
-        lane, pid, paths, deps: { ...deps, gh }, capability: autonomous,
-        openPrs: openPrsFor({ prs, name, names: plans.map(item => item.project), repo: repo.name }),
-        waitForSlot: name => waitForSlot(name, { repo: repo.name, lane }), dropSlot, routeClass, syncMain, writeJson, remove, stamp, say,
-        observeResult: (toolId, result) => {
-          if (toolId === 'claude-code') observeCapacity(state => observeClaudeStream(state, result.stdout, deps.now()));
-          const read = readSessionOutput({ toolId, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, now: deps.now() });
-          if (read.quota || read.interrupted === 'login') refuseProvider(toolId === 'codex' ? 'codex' : 'claude', read.quotaReset);
-        },
-      });
-    }
     // Every way out of this round that is not a session goes through here, so
     // that what the round refused on is a word and not only a line in the log.
     // `machineState` answers `mc status` in the same words, and the agreement
@@ -2929,9 +2895,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
         write: writeJson,
       });
     } catch { /* the page says how old its cache is */ }
-    const programmeJobs = autonomous?.programmeJobs
-      ? reconcileProgrammeQueue(root, { now: deps.now().getTime(), say }) : [];
-    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed, ...(autonomous?.programmeJobs ? { programmeJobs } : {}) };
+    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed };
   }
 
   /**
@@ -2969,9 +2933,7 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
     // The project this lane just ran goes first: it keeps the lane until it has
     // nothing to run, and only then does the queue's order speak.
     const names = first && world.names?.includes(first) ? [first, ...world.names.filter((name) => name !== first)] : world.names;
-    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed,
-      autonomous: autonomous ? (record, openPrs) => autonomousChoice({ root, record, capability: autonomous, openPrs,
-        worktree: join(areaPath(record.project), record.repo) }) : null });
+    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed });
   }
 
   /**
@@ -3070,14 +3032,6 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       return { ran: 0, waited: 'skipped:disk' };
     }
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
-    if (autonomous?.programmePlan) for (const programme of known.programmeJobs || []) {
-      const name = `programme:${programme}`;
-      if (last?.name === name || passed.has(name) || stopRequested() || updateRequested()) continue;
-      const outcome = await runProgrammePlan({ root, programme, repos, repo: repos.find(item => item.name === repo), lane, pid,
-        paths, deps, capability: autonomous, waitForSlot: name => waitForSlot(name, { repo: repo || repos[0]?.name || null, lane }), dropSlot, routeClass, writeJson, remove, stamp, say });
-      if (outcome === 'stop') return { ran: 0, stop: true };
-      if (outcome === 'ran') return { ran: 1, name, step: null };
-    }
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
       // A runner that has handed over finishes the pass it is in and picks
@@ -3085,7 +3039,6 @@ export function createRunner({ merge = true, deps = realDeps(), autonomous = nul
       if (updateRequested()) return { ran: 0 };
       const pick = nextStep({ repo, world: known, passed, first: last?.name });
       if (!pick) return { ran: 0 };
-      // A goal has no step number: what it may do next is its own state's answer, build or review.
       if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
         say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
         passed.add(pick.name);
@@ -3353,14 +3306,7 @@ export async function runLoop({
   // lane above it. `total` is read by `takeSlot` each time a step is about to
   // start.
   const laneSetting = (deps.laneCount || readLaneCount)();
-  // Only a runner that merges can carry a goal to its landing. Why there is no
-  // capability is held for `runner.say`, which does not exist until the runner
-  // does, and said after the start line.
-  const capabilityLines = [];
-  const autonomous = merge
-    ? deps.productionAutonomy?.({ root: workRoot(deps.env), env: deps.env, deps: { ...deps, log: (line) => capabilityLines.push(line) } }) ?? null
-    : null;
-  const runner = createRunner({ merge, deps, autonomous });
+  const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
   // the same work root simply overwrote the first and became invisible to
@@ -3424,7 +3370,6 @@ export async function runLoop({
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
-  for (const line of capabilityLines) runner.say(line);
   if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the steps it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is

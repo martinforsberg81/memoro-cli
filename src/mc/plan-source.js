@@ -139,14 +139,6 @@ function namedRepo(text) {
   }
 }
 
-/** A legacy closeout cannot retire a version this installation does not execute. */
-function nonFixedPlan(text) {
-  try {
-    const value = JSON.parse(text);
-    return value?.version !== undefined && value.version !== 1;
-  } catch { return false; }
-}
-
 /**
  * Every plan under `~/mc/programs/`, with its text: the shape `plansInTree`
  * gives (`path`, `programme`, `project`, `file`) plus `text` and `repo`, the
@@ -165,7 +157,7 @@ export function programsPlans({ home = programsHome(), list = listDirs, read = r
       const path = join(dir, PLAN_FILE);
       const text = read(path);
       if (text === null) continue;
-      if (read(join(dir, CLOSEOUT_FILE)) !== null && !nonFixedPlan(text)) continue;
+      if (read(join(dir, CLOSEOUT_FILE)) !== null) continue;
       plans.push({ path, programme, project, file: PLAN_FILE, text, repo: namedRepo(text) });
     }
   }
@@ -191,7 +183,7 @@ export function programsArchived({ home = programsHome(), archivedHome = archive
         const path = join(dir, PLAN_FILE);
         const closeoutPath = join(dir, CLOSEOUT_FILE);
         const text = read(path);
-        if (text === null || nonFixedPlan(text) || read(closeoutPath) === null) continue;
+        if (text === null || read(closeoutPath) === null) continue;
         archived.push({ path, programme, project, repo: namedRepo(text), closeoutPath });
       }
     }

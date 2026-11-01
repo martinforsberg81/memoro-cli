@@ -67,10 +67,6 @@ THE PAGE
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
                                     person starts it again
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
-  mc programme show <programme>    Programme context; autonomous execution stays disabled
-  mc goal show <p>/<g>             Versioned goal state; no sessions are launched
-  mc goal new|criterion|send|revise|done   Author and manage a goal assignment
-  mc session-control status <p>/<g> Durable next action for an owned v2 run; no execution activation
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
   mc work <name>                  Open that workarea, ~/mc/work/<name>

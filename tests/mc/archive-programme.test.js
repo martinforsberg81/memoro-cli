@@ -125,23 +125,6 @@ describe('archiveVerdict', () => {
     assert.match(archiveVerdict({ programme: 'x' }).lines[0], /no programme named x/u);
   });
 
-  it('holds an autonomous programme until every goal has landed and follow-ups are measured and the programme rests', () => {
-    const v2 = { repo: 'memoro', project: 'g', status: 'inactive', plan: { version: 2 } };
-    const goals = [{ repo: 'memoro', project: 'g', phase: 'landing', done: false, pending_follow_ups: [] }];
-    const held = archiveVerdict({ programme: 'x', plans: [v2], homes: [{}], autonomy: { goals, mode: 'active', planner: null } });
-    assert.deepEqual(held.lines, ['memoro x/g is an autonomous goal without verified landing (landing) — its records stay with the programme',
-      'x is active — an autonomous programme is archived with autonomy off or at a reached stop']);
-    const unreadable = archiveVerdict({ programme: 'x', plans: [v2], homes: [{}],
-      autonomy: { goals: [{ ...goals[0], phase: null, problem: 'invalid JSON' }], mode: null, problem: 'invalid JSON' } });
-    assert.deepEqual(unreadable.lines, ['memoro x/g is an autonomous goal whose state is unreadable (invalid JSON) — its records stay with the programme',
-      'x\'s autonomous state is unreadable (invalid JSON) — kept for recovery']);
-    const leased = archiveVerdict({ programme: 'x', plans: [v2], homes: [{}],
-      autonomy: { goals: [{ ...goals[0], phase: 'landed', done: true }], mode: 'stopped', planner: 'plan-1' } });
-    assert.deepEqual(leased.lines, ['x\'s plan session plan-1 still holds its lease']);
-    assert.deepEqual(archiveVerdict({ programme: 'x', plans: [v2], homes: [{}],
-      autonomy: { goals: [{ ...goals[0], phase: 'landed', done: true }], mode: 'stopped', planner: null } }), { ok: true });
-  });
-
   it('lets a programme with only its own documents go', () => {
     assert.deepEqual(archiveVerdict({ programme: 'x', homes: [{}], areaExists: true, forecast: { kept: [], held_by: [] } }), { ok: true });
   });

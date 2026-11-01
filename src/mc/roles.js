@@ -266,11 +266,6 @@ export function withWorkers(overlay, workers) {
   return workers && overlay ? `${overlay}\n\n@include _step-workers.md` : overlay;
 }
 
-/** Preserve plan's routing metadata without its foreground/plan-writing mandate. */
-export function autonomousPlanRole(role) {
-  return role?.overlay ? { ...role, name: 'plan', overlay: '@include _plan-autonomous.md' } : null;
-}
-
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
   const body = expandRoleIncludes(overlay);

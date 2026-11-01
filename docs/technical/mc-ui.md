@@ -66,11 +66,7 @@ below is about.
   per project under it: the repository it lives in, the project's state (one
   word, one colour — see *The palette*), how many of its steps are done, and
   the open PR. The next-step detail and last run remain in JSON, not on the row. A waiting project keeps its row; a blocked one collapses under
-  its heading unless it has an open pull request. Goals are grouped by phase
-  under their programme, with criteria measured, sessions run and status now.
-  They keep the same project numbers and open through the same menu. There is
-  no separate AUTONOMY block; `data.autonomy` and `mc programme status` keep
-  their full detail. A project's `●` means the runner has a
+  its heading unless it has an open pull request. A project's `●` means the runner has a
   step in flight on it, and nothing else. A programme is drawn
   whether or not any of its projects have a plan the runner can read; one that
   exists only as an open planning session is drawn too, and says `no project
@@ -131,9 +127,8 @@ below is about.
   `nextFor` and `assembleQueue` are unchanged; RUNNER carries counts instead.
 - **RUNNER** — the heading carries the answer: how many steps are **in
   flight** (bold green while it is not zero, `not running` in bold yellow when
-  there is no process), how many lanes there are to hold them, and queued
-  project/goal counts. Sent goals ready for build or review count even with
-  programme autonomy off; active sessions and unsent drafts do not. Under it
+  there is no process), how many lanes there are to hold them, and how many
+  projects are queued. Under it
   **one row per lane**, numbered through: the slots the runner can actually
   fill — `total` from `mc run lanes` when there is one, `per_repo` times the
   repositories otherwise. They were one row per repository lane (`memoro #2`),

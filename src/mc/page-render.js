@@ -258,8 +258,7 @@ function runnerLines(lines, c, wide, runner) {
       : { text: 'not running', styles: ['yellow', 'bold'] },
   ];
   if ((alive || flight) && lanes.length) counts.push({ text: `${lanes.length} lane${lanes.length === 1 ? '' : 's'}`, styles: ['grey'] });
-  const queued = now.queue || { projects: 0, goals: 0 };
-  counts.push({ text: `${queued.projects + queued.goals} queued (${queued.projects} projects · ${queued.goals} goals)`, styles: ['grey'] });
+  counts.push({ text: `${now.queue?.projects ?? 0} queued`, styles: ['grey'] });
   heading(lines, c, wide, 'RUNNER', between(counts, ' · '), 'mc run');
   if (lanes.length && (alive || flight)) {
     for (const lane of lanes) lines.push(laneLine(c, wide, lane));
@@ -1349,26 +1348,9 @@ function programmesLines(lines, c, wide, programmes, expand) {
     // request is work that exists, and collapsing it is how one was lost.
     const collapsed = expand ? null : group.blocked;
     const held = new Set(collapsed ? collapsed.names : []);
-    for (const project of group.projects.filter(project => !project.goal)) {
+    for (const project of group.projects) {
       if (held.has(project.name) && !project.prs?.length) continue;
       lines.push(projectLine(c, wide, project));
-    }
-    const goals = group.projects.filter(project => project.goal);
-    const phases = [...new Set(goals.map(project => project.goal.programme_phase))]
-      .sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
-    for (const phase of phases) {
-      say(lines, c, wide, 4, `phase ${phase ?? 'unknown'}`);
-      for (const project of goals.filter(project => project.goal.programme_phase === phase)) {
-        const goal = project.goal;
-        const criteria = goal.criteria || [];
-        const verified = criteria.filter(item => item.builder === 'verified').length;
-        const lead = `  ${String(project.number).padStart(3)} ${project.running ? MARK.running : MARK.quiet} `;
-        const phaseWord = goal.phase || 'unknown';
-        const meta = ` · ${verified}/${criteria.length} criteria · ${goal.sessions_run ?? 'unknown'} ${wide < 90 ? 'runs' : 'sessions'} · `;
-        const name = clip(project.name, Math.max(1, wide - lead.length - meta.length - phaseWord.length));
-        lines.push(`${lead}${name}${c(meta, 'grey')}${c(phaseWord, ...statusTone(phaseWord))}`);
-        say(lines, c, wide, 8, goal.next_action || goal.problem || 'unknown', ['grey']);
-      }
     }
   }
   if (programmes.no_workarea) {
@@ -1527,10 +1509,8 @@ export function renderPageLines(data, {
   lines.push('');
   briefLines(lines, c, wide, sessions.desks?.brief, data.intake, data.programmes, data.next?.stale);
   lines.push('');
-  const goals = (data.programmes?.programmes || []).flatMap(group => group.projects || []).filter(project => project.goal);
-  const queuedGoals = goals.filter(project => !project.goal.active_run && ['ready', 'review_ready'].includes(project.goal.phase)).length;
-  const queuedProjects = (data.next?.items || []).filter(item => item.runnable && !goals.some(project => project.name === item.name)).length;
-  runnerLines(lines, c, wide, { ...data.runner, at_ms: at, queue: { projects: queuedProjects, goals: queuedGoals } });
+  const queuedProjects = (data.next?.items || []).filter(item => item.runnable).length;
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at, queue: { projects: queuedProjects } });
   if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
   mergesLines(lines, c, wide, data.merges);

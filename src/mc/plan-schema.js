@@ -13,7 +13,6 @@
 // state. Prose fields are arrays of paragraphs rather than one string, so a
 // diff stays line-oriented for the person reading the PR.
 
-import { validateAutonomousProject } from './autonomous-project.js';
 
 export const PLAN_SCHEMA = 'mc-plan';
 export const PLAN_VERSION = 1;
@@ -383,14 +382,11 @@ export function validatePlan(value) {
   const problems = [];
 
   if (!plain(value)) return { ok: false, problems: ['the plan must be a JSON object'] };
-  // This is the fixed-step reader's validator. Contract-level dispatch accepts
-  // v2 through validateProject below; runtime admission stays deliberately off.
+  if (value.version === 2) {
+    return { ok: false, problems: ['unsupported: mc-plan version 2 is not supported — goals are text under <programme>/goals/, see docs/technical/mc-goals.md'] };
+  }
   if (value.version !== undefined && value.version !== PLAN_VERSION) {
-    return {
-      ok: false,
-      problems: [`unsupported: mc-plan version ${String(value.version)} is not supported by the fixed-step reader`,
-        ...(value.version === 2 ? validateAutonomousProject(value).problems : [])],
-    };
+    return { ok: false, problems: [`unsupported: mc-plan version ${String(value.version)} is not supported by the fixed-step reader`] };
   }
   for (const key of unknownKeys(value, PLAN_KEYS)) problems.push(`${key}: unknown key`);
 
@@ -416,12 +412,6 @@ export function validatePlan(value) {
   return { ok: problems.length === 0, problems };
 }
 
-/** Explicit contract dispatch. Never retry an invalid/unknown version as v1. */
-export function validateProject(value, options = {}) {
-  if (plain(value) && value.version === 2) return validateAutonomousProject(value, options);
-  return validatePlan(value);
-}
-
 /**
  * A plan file's text, as the runner and the page both need it: the parsed
  * object, and everything wrong with it. A file that is not JSON is one problem,
@@ -435,7 +425,7 @@ export function readPlanText(text) {
   } catch (err) {
     return { plan: null, problems: [`the file is not JSON: ${err.message}`] };
   }
-  const { ok, problems } = validateProject(value);
+  const { ok, problems } = validatePlan(value);
   return { plan: ok ? value : null, problems };
 }
 
@@ -484,7 +474,6 @@ export function planSummary(plan) {
  * half-built in an order nobody chose.
  */
 export function planState(plan) {
-  if (plan?.version === 2 && validateProject(plan).ok) return { status: 'inactive', index: -1, step: null };
   if (plan?.version !== undefined && plan.version !== PLAN_VERSION) return { status: 'unsupported', index: -1, step: null };
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   // A `landing` step is behind the plan, not in front of it: its pull request
@@ -549,10 +538,6 @@ function clip(text, max) {
  * admission test, in one place, before a session is spent.
  */
 export function deliverableStep(plan) {
-  if (plan?.version === 2 && validateProject(plan).ok) return {
-    step: null, index: -1, reason: 'inactive',
-    why: 'autonomous execution is disabled outside a started programme on a supporting installation — mc programme status', problems: [],
-  };
   const { ok, problems } = validatePlan(plan);
   if (!ok && problems[0]?.startsWith('unsupported:')) return { step: null, index: -1, reason: 'unsupported', why: problems[0], problems };
   if (!ok) return { step: null, index: -1, reason: 'unparseable', why: `the plan does not parse: ${problems[0]}`, problems };

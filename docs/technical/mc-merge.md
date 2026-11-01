@@ -478,7 +478,7 @@ the old). An unnamed `mc gate` runs the test files the change touches, then the
 others cheapest first while the estimate fits 180 s, and names the rest as left
 to the merge round, which runs them all. Its coverage is then `partial`, which
 is never reusable evidence, and the green says what it does not cover. Named
-files and a goal's measured gate (`measurementBinding`, `wholeSelection`) defer
+files and a bound gate (`measurementBinding`, `wholeSelection`) defer
 nothing, and neither does a repository that declares `session_whole`
 (memoro-cli, whose whole suite took 128 s in a session's gate on 2026-11-01).
 
@@ -561,7 +561,7 @@ would be the most confident kind of nothing.
 by tree, selection hash and measurement version, or use the PR head's receipt
 and ask the repository's dependency-aware selector what main's movement reaches.
 Missing or incompatible evidence means measuring the relevant selection. Named
-or filtered runs never enter this full-selection cache. Receipt-bound autonomous
+or filtered runs never enter this full-selection cache. Receipt-bound
 callers additionally require the matching repository/run/revision and current
 gate configuration; legacy v1 callers retain their existing admission path.
 Required merge gates and the PR's own tests still run. `reused` in the round log
@@ -587,8 +587,7 @@ without an exit marker is red. Completed immutable receipts survive command
 exit and can be rediscovered by run ID even if a crash prevented updating the
 reuse cache; missing evidence falls back to measurement. The
 [receipt recovery and coverage contract](mc-gate-evidence.md#waiting-and-recovery)
-defines the future autonomous consumer boundary, not a new v1 publication or
-merge permission.
+defines the bound consumer boundary, not a publication or merge permission.
 
 **Reservation is atomic.** Each lane uses a prepared nonempty claim directory
 published by rename, plus the existing JSON status file for readers and older

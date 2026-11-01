@@ -1,4 +1,3 @@
-import { reviewCommandRefusal } from '../autonomous-review-guard.js';
 /**
  * `mc project` — mc's own verbs over a project (ruling 48, `docs/project/mc/mc-project.md`).
  *
@@ -36,7 +35,7 @@ import { closable, closeArea } from '../close-workarea.js';
 import { run as runGit } from '../git.js';
 import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
-import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan, validateProject } from '../plan-schema.js';
+import { branchFlow, EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, legacyMutationProblem, readDraftOrPlan, sendProblems, STEP_MODELS, STEP_MODEL_WORDS, testDirectories, withPlanLock, withReviewStep, writePlanFile } from '../plan-write.js';
 import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
@@ -46,8 +45,6 @@ import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 import { runAmend } from './project-amend.js';
-import { autonomousCommandContext } from './autonomous-project.js';
-import { readAutonomousState } from '../autonomous-state.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope', '--tool'];
@@ -60,8 +57,6 @@ const VERB_WORDS = ['criterion', 'new', 'edit', 'amend', 'step', 'send', 'archiv
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const reviewRefusal = reviewCommandRefusal(['project', ...argv], deps);
-  if (reviewRefusal) { stderr.write(`mc: ${reviewRefusal}\n`); return 1; }
   const env = deps.env || process.env;
   const root = deps.root || workRoot(env);
   const now = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -70,7 +65,7 @@ export async function run(argv, deps = {}) {
 
   const scanned = scanArgs(argv, {
     booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file', '--expected-revision'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file'],
     repeatable: ['--contract', '--out-of-scope'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -82,7 +77,7 @@ export async function run(argv, deps = {}) {
     return runAmend(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'send') {
-    const extra = onlyFlags(scanned, ['--expected-revision']);
+    const extra = onlyFlags(scanned, []);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
     return sendPlan(scanned, { ...deps, env, stdout, stderr, root });
   }
@@ -180,12 +175,6 @@ function sendPlan(scanned, deps) {
   if (found.sent) { stderr.write(`mc: ${project} is sent already — ${found.file}\n`); return 1; }
   const sentFile = join(found.dir, PLAN_FILE);
 
-  try {
-    const filed = readDraftOrPlan(found.file, { allowVersioned: true });
-    if (filed?.version === 2 || existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'))) throw new Error('v2 assignments are sent with mc goal send <programme>/<goal> --expected-revision <n>');
-    if (scanned.flags['expected-revision'] !== null) { stderr.write('mc: v1 send takes no --expected-revision\n'); return 2; }
-  } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
-
   let outcome;
   try {
     outcome = withPlanLock(found.dir, () => {
@@ -237,17 +226,9 @@ async function showProject(name, flags, deps) {
   }
   let plan;
   try {
-    const held = existsSync(join(found.dir, 'AUTONOMOUS_STATE.json'));
-    plan = held ? null : readDraftOrPlan(found.file, { allowVersioned: true });
-    if (held || plan?.version === 2) {
-      const { root } = autonomousCommandContext(deps);
-      const state = readAutonomousState(root, found.programme, name);
-      if (flags.json) { stdout.write(`${JSON.stringify(state, null, 2)}\n`); return 0; }
-      plan = state.contract;
-    } else {
-      const given = ['--json', '--offline'].filter((flag) => flags[flag.slice(2)]);
-      if (given.length) { stderr.write(`mc: ${name} is a draft — it has no ${given[0]}\n`); return 2; }
-    }
+    plan = readDraftOrPlan(found.file);
+    const given = ['--json', '--offline'].filter((flag) => flags[flag.slice(2)]);
+    if (given.length) { stderr.write(`mc: ${name} is a draft — it has no ${given[0]}\n`); return 2; }
   } catch (error) {
     stderr.write(`mc: ${error?.message || error}\n`);
     return 1;
@@ -259,11 +240,6 @@ async function showProject(name, flags, deps) {
 /** The lines `mc project <name>` prints for a draft: what it is, its criteria and steps, and whether `send` would take it. */
 function draftLines(name, found, plan) {
   const lines = [`${name} — draft · ${plan.repo} · ${found.programme}`, `  file   ${found.file}`, ''];
-  if (plan.version === 2) return [...lines, '  autonomous execution is disabled',
-    `  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision}`,
-    ...plan.success_criteria.map(criterion => `  ${criterion.id}  ${criterion.criterion} (${criterion.verification})`),
-    ...validateProject(plan).problems.map(problem => `  ${problem}`),
-    `send: mc goal send ${found.programme}/${name}`];
   const goal = Array.isArray(plan.goal) ? plan.goal[0] : undefined;
   if (goal) lines.push(goal, '');
 

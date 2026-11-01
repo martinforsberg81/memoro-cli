@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
-import { productionAutonomy } from '../../src/mc/autonomous-capability.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
@@ -5636,47 +5635,4 @@ test('initSource reads apiKeySource off the first init line only', () => {
   assert.equal(initSource(`${INIT('ANTHROPIC_API_KEY')}${INIT('none')}`), 'ANTHROPIC_API_KEY');
   assert.equal(initSource('{"type":"assistant"}\n'), null);
   assert.equal(initSource(''), null);
-});
-
-/* ------------------------------------------------- the production capability */
-
-/** A clock that answers without perl: the real `productionAutonomy`, faked at its one seam. */
-const AWAKE_OK = { platform: 'darwin', read: () => 1000, bootSession: () => 'boot', now: () => 1000 };
-
-test('runLoop: with no v2 plans a capability changes nothing in a round: same queue, order and logs', async () => {
-  const round = async (capability) => {
-    const f = fixture({ plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { c: ready } }, session: okSession() });
-    Object.assign(f.deps, capability);
-    const inner = f.deps.session;
-    f.deps.session = (call) => { if (f.calls.sessions.length >= 2) f.files['/w/runner/STOP'] = ''; return inner(call); };
-    assert.equal(await runLoop({ deps: f.deps }), 0);
-    return { log: f.files['/w/runner/log/runner.log'], order: f.calls.sessions.map((call) => call.cwd), queue: f.files['/w/runner/log/runs.tsv'], git: f.calls.git };
-  };
-  const without = await round({});
-  const built = [];
-  const carried = await round({ productionAutonomy: (options) => { const capability = productionAutonomy(options); built.push(capability); return capability; }, awakeClock: AWAKE_OK });
-  assert.equal(built.length, 1); assert.notEqual(built[0], null, 'the round really carried a capability');
-  assert.ok(without.order.length >= 2, 'the round ran steps');
-  assert.deepEqual(carried, without);
-});
-
-test('runLoop: the capability is built once, and only when merging', async () => {
-  const built = [];
-  const session = okSession();
-  const merging = fixture({ plans: {}, session });
-  merging.deps.productionAutonomy = (options) => { built.push(options.root); return null; };
-  assert.equal(await runLoop({ once: true, deps: merging.deps }), 0);
-  assert.deepEqual(built, ['/w']);
-  assert.equal(await runLoop({ once: true, merge: false, deps: merging.deps }), 0);
-  assert.deepEqual(built, ['/w'], 'a runner that does not merge builds none');
-});
-
-test('runLoop: no capability is said once, after the start line', async () => {
-  const f = fixture({ plans: {}, session: okSession() });
-  Object.assign(f.deps, { productionAutonomy, awakeClock: { platform: 'linux' } });
-  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.equal(log.match(/autonomous capability unavailable/gu).length, 1);
-  assert.match(log, /runner start[^]*not Darwin \(linux\)/u);
-  assert.equal(f.calls.sessions.length, 0);
 });

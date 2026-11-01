@@ -352,9 +352,7 @@ export function nextBranch(name, taken = []) {
  *   `deploy` or `project` wait that is over, which `queue()` sets `ready`
  *   before this is asked (`releaseDue`, ruling 35).
  */
-export function chooseKind({ plan, openPrs = [], autonomous = null }) {
-  // Explicit opt-in dispatch precedes fixed-step and open-PR assumptions.
-  if (plan?.plan?.version === 2 && autonomous) return autonomous(plan, openPrs);
+export function chooseKind({ plan, openPrs = [] }) {
   const flight = inFlight(openPrs);
   if (flight) return flight;
   if (!plan) return { kind: null, skip: null };
@@ -377,9 +375,9 @@ export function chooseKind({ plan, openPrs = [], autonomous = null }) {
  * 2026-09-08) because `nextFor` below is the runner's own picker and needs it;
  * status-collect re-exports it, so both readings still come from one call.
  */
-export function kindFor(name, { plans, autonomous = null }) {
+export function kindFor(name, { plans }) {
   const plan = plans.find((p) => p.project === name) || null;
-  const choice = chooseKind({ plan, autonomous });
+  const choice = chooseKind({ plan });
   if (choice.kind) return choice.kind;
   if (!plan) return 'skip:no-plan';
   return `skip:${choice.reason || 'no-status'}`;
@@ -394,8 +392,8 @@ export function kindFor(name, { plans, autonomous = null }) {
  * `machineState` asks in, minus everything that needs a worktree — this is
  * read from what `queue()` already fetched, so a pick costs no git at all.
  */
-function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}, autonomous = null) {
-  const kind = kindFor(name, { plans, autonomous });
+function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}) {
+  const kind = kindFor(name, { plans });
   if (kind.startsWith('skip:')) return { runnable: false, reason: kind.slice('skip:'.length) };
   const repo = plans.find((p) => p.project === name)?.repo || null;
   // What is open decides whether a project may start anything at all, so a
@@ -404,10 +402,6 @@ function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}, autonomo
   // later. `queue()` has already written the line naming the repository.
   if (prsFailed.includes(repo)) return { runnable: false, reason: 'prs-unknown' };
   const openPrs = holdingPrs(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo }), plans.find((p) => p.project === name));
-  if (plans.find((p) => p.project === name)?.plan?.version === 2 && autonomous) {
-    const choice = chooseKind({ plan: plans.find((p) => p.project === name), openPrs, autonomous });
-    return { runnable: Boolean(choice.kind), kind: choice.kind, reason: choice.reason };
-  }
   const flight = inFlight(openPrs);
   if (flight) return { runnable: false, reason: flight.reason };
   return { runnable: true, kind };
@@ -437,11 +431,11 @@ function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}, autonomo
  * see. Given none, the reading is the plan and the open pull requests.
  */
 export function nextFor({
-  repo = null, world = {}, claimed = new Set(), passed = new Set(), state = null, autonomous = null,
+  repo = null, world = {}, claimed = new Set(), passed = new Set(), state = null,
 } = {}) {
   const { names = [], plans = [], prs = [], prsFailed = [] } = world;
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  const read = state || ((name) => pickState(name, { plans, prs, prsFailed }, autonomous));
+  const read = state || ((name) => pickState(name, { plans, prs, prsFailed }));
   for (const name of names) {
     const at = byProject.get(name)?.repo || null;
     if (repo != null && at !== repo) continue;

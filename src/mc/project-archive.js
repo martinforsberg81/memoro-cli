@@ -67,7 +67,6 @@ export function doneAt(entry) {
  * due. `why` is what the runner's log says about it either way.
  */
 export function archiveDue({ record, entry, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
-  if (record?.plan?.version === 2) return { due: false, why: 'autonomous projects require plan confirmation and a separate archive door' };
   if (!isAbsolute(record?.path || '')) {
     return { due: false, why: 'the plan is in a repository, not under ~/mc/programs/' };
   }
@@ -171,13 +170,6 @@ function parsedPlan(text) {
  */
 export async function archivePrograms({ repo, items, root, paths, deps, docsMerge, now, say }) {
   const prefix = `archive: ${repo.name} `;
-  const autonomous = items.filter(({ record }) => record?.plan?.version === 2 || parsedPlan(deps.read(record.path))?.version === 2);
-  if (autonomous.length) {
-    const remaining = items.filter(item => !autonomous.includes(item));
-    const result = await archivePrograms({ repo, items: remaining, root, paths, deps, docsMerge, now, say });
-    return { ...result, held: [...result.held, ...autonomous.map(({ record }) => ({ project: record.project,
-      why: 'autonomous projects cannot use legacy archive' }))] };
-  }
   if (!items.length) return { archived: [], held: [] };
   const onMain = deps.git(repo.path, ['show', `origin/main:${LOG}`]);
   if (!onMain.ok) {

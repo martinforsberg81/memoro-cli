@@ -112,9 +112,6 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   const gh = (args, opts = {}) => {
     calls.push({ tool: 'gh', args, cwd: opts.cwd });
     if (args[0] === 'pr' && args[1] === 'view') {
-      // The pre-round autonomous ownership lookup is metadata, not the
-      // read-back after a timed-out merge. It must not simulate a landing.
-      if (args.at(-1) === 'headRefName,body') return { status: 0, stdout: JSON.stringify({ headRefName: 'legacy-branch', body: '' }) };
       if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: forge.head }) };
       // What the forge says after a failed merge call: the truth, or nothing.
       if (mergeFails === 'timed-out-merged') { merged = true; return { status: 0, stdout: JSON.stringify({ state: 'MERGED', mergedAt: '2026-08-22T21:30:00Z' }) }; }

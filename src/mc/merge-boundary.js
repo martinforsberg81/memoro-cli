@@ -16,7 +16,6 @@ import { projectForBranch } from './project-prs.js';
 import { applyEntry, readEntry } from './register.js';
 import { workRoot } from './paths.js';
 import { programsPlans } from './plan-source.js';
-import { autonomousMergeDoor } from './autonomous-pr.js';
 
 function run(tool) {
   return (args, options = {}) => spawnSync(tool, args, { cwd: options.cwd, encoding: 'utf8' });
@@ -67,8 +66,6 @@ export async function criteriaDoor({ repoPath, pr, gh, git, step = undefined, en
   const asked = await askGh(['pr', 'view', String(pr), '--json', 'number,state,headRefName,headRefOid,baseRefName,body'], { cwd: repoPath });
   let raw = null;
   if (asked?.status === 0 || asked?.ok === true) { try { raw = JSON.parse(asked.stdout); } catch { /* unknown below */ } }
-  const autonomous = await autonomousMergeDoor({ repoPath, pr, root, view: raw, env, git });
-  if (autonomous.checked) return autonomous;
   if (!raw) return notChecked;
   const head = raw?.headRefName;
   const base = raw?.baseRefName;

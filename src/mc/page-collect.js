@@ -94,8 +94,6 @@ import {
 } from './project-prs.js';
 import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
-import { autonomySection, goalStatus, listAutonomousProgrammes, programmeStatus } from './programme-status.js';
-import { readAutonomousState } from './autonomous-state.js';
 import {
   REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
   readCurrents,
@@ -1696,35 +1694,10 @@ export async function collectPage({
     const programme = current.programme || (/^programme:(.+)$/u.exec(current.name || '') || [])[1];
     if (programme) (planningSessions[programme] ||= []).push(current);
   }
-  // Drafts have durable goal state but no sent PLAN.json. They belong on the
-  // page, never in the runner's legacy queue reading below.
-  const pagePlans = [...plans];
-  // The page outlives damaged state: recovery needs it most then.
-  try {
-    for (const programme of listAutonomousProgrammes(root)) {
-      let goals = [];
-      try { ({ goals } = programmeStatus(root, programme)); } catch { /* the autonomy section reports it */ }
-      for (const goal of goals) {
-        if (pagePlans.some(record => record.programme === programme && record.project === goal.project)) continue;
-        try {
-          const { contract } = readAutonomousState(root, programme, goal.project);
-          pagePlans.push({ project: goal.project, programme, repo: contract.repo, plan: contract, ...planSummary(contract) });
-        } catch { /* unreadable state is reported by programme status */ }
-      }
-    }
-  } catch { /* the autonomy section reports it */ }
   const programmes = programmesSection({
-    plans: pagePlans, areas, rows, openPrs: prs.prs, live: liveNames,
+    plans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
     planningSessions,
-    goals: Object.fromEntries(pagePlans.filter(record => record.plan?.version === 2).map(record => {
-      let status;
-      try { status = goalStatus(root, record.programme, record.project); }
-      catch (error) { status = { project: record.project, problem: error.message, next_action: 'unknown — state preserved for recovery' }; }
-      let sessions_run = null;
-      try { sessions_run = readAutonomousState(root, record.programme, record.project).runs.filter(run => run.role !== 'plan').length; } catch { /* unknown, not zero */ }
-      return [`${record.programme}/${record.project}`, { ...status, sessions_run }];
-    })),
     running: runner.steps.map((step) => step.name).filter(Boolean),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),
@@ -1772,8 +1745,6 @@ export async function collectPage({
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
-    // Only programmes that keep autonomous state; absent on a v1-only machine.
-    ...(() => { const autonomy = autonomySection({ root }); return autonomy ? { autonomy } : {}; })(),
     // File reads only, as DEPLOY's are: the page never runs a read.
     language: languageState(env),
     mc: mcSection({

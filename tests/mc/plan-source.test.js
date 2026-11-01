@@ -17,13 +17,12 @@ import { closable } from '../../src/mc/close-workarea.js';
 import { archiveDue } from '../../src/mc/project-archive.js';
 import { overlayPlans } from '../../src/mc/register.js';
 import { kindFor } from '../../src/mc/run-plan.js';
-import { autonomousProject } from './autonomy-fixtures.js';
 
 describe('unsupported plans stay visible and inert', () => {
-  it('retains valid, malformed and unknown v2 plans, without v1, unplanned or archive fallback', () => {
+  it('retains version 2 and unknown plans, without v1, unplanned or archive fallback', () => {
     scratch((root) => {
       const home = join(root, 'programs');
-      const values = [autonomousProject(), autonomousProject({ execution: {} }), autonomousProject({ version: 99 })];
+      const values = [{ version: 2, repo: 'memoro-cli' }, { version: 99, repo: 'memoro-cli' }];
       values.forEach((value, i) => {
         const dir = join(home, 'mc', `v2-${i}`);
         mkdirSync(dir, { recursive: true });
@@ -39,36 +38,16 @@ describe('unsupported plans stay visible and inert', () => {
         const found = planIn(root, record.project, { programs });
         assert.notEqual(found, null, 'unsupported is a held plan, not missing work');
         assert.equal(found.legacy, false);
-        if (record.project === 'v2-0') {
-          assert.deepEqual(found.plan, values[0]);
-          assert.deepEqual(found.problems, []);
-          assert.equal(kindFor(record.project, { plans: records }), 'skip:inactive');
-          assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is inactive' });
-        } else {
-          assert.equal(found.plan, null);
-          assert.match(found.problems.join('\n'), record.project === 'v2-1' ? /execution.kind/u : /unsupported/u);
-          assert.equal(kindFor(record.project, { plans: records }), 'skip:unparseable');
-          assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is invalid' });
-        }
+        assert.equal(found.plan, null);
+        assert.match(found.problems.join('\n'), /unsupported/u);
+        assert.equal(kindFor(record.project, { plans: records }), 'skip:unparseable');
+        assert.deepEqual(closable({ plan: record }), { close: false, unplanned: false, why: 'the plan is invalid' });
         assert.equal(archiveDue({ record, entry: null, nowMs: Date.now() }).due, false);
       });
       assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), []);
     });
   });
 
-  it('never hides or cleans a non-v1 plan because a legacy closeout is present', () => {
-    scratch(root => {
-      const home = join(root, 'programs');
-      for (const version of [2, 99, '2']) {
-        const dir = join(home, 'mc', `version-${version}-${typeof version}`);
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, PLAN_FILE), JSON.stringify(autonomousProject({ version })));
-        writeFileSync(join(dir, CLOSEOUT_FILE), '{}');
-      }
-      assert.equal(programsPlans({ home }).length, 3);
-      assert.deepEqual(programsArchived({ home, archivedHome: join(root, 'archive') }), []);
-    });
-  });
 });
 
 /** A listing as `git ls-tree` prints it: one path a line, a newline at the end. */

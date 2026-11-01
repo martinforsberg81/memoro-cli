@@ -113,7 +113,7 @@ export function commandIdentity(command) {
 }
 
 /** Stronger than the legacy selection hash: flags and command invocation
- * semantics matter to autonomous consumers, not just filenames/script names. */
+ * semantics matter to a bound receipt, not just filenames/script names. */
 export function checksHash(coverage) {
   return digest({ files: [...coverage.files].sort(), commands: coverage.commands.map(commandIdentity).sort(),
     flags: coverage.flags || [], pattern: coverage.pattern ?? null });

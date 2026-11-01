@@ -19,12 +19,10 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
 
 import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
-import { goalCompletion } from './goal-followup.js';
 import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
@@ -35,8 +33,6 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { gitDirOf } from './repos.js';
 import { listEntries, overlayPlans, realLock } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
-import { currentAutonomousEvidence, readAutonomousState } from './autonomous-state.js';
-import { programmeStatus } from './programme-status.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -130,7 +126,7 @@ export function wrap(text, width, pad) {
 
 export function renderProject({
   name, repo, programme, path, plan, problems = [], workarea, runs, prs, machine = null,
-  queued = [], landing = null, notes = [], autonomous = null,
+  queued = [], landing = null, notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
@@ -147,24 +143,6 @@ export function renderProject({
     out.push('NEXT');
     out.push(`  ${wrap(plan ? planSummary(plan).next : 'the plan does not parse — nothing can be handed out', 90, 2)}`);
     out.push('');
-
-    if (plan?.version === 2) {
-      out.push('AUTONOMOUS');
-      const control = autonomous?.programme;
-      out.push(control?.execution_supported ? '  execution supported by this installation' : '  execution disabled — this installation does not run autonomous work');
-      out.push(`  programme ${plan.programme.id} phase ${plan.programme_phase} · ${plan.work_class} · goal revision ${plan.goal_revision} · programme ${control?.mode || 'unknown'}`);
-      if (autonomous) {
-        out.push(`  state revision ${autonomous.revision} · phase ${autonomous.phase} · done on main: ${autonomous.done}`);
-        out.push(`  branch ${autonomous.ownership.branch || 'none'} · PR ${autonomous.ownership.pr ? `#${autonomous.ownership.pr}` : 'none'}`);
-        if (autonomous.pending_follow_ups?.length) out.push(`  follow-ups pending: ${autonomous.pending_follow_ups.join(', ')}`);
-        if (control) out.push(`  next ${control.next_action} · mc programme status ${plan.programme.id}`);
-      }
-      for (const criterion of plan.success_criteria) {
-        const latest = autonomous?.evidence.builder.filter(item => item.criterion_id === criterion.id).at(-1);
-        out.push(`  ${criterion.id}  ${latest?.status || 'unknown'} · ${criterion.verification} · ${criterion.criterion}`);
-      }
-      out.push('');
-    }
 
     const steps = stepRows(plan);
     if (steps.length) {
@@ -282,19 +260,6 @@ export async function collectProject(name, {
   const problems = mainPlan?.problems ?? [];
   const repo = main?.repo || null;
   const programme = main?.programme || null;
-  let autonomous = null;
-  if (plan?.version === 2) {
-    try {
-      const state = readAutonomousState(root, programme, name);
-      if (!isDeepStrictEqual(state.contract, plan)) throw new Error('published contract differs from authoritative autonomous state');
-      autonomous = { revision: state.revision, phase: state.phase, ...goalCompletion(state),
-        ownership: state.ownership, evidence: currentAutonomousEvidence(state) };
-      const overview = programmeStatus(root, programme);
-      autonomous.programme = { mode: overview.mode, execution_supported: overview.execution.supported,
-        next_action: overview.goals.find((goal) => goal.project === name)?.next_action || 'unknown' };
-    } catch (error) { problems.push(`autonomous state: ${error.message}`); }
-  }
-
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
 
@@ -347,7 +312,6 @@ export async function collectProject(name, {
     programme,
     path: main?.plan || null,
     plan,
-    ...(plan?.version === 2 ? { autonomous } : {}),
     problems,
     workarea,
     runs: runsFor(tsv, name, 3),
