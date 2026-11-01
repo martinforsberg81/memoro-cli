@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -297,7 +298,7 @@ export function stepsBeforeDone(root, { read = realRead } = {}) {
 // Without holding the event loop: a restack of a memoro branch took 29 s on
 // 2026-10-10, and the other lane stood still for all of it.
 const realGit = async (cwd, args) => {
-  const r = await runTool('git', args, { cwd });
+  const r = await runGitAsync(cwd, args);
   return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
 };
 

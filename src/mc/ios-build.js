@@ -38,6 +38,7 @@ import { IOS_BUILD_MODE } from './await-deploy.js';
 import { defaultRepos } from './brief-collect.js';
 import { holdBuildLane } from './commands/deploy.js';
 import { BUILD_LANE, releaseGateLock } from './gate-lock.js';
+import { run as runGit } from './git.js';
 import {
   BUILT, FAILED, INSTALLED, lastShipped as lastShippedRow, recordEnd, recordStart, runningIosBuild, SEED, TESTFLIGHT,
   UPLOADED,
@@ -66,7 +67,7 @@ const short = (sha) => (sha ? String(sha).slice(0, 7) : '');
  * default, and a lockfile cut off would read as no packages at all.
  */
 export function gitRead(cwd, args, { timeoutMs = 60_000 } = {}) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024 });
+  const r = runGit(cwd, args, { timeoutMs, maxBuffer: 256 * 1024 * 1024 });
   if (r.error || r.status !== 0) return null;
   return (r.stdout || '').trim();
 }
@@ -512,8 +513,8 @@ export function listBuilds({
  * Null when it was written, else the line that says why not.
  */
 export function exportAtRev(repoPath, rev, path, dir) {
-  const archive = spawnSync('git', ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
-    timeout: 60_000, maxBuffer: 1024 * 1024 * 1024,
+  const archive = runGit(undefined, ['-C', repoPath, 'archive', '--format=tar', rev, '--', path], {
+    timeoutMs: 60_000, maxBuffer: 1024 * 1024 * 1024, encoding: 'buffer',
   });
   if (archive.error || archive.status !== 0) {
     return `git archive ${rev} ${path}: ${reasonLine(archive.error?.message || String(archive.stderr || '')) || `exit ${archive.status}`}`;

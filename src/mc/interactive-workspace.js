@@ -6,7 +6,7 @@
  */
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { run as runGit } from './git.js';
 import { mcHome, workRoot } from './paths.js';
 import { defaultRepos } from './repos.js';
 
@@ -16,7 +16,7 @@ export function interactiveWorkspaceDirectories({
   env = process.env,
   repos = defaultRepos(env),
   exists = existsSync,
-  git = (path) => spawnSync('git', ['-C', path, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }),
+  git = (path) => runGit(undefined, ['-C', path, 'rev-parse', '--path-format=absolute', '--git-common-dir']),
 } = {}) {
   const candidates = [areaRoot, workRoot(env), mcHome(env), ...repos.map(repo => repo.git)];
   if (cwd) {

@@ -1,6 +1,5 @@
 /** Fail-closed recovery for the autonomous runner seam. Never signal
  * a pid read from disk; live/unknown previous workers keep the workarea held. */
-import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -8,9 +7,10 @@ import { captureWorktree, sameContent } from './session-gate-evidence.js';
 import { processAlive } from './resource-claim.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { validateControlState } from './session-control.js';
+import { run as runGit } from './git.js';
 
 export function sessionGit(cwd, args, encoding = 'utf8') {
-  const result = spawnSync('git', args, { cwd, encoding, timeout: 60_000, maxBuffer: 64 << 20 });
+  const result = runGit(cwd, args, { encoding, timeoutMs: 60_000, maxBuffer: 64 << 20 });
   if (result.error || result.status !== 0) throw new Error(`session snapshot: git ${args[0]} failed`);
   return result.stdout;
 }

@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
+import { run as runGit } from './git.js';
 import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr, waitingOn } from './merge-queue.js';
 import { installedHead, readMerger, stepsBeforeDone } from './merger.js';
 import { workRoot } from './paths.js';
@@ -210,7 +211,7 @@ export async function followMerge({ repoPath, pr, timeoutMs = WATCH_TIMEOUT_MIN 
     prView: deps.prView || ghPrView(repoPath),
     ordered: deps.ordered || stepsBeforeDone(root),
     readHead: deps.readHead || (() => installedHead({
-      git: (cwd, args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 5000 }),
+      git: (cwd, args) => runGit(undefined, ['-C', cwd, ...args], { timeoutMs: 5000 }),
     })),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),

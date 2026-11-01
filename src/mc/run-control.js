@@ -56,6 +56,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultRepos } from './brief-collect.js';
+import { run as runGit } from './git.js';
 import { readLaneCount } from './lane-count.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
 import { ageWords } from './page-cache.js';
@@ -122,7 +123,7 @@ export function realControlDeps(env = process.env) {
       return child.pid ?? null;
     },
     git: (cwd, args) => {
-      const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+      const r = runGit(undefined, ['-C', cwd, ...args]);
       return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
     },
     // How many lanes the runner has in all: `per_repo` on every repository,

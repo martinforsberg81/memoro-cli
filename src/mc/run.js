@@ -115,6 +115,7 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
+import { run as runGit } from './git.js';
 import { gitDirOf } from './repos.js';
 import { runningRound } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -263,6 +264,12 @@ export function dockerNote(docker) {
 
 function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20, env: env ? { ...process.env, ...env } : undefined });
+  return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** `sh` for git — the same limits and answer, started through the one git seam (git.js). */
+function shGit(args, { timeout = 120_000, env } = {}) {
+  const r = runGit(undefined, args, { timeoutMs: timeout, maxBuffer: 64 << 20, ...(env ? { env: { ...process.env, ...env } } : {}) });
   return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -503,7 +510,7 @@ export function realDeps(env = process.env) {
     env,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
-    git: (cwd, args, { env } = {}) => sh('git', ['-C', cwd, ...args], { env }),
+    git: (cwd, args, { env } = {}) => shGit(['-C', cwd, ...args], { env }),
     gh: (cwd, args) => sh('gh', args, { cwd }),
     // Why a `gh pr list` failed: a locked keychain or a bad token, two calls
     // of two seconds at most (github-backoff.js).

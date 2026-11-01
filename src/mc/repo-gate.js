@@ -61,6 +61,7 @@ import { probeMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { runShell as runShellAsync, runTool } from './child-async.js';
+import { runAsync as runGitAsync } from './git.js';
 import { log } from './logger.js';
 import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -213,7 +214,7 @@ export async function runGate({
   // different one is answering a question nobody asked, and it is why a test
   // that put a stub `gh` on the PATH still reached the real one.
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
-  const askGit = git || run('git');
+  const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askGh = gh || run('gh');
   // The selector's resource classes, once the round has read them: a file
   // classed `sqlite` or `heavy` runs after the standard batch, `heavy` one at

@@ -25,6 +25,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { runAsync as runGitAsync } from './git.js';
 import { ageWords } from './page-cache.js';
 import { mcHome, runnerScratchDir } from './paths.js';
 import { declarationFor } from './repo-gate-table.js';
@@ -453,7 +454,14 @@ function capture(command, args, { cwd, timeout = 0 } = {}) {
 }
 
 export function defaultGit(args, { cwd } = {}) {
-  return capture('git', args, { cwd });
+  // `capture`'s shape — `error` a message string, never a rejection — through
+  // the one git entrance (git.js), which `runAsync` gives with an Error.
+  return runGitAsync(cwd, args).then((r) => ({
+    status: r.status,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    error: r.error ? r.error.message : r.signal ? `stopped by ${r.signal}` : null,
+  }));
 }
 
 export function defaultNpm(args, { cwd } = {}) {

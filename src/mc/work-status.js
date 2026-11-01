@@ -27,10 +27,10 @@
  *   said      the last thing the assistant actually said, which is what tells
  *             a person whether they still care about this one
  */
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 import { contextUsage, lastModel, listConversations, readTailEntries } from './conversations.js';
+import { runAsync as runGitAsync } from './git.js';
 import { readMenu } from './menu-read.js';
 import { mcHome, sessionName, workAreaName, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
@@ -39,8 +39,6 @@ import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 import { readStopMark } from './work-stop-marker.js';
-
-const run = promisify(execFile);
 
 /**
  * Ask git about every worktree at once.
@@ -70,8 +68,9 @@ function dependencyState(path) {
 async function gitFacts(paths) {
   const ask = async (cwd, args) => {
     try {
-      const { stdout } = await run('git', ['-C', cwd, ...args], { encoding: 'utf8' });
-      return stdout.trim() || null;
+      const r = await runGitAsync(undefined, ['-C', cwd, ...args]);
+      if (r.error || r.status !== 0) return null;
+      return String(r.stdout || '').trim() || null;
     } catch { return null; }
   };
   const results = await Promise.all(paths.map(async (path) => {

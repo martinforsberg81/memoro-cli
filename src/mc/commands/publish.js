@@ -32,7 +32,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-import { tryGit } from '../git.js';
+import { run as runGit, tryGit } from '../git.js';
 import { projectPlan } from '../merge-boundary.js';
 import { builtPatch } from '../merge-step.js';
 import { branchFlow } from '../plan-schema.js';
@@ -253,7 +253,7 @@ export function repoName(url, root) {
  * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
  * so that rejection — and only that one — is pushed once more without it.
  */
-export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr, detached = false } = {}) {
+export function pushBranch(cwd, branch, { spawn = spawnGit, stderr = process.stderr, detached = false } = {}) {
   const target = detached ? ['origin', `HEAD:refs/heads/${branch}`] : ['-u', 'origin', branch];
   const push = (extra) => spawn('git', ['push', ...extra, ...target], { cwd, encoding: 'utf8', timeout: 120_000 });
   let r = push([]);
@@ -262,6 +262,11 @@ export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.st
     r = push(['--no-thin']);
   }
   return { ok: r.status === 0, text: `${r.stdout || ''}${r.stderr || ''}`.trim() };
+}
+
+/** `spawnSync('git', …)` as `pushBranch` calls it, through the one git entrance. */
+function spawnGit(_git, args, { cwd, timeout } = {}) {
+  return runGit(cwd, args, { timeoutMs: timeout });
 }
 
 function ghCommand(args, cwd) {
