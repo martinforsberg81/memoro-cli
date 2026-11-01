@@ -216,7 +216,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'helper', 'intake', 'review', 'step', 'worker']) {
+    for (const name of ['brief', 'goal', 'helper', 'intake', 'review', 'step', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -375,7 +375,7 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'goal.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
     ]);
   });
 });

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from '../_helpers/mc-cli.js';
-import { instructionsFor, readRole, textDigest, withWorkers } from '../../../src/mc/roles.js';
+import { canonRolesDir, instructionsFor, readRole, textDigest, withWorkers } from '../../../src/mc/roles.js';
 
 const WORKER_MD = `---
 name: worker
@@ -48,6 +48,18 @@ describe('mc roles', () => {
 
   // `_common.md` is the text every role session is told, not a role. A
   // catalogue that has a copy of it must not list `_common` as one.
+  it('lists and shows the goal role mc ships', () => {
+    const env = { MC_HOME: join(mkdtempSync(join(tmpdir(), 'mc-roles-cli-')), 'home') };
+    const listed = runMcCli(['roles', 'list'], { ...env, MC_ROLES_DIR: canonRolesDir() });
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.match(listed.stdout, /\bgoal\b/u);
+    // No catalogue of its own: `show` falls back to canon, as a launch does.
+    const shown = runMcCli(['roles', 'show', 'goal'], env);
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /You are one session on one goal/u);
+    assert.match(shown.stdout, /mc publish --no-merge/u);
+  });
+
   it('does not name the shared text as a role', () => {
     const { env } = fixture({ withShared: true });
     const result = runMcCli(['roles', 'list'], env);

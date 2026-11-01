@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { run as runGit } from '../git.js';
-import { goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, sessions, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, sessions, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -113,21 +113,17 @@ function newGoal(args, flags, ctx) {
   const created = stampSeconds(now);
   const body = `# ${flags.title}\n\n## Goal\n\n## Criteria\n\n## Out of scope\n`;
   ctx.write(join(dir, GOAL_FILE), renderGoal({ status: 'open', repos, class: flags.class, created, body }));
-  ctx.write(join(dir, LOG_FILE), appendLog('', { at: stamp(now), tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }));
   stdout.write(`mc: ${programme}/${goal} — ${dir}\n`);
 
-  const branch = `goal/${goal}`;
   for (const { repo, bare } of bares) {
     const path = join(dir, repo);
-    const exists = ctx.git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok;
-    const added = ctx.git(bare, exists
-      ? ['worktree', 'add', '-q', path, branch]
-      : ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
+    const added = addGoalWorktree({ git: ctx.git, bare, path, goal });
     if (!added.ok) {
       stderr.write(`mc: ${repo}'s worktree is not made — ${added.stderr.trim()}; the goal's files stand in ${dir}\n`);
       return 1;
     }
-    stdout.write(`  ${repo}  ${path}  ${exists ? `${branch}, as it was` : `${branch} from origin/main`}\n`);
+    stdout.write(`  ${repo}  ${path}  ${added.existed ? `${added.branch}, as it was` : `${added.branch} from origin/main`}\n`);
   }
   stdout.write(`GOAL.md is to be filled in: ${join(dir, GOAL_FILE)}\n`);
   return 0;
@@ -161,7 +157,7 @@ function logEntry(args, fields, ctx) {
   }
   const status = fields.status ?? goal.status;
   const entry = {
-    at: stamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
+    at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
     done: fields.done, comment: fields.comment, next: fields.next,
   };
   if (fields.status !== null) {
@@ -273,11 +269,6 @@ function onlyFlags(scanned, allowed) {
     if (given && !allowed.includes(`--${key}`)) return `--${key}`;
   }
   return null;
-}
-
-/** `2026-11-01T21:30Z`: the minute a log entry is stamped with. */
-function stamp(date) {
-  return date.toISOString().replace(/:\d{2}\.\d{3}Z$/u, 'Z');
 }
 
 /** `2026-11-01T20:00:00Z`: the second a goal is created at, as the front matter writes it. */

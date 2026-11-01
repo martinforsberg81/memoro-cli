@@ -707,7 +707,9 @@ export function drainWaiting(state) {
 }
 
 function waitingOn(steps) {
-  return `waiting on ${steps.map((s) => `${s.name}${s.step == null ? '' : ` step ${s.step}`} (${s.lane}${s.elapsed_seconds == null ? '' : `, ${ageWords(s.elapsed_seconds)}`})`).join(', ')}`;
+  // A goal session's current file names it `goal:<programme>/<goal>`, with no step.
+  const named = (name) => name.replace(/^goal:/u, 'goal ');
+  return `waiting on ${steps.map((s) => `${named(s.name)}${s.step == null ? '' : ` step ${s.step}`} (${s.lane}${s.elapsed_seconds == null ? '' : `, ${ageWords(s.elapsed_seconds)}`})`).join(', ')}`;
 }
 
 /**

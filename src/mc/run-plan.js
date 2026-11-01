@@ -934,6 +934,28 @@ export function builtPreamble(built) {
 }
 
 
+/**
+ * What a goal session is told: where the goal is and where it works. The rest
+ * is the goal role's (`canon/roles/goal.md`) and `GOAL.md`'s.
+ */
+export function goalPrompt({ name, dir, worktree, branch }) {
+  return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
+}
+
+/** `checkInPrompt` for a goal session, which has no step to judge or to block. */
+export function goalCheckInPrompt({ minutes, count }) {
+  return [
+    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
+    'Judge whether this session is still moving the goal.',
+    '',
+    'If it is, say so in one line and go on — no other answer is needed.',
+    '',
+    'If it is not — you are going in circles, a test cannot be made green — commit',
+    'what you have, publish it, end with `mc goal log` saying what the next session',
+    'should do differently, and stop.',
+  ].join('\n');
+}
+
 /* --------------------------------------------------------------- headless */
 
 /**

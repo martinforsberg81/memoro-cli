@@ -169,6 +169,45 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
   return goals;
 }
 
+/** A goal's name where a runner names sessions: `goal:<programme>/<goal>`, in its current file and its runs.tsv row. */
+export function goalName({ programme, goal }) {
+  return `goal:${programme}/${goal}`;
+}
+
+/**
+ * The goal a lane of `repos` takes next, or null: of the open goals that parse,
+ * whose first repository is one of `repos` and whose name is not in `held`, the
+ * one whose last log entry is oldest, so goals share sessions fairly. A goal
+ * with no entry is oldest of all, and a tie goes to the first listed. A log
+ * stamp is a fixed-width UTC minute, so stamps compare as strings.
+ */
+export function nextGoal(goals, { repos = [], held = new Set() } = {}) {
+  const lastAt = (goal) => goal.log.at(-1)?.at ?? '';
+  const eligible = goals.filter((goal) => goal.status === 'open' && goal.problems.length === 0
+    && repos.includes(goal.repos[0]) && !held.has(goalName(goal)));
+  return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
+}
+
+/**
+ * A worktree of the repository at `bare` at `path`, on `goal/<goal>`: from
+ * origin/main, or on that branch as it is when it already exists. Gives git's
+ * answer with `branch` and `existed` beside it. `mc goal new` makes a goal's
+ * worktrees this way, and the runner makes one a goal has lost.
+ */
+export function addGoalWorktree({ git, bare, path, goal }) {
+  const branch = `goal/${goal}`;
+  const existed = git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok;
+  const added = git(bare, existed
+    ? ['worktree', 'add', '-q', path, branch]
+    : ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
+  return { ...added, branch, existed };
+}
+
+/** `2026-11-01T21:30Z`: the minute a log entry is stamped with. */
+export function logStamp(date) {
+  return date.toISOString().replace(/:\d{2}\.\d{3}Z$/u, 'Z');
+}
+
 /** Appends `entry` to the goal's LOG.md in `dir`. */
 export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFileAtomic }) {
   const path = join(dir, LOG_FILE);
