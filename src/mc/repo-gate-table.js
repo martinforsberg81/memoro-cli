@@ -156,9 +156,9 @@ export const SHIPPED = Object.freeze({
     // at 29 s, so 60 s. Every change that rebuilds a file lowers it, until it
     // reads 1000.
     pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=60000']),
-    // Martin, 2026-11-01: a memoro-cli merge may take 120 s, however loaded the
-    // machine. The round runs what fits by measured cost; the rest is deferred.
-    round_seconds: 120,
+    // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
+    // here is costly enough to leave to the merge round.
+    session_whole: true,
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -584,8 +584,8 @@ function normalise(entry, env) {
       gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
     },
     retry_once_why: entry.retry_once_why ?? null,
-    // The estimated seconds a merge round spends on its selection. Null: all of it.
-    round_seconds: Number(entry.round_seconds) > 0 ? Number(entry.round_seconds) : null,
+    // A session's gate runs all it selected, leaving nothing to the merge round.
+    session_whole: entry.session_whole === true,
   };
 }
 

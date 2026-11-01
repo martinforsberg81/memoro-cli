@@ -72,7 +72,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, readTestTimes, recordTestTimes, sessionFiles } from './test-times.js';
+import { TIMES_REPORTER, recordTestTimes } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -874,12 +874,6 @@ export async function runGate({
       }));
       if (!selection.ok) return finish('selection', selection.reason);
       fileClasses = selection.classes || {};
-      // A receipt-bound measurement stays whole; only a plain merge round is budgeted.
-      const budget = roundFiles(selection.files, { seconds: evidence === null && mode === 'merge' ? declared.declaration.round_seconds : null,
-        times: readTestTimes({ root, repo: repoNameOf(repoPath) }), lanes: testLanes({ env, mode }) });
-      selection = { ...selection, files: budget.run };
-      report.deferred_files = budget.deferred;
-      if (budget.deferred.length) say(`deferred past the round's budget (${budget.deferred.length}): ${budget.deferred.join(' ')}`);
       report.selection = {
         command: declared.declaration.select,
         files: selection.files.length,
@@ -2161,11 +2155,6 @@ export const TEST_TIMEOUT_MS = 10 * 60_000;
  * real programmes, and memoro-cli's runner tests queued the real projects
  * beside their fixture's (2026-10-19).
  */
-/** What a merge round runs under its repository's `round_seconds`; no budget runs everything. */
-export function roundFiles(files, { seconds = null, times = {}, lanes = 4 } = {}) {
-  return seconds ? sessionFiles(files, { times, lanes, seconds }) : { run: files, deferred: [] };
-}
-
 export function suiteEnv(env) {
   const clean = { ...env };
   const home = env.MC_HOME;
