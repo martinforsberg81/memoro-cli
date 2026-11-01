@@ -49,19 +49,18 @@ describe('the difference between two frames', () => {
     const after = frame(10800);
     // Exactly one row of the real page differs: the MC line at the foot.
     const changed = before.reduce((all, line, index) => (line === after[index] ? all : [...all, index]), []);
-    assert.deepEqual(changed, [25]);
+    assert.deepEqual(changed, [before.length - 1]);
 
-    // The page's first line sits 30 rows above the cursor: the 26 rows of the
-    // page, then the blank, the two key lines and the blank the menu prints,
-    // then the prompt row the cursor is sitting on — `lines.length + 4`.
-    const writes = frameWrites(before, after, { above: 30 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[25]}\r\x1b[5B`);
+    // The page, then the four rows the menu prints below it. Removing a
+    // section changes the frame's length, not the MC row's distance from it.
+    const writes = frameWrites(before, after, { above: before.length + 4 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after.at(-1)}\r\x1b[5B`);
 
     // Said as the criterion says it: the cursor is positioned once, one row is
     // written, and the writes return to where they started.
     assert.equal(writes.match(/\x1b\[\d+[AB]/gu).length, 2);
     assert.equal(writes.match(/\x1b\[2K/gu).length, 1);
-    for (const line of before.filter((text, index) => text !== '' && index !== 21)) {
+    for (const line of before.filter((text, index) => text !== '' && index !== changed[0])) {
       assert.equal(writes.includes(line), false, `wrote a row that had not changed: ${line}`);
     }
   });
@@ -134,15 +133,15 @@ describe('the difference between two frames', () => {
     const after = [...frame(10800)];
     after[2] = '  a row nobody can see any more';
     // A terminal ten rows tall: the cursor is on the last of them, so nine
-    // rows above it can be addressed. Row 25 is five up and is rewritten; row 2
-    // is twenty-eight up, off the screen, and is not.
-    const writes = frameWrites(before, after, { above: 30, rows: 10 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[25]}\r\x1b[5B`);
+    // rows above it can be addressed. The final MC row is five up and is
+    // rewritten; row 2 is off the screen, and is not.
+    const writes = frameWrites(before, after, { above: before.length + 4, rows: 10 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after.at(-1)}\r\x1b[5B`);
     assert.equal(writes.includes(after[2]), false);
     // With nothing left to say on screen, that is no bytes at all.
     const hidden = [...before];
     hidden[2] = '  a row nobody can see any more';
-    assert.equal(frameWrites(before, hidden, { above: 30, rows: 10 }), '');
+    assert.equal(frameWrites(before, hidden, { above: before.length + 4, rows: 10 }), '');
   });
 
   it('reprints a grown frame from the first row it can still reach', () => {

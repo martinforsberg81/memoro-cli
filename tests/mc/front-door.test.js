@@ -56,7 +56,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'NEXT', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The two workareas nothing explains are one line in WORK — the numbers
@@ -117,7 +117,7 @@ describe('bare mc', () => {
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
       const printed = runMcCli([], fx.env).stdout;
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'NEXT', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
         const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }

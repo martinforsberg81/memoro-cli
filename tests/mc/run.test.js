@@ -4191,6 +4191,7 @@ test('runLoop: no total set — every lane starts, exactly as before', async (t)
   const log = r.f.files['/w/runner/log/runner.log'];
   assert.match(log, /lanes: 2 per repository, no total cap/u);
   assert.doesNotMatch(log, /waiting for a lane/u, 'nothing was held back');
+  assert.equal(r.f.files['/w/runner/waiting.json'], undefined, 'uncapped lanes never enqueue');
 });
 
 /**
@@ -4209,13 +4210,20 @@ test('a lane keeps the project it just ran, and lets go only when that has nothi
 });
 
 test('a project between two sessions keeps its machine slot; it goes when the project has nothing to run', async () => {
-  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': { c: ready } }, session: okSession() });
+  const steps = JSON.parse(ready).steps;
+  const f = fixture({ plans: { memoro: { a: plan({ steps: [...steps, { ...steps[0], title: 'The next step' }] }) }, 'memoro-cli': { c: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  f.deps.session = call => areaOf(call.cwd) === 'a' ? landsItself(f, 'a', 77, inner)(call) : inner(call);
   f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'a');
   let waits = 0;
   // The other repository is held until the lane finds nothing more to run on a.
-  f.deps.sleep = async () => { waits += 1; await runner.pass({ repo: 'memoro', last: { name: 'a', step: 0 }, passed: ['a'] }); };
+  f.deps.sleep = async () => {
+    waits += 1;
+    assert.equal(await runner.runStep('a', runner.queue()), 'merged', 'a keeps its held slot even with c waiting');
+    await runner.pass({ repo: 'memoro', last: { name: 'a', step: 0 }, passed: ['a'] });
+  };
   const other = await runner.pass({ repo: 'memoro-cli' });
   assert.equal(other.name, 'c', 'the lane let go, so the slot is free');
   assert.equal(waits, 1, 'and not before');
@@ -4234,6 +4242,7 @@ test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', 
   r.release();
   assert.equal(await run, 0);
   assert.equal(r.state.starts.length, 2, 'the lanes held back gave up on STOP rather than starting');
+  assert.deepEqual(JSON.parse(r.f.files['/w/runner/waiting.json']).waiters, []);
   const log = r.f.files['/w/runner/log/runner.log'];
   assert.match(log, /lanes: 2 per repository, 2 in total/u);
   assert.match(log, /2 of 2 steps in flight on this machine — waiting for a lane/u);
@@ -4273,6 +4282,42 @@ test('a lane held back by the total goes through when the slot frees', async () 
  * total is read each time a slot is taken. Lowered, it holds the next start;
  * raised, the lane that was waiting goes.
  */
+test('a later lane does not overtake a waiter for a machine slot', async t => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { c: ready } }, session: okSession() });
+  f.deps.laneCount = () => ({ per_repo: 2, total: 1 });
+  const sleeps = [];
+  f.deps.sleep = () => new Promise(resolve => sleeps.push(resolve));
+  const inner = f.deps.session;
+  const starts = [];
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  f.deps.session = async call => {
+    const name = areaOf(call.cwd); starts.push(name);
+    if (name === 'a') await held;
+    return inner(call);
+  };
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); for (const wake of sleeps.splice(0)) wake(); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await turns();
+  const second = runner.runStep('b', world, { lane: 1 });
+  await turns();
+  const waiting = () => JSON.parse(f.files['/w/runner/waiting.json']).waiters;
+  assert.deepEqual(waiting().map(({ name, repo, lane }) => ({ name, repo, lane })), [{ name: 'b', repo: 'memoro', lane: 1 }]);
+  assert.ok(waiting()[0].pid); assert.ok(Date.parse(waiting()[0].since));
+  release(); await first;
+  // The old waiter has not polled yet. A newcomer sees the free slot first.
+  const later = runner.runStep('c', world, { lane: 0 });
+  await turns();
+  assert.deepEqual(starts, ['a'], 'c must not take the free slot ahead of b');
+  assert.deepEqual(waiting().map(item => item.name), ['b', 'c']);
+  sleeps.shift()(); await second;
+  sleeps.shift()(); await later;
+  assert.deepEqual(starts, ['a', 'b', 'c']);
+  assert.deepEqual(waiting(), []);
+});
+
 test('a total changed while the runner runs applies to the next slot', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   let total = 2;
@@ -4360,6 +4405,7 @@ test('a lane waiting for a slot gives the wait up on UPDATE, and starts no step'
   release();
   await first;
   assert.deepEqual(starts, ['a'], 'the waiting lane never launched');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/waiting.json']).waiters, []);
   assert.match(f.files['/w/runner/log/runner.log'], /b: UPDATE while waiting for a lane — starting no step, skip/u);
 });
 
