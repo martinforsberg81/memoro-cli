@@ -428,6 +428,13 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A suite finds the toolchain's git first** (`directGitDir` in
+[`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
+shim that asks xcrun on every call, 67 ms against 23 ms for the git behind it
+(2026-11-01), and memoro-cli's autonomy tests make about 400 calls each. `suiteEnv`
+puts `$MC_HOME/direct-git`, a directory holding one link, first on the suite's
+PATH. Off macOS, or when no link can be made, PATH is unchanged.
+
 **A merge round runs at least four lanes.** `realTests` passes
 `--test-concurrency=<testLanes()>` — unless the repository's own flags already
 name a concurrency. A session's `mc gate` takes the free cores,

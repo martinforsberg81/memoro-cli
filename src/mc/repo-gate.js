@@ -49,10 +49,10 @@
  * (one per file per week). A change that touches one of them is red as before,
  * and so is any red the probe does not call main's.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
@@ -2156,8 +2156,44 @@ export const TEST_TIMEOUT_MS = 10 * 60_000;
  */
 export function suiteEnv(env) {
   const clean = { ...env };
+  const home = env.MC_HOME;
   for (const key of ['NODE_TEST_CONTEXT', 'MC_WORK_ROOT', 'MC_HOME']) delete clean[key];
+  const direct = directGitDir({ home });
+  if (direct && clean.PATH) clean.PATH = `${direct}:${clean.PATH}`;
   return clean;
+}
+
+/** The toolchain's own git, once per process: asking again is a spawn per suite. */
+let developerGit;
+function toolchainGit() {
+  if (developerGit !== undefined) return developerGit;
+  const asked = spawnSync('xcode-select', ['-p'], { encoding: 'utf8', timeout: 5_000 });
+  const path = asked.status === 0 ? join(asked.stdout.trim(), 'usr/bin/git') : null;
+  developerGit = path && existsSync(path) ? path : null;
+  return developerGit;
+}
+
+/**
+ * A directory holding only a link to the toolchain's git, for a suite's PATH.
+ * macOS's `/usr/bin/git` is a shim that asks xcrun which git to run on every
+ * call: 67 ms a call against 23 ms direct (2026-11-01), and memoro-cli's
+ * autonomy tests make 400 calls each. One test went from 40 s to 24 s under
+ * twice the load. Null off macOS and whenever the link cannot be made; a suite
+ * then finds git as it always did.
+ */
+export function directGitDir({ home = mcHome(), platform = process.platform, target = toolchainGit } = {}) {
+  if (platform !== 'darwin') return null;
+  try {
+    const git = target();
+    if (!git) return null;
+    const dir = join(home || mcHome(), 'direct-git');
+    const link = join(dir, 'git');
+    if (!existsSync(link)) {
+      mkdirSync(dir, { recursive: true });
+      try { symlinkSync(git, link); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    return existsSync(link) ? dir : null;
+  } catch { return null; }
 }
 
 /**

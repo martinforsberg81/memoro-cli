@@ -28,9 +28,9 @@
  * once in one lane. There is a lock per gate lane (ruling 34, gate-lock.js),
  * and the merger runs one loop per lane: memoro-cli's minute-long rounds no
  * longer wait behind memoro's fifteen. Still one process and one pid. The merger waits them out; it has nobody to give up to. It waits out
- * a running deploy the same way, before a round and never inside one: the
- * deployer lets the round in flight finish, builds alone, and the queue goes
- * on after it.
+ * a running deploy the same way in memoro's lane, before a round and never
+ * inside one: the deployer lets the round in flight finish, builds alone, and
+ * that queue goes on after it. Another repository's lane does not wait for it.
  */
 import { spawn as realSpawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
@@ -42,7 +42,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
-import { runningRound } from './gate-lock.js';
+import { BUILD_LANE, runningRound } from './gate-lock.js';
 import {
   dequeue, enqueue, heldBy, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
@@ -624,7 +624,10 @@ export async function landJob(batch, {
     // the queue goes on after it (Martin, 2026-10-10). Its `running` row is
     // written before the deployer starts, so it is seen here before the
     // deployer looks at the gate.
-    const deploying = readRunningDeploy();
+    // Only memoro's lane: the deploy builds memoro, and a light repository's
+    // round neither touches that build nor can be touched by it. memoro-cli
+    // sat behind a 76-minute deploy on 2026-11-01 for no reason but this check.
+    const deploying = (lane ?? gateLaneOf(job.repo)) === BUILD_LANE ? readRunningDeploy() : null;
     const running = readRunningRound({ alive, lane: lane ?? gateLaneOf(job.repo) });
     const lease = readLeaseFn(job.repo_path);
     const blocking = lease?.held && !lease.orphaned;

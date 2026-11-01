@@ -212,6 +212,14 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(stepNow().status, 'done');
   });
 
+  it('a deploy holds only memoro\'s lane: another repository lands past it', async () => {
+    register();
+    const m = machine([green], { lane: 'memoro-cli', readRunningDeploy: () => ({ pid: 7, sha: 'c6b53f26a6f7' }) });
+    await landJob({ ...JOB, repo: 'memoro-cli' }, { ...m.deps, lane: 'memoro-cli' });
+    assert.equal(m.rounds.length, 1);
+    assert.equal(m.said.some((line) => /waiting behind the deploy/u.test(line)), false);
+  });
+
   it('a round that lost the race for the lock is run again, not answered', async () => {
     register();
     const m = machine([{ ok: false, stopped_at: 'busy', reason: 'another round' }, green]);

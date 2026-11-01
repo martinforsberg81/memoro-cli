@@ -18,7 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -2921,6 +2921,19 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
 });
 
 describe('the suite\'s environment and its time', () => {
+  it('directGitDir: a link to the toolchain git on macOS, nothing elsewhere or when none answers', () => {
+    const home = mkdtempSync(join(tmpdir(), 'mc-direct-git-'));
+    try {
+      const target = join(home, 'real-git'); writeFileSync(target, '');
+      assert.equal(directGitDir({ home, platform: 'linux', target: () => target }), null);
+      assert.equal(directGitDir({ home, platform: 'darwin', target: () => null }), null);
+      const dir = directGitDir({ home, platform: 'darwin', target: () => target });
+      assert.equal(dir, join(home, 'direct-git'));
+      assert.equal(readlinkSync(join(dir, 'git')), target);
+      assert.equal(directGitDir({ home, platform: 'darwin', target: () => target }), dir, 'a second suite finds the link');
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it('suiteEnv: a suite never inherits the runner\'s own ~/mc or a nested test context', () => {
   const env = suiteEnv({ MC_WORK_ROOT: '/Users/me/mc', MC_HOME: '/Users/me/.memoro/mc', NODE_TEST_CONTEXT: 'child', MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
   assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
