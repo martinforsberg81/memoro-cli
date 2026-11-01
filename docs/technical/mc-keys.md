@@ -53,7 +53,7 @@ I/O, before child launch. A trusted preload restricts both `import` and
 CommonJS `require` to those exact files and rechecks their hashes on load.
 An unlisted static dependency is refused before the script body executes;
 an unlisted dynamic dependency is refused when requested, before that module
-executes. Do not use subprocesses, `eval`, custom loaders or filesystem reads
+executes. Do not use subprocesses, worker threads, `eval`, custom loaders or filesystem reads
 to load executable source outside this declaration.
 
 ## Custody, output and records

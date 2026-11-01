@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { mcHome } from './paths.js';
 
@@ -87,8 +87,10 @@ export function rememberRuntimeSecretNames(names, env = process.env) {
     if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) throw new Error('invalid runtime secret name');
     // A hash filename also supports long dotenv names. Contents are names only.
     const file = join(directory, createHash('sha256').update(name).digest('hex'));
-    try { writeFileSync(file, name, { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    // Beside the directory, not in it: a reader must never meet a partial entry.
+    const partial = `${directory}.${process.pid}.${randomUUID()}`;
+    writeFileSync(partial, name, { mode: 0o600 });
+    renameSync(partial, file);
   }
 }
 function registeredRuntimeSecretNames(env) {

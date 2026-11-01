@@ -22,8 +22,11 @@ const sourcePath = path => typeof path === 'string' && PATH.test(path)
   && !path.startsWith('/') && !path.split('/').some(part => !part || part === '.' || part === '..')
   && !path.split('/').includes('.git');
 
+/** GIT_DIR and its kin must not redirect the comparison with origin/main. */
+const withoutGit = env => Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('GIT_')));
+
 function git(cwd, args, env) {
-  const result = spawnSync('git', args, { cwd, env: scrubRuntimeSecretsFromEnv(env),
+  const result = spawnSync('git', args, { cwd, env: scrubRuntimeSecretsFromEnv(withoutGit(env)),
     encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (result.error || result.status !== 0) refuse('repository or origin/main unavailable');
   return result.stdout;
@@ -31,6 +34,7 @@ function git(cwd, args, env) {
 
 export function readKeysManifest(cwd = process.cwd(), env = process.env) {
   const root = realpathSync(git(cwd, ['rev-parse', '--show-toplevel'], env).trim());
+  git(root, ['remote', 'get-url', 'origin'], env);
   const main = git(root, ['rev-parse', '--verify', 'origin/main^{commit}'], env).trim();
   const bytes = git(root, ['show', `${main}:${KEYS_MANIFEST}`], env);
   const expected = { [KEYS_MANIFEST]: sha256(bytes) };

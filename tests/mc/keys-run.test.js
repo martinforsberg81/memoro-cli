@@ -47,6 +47,7 @@ async function fixture(t, source, { names = { FIXTURE_KEY: 'dotenv:fixture:FIXTU
   write('.mc-keys.json', JSON.stringify(manifest));
   for (const [file, content] of Object.entries(files)) write(file, content);
   git(root, ['add', '.']); git(root, ['commit', '-m', 'fixture']);
+  git(root, ['remote', 'add', 'origin', 'https://example.invalid/fixture.git']);
   git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   const vaultKey = await importVaultKey(new Uint8Array(32).fill(9));
   const custody = await mintCustodyRoot(vaultKey);
@@ -227,4 +228,52 @@ test('registered arbitrary dotenv names are scrubbed globally without storing va
   for (const file of allFiles(directory)) absent(readFileSync(file, 'utf8'));
   writeFileSync(join(directory, 'runtime-secret-names', 'invalid'), '');
   assert.throws(() => scrubRuntimeSecretsFromEnv(env), /cannot read script-key name registry/u);
+});
+
+const filtered = async (values, chunks) => {
+  const filter = keyOutputFilter(values); const out = [];
+  filter.on('data', chunk => out.push(chunk));
+  for (const chunk of chunks) filter.write(chunk);
+  filter.end();
+  await new Promise(resolve => filter.on('end', resolve));
+  return Buffer.concat(out).toString();
+};
+
+test('a value inside a longer base64 text, or in base64url, does not pass the filter', async () => {
+  const value = 'sk-live_abc?>~012345';
+  for (const prefix of ['user:', 'us:', 'u:', '']) {
+    const text = Buffer.from(`${prefix}${value}`).toString('base64');
+    for (const encoded of [text, text.replaceAll('+', '-').replaceAll('/', '_')]) {
+      const middle = value.slice(4, 16);
+      const out = await filtered({ TOKEN: value }, [encoded]);
+      assert.match(out, /\[key:TOKEN\]/u, prefix);
+      assert.equal(Buffer.from(out.replace('[key:TOKEN]', ''), 'base64').includes(middle), false);
+    }
+  }
+});
+
+test('overlapping values leave no tail, across a chunk edge too', async () => {
+  const values = { A: 'tok9', B: 'ok9-remainder-of-b' };
+  assert.equal(await filtered(values, ['x tok9-remainder-of-b y']), 'x [key:A] y');
+  assert.equal((await filtered(values, ['x tok9-rem', 'ainder-of-b y'])).includes('remainder'), false);
+});
+
+test('a name registered over a crashed empty entry reads back, and no partial file stays', t => {
+  const home = mkdtempSync(join(tmpdir(), 'mc-key-names-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { MC_HOME: home };
+  rememberRuntimeSecretNames(['SERVICE_TOKEN'], env);
+  const [directory] = readdirSync(home);
+  const [entry] = readdirSync(join(home, directory));
+  writeFileSync(join(home, directory, entry), '');
+  rememberRuntimeSecretNames(['SERVICE_TOKEN'], env);
+  assert.equal(scrubRuntimeSecretsFromEnv({ ...env, SERVICE_TOKEN: 'x' }).SERVICE_TOKEN, undefined);
+  assert.deepEqual(readdirSync(home), [directory]);
+});
+
+test('origin/main with no remote behind it releases nothing', async t => {
+  const f = await fixture(t, "process.stdout.write('started');");
+  spawnSync('git', ['remote', 'remove', 'origin'], { cwd: f.root });
+  const result = await f.run();
+  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /origin\/main unavailable/u);
 });
