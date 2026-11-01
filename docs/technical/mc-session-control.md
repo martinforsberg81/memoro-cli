@@ -1,9 +1,10 @@
-# Autonomous session control (inactive)
+# Autonomous session control
 
 `src/mc/session-control.js` is a pure decision policy, not a launcher. Existing
 v1 prompts, watches, gates, lane reservations and recovery are unchanged.
-Autonomous execution remains disabled. No provider capability or live context
-measurement has been established by these synthetic control tests.
+No provider capability or live context measurement has been established by these
+synthetic control tests; only
+[observed runs](mc-session-observation.md#provider-observations) do that.
 
 ## Trusted inputs and bounded outcomes
 
@@ -24,6 +25,11 @@ be frequent enough to observe a closing boundary before that reserve is spent.
 
 - A newly measured completed criterion at/above a soft threshold requests
   `finish-session`. A checkpoint without criterion completion does not.
+- A measurement that leaves every premerge criterion of the assignment measured
+  requests `finish-session` below any threshold (`criteria-complete`). Finish
+  needs closing, so without this a goal measured early could only wait for the
+  upper bound or run out of no-progress time. Only a runner measurement does it,
+  never a callback.
 - An upper threshold requests `finish-session` even mid-criterion.
 - Closing is sticky, disallows new work, and preserves its original deadline.
   Gate/fixes/publication/handoff may use the reserve; further criteria are not
@@ -97,8 +103,8 @@ tree and content fingerprint; the reference names the HEAD commit.
 
 A red, timed-out, interrupted or closed measurement withholds progress and records
 no failure: the no-progress clock keeps running. Failure accounting for red checks
-is outside this contract. The default verifier reports no progress, and the runner
-does not yet call the verifier.
+is outside this contract. `mc run`'s capability builds one verifier per build run
+and closes it with the session; a capability without one reports no progress.
 
 ## Atomic persistence and common callbacks
 
@@ -109,7 +115,7 @@ expected state revision. Actions are returned only after the atomic write.
 Runner callers must verify measured references, reserve the run, reconcile prior
 workers/gate children before another start, and subsequently publish pending
 results to plan. These functions store durable results; they do not dispatch
-plan work or launch/terminate processes. The explicit inactive
+plan work or launch/terminate processes. The explicit
 [transport seam](mc-session-observation.md) adds process supervision separately.
 
 Both tools can read the same durable signal without live stdin steering:

@@ -1,13 +1,13 @@
-# Programme-owned recovery (inactive)
+# Programme-owned recovery
 
 Planner operation records and recovery rules remain durable, but their former
-public programme command envelope is removed. The installed runner passes no
-headless queue consumer capability; status reports planner unavailability and
-leaves events pending. Ordinary foreground assignment
+public programme command envelope is removed. `mc run` carries the
+headless queue consumer, which claims only with autonomy on; otherwise events
+stay pending for the foreground planner. Ordinary foreground assignment
 changes use `mc goal`; the scanner still observes verified dependency landings.
 
-This extends the injected programme jobs/plan seam. It does **not** enable live
-execution, add a role, change v1 recovery, grant deployment authority or change
+This extends the injected programme jobs/plan seam. It does **not**
+add a role, change v1 recovery, grant deployment authority or change
 test selection/resource reservations. Plan decides; step implements; independent
 review only reports. Existing immutable attempts, reports, receipts and PR
 ownership remain the sources for continuation.

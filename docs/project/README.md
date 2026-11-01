@@ -26,8 +26,8 @@ Mutations check the active role/run and expected state revision under lock.
 Goal assignments retain append-only history and completion is at verified
 landing, with after-integration evidence measured as follow-ups. Independent
 review records findings rather than implementing repairs. The durable planner
-event journal remains, but headless queue consumption is unavailable and
-programme status reports that pending events await a consumer.
+event journal remains; `mc run` consumes it headlessly only with programme
+autonomy on, and programme status shows pending events either way.
 
 `mc goal new`, `criterion add`, `send` and `revise` author and publish v2 goal
 assignments. Sending an unblocked goal makes it ready; exact-revision

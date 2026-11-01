@@ -100,9 +100,7 @@ closure, missing observations, unknown gate children and failed persistence or
 preservation never return a successful normal exit. `control_persisted: false`
 distinguishes a local fail-closed decision from a durable control write. A normal
 transport exit is **not** green publication evidence: the matching committed,
-pushed, relevant-gate handoff contract remains independently required. No v2
-build loop, provider session, gate cancellation authority or plan dispatcher is
-activated here.
+pushed, relevant-gate handoff contract remains independently required.
 
 ## What was actually measured
 

@@ -111,7 +111,7 @@ test('on a fixture installation autonomy on and off drive the disposable program
   const w = disposable(t);
   const on = w.on(w.fixture);
   assert.equal(on.code, 0, on.err);
-  assert.equal(on.json().mode, 'active'); assert.match(on.json().next_action, /planner unavailable/u);
+  assert.equal(on.json().mode, 'active'); assert.match(on.json().next_action, /awaits the runner's headless planner/u);
   const once = w.revision();
   assert.equal(w.on(w.fixture).code, 0); assert.equal(w.revision(), once, 'a repeated on is a read');
 

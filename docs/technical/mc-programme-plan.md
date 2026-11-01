@@ -15,12 +15,11 @@ been removed. The old operation-shape validator was folded into the shared
 goal-state boundary; `programme-plan-contract.js` is no longer needed.
 
 `runProgrammePlan` (`src/mc/programme-plan-run.js`) is the headless queue
-consumer. A runner reaches it only with the injected `autonomous.programmePlan`
-capability, and the installed runner passes none: it launches no planner,
-`mc programme status` reports `planner unavailable` and pending events remain
-durable. This is distinct from build/review lifecycle handling and does not
-enable autonomous execution. The operator sets programme autonomy on or off, but
-autonomy on does not supply the capability.
+consumer. A runner reaches it only with the `autonomous.programmePlan`
+capability, which `mc run` carries (`src/mc/autonomous-capability.js`), and it
+claims only with programme autonomy on. With autonomy off it launches no planner
+and pending events remain durable. This is distinct from build/review lifecycle
+handling: a sent goal needs neither autonomy nor the planner.
 
 Given the capability, the consumer holds a claim file and the queue lease, so a
 programme has one headless planner. It refreshes a detached inspection checkout

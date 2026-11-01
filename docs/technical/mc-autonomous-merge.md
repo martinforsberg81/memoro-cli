@@ -1,6 +1,6 @@
-# Autonomous merge admission (inactive)
+# Autonomous merge admission
 
-No programme is activated by this implementation. V1 criteria, queue, review,
+V1 criteria, queue, review,
 retry and merge paths remain unchanged. Autonomous build publication still
 does not enqueue work. After independent review completes, the trusted runner
 may automatically enqueue a current clean report through the existing merger;
@@ -82,7 +82,7 @@ itself still cannot publish or merge. Routing has a process-owned project claim;
 no model is involved in retrying an interrupted handoff. A durable `merge-queued`
 event and `merge_handoff` intent put the project in `landing` **before** the
 queue write/start. A crash after the report or intent can resume through the
-inactive runner's routing-only continuation. An existing queue row prevents a
+runner's routing-only continuation. An existing queue row prevents a
 second enqueue; corrupt queue content is not interpreted as empty. Refused
 admission produces `merge-refused`, `plan_pending` and no new job.
 
@@ -115,8 +115,8 @@ the routing continuation of a direct round. It writes `merge-landed` and
 `landing` facts. Execution is done at that verified reviewed landing; there is
 no confirmation phase. Deferred after-integration checks remain measured follow-ups
 until their latest revision/SHA-bound observations pass; they do not block their own merge. Existing v2 archive guards refuse the legacy
-auto-archive path even after landing; autonomous archive/activation remains
-future operations work. No live programme is activated here.
+auto-archive path even after landing; autonomous archive remains
+future operations work.
 
 ## Verification
 

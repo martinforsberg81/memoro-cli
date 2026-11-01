@@ -1,4 +1,4 @@
-# Autonomous finish and publication (inactive)
+# Autonomous finish and publication
 
 V2's goal step uses `mc goal finish <programme>/<goal>
 --expected-revision <n> --input-file <json>`, not ordinary `mc publish`.
@@ -88,4 +88,4 @@ Publication cannot clear the marker or authorize merge by itself.
 `tests/mc/autonomous-publish.test.js` uses real temporary repositories/bare
 remotes and stubbed GitHub, with synthetic completed execution observations for
 receipt-reader tests. It does not make hosted model/provider calls or claim a
-live autonomous programme has run. Normal execution remains disabled.
+live autonomous programme has run.

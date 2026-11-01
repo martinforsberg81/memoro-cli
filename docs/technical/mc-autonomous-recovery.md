@@ -1,7 +1,7 @@
-# Autonomous continuation and recovery (inactive)
+# Autonomous continuation and recovery
 
 The injected v2 runner reconciles a published build or abandoned independent
-review before releasing its owner. No production capability is enabled. Build
+review before releasing its owner. Build
 recovery does not launch review or queue merge; a recovered clean review uses
 the existing guarded outcome route. V1's step selection, failed-to-person and archive behavior remain
 separate. V2 cannot enter the legacy project archive, even when a legacy register

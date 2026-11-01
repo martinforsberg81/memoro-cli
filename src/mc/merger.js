@@ -248,7 +248,7 @@ export function queueMerge({
     const binding = { report_id: autonomous.review_id, report_digest: autonomous.review_digest,
       goal_revision: autonomous.goal_revision,
       head: autonomous.head, branch: autonomous.branch, pr: autonomous.pr };
-    // Intent precedes queue persistence/start; the inactive runner recovers this gap.
+    // Intent precedes queue persistence/start; the runner recovers this gap.
     recordAutonomousMergeEvent(root, identity.owner.programme, identity.owner.project,
       { binding, type: 'merge-queued', ticket: autonomous });
   }

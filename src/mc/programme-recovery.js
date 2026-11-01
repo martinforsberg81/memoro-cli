@@ -1,4 +1,4 @@
-/** Inactive recovery policy and shared main incidents. All *Locked writers run
+/** Recovery policy and shared main incidents. All *Locked writers run
  * inside autonomous-state's programme + strict root register transaction. */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';

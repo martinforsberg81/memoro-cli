@@ -1,4 +1,4 @@
-/** Inactive dynamic step dispatcher. Only createRunner's injected capability
+/** Dynamic step dispatcher. Only createRunner's injected capability
  * admits v2. A process exit is not publication, continuation or completion. */
 import { mainIncidentHold, mainRepairPreflight, readProgrammeIncidents } from './programme-recovery.js';
 import { captureWorktree } from './session-gate-evidence.js';

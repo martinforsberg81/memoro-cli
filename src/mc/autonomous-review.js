@@ -1,4 +1,4 @@
-/** Independent review lifecycle. Only the inactive runner seam calls this. */
+/** Independent review lifecycle. Only the runner seam calls this. */
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';

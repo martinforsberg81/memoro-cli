@@ -27,6 +27,10 @@ edit you want measured before you call. A red or interrupted measurement is not 
 failure; it withholds progress and nothing more.
 Do not use legacy `mc step done`, fixed-step publication or project completion.
 
+Finish is refused until control says finish-session: the runner says so when
+every premerge criterion has been measured, or at a session bound. So measure
+each one with `criterion` as soon as its check should pass.
+
 To finish, call `mc goal finish <programme>/<goal>
 --expected-revision <n> --input-file <json>`. The input has exactly
 `goal_revision`, `message` (commit message), `title`, `body` (PR description)

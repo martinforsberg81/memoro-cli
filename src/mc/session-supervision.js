@@ -1,4 +1,4 @@
-/** Explicit, inactive autonomous stream boundary. No v1 caller supplies it.
+/** Explicit autonomous stream boundary. No v1 caller supplies it.
  * Persistent checkpoint commands are the only control delivery on both paths. */
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';

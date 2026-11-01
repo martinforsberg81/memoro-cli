@@ -1,6 +1,6 @@
 # Bounded autonomous session handoffs
 
-`src/mc/session-handoff.js` is an **inactive v2 runner seam**, not a launch or
+`src/mc/session-handoff.js` is a **v2 runner seam**, not a launch or
 publication command. No existing v1 prompt, register, gate selection, lane,
 provider transport or execution-enabled flag changes.
 

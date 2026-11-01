@@ -8,17 +8,20 @@ operator-control support.
 ## Planner availability
 
 The durable planner event queue and operation journal serve recovery and queue
-consumption. The headless consumer runs only behind its injected runner
-capability, and the installed runner passes none, so no planner process is
-launched. `mc programme status` reports planner unavailability and leaves pending
-events visible; it does not imply that the runner will process them. Production
-autonomous execution remains disabled.
+consumption. `mc run` carries the production capability
+([dispatch](mc-autonomous-run.md)), whose headless consumer claims a programme's
+pending events only with autonomy on. With autonomy off no planner process is
+launched and `mc programme status` leaves pending events visible for the
+foreground planner. A sent goal needs neither: it builds, is reviewed and lands
+with autonomy off.
 
 `mc programme autonomy <programme> on|off` records the operator's preference;
 `on --stop "<condition>"` adds a stop condition in prose for the planner, and
-each `on` states the whole preference. Autonomy on does not create a planner
-consumer, enable autonomous execution or launch an agent, and it refuses when
-required capabilities are missing. Off needs no capability. Headless sessions
+each `on` states the whole preference. Autonomy on launches no agent itself: it
+allows the runner's next planner claim, and it refuses until each catalog tool has
+been observed at its installed version
+([provider observations](mc-session-observation.md#provider-observations)).
+Off needs no capability. Headless sessions
 cannot change the preference.
 
 Autonomy controls only new headless planner claims. Off grants no next lease,

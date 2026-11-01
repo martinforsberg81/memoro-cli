@@ -1,4 +1,4 @@
-/** Inactive trusted continuation: review reports are input, not merge commands. */
+/** Trusted continuation: review reports are input, not merge commands. */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';

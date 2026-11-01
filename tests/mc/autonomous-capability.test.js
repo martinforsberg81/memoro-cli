@@ -9,11 +9,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { DEFAULT_CONTROL_PROFILE, productionAutonomy } from '../../src/mc/autonomous-capability.js';
 import { projectSessionCheckpoint, readAutonomousState } from '../../src/mc/autonomous-state.js';
 import { runLoop } from '../../src/mc/run.js';
+import { installationCapabilities } from '../../src/mc/programme-control.js';
 import { groupAlive } from '../../src/mc/session-recovery.js';
 import { validateControlProfile } from '../../src/mc/session-control.js';
 import { streamAutonomousSession } from '../../src/mc/session-supervision.js';
 import { createRunner } from '../../src/mc/run.js';
-import { programmeWorld, git, COMPLETION, PROFILE, PROGRAMME, PROJECT, CRITERIA } from './autonomy-lifecycle-fixture.js';
+import { programmeWorld, git, cleanReview, COMPLETION, PROFILE, PROGRAMME, PROJECT, CRITERIA } from './autonomy-lifecycle-fixture.js';
 import { runnerFixture, completed } from './autonomous-run-fixture.js';
 
 const MINUTE = 60_000;
@@ -98,6 +99,42 @@ test('runLoop with an injected capability starts a scripted goal build', async t
   assert.deepEqual(w.builds[0].measured, ['first']);
   assert.equal(w.builds[0].project, PROJECT);
   assert.equal(w.scripts.step.length, 0);
+});
+
+test('a sent goal with no support builds, is reviewed and lands through runLoop on the production capability', async t => {
+  const w = programmeWorld(t);
+  // Production's own object. Only what a temporary repository cannot do replaces it: the
+  // session gate and GitHub's publication. The clock reads where the scripted sessions start.
+  const production = productionAutonomy({ root: w.root, env: w.env, deps: { ...w.deps, awakeClock: { ...awakeClock, read: () => 1, now: () => 1000 } } });
+  const deps = { ...w.deps, productionAutonomy: () => ({ ...production, fixture: true, gate: w.capability.gate, publication: w.publication }) };
+  const round = () => runLoop({ once: true, deps });
+  const [criterion] = CRITERIA;
+  const report = installationCapabilities({ root: w.root, env: w.env, awakeClock, catalog: w.deps.catalog,
+    launch: tool => ({ ok: true, spec: { bin: tool } }), toolVersion: () => '1.0.0' });
+  assert.deepEqual(report.supported, [], 'nothing observed on this installation');
+
+  await w.open(PROJECT, { success_criteria: [criterion] });
+  assert.equal(w.programme().autonomy?.enabled ?? false, false);
+  w.build({ criteria: ['first'], files: { 'first.js': 'export const first = 1;\n' }, outcome: 'review-ready' });
+  assert.equal(await round(), 0);
+  assert.equal(w.state().phase, 'review_ready', w.state().attempts[0]?.reason);
+  assert.deepEqual(w.state().session_control.profile, production.profile, 'the build ran under the production profile');
+  assert.equal(w.builds[0].control.reason, 'criteria-complete', 'far below the soft bound, the measured goal may finish');
+
+  w.review(cleanReview([criterion]));
+  assert.equal(await round(), 0);
+  assert.equal(w.state().phase, 'landing');
+  const head = w.hub.head(PROJECT);
+
+  const outcome = await w.land();
+  assert.equal(outcome.landed, true, JSON.stringify(outcome.report));
+  assert.equal(w.state().phase, 'landed');
+  assert.deepEqual(w.hub.merges.map(item => item.head), [head]);
+  assert.equal(w.show('main', 'first.js'), 'export const first = 1;');
+
+  assert.equal(await round(), 0);
+  assert.equal(w.programme().planner_jobs?.lease ?? null, null, 'with autonomy off no headless planner claims the landing');
+  assert.deepEqual([w.builds.length, w.reviews.length, w.legacy.length], [1, 1, 0]);
 });
 
 // Budgets that no simulated awake time can reach: the check's own limit is what these tests measure.

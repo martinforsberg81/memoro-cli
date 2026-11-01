@@ -551,7 +551,7 @@ export function createAutonomousDraft(root, programme, project, input, { actor, 
     }, deps);
   }, deps);
 }
-/** Trusted runner seam; execution remains disabled and this launches nothing. */
+/** Trusted runner seam; this launches nothing. */
 export function reserveProjectRun(root, programme, project, actor, revision, deps = {}) {
   actorCheck(actor);
   if (!['plan', 'step', 'review'].includes(actor.role)) throw new Error('project runs belong to plan, step or review');
@@ -736,7 +736,7 @@ export function saveAutonomousPublication(root, programme, project, { actor, rev
   }, deps);
 }
 
-// Inactive trusted runner seams. No CLI operation accepts profiles, clocks or
+// Trusted runner seams. No CLI operation accepts profiles, clocks or
 // measured progress. Keep control and project ownership in one atomic record.
 function controlBinding(state, actor) {
   return { programme_id: state.contract.programme.id,
@@ -761,7 +761,8 @@ export function startProjectSessionControl(root, programme, project, { actor, re
 export function observeProjectSessionControl(root, programme, project, { actor, revision, observation, ...deps }) {
   return locked(root, programme, project, paths => {
     const state = projectState(paths); expected(state, revision);
-    const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation));
+    const criteria = state.contract.success_criteria.filter(item => item.verification === 'premerge').map(item => item.id);
+    const session_control = decideSessionControl(ownedControl(state, actor), controlObservation(state, observation), { criteria });
     return save(paths.project, state, { ...state, session_control }, deps);
   }, deps);
 }

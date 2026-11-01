@@ -1,4 +1,4 @@
-# Revisioned autonomous data (inactive)
+# Revisioned autonomous data
 
 This is the persistence layer for explicitly opted-in v2 goals. It does not
 launch sessions, enable execution, publish code or queue a merge. The
@@ -13,7 +13,8 @@ work root. The ruling-60 format uses `mc-programme-state` **version 2** with
 `metadata: {id, brief}`, a mutation `revision`, reserved planner ownership and
 append-only run/metadata history. There is no programme approval schema or
 approved-revision authority. Its optional durable planner outbox retains events,
-leases and operation receipts. `execution_enabled` remains false.
+leases and operation receipts. `execution_enabled` remains false; no dispatch
+reads it.
 
 Each goal has `AUTONOMOUS_STATE.json` (`mc-autonomous-state`, **version 2**).
 Its explicit v2 `mc-plan` assignment has `programme: {id}`, `work_class`
@@ -66,8 +67,7 @@ cannot stale exact publication/review evidence. Exact content, head, base,
 report digest and independent-model checks remain required at every merge.
 
 Autonomy off disables only new headless planner claims. Sent goals continue
-build, review and merge. The installed runner still has no autonomous
-capability, so this cutover activates nothing. Execution completes at a verified
+build, review and merge. Execution completes at a verified
 reviewed landing on main. Follow-up measurements stay in append-only
 `follow_up_observations`, separate from builder/review evidence; `confirmed` is
 not an execution phase. Obsolete entry-point removal is a subsequent project step.
@@ -95,6 +95,5 @@ They enforce exclusivity and stable unique run IDs under lock. Commands use a
 supplied runner context (`actor`) or `MC_AUTONOMOUS_RUN`/`MC_AUTONOMOUS_ROLE`,
 which must exactly match the stored reservation; there is no `--role` override.
 This is process ownership checking within mc's existing trusted work-root
-boundary, not a new OS security principal or credential mechanism. The future
-runner must reserve before invoking a role. This step adds no production
-reservation caller and cannot activate autonomous work.
+boundary, not a new OS security principal or credential mechanism. The runner
+reserves before invoking a role.

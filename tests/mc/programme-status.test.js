@@ -116,7 +116,7 @@ test('autonomy on requires supported capabilities, a current revision and the op
 
   assert.equal(await f.start(), 0, f.err());
   const reply = JSON.parse(f.out());
-  assert.equal(reply.mode, 'active'); assert.match(reply.next_action, /^planner unavailable — 1 pending event awaits headless queue consumption$/u);
+  assert.equal(reply.mode, 'active'); assert.match(reply.next_action, /^1 pending event awaits the runner's headless planner$/u);
   const state = f.read(); const journal = state.planner_jobs;
   assert.deepEqual(state.autonomy, { enabled: true, stop: 'design-review', by: 'Martin', at: '2026-10-29T12:00:00.000Z' });
   assert.equal(journal.events[0].type, 'activation'); assert.deepEqual(journal.pending.event_ids, [journal.activation.id]);
@@ -155,7 +155,7 @@ test('status shows the active goal, builder criteria, review findings, actual mo
   assert.equal(goal.evidence.quality, 'review findings for plan');
   assert.deepEqual(goal.review.findings, ['Pause can lose a queued merge.']); assert.equal(goal.review.current, true);
   assert.equal(goal.models.reviewer_actual, 'claude:opus');
-  assert.equal(goal.next_action, 'planner unavailable — no headless queue consumer is wired here');
+  assert.equal(goal.next_action, 'plan decides next');
   assert.equal(status.plan.owner, 'plan'); assert.equal(status.plan.pending_events, 1);
   text = renderProgrammeStatus(status);
   assert.match(text, /review {5}1 finding — Pause can lose a queued merge\./u);
@@ -183,10 +183,10 @@ test('with autonomy on the events row names the headless planner as the next act
   const f = fixture(t);
   assert.equal(await f.start(), 0, f.err());
   assert.equal(await f.cli(['status', f.programme]), 0, f.err());
-  assert.match(f.out(), /^ {2}events {6}1 pending · oldest 0m — activation 0m · next actor: headless planner — queued; no consumer is installed here$/mu);
+  assert.match(f.out(), /^ {2}events {6}1 pending · oldest 0m — activation 0m · next actor: headless planner — queued for the runner$/mu);
 });
 
-test('a pending goal names its merge route or dependency before the unavailable planner', t => {
+test('a pending goal names its merge route or dependency before plan', t => {
   const f = fixture(t);
   f.release(); f.building(); f.reviewed({ clean: true });
   const next = () => programmeStatus(f.root, f.programme, { capabilities: supported }).goals[0].next_action;
@@ -215,7 +215,7 @@ test('a revised goal ignores older evidence and a claimed planner is visible as 
   assert.equal(goal.evidence.gate, 'none recorded');
   claimProgrammeJob(f.options({ actor: { run_id: 'job-plan-1', role: 'plan' }, pid: process.pid, now: NOW }));
   const status = programmeStatus(f.root, f.programme, { capabilities: supported });
-  assert.equal(status.next_action, 'planner unavailable — lease job-plan-1 requires recovery');
+  assert.equal(status.next_action, 'headless planner job-plan-1 holds the lease');
   assert.match(status.in_flight[0], /^plan job-plan-1 \(lease until 2026-10-29T12:05:00\.000Z\)$/u);
   goal = status.goals[0];
   assert.equal(goal.programme_phase, 1); assert.equal(goal.work_class, 'fast');

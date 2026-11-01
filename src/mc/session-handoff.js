@@ -188,7 +188,7 @@ function predecessorContext(dir, runId, context, history) {
     programme: context.programme };
 }
 
-/** Trusted, inactive runner seam. Publication observations come from Git and the
+/** Trusted runner seam. Publication observations come from Git and the
  * existing receipt reader, never fields supplied by the model. Callers must own
  * the reserved run and supply process completion, independently observed remote
  * HEAD and PR identity.
