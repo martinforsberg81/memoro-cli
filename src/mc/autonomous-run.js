@@ -1,6 +1,6 @@
 /** Dynamic step dispatcher. Only createRunner's injected capability
  * admits v2. A process exit is not publication, continuation or completion. */
-import { mainIncidentHold, mainRepairPreflight, readProgrammeIncidents } from './programme-recovery.js';
+import { mainIncidentHold, mainRepairPreflight, readProgrammeIncidents, recoveryCarriesTree } from './programme-recovery.js';
 import { captureWorktree } from './session-gate-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -152,7 +152,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const previous = reconcilePreviousSession(sessionGitDir(worktree));
     if (!previous.ok) throw new Error(`recovery required: ${previous.reason}`);
     if (git(['branch', '--show-current']) !== branch) throw new Error('checkout does not match the owned branch');
-    if (git(['status', '--porcelain'])) throw new Error('unfinished tree requires deliberate recovery');
+    if (git(['status', '--porcelain']) && !recoveryCarriesTree(state)) throw new Error('unfinished tree requires deliberate recovery');
     const agreement = readProgrammeState(root, programme).metadata;
     let previousHandoff = null;
     let previousRunId = null;

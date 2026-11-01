@@ -40,6 +40,8 @@ attempt list. Resuming a failed goal requires a current retry diagnosis; an
 already unsuccessful approach is refused. Three consecutive incomplete attempts
 without another verified criterion retain a `no-progress` exception. Neither a
 new run, new commits, a goal revision nor restarting plan resets that count.
+A current retry diagnosis of every attempt also lets the next build start on the
+uncommitted tree those attempts left; without one that tree is refused.
 Verified criterion IDs, not output volume or repeated evidence IDs, define
 progress. Exception handling stays with plan, never an invented design stop.
 

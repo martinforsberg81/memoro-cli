@@ -27,6 +27,9 @@ edit you want measured before you call. A red or interrupted measurement is not 
 failure; it withholds progress and nothing more.
 Do not use legacy `mc step done`, fixed-step publication or project completion.
 
+Uncommitted files at the start of a session are the earlier attempt's work, kept
+for you by a planner's diagnosis: read them and continue rather than start over.
+
 Finish is refused until control says finish-session: the runner says so when
 every premerge criterion has been measured, or at a session bound. So measure
 each one with `criterion` as soon as its check should pass.
@@ -35,9 +38,11 @@ To finish, call `mc goal finish <programme>/<goal>
 --expected-revision <n> --input-file <json>`. The input has exactly
 `goal_revision`, `message` (commit message), `title`, `body` (PR description)
 and `result` (the bounded mc-session-result). Leave its handoff's
-`published_sha` null: mc observes and fills it. Handoff criterion references
-must match current verified builder progress. Finish runs the complete relevant
-gate, commits that content and publishes without queueing merge. A failed finish
+`published_sha` null: mc observes and fills it. A handoff may name only criteria
+the runner has measured passing: ask with `mc session-control criterion`, and the
+measurement is recorded as evidence by itself. Each handoff item's `reference`
+is that record's exact `reference`, read from `evidence.builder` in `mc goal show`,
+because the handoff is checked against it. Finish runs the complete relevant gate, commits that content and publishes without queueing merge. A failed finish
 retains ownership; fix the cause and retry the identical input with the current
 state revision. After `pr_resolved`, exit: only the runner can record normal
 handoff after your process and tools have settled.

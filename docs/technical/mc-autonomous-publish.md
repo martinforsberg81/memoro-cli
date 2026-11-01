@@ -18,7 +18,11 @@ Builder reports are not independent review or plan confirmation.
 
 The operation requires the active **step** owner, the sent current assignment,
 the owned checkout branch and session control in `closing`. Time/context close
-requests do not relax verification. A worktree claim serializes competing finish
+requests do not relax verification. Finish waits for its gate's verdict, past
+`mc gate`'s 540 s answer budget, and while it does neither the closing window nor a
+tool wait stops the session; the gate's own bound and total awake time still do.
+A runner measurement that passes is recorded in `evidence.builder`, and a handoff
+copies that record's exact reference. A worktree claim serializes competing finish
 calls; the durable project owner remains reserved through every phase.
 
 The project's `publication` record pins the run and goal revision,

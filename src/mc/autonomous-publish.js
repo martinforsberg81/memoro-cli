@@ -16,6 +16,9 @@ import { PLAN_FILE } from './plan-source.js';
 import { run as gateCommand, publicationGateSelection } from './commands/gate.js';
 import { run as publishCommand } from './commands/publish.js';
 
+/** Seconds finish waits for its answer: past `mc gate`'s default 540 a wide
+ * selection answers RUNNING, which is no verdict. The gate bounds itself. */
+const FINISH_GATE_BUDGET = '10800';
 const git = (cwd, args) => sessionGit(cwd, args).trim();
 const read = options => readAutonomousState(options.root, options.programme, options.project);
 function owned(options) {
@@ -97,7 +100,7 @@ export async function finishAutonomousPublication(options, input, deps = {}) {
       phase: 'started', input }, deps);
     if (publication.phase === 'started') {
       let output = '';
-      const status = await (deps.gate || gateCommand)(['--json'], { cwd: options.cwd, env: options.env,
+      const status = await (deps.gate || gateCommand)(['--json', '--budget', FINISH_GATE_BUDGET], { cwd: options.cwd, env: options.env,
         stdout: { write: text => { output += text; } }, stderr: deps.stderr || process.stderr,
         measurementBinding: { session_run: options.actor.run_id, goal_revision: initial.goal_revision } });
       if (status !== 0) throw new Error('relevant session gate did not complete green');

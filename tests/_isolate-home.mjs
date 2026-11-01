@@ -27,6 +27,10 @@ import { join } from 'node:path';
 // of its own and removes it on exit, so a suite's leftovers go with it.
 // Created first, so the two homes below land inside it as well.
 const tmpRoot = mkdtempSync(join(tmpdir(), 'mc-test-tmp-'));
+// A gate started by an autonomous session runs its tests inside that session's
+// environment. The session's identity is not the suite's: the verbs read it
+// from process.env, and a fixture planning a goal would be refused as a step.
+for (const name of ['MC_AUTONOMOUS_RUN', 'MC_AUTONOMOUS_ROLE', 'MC_PROGRAMME', 'MC_PROJECT']) delete process.env[name];
 process.env.TMPDIR = tmpRoot;
 process.once('exit', () => rmSync(tmpRoot, { recursive: true, force: true }));
 

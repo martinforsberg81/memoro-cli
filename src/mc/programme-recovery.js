@@ -33,6 +33,13 @@ export function projectRecovery(state) {
     exception: no_progress >= RECOVERY_ATTEMPT_LIMIT ? { code: 'no-progress', reason: `${no_progress} incomplete attempts without a new verified criterion`, reference: 'attempts' } : null,
     latest_diagnosis: state.recovery_diagnoses?.at(-1) || null };
 }
+/** An incomplete attempt leaves its work uncommitted. A planner's current retry
+ * diagnosis of every attempt is the deliberate decision to continue on that tree. */
+export function recoveryCarriesTree(state) {
+  const { attempt_ids, latest_diagnosis: diagnosis } = projectRecovery(state);
+  return attempt_ids.length > 0 && diagnosis?.action === 'retry' && diagnosis.goal_revision === state.goal_revision
+    && isDeepStrictEqual(diagnosis.attempt_ids, attempt_ids);
+}
 export function assertProjectRecovery(state) {
   const report = state.review_reports?.at(-1);
   if (report && !report.clean && report.session.assignment.goal_revision === state.goal_revision) throw new Error('review findings require a planner revision or a new goal, never direct build');
