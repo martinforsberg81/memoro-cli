@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { readAutonomousState } from '../../src/mc/autonomous-state.js';
+import { autonomousPaths, readAutonomousState } from '../../src/mc/autonomous-state.js';
 import { run as sessionControl } from '../../src/mc/commands/session-control.js';
 import { CONTROL_CAPABILITIES, installationCapabilities, missingCapabilities, programmeAutonomyOn } from '../../src/mc/programme-control.js';
 import { capabilityReport } from '../../src/mc/programme-status.js';
@@ -120,13 +120,14 @@ test('gaps name the tool, version and observation lacking; a new version has non
   const tools = [{ tool: 'claude', version: '2.0.0' }, { tool: 'codex', version: null }];
   assert.deepEqual(observationGaps('build', tools, [observation('claude', '1.0.0', 'step', 'session')]),
     ['claude 2.0.0: a step session not observed', 'codex (version unknown): a step session not observed']);
-  assert.deepEqual(observationGaps('review', [tools[0]], [observation('claude', '2.0.0', 'step', 'session')]), ['claude 2.0.0: a review session not observed']);
+  assert.deepEqual(observationGaps('review', [{ ...tools[0], reviewer: true }], [observation('claude', '2.0.0', 'step', 'session')]), ['claude 2.0.0: a review session not observed']);
+  assert.deepEqual(observationGaps('review', [tools[0]], []), [], 'a tool that cannot review owes no review');
   assert.deepEqual(observationGaps('programme-plan', [tools[0]], [observation('claude', '2.0.0', 'review', 'session')]), [], 'the same transport and process path');
   assert.deepEqual(observationGaps('interrupt', [tools[0]], [observation('claude', '2.0.0', 'step', 'interrupt')]), []);
   assert.deepEqual(observationGaps('control-signals', [tools[0]], []), ['claude 2.0.0: a control not observed']);
 });
 
-test('support needs every observation for every catalog tool at its installed version, and autonomy on follows it', t => {
+test('support needs the observations each capability owes at its installed version, and autonomy on follows it', t => {
   const root = scratch(t);
   const deps = installation(root);
   let report = installationCapabilities(deps);
@@ -136,10 +137,12 @@ test('support needs every observation for every catalog tool at its installed ve
   assert.deepEqual(report.transport.map(item => item.tool), ['codex', 'claude']);
   assert.throws(() => programmeAutonomyOn({ root, programme: 'x', revision: 0, by: 'Martin', deps }), /not activated in this installation — missing programme-jobs/u);
 
-  recordObservations(root, FULL({ claude: '2.0.0', codex: '1.0.0' }).filter(item => !(item.tool === 'codex' && item.signal === 'interrupt')));
+  // Codex neither interrupted nor reviewed: review owes only claude, the rest still owe codex.
+  recordObservations(root, FULL({ claude: '2.0.0', codex: '1.0.0' }).filter(item => !(item.tool === 'codex' && (item.signal === 'interrupt' || item.role === 'review'))));
   report = installationCapabilities(deps);
   assert.deepEqual(missingCapabilities(report), ['interrupt']);
   assert.equal(report.capabilities.find(item => item.name === 'build').missing, undefined);
+  assert.equal(report.capabilities.find(item => item.name === 'review').missing, undefined);
   assert.equal(report.capabilities.find(item => item.name === 'interrupt').missing, 'codex 1.0.0: an interrupt not observed');
 
   recordObservations(root, FULL({ claude: '2.0.0', codex: '1.0.0' }));
@@ -151,6 +154,43 @@ test('support needs every observation for every catalog tool at its installed ve
   assert.match(installationCapabilities(upgraded).capabilities[0].missing, /claude 2\.0\.1: a session not observed/u);
 });
 
+test('review support needs only the tools that can review', async t => {
+  const reported = (name, deps) => capabilityReport(deps).capabilities.find(item => item.name === name);
+  const claude = [observation('claude', '2.0.0', 'step', 'session'), observation('claude', '2.0.0', 'review', 'session'),
+    observation('claude', '2.0.0', 'step', 'control'), observation('claude', '2.0.0', 'step', 'interrupt')];
+
+  // The default catalog reviews with claude; no codex review is owed.
+  const root = scratch(t);
+  recordObservations(root, claude);
+  const deps = installation(root);
+  assert.equal(capabilityReport(deps).missing.includes('review'), false, 'a claude review at 2.0.0 is review support');
+  assert.equal(reported('review', deps).missing, undefined);
+  for (const name of ['build', 'control-signals', 'interrupt']) assert.match(reported(name, deps).missing, /codex 1\.0\.0/u, name);
+
+  // A missing claude review is a gap, whatever codex shows.
+  const bare = scratch(t);
+  recordObservations(bare, claude.filter(item => item.role !== 'review'));
+  assert.match(reported('review', installation(bare)).missing, /claude 2\.0\.0: a review session not observed/u);
+  assert.equal(capabilityReport(installation(bare)).missing.includes('review'), true);
+
+  // A goal that has not landed and reserved codex as reviewer brings the codex review gap back.
+  const w = programmeWorld(t);
+  await w.open(PROJECT, { success_criteria: [CRITERIA[0]] });
+  recordObservations(w.root, claude);
+  const paths = autonomousPaths(w.root, PROGRAMME, PROJECT);
+  const reserve = (reviewer_model, phase) => {
+    const state = JSON.parse(readFileSync(paths.project, 'utf8'));
+    writeFileSync(paths.project, JSON.stringify({ ...state, reviewer_model, phase }));
+  };
+  reserve({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, 'ready');
+  const reserved = installation(w.root);
+  assert.equal(capabilityReport(reserved).missing.includes('review'), true);
+  assert.match(reported('review', reserved).missing, /codex 1\.0\.0: a review session not observed/u);
+
+  reserve({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, 'landed');
+  assert.equal(capabilityReport(installation(w.root)).missing.includes('review'), false, 'a landed goal reserves nothing');
+});
+
 test('support needs the capability built here, and anything unreadable supports nothing', t => {
   const root = scratch(t);
   recordObservations(root, FULL({ claude: '2.0.0', codex: '1.0.0' }));
@@ -158,8 +198,9 @@ test('support needs the capability built here, and anything unreadable supports 
   assert.deepEqual(noClock.supported, []);
   assert.match(noClock.capabilities[0].missing, /awake clock: not Darwin/u);
 
+  // Codex with no version blocks every capability that owes it, but review owes only claude.
   const noVersion = installationCapabilities(installation(root, { claude: '2.0.0' }));
-  assert.deepEqual(noVersion.supported, []);
+  assert.deepEqual(noVersion.supported, ['review']);
   assert.match(noVersion.capabilities[0].missing, /codex \(version unknown\)/u);
 
   const noLaunch = installationCapabilities(installation(root, undefined, { launch: () => ({ ok: false, reason: 'missing-bin' }) }));
@@ -171,6 +212,16 @@ test('support needs the capability built here, and anything unreadable supports 
 
   writeFileSync(observationsPath(root), 'not json');
   assert.deepEqual(installationCapabilities(installation(root)).supported, []);
+
+  // A goal state that cannot be read supports nothing, review included.
+  const damaged = scratch(t);
+  recordObservations(damaged, FULL({ claude: '2.0.0', codex: '1.0.0' }));
+  mkdirSync(join(damaged, 'programs', 'mc', 'goal-one'), { recursive: true });
+  writeFileSync(join(damaged, 'programs', 'mc', 'PROGRAMME_STATE.json'), '{}');
+  writeFileSync(join(damaged, 'programs', 'mc', 'goal-one', 'AUTONOMOUS_STATE.json'), 'not json');
+  const damagedReport = installationCapabilities(installation(damaged));
+  assert.deepEqual(damagedReport.supported, []);
+  assert.ok(damagedReport.capabilities.every(item => item.missing), 'every capability names the unreadable state');
 
   const injected = { supported: ['build'] };
   assert.equal(installationCapabilities({ capabilities: injected }), injected);

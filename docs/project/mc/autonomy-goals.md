@@ -251,8 +251,11 @@ of this programme once the verbs above exist:
    The pilot is a sent goal, which runs with autonomy off: there is no force
    path. Its real Claude and Codex sessions record observations per tool
    version, and those observations turn the capability report from *missing* to
-   *supported*. A new tool version has no support until observed again. Martin's
-   act; costs model usage.
+   *supported*. A new tool version has no support until observed again. Review
+   support owes an observation only from the tools that can review: catalog
+   `review`'s tool and any reserved reviewer of a goal that has not landed. The
+   other capabilities still owe one from every catalog tool. Martin's act; costs
+   model usage.
 6. **Profile calibration** from the pilot's measurements.
 7. **Credits.** The autonomous path requires subscription billing;
    `--billing credits` starts no goal session. A decision, then possibly a
