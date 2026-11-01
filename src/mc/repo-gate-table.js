@@ -144,16 +144,18 @@ export const SHIPPED = Object.freeze({
     // is always the whole suite" produce the same command and are not the
     // same claim, and only the first one is checkable.
     suite: 'npm test',
-    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=300000 '
+    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=60000 '
       + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flags its own `test` script gives node, stated rather than parsed.
     // The per-test ceiling is a ratchet (Martin, 2026-11-01: a test over one
-    // second is misbuilt and is rebuilt). 300 s is green today — the slowest
-    // test measured 151 s alone, ~380 git processes — and every change that
-    // rebuilds a file lowers it, until it reads 1000.
-    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=300000']),
+    // second is misbuilt and is rebuilt). It started at 300 s on 2026-11-01,
+    // when the slowest test measured 151 s alone (~380 git processes); the
+    // autonomy tests went the same day and the slowest left is branch-landed
+    // at 29 s, so 60 s. Every change that rebuilds a file lowers it, until it
+    // reads 1000.
+    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=60000']),
     // Martin, 2026-11-01: a memoro-cli merge may take 120 s, however loaded the
     // machine. The round runs what fits by measured cost; the rest is deferred.
     round_seconds: 120,

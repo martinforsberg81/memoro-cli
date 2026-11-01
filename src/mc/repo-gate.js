@@ -49,7 +49,7 @@
  * (one per file per week). A change that touches one of them is red as before,
  * and so is any red the probe does not call main's.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -2175,13 +2175,17 @@ export function suiteEnv(env) {
   return clean;
 }
 
-/** The toolchain's own git, once per process: asking again is a spawn per suite. */
+/**
+ * The toolchain's own git, once per process. Read from the two places Xcode
+ * puts a developer directory (and `DEVELOPER_DIR` when set), not asked of
+ * `xcode-select -p`: the merger's path starts no synchronous child
+ * (child-async.test.js), and the answer is a path that exists or not.
+ */
 let developerGit;
-function toolchainGit() {
+function toolchainGit(env = process.env) {
   if (developerGit !== undefined) return developerGit;
-  const asked = spawnSync('xcode-select', ['-p'], { encoding: 'utf8', timeout: 5_000 });
-  const path = asked.status === 0 ? join(asked.stdout.trim(), 'usr/bin/git') : null;
-  developerGit = path && existsSync(path) ? path : null;
+  const roots = [env.DEVELOPER_DIR, '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'].filter(Boolean);
+  developerGit = roots.map((root) => join(root, 'usr/bin/git')).find((path) => existsSync(path)) ?? null;
   return developerGit;
 }
 
