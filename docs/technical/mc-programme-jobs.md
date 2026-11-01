@@ -1,9 +1,8 @@
-# Durable programme jobs (inactive)
+# Durable programme jobs
 
 `src/mc/programme-jobs.js` adds a planner outbox to the existing
 `PROGRAMME_STATE.json`, not another service or a replacement v1 register.
-Normal execution remains disabled. There is no production launcher or automatic
-activation. `mc programme autonomy on` ([programme operations](mc-programme-operations.md))
+`mc programme autonomy on` ([programme operations](mc-programme-operations.md))
 is the only door from `inactive`, and it refuses on an installation without every
 control capability. Opening `mc plan` is unchanged.
 
@@ -53,10 +52,9 @@ The optional, injected runner capability `autonomous.programmeJobs` enables this
 scan during `queue()` and returns pending programme IDs; without the capability
 the v1 queue and its return shape remain unchanged. A separate injected capability,
 `autonomous.programmePlan`, runs one session per returned ID through
-`runProgrammePlan` ([programme plan](mc-programme-plan.md)). The installed runner
-passes neither, so this installation reports the planner unavailable and the
-pending events and journal stay durable. The public planner envelope commands
-are removed.
+`runProgrammePlan` ([programme plan](mc-programme-plan.md)). `mc run` carries
+both. With autonomy off no ID is returned, and the pending events and journal
+stay durable. The public planner envelope commands are removed.
 
 ## Effects, not exactly-once processes
 
@@ -114,7 +112,7 @@ reconciliation. Existing atomic effects can still be acknowledged while held.
 A planner stop records a reference and reason. Its acknowledgement is
 idempotent and subsequent events remain visible. It holds new planner claims,
 not already sent goals; programme context is not an approval boundary.
-`execution_enabled` stays false throughout.
+The `execution_enabled` state field stays false; no dispatch reads it.
 
 ## Verification
 

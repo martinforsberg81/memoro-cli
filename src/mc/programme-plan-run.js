@@ -1,5 +1,5 @@
 /** Runner-owned plan workspace and the headless queue consumer. Capability
- * injection only: the installed runner passes none, so nothing launches here. */
+ * injection only: `mc run` passes it, and a claim needs programme autonomy on. */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';

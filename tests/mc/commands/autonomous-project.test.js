@@ -45,7 +45,7 @@ test('real CLI routes programme and ordinary goal commands without launching ses
     result = cli(['project', f.project, '--json', '--offline']);
     assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).goal_revision, 2);
     result = cli(['goal', 'send', `${f.programme}/${f.project}`, '--expected-revision', '2']);
-    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
+    assert.equal(result.status, 0, result.stderr); assert.equal('execution_enabled' in JSON.parse(result.stdout), false);
     const sentGoal = f.json(join(f.paths.projectDir, 'PLAN.json'));
     assert.equal(sentGoal.goal_revision, 2); assert.deepEqual(sentGoal.goal, ['Implement explicit contracts.']);
     assert.deepEqual(sentGoal.success_criteria.map(item => item.id), ['schema']);

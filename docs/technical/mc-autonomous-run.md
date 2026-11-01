@@ -1,8 +1,13 @@
-# Dynamic build dispatch (inactive)
+# Dynamic build dispatch
 
-`createRunner({ autonomous: capability })` is an **injected test seam**, not a
-configuration or CLI switch. Normal `mc run` supplies no capability, and
-`AUTONOMOUS_EXECUTION_ENABLED` stays false. No live programme is activated.
+`createRunner({ autonomous: capability })` is not a configuration or CLI switch.
+`runLoop` builds the capability once, when it merges, with `productionAutonomy`
+(`src/mc/autonomous-capability.js`): the awake clock, the control profile
+(`runner/control-profile.json`, or the default), the checkpoint verifier and
+conflict integration. It fails closed: a clock that cannot be read or an invalid
+profile means no capability, the reason is logged once and goals are skipped.
+`AUTONOMOUS_EXECUTION_ENABLED` and the state's `execution_enabled` stay false; no
+dispatch reads them.
 V1 projects retain their fixed-step picker, statuses, prompts and publication.
 
 ## Admission and shared resources
@@ -16,7 +21,7 @@ PR is allowed only when its number and head branch match durable ownership.
 The autonomous flavor uses the **step** role, not a repair role. It routes through
 the existing `fast` model class and capacity snapshot (including provider
 refusals and interactive reserve). It currently requires subscription billing;
-manual credits are not launched through this inactive seam. Both execution modes
+manual credits are not launched through this seam. Both execution modes
 use the runner's project claims, repository lanes, predecessor current files and
 machine-wide `waitForSlot`/`dropSlot` accounting. Gate selection and resource
 reservations remain those of `mc gate`; there is no new direct test runner.
@@ -41,9 +46,11 @@ its index, files and branch remain intact until recovery explicitly allows a
 fresh session. This dispatcher does not replay an old conversation.
 
 Fresh starts fetch/merge main using the runner's `syncMain`, without v1's theirs-only `.gitignore` shortcut. If conflicts remain,
-the injected capability must provide `integrateConflicts`, an integration-only
-step operation on the same reserved run (not a repair agent). It receives the
-bounded assignment and autonomous step instructions. The dispatcher verifies
+the capability must provide `integrateConflicts`, an integration-only step
+operation on the same reserved run (not a repair agent). The production one
+(`src/mc/autonomous-capability.js`) is one supervised headless session on the
+build's launch path, with the bounded assignment, the conflict list and the
+autonomous step instructions; a non-normal exit stops the attempt. The dispatcher verifies
 conflict resolution, merge completion, branch identity and main ancestry before
 checking the starting gate and launching implementation. Missing/unfinished
 integration preserves the merge and records an incomplete attempt for plan.

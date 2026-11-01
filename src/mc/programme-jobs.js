@@ -1,4 +1,4 @@
-/** Durable, inactive planner outbox. Delivery can repeat; effects have receipts.
+/** Durable planner outbox. Delivery can repeat; effects have receipts.
  * Lease reservation stays runner-owned; guarded plan decisions use this journal. */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -333,8 +333,8 @@ export function acknowledgeProgrammeEvents(options, input) {
   });
 }
 
-/** Opt-in event reconciliation only. No headless planner queue consumer is
- * installed; V1 and normal (capability-less) runners never enter this path. */
+/** Opt-in event reconciliation only: V1 and capability-less runners never enter
+ * this path. */
 export function reconcileProgrammeQueue(root, { now = Date.now(), alive, say = () => {} } = {}) {
   const directory = join(root, PROGRAMS_HOME);
   if (!existsSync(directory)) return [];

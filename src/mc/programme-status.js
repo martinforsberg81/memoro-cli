@@ -74,7 +74,7 @@ function goalAction(root, state, holds) {
   try { route = reviewRoutePending(root, state); } catch { return 'unknown — merge queue unreadable'; }
   if (route) return 'submit the clean review for merge';
   if (state.dependency_release?.status === 'waiting') return `wait for ${state.plan_dependencies.map(item => item.project).join(', ')} to land`;
-  return 'planner unavailable — no headless queue consumer is wired here';
+  return 'plan decides next';
 }
 
 /** One autonomous goal. An unreadable state is reported, not skipped. */
@@ -150,7 +150,7 @@ function nextActor({ lease, pending, autonomy, mode }) {
   if (mode === 'waiting') return 'headless planner — after its wait';
   if (mode === 'stopped') return 'foreground planner — planned stop reached';
   if (mode === 'exception') return 'foreground planner — exception needs diagnosis';
-  return 'headless planner — queued; no consumer is installed here';
+  return 'headless planner — queued for the runner';
 }
 
 function programmeAction(status, journal) {
@@ -162,16 +162,16 @@ function programmeAction(status, journal) {
   if (mode === 'exception') return `none — exception ${journal.exception.code || ''}: ${journal.exception.reason}`.replace(' :', ':');
   if (mode === 'waiting') return journal.wait.until === null ? `wait for external ${journal.wait.reason}` : `retry after ${iso(journal.wait.until)} (${journal.wait.kind})`;
   if (!status.execution.supported) return 'planner unavailable — this installation cannot run autonomous work';
-  if (status.plan.lease) return `planner unavailable — lease ${status.plan.lease.run_id} requires recovery`;
-  if (status.plan.pending_events) return `planner unavailable — ${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'} ${status.plan.pending_events === 1 ? 'awaits' : 'await'} headless queue consumption`;
+  if (status.plan.lease) return `headless planner ${status.plan.lease.run_id} holds the lease`;
+  if (status.plan.pending_events) return `${status.plan.pending_events} pending event${status.plan.pending_events === 1 ? '' : 's'} ${status.plan.pending_events === 1 ? 'awaits' : 'await'} the runner's headless planner`;
   const goal = status.goals.find(item => !item.next_action.startsWith('none'));
-  return goal ? `${goal.project}: ${goal.next_action}` : 'planner unavailable — no headless queue consumer is wired here';
+  return goal ? `${goal.project}: ${goal.next_action}` : 'none — nothing pending for the headless planner';
 }
 
 /** Everything `mc programme status` says. `capabilities` defaults to what this
  * installation reports. Damaged programme state is reported as a problem. */
 export function programmeStatus(root, programme, deps = {}) {
-  const report = installationCapabilities(deps);
+  const report = installationCapabilities({ root, ...deps });
   const missing = missingCapabilities(report);
   const execution = { supported: !missing.length, missing, reason: missing.length ? report.reason || null : null };
   // No state file is no autonomous programme — a mistyped name or v1 only — never damage.
@@ -233,8 +233,10 @@ export function autonomySection({ root, deps = {} } = {}) {
   let names = [];
   try { names = listAutonomousProgrammes(root); } catch { return null; }
   if (!names.length) return null;
+  // Measured once: the report runs each tool's --version.
+  const capabilities = installationCapabilities({ root, ...deps });
   return { programmes: names.map(name => {
-    const status = programmeStatus(root, name, deps);
+    const status = programmeStatus(root, name, { ...deps, capabilities });
     return { programme: name, mode: status.mode, goals: status.goals.length, in_flight: status.in_flight.length,
       stop: status.autonomy?.stop || null, next_action: status.next_action, problem: status.problem || null };
   }) };

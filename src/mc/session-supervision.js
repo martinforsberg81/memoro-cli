@@ -1,4 +1,4 @@
-/** Explicit, inactive autonomous stream boundary. No v1 caller supplies it.
+/** Explicit autonomous stream boundary. No v1 caller supplies it.
  * Persistent checkpoint commands are the only control delivery on both paths. */
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
@@ -68,7 +68,7 @@ export async function streamAutonomousSession({ bin, args, cwd, env, unsetEnv = 
     return await new Promise((resolve) => {
       let control = initial; let child = null; let stopped = false; let settled = false;
       let closed = false; let exit = null; let exitSignal = null; let reason = null; let durable = true;
-      let timer = null; let escalation = null; let finalTimer = null;
+      let timer = null; let escalation = null; let finalTimer = null; let signalled = false;
       let fd = null; let output = ''; let errors = ''; let sequence = initial.observation.sequence;
       const decoder = new StringDecoder('utf8'); let partial = ''; let oversized = false;
       const cap = 1 << 20;
@@ -88,7 +88,7 @@ export async function streamAutonomousSession({ bin, args, cwd, env, unsetEnv = 
         if (!child?.pid) return;
         // Only this invocation's freshly spawned process group, never a pid
         // discovered in a previous manifest or transport event.
-        try { process.kill(-child.pid, name); } catch (error) { if (error.code !== 'ESRCH') errors += `\n${name}: ${error.code}`; }
+        try { process.kill(-child.pid, name); signalled = true; } catch (error) { if (error.code !== 'ESRCH') errors += `\n${name}: ${error.code}`; }
       };
       const finish = () => {
         if (settled) return;
@@ -129,7 +129,7 @@ export async function streamAutonomousSession({ bin, args, cwd, env, unsetEnv = 
         resolve({ ...processResult, status: normal && recovery.ok ? 0 : (processResult.status || 1),
           normal_exit: normal && recovery.ok, interrupted: !normal || !recovery.ok,
           recovery_ready: recovery.ok, recovery, control_persisted: durable, stdout: output, stderr: errors,
-          control: controlResponse(control), timedOut: stopped, stalled: false, lingered: false });
+          control: controlResponse(control), timedOut: stopped, signalled, stalled: false, lingered: false });
       };
       const stop = why => {
         if (stopped || settled) return;

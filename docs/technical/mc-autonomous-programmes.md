@@ -16,9 +16,8 @@ remain separate follow-ups.
 
 The public planner envelope commands are removed. Durable programme event
 queues, operation journals, locks, retry receipts and recovery records remain
-for crash consistency and future queue consumption. Until that consumer is
-implemented, the runner does not launch a headless planner and programme status
-reports it unavailable. Production autonomous execution remains disabled.
+for crash consistency and headless queue consumption, which `mc run` carries and
+which claims only with programme autonomy on. A sent goal needs no autonomy.
 
 See [goal planning and journal behavior](mc-programme-plan.md),
 [programme operations](mc-programme-operations.md), and

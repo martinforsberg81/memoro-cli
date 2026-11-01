@@ -1,4 +1,4 @@
-/** Fail-closed recovery for the inactive autonomous runner seam. Never signal
+/** Fail-closed recovery for the autonomous runner seam. Never signal
  * a pid read from disk; live/unknown previous workers keep the workarea held. */
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';

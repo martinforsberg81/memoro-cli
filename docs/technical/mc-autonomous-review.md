@@ -1,10 +1,9 @@
-# Independent autonomous review (inactive)
+# Independent autonomous review
 
 The v1 review role still closes gaps, measures criteria and publishes. V2 has
 an examine-and-report flavor, `_review-autonomous.md`, selected only through
-`createRunner`'s injected autonomous capability with `review: true`. No CLI or
-environment flag activates it; normal execution remains disabled. This step
-does not activate live programmes or automatically schedule repairs.
+`createRunner`'s autonomous capability with `review: true`, which `mc run`
+carries. No CLI or environment flag activates it, and it schedules no repairs.
 
 ## Models and admission
 
@@ -84,7 +83,7 @@ manifest-digest-bound facts. Generation-safe process and project claims serializ
 writers; a dead PID alone never proves successful closure or permission to reuse
 an attempt. Corrupt facts and live or unreadable claims retain ownership.
 
-The dedicated inactive review transport detaches its own process group, observes
+The dedicated review transport detaches its own process group, observes
 native close, group death, transport completion, outstanding tool jobs and the
 existing gate worker. Unknown spawn outcome, open pipes, surviving children or
 unfinished tools retain the active review owner. Exit zero without a complete

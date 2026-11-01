@@ -58,7 +58,7 @@ export function runnerFixture(t, { assignment = {} } = {}) {
     // Tests control lane release explicitly, without polling a real clock.
     sleep: () => { const wait = deferred(); sleeps.push(wait); return wait.promise; },
   };
-  const capability = { profile, pollMs: 10, clock: () => ({ at_ms: 1000, awake_ms: 0 }),
+  const capability = { fixture: true, profile, pollMs: 10, clock: () => ({ at_ms: 1000, awake_ms: 0 }),
     gate: async (args, options) => { assert.deepEqual(args, []); assert.equal(options.env, env); return 0; } };
   const state = (project = f.project) => readAutonomousState(f.root, f.programme, project);
   const add = (project = f.project, overrides = {}) => {

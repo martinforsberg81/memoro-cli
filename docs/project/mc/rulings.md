@@ -2196,3 +2196,17 @@ measurement. The clock is checked against what the machine already logged
 (`pmset -g log`, `kern.sleeptime`, `kern.waketime`), and long sleep is left to
 the provider pilot. The sleep-experiment method in `autonomy-goals.md` could
 not have worked and is replaced.
+
+### Clarification to ruling 60 · the pilot is a sent goal
+
+Settled by the `goals-runner-wiring` contract on 2026-10-31, which applies the
+autonomy-off clarification above to the provider pilot.
+
+- **No force path exists.** The pilot is a goal sent like any other. A sent goal
+  builds, is reviewed and lands with autonomy off and with no capability
+  support; `assertProgrammeDispatch` does not consult capabilities. Nothing
+  overrides the capability report, and nothing needs to.
+- **Support is recorded per tool version.** `mc programme capabilities` reports
+  support only from observed provider runs, bound to the tool version that made
+  them. A new tool version has no support until it is observed again, which
+  refuses `autonomy on` and nothing else.

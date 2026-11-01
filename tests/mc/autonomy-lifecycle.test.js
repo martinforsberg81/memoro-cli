@@ -124,7 +124,7 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   let status = programmeStatus(w.root, PROGRAMME, supported);
   assert.equal(status.goals[0].evidence.quality, 'review findings for plan');
   assert.deepEqual(status.goals[0].review.findings, ['second() ignores the first behaviour.']);
-  assert.equal(status.goals[0].next_action, 'planner unavailable — no headless queue consumer is wired here');
+  assert.equal(status.goals[0].next_action, 'plan decides next');
   assert.ok(status.plan.pending_events >= 1);
   let plan = w.plan('plan-review');
   assert.ok(plan.events().includes('review'));
@@ -137,12 +137,12 @@ test('one goal runs from a deliberate start to its planned stop: fresh sessions,
   assert.equal(w.state().phase, 'ready'); assert.deepEqual(w.state().ownership, { branch: PROJECT, pr: 1 });
 
   // Revision 2 is rebuilt on the same branch and PR: both criteria inside the
-  // soft bound, then closed by the upper bound, with a new gate.
-  w.build({ criteria: ['first', 'second'], pace: 40, upper: 200, outcome: 'review-ready',
+  // soft bound, and the measurement that completes them closes it, with a new gate.
+  w.build({ criteria: ['first', 'second'], pace: 40, outcome: 'review-ready',
     files: { 'second.js': 'import { first } from \'./first.js\';\nexport const second = () => first;\n' } });
   assert.equal(await w.run(), 'ran');
   const three = w.builds[2];
-  assert.deepEqual(three.actions, ['continue', 'continue', 'finish-session']); assert.equal(three.control.reason, 'upper-boundary');
+  assert.deepEqual(three.actions, ['continue', 'finish-session']); assert.equal(three.control.reason, 'criteria-complete');
   assert.equal(w.state().phase, 'review_ready'); assert.equal(w.hub.created(), 1); assert.equal(w.gates.length, 3);
   assert.equal(three.prompt.previous, null, 'a revised goal starts from its assignment, not the old handoff');
   const head = w.hub.head(PROJECT);

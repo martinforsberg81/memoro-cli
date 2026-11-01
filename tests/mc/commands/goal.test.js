@@ -27,7 +27,7 @@ test('foreground goal authoring needs no lease and send makes an unblocked assig
   result = w.criterion('ordinary'); assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).goal_revision, 2);
   result = w.cli(['goal', 'send', `${f.programme}/ordinary`]);
-  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).execution_enabled, false);
+  assert.equal(result.status, 0, result.stderr); assert.equal('execution_enabled' in JSON.parse(result.stdout), false);
   assert.equal(readAutonomousState(f.root, f.programme, 'ordinary').phase, 'ready');
   result = w.cli(['goal', 'done', `${f.programme}/ordinary`]);
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).done, false);

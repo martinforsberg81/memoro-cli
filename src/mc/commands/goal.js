@@ -62,7 +62,7 @@ export async function run(argv, deps = {}) {
       const state = readAutonomousState(root, programme, goal, deps);
       const revision = revisionOrCurrent(scanned, state);
       plan({ ...deps, root, env, context }, programme, { kind: 'send-goal', project: goal, input: { after: scanned.flags.after }, revision });
-      output(stdout, { contract: readAutonomousState(root, programme, goal, deps).contract, execution_enabled: false }); return 0;
+      output(stdout, { contract: readAutonomousState(root, programme, goal, deps).contract }); return 0;
     }
     if (operation === 'revise') {
       if (tail.length) throw new Error('revise takes one target');

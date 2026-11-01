@@ -1,9 +1,10 @@
-# Autonomous transport observation and interruption (inactive)
+# Autonomous transport observation and interruption
 
 `streamSession` has an explicit `autonomous` version-1 runner seam. No existing
 v1 caller supplies it; `watchFor`, `sessionStanding`, result-grace, Claude
 check-ins/silence watches and unwatched Codex sessions keep their old behavior.
-This does **not** enable autonomous scheduling or change any deployed programme.
+The runner supplies it for goal builds and for their main integration, whose
+activity is observed as `{ kind: 'tool', id: 'main-integration' }`.
 
 ## Observations, not invented context
 
@@ -99,9 +100,7 @@ closure, missing observations, unknown gate children and failed persistence or
 preservation never return a successful normal exit. `control_persisted: false`
 distinguishes a local fail-closed decision from a durable control write. A normal
 transport exit is **not** green publication evidence: the matching committed,
-pushed, relevant-gate handoff contract remains independently required. No v2
-build loop, provider session, gate cancellation authority or plan dispatcher is
-activated here.
+pushed, relevant-gate handoff contract remains independently required.
 
 ## What was actually measured
 
@@ -128,5 +127,27 @@ before it has a chance to read the control command. The exit-outcome fixtures
 (cooperative, unexpected, pending-tool, persistence and gate cases) keep awake
 time frozen, so slow startup cannot reach a boundary and kill them before they
 print the events under test. Policy thresholds are unchanged.
+
+## Provider observations
+
+`mc programme capabilities` reports support only from real sessions, recorded in
+`runner/provider-observations.json` (`src/mc/provider-observations.js`). Each
+entry holds `tool`, `tool_version` (from `<bin> --version`, taken before the
+process starts), `role`, `signal`, `run_id`, `project` and `at`.
+
+| Signal | Recorded when |
+| --- | --- |
+| `session` | a build ended with `normal_exit` and `control_persisted`, or a review with `normal_exit`: the review transport keeps no session control |
+| `control` | the process wrote a session-control request, or read status, which leaves a mark in its `MC_SCRATCH` because a read changes no state |
+| `interrupt` | supervision signalled the process group (`signalled` on the session result) |
+
+A capability is supported when the production capability can be built here and
+every tool in the model catalog has, at its installed version, what it needs:
+`build` a step `session`, `review` a review `session`, `control-signals` a
+`control`, `interrupt` an `interrupt`, `programme-jobs` and `programme-plan` any
+`session`. A new tool version has no support until observed again. That refuses
+`autonomy on` only: `assertProgrammeDispatch` does not consult capabilities, so a
+sent goal runs with autonomy off and with no support. A capability with
+`fixture: true` records nothing.
 
 Verification: `mc gate tests/mc/session-observation.test.js tests/mc/session-control.test.js tests/mc/run-session.test.js tests/mc/run-plan.test.js`.

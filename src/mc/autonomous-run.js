@@ -1,4 +1,4 @@
-/** Inactive dynamic step dispatcher. Only createRunner's injected capability
+/** Dynamic step dispatcher. Only createRunner's injected capability
  * admits v2. A process exit is not publication, continuation or completion. */
 import { mainIncidentHold, mainRepairPreflight, readProgrammeIncidents } from './programme-recovery.js';
 import { captureWorktree } from './session-gate-evidence.js';
@@ -23,6 +23,7 @@ import { reviewRoutePending, routeAutonomousReview } from './autonomous-outcomes
 import { takeClaim, releaseClaim } from './resource-claim.js';
 import { gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
+import { providerObserver } from './provider-observations.js';
 
 export function autonomousChoice({ root, record, capability, openPrs = [], worktree = null }) {
   const skip = (reason, text) => ({ kind: null, reason, skip: text });
@@ -64,7 +65,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     say(`${record.project}: independent review continuation: ${routed.queued ? 'queued for merger' : routed.reason}`);
     return 'ran';
   }
-  if (choice.kind === 'review' && !choice.recovery) return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+  if (choice.kind === 'review' && !choice.recovery) return runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps, capability,
     waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult });
   const name = record.project; const programme = record.programme;
   if (choice.recovery) {
@@ -120,6 +121,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
   if (!held.ok) { dropSlot(); return 'skipped:autonomous-owned'; }
   let owned = false;
   let currentWritten = false;
+  let verifier = null;
   try {
     // Another runner can have claimed while this one waited for capacity.
     let state = readAutonomousState(root, programme, name);
@@ -165,11 +167,24 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     const prompt = buildSessionStart({ assignment: state.contract, programme: agreement, runId: actor.run_id,
       previous: previousHandoff, previousRunId });
     if (previousRunId) retirePreviousSession(sessionGitDir(worktree), previousRunId);
+    // One launch path: main integration and the build differ in prompt and scratch directory only.
+    const command = ({ instructions: text, prompt: payload }) => gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin,
+      args: headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions: text, prompt: payload, profileArgs, cache: role.cache }), billing: route.billing });
+    const sessionEnv = scratch => ({ MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
+      MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: scratch });
+    const unsetEnv = [...PROVIDER_API_ENV_NAMES, 'MC_STEP'];
+    const directory = join(paths.scratch, actor.run_id);
+    deps.mkdir(paths.scratch);
     const synced = syncMain(worktree, name, { resolveIgnore: false });
     if (synced.conflicts.length) {
       if (typeof capability.integrateConflicts !== 'function') throw new Error('main conflicts require step integration before building');
-      await capability.integrateConflicts({ ...options, worktree, conflicts: synced.conflicts, instructions, prompt });
+      const integration = `${directory}-integration`;
+      await capability.integrateConflicts({ ...options, worktree, conflicts: synced.conflicts, instructions, prompt,
+        launch: { tool: launch.id, command, env: sessionEnv(integration), unsetEnv, directory: integration },
+        observeResult: result => observeResult(launch.id, result) });
       if (git(['diff', '--name-only', '--diff-filter=U']) || deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) throw new Error('main integration is unfinished');
+      // Its snapshot is the merge it finished; the build supervises the tree from here.
+      retirePreviousSession(sessionGitDir(worktree), actor.run_id);
     } else if (!synced.ok) throw new Error(`main integration failed: ${synced.why}`);
     if (git(['branch', '--show-current']) !== branch || !deps.git(worktree, ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']).ok) throw new Error('current main is not integrated on the owned branch');
     await deps.attachDeps(worktree);
@@ -193,20 +208,20 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
       say(`${name}: starting gate remains red on the assigned main incident; repair must still publish a complete green gate`);
     }
     observeActivity({ kind: 'model', id: null });
-    const observer = projectSessionObserver({ ...options, verify: capability.verify });
+    // A verifier built for this run measures in this worktree; fixtures keep their own `verify`.
+    verifier = capability.verifier ? capability.verifier({ root, programme, project: name, worktree, env: deps.env }) : null;
+    const observer = projectSessionObserver({ ...options, verify: verifier ?? capability.verify });
     if (observer.control.phase !== 'running') throw new Error('starting integration/gate exhausted the session budget');
-    const directory = join(paths.scratch, actor.run_id);
-    deps.mkdir(paths.scratch);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
-    const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const tool = command({ instructions, prompt });
+    const observeProvider = providerObserver({ root, capability, tool: settings.tool, bin: launch.spec.bin, role: 'step', runId: actor.run_id, project: name,
+      directory, control: () => readAutonomousState(root, programme, name).session_control, deps, say });
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, prompt,
-      env: { MC_AUTONOMOUS_RUN: actor.run_id, MC_AUTONOMOUS_ROLE: 'step', MC_PROJECT: name,
-        MC_REPO: repo.name, MC_WORKAREA: worktree, MC_SCRATCH: directory },
-      unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'],
+      env: sessionEnv(directory), unsetEnv,
       autonomous: { version: 1, tool: launch.id, ...observer, clock: capability.clock,
         directory, pollMs: capability.pollMs },
     });
     observeResult(launch.id, result);
+    observeProvider(result);
     if (!result.normal_exit || !result.recovery_ready || !result.control_persisted) throw new Error(result.reason || 'incomplete autonomous process');
     const closing = readAutonomousState(root, programme, name);
     if (closing.publication?.run_id === actor.run_id) {
@@ -222,6 +237,8 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
     }
     return owned ? 'ran' : 'skipped:autonomous-owned';
   } finally {
+    // No measurement outlives its session: closing ends a running check before the lane is given back.
+    await verifier?.close?.();
     if (currentWritten) remove(currentPath);
     releaseClaim(claimPath, held.marker);
     dropSlot();
@@ -229,7 +246,7 @@ export async function runAutonomousBuild({ root, record, repo, worktree, areaNam
 }
 
 /** Same lane/slot accounting as builders; never the builder checkout or overlay. */
-export async function runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps,
+export async function runAutonomousReview({ root, record, repo, worktree, lane, pid, paths, deps, capability,
   waitForSlot, dropSlot, routeClass, writeJson, remove, stamp, say, observeResult }) {
   const name = record.project; const programme = record.programme;
   const state = readAutonomousState(root, programme, name);
@@ -266,6 +283,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
     currentWritten = true;
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, ...settings, instructions, prompt, profileArgs, cache: role.cache });
     const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: route.billing });
+    const observeProvider = providerObserver({ root, capability, tool: settings.tool, bin: launch.spec.bin, role: 'review', runId: actor.run_id, project: name, deps, say });
     beginReviewProcess(options);
     const result = await deps.session({ bin: tool.bin, args: tool.args, cwd: session.checkout, prompt,
       reviewProcess: { options, tool: launch.id },
@@ -273,6 +291,7 @@ export async function runAutonomousReview({ root, record, repo, worktree, lane, 
         MC_WORK_ROOT: root, MC_REPO: repo.name, MC_WORKAREA: session.checkout, MC_SCRATCH: directory },
       unsetEnv: [...PROVIDER_API_ENV_NAMES, 'MC_STEP'] });
     observeResult(launch.id, result);
+    observeProvider(result);
     const invalidReasons = [];
     try { await verifyPr(session); } catch (error) { invalidReasons.push(error.message); }
     const finished = completeAutonomousReview(options, result, { invalidReasons });

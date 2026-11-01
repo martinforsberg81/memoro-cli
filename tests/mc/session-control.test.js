@@ -43,6 +43,26 @@ it('criterion completion beyond soft time closes with reserve, but mid-criterion
   const later = decideSessionControl(closing, tick(1, { progress: progress('integration-proof', 'integration') }));
   assert.equal(later.phase, 'closing'); assert.equal(later.closing_awake_ms, closing.closing_awake_ms);
 });
+it('the measurement that completes every premerge criterion closes below the soft bound; one short of them, or a checkpoint, does not', () => {
+  const criteria = { criteria: ['schema', 'integration'] };
+  const { tick, state } = fresh();
+  const one = decideSessionControl(state, tick(1, { progress: progress('schema-proof', 'schema') }), criteria);
+  assert.equal(one.phase, 'running');
+  const checkpoint = decideSessionControl(one, tick(1, { progress: progress() }), criteria);
+  assert.equal(checkpoint.phase, 'running');
+  const done = decideSessionControl(checkpoint, tick(1, { progress: progress('integration-proof', 'integration') }), criteria);
+  assert.equal(done.phase, 'closing'); assert.equal(done.reason, 'criteria-complete');
+  assert.equal(controlResponse(done).next_action, 'finish-session');
+});
+it('a fresh session reaches closing by measuring again what an earlier session completed; no criteria named closes nothing', () => {
+  const a = fresh(); const first = decideSessionControl(a.state, a.tick(1, { progress: progress('first-proof', 'schema') }));
+  assert.equal(first.phase, 'running', 'without the assignment\'s criteria the bounds alone decide');
+  const b = fresh(profile(), JSON.parse(JSON.stringify(first)), 'build-2');
+  const idle = decideSessionControl(b.state, b.tick(1), { criteria: ['schema'] });
+  assert.equal(idle.phase, 'running', 'history alone is no measurement');
+  const again = decideSessionControl(idle, b.tick(1, { progress: progress('second-proof', 'schema') }), { criteria: ['schema'] });
+  assert.equal(again.reason, 'criteria-complete');
+});
 it('soft current context closes only on a newly completed measured criterion', () => {
   const { tick, state } = fresh();
   const soft = decideSessionControl(state, tick(0, { context: context(0.6) }));

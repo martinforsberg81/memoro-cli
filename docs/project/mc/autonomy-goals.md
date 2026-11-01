@@ -14,12 +14,12 @@ temporary repositories: versioned contracts and state, gate receipts, bounded
 fresh sessions with handoffs, cooperative and forced closure, dynamic build
 sessions on one branch and PR, independent review, the autonomous merge door,
 the programme job queue with leases, headless plan sessions, recovery, and the
-operator's status, start, pause and resume. `mc programme capabilities` on
-this machine reports all six control capabilities built and none supported:
-the installed runner passes no autonomous capability, the production awake
-clock that excludes machine suspend is built but the runner does not read it
-yet, there is no trusted checkpoint verifier, and no provider process has ever
-been observed on the new path. `start` therefore refuses everywhere, by design.
+operator's status, start, pause and resume. When this was written,
+`mc programme capabilities` reported all six control capabilities built and
+none supported: the installed runner passed no autonomous capability, the
+production awake clock was not read, there was no trusted checkpoint verifier,
+and no provider process had been observed on the new path. *Activation gaps*
+below says what is closed.
 
 Before closing those gaps, the model itself was reviewed. The implementation
 plan had made the autonomous mode a second system: an approved programme
@@ -219,15 +219,18 @@ work for the interactive session with `mc shot` before it is planned.
 Unchanged from the capability report, and to be planned as goals or projects
 of this programme once the verbs above exist:
 
-1. **Runner wiring.** `mc run` builds the production capability the seam
-   wants: profile from configuration, poll cadence, review, clock, the `mc
-   gate` adapter, publication requirements and deps, conflict integration,
-   the checkpoint verifier, job and plan consumers. `installationCapabilities`
-   then reports what the runner actually passes instead of a frozen constant.
+1. **Runner wiring.** Wired. `mc run` builds the production capability
+   (`src/mc/autonomous-capability.js`): profile from configuration, poll
+   cadence, review, clock, publication, conflict integration, the checkpoint
+   verifier, job and plan consumers. It fails closed: a clock that cannot be
+   read or an invalid profile means no capability, and goals are skipped. A sent
+   goal runs with autonomy off and needs no capability support. Support is what
+   `autonomy on` requires, and it follows version-bound observations
+   ([contract](../../technical/mc-session-observation.md#provider-observations)).
 2. **Awake clock.** Built in `src/mc/awake-clock.js`: `awake_ms` reads
    `CLOCK_UPTIME_RAW`, which excludes suspend, and never falls back to a clock
-   that counts it. The runner does not read it yet; that wiring belongs with
-   the runner work above. Measured from what the machine already logged, not
+   that counts it. The runner reads it through the production capability.
+   Measured from what the machine already logged, not
    from a sleep experiment. Between boot on 2026-10-27 and 2026-10-31 the wall and
    awake clocks differ by 19 772 s across 47 logged sleeps. `pmset -g log`
    gives 19 980 s, which is about 19 795 s after allowing about 4 s of log lag
@@ -241,14 +244,15 @@ of this programme once the verbs above exist:
 3. **Checkpoint verifier.** Built: `checkpoint-verifier.js` measures a criterion's
    check or the relevant gate, asynchronously and bound to the tree's content
    ([contract](../../technical/mc-session-control.md#clocks-tools-and-progress)).
-   It waits on the runner wiring; until that lands the default verifier reports
-   no progress, so the no-progress clock always runs.
+   The production capability connects it, one verifier per build run.
 4. **Review session whose runner dies** has no recovery path (it stays owned).
-5. **Provider pilot.** Control signals, interruption and context readings are
-   proven only with fixture processes. One goal built end to end with real
-   Claude and Codex sessions, measured, is what turns the capability report
-   from *missing* to *supported*. Martin's act; costs model usage; done in the
-   interactive session.
+5. **Provider pilot.** Wired for observation; not yet run. Control signals,
+   interruption and context readings are proven only with fixture processes.
+   The pilot is a sent goal, which runs with autonomy off: there is no force
+   path. Its real Claude and Codex sessions record observations per tool
+   version, and those observations turn the capability report from *missing* to
+   *supported*. A new tool version has no support until observed again. Martin's
+   act; costs model usage.
 6. **Profile calibration** from the pilot's measurements.
 7. **Credits.** The autonomous path requires subscription billing;
    `--billing credits` starts no goal session. A decision, then possibly a

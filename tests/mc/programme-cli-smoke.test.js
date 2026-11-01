@@ -27,6 +27,7 @@ const PROGRAMME = 'disposable-programme';
 const FAKE_TOOL = `#!${process.execPath}
 const { appendFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
+if (process.argv[2] === '--version') { console.log('0.0.0 (fake)'); process.exit(0); }
 const tool = require('node:path').basename(process.argv[1]);
 appendFileSync(process.env.FAKE_TOOL_LOG, JSON.stringify({ tool, argv: process.argv.slice(2), role: process.env.MC_AUTONOMOUS_ROLE || null }) + '\\n');
 if (!process.env.FAKE_TOOL_DRIVE) process.exit(0);
@@ -110,7 +111,7 @@ test('on a fixture installation autonomy on and off drive the disposable program
   const w = disposable(t);
   const on = w.on(w.fixture);
   assert.equal(on.code, 0, on.err);
-  assert.equal(on.json().mode, 'active'); assert.match(on.json().next_action, /planner unavailable/u);
+  assert.equal(on.json().mode, 'active'); assert.match(on.json().next_action, /awaits the runner's headless planner/u);
   const once = w.revision();
   assert.equal(w.on(w.fixture).code, 0); assert.equal(w.revision(), once, 'a repeated on is a read');
 

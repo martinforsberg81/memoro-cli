@@ -121,6 +121,7 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
+import { productionAutonomy } from './autonomous-capability.js';
 import { autonomousChoice, runAutonomousBuild } from './autonomous-run.js';
 import { reconcileProgrammeQueue } from './programme-jobs.js';
 import { runProgrammePlan } from './programme-plan-run.js';
@@ -655,6 +656,10 @@ export function realDeps(env = process.env) {
       return child.pid ?? null;
     },
     log: (line) => process.stdout.write(`${line}\n`),
+    // The capability `runLoop` hands `createRunner` (autonomous-capability.js).
+    // A dependency so a fixture without it stays on `autonomous: null` and
+    // never spawns the awake clock's perl.
+    productionAutonomy,
   };
 }
 
@@ -3320,7 +3325,14 @@ export async function runLoop({
   // lane above it. `total` is read by `takeSlot` each time a step is about to
   // start.
   const laneSetting = (deps.laneCount || readLaneCount)();
-  const runner = createRunner({ merge, deps });
+  // Only a runner that merges can carry a goal to its landing. Why there is no
+  // capability is held for `runner.say`, which does not exist until the runner
+  // does, and said after the start line.
+  const capabilityLines = [];
+  const autonomous = merge
+    ? deps.productionAutonomy?.({ root: workRoot(deps.env), env: deps.env, deps: { ...deps, log: (line) => capabilityLines.push(line) } }) ?? null
+    : null;
+  const runner = createRunner({ merge, deps, autonomous });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
   // the same work root simply overwrote the first and became invisible to
@@ -3384,6 +3396,7 @@ export async function runLoop({
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
+  for (const line of capabilityLines) runner.say(line);
   if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the steps it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
