@@ -1989,7 +1989,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
-    assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
+    assert.match(text, /PROGRAMMES {2}3 active · 0 dormant · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 waiting · 0 blocked\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own projects');
     // The blocked project is one row for its programme — the number that still
@@ -2412,7 +2412,7 @@ describe('collectPage', () => {
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES {2}3 programmes · 4 projects/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES {2}3 active · 0 dormant · 4 projects/u);
   });
 
   it('collects repository pauses, merger liveness and landed PR history from the supplied homes', async (t) => {
@@ -2679,7 +2679,7 @@ describe('the palette', () => {
     '',
     'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 0 waiting · 1 blocked · ≈$7.28 today
     '',
-    'bold+cyan grey green grey red grey grey grey', // PROGRAMMES  3 programmes · 4 projects  ready 2 · blocked 1 · done 1
+    'bold+cyan grey green grey red grey grey grey', // PROGRAMMES  3 active · 0 dormant · 4 projects  ready 2 · blocked 1 · done 1
     'bold+cyan grey grey grey grey red grey', //       assistant-avatar  0 ready · 0 waiting · 1 blocked  ·  no plan session
     'bold+cyan green grey grey grey grey grey', //     docx-editing-surface  1 ready · 0 waiting · 0 blocked  ·  no plan session
     'grey grey grey green grey', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step

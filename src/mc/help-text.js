@@ -17,6 +17,7 @@ PLAN AND FOLLOW
   mc step <project>                Where each step stands
   mc project <name>                Show a sent plan or a draft
   mc goal list [<programme>]       Goals and their last session's next action
+  mc programs list [--json]        Every programme, active or dormant
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
 
 RUN AND LAND
@@ -127,6 +128,12 @@ ${commandReference('status')}
                                     fails stops it, a second run continues
 ${commandReference('goal')}
 
+  mc programs list [--json]        Every programme, one line each, by name:
+                                    active (a project or a goal, of any
+                                    status) or dormant, its repositories, its
+                                    projects and their states, its goals and
+                                    open plan sessions. The page draws the
+                                    dormant ones as one line pointing here
   mc repos [--json]                The two repositories: bare or primary, the git
                                     directory, the checkout mc serves, and the
                                     linked worktrees each has

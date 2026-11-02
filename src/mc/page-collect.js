@@ -1485,11 +1485,17 @@ export function programmesSection({
 
   const groups = names.map((name) => {
     const own = projects.filter((project) => project.programme === name);
+    const goals = goalList.filter((goal) => goal.programme === name);
     return {
       programme: name,
+      // A programme with no project of any status and no goal of any status.
+      // An open plan session does not make it active: nothing is on it yet.
+      // Twenty-seven of forty-one headings said `no project yet` on
+      // 2026-11-02; the renderer folds these into one line (Martin).
+      dormant: own.length === 0 && goals.length === 0,
       projects: own,
       // The programme's goals, after its project rows (programmesLines).
-      goals: goalList.filter((goal) => goal.programme === name),
+      goals,
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
@@ -1508,9 +1514,12 @@ export function programmesSection({
     if (kind) kinds[kind] = (kinds[kind] || 0) + 1;
   }
 
+  const dormant = groups.filter((group) => group.dormant).length;
   return {
     count: projects.length,
     programmes: groups,
+    active: groups.length - dormant,
+    dormant,
     statuses: statusesOf(projects),
     // Every stopped project at once: how many wait on an answer from Martin (a
     // decision or a workarea), and which blockers hold the most. A project that
@@ -1686,6 +1695,45 @@ export function readStrays(root, { git = runGit } = {}) {
     }, 0);
     return { name, checkout: checkouts.length > 0, uncommitted };
   });
+}
+
+/**
+ * PROGRAMMES alone, from the sources `collectPage` reads it from — the plans,
+ * the register over them, the goals, the open plan sessions and the tree's own
+ * programmes (`listProgrammes`) — and through the same `programmesSection`, so
+ * `mc programs list` and the page cannot give a programme two verdicts. No
+ * fetch, no GitHub, no tmux: none of those decide whether a programme is
+ * active, and the verb answers in the time it takes to read files.
+ */
+export function readProgrammes({
+  env = process.env,
+  now = new Date(),
+  repos = defaultRepos(env),
+  git = runGit,
+  alive = pidAlive,
+  cache = { loadPlans },
+  programmes = (repo) => listProgrammes(repo),
+} = {}) {
+  const root = workRoot(env);
+  const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
+  const { plans: filed } = cache.loadPlans({ root, repos: present, now, git });
+  const plans = overlayPlans(filed, { root, lock: realLock, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
+  const sessions = sessionsSection({ foreground: readForeground(join(root, 'runner', 'foreground')), now, alive });
+  // Which repository's tree each programme is a directory in: the one fact a
+  // programme with no project and no goal has about where it lives.
+  const homes = {};
+  for (const repo of present) {
+    for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
+  }
+  const section = programmesSection({
+    plans,
+    planning: sessions.planning,
+    planningSessions: sessions.planning_sessions,
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
+    programmes: Object.keys(homes),
+    now,
+  });
+  return { section, homes };
 }
 
 /* ----------------------------------------------------------------- collect */
