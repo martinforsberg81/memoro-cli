@@ -4,6 +4,7 @@
  * made of real files with no git, no gh and no tmux.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2178,11 +2179,33 @@ describe('the page', () => {
 
   it('restartPage: with execve, the process is replaced and nothing is spawned', () => {
     const execs = [];
-    const env = { MC_EMIT_SHELL_DIRECTIVES: '1' };
+    const env = { MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' };
     const { spawned } = restartWith({ env, execve: (...args) => { execs.push(args); } });
-    assert.deepEqual(execs, [[process.execPath, [process.execPath, '/opt/homebrew/bin/mc', '--emit-shell-directives'], env]]);
-    assert.equal(execs[0][2], env, 'the same environment, wrapper flag and all');
+    // fd 3 does not survive Node's execve, so the new image is told nothing
+    // about it: no wrapper flag, no wrapper variable, the rest as it was.
+    assert.deepEqual(execs, [[process.execPath, [process.execPath, '/opt/homebrew/bin/mc'], { MC_HOME: '/h' }]]);
     assert.deepEqual(spawned, []);
+  });
+
+  it('restartPage: a real exec keeps the PID and starts the new image without the wrapper flag', (t) => {
+    if (typeof process.execve !== 'function') return t.skip('no process.execve before Node 22.15');
+    const module = new URL('../../src/mc/commands/home.js', import.meta.url).href;
+    const after = "console.log(JSON.stringify({ pid: process.pid, flag: process.env.MC_EMIT_SHELL_DIRECTIVES ?? null, args: process.argv.slice(1) }));";
+    const before = [
+      `import { restartPage } from ${JSON.stringify(module)};`,
+      'console.log(process.pid);',
+      `restartPage({ stdout: process.stdout, from: 'aaaaaaaa1', to: 'bbbbbbbb2', argv: [process.execPath, '--input-type=module', '-e', ${JSON.stringify(after)}, '--emit-shell-directives'] });`,
+      "throw new Error('execve returned');",
+    ].join('\n');
+    const out = spawnSync(process.execPath, ['--input-type=module', '-e', before], {
+      env: { ...process.env, MC_EMIT_SHELL_DIRECTIVES: '1' }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(out.status, 0, out.stderr);
+    const lines = out.stdout.trim().split('\n');
+    const replaced = JSON.parse(lines.at(-1));
+    assert.equal(replaced.pid, Number(lines[0]), 'the same process, replaced');
+    assert.equal(replaced.flag, null);
+    assert.ok(!replaced.args.includes('--emit-shell-directives'), replaced.args.join(' '));
   });
 
   it('restartPage: with execve undefined, mc is spawned and waited on as before', () => {

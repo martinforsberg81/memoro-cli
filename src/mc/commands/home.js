@@ -42,7 +42,7 @@ import { CLEAR_ALL } from '../page-frame.js';
 import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
-import { mcCheckout } from '../run-control.js';
+import { childEnv, mcCheckout } from '../run-control.js';
 import { inspectWorkArea } from '../work-area.js';
 import { workAreaName } from '../paths.js';
 import { openArea, parseArgs, runVerb, startSomething } from './work.js';
@@ -152,17 +152,20 @@ export function codeCommit({ checkout = mcCheckout(), spawn = (_git, args) => ru
 }
 
 /**
- * `mc` again, on the code that is on disk now, in this terminal: the same
- * arguments, and the shell wrapper's fd 3 when it holds one, so a project
- * opened from the new page still `cd`s the shell (run-control.js, `childEnv`).
+ * `mc` again, on the code that is on disk now, in this terminal, with the
+ * same arguments.
  *
  * The process is replaced (`process.execve`), not waited on: a child under a
  * waiting parent left one parked `mc` per restart, and after a day of
  * fast-forwards in `~/mc/self` a tab held a chain of them. Replaced, only the
- * newest page's process is left. fd 3 survives the exec with nothing passed:
- * it is the shell's descriptor, inherited when this process started, and
- * nothing in mc opens or marks it — libuv sets close-on-exec only on the
- * descriptors it opens itself — so the new image holds it as this one did.
+ * newest page's process is left. The shell wrapper's fd 3 does not survive
+ * the exec: Node marks every inherited descriptor close-on-exec at startup
+ * (`uv_disable_stdio_inheritance`) and its `execve` clears that only for 0-2.
+ * Nothing in mc writes fd 3 since `emitCd` went (#561), so nothing a person
+ * sees is lost; the new image is started without `--emit-shell-directives`
+ * and without `MC_EMIT_SHELL_DIRECTIVES` (`childEnv`), so it makes no claim
+ * on a descriptor it does not hold. Anything that writes fd 3 again owns
+ * carrying it across this exec.
  * A replaced process runs no `finally` and no `exit` handler, which is why
  * the live reader's `ask` has given the terminal back (timer, resize
  * listener, raw mode, `/dev/tty`) before `menu` calls this.
@@ -181,7 +184,8 @@ export function restartPage({
   stdout.write(`${tty ? CLEAR_ALL : '\n'}mc: mc moved from ${short(from)} to ${short(to)} under this page — starting it again on the new code\n`);
   if (typeof execve === 'function') {
     try {
-      execve(process.execPath, [process.execPath, ...argv.slice(1)], env);
+      const args = argv.slice(1).filter((arg) => arg !== '--emit-shell-directives');
+      execve(process.execPath, [process.execPath, ...args], childEnv(env));
       // Never reached on a real exec; a test's `execve` returns here.
       return 0;
     } catch { /* the child below, as before */ }
