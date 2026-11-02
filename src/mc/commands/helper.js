@@ -21,6 +21,7 @@
  */
 import { mkdirSync } from 'node:fs';
 
+import { commandUsage } from '../command-help.js';
 import {
   collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, HELPER_REPOS, proposalsDir,
   unreadableSections,
@@ -31,14 +32,13 @@ import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
-const USAGE = 'usage — mc helper [--new] [--codex|--claude] [--model <model>]\n'
-  + '        mc helper --intake [--collect] [--since <iso>] [--limit <n>] [--threshold <n>] [--model <model>]\n';
+const USAGE = commandUsage('helper');
 
 /** The flags that only mean something to the digest, named once for the refusal. */
 const DIGEST_FLAGS = ['--since', '--limit', '--threshold'];
 
 export function usage() {
-  return USAGE;
+  return commandUsage('helper');
 }
 
 export async function run(argv, deps = {}) {

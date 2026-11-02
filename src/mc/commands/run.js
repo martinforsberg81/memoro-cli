@@ -49,36 +49,21 @@
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
+import { commandUsage } from '../command-help.js';
 import { readBillingApi, readBillingState, writeBillingApi } from '../billing.js';
 import { billingRoute, billingStatus } from '../billing-route.js';
 import { readCapacity } from '../model-capacity.js';
-import { LANES_MAX, laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
+import { laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
 import { runnerDir } from '../paths.js';
 import { IF_WAS_RUNNING, requestUpdate, startRunner, stopRunner } from '../run-control.js';
 import { REPO_NAMES, runLoop } from '../run.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { scanArgs } from './flags.js';
 
-const USAGE = [
-  'usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
-  '        mc run start [same flags]   the runner, in the background; takes over from one that is stopping',
-  '        mc run start --if-was-running  only after a runner that died (the login agent\'s start)',
-  '        mc run stop [--force]       after the steps in flight, or now',
-  '        mc run --update [--force]   new code, new process; the old one finishes its steps',
-  '                                    the runner moves now, the merger and the repo watcher at their',
-  '                                    next safe point, each starting a successor on the new code',
-  '                                    already on origin/main: nothing written (--force writes anyway)',
-  '                                    already draining: the drain, and the steps it waits on',
-  `        mc run lanes [<n>] [--total <n>|none]`,
-  `                                    steps in flight: <n> per repository, --total across every`,
-  `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
-  '        mc run --billing             plan usage and next billing for Claude and Codex',
-  '        mc run --billing <claude|codex> <on|off>',
-  '                                    whether that provider uses its API key once its plan is spent',
-].join('\n');
+const USAGE = commandUsage('run');
 
 export function usage() {
-  return USAGE;
+  return commandUsage('run');
 }
 
 export async function run(argv, deps = {}) {

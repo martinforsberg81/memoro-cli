@@ -2,12 +2,13 @@
  * `mc status <name>` — one project. See status-project.js for what it reads;
  * this file parses the two flags and prints.
  */
+import { commandUsage } from '../command-help.js';
 import { programsGoals } from '../goals.js';
 import { programsHome } from '../paths.js';
 import { collectProject, renderProject } from '../status-project.js';
 
 export function usage() {
-  return 'usage — mc status <name> [--json] [--offline]\n';
+  return commandUsage('status');
 }
 
 /** The first goal called `name` under the programmes home, or null. */
