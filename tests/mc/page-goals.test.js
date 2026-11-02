@@ -153,3 +153,32 @@ describe('goalsOf — what the page reads of a goal', () => {
     assert.equal(cleanup.running, false, 'a current file whose process is gone is not a session');
   });
 });
+
+describe('a goal in review, and one waiting on plan', () => {
+  it('goalsOf marks a goal blocked by a red review or a red merge as waiting on plan', () => {
+    const red = { at: '2026-11-01T11:00Z', tool: 'codex', model: 'gpt-6.1-sol', status: 'blocked', done: 'red abc1234', comment: 'criterion 2 not met', next: null };
+    const asked = { at: '2026-11-01T11:00Z', tool: 'claude', model: 'opus', status: 'blocked', done: null, comment: 'which table?', next: null };
+    const [byReview, byQuestion] = goalsOf({
+      goals: [
+        { programme: 'mc', goal: 'judged', repos: ['memoro-cli'], status: 'blocked', log: [red], problems: [] },
+        { programme: 'mc', goal: 'asked', repos: ['memoro-cli'], status: 'blocked', log: [asked], problems: [] },
+      ],
+    });
+    assert.equal(byReview.plan, true);
+    assert.equal(byQuestion.plan, false);
+  });
+
+  it('the page draws review green, and a goal waiting on plan in the colour of what waits on a person', () => {
+    const rows = [
+      { name: 'judged', programme: 'mc', repos: ['memoro-cli'], status: 'review', sessions: 2, last: { next: null, comment: null }, running: false, plan: false, problems: [] },
+      { name: 'redone', programme: 'mc', repos: ['memoro-cli'], status: 'blocked', sessions: 2, last: { next: null, comment: 'criterion 2 not met' }, running: false, plan: true, problems: [] },
+    ];
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW }) });
+    const lines = programmesOf(renderPageLines(data, { columns: 140, now: NOW, colour: true }));
+    const review = lines.find((line) => plain(line).includes('g · judged'));
+    const waiting = lines.find((line) => plain(line).includes('g · redone'));
+    assert.match(review, /\u001b\[32mreview/u, 'review is green');
+    assert.match(plain(waiting), /blocked .*waits on plan · criterion 2 not met/u);
+    assert.match(waiting, /\u001b\[31mwaits on plan/u, 'waits on plan is red');
+  });
+});

@@ -58,7 +58,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
-import { goalName, programsGoals, sessions as goalSessions } from './goals.js';
+import { goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
@@ -1484,6 +1484,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     sessions: goalSessions(goal.log),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
+    // Blocked by a red review or a red merge: it waits on plan (`waitsOnPlan`).
+    plan: waitsOnPlan(goal),
     problems: goal.problems,
   }));
 }

@@ -1098,14 +1098,18 @@ function projectLine(c, wide, project) {
  * session said is next (or its comment, when it said nothing next). A goal whose
  * GOAL.md does not parse says its first problem in red there instead.
  *
- * `open` is green while a session is on it and grey otherwise, `blocked` is the
- * blocked colour, and `done` is grey — the project rows' colours for the same words.
+ * `open` is green while a session is on it and grey otherwise, `review` is
+ * green — a review session or the merger moves it by itself — `blocked` is the
+ * blocked colour, and `done` is grey: the project rows' colours for the same
+ * words. A goal blocked by a red review or a red merge waits on plan, and its
+ * tail says so first, in the colour of what waits on a person.
  */
 function goalLine(c, wide, goal) {
   const column = projectColumns(wide);
   const mark = goal.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
   const word = goal.status ?? '—';
   const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
+    : goal.status === 'review' ? ['green']
     : (goal.status === 'blocked' ? statusTone('blocked') : ['grey']);
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
@@ -1123,6 +1127,11 @@ function goalLine(c, wide, goal) {
   if (room <= 0) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
   const said = goal.last?.next ?? goal.last?.comment ?? null;
+  if (goal.plan) {
+    const head = 'waits on plan';
+    const tail = said ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
+    return `${left}${c(clip(head, room), ...statusTone('blocked'))}${tail ? c(tail, 'grey') : ''}`;
+  }
   return said ? `${left}${c(clip(one(said), room), 'grey')}` : left;
 }
 
