@@ -29,9 +29,10 @@ import {
 } from '../paths.js';
 import { REGISTER_DIR, STATE_FILE } from '../register.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return 'usage — mc layout [--json] · mc layout migrate [--json] · mc layout migrate --apply\n';
+  return commandUsage('layout');
 }
 
 export async function run(argv, deps = {}) {

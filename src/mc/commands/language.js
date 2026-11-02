@@ -73,6 +73,7 @@ import {
   deploySource, isOwnWorktree, leftoverStamps, REPO, strayPaths, worktreeState,
 } from './deploy.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 /** The keychain entries the key is kept under. */
 export const TOKEN_SECRET = 'cloudflare-d1-edit-token';
@@ -83,17 +84,7 @@ const ACCOUNT = /^[A-Za-z0-9_-]{1,64}$/u;
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function usage() {
-  return [
-    'usage — mc language [--json]                    each language\'s last reading and last run, from the cache\n',
-    '        mc language status <lang>               the language\'s reads, run now in memoro\'s main, and cached\n',
-    '        mc language key [--json]                whether the Cloudflare key is held, and its account\n',
-    '        printf %s "<token>" | mc language key set --account <id>\n',
-    '                                                keep the key in this machine\'s keychain — never an argument\n',
-    '        mc language run <manifest> [--dry-run]  a cutover\'s acts in order, asking before every write\n',
-    '        mc language resume [--manifest <name>] [--from-head]\n',
-    '                                                the stopped run again, from the act it stopped at\n',
-    '        mc language promote [--langs <list>]    the curated grammar waiting, to production after one question\n',
-  ].join('');
+  return commandUsage('language');
 }
 
 /** `~/mc/runner/log/language` — the readings and, from step 2, the runs. */

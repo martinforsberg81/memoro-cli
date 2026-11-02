@@ -18,6 +18,7 @@ import { formatReading, hasLockfile, readDeps } from '../deps.js';
 import { repoNameOf } from '../repos.js';
 import { scanArgs } from './flags.js';
 import { resolveRepoPath } from './repo.js';
+import { commandUsage } from '../command-help.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -113,18 +114,5 @@ async function runBump(argv, deps) {
 }
 
 export function usage() {
-  return [
-    'usage — mc deps [<repo>] [--json] [--refresh]\n',
-    '  Which dependencies of <repo>\'s origin/main need updating: npm audit and npm view\n',
-    '  of its lockfile, in three groups — security within the major, patch/minor, major —\n',
-    '  each row runtime or tool, with the repository\'s declared notes. No repo reads\n',
-    '  every one with a package-lock.json. A saved reading of the same sha younger than\n',
-    '  6 h is reused; --refresh reads anew. Saved in ~/.memoro/mc/deps/<repo>.json.\n',
-    '\n',
-    'usage — mc deps bump <repo> security|minor|<package>[@<version>] [--dry-run] [--json]\n',
-    '  A fresh reading, then a workarea deps-<repo>-<what>-<yyyymmdd> on origin/main where\n',
-    '  npm changes package.json and package-lock.json with --package-lock-only only; one\n',
-    '  commit, mc publish, mc merge <repo> <pr>. A group never crosses a major; only a\n',
-    '  named <package>@<version> may. --dry-run prints the change and makes nothing.\n',
-  ].join('');
+  return commandUsage('deps');
 }

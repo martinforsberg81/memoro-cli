@@ -15,6 +15,7 @@
 import { collectPage } from '../page-collect.js';
 import { colourFor, columnsFor, renderPrsLines } from '../page-render.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -41,12 +42,5 @@ export async function run(argv, deps = {}) {
 }
 
 export function usage() {
-  return [
-    'usage — mc prs                        every open pull request, and whose it is — asks GitHub\n',
-    '        mc prs --offline              the same, from the page\'s cache\n',
-    '        mc prs --json                 the same, as one object\n',
-    '\n',
-    'Groups: on a step (project and step), plan sessions, workareas, checked out elsewhere, nobody\'s.\n',
-    'Reads only: nothing is closed, merged or moved.\n',
-  ].join('');
+  return commandUsage('prs');
 }

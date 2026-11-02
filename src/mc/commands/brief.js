@@ -23,9 +23,10 @@ import { briefDir } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return 'usage — mc brief [--new] [--codex|--claude] [--model <model>]\n';
+  return commandUsage('brief');
 }
 
 export async function run(argv, deps = {}) {

@@ -27,13 +27,10 @@ import {
 } from '../roles.js';
 import { skillStatus } from '../skills.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return [
-    'usage — mc roles list [--json]\n',
-    '        mc roles show <role> [--json]\n',
-    '        mc roles check [<role>] [--json]\n',
-  ].join('');
+  return commandUsage('roles');
 }
 
 export async function run(argv, deps = {}) {

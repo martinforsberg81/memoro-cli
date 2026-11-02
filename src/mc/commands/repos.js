@@ -12,9 +12,10 @@ import { tildePath } from '../layout-migrate.js';
 import { parseWorktrees } from '../project-prs.js';
 import { defaultRepos } from '../repos.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return 'usage — mc repos [--json]\n';
+  return commandUsage('repos');
 }
 
 export async function run(argv, deps = {}) {

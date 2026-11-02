@@ -53,6 +53,7 @@ import { gateConfiguration } from '../gate-greens.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
+import { commandUsage } from '../command-help.js';
 
 /** How long the answer waits for the gate, in seconds, unless `--budget` says otherwise. */
 export const DEFAULT_BUDGET = 540;
@@ -292,17 +293,5 @@ function readText(io, path) {
 }
 
 export function usage() {
-  return [
-    'usage — mc gate <test files…> [--test-name-pattern <p>]   the named test files, with repository flags and bounded concurrency\n',
-    '        mc gate                       affected tests and command gates against origin/main, including local changes\n',
-    '        mc gate --base <ref>          … against another base\n',
-    '        mc gate --json                the summary as one object\n',
-    '        mc gate --budget <s>          answer after at most s seconds, default 540; the tests keep running\n',
-    '        mc gate --wait                wait for the gate running here and print its verdict\n',
-    '\n',
-    'The merge gate still verifies the candidate with the current base; --full is refused.\n',
-    'The gate starts at once at low priority, beside merge rounds; a deploy or iOS build of memoro goes first.\nCostly affected tests are left to the merge round by measured time; those this change touches always run.\n',
-    'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
-    'Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n',
-  ].join('');
+  return commandUsage('gate');
 }

@@ -42,6 +42,7 @@ import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 import { repoNameOf } from '../repos.js';
+import { commandUsage } from '../command-help.js';
 
 const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
 // `merge` and `nightly` stay in the list only so the old spellings can be
@@ -797,18 +798,7 @@ function seconds(ms) {
 }
 
 export function usage() {
-  return [
-    'usage — mc repo status [repo] [--json] [--offline]\n',
-    '        mc repo watch start [--interval <seconds>]\n',
-    '        mc repo watch stop\n',
-    '        mc repo watch status [--json]\n',
-    '        mc repo claim <repo> "<what for>"\n',
-    '        mc repo release <repo> [--force]\n',
-    '        mc repo who <repo> [--json]\n',
-    '        mc repo guard [repo] [--json]\n',
-    '        mc repo push-check <remote> <url>   the pre-push hook\'s call; ref lines on stdin\n',
-    '        mc repo rounds [--json]             every gate round, by where it ended\n',
-  ].join('');
+  return commandUsage('repo');
 }
 
 export function parseArgs(argv) {

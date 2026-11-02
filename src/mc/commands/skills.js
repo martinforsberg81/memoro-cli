@@ -14,13 +14,10 @@
  */
 import { skillReport } from './roles.js';
 import { skillStatus, syncSkills } from '../skills.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return [
-    'usage — mc skills [--json]        mc\'s task skills, installed vs canon and the programme SKILL.md files\n',
-    '        mc skills sync [--json]   install them for Claude (~/.claude/skills) and Codex (~/.agents/skills) as mc-*,\n',
-    '                                  rewrite a changed one, remove a stale mc-* one; nothing else is touched\n',
-  ].join('');
+  return commandUsage('skills');
 }
 
 export async function run(argv, deps = {}) {
