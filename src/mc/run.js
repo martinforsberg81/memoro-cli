@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, reviewDue, parseLog, programsGoals, queuedText, REVIEW_ROLE, setStatus, verdictOf } from './goals.js';
+import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -2139,9 +2139,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
    * not stand in front of every other goal; why is said once, when it changes.
-   * A goal waits from its last log entry.
+   * A goal waits from its last log entry. The goals' `after` is settled first
+   * (`releaseWaiting`), so a goal whose last `after` goal has landed is a
+   * candidate in the same pick.
    */
   function goalWork({ repos: names, passed }) {
+    releaseWaiting();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
     const may = (goal) => {
       if (goal.status !== 'review') return true;
@@ -2216,6 +2219,24 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return pr ? { number: pr.number, head: pr.headRefOid } : null;
     } catch (error) {
       return { error: error.message };
+    }
+  }
+
+  /**
+   * The status changes goals' `after` asks for (`waitingMoves`), made: a
+   * waiting goal whose `after` has all landed goes open with an entry naming
+   * what landed, and its branches with no commits of their own are remade from
+   * `origin/main` as it is now; one whose `after` goal is gone goes blocked
+   * for plan; an open goal with an `after` not landed goes waiting. Nothing
+   * else is written, so a pass with nothing to move writes nothing.
+   */
+  function releaseWaiting() {
+    for (const move of waitingMoves(goals())) {
+      const { goal } = move;
+      const name = goalName(goal);
+      goalStatus(goal, name, move.status, { done: move.done, comment: move.comment });
+      if (move.status !== 'open') continue;
+      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
     }
   }
 

@@ -1,8 +1,10 @@
 /**
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
- *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"
- *                                  GOAL.md, LOG.md and a worktree per repository on goal/<goal>, from origin/main
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--after <p>/<g>[,<p>/<g>]]
+ *                                  GOAL.md, LOG.md and a worktree per repository on goal/<goal>, from origin/main;
+ *                                  with --after it is `waiting` until those goals have landed
+ *   mc goal after <programme>/<goal> [<p>/<g>…]   the goals it starts after, replaced; none given clears them
  *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]
  *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
  *   mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
@@ -13,14 +15,20 @@
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's, and mc writes the status line and the log, nothing else.
  * A session never sets `done`: the merger does when the pull request lands, and
- * a person may by hand. A review session never sets `open`: plan does.
+ * a person may by hand. A review session never sets `open`: plan does. Nobody
+ * sets `waiting` by `--status`: a goal waits by its `after`, and the runner
+ * lets it go when that has landed.
+ *
+ * `after` is a verb of its own, not a flag on `log` or a status verb: it
+ * changes the front matter's `after` line, where those change the status, and
+ * the status follows from it — waiting while anything named has not landed.
  */
 import { commandUsage } from '../command-help.js';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { run as runGit } from '../git.js';
-import { addGoalWorktree, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, REVIEW_ROLE, sessions, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, afterCycle, afterOf, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, REVIEW_ROLE, sessions, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -28,10 +36,11 @@ import { knownRepositories } from '../work-area.js';
 import { scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--done', '--comment', '--next', '--status', '--reason'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--after', '--done', '--comment', '--next', '--status', '--reason'];
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
-  new: ['--repo', '--class', '--title'],
+  new: ['--repo', '--class', '--title', '--after'],
+  after: [],
   log: ['--done', '--comment', '--next', '--status'],
   status: ['--reason'],
   show: [],
@@ -65,6 +74,7 @@ export async function run(argv, deps = {}) {
   const { flags } = scanned;
 
   if (verb === 'new') return newGoal(rest, flags, ctx);
+  if (verb === 'after') return setAfter(rest, ctx);
   if (verb === 'log') return logEntry(rest, { status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { status: verb, done: null, comment: flags.reason, next: null }, ctx);
   if (verb === 'show') return showGoal(rest, ctx);
@@ -98,6 +108,9 @@ function newGoal(args, flags, ctx) {
   const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
+  const after = afterNamed(flags.after === null ? [] : flags.after.split(','), `${programme}/${goal}`, ctx);
+  if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
+
   const known = ctx.known();
   const unknown = repos.filter((repo) => !known.some((path) => repoNameOf(path) === repo));
   if (unknown.length) {
@@ -116,9 +129,11 @@ function newGoal(args, flags, ctx) {
 
   const created = stampSeconds(now);
   const body = `# ${flags.title}\n\n## Goal\n\n## Criteria\n\n## Out of scope\n`;
-  ctx.write(join(dir, GOAL_FILE), renderGoal({ status: 'open', repos, class: flags.class, created, body }));
-  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }));
-  stdout.write(`mc: ${programme}/${goal} — ${dir}\n`);
+  const status = after.pending.length ? 'waiting' : 'open';
+  const comment = after.pending.length ? `waits on ${after.pending.join(', ')}` : null;
+  ctx.write(join(dir, GOAL_FILE), renderGoal({ status, repos, class: flags.class, created, after: after.names, body }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'person', model: null, status, done: 'skapat', comment, next: null }));
+  stdout.write(`mc: ${programme}/${goal}${comment ? ` · waiting — ${comment}` : ''} — ${dir}\n`);
 
   for (const { repo, bare } of bares) {
     const path = join(dir, repo);
@@ -152,6 +167,10 @@ function logEntry(args, fields, ctx) {
     stderr.write('mc: log needs --done, --comment, --next or --status\n');
     return 2;
   }
+  if (fields.status === 'waiting') {
+    stderr.write(`mc: a goal waits by its after, not by --status — mc goal after ${target.name} <programme>/<goal>…\n`);
+    return 2;
+  }
   const refused = refusedStatus(fields.status, env);
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const text = read(join(target.dir, GOAL_FILE));
@@ -160,6 +179,14 @@ function logEntry(args, fields, ctx) {
   if (goal.problems) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
+  }
+  if (fields.status === 'open' && goal.status !== 'open') {
+    const { pending, gone } = afterOf(goal, programsGoals({ home: ctx.home, list: ctx.list, read }));
+    if (pending.length || gone.length) {
+      const why = [pending.length ? `waits on ${pending.join(', ')}, not landed` : null, gone.length ? `${gone.join(', ')} gone without landing` : null].filter(Boolean).join('; ');
+      stderr.write(`mc: ${target.name} is not opened — it ${why}; the runner opens it when they land, or mc goal after ${target.name} changes what it waits on\n`);
+      return 1;
+    }
   }
   const status = fields.status ?? goal.status;
   const entry = {
@@ -176,37 +203,75 @@ function logEntry(args, fields, ctx) {
     appendEntry({ dir: target.dir, entry, read, write });
   }
   stdout.write(`mc: ${target.name} · ${status}\n`);
-  if (status === 'open' && goal.status !== 'open') remakeUnbuiltBranches(target, goal, ctx);
+  if (status === 'open' && goal.status !== 'open') remakeBranches(target, goal, ctx);
   return 0;
 }
 
+/** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */
+function remakeBranches(target, goal, { stdout, git }) {
+  remakeUnbuiltBranches({ git, dir: target.dir, goal: target.goal, repos: goal.repos, say: (repo, text) => stdout.write(`  ${repo}  ${text}\n`) });
+}
+
 /**
- * A goal's branch is made when the goal can start. A goal written `blocked`
- * behind another got its branch at `mc goal new`, before what it waits for
- * landed; when it goes `open`, each worktree whose branch has no commits of
- * its own — nothing past `origin/main` — is moved to `origin/main` as it is
- * now, which is that branch made again. A branch with commits is never
- * moved, nor one under uncommitted changes `git reset --keep` will not carry.
- * What happened is said per repository; nothing here fails the status change.
+ * The goals `names` gives as an `after` for `self`, checked against the goals
+ * there are: `{ names, pending }` — each `<programme>/<goal>` once, and those
+ * of them not landed — or `{ error }` for a name that is not a goal, the goal
+ * itself, or a ring of goals waiting on each other.
  */
-function remakeUnbuiltBranches(target, goal, ctx) {
-  const { stdout, git } = ctx;
-  for (const repo of goal.repos) {
-    const path = join(target.dir, repo);
-    const say = (text) => stdout.write(`  ${repo}  goal/${target.goal} ${text}\n`);
-    const fetched = git(path, ['fetch', '-q', 'origin']);
-    if (!fetched.ok) { say(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
-    const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
-    if (!own.ok) { say(`left as it is — no worktree at ${path}`); continue; }
-    const count = Number(own.stdout.trim());
-    if (count > 0) { say(`left as it is — ${count} commit${count === 1 ? '' : 's'} of its own`); continue; }
-    const behind = Number(git(path, ['rev-list', '--count', 'HEAD..origin/main']).stdout.trim());
-    if (!behind) { say('is origin/main already'); continue; }
-    const moved = git(path, ['reset', '-q', '--keep', 'origin/main']);
-    say(moved.ok
-      ? `remade from origin/main — it had no commits of its own, and main has ${behind} more`
-      : `left as it is — ${moved.stderr.trim() || 'git reset --keep refused'}`);
+function afterNamed(names, self, ctx) {
+  const given = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
+  const malformed = given.filter((name) => !isGoalRef(name));
+  if (malformed.length) return { error: `after ${malformed.join(', ')} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
+  if (given.includes(self)) return { error: `${self} cannot wait on itself` };
+  const goals = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read });
+  const { pending, gone } = afterOf({ after: given }, goals);
+  if (gone.length) return { error: `after ${gone.join(', ')} is not a goal — mc goal list names them` };
+  const ring = afterCycle(self, given, goals);
+  if (ring) return { error: `${ring} waits on ${self} already — goals that wait on each other never start` };
+  return { names: given, pending };
+}
+
+/**
+ * `mc goal after <programme>/<goal> [<p>/<g>…]` — replaces the goals it
+ * starts after; none given clears them. A goal that is open, blocked or
+ * waiting is `waiting` after it while any of them has not landed, and one
+ * that was waiting is `open` when none is left, its branches remade as `mc
+ * goal open` does. A goal in review or done does not wait, and is refused.
+ * The change is logged as a person's (or session's) entry.
+ */
+function setAfter(args, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  if (args.length < 1) { stderr.write(usage()); return 2; }
+  const [named, ...names] = args;
+  if (!isGoalRef(named)) { stderr.write(`mc: ${named} is not <programme>/<goal> — lower-case letters, digits and hyphens\n`); return 2; }
+  const target = goalNamed(named, ctx);
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
   }
+  if (goal.status === 'review' || goal.status === 'done') {
+    stderr.write(`mc: ${target.name} is ${goal.status} — a goal in ${goal.status} waits on nothing\n`);
+    return 1;
+  }
+  const after = afterNamed(names.flatMap((name) => name.split(',')), target.name, ctx);
+  if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
+  const status = after.pending.length ? 'waiting' : (goal.status === 'waiting' ? 'open' : goal.status);
+  const entry = {
+    at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
+    done: after.names.length ? `after ${after.names.join(', ')}` : 'after cleared',
+    comment: after.pending.length ? `waits on ${after.pending.join(', ')}` : null, next: null,
+  };
+  const outcome = setStatus({ dir: target.dir, status, after: after.names, entry, read, write });
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${target.name} · ${status}${entry.comment ? ` — ${entry.comment}` : ''}\n`);
+  if (status === 'open' && goal.status !== 'open') remakeBranches(target, goal, ctx);
+  return 0;
 }
 
 /**
@@ -227,7 +292,7 @@ function showGoal(args, ctx) {
     for (const problem of goal.problems) stderr.write(`  ${problem}\n`);
     return 1;
   }
-  stdout.write(`${target.name} · ${goal.status} · ${goal.repos.join(', ')} · ${goal.class} · created ${goal.created ?? '—'}\n`);
+  stdout.write(`${target.name} · ${goal.status} · ${goal.repos.join(', ')} · ${goal.class} · created ${goal.created ?? '—'}${goal.after.length ? ` · after ${goal.after.join(', ')}` : ''}\n`);
   const body = goal.body.trim();
   if (body) stdout.write(`\n${body}\n`);
 
@@ -253,7 +318,8 @@ function showGoal(args, ctx) {
 /**
  * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
  * status · n sessions · the last entry's Nästa`. A goal blocked by a red review
- * or a red merge reads `blocked, waits on plan` (`waitsOnPlan`). A goal that does not parse is
+ * or a red merge reads `blocked, waits on plan` (`waitsOnPlan`); a waiting one,
+ * `waiting on <programme>/<goal>, …` — what in its `after` has not landed. A goal that does not parse is
  * listed with its first problems, not skipped.
  */
 function listGoals(args, ctx) {
@@ -264,7 +330,8 @@ function listGoals(args, ctx) {
     stderr.write(`mc: ${programme} is not a programme name — lower-case letters, digits and hyphens\n`);
     return 2;
   }
-  const goals = programsGoals({ home, list, read }).filter((goal) => programme === undefined || goal.programme === programme);
+  const all = programsGoals({ home, list, read });
+  const goals = all.filter((goal) => programme === undefined || goal.programme === programme);
   if (goals.length === 0) { stdout.write('mc: no goals\n'); return 0; }
   for (const goal of goals) {
     const name = `${goal.programme}/${goal.goal}`;
@@ -273,7 +340,9 @@ function listGoals(args, ctx) {
       continue;
     }
     const next = (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
-    const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan` : goal.status;
+    const { pending } = afterOf(goal, all);
+    const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan`
+      : (goal.status === 'waiting' && pending.length ? `waiting on ${pending.join(', ')}` : goal.status);
     stdout.write(`${name} · ${goal.repos.join(',')} · ${status} · ${sessions(goal.log)} sessions · ${next}\n`);
   }
   return 0;
