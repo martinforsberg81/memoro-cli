@@ -85,7 +85,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | fact | file | written by |
 |---|---|---|
 | the plan, its state and its steps | `~/mc/programs/<programme>/<name>/PLAN.json`, read as it stands (no `git fetch`) | the step sessions, through `mc run` |
-| the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/plan/`, nor `mc work`, whose areas are under `~/mc/work/` |
+| the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/programs/`, nor `mc work`, whose areas are under `~/mc/work/` |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 | whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |

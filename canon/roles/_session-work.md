@@ -24,11 +24,11 @@ nothing in the plan waits for that.
 
 1. Branch from main: `git fetch origin && git checkout -B <slug> origin/main`.
    `<slug>` is never a project directory name — `mc merge` would check the
-   PR against that plan. In `~/mc/plan/<programme>/`, go back to
+   PR against that plan. In `~/mc/programs/<programme>/`, go back to
    `plan/<programme>` when done.
 2. Build in pieces. At each review point stop and show Martin the thing
-   itself — the diff, a screenshot (`mc shot`), the running app (`mc dev`) —
-   with what you would do next. Build nothing past a point he has not seen.
+   itself — the diff, a screenshot (`mc shot`), the running app
+   (`mc dev open <surface>`) — with what you would do next. Build nothing past a point he has not seen.
 3. `mc gate <files…>` (the tests your change reaches), commit, `mc publish` —
    it pushes, opens the PR and queues it for the merger in one call (a
    docs-only PR runs the tests that read documents and lands in the call when they are green); `mc step` and `merger.log` say what came

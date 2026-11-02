@@ -55,10 +55,12 @@ What canon holds today:
 
 | role | model | who launches it |
 |---|---|---|
-| `brief` | opus | `mc brief`, a foreground session in `~/mc/` |
+| `brief` | opus | `mc brief`, a foreground session in `~/mc/brief/` |
 | `helper` | sonnet | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | the inbox drain, one headless turn per file |
-| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/plan/<programme>/` |
+| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/` |
+| `goal` | opus | `mc run`, one headless session on a goal; no steps or merge authority |
+| `mend` | opus | the merger, one headless repair of a red pull request |
 | `step` | opus | `mc run`, one step of a `PLAN.json` |
 | `review` | opus | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
 | `worker` | opus | `mc worker`, and every conversation in that area after |
@@ -171,7 +173,7 @@ vanished is not.
 them frontmatter — so an `mc plan <programme>` session was told its model,
 `_common.md` and its first prompt, and nothing about planning. #580 was called
 *"Every role says a turn is the cost; the plan role gets a body"* and landed
-only the first half. It has one now: the programme as the unit, `~/mc/plan/`
+only the first half. It has one now: the programme as the unit, `~/mc/programs/`
 and why it is not a workarea, the two kinds of work that are its own (thinking
 a programme through, and a `plan-review` park), the project the brief has
 already decided and it therefore does not take, and the shared passage above.
@@ -324,3 +326,28 @@ tool will accept. `modelArgs` in
 as given — the tool is the authority on its own model names — so a name it
 rejects fails at launch and nowhere earlier. `plan`'s move to `fable` was
 verified by opening a real planning session with it (2026-09-05, #614).
+
+
+## Session identity is not only an instruction argument
+
+Every launch sets `MC_ROLE` for its own session, including resumed foreground
+sessions and tmux replacements. `MC_PROGRAMME` accompanies plan, step, goal and
+review launches when the programme is known; a mend reads it from the step's
+register when there is one. The intake turn sets `MC_ROLE=intake`, not `helper`.
+An ordinary work conversation sets `MC_ROLE=work`; a worker uses `worker`.
+Launchers clear inherited role, programme, goal and step identity first, so a
+child never inherits its caller's job by accident.
+
+[`session-role.js`](../../src/mc/session-role.js) is shared by the launchers,
+the SessionStart hook and the `mc plan` refusal. It reads `MC_ROLE` first, then
+older `MC_GOAL` and `MC_STEP` markers, then cwd under the work root. Programme
+directories identify an interactive plan session; their `goals/<goal>/`
+subtrees identify goal sessions instead. Both step layouts, the mend directory,
+brief, helper and intake have cwd fallbacks. An unrecognised directory is
+unknown, not a guessed role. The hook names what it checked in its first line.
+
+`mc plan` is the person's entrance. It refuses a recognised session, or a
+Claude/Codex session marker, before choosing a programme or creating anything.
+Plan changes inside a session use `mc project new`, `mc project step add` and
+`mc project send`. The plan session is interactive with Martin; a headless plan
+session is not built yet.

@@ -4,12 +4,15 @@ Repo-owned instruction contract for **Claude Code**. The full, tool-agnostic
 content lives at [`docs/coding-agent-protocol.md`](docs/coding-agent-protocol.md) — **read
 that first**.
 
-Work here is projects: a `PLAN.json` under `docs/project/<programme>/<project>/`
-on `main`, written by `mc plan`, stepped by `mc run`, landed through
-`mc merge`, closed out into `docs/project/project_log.md` and
-`docs/technical/`. Open questions become decision files that `mc brief`
-answers. The protocol's *How work is organized* is the whole of it — you do
-not write plan state by hand, and you do not decide.
+Work here is projects: `PLAN.json` and `STATE.json` under
+`~/mc/programs/<programme>/<project>/`, written through `mc project` and
+`mc step`, built by `mc run`, landed through `mc merge`. Martin opens an
+interactive plan session in `~/mc/programs/<programme>/` with `mc plan`.
+A session already there never runs `mc plan`: use `mc project new`,
+`mc project step add` and `mc project send`. `MC_ROLE` names a launched
+session; SessionStart names the role first, with cwd fallback for a session
+opened by hand. A headless plan session is not built yet. The protocol's
+*How work is organized* is the account; never edit plan state by hand.
 
 Beside projects, a goal is `GOAL.md` and `LOG.md` and a worktree per repository
 under `~/mc/programs/<programme>/goals/<goal>/`: a goal session logs with

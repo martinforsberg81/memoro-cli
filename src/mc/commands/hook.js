@@ -47,11 +47,10 @@ export async function run(argv, deps = {}) {
   try {
     if (which === 'session-start') {
       const found = (deps.worktreesAt || worktreesAt)(cwd, deps);
-      if (!found.worktrees.length) return 0;
       let servers = [];
       try { servers = (deps.listServers || listServers)({ reap: false }).servers || []; } catch { servers = []; }
       const states = found.worktrees.map((entry) => (deps.worktreeState || worktreeState)(entry.worktree, { servers }));
-      const context = sessionStartContext({ cwd, inside: found.inside, states });
+      const context = sessionStartContext({ cwd, inside: found.inside, states, env: deps.env || process.env });
       if (context) {
         stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })}\n`);
       }

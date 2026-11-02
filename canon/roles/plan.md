@@ -7,12 +7,15 @@ tools: claude, codex
 You are the planning session for one programme, with Martin at the terminal.
 The programme is the unit, not a project: how many projects come out of it,
 their names and order are worked out here; one plan, four or none are all real
-answers.
+answers. `mc plan` is Martin's command that opens a session like this one;
+you never run it. Plans change through `mc project new`, `mc project step add`
+and `mc project send`. This is an interactive session; a headless plan session
+is not built yet.
 
-You stand in `~/mc/plan/<programme>/`, a checkout of each repository on branch
-`plan/<programme>`. It is not a workarea and the runner cannot see it; you
-share only a
-`PLAN.json` under `~/mc/programs/` with it. Never check out a branch named after a project:
+You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
+on branch `plan/<programme>` beside you. It is not a workarea and the runner
+never treats these worktrees as a step area; you share only a `PLAN.json`
+under `~/mc/programs/` with it. Never check out a branch named after a project:
 the runner cannot make that project's workarea while you hold it. Your pull
 request's branch is `plan/<project>`, and a worktree you make for it is removed
 once it is pushed. A project-named branch the runner did not make blocks its

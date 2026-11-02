@@ -47,52 +47,39 @@ last row should read `0%`.
 
 ## How work is organized
 
-Work is **projects**, and a project is a `PLAN.json` on `main`. This is the same
-shape in memoro; the difference is only which repository the plan lives in.
+Work is **projects** under `~/mc/programs/<programme>/<project>/`, written
+through `mc project`, not by hand. A project's `PLAN.json` describes the work;
+`STATE.json` beside it is the register, written through `mc step` and the runner.
 
 ```
-mc brief    → Martin and a session read what happened and what is waiting
-mc plan     → a foreground session on one programme, with Martin in it;
-              plans come out of it as docs/project/<programme>/<project>/PLAN.json
-mc run      → the runner takes one step of one ready plan, in a fresh session
-mc merge    → the gate, then the squash
-              close-out → project_log.md + docs/technical/
+Person: mc brief / mc plan / mc helper → opens an interactive session
+Person: mc run start|stop             → controls the headless runner
+Session: mc project new / step add / send → writes and sends a plan
+Session: mc gate / mc publish         → measures and publishes the work
 ```
 
-- **Plans live at `docs/project/<programme>/<project>/PLAN.json`.** There is one
-  programme here, `mc`. One file: the overall part — `goal`, `contract`,
-  `out_of_scope`, `success_criteria`, `documents` — then `steps[]`, each
-  carrying its own `instruction`, `done_when`, `status`
-  (`ready` | `done` | `blocked`) and `comments`. The plan has no status of
-  its own: it is the state of the first step that is not done. See
-  [`docs/project/README.md`](project/README.md).
-- **You do not write plan state by hand.** `mc plan <programme>` opens the
-  session a plan is written in, with Martin in it. Where a step stands is in
-  the register mc keeps (`~/mc/runner/projects/`), written by `mc step` and
-  `mc merge` and never in the file: the file's `status`, `pr` and `comments`
-  seed a plan the register has not seen and are read by nothing after that. A
-  step session's one edit to the plan is `met` on the criteria it met —
-  `mc merge` compares the file at the door, so a session that touched a step
-  leaves a PR it will not merge. A planning session starts a parked step with
-  `mc step ready <project> <n>`, not by editing the file.
-- **You do not decide.** An open question becomes a
-  `decisions/<programme>-<n>.md` file at the root of the session that raised it
-  — `~/mc/<workarea>/` for a step session, `~/mc/plan/<programme>/` for a
-  planning one: the question, the options, one recommendation, and no menu.
-  Martin answers it in `mc brief`. Those directories are outside git and do not
-  survive the session, so a ruling worth keeping is carried into
-  [`docs/project/mc/rulings.md`](project/mc/rulings.md) **before** the file is
-  retired. (`mc brief --collect` deleted an answered file once no plan was
-  still waiting on it; it is gone, and nothing deletes one now.)
-- **A workarea is `~/mc/<project>/memoro-cli`,** a worktree on branch
-  `<project>` from `origin/main`. `mc` owns it: it is created by `mc run` when
-  it first steps that project, or by `mc work add`, and closed by `mc run` in
-  the round after its plan says `done`. Never remove one, or its branch, by
-  hand. A planning session has no workarea and makes none: it lives at
-  `~/mc/plan/<programme>/`, which the runner cannot see (see
-  [`docs/technical/mc-plan.md`](technical/mc-plan.md)).
-- **`status: ready` is what starts the runner on a plan.** Nothing else is a
-  queue. Do not set it on a plan that is not ready to be executed unattended.
+- **A session is already a session.** Never run `mc plan` to create a plan:
+  it is Martin's command to open or resume the interactive plan session.
+  `mc plan` refuses recognised sessions and Claude/Codex session markers.
+  Use `mc project new`, `mc project step add` and `mc project send` instead.
+- **The plan session stands in `~/mc/programs/<programme>/`.** Repository
+  worktrees on `plan/<programme>` are beside the programme's projects and
+  documents. It is not the runner's workarea. A step stands in
+  `~/mc/runner/step/<project>/<repo>/`; mc owns that area, and removes it when
+  the project is archived. Never remove it or its branch by hand.
+- **Role identity travels in the environment.** `MC_ROLE` names the launched
+  role and `MC_PROGRAMME` names its programme when known. SessionStart names
+  the role first; a session opened by hand gets a cwd fallback, not a guessed
+  identity from a neighbouring goal or project.
+- **You do not write plan state by hand.** `mc project` writes plans and
+  criteria; `mc step` records progress. `mc project send` validates and sends
+  finished work for unattended execution. A parked step is restarted with
+  `mc step ready <project> <n>`, after its question has been answered.
+- **You do not decide what belongs to Martin.** In the interactive plan or
+  brief session, ask the one thing. A headless step records what it found with
+  `mc step note` and `mc step blocked --on <name> --reason "…"`. Carry the
+  answer into the plan before restarting it; repository rulings belong in
+  `docs/project/<programme>/rulings.md`.
 
 Beside projects there are **goals**. A goal is `GOAL.md` (its brief and its
 `status`), `LOG.md` (one entry per session) and a worktree per repository on
@@ -100,7 +87,8 @@ Beside projects there are **goals**. A goal is `GOAL.md` (its brief and its
 in the worktree. A session on a goal does the work, commits, pushes its pull
 request with `mc publish --no-merge`, and ends with `mc goal log` saying what it
 did and what comes next. A goal has no steps, register or merge door: `mc merge`
-stays a person's or a plan session's act. See
+stays a person's or the interactive plan session's act. That is the session
+Martin opens; a headless plan session is not built yet. See
 [`docs/technical/mc-goals.md`](technical/mc-goals.md).
 
 ## Working on this codebase as a coding agent

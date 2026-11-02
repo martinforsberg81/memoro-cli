@@ -244,7 +244,7 @@ the archive. `~/mc/proposals/` holds what nobody has decided yet and only that; 
 left there after its project exists is a decision that gets taken twice.
 
 **That session has no workarea and makes none.** It lives at
-`~/mc/plan/<programme>/`, with a checkout of each repository on branch
+`~/mc/programs/<programme>/`, with a checkout of each repository on branch
 `plan/<programme>` — mc's own directory, which `mc run` cannot see. What a
 planning session and the runner share is a `PLAN.json` under `~/mc/programs/`, and nothing
 else; the `<project>` directory name is what the runner will call that
@@ -301,7 +301,7 @@ never merges: a goal session publishes with `mc publish --no-merge`. See
 
 Decisions are raised as files under a `decisions/` directory at the root of the
 session that raised them: `~/mc/<workarea>/decisions/` for a step session,
-`~/mc/plan/<programme>/decisions/` for a planning one. Neither directory is
+`~/mc/programs/<programme>/decisions/` for a planning one. Neither directory is
 part of this repository and neither survives its session, so a document here
 cites a decision **by name, never by path** — `` [`mc-1`](mc/rulings.md) ``,
 not `` `~/mc/mc-utredning/decisions/mc-1.md` ``. A path out of the repository
@@ -335,16 +335,18 @@ folder kept beside its checkout moved to `~/mc/runner/log/closed/<name>/`
 removed by a machine — it is listed in `~/mc/runner/unplanned-workareas.md`
 and on the page, for Martin.
 
-None of that reaches a planning session. `~/mc/plan/<programme>/` holds no
-top-level checkout, so neither `mc run`'s `workareas()` nor `mc status`'s
-`areasWithCheckout()` can see what is under it: no machine archives or closes
-a planning session, and none lists it as a workarea without a plan.
+None of that makes a programme's repository worktrees into a step area.
+The interactive plan session stands in `~/mc/programs/<programme>/`; current
+step areas are under `~/mc/runner/step/`. The runner reads the projects and goals
+under `programs/`, not the programme session's repository checkouts as workareas.
 
-**A programme is archived by hand, with `mc plan <programme> --archive`.**
+**A programme is archived by the person, with `mc plan <programme> --archive`.**
+A session never calls `mc plan`, even to archive; the interactive plan session
+uses `mc project` to change plans.
 Nothing can tell that a programme is over — one whose projects are all done is
 also where the next piece of that work belongs — so this is typed, never
 triggered. It refuses, touching nothing, while any plan under the programme is
-still under `~/mc/programs/`, or while releasing `~/mc/plan/<programme>/`
+still under `~/mc/programs/`, or while releasing `~/mc/programs/<programme>/`
 would keep something (uncommitted work, commits main lacks, a shell standing
 in it, a file somebody put there). Otherwise, in every repository whose
 `docs/project/` holds the programme, it removes `docs/project/<programme>/` and

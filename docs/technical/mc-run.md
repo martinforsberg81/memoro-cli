@@ -559,7 +559,7 @@ An open pull request is not in the table: the pick answered it.
 There is no `triage` and there never will be again: the runner runs plans, it
 does not write them. Planning is `mc plan <programme>`, a session at the
 terminal with Martin in it, and it happens somewhere the runner cannot reach —
-`~/mc/plan/<programme>/`, not a workarea (see [`mc-plan.md`](mc-plan.md)). The
+`~/mc/programs/<programme>/`, not a workarea (see [`mc-plan.md`](mc-plan.md)). The
 one thing the runner writes into a plan is a step it could not start, and it
 never writes `ready`. The runner never read decision files, counted them, or
 started a project because one was answered, and there are none to read now. A

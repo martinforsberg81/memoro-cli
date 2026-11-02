@@ -32,7 +32,7 @@ import { REAL_GIT_FILES } from './_real-git-files.mjs';
 const tmpRoot = mkdtempSync(join(tmpdir(), 'mc-test-tmp-'));
 // A gate started by a session runs its tests inside that session's environment.
 // The session's identity is not the suite's: the verbs read it from process.env.
-for (const name of ['MC_PROGRAMME', 'MC_PROJECT']) delete process.env[name];
+for (const name of ['MC_ROLE', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_GOAL', 'MC_STEP', 'CLAUDECODE', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_CI']) delete process.env[name];
 process.env.TMPDIR = tmpRoot;
 process.once('exit', () => rmSync(tmpRoot, { recursive: true, force: true }));
 

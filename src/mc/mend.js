@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 
+import { withoutSessionIdentity } from './session-role.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -209,7 +210,7 @@ const realGit = async (cwd, args) => {
 const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
 /** What a session's environment must not hand the mend: it is nobody's step session. */
-const SESSION_ENV = ['MC_STEP', 'MC_PROJECT', 'MC_REPO', 'MC_WORKAREA'];
+const SESSION_ENV = ['MC_REPO', 'MC_WORKAREA'];
 
 /**
  * The step's own words from the plan, or null: read from disk when the
@@ -242,7 +243,9 @@ export async function runMend({ root, job, report, deps = {} }) {
   const now = deps.now || (() => new Date());
   const git = deps.git || realGit;
   const read = deps.read || realRead;
-  const env = { ...(deps.env || process.env) };
+  const env = { ...withoutSessionIdentity(deps.env || process.env), MC_ROLE: 'mend' };
+  const programme = job.step ? readEntry(root, job.step.project, { read })?.programme : null;
+  if (programme) env.MC_PROGRAMME = programme;
   for (const key of SESSION_ENV) delete env[key];
   const t0 = now().getTime();
   const seconds = () => Math.round((now().getTime() - t0) / 1000);

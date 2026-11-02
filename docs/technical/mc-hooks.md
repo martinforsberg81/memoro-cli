@@ -6,7 +6,7 @@
 behöver göra … flytta mekaniska delar från modell till logik." The same day a
 session had shown why, three ways:
 
-- It started in a workarea (`~/mc/plan/assistant`), so neither memoro's
+- It started in a workarea (then `<work root>/plan/assistant`, before layout 2), so neither memoro's
   `CLAUDE.md` nor its `.claude/settings.json` was loaded.
 - Its memoro worktree stood on a branch whose PR had merged and which was 1025
   commits behind `origin/main`; it read and measured that code for an hour.
@@ -49,7 +49,17 @@ themselves always exit 0 and print at most one JSON object.
 
 ## `mc hook session-start`
 
-Reads the hook JSON (`cwd`) on stdin. The worktrees are the one `cwd` stands
+Reads the hook JSON (`cwd`) on stdin. Its first line names the session's role
+and programme: `MC_ROLE` first, then older `MC_GOAL`/`MC_STEP` markers, then cwd
+under the work root for a session opened by hand. In `~/mc/programs/mc/` it
+names the plan session for `mc`, says `mc plan` is the person's entrance and
+that this session never runs it, and points to `mc project`. A goal subtree is
+never classified as its parent programme's plan session. See
+[session identity](mc-roles.md#session-identity-is-not-only-an-instruction-argument).
+When the role is unknown, the first line names the variables and cwd it checked.
+This identity is printed even without a known repository.
+
+The worktrees are the one `cwd` stands
 in, or — in a workarea — each child directory that is a worktree of a
 repository `defaultRepos` names, decided by the shared git directory. For each,
 from local refs only (no fetch, so it is instant): branch, behind and ahead of
@@ -67,7 +77,8 @@ it:
 
 Then the toolbox: one line per job, the verb first. The answer is
 `{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }`.
-Outside mc's repositories it prints nothing.
+Repository state is omitted when no known worktree is found; role identity is
+still printed.
 
 ## `mc hook pre-tool`
 

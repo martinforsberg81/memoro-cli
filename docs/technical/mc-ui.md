@@ -186,7 +186,7 @@ below is about.
   for status and PR ownership readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
   `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
-  the branch rule; a plan session's, checked out under `~/mc/plan/<programme>/`
+  the branch rule; a plan session's, checked out under `~/mc/programs/<programme>/`
   or called `plan/…`; a workarea's; one checked out somewhere else; or
   nobody's. The heading counts them all — `8 open · 4 on a step · 1 plan ·
   1 nobody's` — and the rows are only the ones no other row draws: a
