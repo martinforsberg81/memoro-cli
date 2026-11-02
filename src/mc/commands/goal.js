@@ -12,6 +12,7 @@
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's, and mc writes the status line and the log, nothing else.
  */
+import { commandUsage } from '../command-help.js';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
@@ -277,11 +278,5 @@ function stampSeconds(date) {
 }
 
 export function usage() {
-  return [
-    'usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main\n',
-    '        mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|blocked|done]   append a session\'s entry to LOG.md; the goal is MC_GOAL\'s when none is named\n',
-    '        mc goal open|blocked|done [<programme>/<goal>] [--reason "…"]   set the goal\'s status, and log the reason\n',
-    '        mc goal show <programme>/<goal>   the goal, its last three log entries, and each worktree\'s state\n',
-    '        mc goal list [<programme>]   every goal, one line each\n',
-  ].join('');
+  return commandUsage('goal');
 }

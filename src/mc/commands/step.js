@@ -37,6 +37,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
+import { commandUsage } from '../command-help.js';
 import { run as runGit } from '../git.js';
 import { currentIndex, listEntries, parseStepEnv, readEntry, updateStep } from '../register.js';
 import { workRoot } from '../paths.js';
@@ -353,14 +354,5 @@ export function listAll(root, io = {}) {
 }
 
 export function usage() {
-  return [
-    'usage — mc step                                   this session\'s step (MC_STEP)\n',
-    '        mc step <project> [--json]                 every step of a project\n',
-    '        mc step failed [<project> <n>] --reason "…"\n',
-    '        mc step blocked [<project> <n>] --on <decision> | --on-project <project> [--reason "…"]\n',
-    '        mc step blocked [<project> <n>] --until <iso> | --after-deploy [<m>] [--hours <h>] [--reason "…"]\n',
-    '        mc step note [<project> <n>] "…"\n',
-    '        mc step ready <project> <n> [--answer "…"]\n',
-    '        mc step done <project> <n> [--pr <n>]\n',
-  ].join('');
+  return commandUsage('step');
 }
