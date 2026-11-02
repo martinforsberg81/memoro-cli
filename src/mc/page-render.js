@@ -1263,7 +1263,11 @@ function programmeCounts(c, group, columns) {
   const goalsPart = goals ? [{ text: goalWords, styles: ['grey'] }] : [];
   const statuses = group.statuses || {};
   const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
-  if (!total) return pad(paint(c, [{ text: 'no project yet', styles: ['grey'] }, ...goalsPart], room), room);
+  // A programme whose only work is goals says those and nothing about the
+  // projects it lacks: `no project yet` is the dormant programme's words, and
+  // the collapsed page draws none of those (Martin, 2026-11-02).
+  if (!total && goals) return pad(paint(c, [{ text: goalWords.slice(3), styles: ['grey'] }], room), room);
+  if (!total) return pad(paint(c, [{ text: 'no project yet', styles: ['grey'] }], room), room);
   const ready = statuses.ready || 0;
   const waiting = statuses.waiting || 0;
   const blocked = statuses.blocked || 0;
@@ -1290,18 +1294,35 @@ function programmeCounts(c, group, columns) {
  * page's own numbers were all on one heading forty rows above, so a programme's
  * share of them had to be counted off its rows by hand.
  */
-function programmeLine(c, wide, group) {
-  const column = programmeColumns(wide);
-  const session = group.planning;
-  const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
-  const counts = programmeCounts(c, group, column.counts);
+/**
+ * A programme's open plan sessions by provider, `claude 1 · codex 2`, or ''
+ * when it has none. The heading draws it after `plan`; `mc programs list`
+ * says it in the same words.
+ */
+export function planSessionWords(group) {
+  return Object.entries(planProviders(group)).map(([provider, n]) => `${provider} ${n}`).join(' · ');
+}
+
+/** The same as data: `{ claude: 1, codex: 2 }`, providers by name. */
+export function planProviders(group) {
   const providers = {};
-  for (const item of group.planning_sessions || (session ? [session] : [])) {
+  for (const item of group.planning_sessions || (group.planning ? [group.planning] : [])) {
     const provider = item.tool === 'claude-code' ? 'claude' : item.tool || 'unknown';
     providers[provider] = (providers[provider] || 0) + 1;
   }
-  const meta = Object.entries(providers).sort(([a], [b]) => a.localeCompare(b))
-    .map(([provider, n]) => `${provider} ${n}`).join(' · ');
+  return Object.fromEntries(Object.entries(providers).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** `done 13 · blocked 5` — states by count, biggest first, as the PROGRAMMES heading draws them. */
+export function statusRollup(statuses = {}) {
+  return Object.entries(statuses).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function programmeLine(c, wide, group) {
+  const column = programmeColumns(wide);
+  const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
+  const counts = programmeCounts(c, group, column.counts);
+  const meta = planSessionWords(group);
   const detail = meta ? `plan ${meta}` : '·  no plan session';
   // Provider counts take precedence over the programme's rollup on a narrow
   // terminal; the headline and JSON still carry that rollup.
@@ -1395,16 +1416,36 @@ function blockedLines(lines, c, wide, blocked, waiting = 0) {
 }
 
 function programmesLines(lines, c, wide, programmes, expand) {
-  const statuses = Object.entries(programmes.statuses || {})
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const statuses = statusRollup(programmes.statuses)
     .map(([status, n]) => ({ text: `${status} ${n}`, styles: statusTone(status) }));
   const groups = programmes.programmes || [];
+  // A page from before the flag has every programme active, as it was drawn.
+  const asleep = groups.filter((group) => group.dormant);
+  const dormant = programmes.dormant ?? asleep.length;
+  const active = programmes.active ?? groups.length - dormant;
   heading(lines, c, wide, 'PROGRAMMES', [
-    { text: `${groups.length} programme${groups.length === 1 ? '' : 's'} · ${programmes.count} project${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
+    { text: `${active} active · ${dormant} dormant · ${programmes.count} project${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
     ...between(statuses, ' · '),
   ], 'p  plan a programme');
 
+  // The dormant programmes — no project, no goal — are this one line and not a
+  // heading each: on 2026-11-02 they were 27 of 41 headings, every one saying
+  // `no project yet`. Directly under the heading, where the counts it explains
+  // are, rather than after the last active group's rows, where it reads as part
+  // of that programme. A live plan session is the one thing on a dormant
+  // programme somebody may come looking for, so the line counts those.
+  // Expanded (`a`), every programme is drawn and the line is not needed.
+  if (!expand && asleep.length) {
+    const planned = asleep.filter((group) => planSessionWords(group)).length;
+    say(lines, c, wide, 2, [
+      `${asleep.length} dormant`,
+      planned ? `${planned} with a plan session` : '',
+      'mc programs list',
+    ].filter(Boolean).join(' · '));
+  }
+
   for (const group of groups) {
+    if (group.dormant && !expand) continue;
     lines.push(programmeLine(c, wide, group));
     // What is actionable keeps its row; what is stopped is the `N blocked` on
     // the programme's own heading and nothing more — a row under it said the
