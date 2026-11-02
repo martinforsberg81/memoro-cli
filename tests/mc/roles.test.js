@@ -31,6 +31,7 @@ import {
   sharedRoleText,
 } from '../../src/mc/roles.js';
 import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
+import { canonSkillsDir } from '../../src/mc/skills.js';
 
 const WORKER_MD = `---
 name: worker
@@ -224,10 +225,12 @@ describe('the text every role session shares', () => {
   });
 
   // 2026-10-10: a step session ran `kill` on the merger's test process,
-  // taking it for its own hung test. The rule reaches every session.
-  it('tells a step session never to signal a process it did not start', () => {
+  // taking it for its own hung test. The rule is the `processes` skill now,
+  // and the step session is pointed at it.
+  it('points a step session at the rule never to signal a process it did not start', () => {
     const told = instructionsFor('claude-code', readCanonRole('build-project').overlay);
-    assert.match(told, /Never signal a process you did not start/u);
+    assert.match(told, /Skill `mc-processes`/u);
+    assert.match(readFileSync(join(canonSkillsDir(), 'processes', 'SKILL.md'), 'utf8'), /Never signal a process you did not start/u);
   });
 
   // A file named `_common.md` in a catalogue directory is text, not a role:

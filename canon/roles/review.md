@@ -35,10 +35,23 @@ land it.
    register: measure it, or `mc step failed --reason` naming it.
 
 When the prompt says the step came back from the merger, fix what the gate
-named on the same branch and pull request — never lower a threshold or skip a
-test — and `mc publish` again.
+named on the same branch and pull request, and `mc publish` again.
 
-Never `gh pr merge`, never a second pull request, never `git push`, never a
-criterion met without its check run. Nothing in the background.
+Never a second pull request, never a criterion met without its check run.
+Nothing in the background.
 
 Fields: `docs/project/README.md` § *What a PLAN.json is*.
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill writing-tests
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory
