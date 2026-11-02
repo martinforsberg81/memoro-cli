@@ -24,29 +24,49 @@ export function usage() {
   return commandUsage('model');
 }
 
+/**
+ * Each subcommand and the scan it is read with; '' is the bare verb, '*' a
+ * first word that names something. A route's `check` is what the words after
+ * it may not be: null, or what is wrong. The verb runs it before it touches
+ * the catalog, and help-routes.test.js walks the help with it.
+ */
+const SCAN = { booleans: ['--json'] };
+export const ROUTES = Object.fromEntries(['', 'list', 'add', 'remove', 'set'].map((verb) => [
+  verb, { ...SCAN, check: ({ flags, positional }) => refusal(verb || 'list', positional, flags) },
+]));
+
+/** What `mc model <verb> <rest…>` may not be, the candidate's own spelling aside. */
+function refusal(verb, rest, flags) {
+  if (verb === 'list') return rest.length ? `unexpected arg: ${rest[0]}` : null;
+  if (!['add', 'remove', 'set'].includes(verb)) return `unknown model command "${verb}"`;
+  if (flags.json) return '--json is for mc model list';
+  if (verb === 'add' || verb === 'remove') {
+    if (rest.length !== 2) return verb === 'add' ? 'mc model add fast|large <tool>:<model>:<effort>' : 'mc model remove fast|large <tool>:<model>';
+    return CLASSES.includes(rest[0]) ? null : `"${rest[0]}" is not a class: ${verb} takes fast or large`;
+  }
+  return rest.length !== 2 || rest[0] !== 'review' ? 'mc model set review <tool>:<model>:<effort>' : null;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const { flags, positional, error } = scanArgs(argv, { booleans: ['--json'] });
+  const { flags, positional, error } = scanArgs(argv, SCAN);
   if (error) return usageError(stderr, error);
   const [verb = 'list', ...rest] = positional;
+  const refused = refusal(verb, rest, flags);
+  if (refused) return usageError(stderr, refused);
 
   try {
     if (verb === 'list') {
-      if (rest.length) return usageError(stderr, `unexpected arg: ${rest[0]}`);
       const models = readModels(env);
       if (flags.json) stdout.write(`${JSON.stringify({ ok: true, ...models }, null, 2)}\n`);
       else stdout.write(listText(models));
       return 0;
     }
 
-    if (flags.json) return usageError(stderr, '--json is for mc model list');
-
     if (verb === 'add') {
-      if (rest.length !== 2) return usageError(stderr, 'mc model add fast|large <tool>:<model>:<effort>');
       const [cls, spec] = rest;
-      if (!CLASSES.includes(cls)) return usageError(stderr, `"${cls}" is not a class: add takes fast or large`);
       const value = parseCandidate(spec);
       const models = changeModels(env, (catalog) => addCandidate(catalog, cls, value));
       stdout.write(`mc: added ${candidateSpec(value)} to ${cls} — ${cls} is now ${summary(models[cls])}\n`);
@@ -54,9 +74,7 @@ export async function run(argv, deps = {}) {
     }
 
     if (verb === 'remove') {
-      if (rest.length !== 2) return usageError(stderr, 'mc model remove fast|large <tool>:<model>');
       const [cls, target] = rest;
-      if (!CLASSES.includes(cls)) return usageError(stderr, `"${cls}" is not a class: remove takes fast or large`);
       const value = parseTarget(target);
       const models = changeModels(env, (catalog) => removeCandidate(catalog, cls, value));
       stdout.write(`mc: removed ${value.tool}:${value.model} from ${cls} — ${cls} is now ${summary(models[cls])}\n`);
@@ -64,7 +82,6 @@ export async function run(argv, deps = {}) {
     }
 
     if (verb === 'set') {
-      if (rest.length !== 2 || rest[0] !== 'review') return usageError(stderr, 'mc model set review <tool>:<model>:<effort>');
       const value = parseCandidate(rest[1]);
       changeModels(env, (catalog) => setReview(catalog, value));
       stdout.write(`mc: review is now ${candidateSpec(value)}\n`);
@@ -77,8 +94,7 @@ export async function run(argv, deps = {}) {
     }
     throw caught;
   }
-
-  return usageError(stderr, `unknown model command "${verb}"`);
+  return 2; // refusal() has answered every other verb
 }
 
 function usageError(stderr, message) {

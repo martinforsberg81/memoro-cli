@@ -1,5 +1,9 @@
 /** Script keys are released only through the committed source-closure runner. */
 import { listScriptKeys, runScriptWithKeys } from '../keys-run.js';
+import { commandUsage } from '../command-help.js';
+
+/** The two subcommands; a script's own arguments are its own (help-routes.test.js walks the help with it). */
+export const ROUTES = { run: {}, list: {} };
 
 export async function run(argv, deps = {}) {
   const [verb, script, ...args] = argv;
@@ -14,7 +18,5 @@ export async function run(argv, deps = {}) {
 // Everything after the script is the script's argv, including --help.
 export function handlesHelp(argv) { return argv[0] === 'run' && argv.length >= 2 && !argv[1].startsWith('-'); }
 export function usage() {
-  return 'usage — mc keys run <script> [args…]\n'
-    + '        mc keys list\n'
-    + '        Uses the repository’s committed .mc-keys.json; never exports plaintext.\n';
+  return commandUsage('keys');
 }

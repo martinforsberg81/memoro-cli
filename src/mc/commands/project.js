@@ -44,7 +44,7 @@ import { archivedProjectsHome, layoutVersion, programsHome, runnerDir, runnerTab
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { cwdsOfUser, processesStandingIn } from '../standing.js';
 import { discardWorkArea } from '../work-area.js';
-import { scanArgs } from './flags.js';
+import { only, scanArgs } from './flags.js';
 import { runAmend } from './project-amend.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
@@ -54,6 +54,22 @@ const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-fil
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
 /** The words `mc project` takes as its verb. Any other single word is a project's name, for `mc project <name>`. */
 const VERB_WORDS = ['criterion', 'new', 'edit', 'amend', 'step', 'send', 'archive', 'discard'];
+/** The one scan every form of the verb is read with. */
+const SCAN = {
+  booleans: ['--apply', '--json', '--offline'],
+  strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file'],
+  repeatable: ['--contract', '--out-of-scope'],
+};
+/** The flags each form keeps of that scan; the run below refuses by the same lists. */
+const FORM_FLAGS = {
+  new: NEW_FLAGS, edit: EDIT_FLAGS, amend: ['--amendment-file', '--reason'], send: [], archive: [], discard: ['--apply'],
+  'criterion add': ['--check'], 'criterion edit': ['--check'], 'criterion drop': ['--reason'],
+  'criterion met': [], 'criterion unmet': [],
+  'step add': STEP_ADD_FLAGS, 'step edit': STEP_EDIT_FLAGS,
+  '*': ['--json', '--offline'],
+};
+/** Each form and what it accepts; `*` is a project's name (help-routes.test.js walks the help with it). */
+export const ROUTES = Object.fromEntries(Object.entries(FORM_FLAGS).map(([form, names]) => [form, only(SCAN, names)]));
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -64,72 +80,68 @@ export async function run(argv, deps = {}) {
   const io = { read: deps.read, write: deps.write, lock: deps.lock, append: deps.append };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
-  const scanned = scanArgs(argv, {
-    booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason', '--tool', '--amendment-file'],
-    repeatable: ['--contract', '--out-of-scope'],
-  });
+  const scanned = scanArgs(argv, SCAN);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const [noun, verb, ...rest] = scanned.positional;
   if (scanned.flags.apply && noun !== 'discard') { stderr.write(usage()); return 2; }
   if (noun === 'amend') {
-    const extra = onlyFlags(scanned, ['--amendment-file', '--reason']);
+    const extra = onlyFlags(scanned, FORM_FLAGS.amend);
     if (extra) { stderr.write(`mc: amend takes no ${extra}\n`); return 2; }
     return runAmend(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'send') {
-    const extra = onlyFlags(scanned, []);
+    const extra = onlyFlags(scanned, FORM_FLAGS.send);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
     return sendPlan(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun === 'archive') {
-    const extra = onlyFlags(scanned, []);
+    const extra = onlyFlags(scanned, FORM_FLAGS.archive);
     if (extra) { stderr.write(`mc: archive takes no ${extra}\n`); return 2; }
     return archiveProject(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun === 'discard') {
-    const extra = onlyFlags(scanned, ['--apply']);
+    const extra = onlyFlags(scanned, FORM_FLAGS.discard);
     if (extra) { stderr.write(usage()); return 2; }
     return discardProject(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun !== undefined && !VERB_WORDS.includes(noun)) {
     if (scanned.positional.length !== 1) { stderr.write(usage()); return 2; }
-    const extra = onlyFlags(scanned, ['--json', '--offline']);
+    const extra = onlyFlags(scanned, FORM_FLAGS['*']);
     if (extra) { stderr.write(`mc: ${noun} takes no ${extra}\n`); return 2; }
     return showProject(noun, scanned.flags, { ...deps, env, stdout, stderr });
   }
   if (noun === 'new') {
-    const extra = onlyFlags(scanned, NEW_FLAGS);
+    const extra = onlyFlags(scanned, FORM_FLAGS.new);
     if (extra) { stderr.write(`mc: new takes no ${extra}\n`); return 2; }
     return newPlan(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun === 'edit') {
-    const extra = onlyFlags(scanned, EDIT_FLAGS);
+    const extra = onlyFlags(scanned, FORM_FLAGS.edit);
     if (extra) { stderr.write(`mc: edit takes no ${extra}\n`); return 2; }
     return editPlan(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun === 'criterion' && verb === 'add') {
-    const extra = onlyFlags(scanned, ['--check']);
+    const extra = onlyFlags(scanned, FORM_FLAGS['criterion add']);
     if (extra) { stderr.write(`mc: criterion add takes no ${extra}\n`); return 2; }
     return addCriterion(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun === 'criterion' && verb === 'edit') {
-    const extra = onlyFlags(scanned, ['--check']);
+    const extra = onlyFlags(scanned, FORM_FLAGS['criterion edit']);
     if (extra) { stderr.write(`mc: criterion edit takes no ${extra}\n`); return 2; }
     return editCriterion(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'criterion' && verb === 'drop') {
-    const extra = onlyFlags(scanned, ['--reason']);
+    const extra = onlyFlags(scanned, FORM_FLAGS['criterion drop']);
     if (extra) { stderr.write(`mc: criterion drop takes no ${extra}\n`); return 2; }
     return dropCriterion(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'step' && verb === 'add') {
-    const extra = onlyFlags(scanned, STEP_ADD_FLAGS);
+    const extra = onlyFlags(scanned, FORM_FLAGS['step add']);
     if (extra) { stderr.write(`mc: step add takes no ${extra}\n`); return 2; }
     return addStep(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun === 'step' && verb === 'edit') {
-    const extra = onlyFlags(scanned, STEP_EDIT_FLAGS);
+    const extra = onlyFlags(scanned, FORM_FLAGS['step edit']);
     if (extra) { stderr.write(`mc: step edit takes no ${extra}\n`); return 2; }
     return editStep(scanned, { ...deps, env, stdout, stderr, root, io });
   }
@@ -137,7 +149,7 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  const extra = onlyFlags(scanned, []);
+  const extra = onlyFlags(scanned, FORM_FLAGS[`criterion ${verb}`]);
   if (extra) { stderr.write(`mc: criterion ${verb} takes no ${extra}\n`); return 2; }
   const [project, number] = rest.length === 2 ? rest : [parseStepEnv(env.MC_STEP)?.project, rest[0]];
   if (!project) { stderr.write('mc: which project? mc project criterion met <project> <n>, or MC_STEP in a runner session\n'); return 2; }

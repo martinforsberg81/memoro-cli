@@ -30,13 +30,17 @@ import {
 } from '../hooks.js';
 import { programsHome } from '../paths.js';
 import { syncSkills } from '../skills.js';
+import { commandUsage } from '../command-help.js';
+
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { 'session-start': {}, 'pre-tool': {}, install: { booleans: ['--check'] } };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const [which, ...extra] = argv;
   if (which === 'install') return install(extra, { stdout, stderr, deps });
-  if (!['session-start', 'pre-tool'].includes(which) || extra.length) {
+  if (!Object.hasOwn(ROUTES, which) || extra.length) {
     stderr.write(`mc: mc hook takes session-start or pre-tool\n${usage()}`);
     return 2;
   }
@@ -99,7 +103,7 @@ async function readStdin() {
  * refusal names neither the error nor the file's text, which can hold secrets.
  */
 function install(extra, { stdout, stderr, deps }) {
-  if (!(extra.length === 0 || (extra.length === 1 && extra[0] === '--check'))) {
+  if (!(extra.length === 0 || (extra.length === 1 && ROUTES.install.booleans.includes(extra[0])))) {
     stderr.write(`mc: mc hook install takes only --check\n${usage()}`);
     return 2;
   }
@@ -142,23 +146,5 @@ export function installSettings(path, { check = false, readFile = (file) => read
 }
 
 export function usage() {
-  return [
-    'usage — mc hook session-start   for a SessionStart hook: the worktrees\' branch, how far behind\n',
-    '                                origin/main, changed files, dev server, the warnings, the mc toolbox\n',
-    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*): first the PreToolUse hooks of\n',
-    '                                every worktree the session did not start in (their deny wins), then\n',
-    '                                gh pr create, gh pr edit / git push →\n',
-    '                                mc publish, gh pr merge → mc merge, npm run ci, npm test and\n',
-    '                                node --test → mc gate <files…>,\n',
-    '                                npm run dev* → mc test dev --here --url, a scratch Playwright\n',
-    '                                script → mc shot, Claude in Chrome sent to 127.0.0.1, localhost or\n',
-    '                                [::1] → mc shot --keep / mc shot next. MC_HOOK_ALLOW=1 in the\n',
-    '                                command (or #MC_HOOK_ALLOW=1 on the URL) lets it through.\n',
-    '        mc hook install [--check]  writes those two entries, or says whether they are there (exit 1 when not)\n',
-    '\n',
-    'Both read the hook JSON on stdin, print at most one JSON object, and always exit 0.\n',
-    'In ~/.claude/settings.json:\n',
-    ...MC_HOOKS.map((want) => `  "${want.event}": [{ ${want.matcher ? `"matcher": "${want.matcher}", ` : ''}"hooks": [{ "type": "command", "command": "${want.command}" }] }]\n`),
-    'Read lets memoro\'s block-sqlite-state.sh answer the Read tool too.\n',
-  ].join('');
+  return commandUsage('hook');
 }

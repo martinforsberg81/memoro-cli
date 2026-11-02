@@ -55,21 +55,13 @@ import {
   attachBackground, backgroundTarget, clearTrustDialog, insideSession, openInWorkArea,
   respawnInBackground, startInBackground,
 } from '../work-open.js';
+import { commandUsage } from '../command-help.js';
 
 const VERBS = ['add', 'remove', 'release', 'discard', 'tidy', 'stop', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export function usage() {
-  return [
-    'usage — mc work\n',
-    '        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n',
-    '        mc work add <name> <repo> [branch] [--from <ref>]\n',
-    '        mc work remove <name> <repo>\n',
-    '        mc work stop <name>\n',
-    '        mc work release <name> [--apply]\n',
-    '        mc work discard <name> [repo] [--apply]\n',
-    '        mc work tidy [--apply] [--days <n>] [--json]\n',
-  ].join('');
+  return commandUsage('work');
 }
 
 export async function run(argv, deps = {}) {

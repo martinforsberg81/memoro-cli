@@ -12,26 +12,27 @@
 import { readProgrammes } from '../page-collect.js';
 import { planProviders, statusRollup } from '../page-render.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return [
-    'usage — mc programs list [--json]   every programme, one line each: active or dormant, its repositories,\n',
-    '                                    projects with their states, goals and open plan sessions\n',
-    '\n',
-    'A programme is active with at least one project or goal, of any status; every other is dormant.\n',
-    'The page draws the active ones and one line for the dormant; --json prints this list as data.\n',
-  ].join('');
+  return commandUsage('programs');
 }
+
+/** The forms the handler reads, and what it refuses after the scan (help-routes walks them). */
+export const ROUTES = {
+  '': { booleans: ['--json'], check: ({ flags }) => (flags.json ? 'mc programs --json needs list' : null) },
+  list: { booleans: ['--json'], check: ({ positional }) => (positional.length ? `mc programs list takes no ${positional[0]}` : null) },
+  '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, { booleans: ['--json'] });
-  const [verb, ...rest] = scanned.positional;
+  const [verb] = argv.filter((word) => !word.startsWith('-'));
+  const route = verb === undefined ? ROUTES[''] : (ROUTES[verb] || ROUTES['*']);
+  const scanned = scanArgs(verb === 'list' ? argv.filter((word, at) => at !== argv.indexOf('list')) : argv, route);
   if (!scanned.error && verb === undefined && !scanned.flags.json) { stdout.write(usage()); return 0; }
-  let error = scanned.error;
-  if (!error && verb !== 'list') error = verb === undefined ? 'mc programs --json needs list' : `mc programs has no ${verb}`;
-  if (!error && rest.length) error = `mc programs list takes no ${rest[0]}`;
+  const error = scanned.error || route.check(scanned);
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
 
   const read = deps.read || (() => readProgrammes({ env: deps.env || process.env }));
