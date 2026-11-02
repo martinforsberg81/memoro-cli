@@ -180,7 +180,7 @@ calls it.
 
 - Something that must not run while areas move: a runner or its predecessor
   alive; a build session with a live pid; the merger alive; a `merges.json` entry
-  in `mending` or `landing`; a foreground planning session with a live pid in an
+  `landing`; a foreground planning session with a live pid in an
   old area; any process standing in an old area; a dev server serving one.
 - The plan itself: a destination that exists, or two moves to one destination;
   a `plan/<p>` whose name is not a valid programme name; a register whose JSON

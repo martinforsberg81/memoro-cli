@@ -165,7 +165,7 @@ below is about.
   `failed`, `timed out`. `plan` is drawn once there has been one; an outcome
   with no sessions is not drawn; `red`, `blocked` and `failed` are red and
   `timed out` yellow. `other` is what the runner logged that is not one of its session
-  kinds — merge rounds, mends, the helper's turns. The list-price cost gives
+  kinds — merge rounds, the helper's turns, and mend rows from before 2026-11-02. The list-price cost gives
   way first on a narrow terminal, its basis and then itself. `mc --json`
   carries `runner.sessions` (one per lane file: `kind`, `variant`, `goal`,
   `name`, `step`, `steps`, `repo`, `model`, the clock), `runner.lanes` (each
@@ -186,9 +186,9 @@ below is about.
   first at 80 columns. A landing carries its phase in words (`gate`, `rebase`,
   `landing`), elapsed clock and age in the queue. Waiting numbers follow in
   landing order, with grey words instead of unexplained marks: `awaits
-  <project> step <n>`, `mended`, `after #N`. Long lists become `… N more`.
-  Reds, mends and fixes stay on their repository's row. Normal work, including
-  mending and fixing, is plain terminal text; clocks, reasons and the fixing
+  <project> step <n>`, `after #N`. Long lists become `… N more`.
+  Reds and fixes stay on their repository's row. Normal work, including
+  fixing, is plain terminal text; clocks, reasons and the fixing
   session's last sentence are grey. A PR the merger answered red is red.
   Fixing still means a live runner lane holds the red's project and step; its
   last sentence is read from the last 64 KiB of `<session.log>.jsonl` with
@@ -199,7 +199,7 @@ below is about.
   rows also say `last #N · 2 h ago`, in grey, or `no landing recorded`.
   `mc --json` carries the drawing's exact input as `merges.repos[]`: `repo`,
   `state`, `pause`, `merger_stopped`, `landing`, `landings`, `waiting`, `reds`,
-  `mending`, `fixing`, `day_count`, `last`. The older aggregate fields remain
+  `fixing`, `day_count`, `last`. The older aggregate fields remain
   for status and PR ownership readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
   `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
@@ -530,8 +530,8 @@ person set it to.
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
 | WORK | the workareas no project explains: their numbers, the file | grey |
-| MERGES | repository, landing PR and phase, waiting PRs, mending and fixing | plain |
-| MERGES | clocks, queue counts, waiting explanations, mend/fix detail, idle and last landing | grey |
+| MERGES | repository, landing PR and phase, waiting PRs, fixing | plain |
+| MERGES | clocks, queue counts, waiting explanations, fix detail, idle and last landing | grey |
 | MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
 | MERGES | `paused` with reason; `merger stopped`; a PR answered red | red |
 | SESSIONS | a lane's project's or goal's open pull request, after the clock | bold cyan |

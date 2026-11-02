@@ -2,14 +2,15 @@
 
 **Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
 `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
-`reviewRoute`, `settleReview`, `goalWithoutWord`, `releaseWaiting`), `src/mc/merger.js`
-(`tellGoal`), `canon/roles/build-goal.md` (with `_build.md`) and
-`canon/roles/goal-review.md`
+`reviewRoute`, `settleReview`, `goalWithoutWord`, `releaseWaiting`, `planRoute`,
+`settlePlan`), `src/mc/merger.js` (`tellGoal`), `canon/roles/build-goal.md`
+(with `_build.md`), `canon/roles/goal-review.md` and `canon/roles/plan.md`
 
 A goal is two text files and a worktree, beside projects. It has no steps, no
 register and no owner. A build session does the work and publishes its pull
 request; a review session on another model judges it; a green review queues it
-for the merger; the goal is `done` when it lands. Martin decided the process on
+for the merger; the goal is `done` when it lands. A blocked goal wakes a plan
+session, which reopens it, replaces it or asks Martin. Martin decided the process on
 2026-11-02: *"Ingen review till build. Review skriver i LOG.md; plan öppnar som
 har helhetsförståelsen."* and *"Grön till merge direkt."*
 
@@ -23,7 +24,10 @@ review   ── review: green, head unchanged ──────────▶ 
 queued   ── merger landed ──────────────────────────▶ done
 queued   ── merger red ─────────────────────────────▶ blocked
 queued   ── head moved past the reviewed one ───────▶ review, reviewed again
-blocked  ── plan sets it open ──────────────────────▶ open
+open     ── three sessions without a word (runner) ─▶ blocked
+blocked  ── the runner wakes plan; plan sets it open ▶ open
+blocked  ── plan leaves it blocked (runner entry) ──▶ blocked, waits on a person
+blocked  ── a person sets it open ──────────────────▶ open
 ```
 
 ## Layout
@@ -151,11 +155,13 @@ Six verbs; the status verbs are four words.
 - A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
   by either verb: only the merger and a person set it. A review session
   (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
+  A plan session (`MC_ROLE=plan`) is refused `review`.
 - **`show <p>/<g>`** — the front matter (with `· after <names>` when set), the body, the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
-  n sessions · the last entry's Nästa`. A goal blocked by a red review or a red
-  merge reads `blocked, waits on plan` (`waitsOnPlan`); a waiting goal reads
+  n sessions · the last entry's Nästa`. A goal blocked by a red review, a red
+  merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`); any other
+  blocked goal `blocked, waits on a person` (`waitsOnPerson`); a waiting goal reads
   `waiting on <p>/<g>, …`, the names in its `after` that have not landed.
 
 ## Waiting on another goal
@@ -208,6 +214,8 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
    means oldest of all; a tie goes to the first listed. Held means a current
    file named `goal:<programme>/<goal>` exists, or the lane claimed it this
    tick. A goal keeps no slot between its sessions.
+   A goal that waits on plan (`planDue`, *A blocked goal wakes plan*) is a
+   candidate too, of kind `plan`.
 2. **Worktrees.** A repository's worktree that has gone is made again on
    `goal/<goal>`, as `mc goal new` makes it.
 3. **Launch.** An `open` goal gets a build session with the `build-goal` role
@@ -243,10 +251,48 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
      the goal stays `review`, and the new head gets a review of its own.
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
-`build-goal` or `review-goal`; rows from before say `goal`, and are read as
-the build they were. On the page it is a `BUILD` or `REVIEW` row in
-SESSIONS working on `<p>/<g>`, and it waits behind a project's build and
-every review for a free lane ([mc-run.md](mc-run.md) § *Lanes*).
+`build-goal`, `review-goal` or `plan`; rows from before say `goal`, and are
+read as the build they were. On the page it is a `BUILD`, `REVIEW` or `PLAN`
+row in SESSIONS working on `<p>/<g>`. A build waits behind a project's build
+and every review for a free lane; a plan session ranks with the reviews
+([mc-run.md](mc-run.md) § *Lanes*).
+
+## A blocked goal wakes plan
+
+Martin, 2026-11-02: a red review goes to plan, *"plan öppnar som har
+helhetsförståelsen"*; a red merge takes the same path. The runner starts one
+headless plan session for a goal that waits on plan (`waitsOnPlan`,
+`planDue` in `goals.js`): one that is `blocked`, parses, and whose last entry
+is a review's `red` verdict or a runner entry of status `blocked` — a red merge
+(`merger answered red on #<pr>`), three sessions in a row without a word, a
+review that left no verdict or found no pull request, a green that could not
+be queued, an `after` goal gone without landing. A goal blocked by a person or
+by a build session's own `--status blocked` waits on a person and wakes
+nothing; so does a `waiting` goal.
+
+- **Where and on what.** The `plan` role (`canon/roles/plan.md`, its section
+  *Headless, on a blocked goal*), on the role's model — `fable`, ruling 6 — on
+  claude at high effort, pinned as a review is (`planRoute`), with the billing
+  any session has. It stands in the programme's directory
+  (`~/mc/programs/<programme>/`), never in the goal's worktree: `MC_ROLE=plan`,
+  `MC_GOAL`, `MC_PROGRAMME`, `MC_TOOL` and `MC_MODEL` are set, `MC_REPO` and
+  `MC_WORKAREA` are not. Its prompt (`goalPlanPrompt` in `run-plan.js`) names
+  the goal, the last entry's words and the worktree it may read.
+- **One at a time.** The session is named `goal:<p>/<g>` like the goal's other
+  sessions, so the current file that holds a build or a review holds it too.
+- **What it does.** It reads GOAL.md, LOG.md, the pull request and its
+  comments, the programme's brief and the code, and ends with one of three:
+  revises GOAL.md if needed, writes `Nästa:` and sets the goal `open`; closes
+  the pull request and makes a new goal when this one was wrong; or leaves it
+  `blocked` with the question for Martin. It never writes code, commits,
+  pushes or merges in the goal's worktree.
+- **No loop** (`settlePlan`). A goal the session leaves `blocked` — with its
+  own entry or none — gets the runner's entry `Gjort: plan session ended; the
+  goal stays blocked — waits on Martin` (`planHeldText`). A goal whose last
+  entry is that one is not `waitsOnPlan`, so it starts nothing until a person
+  acts. A goal plan set `open` goes to its next build session; when it goes
+  red again it is blocked by a fresh entry, and plan is woken again with the
+  whole log to read.
 
 ## What a build session does
 
@@ -292,10 +338,9 @@ A goal's job carries the goal and the head its review judged (`merge-queue.js`
   goal goes back to `review` with a runner entry.
 - **Landed:** `done`, with a runner entry naming the pull request and the
   landed sha.
-- **Red:** `blocked`, with a runner entry giving the round's reason. A goal's
-  job gets no mend: the mend's push would be a head no review read. A red only
-  under load is requeued as any job's is, and says nothing to the goal until
-  it is answered.
+- **Red:** `blocked`, with a runner entry giving the round's reason, which
+  wakes plan (*A blocked goal wakes plan*). A red only under load is requeued
+  as any job's is, and says nothing to the goal until it is answered.
 
 `mc merge` on a red goal job queues it again as the goal's, with no reviewed
 head; that is a person's act, and its landing still sets the goal `done`.
@@ -313,9 +358,13 @@ head; that is a person's act, and its landing still sets the goal `done`.
   for the merger once its green is queued.
 - `blocked` — set by a session that cannot go on, by a red review, by the
   runner (steps 3, 5, 6) or by the merger on red. Nothing goes back to a build
-  session by itself. One blocked by a red review or a red merge waits on plan:
-  `mc goal list` says so, and the page leads its row's tail with
-  `waits on plan` in the colour of what waits on a person.
+  session by itself. One blocked by a red review, a red merge or the runner
+  waits on plan, and the runner wakes a plan session for it: `mc goal list`
+  says `waits on plan`, and the page leads its row's tail with `waits on plan`.
+  Any other — a person's, a build session's question, one plan left blocked —
+  waits on a person: the list says `waits on a person`, and the page leads its
+  tail with `waits on a person` and the question (the last comment that is not
+  the runner's). Both are in the colour of what waits on a person.
 - `done` — set by the merger when the pull request lands, or by a person.
 
 ## What a goal does not have
@@ -333,7 +382,5 @@ head; that is a person's act, and its landing still sets the goal `done`.
   queues a goal's pull request, and only the head it judged lands.
 - **No close-out.** No archive verb; a `done` goal stays where it is.
 
-The headless plan session (`autonomy on`) and phases are not built; they wait
-until goal sessions have run for real. The page draws a `PLAN` row already,
-from the lane file's `kind`; the runner starts no plan session (goal
-`headless-plan`).
+Phases and programme-level goals are not built, and plan is woken only by a
+blocked goal: not for projects, and not by a goal that landed.

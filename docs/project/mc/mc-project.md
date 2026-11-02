@@ -69,7 +69,7 @@ never an area.**
 
 ~/mc/runner/                          everything the runner runs
   step/<project>/<repo>/              a step's worktree, made by the runner when a step in <repo> runs
-  mend/<repo>-<pr>/                   as today
+  mend/<repo>-<pr>/                   as it was then (the mend is removed, 2026-11-02)
   deps/<name>/<repo>/                 mc deps bump (today step/deps-…)
   log/  merges.json  held.json  unmergeable.json  foreground/  runner.json  billing  caches
                                       what is running now, raw logs, caches; may be pruned or rebuilt
