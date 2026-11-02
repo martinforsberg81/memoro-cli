@@ -4,71 +4,38 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_LANES, laneCountPath, readLaneCount, writeLaneCount } from '../../src/mc/lane-count.js';
+import { DEFAULT_LANES, laneCountPath, migratedLanes, readLaneCount, writeLaneCount } from '../../src/mc/lane-count.js';
 
-test('lanes: absent, broken or out of range reads as one; a whole number from 1 to 8 is kept', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mc-lanes-'));
-  assert.deepEqual(readLaneCount({ root }), { per_repo: DEFAULT_LANES, total: null });
-  assert.deepEqual(
-    writeLaneCount('4', { root, now: new Date('2026-09-03T20:00:00Z') }),
-    { ok: true, field: 'per_repo', count: 4, per_repo: 4, total: null },
-  );
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 4, total: null });
-  assert.deepEqual(
-    JSON.parse(readFileSync(laneCountPath(root), 'utf8')),
-    { per_repo: 4, total: null, set: '2026-09-03T20:00:00.000Z' },
-  );
+const fresh = () => mkdtempSync(join(tmpdir(), 'mc-lanes-'));
+
+test('lanes: absent, broken or out of range reads as the default; a whole number from 1 to 8 is kept', () => {
+  const root = fresh();
+  assert.deepEqual(readLaneCount({ root }), { lanes: DEFAULT_LANES, migrated: null });
+  assert.equal(DEFAULT_LANES, 2, 'what no file allowed before: one lane on each of two repositories');
+  assert.deepEqual(writeLaneCount('4', { root, now: new Date('2026-11-02T20:00:00Z') }), { ok: true, lanes: 4 });
+  assert.deepEqual(readLaneCount({ root }), { lanes: 4, migrated: null });
+  assert.deepEqual(JSON.parse(readFileSync(laneCountPath(root), 'utf8')), { lanes: 4, set: '2026-11-02T20:00:00.000Z' });
   for (const bad of ['0', '9', 'four', '2.5', '', 'none']) assert.equal(writeLaneCount(bad, { root }).ok, false, bad);
-  assert.match(writeLaneCount('9', { root }).reason, /whole number from 1 to 8/u);
-  assert.doesNotMatch(writeLaneCount('9', { root }).reason, /none/u, 'none is a total form, not a per-repo one');
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 4, total: null }, 'a refused write changes nothing');
+  assert.match(writeLaneCount('9', { root }).reason, /lanes is a whole number from 1 to 8, not "9"/u);
+  assert.deepEqual(readLaneCount({ root }), { lanes: 4, migrated: null }, 'a refused write changes nothing');
+  writeFileSync(laneCountPath(root), '{ not json');
+  assert.equal(readLaneCount({ root }).lanes, DEFAULT_LANES);
 });
 
-test('lanes: the total is the second number in the same file, and absent means no cap', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mc-lanes-'));
-  writeLaneCount('4', { root });
-  assert.deepEqual(
-    writeLaneCount('3', { root, field: 'total' }),
-    { ok: true, field: 'total', count: 3, per_repo: 4, total: 3 },
-    'setting the total leaves per_repo alone',
-  );
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 4, total: 3 });
+test('lanes: an old per_repo and total is read once into the total it allowed', () => {
+  assert.equal(migratedLanes({ per_repo: 4, total: 4 }, 2), 4, 'the total bound');
+  assert.equal(migratedLanes({ per_repo: 2, total: null }, 2), 4, 'no total: per_repo on each repository');
+  assert.equal(migratedLanes({ per_repo: 3, total: 5 }, 2), 5);
+  assert.equal(migratedLanes({ per_repo: 1, total: 6 }, 2), 2, 'a total that never bound');
+  assert.equal(migratedLanes({ per_repo: 8, total: null }, 2), 8, 'never above eight');
+  assert.equal(migratedLanes({ per_repo: 99, total: 3 }, 2), 2, 'a nonsense per_repo is one per repository');
+  assert.equal(migratedLanes({ lanes: 3 }, 2), null, 'the new shape is not old');
 
-  writeLaneCount('2', { root });
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 2, total: 3 }, 'setting per_repo leaves the total alone');
-
-  for (const bad of ['0', '9', 'three', '2.5', '']) {
-    const set = writeLaneCount(bad, { root, field: 'total' });
-    assert.equal(set.ok, false, bad);
-    assert.match(set.reason, /--total is a whole number from 1 to 8, or none for no cap/u, bad);
-  }
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 2, total: 3 }, 'a refused write changes nothing');
-
-  assert.deepEqual(
-    writeLaneCount('None', { root, field: 'total' }),
-    { ok: true, field: 'total', count: null, per_repo: 2, total: null },
-    'none says no cap, in any case',
-  );
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 2, total: null });
-});
-
-test('lanes: one bad number in the file does not cost the other', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mc-lanes-'));
-  const write = (raw) => writeFileSync(laneCountPath(root), raw);
-
-  write(JSON.stringify({ per_repo: 99, total: 3 }));
-  assert.deepEqual(readLaneCount({ root }), { per_repo: DEFAULT_LANES, total: 3 });
-
-  write(JSON.stringify({ per_repo: 4, total: 'lots' }));
-  assert.deepEqual(readLaneCount({ root }), { per_repo: 4, total: null }, 'a nonsense total is no cap, not a wall');
-
-  write('{ not json');
-  assert.deepEqual(readLaneCount({ root }), { per_repo: DEFAULT_LANES, total: null });
-
-  write(JSON.stringify({ per_repo: 4, total: 'lots' }));
-  assert.deepEqual(
-    writeLaneCount('3', { root, field: 'total' }),
-    { ok: true, field: 'total', count: 3, per_repo: 4, total: 3 },
-    'a merge writes what the file reads as, so a bad number is repaired rather than carried',
-  );
+  const root = fresh();
+  writeFileSync(laneCountPath(root), JSON.stringify({ per_repo: 2, total: 3, set: '2026-11-02T09:29:28.288Z' }));
+  assert.deepEqual(readLaneCount({ root, repos: 2 }), { lanes: 3, migrated: { per_repo: 2, total: 3 } });
+  const written = JSON.parse(readFileSync(laneCountPath(root), 'utf8'));
+  assert.equal(written.lanes, 3);
+  assert.equal('per_repo' in written, false, 'the old fields are not left to be read again');
+  assert.deepEqual(readLaneCount({ root, repos: 2 }), { lanes: 3, migrated: null }, 'read once');
 });

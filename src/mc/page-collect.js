@@ -61,7 +61,7 @@ import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.j
 import { goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
-import { readLaneCount } from './lane-count.js';
+import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import {
@@ -80,7 +80,7 @@ import { watcherState } from './repo-watch.js';
 import { billingStatus } from './billing-route.js';
 import { readCapacity } from './model-capacity.js';
 import { readBillingState } from './billing.js';
-import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
+import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
@@ -240,9 +240,9 @@ export function runnerSection({
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
   deploy = null, attempt = null, live = null, repos = REPO_NAMES,
-  // What `mc run lanes` set: how many lane loops each repository has, and the
-  // cap across them. The rows are one per lane, so the page needs the number.
-  lanes: setting = { per_repo: 1, total: null },
+  // What `mc run lanes` set: how many sessions run at once, across every
+  // repository. The rows are one per lane, so the page needs the number.
+  lanes: setting = { lanes: DEFAULT_LANES },
   // The plans, for the one thing a lane file does not carry: which step of its
   // plan the session is on.
   plans = [],
@@ -276,7 +276,7 @@ export function runnerSection({
       ? { at: new Date(stopAt).toISOString(), age_seconds: Math.max(0, Math.round((now.getTime() - stopAt) / 1000)) }
       : null,
     lanes: lanesOfRunner(base.steps, repos, setting),
-    setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
+    setting: { lanes: setting.lanes ?? DEFAULT_LANES },
     process,
     // One entry per repository the round could not ask GitHub about, while
     // that lasts: the round's `prsFailed`, carried between rounds.
@@ -303,8 +303,8 @@ export function runnerSection({
  * They were one row per repository lane — `memoro #2`, `memoro-cli #4` — which
  * at four lanes on each of two repositories was eight rows under a cap of five:
  * three of them could never hold a step at the same time as the rest. The rows
- * are the slots the runner can actually fill now — `total` when `mc run lanes`
- * set one, `per_repo` times the repositories otherwise — and a row is `lane 3`
+ * are the slots the runner can actually fill now — the total `mc run lanes`
+ * set — and a row is `lane 3`
  * until a step is in it, when the step's own repository is what the row says
  * (Martin, 2026-09-19).
  *
@@ -317,11 +317,7 @@ export function runnerSection({
  * disagree about a lane, because there is one of it.
  */
 function lanesOfRunner(steps = [], repos = [], setting = {}) {
-  const perRepo = Number.isInteger(setting?.per_repo) && setting.per_repo > 0 ? setting.per_repo : 1;
-  const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))];
-  const slots = Number.isInteger(setting?.total) && setting.total > 0
-    ? Math.min(setting.total, perRepo * names.length)
-    : perRepo * names.length;
+  const slots = Number.isInteger(setting?.lanes) && setting.lanes > 0 ? setting.lanes : DEFAULT_LANES;
   const running = [...steps].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
     || String(a.name).localeCompare(String(b.name)));
   return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
@@ -1754,7 +1750,7 @@ export async function collectPage({
 
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
   // one head per lane.
-  const laneSetting = laneCount({ root: home });
+  const laneSetting = laneCount({ root: home, repos: present.length });
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
   // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
   const currents = readCurrents(join(root, 'runner'));
@@ -1764,9 +1760,8 @@ export async function collectPage({
     stop,
     stopText: stop ? readText(join(root, 'runner', 'STOP')) : null,
     rows,
-    // `per_repo` lanes per repository this machine has a checkout of, drawn
-    // whether or not each has a step: a lane between steps and a lane that has
-    // died were the same absence until the row existed.
+    // The repositories this machine has a checkout of; the lanes are the
+    // total `mc run lanes` set, across all of them.
     repos: present.map((repo) => repo.name),
     lanes: laneSetting,
     plans,
@@ -1822,9 +1817,9 @@ export async function collectPage({
     next: nextSection({
       queueText,
       plans,
-      // How many lane loops each repository has, so the block bolds as many
-      // heads as there are lanes to start them (`mc run lanes`).
-      lanes: laneSetting.per_repo,
+      // How many lanes there are, so a block bolds no more heads than there
+      // are lanes to start them (`mc run lanes`).
+      lanes: laneSetting.lanes,
       machine: (name) => machineState(name, {
         plans,
         prs: prs.prs,
@@ -1874,7 +1869,7 @@ export async function collectPage({
         read: readText,
         list: (dir) => { try { return readdirSync(dir); } catch { return []; } },
         now,
-        lanes: laneSlots(laneSetting, present.length),
+        lanes: laneSetting.lanes,
       }),
       now,
     }),

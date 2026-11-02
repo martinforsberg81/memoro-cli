@@ -29,7 +29,7 @@ import {
  * to reach him, it can be asked — so its overlay says read first and ask the
  * one thing, rather than holding it to the shape a written proposal takes.
  */
-const AUTHORS = ['worker', 'step'];
+const AUTHORS = ['worker', 'build-project'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
@@ -97,8 +97,8 @@ describe('the decision shape every role writes', () => {
    * The boundary the runner checks on the way back in. It is in the overlay as
    * well, so a session is told before it is caught.
    */
-  it('step is told the plan file is not its to edit, that criteria are met through mc project, that state goes through mc step, and that it is checked', () => {
-    const { overlay } = readCanonRole('step');
+  it('build-project is told the plan file is not its to edit, that criteria are met through mc project, that state goes through mc step, and that it is checked', () => {
+    const { overlay } = readCanonRole('build-project');
     assert.match(overlay, phrase('You never change the plan file'));
     assert.match(overlay, phrase('written by `mc step`'));
     assert.match(overlay, phrase('`mc step note "…"`'));
@@ -118,7 +118,7 @@ describe('the decision shape every role writes', () => {
  * the assembler.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const CANON_ROLES = ['brief', 'goal', 'helper', 'intake', 'plan', 'step', 'worker'];
+  const CANON_ROLES = ['brief', 'build-goal', 'build-project', 'helper', 'intake', 'plan', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
   const ROUTE = phrase('The practical route to `main` is yours to settle');
 

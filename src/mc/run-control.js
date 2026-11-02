@@ -126,9 +126,8 @@ export function realControlDeps(env = process.env) {
       const r = runGit(undefined, ['-C', cwd, ...args]);
       return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
     },
-    // How many lanes the runner has in all: `per_repo` on every repository,
-    // and never more than `total` (run.js `runLoop`).
-    laneCount: () => laneSlots(readLaneCount(), defaultRepos(env).length),
+    // How many lanes the runner has in all: the total (`mc run lanes`).
+    laneCount: () => readLaneCount({ repos: defaultRepos(env).length }).lanes,
     // The login agent, written only when its text differs, and only on the
     // machine that has a launchd to read it.
     writeAgent: (path, text) => {
@@ -198,12 +197,6 @@ export function agentPlist({ execPath, entry, env = {}, log }) {
     '</plist>',
     '',
   ].join('\n');
-}
-
-/** The lanes a runner starts: `per_repo` per repository, capped by `total`. */
-export function laneSlots({ per_repo: perRepo = 1, total = null } = {}, repos = 1) {
-  const all = perRepo * repos;
-  return total == null ? all : Math.min(all, total);
 }
 
 /**
@@ -598,7 +591,7 @@ function descendants(pid, ps) {
  * exists exactly as long as that lane's session does (run.js `runStep`). A
  * file whose runner pid is gone is not a step in flight, and is left out.
  *
- * `lanes` is how many lanes the runner has in all (`laneSlots`), so the lanes
+ * `lanes` is how many lanes the runner has in all (`mc run lanes`), so the lanes
  * done are the ones not in flight. Measured 2026-10-07: UPDATE written with
  * six lanes busy, four said so as their steps landed, and nothing said what
  * the other two were doing — so the person force-stopped the runner.
