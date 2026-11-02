@@ -14,10 +14,11 @@ function prefixes(text, verb) {
     const match = /^\s*(?:usage\s*[—:]\s*)?mc ([a-z-]+)\b(.*)$/u.exec(line);
     if (match?.[1] !== verb) continue;
     let paths = [''];
-    for (let word of match[2].trim().split(/\s+/u)) {
+    const synopsis = match[2].trim().split(/ {2,}/u)[0];
+    for (let word of synopsis.split(/\s+/u)) {
       // [list] and <dev|prod> are finite alternatives, <name> is not.
-      if (/^\[[a-z-]+\]$/u.test(word) || /^<[a-z-]+(?:\|[a-z-]+)+>$/u.test(word)) word = word.slice(1, -1);
-      if (!/^[a-z-]+(?:\|[a-z-]+)*$/u.test(word)) break;
+      if (/^\[[a-z][a-z-]*\]$/u.test(word) || /^<[a-z][a-z-]*(?:\|[a-z][a-z-]*)+>$/u.test(word)) word = word.slice(1, -1);
+      if (!/^[a-z][a-z-]*(?:\|[a-z][a-z-]*)*$/u.test(word)) break;
       paths = paths.flatMap((path) => word.split('|').map((part) => `${path} ${part}`.trim()));
       for (const path of paths) result.add(path);
     }
@@ -26,6 +27,11 @@ function prefixes(text, verb) {
 }
 
 describe('help after documented subcommands', () => {
+  it('walks the synopsis, not the aligned description', () => {
+    assert.deepEqual(prefixes('usage — mc build ios        does memoro need a binary?', 'build'), [[], ['ios']]);
+    assert.deepEqual(prefixes('        mc repo watch status [--json]   whether it is running', 'repo'), [[], ['watch'], ['watch', 'status']]);
+  });
+
   it('walks both the long help and each handler usage, with --help and -h', async () => {
     const seen = new Set();
     for (const [verb, path] of Object.entries(VERB_MODULES)) {
