@@ -163,7 +163,7 @@ import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, wri
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
+import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
 import { attachRepoDepsAsync } from './work-deps.js';
@@ -2403,7 +2403,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
-      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
+      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
     };
     writeJson(currentPath, current);
     const scratch = join(paths.scratch, stem);
@@ -2734,10 +2734,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
-    // Haiku workers (`runner.subagents: on`): the role is told how to use
-    // them through the same include the role files use for a shared passage.
-    const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
+    const instructions = instructionsFor(launch.id, role.overlay);
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
 
     // At each launch, use the provider's plan until a window is full or the
     // plan has refused. The gateway wrapper opens the key for API sessions.
@@ -2776,7 +2774,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
       kind: sessionKind(kind).kind, variant: 'project', repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), ...(cls ? { class: cls } : {}), billing: picked.billing,
+      effort: settings.effort, advisor: settings.advisor, ...(cls ? { class: cls } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2789,7 +2787,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         source: roleSourceOf(role) || 'canon',
         overlay: role.overlay,
         instructions,
-        workers: settings.subagents,
       }),
     };
     writeJson(currentPath, current);
@@ -2826,7 +2823,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // session grant, never the provider key.
     const launchOnce = async (resume, text) => {
       const { billing } = picked;
-      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
+      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
       const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args: sessionArgs, billing });
       const running = deps.session({
         bin: tool.bin,

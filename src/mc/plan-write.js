@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { PLAN_FILE } from './plan-source.js';
-import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, REVIEW_CLASS, validatePlan, WORK_CLASSES } from './plan-schema.js';
+import { branchFlow, CLAUDE_MODELS, CODEX_MODELS, NAME_RE, REMOVED_RUNNER_KEYS, REVIEW_CLASS, validatePlan, WORK_CLASSES } from './plan-schema.js';
 
 /**
  * The file a plan is written to until `mc project send` renames it. It sits
@@ -245,7 +245,8 @@ function instructionOf(step) {
  * on: all of `validatePlan`'s problems, then what only a verb refuses — a plan
  * that names a model for itself rather than for each step (ruling 42), a step
  * whose model is not `STEP_MODELS`, a banned word in a step's `done_when` or a
- * criterion's `check`, and a dependency in prose where `--after` belongs. An
+ * criterion's `check`, a dependency in prose where `--after` belongs, and a
+ * runner key mc has removed (`REMOVED_RUNNER_KEYS`). An
  * empty array is a plan `mc project send` may rename to `PLAN.json`.
  * `models: false` leaves the steps' models to the caller: an amendment judges
  * only the model it writes, so a plan sent before ruling 59 stays amendable.
@@ -255,9 +256,15 @@ export function sendProblems(plan, { models = true } = {}) {
   if (plan?.runner?.model) {
     problems.push('runner.model: a plan names no model — each step names its own (ruling 42)');
   }
+  const removed = (runner, at) => {
+    if (!runner || typeof runner !== 'object') return;
+    for (const [key, why] of Object.entries(REMOVED_RUNNER_KEYS)) if (Object.hasOwn(runner, key)) problems.push(`${at}.${key}: ${why}`);
+  };
+  removed(plan?.runner, 'runner');
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   steps.forEach((step, index) => {
     const n = index + 1;
+    removed(step?.runner, `steps[${n}].runner`);
     if (step && typeof step === 'object' && 'kind' in step) problems.push(`steps[${n}].kind: the review step is mc's — send adds it`);
     // `review` is named by validatePlan, which says what it is for; this names the rest.
     const model = step?.runner?.model;

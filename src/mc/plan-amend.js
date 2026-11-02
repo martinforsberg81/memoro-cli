@@ -1,6 +1,6 @@
 /** An amendment changes instructions, never execution history or the release door. */
 import { isDeepStrictEqual } from 'node:util';
-import { planState, validatePlan } from './plan-schema.js';
+import { planState, REMOVED_RUNNER_KEYS, validatePlan } from './plan-schema.js';
 import { applyEntry, stepKey } from './register.js';
 import { dependencyWords, sendProblems, STEP_MODEL_WORDS, STEP_MODELS, testDirectories } from './plan-write.js';
 
@@ -39,6 +39,13 @@ export function amendedPlan(plan, entry, amendment) {
   const first = amendmentStanding(plan, entry);
   onlyKeys(amendment, ['contract', 'steps', 'success_criteria'], 'amendment');
   const next = structuredClone(plan);
+  // A key mc no longer reads goes with the first amendment: send refuses it,
+  // so the amended plan must not carry it (REMOVED_RUNNER_KEYS).
+  for (const holder of [next, ...(Array.isArray(next.steps) ? next.steps : [])]) {
+    if (!plain(holder?.runner)) continue;
+    for (const key of Object.keys(REMOVED_RUNNER_KEYS)) delete holder.runner[key];
+    if (holder !== next && Object.keys(holder.runner).length === 0) delete holder.runner;
+  }
   if (own(amendment, 'contract')) next.contract = amendment.contract;
   if (own(amendment, 'success_criteria')) {
     if (!Array.isArray(amendment.success_criteria)) throw new Error('success_criteria must be an array');

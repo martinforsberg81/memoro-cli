@@ -23,7 +23,7 @@ import { readForeground } from '../page-collect.js';
 import { workRoot } from '../paths.js';
 import {
   canonRolesDir, expandRoleIncludes, instructionsFor, listRoles, readCanonRole, readRole,
-  rolesDir, textDigest, withWorkers,
+  rolesDir, textDigest,
 } from '../roles.js';
 import { skillStatus } from '../skills.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
@@ -140,8 +140,8 @@ function roleFromSource(name, source, env) {
  * every tool, and only `profileArgs` after it differs — but passing the wrong
  * one would still be describing a launch nobody makes.
  */
-function assembleFor(role, { workers = false } = {}) {
-  const instructions = instructionsFor(role.tools?.[0] || 'claude', withWorkers(role.overlay, workers));
+function assembleFor(role) {
+  const instructions = instructionsFor(role.tools?.[0] || 'claude', role.overlay);
   return {
     name: role.name,
     source: role.source,
@@ -226,10 +226,10 @@ async function check(opts, { stdout, stderr, deps }) {
     if (opts.name && record?.name !== opts.name) continue;
     let now = null;
     if (record) {
-      const key = `${record.source}:${record.name}${record.workers ? ':workers' : ''}`;
+      const key = `${record.source}:${record.name}`;
       if (!today.has(key)) {
         const role = roleFromSource(record.name, record.source, env);
-        today.set(key, role ? assembleFor(role, { workers: record.workers }) : null);
+        today.set(key, role ? assembleFor(role) : null);
       }
       now = today.get(key);
     }

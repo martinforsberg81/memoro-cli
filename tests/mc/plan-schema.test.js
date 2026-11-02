@@ -333,9 +333,9 @@ describe('the plan schema', () => {
     assert.match(onStep({ model: 'Sonnet 5' }).problems.join('\n'), /steps\[1\]\.runner\.model: must be a model name/u);
     assert.match(onStep({ tool: 'codex' }).problems.join('\n'), /steps\[1\]\.runner\.tool: a plan-level key/u);
     assert.match(onStep({ check_in_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.check_in_minutes: a plan-level key/u);
-    assert.equal(onStep({ subagents: 'on' }).ok, true);
-    assert.equal(onStep({ subagents: 'off' }).ok, true);
-    assert.match(onStep({ subagents: true }).problems.join('\n'), /steps\[1\]\.runner\.subagents: on or off/u);
+    // Removed 2026-11-02: a sent plan that still carries it reads as before.
+    assert.deepEqual(onStep({ subagents: 'on' }), { ok: true, problems: [] });
+    assert.deepEqual(validatePlan(plan({ runner: { subagents: 'on' } })), { ok: true, problems: [] });
     assert.match(onStep({ stall_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.stall_minutes: a plan-level key/u);
     assert.match(onStep({ temperature: 1 }).problems.join('\n'), /steps\[1\]\.runner\.temperature: unknown key/u);
     assert.match(onStep('opus').problems.join('\n'), /steps\[1\]\.runner: must be an object/u);

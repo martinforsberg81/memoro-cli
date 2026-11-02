@@ -596,21 +596,13 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
   assert.equal(unnamed.some((arg) => arg.startsWith('model_reasoning_effort')), false, 'no effort named, no override');
 });
 
-test('headlessArgs: subagents adds Agent and mc\'s own step-worker, claude only', async () => {
+test('headlessArgs: a claude step gets the six tools and no agents of mc\'s, new or resumed', async () => {
   const adapter = await import('../../src/adapters/claude-code.js');
-  const off = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'do it', profileArgs });
-  assert.equal(off[off.indexOf('--tools') + 1], 'Bash,Read,Edit,Write,Grep,Glob');
-  assert.equal(off.includes('--agents'), false);
-  const on = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', subagents: true, instructions: null, prompt: 'do it', profileArgs });
-  assert.equal(on[on.indexOf('--tools') + 1], 'Bash,Read,Edit,Write,Grep,Glob,Agent');
-  const agents = JSON.parse(on[on.indexOf('--agents') + 1]);
-  assert.deepEqual(Object.keys(agents), ['step-worker']);
-  assert.equal(agents['step-worker'].model, 'claude-haiku-5-5');
-  assert.deepEqual(agents['step-worker'].tools, ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'], 'no Agent: a worker starts no worker');
-  const resumed = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', subagents: true, instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
-  assert.equal(resumed.includes('--agents'), true, 'a resumed session keeps its workers');
-  const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', subagents: true, instructions: null, prompt: 'do it', profileArgs });
-  assert.equal(codex.includes('--agents'), false);
+  const fresh = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'do it', profileArgs });
+  assert.equal(fresh[fresh.indexOf('--tools') + 1], 'Bash,Read,Edit,Write,Grep,Glob');
+  assert.equal(fresh.includes('--agents'), false);
+  const resumed = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
+  assert.equal(resumed.includes('--agents'), false);
 });
 
 test('workClassOf: a step names a class as its model, and nothing else is one', () => {
@@ -623,12 +615,12 @@ test('workClassOf: a step names a class as its model, and nothing else is one', 
 });
 
 test('routedSettings: the candidate\'s tool, model and effort; the plan\'s own model and effort set aside; a step\'s explicit effort kept', () => {
-  const planRunner = { tool: 'claude', model: 'opus', effort: 'low', check_in_minutes: 30, stall_minutes: 15, subagents: 'on' };
+  const planRunner = { tool: 'claude', model: 'opus', effort: 'low', check_in_minutes: 30, stall_minutes: 15 };
   const codex = routedSettings(planRunner, { model: 'fast' }, { candidate: { tool: 'codex', model: 'gpt-6-luna', effort: 'high' } });
-  assert.deepEqual([codex.tool, codex.model, codex.effort, codex.advisor, codex.subagents], ['codex', 'gpt-6-luna', 'high', null, false]);
+  assert.deepEqual([codex.tool, codex.model, codex.effort, codex.advisor], ['codex', 'gpt-6-luna', 'high', null]);
   assert.deepEqual([codex.checkInMinutes, codex.stallMinutes], [30, 15], 'the plan\'s watch intervals still apply');
   const pinned = routedSettings(planRunner, { model: 'review', effort: 'xhigh' }, { kind: 'review', candidate: { tool: 'claude', model: 'opus', effort: 'high' } });
-  assert.deepEqual([pinned.tool, pinned.model, pinned.effort, pinned.subagents], ['claude', 'opus', 'xhigh', true]);
+  assert.deepEqual([pinned.tool, pinned.model, pinned.effort], ['claude', 'opus', 'xhigh']);
 });
 
 test('recoveryFor: a class-routed step is resumed only on the model it ran on; a concrete one is decided as before', () => {
@@ -641,12 +633,9 @@ test('recoveryFor: a class-routed step is resumed only on the model it ran on; a
   assert.equal(recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now }).mode, 'resume');
 });
 
-test('sessionSettings: subagents is on only where a plan or step says so, step over plan', () => {
-  assert.equal(sessionSettings({}).subagents, false);
-  assert.equal(sessionSettings({ subagents: 'on' }).subagents, true);
-  assert.equal(sessionSettings({}, { subagents: 'on' }).subagents, true);
-  assert.equal(sessionSettings({ subagents: 'on' }, { subagents: 'off' }).subagents, false);
-  assert.equal(describeSettings('claude', sessionSettings({}, { subagents: 'on' })), 'claude opus · effort medium · haiku workers');
+test('sessionSettings: a sent plan\'s removed runner key changes nothing', () => {
+  assert.deepEqual(sessionSettings({ subagents: 'on' }, { subagents: 'on' }), sessionSettings({}));
+  assert.equal(describeSettings('claude', sessionSettings({}, { subagents: 'on' })), 'claude opus · effort medium');
 });
 
 test('sessionStanding and sessionSpoke read past a subagent\'s events', () => {
@@ -917,7 +906,7 @@ test('sessionSettings: tool, check_in_minutes and stall_minutes from the plan, w
   assert.equal(DEFAULT_STALL_MINUTES, 20);
   assert.equal(sessionSettings({}).checkInMinutes, 60);
   assert.equal(sessionSettings({}).stallMinutes, 20);
-  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', check_in_minutes: 30, stall_minutes: '15' }), { ...wait(30, 15), tool: 'codex', model: 'o3', effort: null, advisor: null, subagents: false });
+  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', check_in_minutes: 30, stall_minutes: '15' }), { ...wait(30, 15), tool: 'codex', model: 'o3', effort: null, advisor: null });
   assert.equal(sessionSettings({ check_in_minutes: 'lots' }).checkInMinutes, 60);
   // A step cannot set them: they are the plan's, like the tool.
   assert.equal(sessionSettings({}, { check_in_minutes: 5 }).checkInMinutes, 60);
@@ -934,7 +923,7 @@ test('sessionSettings: tool, check_in_minutes and stall_minutes from the plan, w
  */
 test('sessionSettings: the step defaults, plan and step overrides, advisor off, codex getting none', () => {
   assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'opus', effort: 'medium', advisor: null }, review: { model: 'opus', effort: 'high', advisor: null } }, 'two kinds: the repair is gone (ruling 21), and the review has its own');
-  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, subagents: false, ...wait() });
+  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, ...wait() });
   // Since 2026-09-25 the default names no advisor, so a plan back on sonnet
   // gets one only by naming it.
   assert.equal(sessionSettings({ model: 'sonnet' }).advisor, null);
@@ -943,13 +932,13 @@ test('sessionSettings: the step defaults, plan and step overrides, advisor off, 
   // The plan overrides the default key by key. An advisor that is the model
   // itself is no advisor (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
   // opus+opus.").
-  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, subagents: false, ...wait() });
+  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, ...wait() });
   assert.deepEqual(sessionSettings({ model: 'opus', advisor: 'sonnet' }).advisor, 'sonnet');
 
   // The step overrides the plan, again key by key.
   const plan = { model: 'opus', effort: 'low', advisor: 'opus' };
-  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: null, subagents: false, ...wait() });
-  assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', subagents: false, ...wait() });
+  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: null, ...wait() });
+  assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', ...wait() });
   assert.deepEqual(sessionSettings({}, { model: 'opus' }).advisor, null, 'a step on opus gets no opus advisor');
 
   // `off` at any level is no advisor, and a step can turn off the plan's.
@@ -959,9 +948,9 @@ test('sessionSettings: the step defaults, plan and step overrides, advisor off, 
 
   // `opus` is claude's: codex gets no model it did not name, and no advisor
   // even when one is named. Effort is the plan's word on either tool.
-  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, subagents: false, ...wait() });
-  assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus', subagents: 'on' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: 'high', advisor: null, subagents: false, ...wait() });
-  assert.deepEqual(sessionSettings({ tool: 'codex' }, { model: 'gpt-6-luna', effort: 'medium' }), { tool: 'codex', model: 'gpt-6-luna', effort: 'medium', advisor: null, subagents: false, ...wait() });
+  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, ...wait() });
+  assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: 'high', advisor: null, ...wait() });
+  assert.deepEqual(sessionSettings({ tool: 'codex' }, { model: 'gpt-6-luna', effort: 'medium' }), { tool: 'codex', model: 'gpt-6-luna', effort: 'medium', advisor: null, ...wait() });
   assert.equal(sessionSettings({ tool: 'codex' }, { model: 'gpt-6.1-sol' }).effort, null, 'no effort named, none passed');
 });
 

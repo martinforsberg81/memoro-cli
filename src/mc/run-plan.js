@@ -1034,7 +1034,7 @@ export function goalCheckInPrompt({ minutes, count }) {
  * bounded by its plan, the strong model is reached through `--advisor`, and a
  * subagent runs on whatever model the repository's instruction files name,
  * outside the plan's `runner` choice (measured 2026-09-12 over the first 41
- * sonnet step sessions: 19 spawned opus subagents on memoro's `CLAUDE.md`
+ * sonnet step sessions: 19 spawned opus Agent sessions on memoro's `CLAUDE.md`
  * instruction, a quarter of the era's cost) — and it has no use for Skill,
  * Workflow, Cron, Web or Task tools either. Tool definitions ride in every
  * request: claude 2.1.280 measured 18 687 tokens/request with the default
@@ -1044,42 +1044,11 @@ export function goalCheckInPrompt({ minutes, count }) {
  * Bash (2 866 such calls against 466 native reads, 2026-09-15..25).
  * `--strict-mcp-config` keeps a user-level MCP server, with its own tool
  * definitions, out of the lane. Whatever any repository's files say, the
- * session has these tools and no others — except a step whose plan says
- * `subagents: on`, which also gets `Agent` and mc's own `STEP_WORKER_AGENTS`
- * and nothing a repository defines.
+ * session has these tools and no others.
  */
 export { CLAUDE_TOOLS };
 
-/**
- * The one subagent a step with `runner.subagents: on` may call, passed whole
- * on `--agents` so no repository's `.claude/agents/` decides what it is. The
- * model is named outright — a subagent otherwise inherits the session's, and
- * the point is that it does not. Its brief comes from the step session
- * (`canon/roles/_step-workers.md` tells it how to write one); it answers once
- * and only that answer enters the step's context — its own events reach mc's
- * stream marked with `parent_tool_use_id`, and `sessionStanding` and
- * `sessionSpoke` read past them. A trial (Martin, 2026-10-11: two steps with
- * it on, then read them), so off unless a plan or step says otherwise.
- */
-export const STEP_WORKER_AGENTS = Object.freeze({
-  'step-worker': Object.freeze({
-    description: 'Does most of the step: reading, searching, editing code, writing tests to a brief, running them. Brief it for any job of more than a file or two. Answers once, when done.',
-    model: 'claude-haiku-5-5',
-    effort: 'high',
-    tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
-    prompt: [
-      'You are a worker for a build session in mc, headless, in its workarea. The build session leads; you do the work it briefs.',
-      'Do the brief and nothing beside it: read, search, edit, write the tests it describes, run the commands it names.',
-      'Never weaken, skip or delete a test the brief did not name, never touch a threshold or the plan file.',
-      'Never run `mc`, `gh`, or a git command that changes the tree or history (`commit`, `push`, `checkout`, `reset`, `stash`); the workarea is shared.',
-      'Nothing in the background.',
-      'Answer once, at the end, short: what you found or changed with file:line, the reds with their messages (not the log), and what you could not do.',
-      'Say when you are unsure; never guess.',
-    ].join('\n'),
-  }),
-});
-
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const effortArgs = adapter?.effortArgs?.(effort) ?? [];
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
@@ -1097,7 +1066,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // `--resume` keeps the session's id and its whole history; the message on
   // stdin is the next turn of that conversation.
   const resumed = resume ? ['--resume', resume] : [];
-  const tools = subagents ? ['--tools', `${CLAUDE_TOOLS},Agent`, '--agents', JSON.stringify(STEP_WORKER_AGENTS)] : ['--tools', CLAUDE_TOOLS];
+  const tools = ['--tools', CLAUDE_TOOLS];
   return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
 }
 
@@ -1723,9 +1692,6 @@ export function tsvHeader() {
  * mc's guess at what that tool calls its best model. The advisor is claude's
  * flag, so another tool gets none, named or not. Effort is the plan's word on
  * either tool: claude's `--effort`, codex's `model_reasoning_effort`.
- *
- * `subagents` resolves step over plan too, and is `on` only where it says
- * so: off by default, and off on any tool but claude (`STEP_WORKER_AGENTS`).
  */
 export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'step' } = {}) {
   const plan = planRunner || {};
@@ -1743,7 +1709,6 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
     model,
     effort: EFFORT_LEVELS.includes(effort) ? effort : null,
     advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
-    subagents: claude && named('subagents') === 'on',
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
     stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };
@@ -1789,7 +1754,6 @@ export function describeSettings(shortName, settings) {
     `${shortName} ${settings.model || 'own default model'}`,
     settings.effort ? `effort ${settings.effort}` : null,
     settings.advisor ? `advisor ${settings.advisor}` : null,
-    settings.subagents ? 'haiku workers' : null,
   ].filter(Boolean).join(' · ');
 }
 
