@@ -37,6 +37,7 @@ import { join } from 'node:path';
 
 import { canonRoot } from './canon.js';
 import { mcHome } from './paths.js';
+import { expandRoleSkills } from './skills.js';
 
 /**
  * Reserved as an identity, not as a word: `mc helper` owns `~/mc/helper/`
@@ -151,15 +152,20 @@ export function sharedRoleText() {
  * is left standing in the text rather than silently dropped: a visible
  * `@include` line in a session's instructions is a broken install somebody can
  * see, and a rule that quietly vanished is not.
+ *
+ * A role names a task skill the same way, `@skill <name>` on a line of its
+ * own, and the line becomes a pointer to the installed `mc-<name>` skill — not
+ * its text (see `expandRoleSkills` in `skills.js`). An unknown name stands.
  */
 const ROLE_INCLUDE = /^@include[ \t]+(_[A-Za-z0-9._-]+\.md)[ \t]*$/gmu;
 
-export function expandRoleIncludes(text) {
-  if (typeof text !== 'string' || !text.includes('@include')) return text;
-  return text.replace(ROLE_INCLUDE, (line, file) => {
-    const passage = readFile(join(canonRolesDir(), file))?.trim();
-    return passage || line;
-  });
+export function expandRoleIncludes(text, { tool = 'claude', env = process.env } = {}) {
+  if (typeof text !== 'string') return text;
+  const included = text.includes('@include')
+    ? text.replace(ROLE_INCLUDE, (line, file) => readFile(join(canonRolesDir(), file))?.trim() || line)
+    : text;
+  // `@skill <name>` after `@include`, so an included passage can name a skill too.
+  return expandRoleSkills(included, { tool, env });
 }
 
 export function readRole(name, env = process.env) {
@@ -268,7 +274,7 @@ export function withWorkers(overlay, workers) {
 
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
-  const body = expandRoleIncludes(overlay);
+  const body = expandRoleIncludes(overlay, { tool: toolId || 'claude' });
   const combined = [shared, body].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }

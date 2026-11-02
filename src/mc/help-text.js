@@ -614,7 +614,13 @@ IN FULL
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc roles check [<role>]          What a launch would hand a session today,
-                                    and any live session running other text
+                                    and any live session running other text;
+                                    then the installed skills against canon
+  mc skills [sync]                 mc's task skills (canon/skills, a programme's
+                                    SKILL.md) installed as mc-* for Claude
+                                    and Codex; sync rewrites a changed one
+                                    and removes a stale one. SessionStart
+                                    runs the sync too
   mc model [list] [--json]         The model catalog: the candidates a fast or
                                     large step may run on, in order, and the
                                     review model. Changed with mc model add,
