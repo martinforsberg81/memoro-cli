@@ -449,3 +449,24 @@ describe('routing', () => {
     }
   });
 });
+
+describe('mc status on a goal', () => {
+  it('says it is a goal, and a waiting one what it waits on', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-status-goal-'));
+    const goal = (name, status, after = null) => {
+      mkdirSync(join(root, 'programs', 'mc', 'goals', name), { recursive: true });
+      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.md'),
+        `---\nstatus: ${status}\nrepos: memoro-cli\nclass: large\n${after ? `after: ${after}\n` : ''}---\n# ${name}\n`);
+    };
+    goal('headless-plan', 'waiting', 'mc/runner-sessions, mc/goal-waiting');
+    goal('runner-sessions', 'done');
+    goal('goal-waiting', 'review');
+    const err = [];
+    const code = await project(['headless-plan'], {
+      env: { MC_WORK_ROOT: root }, collect: async () => null,
+      stdout: { write: () => {} }, stderr: { write: (text) => err.push(text) },
+    });
+    assert.equal(code, 1);
+    assert.equal(err.join(''), 'headless-plan is a goal · waiting on mc/goal-waiting — mc goal show mc/headless-plan\n');
+  });
+});

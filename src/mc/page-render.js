@@ -1203,7 +1203,7 @@ function goalLine(c, wide, goal) {
   const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
   if (goal.plan || waits) {
     const head = waits ?? 'waits on plan';
-    const tail = said ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
+    const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
     return `${left}${c(clip(head, room), ...statusTone(waits ? 'waiting' : 'blocked'))}${tail ? c(tail, 'grey') : ''}`;
   }
   return said ? `${left}${c(clip(one(said), room), 'grey')}` : left;

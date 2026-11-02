@@ -2,7 +2,7 @@
 
 **Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
 `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
-`reviewRoute`, `settleReview`, `goalWithoutWord`), `src/mc/merger.js`
+`reviewRoute`, `settleReview`, `goalWithoutWord`, `releaseWaiting`), `src/mc/merger.js`
 (`tellGoal`), `canon/roles/build-goal.md` (with `_build.md`) and
 `canon/roles/goal-review.md`
 
@@ -14,6 +14,9 @@ for the merger; the goal is `done` when it lands. Martin decided the process on
 har helhetsförståelsen."* and *"Grön till merge direkt."*
 
 ```
+waiting  ── every after-goal landed (runner) ──────▶ open
+waiting  ── an after-goal gone without landing ────▶ blocked
+open     ── given an after not landed ─────────────▶ waiting
 open     ── build session holds the criteria met ──▶ review
 review   ── review: red, or no verdict ─────────────▶ blocked
 review   ── review: green, head unchanged ──────────▶ review, queued for the merger
@@ -46,6 +49,7 @@ status: open
 repos: memoro-cli, memoro
 class: fast
 created: 2026-11-01T20:00:00Z
+after: mc/runner-sessions, mc/agent-skills-text
 ---
 # Title
 
@@ -56,14 +60,19 @@ created: 2026-11-01T20:00:00Z
 ## Out of scope
 ```
 
-- `status` — `open`, `review`, `blocked` or `done`. A goal starts `open`.
+- `status` — `open`, `waiting`, `review`, `blocked` or `done`. A goal starts
+  `open`, or `waiting` when its `after` names a goal that has not landed.
 - `repos` — comma-separated repository names. The first is where a session
   starts, and the lane that serves it takes the goal.
 - `class` — `fast` or `large`, routed as a step's class is (ruling 59).
 - `created` — optional; written by `mc goal new`.
+- `after` — optional; the goals this one starts after, comma-separated
+  `<programme>/<goal>` names. Written by `mc goal new --after` and
+  `mc goal after`; absent is none. A goal waits on goals only — not on a
+  project, a deploy or a time (projects have those).
 
 The body is Markdown, written by a person or a session. mc rewrites only the
-`status` line. A GOAL.md whose front matter does not parse is listed by
+`status` and `after` lines. A GOAL.md whose front matter does not parse is listed by
 `mc goal list` with its problems, and the runner never starts it.
 
 ## LOG.md
@@ -96,38 +105,88 @@ Nästa: what the next session should do
 
 ## The verbs
 
-Five verbs; the status verbs are four words.
+Six verbs; the status verbs are four words.
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…"`** — makes a
-  goal, refused unless its flags are valid and its names are new. Each
+- **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--after <p>/<g>[,<p>/<g>]]`** — makes a
+  goal, refused unless its flags are valid and its names are new. With
+  `--after`, every name must be a goal (not the goal itself), and the goal
+  starts `waiting` when one of them has not landed — its first entry says
+  `waits on …`. Each
   repository is fetched first; then GOAL.md, LOG.md, and a worktree of each on
   `goal/<g>` from `origin/main` (or that branch as it stands, when it exists).
   **One branch, built to the end**: the goal is built on this branch, and
   whether `main` moves meanwhile is not the build's concern — the merger
   brings the candidate up to date when it lands it.
+- **`after <p>/<g> [<p>/<g>…]`** — replaces the goal's `after`; none given
+  clears it. A name that is not a goal, the goal itself, or a ring (a goal
+  that already waits, through its own `after`, on this one) is refused, and so
+  is a goal in `review` or `done`: it waits on nothing. An `open`, `blocked`
+  or `waiting` goal becomes `waiting` while a name has not landed; a `waiting`
+  one with nothing left is `open` again, its branches remade as `open` does.
+  The change is an entry: `Gjort: after <names>` (or `after cleared`). It is a
+  verb of its own, not a flag on `log` or a status verb, because it changes
+  the `after` line and the status follows from it.
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]`** —
   appends one entry; at least one field is needed. `--status` also sets the
-  status line. The goal is `MC_GOAL`'s when none is named.
+  status line, except `waiting`: a goal waits by its `after`, never by a
+  status. The goal is `MC_GOAL`'s when none is named.
 - **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
-  logs the reason as the entry's `Kommentar`.
-- **A goal's branch is made when the goal can start.** A goal written
-  `blocked` behind another got its branch at `new`, before what it waits for
-  landed. When it goes `open` (by `open` or `log --status open`), each
+  logs the reason as the entry's `Kommentar`. Going `open` (by `open` or
+  `log --status open`) is refused, with nothing written, while the goal's
+  `after` names a goal that has not landed or is gone: `mc: mc/headless-plan
+  is not opened — it waits on mc/goal-waiting, not landed; …`.
+- **A goal's branch is made when the goal can start.** A goal that waited got
+  its branch at `new`, before what it waits for landed. When it goes `open` —
+  by `open`, `log --status open`, `after`, or the runner releasing it — each
   worktree is fetched, and one whose branch has no commits past
   `origin/main` is moved to `origin/main` as it is now (`git reset --keep`) —
   that branch made again. A branch with commits of its own is never moved,
   nor one with uncommitted changes `--keep` will not carry; each repository
   says which (`remade from origin/main — it had no commits of its own, and
   main has 12 more`, `left as it is — 3 commits of its own`), and nothing
-  here fails the status change (`remakeUnbuiltBranches`, `commands/goal.js`).
+  here fails the status change (`remakeUnbuiltBranches`, `goals.js`).
 - A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
   by either verb: only the merger and a person set it. A review session
   (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
-- **`show <p>/<g>`** — the front matter, the body, the last three entries, and
+- **`show <p>/<g>`** — the front matter (with `· after <names>` when set), the body, the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
   n sessions · the last entry's Nästa`. A goal blocked by a red review or a red
-  merge reads `blocked, waits on plan` (`waitsOnPlan`).
+  merge reads `blocked, waits on plan` (`waitsOnPlan`); a waiting goal reads
+  `waiting on <p>/<g>, …`, the names in its `after` that have not landed.
+
+## Waiting on another goal
+
+Martin, 2026-11-02: *"Sedan behöver vi en status som heter waiting, det har vi
+redan för project."* A goal that must start after another names it in
+`after`, and is `waiting` until it has landed: the runner lets it go, as it
+lets a project step blocked on a time, a deploy or another project go
+(ruling 35). `blocked` keeps meaning a person or plan must act.
+
+Each time a lane looks for work, before goals are picked, the runner settles
+every goal's `after` (`releaseWaiting` in `run.js`, `waitingMoves` and
+`afterOf` in `goals.js`), against the goals there are:
+
+- **Landed** is `done`. When every goal in a `waiting` goal's `after` has
+  landed, the runner sets it `open` with an entry `Gjort: <names> landed —
+  starting`, remakes its branches from `origin/main` as it is now
+  (`remakeUnbuiltBranches`), and the goal is a candidate in that same pick.
+- **Pending** is any other status, `blocked` included: an after-goal that is
+  blocked may still land, so the goal stays `waiting` and nothing is written.
+- **Gone** is no goal by that name any more — its directory or GOAL.md
+  removed, which is how a goal is discarded or archived without landing. The
+  waiting goal goes `blocked` with the entry `Kommentar: <names> is gone
+  without landing — waits on plan to change after`; `waitsOnPlan` counts it,
+  so the list and the page say `waits on plan`.
+- An `open` goal whose `after` has not landed — an `after` written by hand,
+  say — is set `waiting` with an entry `waits on <names>`. A goal in `review`,
+  `blocked` or `done` is not moved: a person or plan put it there.
+
+A `waiting` goal is never picked for a session and never wakes plan. The page
+draws it in the projects' waiting colour (yellow, `docs/technical/mc-ui.md`)
+and leads its row's tail with `waits on <names>`; its row in `mc --json`
+(`programmes[].goals[]`) carries `after` and `waiting_on`, and `mc status
+<goal>` answers `<goal> is a goal · waiting on <names> — mc goal show …`.
 
 ## How the runner takes a goal
 
@@ -136,7 +195,8 @@ reviews: `pickWork` (`lane-pick.js`) orders them all, and a goal is not
 waiting for the steps to run out ([mc-run.md](mc-run.md), *What a free lane
 takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
 
-1. **Pick.** Of the goals that parse and are `open` or due a review and
+1. **Pick.** After `after` is settled (*Waiting on another goal*), of the
+   goals that parse and are `open` or due a review and
    that are not held, on any repository (a lane serves them all), the one whose last
    entry is oldest. A goal in `review` is due a review unless its last entry is
    the runner's `queued` one: then it waits for the merger. A review that
@@ -239,6 +299,10 @@ head; that is a person's act, and its landing still sets the goal `done`.
 
 ## Status
 
+- `waiting` — its `after` names a goal that has not landed. Set by
+  `mc goal new --after`, `mc goal after` and the runner, never by `--status`;
+  never picked for a session, never woken for plan; `mc goal open` refuses it.
+  The runner opens it when every after-goal has landed.
 - `open` — picked for a build session. Only plan or a person sets a blocked
   goal open again, after reading the entry, revising GOAL.md if needed and
   writing `Nästa:`.
