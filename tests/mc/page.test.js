@@ -14,7 +14,7 @@ import { markCriterion, registerPath, seedEntry } from '../../src/mc/register.js
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
 import {
-  attachPrs, checksSection, collectPage, countNewErrors, dockerSection, intakeSection, mergesSection, newErrorLines, nextSection,
+  attachPrs, checksSection, collectPage, countNewErrors, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines, nextSection,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection, stateOf,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
@@ -119,7 +119,7 @@ const TSV = [
 const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('2026-08-28T12:00:00Z'));
 const live = () => true;
 
-describe('RUNNER', () => {
+describe('STEPS', () => {
   const RUNNER = { pid: 4242, started: '2026-08-29T10:00:00Z' };
   const CURRENT = {
     name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
@@ -248,7 +248,7 @@ describe('RUNNER', () => {
     // An idle lane is a number and nothing else: it has no repository until a
     // step is in it.
     assert.match(strip(rowWith(lines, 'lane 3')), /^ {2}· lane 3 {6}idle$/u);
-    assert.match(strip(rowWith(lines, 'RUNNER')), /RUNNER {2}2 in flight · 3 lanes/u);
+    assert.match(strip(rowWith(lines, 'STEPS')), /STEPS {2}2 in flight · 3 lanes/u);
   });
 
   // step-credits: a lane on the API credit says so beside tool and model; one
@@ -301,15 +301,15 @@ describe('RUNNER', () => {
     const idle = paintedPage(pageData({
       runner: runnerSection({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live }),
     }));
-    assert.match(strip(rowWith(idle, 'idle')), /^ {2}· lane 2 {6}idle$/u);
-    assert.match(strip(rowWith(idle, 'RUNNER')), /RUNNER {2}1 in flight · 2 lanes/u);
+    assert.match(strip(rowWith(idle, 'lane 2')), /^ {2}· lane 2 {6}idle$/u);
+    assert.match(strip(rowWith(idle, 'STEPS')), /STEPS {2}1 in flight · 2 lanes/u);
 
     // No runner, no lanes: a lane is something a process drives, and one line
     // says the process is not there. The heading beside it says `mc run`.
     const off = paintedPage(pageData());
-    assert.equal(off.filter((line) => /idle/u.test(strip(line))).length, 0);
+    assert.equal(off.filter((line) => /^ {2}· lane /u.test(strip(line))).length, 0);
     assert.ok(off.some((line) => /the runner is not running — mc run starts it/u.test(strip(line))));
-    assert.match(strip(rowWith(off, 'RUNNER')), /RUNNER {2}not running/u);
+    assert.match(strip(rowWith(off, 'STEPS')), /STEPS {2}not running/u);
   });
 
   /**
@@ -826,7 +826,7 @@ describe('NEXT', () => {
     const lines = renderPageLines(pageData({ next }), { columns: 120 });
     // The heading is the one number anybody used, and a row is four columns:
     // repository, project, which step of its plan, and what the step is called.
-    assert.ok(lines.some((line) => /RUNNER .*2 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /STEPS .*2 queued/u.test(line)), lines.join('\n'));
     assert.ok(!lines.some((line) => /^  NEXT /u.test(line)), 'the full next object is data-only');
     assert.equal(next.items.find(item => item.name === 'mc-ui').title, 'The page');
     // What was skipped, and why, is not the section's to say any more.
@@ -844,7 +844,7 @@ describe('NEXT', () => {
     const next = nextSection({ queueText: 'mc-ui\ndocx-editor\n', plans: PLANS });
     assert.equal(next.from_queue, 2);
     const named = renderPageLines(pageData({ next }), { columns: 120 });
-    assert.ok(named.some((line) => /RUNNER .*2 queued/u.test(line)), named.join('\n'));
+    assert.ok(named.some((line) => /STEPS .*2 queued/u.test(line)), named.join('\n'));
     assert.ok(!named.some((line) => /queue\.md/u.test(line)), named.join('\n'));
   });
 
@@ -882,7 +882,7 @@ describe('NEXT', () => {
     const rows = lines.filter((line) => /^ {5}memoro(-cli)? /u.test(line));
     assert.deepEqual(rows.map((line) => line.trim().split(/\s+/u).slice(0, 2).join(' ')),
       [], 'queue names are no longer drawn');
-    assert.ok(lines.some((line) => /RUNNER .*6 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /STEPS .*6 queued/u.test(line)), lines.join('\n'));
   });
 
   // The page used to answer "somebody has a session open here" as a skip of its
@@ -932,308 +932,239 @@ describe('NEXT', () => {
   // then it says that rather than blaming the queue file for it.
   it('says so when there is no plan on main to run', () => {
     const lines = renderPageLines(pageData({ next: nextSection({ plans: [] }) }), { columns: 120 });
-    assert.ok(lines.some((line) => /RUNNER .*0 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /STEPS .*0 queued/u.test(line)), lines.join('\n'));
   });
 });
 
 describe('MERGES', () => {
   const LANDING = {
-    repo: 'memoro', pr: 11651, holder: 'sql-w5-relationship-closure', phase: 'running 17 test files',
+    repo: 'memoro', pr: 11651, pid: 4242, phase: 'running 17 test files',
     mode: 'merge', since: '2026-08-29T11:56:00Z', age_seconds: 240,
   };
+  const job = (pr, extra = {}) => ({ repo: 'memoro', pr, since: '2026-08-29T11:50:00Z', state: 'queued', ...extra });
+  const section = (extra = {}) => mergesSection({ now: NOW, merger: { pid: 4242 }, ...extra });
+  const drawing = (merges, columns = 120, colour = false) => {
+    const lines = renderPageLines(pageData({ merges }), { columns, colour });
+    const start = lines.findIndex((line) => /MERGES/u.test(line));
+    const end = lines.findIndex((line, i) => i > start && !line);
+    return lines.slice(start, end);
+  };
 
-
-
-  /**
-   * The merger's queue (ruling 30): every pull request `mc merge` or the
-   * runner handed it, oldest first, with the step it is — or its branch — and
-   * since when. Until this row existed the only trace of a queued merge was a
-   * file nobody opens.
-   */
-  it('carries every queued pull request with its step or branch, oldest first', () => {
-    const merges = mergesSection({
-      queued: [
-        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', since: '2026-08-29T11:00:00Z', state: 'queued' },
-        { repo: 'memoro', pr: 11541, branch: 'docx-editor', step: { project: 'docx-editor', index: 1 }, since: '2026-08-29T09:30:00Z', state: 'landing' },
-      ],
-      now: new Date('2026-08-29T12:00:00Z'),
-    });
-    assert.equal(merges.queued.count, 2);
-    assert.deepEqual(merges.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
-    assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [9000, 3600]);
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    // The queue is on the heading, in landing order — with the repository on
-    // each number because the queue spans two — and has no row of its own.
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}2 waiting: memoro#11541 memoro-cli#671 +mc merge <repo> <pr>$/u.test(line)),
-      lines.join('\n'));
-    assert.ok(!lines.some((line) => /· waiting/u.test(line)), lines.join('\n'));
-  });
-
-  it('a red answer is a red row of its own, with its reason, while the queue goes on', () => {
-    const merges = mergesSection({
-      queued: [
-        { repo: 'memoro', pr: 13318, branch: 'english-grammar-rows-9', since: '2026-10-10T06:54:00Z', state: 'queued' },
-        {
-          repo: 'memoro', pr: 13301, branch: 'main-chat-d1-4', step: { project: 'main-chat-d1', index: 2 }, since: '2026-10-10T06:52:00Z',
-          state: 'red', reason: 'red: 3 tests red: the call-site table', answered: '2026-10-10T06:56:50Z',
-        },
-        { repo: 'memoro', pr: 12900, branch: 'bookstores', since: '2026-10-10T06:05:00Z', state: 'red', reason: 'red: 3 tests red', answered: '2026-10-10T06:09:09Z' },
-        { repo: 'memoro', pr: 13000, branch: 'gone', since: '2026-10-10T05:00:00Z', state: 'red', reason: 'red: x', answered: '2026-10-10T05:05:00Z' },
-      ],
-      prs: [
-        { repo: 'memoro', number: 13318, title: 'English grammar' },
-        { repo: 'memoro', number: 13301, title: 'main-chat-d1 3' },
-        { repo: 'memoro', number: 12900, title: 'Remove the Adlibris and Bokus site recipes' },
-      ],
-      now: new Date('2026-10-10T07:10:00Z'),
-    });
-    assert.equal(merges.queued.count, 1, 'a red answer is not waiting');
-    assert.deepEqual(merges.red.items.map((item) => item.pr), [13301, 12900], 'newest first; a closed pull request is not drawn');
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /MERGES {2}2 red · 1 waiting: #13318 +mc merge/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}✗ memoro +#13301 {2}main-chat-d1 step 3 {2}red: 3 tests red: the call-site table {2}13 min ago$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}✗ memoro +#12900 {2}bookstores {2}red: 3 tests red {2}\d+ min ago$/u.test(line)), lines.join('\n'));
-  });
-
-  it('marks a job whose plan\'s earlier step is not done, and says which step it waits for', () => {
-    const merges = mergesSection({
-      queued: [
-        { repo: 'memoro', pr: 13400, branch: 'mq-3', step: { project: 'mq', index: 2 }, since: '2026-10-10T12:00:00Z', state: 'queued' },
-        { repo: 'memoro', pr: 13401, branch: 'other', since: '2026-10-10T12:01:00Z', state: 'queued' },
-      ],
-      ordered: (entry) => entry.step?.project !== 'mq',
-      now: new Date('2026-10-10T12:05:00Z'),
-    });
-    assert.deepEqual(merges.queued.items.map((item) => item.waits_for), ['mq step 2', null]);
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}2 waiting: #13400⏸ #13401 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
-  });
-
-  it('names a one-repository queue by number alone, and counts what does not fit', () => {
-    const queued = Array.from({ length: 30 }, (_, n) => ({
-      repo: 'memoro', pr: 13200 + n, branch: `b${n}`, since: '2026-10-09T19:00:00Z', state: 'queued',
-    }));
-    const merges = mergesSection({ queued, now: new Date('2026-10-09T19:04:00Z') });
-    const lines = renderPageLines(pageData({ merges }), { columns: 100 });
-    const line = lines.find((l) => /MERGES/u.test(l));
-    assert.match(line, /^ {2}MERGES {2}30 waiting: #13200 #13201 /u);
-    assert.match(line, / … \d+ more +mc merge <repo> <pr>$/u);
-    assert.ok(line.length <= 100, line);
-  });
-
-  it('does not draw the job the running round is landing twice', () => {
-    const merges = mergesSection({
-      landing: { pr: 12353, repo: 'memoro', mode: 'merge' },
-      queued: [
-        { repo: 'memoro', pr: 12353, branch: 'b', since: '2026-10-01T19:56:03Z', state: 'landing' },
-        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', since: '2026-10-01T20:00:00Z' },
-      ],
-    });
-    assert.deepEqual(merges.queued.items.map((item) => item.pr), [671]);
-  });
-
-  it('has nothing queued when the file is missing or not a list', () => {
-    assert.deepEqual(mergesSection({}).queued, { count: 0, items: [] });
-    assert.equal(mergesSection({ queued: null }).queued.count, 0);
-  });
-
-  /**
-   * The round running right now — `runningMerge`'s own object, unread by this
-   * function — drawn ahead of the queue, in the green a running RUNNER step is
-   * drawn in: it is moving, not merely waiting to.
-   */
-  it('draws the round running now ahead of the queue', () => {
-    const merges = mergesSection({ landing: LANDING });
-    assert.equal(merges.landing.pr, LANDING.pr);
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /MERGES.*1 landing/u.test(line)), lines.join('\n'));
-    // The mark in the gutter, as a running lane has it; no holder on the row.
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}#11651 {2}landing · running 17 test files · 4 min$/u.test(line)),
-      lines.join('\n'));
-  });
-
-  /**
-   * Two rounds at once — a memoro round and a memoro-cli round, each in
-   * its repository's lane — are two rows, each naming its lane.
-   */
-  it('draws both rounds when one runs in each lane, and names the lane of each', () => {
-    const merges = mergesSection({
-      landing: [{ ...LANDING, lane: 'memoro' }, { ...LANDING, repo: 'memoro-cli', pr: 838, phase: 'node --test', lane: 'memoro-cli' }],
-      queued: [{ repo: 'memoro-cli', pr: 838, since: '2026-10-10T12:00:00Z', state: 'landing' }],
-    });
-    assert.equal(merges.count, 2, 'the second is not counted twice as a waiter');
-    assert.equal(merges.landings.length, 2);
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /MERGES.*2 landing/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}landing · memoro lane · running 17 test files/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /● memoro-cli {2}#838 {2}landing · memoro-cli lane · node --test/u.test(line)), lines.join('\n'));
-  });
-
-  /**
-   * A batch is one round and three pull requests: each keeps its own row,
-   * the round's phase and clock on the first, and none of them is a waiter
-   * (Martin, 2026-10-10).
-   */
-  it('draws every pull request of a batch round on its own row, the phase on the first', () => {
-    const started = '2026-10-10T17:47:00Z';
-    const merges = mergesSection({
-      landing: { ...LANDING, pr: 13372 },
-      queued: [
-        { repo: 'memoro', pr: 13372, branch: 'a-1', step: { project: 'a', index: 0 }, since: '2026-10-10T17:30:00Z', state: 'landing', started },
-        { repo: 'memoro', pr: 13373, branch: 'b-2', step: { project: 'b', index: 1 }, since: '2026-10-10T17:31:00Z', state: 'landing', started },
-        { repo: 'memoro', pr: 13374, branch: 'loose', since: '2026-10-10T17:32:00Z', state: 'landing', started },
-        { repo: 'memoro', pr: 13380, branch: 'next', since: '2026-10-10T17:40:00Z', state: 'queued' },
-      ],
-      prs: [{ repo: 'memoro', number: 13373, title: 'b 2: the second' }],
-      now: new Date('2026-10-10T17:51:00Z'),
-    });
-    assert.deepEqual(merges.landings.map((item) => item.pr), [13372, 13373, 13374]);
-    assert.deepEqual(merges.landings.map((item) => item.phase ?? null), [LANDING.phase, null, null]);
-    assert.deepEqual(merges.landings.map((item) => item.batch_of ?? null), [null, 13372, 13372]);
-    assert.deepEqual(merges.landings.map((item) => [item.name, item.step]), [['a', 1], ['b', 2], ['loose', null]]);
-    assert.deepEqual(merges.queued.items.map((item) => item.pr), [13380], 'no batch member is waiting');
-    assert.equal(merges.count, 4);
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}3 landing · 1 waiting: #13380 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13372 {2}a step 1 {2}landing · running 17 test files · 4 min$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13373 {2}b step 2 {2}b 2: the second {2}same round as #13372$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13374 {2}loose {2}same round as #13372$/u.test(line)), lines.join('\n'));
-    assert.equal(lines.filter((line) => /running 17 test files/u.test(line)).length, 1, 'the phase is on the first row only');
-  });
-
-  /**
-   * A red getting its one mend is a yellow row of its own under the round
-   * landing beside it, and the heading counts it; a mended job back in line
-   * is a waiter again, marked `↻`.
-   */
-  it('draws a mend on a yellow row of its own beside a landing round, and marks a mended waiter', () => {
-    const merges = mergesSection({
-      landing: { ...LANDING, pr: 13390 },
-      queued: [
-        { repo: 'memoro', pr: 13390, branch: 'c', since: '2026-10-10T17:00:00Z', state: 'landing', started: '2026-10-10T17:47:00Z' },
-        {
-          repo: 'memoro', pr: 13370, branch: 'card-views-3', step: { project: 'card-views', index: 2 }, since: '2026-10-10T16:50:00Z', state: 'mending',
-          mend: { pid: 4242, started: '2026-10-10T17:45:00Z', reason: 'conflicts with origin/main: card-views.js', stopped_at: 'merge' },
-        },
-        { repo: 'memoro', pr: 13360, branch: 'd', since: '2026-10-10T16:40:00Z', state: 'queued', mended: { at: '2026-10-10T17:40:00Z', outcome: 'pushed' } },
-      ],
-      now: new Date('2026-10-10T17:51:00Z'),
-    });
-    assert.deepEqual(merges.mending.items.map((item) => [item.pr, item.reason, item.age_seconds, item.waiting]), [
-      [13370, 'conflicts with origin/main: card-views.js', 360, false],
-    ]);
-    assert.deepEqual(merges.queued.items.map((item) => item.pr), [13360], 'a mend is not a waiter');
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 landing · 1 mending · 1 waiting: #13360↻ +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
-    const landingAt = lines.findIndex((line) => /#13390/u.test(line));
-    const mendAt = lines.findIndex((line) => /^ {2}● memoro {6}#13370 {2}card-views step 3 {2}mending — conflicts with origin\/main: card-views\.js {2}6 min$/u.test(line));
-    assert.ok(mendAt > landingAt && landingAt >= 0, lines.join('\n'));
-    // Before the session has a pid, the mend is waiting for it.
-    const quiet = mergesSection({
-      queued: [{ repo: 'memoro', pr: 13371, branch: 'quiet', since: '2026-10-10T16:55:00Z', state: 'mending', mend: { pid: null, started: null, reason: 'red: 2 tests red', stopped_at: 'gate' } }],
-    });
-    assert.ok(renderPageLines(pageData({ merges: quiet }), { columns: 120 })
-      .some((line) => /^ {2}● memoro {6}#13371 {2}quiet {2}mending — red: 2 tests red {2}waiting$/u.test(line)));
-    const painted = renderPageLines(pageData({ merges }), { columns: 120, colour: true }).find((line) => /#13370/u.test(line));
-    assert.match(painted, /\x1b\[33m/u, 'the mend row is yellow');
-    // Narrow, the reason gives way and the number and the name stay.
-    const narrow = renderPageLines(pageData({ merges }), { columns: 70 }).find((line) => /#13370/u.test(line));
-    assert.ok(narrow.length <= 70, narrow);
-    assert.match(narrow, /#13370 {2}card-views step 3 {2}mending — /u);
-  });
-
-  /**
-   * A red whose step a live runner session holds is that session's work
-   * (ruling 39): a yellow row with what it last said and how long it has run,
-   * counted `fixing` and not `red`. Nobody on it, it is the red row.
-   */
-  it('draws a red a live runner session holds as a yellow fixing row with its last sentence', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mc-page-fixing-'));
-    const log = join(dir, 'card-views-20261010T174500Z');
-    writeFileSync(`${log}.jsonl`, [
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'Merging origin/main.' }] } },
-      { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'Running the gate.' }, { type: 'tool_use', name: 'Bash' }] } },
-    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
-    const red = {
-      repo: 'memoro', pr: 13370, branch: 'card-views-3', step: { project: 'card-views', index: 2 }, since: '2026-10-10T16:50:00Z',
-      state: 'red', reason: 'red: conflicts with origin/main: card-views.js', answered: '2026-10-10T17:30:00Z',
-    };
-    const current = { name: 'card-views', step: 3, kind: 'step', tool: 'claude', pid: 4242, lane: 0, started: '2026-10-10T17:45:00Z' };
-    const register = (path) => (project) => (project === 'card-views'
-      ? { project, steps: [{ status: 'done' }, { status: 'done' }, { status: 'running', session: { log: path } }] }
-      : null);
-    const section = (overrides = {}) => mergesSection({
-      queued: [red], now: new Date('2026-10-10T17:51:00Z'), currents: [current], alive: (pid) => pid === 4242, entry: register(log), ...overrides,
-    });
-    const merges = section();
-    assert.deepEqual(merges.fixing.items.map((item) => [item.pr, item.said, item.age_seconds, item.lane]), [[13370, 'Running the gate.', 360, 0]]);
-    assert.equal(merges.red.count, 0, 'a red being fixed is not a red row');
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 fixing +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.includes('  ● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min'), lines.join('\n'));
-    assert.ok(!lines.some((line) => /✗.*#13370/u.test(line)), lines.join('\n'));
-    const painted = renderPageLines(pageData({ merges }), { columns: 120, colour: true }).find((line) => /#13370/u.test(line));
-    assert.match(painted, /\x1b\[33m/u, 'the fixing row is yellow');
-    // Narrow, the sentence gives way and the number and the name stay.
-    const narrow = renderPageLines(pageData({ merges }), { columns: 70 }).find((line) => /#13370/u.test(line));
-    assert.ok(narrow.length <= 70, narrow);
-    assert.match(narrow, /#13370 {2}card-views step 3 {2}fixing — /u);
-    // The pid dead, or the lane on another step: nobody is on it, and it is red.
-    for (const nobody of [section({ alive: () => false }), section({ currents: [{ ...current, step: 4 }] })]) {
-      assert.equal(nobody.fixing.count, 0);
-      const rows = renderPageLines(pageData({ merges: nobody }), { columns: 120 });
-      assert.ok(rows.some((line) => /^ {2}MERGES {2}1 red +mc merge <repo> <pr>$/u.test(line)), rows.join('\n'));
-      assert.ok(rows.some((line) => /^ {2}✗ memoro +#13370 {2}card-views step 3 {2}red: conflicts with origin\/main: card-views\.js {2}21 min ago$/u.test(line)), rows.join('\n'));
+  it('always draws exactly two repository rows, including idle, landing, waiting, paused and red', () => {
+    const fixtures = [section(), section({ landing: LANDING }), section({ queued: [job(1)] }),
+      section({ pauses: { memoro: { kind: 'deploy', reason: 'deploy' } }, queued: [job(1)] }),
+      section({ queued: [job(2, { state: 'red', reason: 'tests red' })] })];
+    for (const merges of fixtures) {
+      for (const columns of [80, 120]) {
+        const lines = drawing(merges, columns);
+        assert.equal(lines.length, 3, lines.join('\n'));
+        assert.match(lines[1], /^ {4}memoro /u);
+        assert.match(lines[2], /^ {4}memoro-cli /u);
+        assert.ok(lines.every((line) => width(line) <= columns), lines.join('\n'));
+      }
     }
-    // No transcript yet: the row says the red's reason.
-    const silent = section({ entry: register(join(dir, 'missing')) });
-    assert.equal(silent.fixing.items[0].said, null);
-    assert.ok(renderPageLines(pageData({ merges: silent }), { columns: 120 })
-      .includes('  ● memoro      #13370  card-views step 3  fixing — red: conflicts with origin/main: card-views.js  6 min'));
+    assert.match(drawing(section())[0], /memoro idle · memoro-cli idle/u);
   });
 
-  /**
-   * What is landing, named: the queue entry has its step and branch, the open
-   * pull requests its title — the row was a number and a holder's hostname
-   * (Martin, 2026-10-09).
-   */
-  it('names what is landing: repository, number, project and step, title, then phase and time', () => {
-    const merges = mergesSection({
-      landing: { ...LANDING, pr: 13265 },
-      queued: [
-        { repo: 'memoro', pr: 13265, branch: 'email-inbox-fixes-2', step: { project: 'email-inbox-fixes', index: 1 }, since: '2026-08-29T11:55:00Z', state: 'landing' },
-        { repo: 'memoro', pr: 13255, branch: 'plan-staff', since: '2026-08-29T11:56:00Z', state: 'queued' },
-      ],
-      prs: [{ repo: 'memoro', number: 13265, headRefName: 'email-inbox-fixes-2', title: 'email-inbox-fixes 2: the inbox reads' }],
-      now: new Date('2026-08-29T12:00:00Z'),
+  it('puts counts on the heading, PR numbers in landing order on their repository row', () => {
+    const merges = section({ queued: [job(3, { repo: 'memoro-cli' }), job(2), job(1, { since: '2026-08-29T11:00:00Z' })] });
+    assert.deepEqual(merges.repos.map((repo) => repo.waiting.map((item) => item.pr)), [[1, 2], [3]]);
+    const [head, memoro, cli] = drawing(merges);
+    assert.match(head, /memoro 2 waiting · memoro-cli 1 waiting/u);
+    assert.doesNotMatch(head, /#/u);
+    assert.match(memoro, /#1.*#2/u);
+    assert.match(cli, /#3/u);
+    assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [3600, 600, 600]);
+  });
+
+  it('joins landing identity and queue age, excludes it from waiting, and translates phases', () => {
+    const merges = section({ landing: LANDING, queued: [job(11651, { state: 'landing', branch: 'feature' }), job(11652)],
+      prs: [{ repo: 'memoro', number: 11651, title: 'A title '.repeat(50) }] });
+    const repo = merges.repos[0];
+    assert.equal(repo.landing.queue_age_seconds, 600);
+    assert.equal(repo.landing.phase_words, 'gate');
+    assert.equal(repo.landing.name, 'feature');
+    assert.equal(repo.waiting.length, 1);
+    for (const columns of [80, 120]) {
+      const line = drawing(merges, columns)[1];
+      assert.match(line, /memoro.*#11651 gate/u);
+      assert.match(line, /4 min · queued 10 min/u);
+      assert.match(line, /#11652/u);
+      assert.ok(width(line) <= columns, line);
+    }
+    assert.equal(mergePhase('rebase candidate'), 'rebase');
+    assert.equal(mergePhase('merged origin/main into candidate'), 'rebase');
+    assert.equal(mergePhase('squash merge'), 'landing');
+    assert.equal(mergePhase('pr-tests'), 'gate');
+  });
+
+  it('keeps two concurrent landing queues separate', () => {
+    const merges = section({ landing: [LANDING, { ...LANDING, repo: 'memoro-cli', pr: 838 }] });
+    const lines = drawing(merges);
+    assert.match(lines[0], /memoro 1 landing · memoro-cli 1 landing/u);
+    assert.match(lines[1], /#11651 gate/u);
+    assert.match(lines[2], /#838 gate/u);
+  });
+
+  it('keeps legacy batch members on the same repository row, never as waiting', () => {
+    const started = '2026-08-29T11:56:00Z';
+    const merges = section({ landing: LANDING, queued: [job(11651, { state: 'landing', started }),
+      job(11652, { state: 'landing', started })] });
+    assert.equal(merges.landings.length, 2);
+    assert.equal(merges.repos[0].landings.length, 2);
+    assert.equal(merges.repos[0].waiting.length, 0);
+    assert.equal(drawing(merges).length, 3);
+    assert.match(drawing(merges)[1], /#11651.*#11652/u);
+  });
+
+  it('explains waiting markers with grey words instead of symbols', () => {
+    for (const [extra, word] of [[{ mended: { outcome: 'pushed' } }, 'mended'],
+      [{ parent: { pr: 9, sha: 'abc' } }, 'after #9'],
+      [{ step: { project: 'mq', index: 2 } }, 'awaits mq step 2']]) {
+      const merges = section({ queued: [job(10, extra)], ordered: (item) => !item.step });
+      const row = drawing(merges, 120, true)[1];
+      assert.ok(strip(row).includes(word), row);
+      assert.doesNotMatch(strip(row), /⏸|↻|→/u);
+      assert.match(row, /\x1b\[90m/u);
+    }
+  });
+
+  it('keeps a red and a mend inline, in red and plain text respectively, with grey detail', () => {
+    const merges = section({ queued: [job(1, { state: 'red', reason: 'tests red', answered: '2026-08-29T11:55:00Z' }),
+      job(2, { state: 'mending', mend: { pid: 4242, started: '2026-08-29T11:54:00Z', reason: 'conflicts' } })] });
+    const repo = merges.repos[0];
+    assert.equal(repo.reds.length, 1);
+    assert.equal(repo.mending[0].age_seconds, 360);
+    const row = drawing(merges, 120, true)[1];
+    assert.match(row, /#2 mending/u);
+    assert.match(row, /\x1b\[31m#1 red\x1b\[0m/u);
+    assert.match(row, /\x1b\[90m · 6 min · conflicts/u);
+    assert.doesNotMatch(row, /\x1b\[33m|\x1b\[32m/u);
+    assert.equal(drawing(merges).length, 3);
+  });
+
+  it('keeps a fixing session plain with its last sentence and grey age, then red when it leaves', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-page-fixing-'));
+    try {
+      const log = join(dir, 'session');
+      writeFileSync(`${log}.jsonl`, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Running the gate.' }] } }));
+      const red = job(1, { state: 'red', reason: 'conflicts', step: { project: 'feature', index: 0 } });
+      const current = { name: 'feature', kind: 'step', step: 1, pid: 4242, started: '2026-08-29T11:54:00Z' };
+      const input = { queued: [red], currents: [current], alive: (pid) => pid === 4242,
+        entry: () => ({ steps: [{ session: { log } }] }) };
+      const merges = section(input);
+      assert.equal(merges.repos[0].reds.length, 0);
+      assert.equal(merges.repos[0].fixing[0].said, 'Running the gate.');
+      const row = drawing(merges, 120, true)[1];
+      assert.match(row, /#1 fixing/u);
+      assert.match(row, /\x1b\[90m · 6 min · Running the gate./u);
+      assert.doesNotMatch(row, /\x1b\[33m|\x1b\[31m/u);
+      for (const extra of [{ alive: () => false }, { currents: [{ ...current, step: 2 }] }]) {
+        assert.equal(section({ ...input, ...extra }).repos[0].reds.length, 1);
+      }
+      assert.equal(section({ ...input, entry: null }).repos[0].fixing[0].said, null);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('does not draw a closed red or count a red as waiting', () => {
+    const merges = section({ queued: [job(1, { state: 'red' }), job(2, { state: 'red' })],
+      prs: [{ repo: 'memoro', number: 1 }] });
+    assert.deepEqual(merges.repos[0].reds.map((item) => item.pr), [1]);
+    assert.equal(merges.repos[0].waiting.length, 0);
+  });
+
+  it('shows red pause labels only on the heading, including a deploy on memoro alone', () => {
+    for (const [kind, reason] of [['deploy', 'deploy'], ['gate', 'gate round'], ['lease', 'lease held']]) {
+      const merges = section({ queued: [job(1)], pauses: { memoro: { kind, reason } } });
+      assert.equal(merges.repos[0].state, 'paused');
+      assert.equal(merges.repos[0].pause.kind, kind);
+      const [head, row, cli] = drawing(merges, 80, true);
+      assert.match(head, /\x1b\[31m paused /u);
+      assert.ok(strip(head).includes(`paused ${reason}`));
+      assert.doesNotMatch(strip(row + cli), /paused|deploy/u);
+      assert.equal(merges.repos[1].pause, null);
+    }
+  });
+
+  it('shows merger stopped in red when work remains and the merger is absent', () => {
+    const merges = section({ merger: null, queued: [job(1)] });
+    assert.equal(merges.repos[0].state, 'stopped');
+    assert.match(drawing(merges, 80, true)[0], /\x1b\[31m merger stopped/u);
+    assert.equal(section({ merger: null }).repos[0].state, 'idle');
+  });
+
+  it('reads the same deploy, gate-lane and non-orphaned lease barriers as the merger', () => {
+    const repos = [{ name: 'memoro', path: '/repos/memoro' }, { name: 'memoro-cli', path: '/repos/memoro-cli' }];
+    const free = { repos, deploy: () => null, round: () => null, lease: () => null };
+    assert.deepEqual(mergePauses({ ...free, deploy: () => ({ sha: 'abc' }) }), {
+      memoro: { kind: 'deploy', reason: 'deploy', sha: 'abc' }, 'memoro-cli': null,
     });
-    assert.equal(merges.landing.title, 'email-inbox-fixes 2: the inbox reads');
-    assert.equal(merges.landing.name, 'email-inbox-fixes');
-    assert.equal(merges.landing.step, 2);
-    const lines = renderPageLines(pageData({ merges }), { columns: 140 });
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13265 {2}email-inbox-fixes step 2 {2}email-inbox-fixes 2: the inbox reads {2}landing · running 17 test files · 4 min$/u.test(line)),
-      lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 landing · 1 waiting: #13255 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
-    // Narrow, the title gives way and the number, the name and the phase stay.
-    const narrow = renderPageLines(pageData({ merges }), { columns: 80 });
-    const row = narrow.find((line) => /#13265/u.test(line));
-    assert.ok(row.length <= 80, row);
-    assert.match(row, /#13265 {2}email-inbox-fixes step 2/u);
+    const calls = [];
+    const pauses = mergePauses({ ...free, round: (lane) => { calls.push(lane); return lane === 'memoro-cli' ? { pid: 42 } : null; } });
+    assert.deepEqual(calls, ['memoro', 'memoro-cli']);
+    assert.equal(pauses['memoro-cli'].kind, 'gate');
+    assert.equal(mergePauses({ ...free, lease: () => ({ held: true, holder: 'other' }) }).memoro.kind, 'lease');
+    assert.equal(mergePauses({ ...free, lease: () => ({ held: true, orphaned: true }) }).memoro, null);
+    assert.equal(mergePauses({ ...free, rounds: [LANDING], round: () => LANDING,
+      lease: () => ({ held: true, holder: 'own round' }) }).memoro, null);
   });
 
-  it('says measuring, not landing, for a check-mode round', () => {
-    const merges = mergesSection({ landing: { ...LANDING, mode: 'check', holder: 'martin@laptop' } });
-    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}measuring, not landing · running 17 test files · 4 min$/u.test(line)),
-      lines.join('\n'));
+  it('treats check rounds as pauses, never as PRs landing', () => {
+    for (const mode of ['check', 'full', 'nightly']) {
+      assert.equal(section({ landing: { ...LANDING, mode } }).repos[0].landing, null);
+    }
+    assert.equal(section({ landing: { ...LANDING, mode: 'docs' } }).repos[0].landing.pr, LANDING.pr);
+    const dir = mkdtempSync(join(tmpdir(), 'mc-merge-pause-'));
+    try {
+      writeFileSync(gateLockPath(dir, 'memoro'), JSON.stringify({ ...LANDING, mode: 'check' }));
+      const pauses = mergePauses({ root: dir, repos: [{ name: 'memoro', path: '/repos/memoro' }],
+        alive: (pid) => pid === 4242, deploy: () => null, lease: () => null });
+      assert.equal(pauses.memoro.kind, 'gate');
+      assert.equal(mergePauses({ root: dir, repos: [{ name: 'memoro', path: '/repos/memoro' }],
+        alive: () => false, deploy: () => null, lease: () => null }).memoro, null);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('says nothing landing when no round is running', () => {
-    const lines = renderPageLines(pageData({ merges: mergesSection({}) }), { columns: 120 });
-    // Once, on the heading: a row under it saying the same thing is a row.
-    assert.ok(lines.some((line) => /MERGES {2}nothing landing, nothing waiting/u.test(line)), lines.join('\n'));
-    assert.ok(!lines.some((line) => /· nothing landing$/u.test(line)), lines.join('\n'));
+  it('puts all landed PRs, including manual and batch merges, in per-repo day counts and last landing', () => {
+    const history = [
+      { repo: 'memoro.git', at: '2026-08-29T09:55:00Z', duration_ms: 300000, merged: [1, 2], phase: 'end' },
+      { repo: 'memoro-cli', at: '2026-08-28T11:00:00Z', merged: [3] },
+      { repo: 'memoro', at: '2026-08-29T09:55:00Z', merged: [2] },
+      { repo: 'memoro', at: '2026-08-29T10:00:00Z', phase: 'start' },
+    ];
+    const merges = section({ history });
+    assert.deepEqual(merges.repos.map((repo) => repo.day_count), [2, 0]);
+    assert.equal(merges.repos[0].last.age_seconds, 7200);
+    const [, row, cli] = drawing(merges, 80, true);
+    assert.match(strip(row), /idle · last #2 · 2 h ago/u);
+    assert.match(row, /\x1b\[32m2 merges in 24 h/u);
+    assert.match(strip(cli), /last #3/u);
+    assert.match(cli, /\x1b\[90m0 merges in 24 h/u);
+    const steps = renderPageLines(pageData({ runner: runnerSection({ rows: ROWS }) }));
+    assert.ok(steps.some((line) => /STEPS.*mc run/u.test(line)));
+    assert.ok(!steps.some((line) => /merged \d/u.test(line)));
+  });
+
+  it('fits long queues, simultaneous pauses and large counts at 80 and 120 columns', () => {
+    const merges = section({ queued: Array.from({ length: 30 }, (_, i) => job(13200 + i)),
+      pauses: { memoro: { kind: 'deploy', reason: 'deploy' }, 'memoro-cli': { kind: 'gate', reason: 'gate round' } } });
+    for (const columns of [80, 120]) {
+      const lines = drawing(merges, columns, true);
+      assert.ok(lines.every((line) => width(line) <= columns), lines.map(strip).join('\n'));
+      assert.match(strip(lines[1]), /#13200.*… \d+ more/u);
+      assert.equal((strip(lines[0]).match(/paused/gu) || []).length, 2);
+      assert.doesNotMatch(lines[0], /\x1b\[33m/u);
+    }
+  });
+
+  it('draws only repos[], and carries that exact shape in JSON', () => {
+    const merges = section({ queued: [job(1)] });
+    const parsed = JSON.parse(JSON.stringify(merges));
+    parsed.queued.items = [job(99)];
+    assert.equal(parsed.repos[0].waiting[0].pr, 1);
+    assert.match(drawing(parsed)[1], /#1/u);
+    assert.doesNotMatch(drawing(parsed).join(''), /#99/u);
+    assert.deepEqual(mergesSection({ queued: null }).repos.map((repo) => repo.waiting), [[], []]);
   });
 });
 
@@ -1880,7 +1811,7 @@ describe('the page', () => {
     // The order itself is Martin's (2026-09-19): the listing, the two desks
     // with what lies on each, what the runner takes next and what it is doing,
     // and the short end of the page — merges, the deploy, mc itself.
-    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'RUNNER', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
+    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'STEPS', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
@@ -1899,11 +1830,12 @@ describe('the page', () => {
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
-    assert.match(text, /RUNNER {2}1 in flight · 2 lanes · 2 queued\s+mc run/u);
-    assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
-    assert.match(text, /RUNNER .*2 queued/u);
+    assert.match(text, /STEPS {2}1 in flight · 2 lanes · 2 queued\s+mc run/u);
+    assert.match(text, /^ {2}3 steps in 24 h · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
+    assert.match(text, /STEPS .*2 queued/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
-    assert.match(text, /MERGES {2}1 waiting: #10958\s+mc merge <repo> <pr>/u);
+    assert.match(text, /MERGES {2}memoro 1 waiting merger stopped · memoro-cli idle/u);
+    assert.match(text, /memoro +#10958/u);
     // One block per lane, three deep, and the row says where in its plan the
     // project is. The lanes run at the same time: both heads start now.
     assert.doesNotMatch(text, /^  NEXT /mu);
@@ -2077,7 +2009,7 @@ describe('the page', () => {
       const lines = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW });
       const over = lines.filter((line) => width(line) > wide);
       assert.deepEqual(over, [], `${columns} columns: ${over.join('\n')}`);
-      assert.ok(lines.some((line) => /RUNNER/u.test(line)), `${columns} columns lost RUNNER`);
+      assert.ok(lines.some((line) => /STEPS/u.test(line)), `${columns} columns lost STEPS`);
     }
   });
 
@@ -2335,6 +2267,36 @@ describe('collectPage', () => {
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
     assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES {2}3 programmes · 4 projects/u);
+  });
+
+  it('collects repository pauses, merger liveness and landed PR history from the supplied homes', async (t) => {
+    const root = workRootFixture();
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const repos = ['memoro', 'memoro-cli'].map((name) => {
+      const path = join(root, 'repos', name);
+      mkdirSync(join(path, '.git'), { recursive: true });
+      return { name, path };
+    });
+    writeFileSync(join(root, 'runner', 'merger.json'), JSON.stringify({ pid: process.pid }));
+    writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({ pid: process.pid, mode: 'check' }));
+    writeFileSync(join(root, 'gate-rounds.jsonl'), JSON.stringify({
+      schema: 'mc-gate-round', phase: 'end', repo: 'memoro-cli.git', at: '2026-08-29T09:59:00Z', duration_ms: 60000, merged: [673],
+    }) + '\n');
+    const input = {
+      claudeSettings: () => null, env: { MC_WORK_ROOT: root, MC_HOME: root }, repos, now: NOW, offline: true, checkout: null,
+      exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+      cache: { loadPlans: () => ({ plans: [], sources: [] }), loadPrs: () => ({ prs: [] }) },
+    };
+    const data = await collectPage(input);
+    assert.equal(data.merges.repos[0].pause.kind, 'gate');
+    assert.equal(data.merges.repos[0].landing, null, 'a check round is not a landing');
+    assert.equal(data.merges.landings[0].mode, 'check', 'legacy status readers still see the measurement');
+    assert.equal(data.merges.repos[1].day_count, 1);
+    assert.deepEqual(data.merges.repos[1].last, { pr: 673, at: '2026-08-29T10:00:00.000Z', age_seconds: 7200 });
+    assert.equal(data.merges.repos[1].merger_stopped, false);
+    rmSync(join(root, 'runner', 'merger.json'));
+    const stopped = await collectPage(input);
+    assert.equal(stopped.merges.repos[1].merger_stopped, true);
   });
 
   it('--fresh fetches, asks GitHub and refills the PR cache', async () => {
@@ -2596,9 +2558,11 @@ describe('the palette', () => {
     'grey grey grey', //                             · lane 2      idle
     'red+bold grey', //                              ■ stopping since … — waiting on mc-ui (memoro-cli#1, 20 min); 1 lane done
     'grey', //                                           start takes over now — a new runner on every lane …
-    'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
+    'grey grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
-    'bold+cyan grey green grey', //                    MERGES  1 waiting: #10958        mc merge <repo> <pr>
+    'bold+cyan grey red grey grey grey', // MERGES counts, stopped merger, second queue, verb
+    'grey grey grey', // memoro waiting PR and grey detail/day count
+    'grey grey grey grey', // memoro-cli idle and grey day count
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',

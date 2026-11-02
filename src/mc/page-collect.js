@@ -57,7 +57,7 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
-import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
+import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { goalName, programsGoals, sessions as goalSessions } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -69,6 +69,10 @@ import {
 } from './merge-queue.js';
 import { readMerger } from './merger.js';
 import { runningMerges } from './merges-collect.js';
+import { BUILD_LANE, runningRound } from './gate-lock.js';
+import { gateLaneOf } from './repo-gate-table.js';
+import { readLease } from './repo-lease.js';
+import { readRounds } from './repo-round-log.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
@@ -110,7 +114,7 @@ export const DECISIONS_NAMED = 3;
 /** How many stale blockers the line names before it only counts them. */
 export const STALE_NAMED = 3;
 
-/* ------------------------------------------------------------------ RUNNER */
+/* ------------------------------------------------------------------- STEPS */
 
 /**
  * The machine: the runner's steps, one per lane (`nowBlock`), a pending STOP,
@@ -577,7 +581,9 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 }
 
 /**
- * MERGES — the one round running now, and the merger's queue behind it
+ * MERGES — one queue per repository, including idle queues. `repos[]` is
+ * the page/JSON contract; aggregate fields remain for status/PR readers.
+ * The running rounds and the merger's queue behind them
  * (`merges.json`, ruling 30): every pull request `mc merge` or the runner has
  * handed the merger and it has not answered yet.
  *
@@ -587,7 +593,7 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * so its tests never touch a real one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
  *
- * `red` is what came back red and has not been queued again: a row each
+ * `red` is what came back red and has not been queued again: inline per repository
  * until `mc merge` puts it back in line (Martin, 2026-10-10). One whose pull
  * request is no longer open is nobody's to fix and is not drawn — when the
  * open pull requests are known at all.
@@ -610,6 +616,7 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
   currents = [], alive = pidAlive, entry = null,
+  repos = REPO_NAMES, pauses = {}, merger = null, history = [],
 } = {}) {
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
@@ -644,7 +651,7 @@ export function mergesSection({
       : [];
     for (const item of rest) members.add(item);
     return [
-      { ...round, ...named(round.repo, round.pr, own) },
+      { ...round, ...named(round.repo, round.pr, own), queue_since: own?.since || null },
       ...rest.map((item) => ({
         repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, batch_of: Number(round.pr),
         ...named(item.repo || round.repo, item.pr, item),
@@ -657,7 +664,7 @@ export function mergesSection({
     const ms = Date.parse(when || '');
     return Number.isFinite(ms) ? Math.max(0, Math.round((at - ms) / 1000)) : null;
   };
-  // A red getting its one mend (mend.js): a row of its own, not a waiter —
+  // A red getting its one mend (mend.js) is not a waiter —
   // the merger cannot take it until the mend puts it back as `queued`.
   const mendingItems = entries.filter((item) => item.state === 'mending').map((item) => {
     const { name, title } = named(item.repo, item.pr, item);
@@ -712,7 +719,39 @@ export function mergesSection({
       lane: current.lane ?? null,
     });
   }
+  const names = [...new Set([...REPO_NAMES, ...repos.map((repo) => repo.name || repo),
+    ...all.map((item) => item.repo), ...landings.map((item) => item.repo)].filter(Boolean))];
+  const repoQueues = names.map((repo) => {
+    const own = (items) => items.filter((item) => item.repo === repo);
+    const active = own(landings).filter(isLandingRound).map((item) => ({
+      ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: mergePhase(item.phase),
+    }));
+    const waiting = own(queuedItems);
+    const mending = own(mendingItems);
+    const fixing = own(fixingItems);
+    const red = own(reds);
+    const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
+      && round.phase !== 'start' && round.merged?.length)
+      .flatMap((round) => {
+        // Round records timestamp the start. Completion is the start plus its duration.
+        const ended = Date.parse(round.at) + (Number(round.duration_ms) || 0);
+        return Number.isFinite(ended) ? round.merged.slice().reverse().map((pr) => ({ pr: Number(pr), at: new Date(ended).toISOString() })) : [];
+      }).sort((a, b) => b.at.localeCompare(a.at));
+    const last = landed[0] ? { ...landed[0], age_seconds: ageOf(landed[0].at) } : null;
+    const day = new Set(landed.filter((item) => ageOf(item.at) <= DAY_MS / 1000).map((item) => item.pr)).size;
+    const pause = pauses[repo] || null;
+    const stopped = !merger && !active.length && Boolean(waiting.length || mending.length);
+    return {
+      repo,
+      state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'
+        : mending.length ? 'mending' : fixing.length ? 'fixing' : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
+      pause, merger_stopped: stopped, landing: active[0] || null, landings: active,
+      waiting, mending, fixing, reds: red, day_count: day, last,
+    };
+  });
   return {
+    repos: repoQueues,
+    // Retained for status/PR ownership readers. The MERGES drawing uses repos only.
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
@@ -721,6 +760,46 @@ export function mergesSection({
     red: { count: reds.length, items: reds },
     count: landings.length + queuedItems.length,
   };
+}
+
+/** Gate-only modes measure but never land; docs rounds really do land their PR. */
+function isLandingRound(round) {
+  return round.pr != null && (round.mode === 'merge' || round.mode === 'docs' || !round.mode);
+}
+
+/** Short phase words shared by JSON and the page; progress messages stay in `phase`. */
+export function mergePhase(phase) {
+  if (/rebas|restack|conflict|merge.*(?:main|candidate)/iu.test(phase || '')) return 'rebase';
+  if (/squash|push|landing|landed|merging|merged #|pr merge/iu.test(phase || '')) return 'landing';
+  return phase ? 'gate' : 'landing';
+}
+
+/**
+ * Read exactly the merger's pre-round barriers, without claiming or reaping anything.
+ * A merge round's own lock and lease describe its landing, not another pause.
+ */
+export function mergePauses({
+  repos = [], rounds = [], env = process.env, root = mcHome(env), now = new Date(), alive = pidAlive,
+  deploy = () => runningDeploy(env, { alive }),
+  round = (lane) => runningRound({ root, lane, alive }),
+  lease = (repo) => readLease(repo.path, { root, now: now.getTime(), kill: (pid) => {
+    if (!alive(pid)) throw new Error('process gone');
+  } }),
+} = {}) {
+  const deploying = deploy();
+  return Object.fromEntries(repos.map((repo) => {
+    const lane = gateLaneOf(repo.name);
+    const running = round(lane);
+    const own = running && rounds.some((item) => item.repo === repo.name && isLandingRound(item)
+      && item.pid === running.pid && item.pr === running.pr);
+    const held = lease(repo);
+    const pause = lane === BUILD_LANE && deploying
+      ? { kind: 'deploy', reason: 'deploy', sha: deploying.sha || null }
+      : running && !own ? { kind: 'gate', reason: 'gate round', pid: running.pid }
+      : held?.held && !held.orphaned && !own ? { kind: 'lease', reason: 'lease held', holder: held.holder }
+      : null;
+    return [repo.name, pause];
+  }));
 }
 
 /** How much of a session's transcript the fixing row reads: its last sentence is near the end. */
@@ -1707,8 +1786,12 @@ export async function collectPage({
     alive,
   });
 
+  const roundsNow = merges({ root: home, repos: present, alive, now });
   const mergesNow = mergesSection({
-    landing: merges({ root: home, repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
+    landing: roundsNow, queued: queuedForMerge, prs: prs.prs, now,
+    repos: repos.map((repo) => repo.name),
+    pauses: mergePauses({ repos: present, rounds: roundsNow, env, root: home, now, alive }),
+    merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
     ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
     currents, alive, entry: (project) => readEntry(root, project),
   });

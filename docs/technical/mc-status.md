@@ -65,7 +65,7 @@ OPEN PR
 
 and a `check`-mode round (`mc test`, measuring rather than merging) reads
 `#427 is being measured (mc test), not landed` — the same
-`runningMerge` reading the page's own MERGES section draws
+`runningMerge` reading that also feeds the page's MERGES repository queues
 ([`mc-ui.md`](mc-ui.md)).
 
 `--json` prints the same object the renderer takes. `--offline` skips the

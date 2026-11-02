@@ -56,7 +56,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'STEPS', 'MERGES', 'DEPLOY', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The two workareas nothing explains are one line in WORK — the numbers
@@ -74,6 +74,8 @@ describe('bare mc', () => {
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
       assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'next', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
+        [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
       assert.match(page.billing, /claude \? plan · codex \? plan/u);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
@@ -117,7 +119,7 @@ describe('bare mc', () => {
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
       const printed = runMcCli([], fx.env).stdout;
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'RUNNER', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'STEPS', 'MERGES', 'DEPLOY', 'MC']) {
         const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
