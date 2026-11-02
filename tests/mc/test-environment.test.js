@@ -23,7 +23,7 @@ import { describe, it } from 'node:test';
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
-  accountAvailable, answers, builtFromMoved, editedSince, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
+  accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
   NO_SHARED_WORKTREE, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
@@ -736,7 +736,7 @@ describe('bringing one up', () => {
       registerTimeoutMs: 5_000,
       spawn: () => ({ pid: 4242, unref() {} }),
       pidAlive: () => true,
-      onWaiting: (line) => waiting.push(line),
+      onSlowStart: (line) => waiting.push(line),
       fetch: async () => ({ ok: true }),
     });
 
@@ -764,7 +764,7 @@ describe('bringing one up', () => {
       spawn: () => ({ pid: 4242, unref() {} }),
       pidAlive: () => true,
       stopServer: () => { stopped += 1; return { ok: true }; },
-      onWaiting: () => {},
+      onSlowStart: () => {},
       fetch: async () => ({ ok: true }),
     });
 
@@ -792,7 +792,7 @@ describe('bringing one up', () => {
       registerTimeoutMs: 5_000,
       spawn: () => ({ pid: 4242, unref() {} }),
       pidAlive: () => false,
-      onWaiting: (line) => waiting.push(line),
+      onSlowStart: (line) => waiting.push(line),
       fetch: async () => ({ ok: true }),
     });
 
@@ -1272,5 +1272,25 @@ describe('editedSince — a change nobody committed', () => {
       assert.equal(editedSince(listed(['a.js', 'new.js', 'old.js']), '/w', { git, statSync: before }), null);
       assert.equal(editedSince(listed([]), '/w', { git: status(''), statSync: before }), null);
     });
+  });
+});
+
+describe('ensureAppServer', () => {
+  it('says a slot wait and a slow start apart, and neither throws (network-hub-avatars, 2026-11-02)', async () => {
+    const said = [];
+    const ensured = await ensureAppServer('/w', DECLARATION, {
+      stdout: { write: (text) => said.push(text) },
+      deps: {
+        ensureDevServer: async (_worktree, _declaration, options) => {
+          options.onWaiting({ holders: [{ instance_id: 'measure-0', worktree_path: '/elsewhere' }] });
+          options.onSlowStart('mc: memoro (pid 4242) is still starting after 5s — waiting another 5s');
+          return { ok: false, error: 'stub' };
+        },
+      },
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.ok(said.some((line) => line.includes('held by measure-0 (/elsewhere)')), said.join(''));
+    assert.ok(said.some((line) => line.includes('(pid 4242) is still starting')), said.join(''));
   });
 });

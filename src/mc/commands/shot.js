@@ -49,10 +49,55 @@ import {
 } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import {
-  close, keep, next, sessions,
+  CLOSE_FLAGS, SESSIONS_FLAGS, STEP_FLAGS, close, keep, next, sessions,
 } from './shot-session.js';
+import { commandUsage } from '../command-help.js';
 
 const PLACES = ['dev', 'prod'];
+
+/**
+ * Each subcommand and the scan it is read with; '' is the bare verb, '*' a
+ * first word that names something. A route's `check` is what its scanned
+ * arguments may not be, read before anything is started: null, or what is
+ * wrong. The verb runs it, and help-routes.test.js walks the help with it.
+ */
+export const ROUTES = {
+  '*': {
+    check: (scanned) => refuseShot(scanned)?.error ?? null,
+    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
+    strictValues: [
+      '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
+    ],
+    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
+  },
+  next: STEP_FLAGS,
+  close: CLOSE_FLAGS,
+  sessions: SESSIONS_FLAGS,
+  login: { booleans: ['--paste'], check: (scanned) => refuseAccount('login', scanned) },
+  logout: { check: (scanned) => refuseAccount('logout', scanned) },
+};
+
+/** What a shot's arguments may not be, and whether the usage goes with saying so. */
+function refuseShot({ flags, positional }) {
+  const [where, , ...extra] = positional;
+  if (!PLACES.includes(where)) return { error: `mc shot takes dev or prod first${where ? `, not ${where}` : ''}`, usage: true };
+  if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
+  if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
+  if (flags.here && where === 'prod') return { error: '--here is for dev — production has one app, not one per worktree' };
+  if ((flags.account || flags.onboarding) && where === 'prod') {
+    return { error: '--account and --onboarding are for dev — production signs in as the test account or as you' };
+  }
+  if (flags.compare && where === 'prod') return { error: '--compare is for dev — production has one tree' };
+  if (flags.keep && flags.compare) return { error: '--keep keeps one browser and --compare runs two' };
+  if (flags.compare && flags.out) return { error: '--compare writes two files and --out names one — two files need two names' };
+  return null;
+}
+
+function refuseAccount(verb, { positional }) {
+  const [where, ...extra] = positional;
+  return where !== 'prod' || extra.length ? `mc shot ${verb} is for prod only — a dev server signs in through /dev/login` : null;
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -64,46 +109,12 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'close') return close(argv.slice(1), io);
   if (argv[0] === 'sessions') return sessions(argv.slice(1), io);
 
-  const scanned = scanArgs(argv, {
-    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
-    strictValues: [
-      '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
-    ],
-    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
-  });
+  const scanned = scanArgs(argv, ROUTES['*']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
-  const [where, word, ...extra] = positional;
-  if (!PLACES.includes(where)) {
-    stderr.write(`mc: mc shot takes dev or prod first${where ? `, not ${where}` : ''}\n${usage()}`);
-    return 2;
-  }
-  if (extra.length) { stderr.write(`mc: one target at a time (${extra.join(' ')} is extra)\n`); return 2; }
-  if (flags.me && where === 'dev') {
-    stderr.write('mc: --me is for prod — a dev server has only the accounts /dev/login offers\n');
-    return 2;
-  }
-  if (flags.here && where === 'prod') {
-    stderr.write('mc: --here is for dev — production has one app, not one per worktree\n');
-    return 2;
-  }
-  if ((flags.account || flags.onboarding) && where === 'prod') {
-    stderr.write('mc: --account and --onboarding are for dev — production signs in as the test account or as you\n');
-    return 2;
-  }
-  if (flags.compare && where === 'prod') {
-    stderr.write('mc: --compare is for dev — production has one tree\n');
-    return 2;
-  }
-  if (flags.keep && flags.compare) {
-    stderr.write('mc: --keep keeps one browser and --compare runs two\n');
-    return 2;
-  }
-  if (flags.compare && flags.out) {
-    stderr.write('mc: --compare writes two files and --out names one — two files need two names\n');
-    return 2;
-  }
+  const [where, word] = positional;
+  const refused = refuseShot(scanned);
+  if (refused) { stderr.write(`mc: ${refused.error}\n${refused.usage ? usage() : ''}`); return 2; }
   const safeArea = parseSafeArea(flags['safe-area']);
   if (!safeArea.ok) { stderr.write(`mc: ${safeArea.error}\n`); return 2; }
   const scroll = parseScroll(flags.scroll);
@@ -327,13 +338,10 @@ export function answer(result, {
 
 /** `mc shot login prod [--paste]` and `mc shot logout prod`. */
 async function account(verb, argv, { stdout, stderr, deps }) {
-  const scanned = scanArgs(argv, { booleans: verb === 'login' ? ['--paste'] : [] });
+  const scanned = scanArgs(argv, ROUTES[verb]);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  const [where, ...extra] = scanned.positional;
-  if (where !== 'prod' || extra.length) {
-    stderr.write(`mc: mc shot ${verb} is for prod only — a dev server signs in through /dev/login\n`);
-    return 2;
-  }
+  const refused = ROUTES[verb].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   if (verb === 'logout') {
     await (deps.deleteSecret || deleteSecret)(SESSION_SECRET);
     stdout.write('mc: your session is forgotten\n');
@@ -453,77 +461,5 @@ async function readStdin() {
 }
 
 export function usage() {
-  return [
-    'usage — mc shot <dev|prod> <target>   a PNG of the running app; prints its path first, alone\n',
-    '          [--el <css>]                one element\n',
-    '          [--shell base|immersive|window]  one shell\n',
-    '          [--full]                    the whole scrolled page\n',
-    '          [--viewport <name|WxH[@dpr]>]    a declared viewport or a size (dpr 2)\n',
-    '          [--theme light|dark] [--locale <code>]\n',
-    '          [--safe-area <t,r,b,l>|0]    insets as a phone reports them; iphone carries 47,0,34,0\n',
-    '          [--wait-for <css>]          wait until it is visible\n',
-    '          [--scroll <css>[@end|@top|@<px>] | @end]\n',
-    '                                      scroll that element first (@end by default); a bare\n',
-    '                                      @end/@top scrolls the surface\'s declared scroller\n',
-    '          [--measure <css> | @<name>]  print every match\'s box, padding, position, scroll, colours and\n',
-    '                                      visibility as one JSON line after the path; a name is\n',
-    '                                      one of the surface\'s declared measurements (mc dev surfaces)\n',
-    '          [--click <selector>]        press it after the page and its window are open and before\n',
-    '                                      --wait-for/--scroll/--el; repeatable, in order; a CSS selector\n',
-    '                                      or text=<words>, as memoro\'s capture script reads locators\n',
-    '          [--context-click <css>]     right-click it\n',
-    '          [--long-press <css>[@ms]]   press and hold it (600 ms unless said)\n',
-    '          [--fill <css>=<text>]       type text into it\n',
-    '          [--eval <js> | --eval-file <path>]\n',
-    '                                      run it in the page; its value prints as eval <n>\n',
-    '          [--upload <css>=<file>]     choose the file in that file input\n',
-    '          [--press <key>]             press a key (Enter, Escape, Meta+K)\n',
-    '                                      the seven act in the order they are given\n',
-    '          [--timeout <s>]             how long each wait and action may take (10 s)\n',
-    '          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n',
-    '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
-    '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
-    '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
-    '          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n',
-    '                                      --compare <sha> pins the tree and its database\n',
-    '          [--keep]                    keep the browser open for mc shot next\n',
-    '          [--out <file.png>] [--open] [--json]\n',
-    '        mc shot next [<id>] [step flags]   one more step on a kept browser, answered as a shot;\n',
-    '                                      the step flags are the seven acting flags, --wait-for,\n',
-    '                                      --scroll, --measure, --el, --shell, --full, --timeout,\n',
-    '                                      --out, --json, --open, and --goto <path|target> (go there\n',
-    '                                      in the app), --reload, --no-shot (answer without a picture);\n',
-    '                                      without an id, this worktree\'s most recently used session\n',
-    '        mc shot close [<id>|--all]    end a kept browser\n',
-    '        mc shot sessions              the kept browsers, and how long each has been idle\n',
-    '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
-    '        mc shot login prod            sign in once in a browser; mc keeps the session\n',
-    '        mc shot login prod --paste    …or pipe it in: the memoro_session cookie value from\n',
-    '                                      meetmemoro.app, Chrome DevTools → Application → Cookies\n',
-    '        mc shot logout prod           forget it\n',
-    '\n',
-    'A target is a path under /app or /admin, or a name from memoro\'s .mc/shot.json. Without\n',
-    '--out the file goes under ~/.memoro/mc/shots/. Inside a memoro worktree dev serves that\n',
-    'worktree (restarted when it was edited since the server started) and says which tree it\n',
-    'serves; elsewhere it serves the shared checkout. dev signs in through /dev/login; prod as\n',
-    'the test account, or as you with --me. A target that requires a role (every /admin path)\n',
-    'is judged against the account\'s declared role: one line says whether its gate held, and\n',
-    'a gate that did not hold exits 1.\n',
-    '\n',
-    'Every error the page, its requests, the dev server or a dialog raised during the shot\n',
-    'prints as error lines after the path; a step that fails is pictured as the page stood\n',
-    'and named in a failed line (exit 1).\n',
-    '\n',
-    'Example — the bottom of the main chat on a phone, with its numbers:\n',
-    '  mc shot dev assistant --viewport iphone --scroll \'.window-view__content\' \\\n',
-    '    --measure \'.window-view__content, .assistant-layout__footer, .assistant-summon\'\n',
-    '\n',
-    'A kept browser holds the page between calls, so each step is one call and what the page\n',
-    'holds in memory stays; a failed step leaves the page where it stood. A dev session whose\n',
-    'tree was edited has its server restarted and the page opened again on it. At most four are\n',
-    'kept; a fifth --keep closes the longest idle. Example — set up a vault, then take one step:\n',
-    '  mc shot dev /app/tools/vault --keep --fill \'input[name=setupPassword]=…\' \\\n',
-    '    --click \'text=Create Vault\' --timeout 30\n',
-    '  mc shot next --click \'text=New entry\' --eval \'document.activeElement.name\'\n',
-  ].join('');
+  return commandUsage('shot');
 }

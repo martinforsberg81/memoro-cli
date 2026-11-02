@@ -21,12 +21,15 @@ function goalNamed(name, env) {
   return goal ? { ...goal, waitingOn: afterOf(goal, goals).pending } : null;
 }
 
+/** The one form, a project's name and two flags (help-routes.test.js walks the help with it). */
+export const ROUTES = { '*': { booleans: ['--json', '--offline'] } };
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const names = [];
   for (const arg of argv) {
-    if (arg === '--json' || arg === '--offline') continue;
+    if (ROUTES['*'].booleans.includes(arg)) continue;
     if (arg.startsWith('--')) {
       stderr.write(`mc: unknown argument ${arg}\n`);
       stderr.write(usage());

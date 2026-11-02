@@ -42,4 +42,4 @@ export async function run(argv, deps = {}) {
 }
 
 // What `mc status --help` prints: the one form that answers.
-export { usage } from '../mc/commands/status-project.js';
+export { ROUTES, usage } from '../mc/commands/status-project.js';

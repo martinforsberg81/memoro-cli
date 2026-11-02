@@ -48,6 +48,7 @@ import { ask, interactive, select } from '../prompt.js';
 import { run as runGit } from '../git.js';
 import { planSessionRefusal } from '../session-role.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 function sh(cmd, args, { cwd } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
@@ -78,16 +79,13 @@ export const planArea = (programme, env = process.env) => planAreaName(programme
  */
 export const planBranch = (programme) => `plan/${programme}`;
 
-const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n'
-  + '        mc plan <programme> --archive\n'
-  + 'Person only: opens or resumes an interactive plan session. Never run inside a session.\n'
-  + 'Already planning? Use mc project new, mc project step add and mc project send.\n';
+const USAGE = commandUsage('plan');
 
 /** What `chooseProgramme` returns for "not one of these" — never a real name. */
 const NEW_PROGRAMME = Symbol('new programme');
 
 export function usage() {
-  return USAGE;
+  return commandUsage('plan');
 }
 
 export async function run(argv, deps = {}) {
@@ -408,7 +406,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env }) {
   return { overlay: role.overlay || null, prompt: lines.join('\n'), model: role.model || null };
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   // `--repo` was how the old, project-shaped `mc plan` chose which repository
   // to make a workarea in. A programme is not in one repository, so the flag
   // has nothing left to select — said plainly, because "unknown flag" reads

@@ -25,11 +25,12 @@ import {
 } from '../roles.js';
 import { openArea } from './work.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export function usage() {
-  return 'usage — mc worker <name> [task] [--model <model>] [--tmux] [--codex|--claude]\n';
+  return commandUsage('worker');
 }
 
 export async function run(argv, deps = {}) {
