@@ -2179,7 +2179,7 @@ describe('the page', () => {
 
   it('restartPage: with execve, the process is replaced and nothing is spawned', () => {
     const execs = [];
-    const env = { MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' };
+    const env = Object.freeze({ MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' });
     const { spawned } = restartWith({ env, execve: (...args) => { execs.push(args); } });
     // fd 3 does not survive Node's execve, so the new image is told nothing
     // about it: no wrapper flag, no wrapper variable, the rest as it was.
@@ -2225,16 +2225,19 @@ describe('the page', () => {
     assert.equal(spawned[0].bin, process.execPath);
     assert.deepEqual(spawned[0].args, ['/opt/homebrew/bin/mc', '--emit-shell-directives']);
     assert.deepEqual(spawned[0].stdio, ['inherit', 'inherit', 'inherit', 3]);
+    assert.deepEqual(spawned[0].env, { MC_EMIT_SHELL_DIRECTIVES: '1' });
   });
 
   it('restartPage: with an execve that throws, mc is spawned and waited on as before', () => {
     let tried = 0;
-    const { code, spawned } = restartWith({ execve: () => { tried += 1; throw new Error('ENOEXEC'); } });
+    const env = Object.freeze({ MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' });
+    const { code, spawned } = restartWith({ env, execve: () => { tried += 1; throw new Error('ENOEXEC'); } });
     assert.equal(tried, 1);
     assert.equal(code, 5);
     assert.equal(spawned.length, 1);
     assert.deepEqual(spawned[0].args, ['/opt/homebrew/bin/mc', '--emit-shell-directives']);
     assert.deepEqual(spawned[0].stdio, ['inherit', 'inherit', 'inherit', 3]);
+    assert.equal(spawned[0].env, env, 'the failed exec must leave the wrapper environment intact for spawn');
   });
 
   it('reads no commit when mc is not running from a checkout, or git does not answer', () => {
