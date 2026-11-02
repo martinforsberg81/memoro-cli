@@ -23,7 +23,7 @@ import { parseRuns } from './brief-collect.js';
 export const CLOSEOUT_SCHEMA = 'mc-closeout';
 export const CLOSEOUT_VERSION = 1;
 
-/** Row kinds that are the merger's, not the project's sessions. */
+/** Row kinds that are the merger's, not the project's sessions; `mend` rows were written until the mend was removed (2026-11-02). */
 const NOT_SESSIONS = new Set(['merge', 'mend']);
 
 /** Where a project's closeout lives, relative to the repository. */

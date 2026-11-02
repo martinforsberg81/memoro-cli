@@ -11,8 +11,8 @@
  * `runner/merge-red/<repo>-<pr>.txt` — per red test its file, its name, where
  * it failed and the assertion's first lines, at most `DETAIL_LINES` in all —
  * one file per pull request, the next red overwriting it and a landing
- * removing it. The retry preamble and the mend prompt name that path, the red
- * files and the one `mc gate` line that runs just those tests again.
+ * removing it. The retry preamble names that path, the red files and the one
+ * `mc gate` line that runs just those tests again.
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -80,7 +80,7 @@ export function rerunLine(files, names = []) {
   return `Re-run just those: mc gate ${files.join(' ')}${some.length ? ` --test-name-pattern ${quoted(some.join('|'))}` : ''}`;
 }
 
-/** The three lines a retry and a mend are handed; empty without red files. */
+/** The three lines a retry is handed; empty without red files. */
 export function redLines(red) {
   if (!red?.files?.length) return [];
   return [

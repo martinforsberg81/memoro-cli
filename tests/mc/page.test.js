@@ -1150,8 +1150,7 @@ describe('MERGES', () => {
   });
 
   it('explains waiting markers with grey words instead of symbols', () => {
-    for (const [extra, word] of [[{ mended: { outcome: 'pushed' } }, 'mended'],
-      [{ parent: { pr: 9, sha: 'abc' } }, 'after #9'],
+    for (const [extra, word] of [[{ parent: { pr: 9, sha: 'abc' } }, 'after #9'],
       [{ step: { project: 'mq', index: 2 } }, 'awaits mq step 2']]) {
       const merges = section({ queued: [job(10, extra)], ordered: (item) => !item.step });
       const row = drawing(merges, 120, true)[1];
@@ -1161,16 +1160,17 @@ describe('MERGES', () => {
     }
   });
 
-  it('keeps a red and a mend inline, in red and plain text respectively, with grey detail', () => {
+  it('keeps a red inline, in red with grey detail; an entry an older merger left mending is waiting', () => {
     const merges = section({ queued: [job(1, { state: 'red', reason: 'tests red', answered: '2026-08-29T11:55:00Z' }),
       job(2, { state: 'mending', mend: { pid: 4242, started: '2026-08-29T11:54:00Z', reason: 'conflicts' } })] });
     const repo = merges.repos[0];
     assert.equal(repo.reds.length, 1);
-    assert.equal(repo.mending[0].age_seconds, 360);
+    assert.equal('mending' in repo, false);
+    assert.deepEqual(repo.waiting.map((item) => item.pr), [2]);
     const row = drawing(merges, 120, true)[1];
-    assert.match(row, /#2 mending/u);
+    assert.doesNotMatch(row, /mending/u);
     assert.match(row, /\x1b\[31m#1 red\x1b\[0m/u);
-    assert.match(row, /\x1b\[90m · 6 min · conflicts/u);
+    assert.match(row, /\x1b\[90m · 5 min ago · tests red/u);
     assert.doesNotMatch(row, /\x1b\[33m|\x1b\[32m/u);
     assert.equal(drawing(merges).length, 3);
   });

@@ -1279,8 +1279,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * nothing came after the landing (`mergedAtTip`).
    *
    * The merger restacks a branch before it lands it (`restack`, merger.js),
-   * and a mend it pushes after the step's session has ended moves the head
-   * too: the head is not the workarea's tip, so `mergedAtTip` says no.
+   * and a push to the branch after the step's session has ended (the mend's,
+   * until 2026-11-02) moves the head too: the head is not the workarea's tip, so `mergedAtTip` says no.
    * `publish-handover` step 6 started on `publish-handover-7` on 2026-10-17
    * nine minutes after #929 had landed from it, and its publish was refused.
    * `sql-schema-drift-3` started on 2026-10-18 on a branch #13762 had merged

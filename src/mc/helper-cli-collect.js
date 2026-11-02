@@ -55,7 +55,7 @@ export const RUNNER_SILENT_HOURS = 6;
 /** At most this many fingerprint rows in one digest, loudest first. */
 export const CLI_ROW_CAP = 60;
 
-/** A runner row that did its job without saying success: a merge that landed, a mend that pushed. */
+/** A runner row that did its job without saying success: a merge that landed, and a mend that pushed (a row from before 2026-11-02). */
 export const LANDED_NOTES = new Set(['merged', 'pushed']);
 
 /**
@@ -185,7 +185,7 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
       // itself through `mc merge` often does — three quarters of all step rows
       // since 2026-09-25. Its note is the session's verdict, so it is normal.
       if (/success/u.test(outcome) && (code === '0' || code === '143')) continue;
-      // `merger.js` and `mend.js` write these notes for a landing, so they are normal; a nonzero exit with the same note is still a finding.
+      // `merger.js` writes these notes for a landing (and the mend did, until 2026-11-02), so they are normal; a nonzero exit with the same note is still a finding.
       if (LANDED_NOTES.has(outcome) && code === '0') continue;
       // The exit code is always named, never only the note. A row saying
       // `success` that exited 1 is a real anomaly — the session reported it

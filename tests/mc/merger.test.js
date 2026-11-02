@@ -525,26 +525,16 @@ describe('serve — the loop', () => {
     assert.deepEqual(landed, [1, 2]);
   });
 
-  it('a mending entry whose merger is alive stays with it; once that merger is gone it goes back in line on the next pass', async () => {
+  it('a `mending` entry an older merger left reads as queued and is landed: no mend session exists any more', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([
       { ...JOB, pr: 1, since: 'a', step: null },
       { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null, state: 'mending', merger: 777, mend: { pid: 4321, started: 's', reason: 'x', stopped_at: 'merge' } },
     ]));
-    let merger777 = true;
+    assert.equal(queue().find((e) => e.pr === 2).state, 'queued');
     const landed = [];
-    const seen = [];
-    await serve({
-      root, lock, take, release, ...ONE_LANE, alive: (p) => p === 777 && merger777,
-      land: async ([job]) => {
-        landed.push(job.pr);
-        seen.push(queue().find((e) => e.pr === 2).state);
-        merger777 = false;
-        return green;
-      },
-    });
-    assert.equal(seen[0], 'mending', 'held by its live merger while the first round runs');
-    assert.deepEqual(landed, [1, 2], 'back in line on the next pass, and landed');
+    await serve({ root, lock, take, release, ...ONE_LANE, alive: (p) => p === 777, land: async ([job]) => { landed.push(job.pr); return green; } });
+    assert.deepEqual(landed, [1, 2]);
     assert.deepEqual(queue(), []);
   });
 
@@ -586,48 +576,6 @@ describe('serve — the loop', () => {
     assert.deepEqual(landed, [1, 2]);
   });
 
-  it('a mend not yet started when the code moves is dropped and its entry stays mending', async () => {
-    register();
-    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
-    const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): Merge conflict in a.js' };
-    const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
-    const heads = ['aaa1111', 'aaa1111'];
-    const mended = [];
-    // The first mend is held open until the merger has decided to leave; the
-    // ten seconds only keep a merger that never decides from hanging the test.
-    let releaseMend = null;
-    let leaving = false;
-    const m = machine([conflict, conflict]);
-    const say = (line) => {
-      m.said.push(line);
-      if (line.startsWith('code moved')) { leaving = true; releaseMend?.(); }
-    };
-    const code = await serve({
-      root, lock, take, release, ...ONE_LANE, say, now: m.deps.now,
-      sleep: () => pause(5),
-      version: { checkout: '~/memoro-cli', commit: 'aaa1111' },
-      head: async () => heads.shift() ?? 'bbb2222',
-      mendAtOnce: 1,
-      land: landerFor({ ...m.deps, say, mayMend: () => true }),
-      mend: async (job) => {
-        mended.push(job.pr);
-        let guard = null;
-        await new Promise((resolve) => {
-          releaseMend = resolve;
-          if (leaving) resolve();
-          else guard = setTimeout(resolve, 10_000);
-        });
-        clearTimeout(guard);
-        return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 };
-      },
-      appendRun: () => {},
-    });
-    assert.equal(code, 0);
-    assert.equal(m.rounds.length, 2, m.said.join('\n'));
-    assert.deepEqual(mended, [671], 'the second mend never ran');
-    assert.equal(queue().find((e) => e.pr === 672).state, 'mending');
-    assert.ok(m.said.includes('left for bbb2222'), m.said.join('\n'));
-  });
 });
 
 describe('succeed — a successor after new code', () => {
@@ -958,31 +906,6 @@ describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
     assert.deepEqual(queue(), []);
   });
 
-  it('a restack refusal that gets its mend is mending, and its mend has started, before the round ends', async () => {
-    registerBatch();
-    const { gh } = stubGh({ 11: OPEN, 12: OPEN, 13: OPEN });
-    const m = machine([two], { gh });
-    let roundDone = false;
-    let roundEnded = () => {};
-    const ended = new Promise((resolve) => { roundEnded = resolve; });
-    const mendStarted = [];
-    const stacked = { ...jobFor(12, 1), branch: 'mb-12', parent: { project: null, index: null, pr: 5, sha: 'abc' } };
-    const { seen } = await serveSeeing(m, gh, {
-      jobs: [jobFor(11, 0), stacked, jobFor(13, 2)],
-      after: () => { roundDone = true; roundEnded(); },
-      landOver: {
-        moveOntoMain: (job) => (job.pr === 12 ? { ok: false, reason: 'moving #12 onto main after #5 landed conflicts in a.js' } : { ok: true, moved: true }),
-        mayMend: (job) => job.pr === 12,
-      },
-      serveOver: {
-        // Held until the round ends, so the queue the round sees is the
-        // mending one and not what the mend's settling wrote after it.
-        mend: async (job) => { mendStarted.push([job.pr, roundDone]); await ended; return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 }; },
-      },
-    });
-    assert.deepEqual(mendStarted, [[12, false]]);
-    assert.ok(seen.some(([pr, state]) => pr === 12 && state === 'mending'), JSON.stringify(seen));
-  });
 });
 
 describe('lanes (merge-throughput step 2)', () => {
@@ -1242,7 +1165,6 @@ describe('a round watches its pull request (round-abort)', () => {
     assert.equal(answers[0].landed, false);
     assert.equal(answers[0].back, true);
     assert.equal(answers[0].report.stopped_at, 'pushed');
-    assert.equal(answers[0].mending, undefined);
     assert.equal(answers[0].requeued, undefined);
     assert.equal(stepNow().status, 'landing');
     assert.equal(stepNow().attempts, 0);
@@ -1616,48 +1538,15 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     assert.ok(answeredAt !== null && leftAt - answeredAt < 1000);
   });
 
-  it('while a mend is pending, the same lane takes and answers its next job (merger-hardening step 6)', async () => {
+  it('a conflict on a step\'s pull request is red at once, and the step is ready for its next session (ruling 30): no mend', async () => {
     register();
-    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
     const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): Merge conflict in a.js' };
-    // The mend is held open until the other job is answered, not for a fixed
-    // 300 ms that a loaded machine can spend before the other job is taken.
-    // The ten seconds only keep a lane that never answers from hanging the test.
-    let release672 = null;
-    let otherAnswered = false;
-    let otherAnsweredWhileMending = null;
-    let mendDone = false;
-    const m = machine([conflict, green]);
-    const say = (line) => {
-      m.said.push(line);
-      if (/^other #672: merged/u.test(line)) {
-        otherAnswered = true;
-        otherAnsweredWhileMending = !mendDone;
-        release672?.();
-      }
-    };
-    const code = await serve({
-      root, lock, take, release, ...ONE_LANE, say, now: m.deps.now,
-      sleep: () => pause(5),
-      land: landerFor({ ...m.deps, say, mayMend: (job) => job.pr === 671 }),
-      mend: async () => {
-        let guard = null;
-        await new Promise((resolve) => {
-          release672 = resolve;
-          if (otherAnswered) resolve();
-          else guard = setTimeout(resolve, 10_000);
-        });
-        clearTimeout(guard);
-        mendDone = true;
-        return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 };
-      },
-      appendRun: () => {},
-    });
-    assert.equal(code, 0);
-    assert.ok(release672, 'the mend was started');
-    assert.equal(otherAnsweredWhileMending, true, m.said.join('\n'));
-    assert.equal(m.rounds.length, 2);
-    assert.equal(queue().find((e) => e.pr === 671).state, 'red');
+    const m = machine([conflict]);
+    const [answer] = await landJob({ ...JOB, pr: 671 }, m.deps);
+    assert.equal(answer.landed, false);
+    assert.deepEqual(Object.keys(answer).sort(), ['job', 'landed', 'report']);
+    assert.equal(stepNow().status, 'ready');
+    assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0, m.said.join('\n'));
   });
 
   it('restack awaits an async git, skips an empty pick, merges main in on a conflicting pick, and a conflicting merge is said with its files', async () => {
@@ -1735,12 +1624,11 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
     assert.equal(m.rows[0].name, 'goal:mc/g');
   });
 
-  it('red: the goal is blocked with a runner entry saying why, and gets no mend', async () => {
+  it('red: the goal is blocked with a runner entry saying why, which wakes plan', async () => {
     const { writes, setGoal } = goalWrites();
-    const m = machine([red], { gh: headAt('aaa111'), setGoal, mayMend: () => true });
+    const m = machine([red], { gh: headAt('aaa111'), setGoal });
     const [answer] = await landJob(GOAL_JOB, m.deps);
     assert.equal(answer.landed, false);
-    assert.equal(answer.mending, undefined, 'a mend would push a head no review read');
     assert.equal(writes[0].status, 'blocked');
     assert.equal(writes[0].entry.done, 'merger answered red on #90');
     assert.match(writes[0].entry.comment, /^red: 2 tests red: a › b — waits on plan$/u);

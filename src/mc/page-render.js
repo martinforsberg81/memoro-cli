@@ -840,12 +840,11 @@ function mergeQueueLabel(repo, compact = false, stopped = false) {
   const counts = [
     repo.landings.length ? `${repo.landings.length} landing` : '',
     repo.waiting.length ? `${repo.waiting.length} waiting` : '',
-    repo.mending.length ? `${repo.mending.length} mending` : '',
     repo.fixing.length ? `${repo.fixing.length} fixing` : '',
     repo.reds.length ? `${repo.reds.length} red` : '',
   ].filter(Boolean);
   const count = compact && counts.length
-    ? `${repo.landings.length + repo.waiting.length + repo.mending.length + repo.fixing.length + repo.reds.length}`
+    ? `${repo.landings.length + repo.waiting.length + repo.fixing.length + repo.reds.length}`
     : counts.join(', ') || 'idle';
   return [
     { text: `${repo.repo} ${count}`, styles: ['grey'] },
@@ -864,11 +863,10 @@ function mergeRepoLine(c, wide, repo) {
         item.queue_age_seconds != null ? `queued ${ageWords(item.queue_age_seconds)}` : ''].filter(Boolean).join(' · '),
     });
   }
-  for (const [items, label] of [[repo.mending, 'mending'], [repo.fixing, 'fixing'], [repo.reds, 'red']]) {
+  for (const [items, label] of [[repo.fixing, 'fixing'], [repo.reds, 'red']]) {
     for (const item of items) chunks.push({
       text: `#${item.pr} ${label}`, styles: label === 'red' ? ['red'] : [],
-      detail: [label === 'mending' && item.waiting ? 'waiting for session'
-        : item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
+      detail: [item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
       one(item.said || item.reason)].filter(Boolean).join(' · '),
     });
   }
@@ -876,7 +874,7 @@ function mergeRepoLine(c, wide, repo) {
     chunks.push({
       text: `#${item.pr}`, styles: [],
       detail: [item.waits_for ? `awaits ${item.waits_for}` : 'waiting',
-        item.mended ? 'mended' : '', item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
+        item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
     });
   }
   const head = `    ${pad(repo.repo, 11)} `;

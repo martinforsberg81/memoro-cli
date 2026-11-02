@@ -486,7 +486,7 @@ describe('SessionStart names the session before anything else', () => {
       ['/mc/programs/mc', { MC_ROLE: 'review', MC_PROGRAMME: 'mc' }, /^You are the review session for programme `mc`\./u],
       ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the brief session\./u],
       ['/elsewhere', { MC_ROLE: 'helper' }, /^You are the helper session\./u],
-      ['/elsewhere', { MC_ROLE: 'mend' }, /^You are the mend session\./u],
+      ['/elsewhere', { MC_ROLE: 'goal-review' }, /^You are the goal-review session\./u],
     ]) {
       const stdout = { text: '', write(text) { this.text += text; } };
       await run(['session-start'], {

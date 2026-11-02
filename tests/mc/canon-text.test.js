@@ -95,7 +95,7 @@ describe('one home per rule in canon/', () => {
 });
 
 describe('every role names the skills it needs', () => {
-  const ROLES = ['brief', 'build-goal', 'build-project', 'goal-review', 'helper', 'intake', 'mend', 'plan', 'review', 'worker'];
+  const ROLES = ['brief', 'build-goal', 'build-project', 'goal-review', 'helper', 'intake', 'plan', 'review', 'worker'];
   const named = (overlay) => [...overlay.matchAll(/^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu)].map((m) => m[1]);
 
   it('names only skills canon ships, and every skill is named by some role', () => {
@@ -115,13 +115,13 @@ describe('every role names the skills it needs', () => {
   it('every role names the proposals skill; every role that runs commands names processes', () => {
     for (const role of ROLES) {
       const skills = named(readCanonRole(role).overlay);
-      if (role !== 'mend') assert.ok(skills.includes('proposals'), `${role} does not name proposals`);
+      assert.ok(skills.includes('proposals'), `${role} does not name proposals`);
       if (role !== 'intake') assert.ok(skills.includes('processes'), `${role} does not name processes`);
     }
   });
 
   it('every role that changes code names publish-and-merge, git and scratch-and-probes', () => {
-    for (const role of ['brief', 'build-goal', 'build-project', 'mend', 'plan', 'review', 'worker']) {
+    for (const role of ['brief', 'build-goal', 'build-project', 'plan', 'review', 'worker']) {
       const skills = named(readCanonRole(role).overlay);
       for (const skill of ['publish-and-merge', 'git', 'scratch-and-probes']) assert.ok(skills.includes(skill), `${role} does not name ${skill}`);
     }

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  MERGE_BATCH_MAX, dequeue, enqueue, heldBy, heldLanding, markLanding, markMended, markMending, markQueued, markRed, markRequeued,
+  MERGE_BATCH_MAX, dequeue, enqueue, heldBy, heldLanding, markLanding, markQueued, markRed, markRequeued,
   mergesPath, nextBatch, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor, stepsDone, waitingOn,
 } from '../../src/mc/merge-queue.js';
 
@@ -212,26 +212,22 @@ test('a requeued job keeps its place, counts the requeue, and is not taken befor
   assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].requeues, 2);
 });
 
-test('markLanding names its merger; queueEntries keeps it on landing and mending, and drops it on queued and red', () => {
+test('markLanding names its merger; queueEntries keeps it on landing, and drops it on queued and red', () => {
   const landing = markLanding(enqueue([], job()), job(), 'T', 4242);
   assert.equal(landing[0].state, 'landing');
   assert.equal(landing[0].started, 'T');
   assert.equal(landing[0].merger, 4242);
   assert.equal(queueEntries(landing)[0].merger, 4242);
-  assert.equal(queueEntries(markMending(landing, job(), { merger: 4242 }))[0].merger, 4242);
   const raw = { ...job(), merger: 4242 };
   assert.equal(queueEntries([{ ...raw, state: 'queued' }])[0].merger, null);
   assert.equal(queueEntries([{ ...raw, state: 'red' }])[0].merger, null);
 });
 
-test('markMending names its merger on the entry, not in the mend; markRed, markMended, markQueued and markRequeued leave none', () => {
+test('markRed, markQueued and markRequeued leave no merger; a `mending` entry from before reads as queued, with no merger and no mend', () => {
   const landing = markLanding(enqueue([], job()), job(), 'T', 4242);
-  const mending = markMending(landing, job(), { reason: 'red', stopped_at: 'x', started: 'T', pid: 7, merger: 4242 });
-  assert.equal(mending[0].merger, 4242);
-  assert.equal(mending[0].mend.pid, 7, 'the mend session\'s pid stays in mend');
-  assert.equal(mending[0].mend.merger, undefined);
-  assert.equal(markRed(mending, job(), { reason: 'r', answered: 'z' })[0].merger, null);
-  assert.equal(markMended(mending, job())[0].merger, null);
+  assert.equal(markRed(landing, job(), { reason: 'r', answered: 'z' })[0].merger, null);
+  const [old] = queueEntries([{ ...job(), state: 'mending', merger: 4242, mend: { pid: 7 }, mended: { at: 'T', outcome: 'pushed' } }]);
+  assert.deepEqual([old.state, old.merger, 'mend' in old, 'mended' in old], ['queued', null, false, false]);
   assert.equal(markQueued(landing, job())[0].merger, null);
   assert.equal(markRequeued(landing, job())[0].merger, null);
 });

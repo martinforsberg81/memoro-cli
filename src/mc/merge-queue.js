@@ -17,7 +17,7 @@
  * entry is not work: it stays so the page draws it red while the queue goes
  * on (Martin, 2026-10-10: *"en misslyckad merge pr bör ligga kvar som en rad
  * i mc (röd) medan merge-kön fortsätter med nästa"*), and `mc merge` again
- * puts it back in line. A `landing` or `mending` entry names the merger that
+ * puts it back in line. A `landing` entry names the merger that
  * has it (`merger`, a pid); a `landing` entry whose merger died is
  * landed again by the next one — the round itself is what says whether the
  * pull request already merged.
@@ -41,10 +41,10 @@ export function mergesPath(root) {
   return join(root, 'runner', 'merges.json');
 }
 
-// `mending`: answered red, and a mend session has the branch (ruling 37,
-// mend.js). In line, so the page and `placeOf` count it, but not work the
-// merger may take until the mend puts it back as `queued`.
-export const JOB_STATES = Object.freeze(['queued', 'landing', 'red', 'mending']);
+// A `mending` entry from before the mend was removed (2026-11-02, goal
+// `headless-plan`) is not a state any more: it reads as `queued`, and the
+// merger measures the branch as it stands.
+export const JOB_STATES = Object.freeze(['queued', 'landing', 'red']);
 
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -77,7 +77,7 @@ function normalise(entry) {
     started: entry.started ?? null,
     // The pid of the merger that has the job; another live merger leaves the
     // entry alone (`held`, see `heldBy`).
-    merger: (entry.state === 'landing' || entry.state === 'mending') && Number.isInteger(entry.merger) ? entry.merger : null,
+    merger: entry.state === 'landing' && Number.isInteger(entry.merger) ? entry.merger : null,
     // A red only under load is put back in line rather than answered
     // (`markRequeued`): how often, and not before when it is taken again.
     requeues: Number.isInteger(entry.requeues) && entry.requeues > 0 ? entry.requeues : 0,
@@ -85,18 +85,6 @@ function normalise(entry) {
     // A red answer's words and when it came (`markRed`).
     reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
     answered: entry.state === 'red' ? entry.answered ?? null : null,
-    // The one mend a job gets (mend.js): `{ at, outcome }` once it has had
-    // it, and `{ pid, started, reason, stopped_at }` while it runs. Read and
-    // written only by the merger that mends; an older mc drops them.
-    mended: plain(entry.mended) ? { at: entry.mended.at ?? null, outcome: entry.mended.outcome ?? null } : null,
-    mend: entry.state === 'mending' && plain(entry.mend)
-      ? {
-        pid: Number.isInteger(entry.mend.pid) ? entry.mend.pid : null,
-        started: entry.mend.started ?? null,
-        reason: entry.mend.reason ?? null,
-        stopped_at: entry.mend.stopped_at ?? null,
-      }
-      : null,
   };
 }
 
@@ -126,12 +114,10 @@ export function enqueue(entries, entry) {
   const at = entries.findIndex((item) => samePr(item, next));
   if (at < 0) return [...entries, next];
   const was = entries[at];
-  // A mend session has the branch: what it pushes is measured next.
-  if (was.state === 'landing' || was.state === 'mending') return entries;
-  // Queued again, a job keeps its one mend spent: a job gets at most one. A
-  // goal's job queued again by `mc merge` stays the goal's, so its landing
+  if (was.state === 'landing') return entries;
+  // A goal's job queued again by `mc merge` stays the goal's, so its landing
   // still sets the goal done; the head is the new call's, none for a person's.
-  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since, mended: was.mended, goal: next.goal || was.goal } : item));
+  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since, goal: next.goal || was.goal } : item));
 }
 
 /** The entries without it: landed, or nothing left to land. */
@@ -148,28 +134,9 @@ export function queuedFor(entries, repo, pr) {
  * The entry kept with the round's red answer: `state: 'red'`, the reason and
  * when — no longer work for the merger, still a row on the page.
  */
-export function markRed(entries, job, { reason = null, answered = null, mended = undefined } = {}) {
+export function markRed(entries, job, { reason = null, answered = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'red', reason, answered, merger: null, mend: null, ...(mended !== undefined ? { mended } : {}) }
-    : entry));
-}
-
-/**
- * The entry set aside for its one mend (mend.js): `state: 'mending'` with
- * the round's stop and reason, until `markMended` or `markRed` answers it.
- * `merger` is the pid of the merger that mends it, on the entry; `pid` is the
- * mend session's, in `mend`.
- */
-export function markMending(entries, job, { reason = null, stopped_at = null, started = null, pid = null, merger = null } = {}) {
-  return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'mending', merger, mend: { pid, started, reason, stopped_at } }
-    : entry));
-}
-
-/** The mend pushed: back in line as `queued`, at its old place (`since`), its mend spent. */
-export function markMended(entries, job, { outcome = 'pushed', at = null } = {}) {
-  return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, merger: null, mend: null, mended: { at, outcome } }
+    ? { ...entry, state: 'red', reason, answered, merger: null }
     : entry));
 }
 

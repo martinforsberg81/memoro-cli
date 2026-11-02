@@ -20,7 +20,7 @@ describe('session identity', () => {
       ['/mc/programs/mc', 'plan', 'mc'], ['/mc/programs/mc/memoro-cli/src', 'plan', 'mc'],
       ['/mc/plan/old/memoro', 'plan', 'old'], ['/mc/programs/mc/goals/g/memoro-cli', 'build-goal', 'mc'],
       ['/mc/runner/step/p/memoro', 'build-project'], ['/mc/step/p', 'build-project'],
-      ['/mc/runner/mend/memoro-1', 'mend'], ['/mc/brief', 'brief'],
+      ['/mc/runner/mend/memoro-1', null], ['/mc/brief', 'brief'],
       ['/mc/helper', 'helper'], ['/mc/intake', 'intake'],
       ['/elsewhere', null], ['/mc-other/programs/mc', null], ['/mc/programs/mc/goals', null],
     ]) {

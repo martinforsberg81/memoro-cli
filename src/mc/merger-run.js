@@ -11,7 +11,7 @@
  * still queued waits for the next start, and no successor is started. A
  * checkout that moves past the commit this merger started on releases
  * merger.json and starts its successor on the new code at once, while jobs
- * remain: this merger then finishes only the rounds and mends it holds, and the
+ * remain: this merger then finishes only the rounds it holds, and the
  * successor takes every other job (`held` in merge-queue.js). The handler only sets `stopping`:
  * the rounds run with `signals: false`, so nothing else in this process exits
  * on a signal, and every child process is started without holding the event
@@ -23,7 +23,6 @@ import { fileURLToPath } from 'node:url';
 
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { mayMend, runMend } from './mend.js';
 import { landerFor, runsAppender, serve, succeed } from './merger.js';
 import { workRoot } from './paths.js';
 
@@ -71,8 +70,7 @@ const code = await serve({
   handover: () => { if (!stopping) succeed({ root, movedTo, say }); },
   gh,
   appendRun,
-  // A red the change caused gets one mend session first (ruling 37).
-  land: landerFor({ root, say, sleep, gh, appendRun, mayMend }),
-  mend: (job, report, { onPid }) => runMend({ root, job, report, deps: { onPid } }),
+  // A red goes to the step's next session, or blocks the goal for plan.
+  land: landerFor({ root, say, sleep, gh, appendRun }),
 });
 process.exit(code);

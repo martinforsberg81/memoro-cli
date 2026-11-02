@@ -29,7 +29,6 @@ export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {})
   // Layout 1 remains readable while machines move to programs/.
   if (first === 'plan' && second) return found('plan', second);
   if ((first === 'step' && second) || (first === 'runner' && second === 'step' && third)) return found('build-project');
-  if (first === 'runner' && second === 'mend' && third) return found('mend');
   if (['brief', 'helper', 'intake'].includes(first)) return found(first);
   return found(null);
 }

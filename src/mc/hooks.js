@@ -219,7 +219,7 @@ export const BASH_RULES = [
   {
     id: 'push',
     test: /(^|[;&|(]\s*|\s)git\s+push\b/u,
-    reason: 'Use `mc publish` — it pushes without force, refuses on main, a dirty tree or a moved remote, and opens or updates the PR; `--branch <name>` from a detached HEAD. A deliberate force-with-lease (a rebased stack) carries MC_HOOK_ALLOW=1.',
+    reason: 'Use `mc publish` — it pushes without force, refuses on main, a dirty tree or a moved remote, and opens or updates the PR. A deliberate force-with-lease (a rebased stack) carries MC_HOOK_ALLOW=1.',
   },
   {
     id: 'pr-merge',
