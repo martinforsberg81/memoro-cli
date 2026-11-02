@@ -158,10 +158,13 @@ below is about.
   `~/mc/runner/github.json` and gone once the round has asked again and been
   answered (`runner.github` in `mc --json`; the backoff is in
   [mc-run.md](mc-run.md)), and one line of the day behind it, **per kind**:
-  `24 h · build 9 (6 open, 1 failed) · review 3 (3 merged) · other 40 ·
-  ≈$31 list (opus, 2026-06)`. `plan` is drawn once there has been one; an
-  outcome with no sessions is not drawn; `failed` is red and `timed out`
-  yellow. `other` is what the runner logged that is not one of its session
+  `24 h · build 53 (40 built, 8 queued, 2 blocked) · review 15 (15 queued) ·
+  other 114 · ≈$846 list (opus, 2026-06)`. An outcome is where the session
+  left its work, read off the runs.tsv note (`outcomeOf`): `merged`,
+  `queued`, `built`, `open`, `red` (back from the merger), `blocked`,
+  `failed`, `timed out`. `plan` is drawn once there has been one; an outcome
+  with no sessions is not drawn; `red`, `blocked` and `failed` are red and
+  `timed out` yellow. `other` is what the runner logged that is not one of its session
   kinds — merge rounds, mends, the helper's turns. The list-price cost gives
   way first on a narrow terminal, its basis and then itself. `mc --json`
   carries `runner.sessions` (one per lane file: `kind`, `variant`, `goal`,

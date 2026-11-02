@@ -209,7 +209,7 @@ const realGit = async (cwd, args) => {
 
 const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
-/** What a session's environment must not hand the mend: it is nobody's step session. */
+/** What a session's environment must not hand the mend: it is nobody's build session. */
 const SESSION_ENV = ['MC_REPO', 'MC_WORKAREA'];
 
 /**

@@ -165,7 +165,7 @@ lines come first, and with `--watch --json` the queueing says nothing, so the
 watch's object is the only output.
 
 **Opt-in and read-only.** Nothing starts a watch, and the step-session prompt
-does not mention it: a step session queues and ends, because the next step
+does not mention it: a build session queues and ends, because the next step
 stacks on top. The watch never writes `merges.json`, the register or
 `merger.json`, never starts a merger and never cancels or re-queues a job — a
 3 or a 4 leaves everything where it was. `--watch` is refused with `--docs`
@@ -1019,7 +1019,7 @@ back red the job on top stays in the queue and waits; that step is the
 project's next session's first, on its own branch.
 
 **The runner queues what the session published and did not** (ruling 25,
-2026-10-07). When a step session's process is gone, the register still says
+2026-10-07). When a build session's process is gone, the register still says
 `running`, the session ended `success`, and a pull request is open on the
 step's branch, the runner asks for that merge itself (`landForSession` in
 [`src/mc/run.js`](../../src/mc/run.js)) through the same door: the plan's
@@ -1184,7 +1184,7 @@ The three numbers are constants with their reasons beside them, not settings:
 - **`MEND_MINUTES`** = 120 — a ceiling for a hung session, not a budget. At
   20 the #13409 mend (2026-10-10) was cut off mid re-record of the SQL
   baselines and the step went red as before: the cut cost the session and
-  bought nothing. Step sessions have no wall clock (ruling 18); a mend's
+  bought nothing. Build sessions have no wall clock (ruling 18); a mend's
   output is buffered, so it cannot be judged stalled as they are.
 
 ## The full run nobody asks for

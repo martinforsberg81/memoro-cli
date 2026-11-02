@@ -327,19 +327,26 @@ export function githubLine(failure) {
 }
 
 /**
- * The day behind the lanes, one line: per session kind, how many and how they
- * ended — `build 9 (6 open, 1 failed) · review 3 (3 merged)` — then what else
- * the runner logged, and what it all cost at list price.
+ * The day behind the lanes, one line: per session kind, how many and where
+ * they left their work — `build 53 (40 built, 8 queued, 2 blocked) · review
+ * 15 (15 queued)` (`outcomeOf`, page-collect.js) — then what else the runner
+ * logged, and what it all cost at list price.
  *
- * Grey is the bookkeeping and the colour is the outcome that needs a look: a
- * failed session is red and a timed-out one yellow. An outcome with no
+ * Grey is the bookkeeping and the colour is the outcome that needs a look:
+ * red for what waits on somebody — back red from the merger, blocked, failed
+ * — and yellow for a session that timed out. An outcome with no
  * sessions is not drawn at all, and `plan` only once there has been one: a
  * `failed 0` is the quietest thing on the row, and painting it red would make
  * the row cry wolf every day.
  */
 const DAY_OUTCOMES = [
   ['merged', 'merged', ['grey']],
+  ['queued', 'queued', ['grey']],
+  ['built', 'built', ['grey']],
   ['open', 'open', ['grey']],
+  // Back from the merger, blocked on a person, failed: each waits on somebody.
+  ['red', 'red', ['red']],
+  ['blocked', 'blocked', ['red']],
   ['failed', 'failed', ['red']],
   ['timeout', 'timed out', ['yellow']],
 ];
@@ -358,14 +365,19 @@ function dayLine(lines, c, wide, day) {
       parts.push({ text: `${index ? ', ' : ' ('}${counted[key]} ${label}${index === outcomes.length - 1 ? ')' : ''}`, styles });
     });
   }
-  if (kinds.other) parts.push(dot, { text: `other ${kinds.other}`, styles: ['grey'] });
-  // The cost gives way first on a narrow terminal — its basis, then itself —
-  // so the counts keep their colours.
-  const used = parts.reduce((n, part) => n + part.text.length, 0);
-  const priced = [cost && `${cost} list (${day.model}, ${day.prices_dated})`, cost && `${cost} list`]
-    .find((text) => text && used + 3 + text.length <= wide - 2);
-  if (priced) parts.push(dot, { text: priced, styles: ['grey'] });
-  lines.push(`  ${paint(c, parts, wide - 2)}`);
+  // What is not a session, and the cost, give way on a narrow terminal — the
+  // cost's basis first, then the cost, then `other` — so the counts keep their
+  // colours rather than being clipped grey.
+  const room = wide - 2;
+  const used = () => parts.reduce((n, part) => n + part.text.length, 0);
+  const other = kinds.other ? `other ${kinds.other}` : null;
+  const priced = [cost && `${cost} list (${day.model}, ${day.prices_dated})`, cost && `${cost} list`].filter(Boolean);
+  const tail = [
+    ...priced.map((text) => [other, text]),
+    [other],
+  ].map((group) => group.filter(Boolean)).find((group) => used() + group.reduce((n, text) => n + 3 + text.length, 0) <= room) || [];
+  for (const text of tail) parts.push(dot, { text, styles: ['grey'] });
+  lines.push(`  ${paint(c, parts, room)}`);
 }
 
 /** A painted cell, padded to its column with spaces that carry no colour. */
@@ -381,13 +393,18 @@ const workWidth = (wide) => (wide >= 90 ? 30 : 22);
 const LANE_REPO = 11;
 const SESSION_REPO = 12;
 const LANE_MODEL = 8;
-const LANE_CLOCK = 8;
+const LANE_CLOCK = 9;
 
-/** What a session works on, as the row says it: `mc/<goal>`, or a project and its step. */
-export function sessionWork(session) {
-  if (session.goal) return session.goal;
+/**
+ * What a session works on, as the row says it, in `room` characters:
+ * `mc/<goal>`, or a project and its step. A long project name gives way and
+ * its step does not — `study-starter-se… 1/4` — because the step is the part
+ * of the cell that changes.
+ */
+export function sessionWork(session, room = Infinity) {
+  if (session.goal) return clip(session.goal, room);
   const at = session.step && session.steps ? ` ${session.step}/${session.steps}` : '';
-  return `${session.name || '?'}${at}`;
+  return `${clip(session.name || '?', Math.max(1, room - at.length))}${at}`;
 }
 
 /**
@@ -421,7 +438,7 @@ function laneLine(c, wide, lane) {
   // Padded outside the paint, so the spaces after a cell are plain ones and
   // a row that ends on a cell ends where its text does.
   const left = `  ${c(MARK.running, 'green')} ${cell(c, kind.toUpperCase(), LANE_KIND, kindTone(kind))} `
-    + `${pad(clip(sessionWork(s), named - 1), named)}`
+    + `${pad(sessionWork(s, named - 1), named)}`
     + `${pad(clip(s.repo || lane.repo || 'unplaced', SESSION_REPO - 1), SESSION_REPO)}`
     + `${cell(c, clip(s.model || s.tool || '', LANE_MODEL - 1), LANE_MODEL, ['grey'])}`
     // The clock carries its own colour: `elapsedTone` says when it has turned.

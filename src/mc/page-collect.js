@@ -306,26 +306,47 @@ export function runnerSection({
 }
 
 /**
+ * Where a session left its work, in the order the day line names them. A
+ * runs.tsv note is the session's own exit word — `success`, `timeout`,
+ * `no-json`, `failed` — and after it where the step stands (run.js): `merged`,
+ * `queued` for the merge queue, `built` on its branch, `open`, `red` back
+ * from the merger, `blocked`, `failed`.
+ */
+export const DAY_OUTCOMES = Object.freeze(['merged', 'queued', 'built', 'open', 'red', 'blocked', 'failed', 'timeout']);
+
+/**
+ * One row's outcome: the last of its note's words that says where the work
+ * stands; failing that, what the exit word says — `timeout` for a timeout or
+ * a stall (the runner's only kill since ruling 18), `failed` for an exit that
+ * is not a success, and `other` for a success that moved nothing on (a
+ * goal's session, whose work is in its log, or a hand-over between billings).
+ */
+export function outcomeOf(row) {
+  const words = String(row?.note ?? '').split(',').map((word) => word.trim());
+  const where = words.slice(1).reverse().find((word) => DAY_OUTCOMES.includes(word));
+  if (where) return where;
+  if (words[0] === 'timeout' || words[0].startsWith('stalled')) return 'timeout';
+  if (String(row?.exit ?? '0') !== '0' || words[0] !== 'success') return 'failed';
+  return 'other';
+}
+
+/**
  * The day's outcomes per session kind: `{ plan, build, review }`, each with
- * `sessions` and the buckets `summariseRuns` puts a row in — `merged`, `open`,
- * `failed`, `timeout`, `other` — so the three add up to every session the
- * runner ran. A row under an old word (`step`, `goal`) counts as the build it
- * was. What is not a session of these kinds — a merge round, a mend, the
- * helper's turns — is `other` beside them, a count and nothing more: the line
- * before counted every row as a step, merge rounds and helper turns with them.
+ * `sessions` and a count per outcome (`DAY_OUTCOMES`, and `other`), so each
+ * kind's outcomes add up to its sessions. A row under an old word (`step`,
+ * `goal`) counts as the build it was. What is not a session of these kinds — a
+ * merge round, a mend, the helper's turns — is `other` beside them, a count
+ * and nothing more: the line before counted every row as a step, merge rounds
+ * and helper turns with them.
  */
 export function dayByKind(rows = []) {
-  const groups = Object.fromEntries(SESSION_KINDS.map((kind) => [kind, []]));
-  let other = 0;
+  const blank = () => ({ sessions: 0, ...Object.fromEntries([...DAY_OUTCOMES, 'other'].map((word) => [word, 0])) });
+  const out = { ...Object.fromEntries(SESSION_KINDS.map((kind) => [kind, blank()])), other: 0 };
   for (const row of rows) {
     const named = sessionKind(row.kind);
-    if (named) groups[named.kind].push(row);
-    else other += 1;
-  }
-  const out = { other };
-  for (const kind of SESSION_KINDS) {
-    const { steps, merged, open, failed, timeout, other: rest } = summariseRuns(groups[kind]);
-    out[kind] = { sessions: steps, merged, open, failed, timeout, other: rest };
+    if (!named) { out.other += 1; continue; }
+    out[named.kind].sessions += 1;
+    out[named.kind][outcomeOf(row)] += 1;
   }
   return out;
 }
