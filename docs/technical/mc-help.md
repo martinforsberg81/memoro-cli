@@ -231,7 +231,10 @@ each verb's usage, without the help interceptor: each `mc <verb> …` row, a
 set`. Each row is expanded into command lines: the required words with a sample
 for each placeholder, then one line more for every optional part and every
 alternative (`a|b`, `<dev|prod>`, `--on <d> | --on-project <p>`, a bare `@<name>`
-as another value of the flag before it). Each line goes through what the
+as another value of the flag before it), and each of those once more on every
+other alternative of a route word before it (`stop --force` as well as
+`start --force`). Two optional parts are never combined: they may exclude each
+other. Each line goes through what the
 handler reads its arguments with:
 
 - its exported parser, where it has one: `parseRunArgs`, work, dev, repo,
@@ -284,6 +287,15 @@ alternatives (`[--me]  prod only: …` under `mc shot <dev|prod>`) is walked on
 that alternative alone. An example's shell continuation (` \`) is not a word.
 `mc hook`, `mc keys` and `mc skills` read their arguments without the scanner
 and keep their own checks; their routes have no `check`.
+
+In the seventh pass (the plan session, after the review on 5bd74a2) an optional
+part was still walked on the default line only, so `[--here]` under
+`mc shot <dev|prod>` was checked as `dev x --here` and never as
+`prod x --here`, which shot refuses. Each optional part is now walked on every
+alternative of a route word before it. It found that one line: shot's
+`[--here]` now says `dev only:` and is walked on dev alone. `mc run
+start|stop [--once]` and shot's `<dev|prod>` with an unqualified `[--here]` are
+negative controls.
 
 What it found, now fixed: `mc vault` revoke-device, change-password and
 destroy-forgotten were routed but missing from the vault row and the matrix;

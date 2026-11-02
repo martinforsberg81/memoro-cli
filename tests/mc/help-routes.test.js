@@ -248,13 +248,26 @@ function unitVariants(unit) {
   return unit.alternatives.flatMap(unitVariants);
 }
 
-/** The default line, then one line for each choice made otherwise, one at a time. */
+/** A word that names one of several routes: `start|stop`, `<dev|prod>`. */
+const isRouteChoice = (unit) => unit.kind === 'word' && choices(unit.text).length > 1;
+
+/**
+ * The default line, then one line for each choice made otherwise, one at a
+ * time — and each of those choices again on every other alternative of a route
+ * word before it, so `mc run start|stop [--once]` is walked as `stop --once`
+ * too. Two optional parts are never combined: they may exclude each other.
+ */
 function sequenceVariants(units) {
   const each = units.map(unitVariants);
   const base = each.map((variants) => variants[0]);
   const lines = [base.flat()];
+  const line = (choice) => base.map((part, other) => (Object.hasOwn(choice, other) ? choice[other] : part)).flat();
   each.forEach((variants, at) => variants.slice(1).forEach((variant) => {
-    lines.push(base.map((part, other) => (other === at ? variant : part)).flat());
+    lines.push(line({ [at]: variant }));
+    units.slice(0, at).forEach((unit, route) => {
+      if (!isRouteChoice(unit)) return;
+      each[route].slice(1).forEach((word) => lines.push(line({ [route]: word, [at]: variant })));
+    });
   }));
   return lines;
 }
@@ -460,6 +473,9 @@ describe('every name in the help is routed', () => {
       '  mc layout migrate --apply --json   --json is the dry run\'s',
       '  mc deps bump x                   bump takes a repository and what',
       'usage — mc shot <dev|prod> <target>   a PNG\n          [--me]                      dev only: said of the wrong place',
+      // A flag one alternative refuses, written after both: walked on each.
+      '  mc run start|stop [--once]       --once is not stop\'s',
+      'usage — mc shot <dev|prod> <target>   a PNG\n          [--here]                    the worktree you stand in',
     ]) {
       assert.notDeepEqual(unrouted(row), [], row);
     }
@@ -475,7 +491,11 @@ describe('every name in the help is routed', () => {
 
   it('expands placeholders, alternatives and optional parts into command lines', () => {
     assert.deepEqual(expand('<repo> <pr> [<pr>...] [--check] [--json]'), [['x', '7'], ['x', '7', '8'], ['x', '7', '--check'], ['x', '7', '--json']]);
-    assert.deepEqual(expand('start|stop [--force]'), [['start'], ['stop'], ['start', '--force']]);
+    assert.deepEqual(expand('start|stop [--force]'), [['start'], ['stop'], ['start', '--force'], ['stop', '--force']]);
+    // Each optional part on every route alternative before it; two optional parts never together.
+    assert.deepEqual(expand('<dev|prod> <target> [--here] [--json]'), [
+      ['dev', 'x'], ['prod', 'x'], ['dev', 'x', '--here'], ['prod', 'x', '--here'], ['dev', 'x', '--json'], ['prod', 'x', '--json'],
+    ]);
     assert.deepEqual(expand('blocked [<project> <n>] --on <decision> | --on-project <project>'), [
       ['blocked', '--on', 'x'], ['blocked', 'x', '3', '--on', 'x'], ['blocked', '--on-project', 'x'],
     ]);

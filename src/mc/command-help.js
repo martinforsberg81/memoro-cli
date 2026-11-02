@@ -278,7 +278,7 @@ export const COMMAND_USAGE = Object.freeze({
     "          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n",
     "          [--onboarding]              dev only: reseed the account and show its onboarding\n",
     "          [--me]                      prod only: signed in as you, from mc shot login prod\n",
-    "          [--here]                    the worktree you stand in — the default inside a memoro worktree\n",
+    "          [--here]                    dev only: the worktree you stand in (default in a memoro worktree)\n",
     "          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n",
     "                                      --compare <sha> pins the tree and its database\n",
     "          [--keep]                    keep the browser open for mc shot next\n",
