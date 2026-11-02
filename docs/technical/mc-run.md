@@ -11,8 +11,9 @@ log is something `mc status` can read.
 **The runner decides nothing with a model.** It reads files, runs `git` and
 `gh`, starts a session through the adapter and waits for it. It is the parent
 of the process it starts, so it needs no inbox, no knock and no watcher to
-know whether that process is alive. The model is the step session, and the
-step session is the only place a model appears.
+know whether that process is alive. The model is the session — `plan`,
+`build` (of a project's step or of a goal) or `review` — and the session is
+the only place a model appears.
 
 The rules that are pure functions of text live in
 [`src/mc/run-plan.js`](../../src/mc/run-plan.js); everything that touches a
@@ -228,7 +229,7 @@ repository. What it does, for as long as the runner runs:
      a modal and a process behind (2026-09-20). Each failure is diagnosed in
      two calls of two seconds at most — `security show-keychain-info` (hangs
      or fails on a locked keychain), then `gh auth status` (fails on a bad
-     token) — and the page's STEPS line names the cause and its command,
+     token) — and the page's SESSIONS section names the cause and its command,
      `security unlock-keychain` or `gh auth login -h github.com`,
    - that has no open pull request (`inFlight`),
    - that no other lane has claimed (`claims`),
@@ -312,7 +313,7 @@ the volume where `MC_SCRATCH` is made (`diskRoom`, `deps.freeBytes` on
 constant in `run.js` — the pass starts nothing and returns `skipped:disk`; the
 lane says `disk: <n> GiB free, below 5 GiB — no step started` once in
 `runner.log` and writes the same line to `~/mc/runner/disk.json`, which the
-page's STEPS block shows in yellow while the runner is alive. The step stays
+page's SESSIONS section shows in yellow while the runner is alive. The step stays
 `ready` and nothing is written into a plan; the first pass with room removes
 the file and the line goes with it. Sessions already running, their check-ins
 and their landings are not in a pass and go on. A reader that throws, or no
@@ -370,7 +371,7 @@ A project is asked in two places, and the order is the whole of what a pick
 costs: **the plan under `~/mc/programs/` decides before anything is touched, and the
 worktree decides after.**
 
-What a step session has not committed is snapshotted to
+What a project's build session has not committed is snapshotted to
 `refs/mc/checkpoint/<project>` (`src/mc/checkpoint.js`): every `CHECKPOINT_MS`
 (ten minutes) while the session runs, and immediately before each
 `git merge --abort` the runner makes in the step's workarea. The snapshot is a
@@ -514,7 +515,7 @@ conflicts with `main` and no rule merges one: `plan-merge.js` went with the
 plans, and the plan the runner obeys is the one under `~/mc/programs/`
 ([`docs/project/README.md`](../project/README.md), § *Who writes what*).
 
-Every other conflict is handed to the step session: `stepPrompt` puts a
+Every other conflict is handed to the build session: `stepPrompt` puts a
 preamble above the body naming the conflicting files, saying the merge stopped
 there, and saying it is the first thing the session does and not the job. One
 session resolves the merge and delivers the step, and one pull request carries
@@ -542,7 +543,7 @@ disk and from nowhere else. No repository holds a plan (ruling 48), so no
 worktree has a copy to disagree with. **What a planning session and the runner
 share is a `PLAN.json` under `~/mc/programs/`, and nothing else.**
 
-A step session does not edit its plan: it is written only through `mc project`
+A build session does not edit its plan: it is written only through `mc project`
 and `mc step`, and the runner reads what they wrote.
 
 `chooseKind` is the whole of what a project gets from that copy:
@@ -810,7 +811,7 @@ inside it, and both tools are given the same. The session's Bash also gets a
 ten-minute ceiling (`BASH_DEFAULT_TIMEOUT_MS`), so a suite run is one call
 rather than a detached job polled in two-minute `sleep` loops.
 
-**What the session is told about itself.** A step session's environment carries
+**What the session is told about itself.** A project's build session's environment carries
 `MC_STEP` (`<project>:<index>`), `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA` (the
 worktree) — and, for every kind of session the runner starts, `MC_SCRATCH`: an
 existing directory `~/mc/runner/scratch/<project>-<stamp>/`, outside the
@@ -869,8 +870,8 @@ Four answers the merger gives without a person (ruling 37,
   red pause/stopped labels on the heading. Each repository keeps one row,
   landing or idle: PRs, phase and clocks, waiting numbers in landing order,
   reds and plain-text mends/fixes. Its own green success count is landed PRs
-  in 24 hours, including merges outside runner steps. STEPS is the runner's
-  section, still expanded by `mc run`; its day line contains step outcomes,
+  in 24 hours, including merges outside runner steps. SESSIONS is the runner's
+  section, still expanded by `mc run`; its day line counts outcomes per kind,
   not the merged count. See [mc-ui.md](mc-ui.md).
 
 **One job lands in one round** (ruling 55, 2026-10-24). The merger takes the
@@ -1045,143 +1046,110 @@ which the pull request was the brief's (`heldRepair`, `repairPrompt`,
 `canon/roles/repair.md`, `laneRepair` for a pull request no project's round
 reached). Measured 2026-09-05..12: 22 repair sessions, 156 minutes, median 33
 turns, each re-reading a branch it had never seen. Ruling 21 took all of it
-out: the step session runs `mc merge` itself and fixes its own red with the
+out: the build session runs `mc merge` itself and fixes its own red with the
 diff in its context, a step that did not land is `failed` in the register
 (*The register*), and there is no second session. `held.json` is gone, and
 the brief's *Held before merge* is *Failed steps*.
 
 ## Lanes
 
-**One lane loop per repository per `per_repo`, all at the same time**, each on
-its own clock. memoro's steps and memoro-cli's never touch — different main
-branches, different worktrees, different pull requests — so a lane that is idle
-does not wait for one that is busy.
+**`mc run lanes <n>` is the total** — how many headless sessions the runner
+runs at once, across every repository and every kind of session (Martin,
+2026-11-02: *"Vi har enbart mc run lanes x (som blir totalt antal lanes för
+headless)."*). The runner runs three kinds: `plan`, `build` — of a project's
+step (variant `project`) or of a goal (variant `goal`) — and `review`, of a
+project's review step or of a goal (`session-kind.js`). A lane is bound to
+no repository and no kind: n lane loops run at once, `lane 1` to `lane n`,
+each on its own clock, and a lane that frees takes the next work of any
+kind on any repository.
 
-**A lane owns one repository, and everything that repository's steps touch.**
+The count lives in `~/.memoro/mc/lanes.json` (`lane-count.js`), one number,
+1 to 8, default 2 — what no file meant before, one lane on each of two
+repositories — read live: a raised count starts the new lanes within one poll
+(`UPDATE_POLL_MS`), a lowered one ends each lane above it after the session
+it is in. Until 2026-11-02 the file held two numbers, `per_repo` (that many
+lanes on each repository) and `--total` (a cap across them), and the machine
+ran the smaller of `per_repo × repositories` and `total`. A file in that
+shape is read once into the one number it actually allowed and written back,
+and `mc run lanes` says so the first time (`read from the old setting
+(per_repo 2, total 3): the 3 it allowed`). `mc run lanes 2 --total 3`, `mc
+run lanes per_repo …` and `--per-repo` are refused with the line that says
+what replaced them. **A count of sessions is a proxy for load, not a
+measurement of it** — memory and quota are the honest measurements; the
+runner holds new starts back while free memory or disk is short
+(`memory.json`, `disk.json`), and the lane count does not.
 
-- **Its slice of the order.** `nextFor` takes only names whose plan is in the
-  lane's repository — an existing workarea decides it, and the plan
-  decides it when there is no workarea yet. Martin's order holds *within* the
-  repository.
-- **Its own steps, one at a time.** A lane runs one step and picks again.
-  A project or goal holds its lane from its first step to its review: the name
-  the lane just ran goes first in the next pick, and under a total the slot is
-  kept between the two sessions. The lane goes to the next name when that name
-  has nothing to run: blocked, failed, on a decision, or in the merge queue.
-- **Its own reading of the world.** `queue({ only })` fetches one repository,
-  so two lanes of two repositories never run `git fetch` in the same checkout
-  at the same moment.
-- **Its own rows.** runs.tsv rows and runner.log lines are appended whole and
-  prefixed by project name, so two lanes writing at once interleave by line,
-  never within one.
+**The merge lanes are not these lanes.** The merger lands pull requests in
+one merge lane per repository (ruling 61, [mc-merge.md](mc-merge.md)); it is
+its own process, takes no slot here, and `mc run lanes` does not change it.
 
-**A repository may have more than one — `mc run lanes <n>`.** The count lives in
-`~/.memoro/mc/lanes.json` (`lane-count.js`), 1 to 8, default 1, read live: a
-raised count starts the new lanes within one poll (`UPDATE_POLL_MS`), a lowered
-one ends each lane above it after the step it is in. With n above
-one, n loops run on each repository, tagged `memoro#1`, `memoro#2`, and **every
-one of them takes from the same ordered list**. What keeps two of them off one
-project is **the claim**: `claims` in `run.js` is one set for the process, a
-lane adds the name it picked in the same tick it picks it — before its session
-has opened anything — and `runStep` releases it in a `finally` however the step
-ends. `nextFor` skips a claimed name, so the second lane takes the second
-*runnable* name, not the second by position. Two lanes on one repository read
-the world separately, up to ten minutes apart, and the first lane's pull request
-does not exist yet while its session runs; the claim is what covers that, and
-the open pull request covers the rest once the session has pushed. `runStep`
-checks the claim once more as the last guard.
+### What a free lane takes
 
-Each lane has a current file of its own — the first keeps `current-<repo>.json`,
-the rest are `current-<repo>-<k>.json`, and the page reads them by name. What
-the lanes of one repository share is its main, and that is where two steps
-meet: **a landing that finds the gate lock or the repository lease held waits
-for it** — `landPr` asks the merge round again every 30 s for up to 45 minutes —
-instead of logging `left open` and parking the project behind its own pull
-request, which is what a refused landing did until 2026-09-03. The lock and the
-lease themselves still refuse: one suite at a time is the guarantee, and it is
-the caller that learnt to wait.
+`pickWork` (`lane-pick.js`) is asked once per pass, with everything that can
+start now on every repository — a project's next step by `nextFor`, a goal
+that is `open` or in `review` — already without what another lane holds, and
+it answers one of them:
 
-**And the machine has a number of its own — `mc run lanes --total <n>`.** It
-lives beside the first in the same file, and the two are not the same kind of
-thing. `per_repo` bounds how many steps share one `main` — where two landings
-meet at the gate — and is a correctness number. `total` bounds this machine
-across every repository at once: CPU, memory, API quota, and how much of a
-fleet one person can follow. `lanes 3` on two repositories is six sessions,
-and until 2026-09-05 nothing in the code objected. **A count of sessions is a
-proxy for load, not a measurement of it** — memory and quota are the honest
-measurements and neither is read.
+1. **Finishing comes before starting.** The project the lane has just run
+   goes on: a project holds its lane from its first step to its review, and
+   the slot is kept between the two sessions. Then **a review before a
+   build**, and **a project's build before a goal's**.
+2. Within one rank, a step the API cut off goes first (its cache is warm,
+   ruling 33), and then **the work that has waited longest**: the oldest
+   `since` — when it last moved, a project's register entry or a goal's
+   last log entry. A tie keeps the order the candidates came in, which is
+   `queue.md`'s and then alphabetical.
+3. **No repository takes every lane while another waits.** Each repository
+   with work or with a session running has a share, `ceil(lanes /
+   repositories)`. While any repository below its share has work that can
+   start, work on a repository at or above its share is not picked —
+   whatever its kind or its wait, and the project a lane would carry on with
+   too. With two repositories and two lanes or more the share is at most
+   `lanes − 1`, so one repository reaches the last lane only when the other
+   has nothing to start, and one that took every lane while the other was
+   idle gives up the next lane that frees as soon as the other has work. With
+   one lane, one repository holds it by necessity, and the two take turns by
+   their wait. `lane-pick.test.js` holds each of these; `run.test.js` runs
+   four lanes over two repositories at once.
 
-Each is absent on its own terms and the file may hold either alone. An absent
-`per_repo` is 1, an absent `total` is no cap, and a machine with neither set —
-which is what `~/.memoro/mc/lanes.json` held until 2026-09-05 — runs one lane
-per repository, two sessions, exactly what it ran before the total existed. Set,
-both bind and the smaller wins: `per_repo`
-structurally, because there are that many lane loops per repository, and
-`total` read live from `lanes.json` at each `takeSlot` (run.js), so a new value
-applies to the next start of a step with no restart. The count is this
-process's own claims, taken at the last moment before a lane launches a session
-and dropped in the same `finally` that removes its current file, plus the steps
-other live runners hold by their lane files — a predecessor finishing after a
-handover. Own steps are claims rather than a count of `current-*.json` because
-a file is written after a step begins, and two lanes counting files in the same
-tick would both see the same free slot. A lane with
-no slot polls every 15 s and says one line when the wait begins, and gives the
-wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
-read no lane starts a step. Waiting lanes take slots first come, first served: a
-new arrival cannot overtake a waiter even if it polls first. `runner/waiting.json`
-records the ordered waiters (project, repository, lane, runner pid and arrival
-time). Admission, STOP, UPDATE and a failed wait remove the ticket. With no
-total cap, no ticket is enqueued. This changes only machine-slot admission,
-not `nextFor` or `assembleQueue`.
+What keeps two lanes off one project is **the claim**: `claims` in `run.js`
+is one set for the process, a lane adds the name it picked in the same tick
+it picks it — before its session has opened anything — and the session's
+`finally` releases it however it ends. A claimed name is not offered to the
+picker, so the second lane takes the second piece of work, not the same one.
+`runStep` checks the claim once more as the last guard.
 
-**Which pair is chosen decides whether that hazard can bite at all**, and this
-is the one arithmetic worth knowing about the two numbers together. `per_repo`
-is structural — there are exactly that many lane loops per repository, so one
-repository can never hold more than `per_repo` slots; the number of loops
-follows lanes.json, so it binds within one poll of a change — while `total` is one
-counter for the machine. With two repositories, whatever one of them holds, the
-other always has at least `total − per_repo` slots it cannot be shut out of.
-`per_repo 3, total 3` therefore guarantees a repository nothing: memoro can
-hold all three and memoro-cli waits for as long as memoro has steps, which
-with 46 memoro step runs against memoro-cli's 10 since 2026-09-02 is most of
-the time. `per_repo 2, total 3` guarantees each of them one, with no ordering
-rule and no scheduler. A `total` at or below `per_repo` is the first thing to
-look at when one side is being starved.
+Each lane's session has a current file, `current-<repo>.json` or
+`current-<repo>-<k>.json` with `k` the lane's index, carrying `kind` and
+`variant` (`build`/`project`, `build`/`goal`, `review`/`project`,
+`review`/`goal`, `plan`); the page reads them by name, and a file from before
+that says `step` or `goal` is read as the build it was. runs.tsv's `kind`
+cell is `build-project`, `build-goal`, `review-project`, `review-goal` or
+`plan`; older rows say `step`, `goal` and `review` and are still read
+(`sessionKind`). Rows and runner.log lines are appended whole and prefixed by
+the work's name, so two lanes writing at once interleave by line, never
+within one.
 
-**This machine runs `per_repo 2, total 3`**, set 2026-09-05 as
-[ruling 14](../project/mc/rulings.md) — the pair that lifts the interim
-`per_repo 1` and still leaves memoro-cli a slot memoro cannot take. Measured
-from `runner.log`'s own start lines over the first 12½ hours under it
-(2026-09-06T02:28Z on): 40 step sessions, **never more than three at once**,
-three of them at once six times and 4 % of the window; the same reading of
-2026-09-04, before the total existed, has six at once. No lane has yet had to
-wait for a slot — there is not one `steps in flight on this machine` line in
-the log — so the ceiling is measured and the waiting is still only tested.
+**The slot.** Besides the lane loops there is one counter for the machine:
+`takeSlot` (run.js) takes a slot at the last moment before a lane launches a
+session and drops it in the same `finally` that removes its current file,
+plus the sessions other live runners hold by their lane files — a
+predecessor finishing after a handover. A lane with no slot polls every 15 s,
+says one line when the wait begins (`<name>: 3 of 3 sessions in flight on
+this machine — waiting for a lane`), and gives the wait up on STOP or UPDATE
+— the drain promises that from the moment UPDATE is read no lane starts a
+session. Waiting lanes take slots first come, first served;
+`runner/waiting.json` records the ordered waiters (name, repository, lane,
+runner pid and arrival time).
 
 What the total does not bound is worth knowing before it is trusted as a load
-guard. It counts **steps**, taken by a lane: the chores beside the lanes — the
+guard. It counts the runner's sessions: the chores beside the lanes — the
 helper turn, the intake drain — spend sessions of their own and take no slot,
-and neither do `mc test`, `mc merge` or anything a person starts. And the
-counter is one runner process's own, so a second `mc run` on this machine has a
-second counter and the two do not see each other. One unattended runner is the
-case this is built for; `mc run --once` beside it is refused.
+and neither do `mc test`, `mc merge`, the merger or anything a person starts.
 
-**There is no merge lane any more** (ruling 21, 2026-09-12): a step session
-lands its own pull request through `mc merge`, inside its own session and its
-own slot, so the ceiling on what runs is `total` and nothing more. Until then
-a third loop landed what a refused hand `mc merge` had queued and ran one
-repair session per held pull request, outside both numbers.
-
-`mc run lanes` with no argument prints both numbers and how many steps are in
-flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
-`1 per repository, no total cap (up to 2 across 2 repositories) — 0 in
-flight`, because a line that names only the per-repository number is the line
-that produced the wrong picture in the first place. `mc run lanes <n>` sets
-the per-repository number as it always has, `--total <n>` sets the machine's
-without touching it, `--total none` takes the cap off, and both may be given
-in one command — each is checked before either is written. A total at or above
-`per_repo × repositories` can never refuse a lane a slot, and the verb says so
-rather than letting an operator believe they capped anything.
+`mc run lanes` with no argument prints the total and how many sessions are in
+flight while it is read — `lanes 3 — 2 of 3 in flight, across every
+repository`.
 
 ### Why the session is spawned, not `spawnSync`
 
@@ -1319,7 +1287,7 @@ thing it writes into a repository: a blocked step (below).
   however that session returns, so a step that throws still clears it. A file
   whose runner pid is gone is moved to `runner/log/dead-<file>-<pid>.json` by
   the next runner that reads it, and the drain and stop lines leave it out.
-  Readers — the page's STEPS block, `mc status <name>` — glob
+  Readers — the page's SESSIONS section, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block
   is a list of lines and not a line.
 - **`projects/<project>.json`** — the register: where every step of every
@@ -1576,7 +1544,7 @@ keeps no parent process.
   `MEMORY_MIN_FREE_PERCENT` (20). It says `disk: <n> GiB free, below 5 GiB —
   no step started` or `memory: <n>% free, below 20% — no step started` once
   per pass and writes `disk.json` or `memory.json`. The file is removed when
-  there is room again. `nowBlock` reads both, so the page's STEPS block shows
+  there is room again. `nowBlock` reads both, so the page's SESSIONS section shows
   either hold. Sessions already running, their check-ins and landings, go on.
   No reading is room: a guess must not stop the runner.
 - **`~/mc/runner/UPDATE`** — read between picks only, and answered by a

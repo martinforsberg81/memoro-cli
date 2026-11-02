@@ -226,7 +226,7 @@ function liveFacts({ root, io, oldAreaNames, oldAreaOf }) {
   for (const step of drainState({ paths, read, list, now: io.now(), alive }).inFlight) {
     if (!Number.isInteger(step.pid)) continue;
     const which = step.step == null ? step.name : `${step.name} step ${step.step + 1}`;
-    live.push({ what: 'step', pid: step.pid, line: `a step session is running: ${which} (lane ${step.lane}, runner pid ${step.pid}) — mc run stop, and wait for it to finish` });
+    live.push({ what: 'step', pid: step.pid, line: `a build session is running: ${which} (lane ${step.lane}, runner pid ${step.pid}) — mc run stop, and wait for it to finish` });
   }
   const merger = readMerger({ root, read, alive });
   if (merger) live.push({ what: 'merger', pid: merger.pid, line: `the merger is running (pid ${merger.pid}) — wait for its queue to empty, or end it` });

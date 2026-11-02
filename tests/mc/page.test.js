@@ -14,13 +14,13 @@ import { markCriterion, registerPath, seedEntry } from '../../src/mc/register.js
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
 import {
-  attachPrs, checksSection, collectPage, countNewErrors, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines, nextSection,
+  attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines, nextSection,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection, stateOf,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
-import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
+import { colourFor, columnsFor, renderPage, renderPageLines, sessionWork } from '../../src/mc/page-render.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
 import { codeCommit, pageKey, restartPage, run as page } from '../../src/mc/commands/home.js';
@@ -119,7 +119,7 @@ const TSV = [
 const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('2026-08-28T12:00:00Z'));
 const live = () => true;
 
-describe('STEPS', () => {
+describe('SESSIONS', () => {
   const RUNNER = { pid: 4242, started: '2026-08-29T10:00:00Z' };
   const CURRENT = {
     name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
@@ -130,9 +130,9 @@ describe('STEPS', () => {
     const runner = runnerSection({
       runner: RUNNER, currents: [CURRENT], stop: true, rows: ROWS, now: NOW, alive: live,
     });
-    assert.equal(runner.steps[0].name, 'mc-ui');
-    assert.equal(runner.steps[0].elapsed_seconds, 1200);
-    assert.deepEqual([runner.steps[0].check_in_seconds, runner.steps[0].check_ins], [3600, 0]);
+    assert.equal(runner.sessions[0].name, 'mc-ui');
+    assert.equal(runner.sessions[0].elapsed_seconds, 1200);
+    assert.deepEqual([runner.sessions[0].check_in_seconds, runner.sessions[0].check_ins], [3600, 0]);
     assert.equal(runner.stop, true);
     assert.equal(runner.process.alive, true);
     assert.equal(runner.stop_requested, null, 'a STOP with no time in it has no since');
@@ -143,6 +143,101 @@ describe('STEPS', () => {
     assert.equal(runner.day.steps, 3);
     assert.equal(runner.day.timeout, 1);
     assert.ok(runner.day.cost > 8 && runner.day.cost < 8.2, `≈ $8.07 list (cache writes at 2×): ${runner.day.cost}`);
+  });
+
+  /**
+   * The runner runs three kinds of session (Martin, 2026-11-02): `plan`,
+   * `build` of a project's step or of a goal, and `review`. Each row has its
+   * kind as the first word, then what it works on, the repository, the model
+   * and the clock — at 80 columns and at 120, with no line wider than the
+   * terminal. `PLAN` is drawn from a fixture: the runner does not start plan
+   * sessions yet (goal `headless-plan`).
+   */
+  it('draws one row per session, its kind first: PLAN, BUILD of a goal and of a project, REVIEW', () => {
+    const lane = (over) => ({
+      tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0, pid: 4242, worktree: '/w/x', ...over,
+    });
+    const runner = runnerSection({
+      runner: RUNNER,
+      currents: [
+        lane({ name: 'goal:mc/runner-sessions', kind: 'build', variant: 'goal', repo: 'memoro-cli', lane: 0, started: '2026-08-29T11:00:00Z' }),
+        lane({ name: 'docx-editor', kind: 'build', variant: 'project', repo: 'memoro', lane: 1, model: 'sonnet', started: '2026-08-29T11:40:00Z' }),
+        lane({ name: 'goal:mc/review-and-land', kind: 'review', variant: 'goal', repo: 'memoro-cli', lane: 2, started: '2026-08-29T11:50:00Z' }),
+        lane({ name: 'goal:mc/headless-plan', kind: 'plan', repo: 'memoro-cli', lane: 3, started: '2026-08-29T11:55:00Z' }),
+        // A lane file from before the kinds: a project's `step`, read as its build.
+        lane({ name: 'mc-ui', kind: 'step', repo: 'memoro-cli', lane: 4, started: '2026-08-29T11:58:00Z' }),
+      ],
+      rows: ROWS,
+      lanes: { lanes: 6 },
+      plans: [{ project: 'docx-editor', step: 4, steps: 6 }],
+      now: NOW,
+      alive: live,
+    });
+    // `mc --json` has the shape the page draws from.
+    assert.deepEqual(runner.sessions.map((s) => [s.kind, s.variant, s.goal, s.name]), [
+      ['build', 'project', null, 'docx-editor'],
+      ['plan', null, 'mc/headless-plan', 'goal:mc/headless-plan'],
+      ['review', 'goal', 'mc/review-and-land', 'goal:mc/review-and-land'],
+      ['build', 'goal', 'mc/runner-sessions', 'goal:mc/runner-sessions'],
+      ['build', 'project', null, 'mc-ui'],
+    ]);
+    assert.ok(!('steps' in runner), 'the list is `sessions`');
+    assert.deepEqual(runner.lanes.map((l) => l.session?.kind ?? null), ['build', 'build', 'review', 'plan', 'build', null]);
+    for (const columns of [80, 120]) {
+      const lines = renderPageLines(pageData({ runner }), { columns, version: '0.7.11', now: NOW });
+      for (const line of lines) assert.ok(width(line) <= columns, `${columns}: ${line}`);
+      const at = lines.findIndex((line) => /^ {2}SESSIONS /u.test(line));
+      const rows = lines.slice(at + 1, at + 7);
+      assert.match(lines[at], /^ {2}SESSIONS {2}5 of 6 lanes · 0 queued +mc run$/u);
+      assert.match(rows[0], /^ {2}● BUILD {3}mc\/runner-sessions +memoro-cli {2}opus {4}60 min {3}0 check-ins$/u);
+      assert.match(rows[1], /^ {2}● BUILD {3}docx-editor 4\/6 +memoro {6}sonnet {2}20 min/u);
+      assert.match(rows[2], /^ {2}● REVIEW {2}mc\/review-and-land +memoro-cli {2}opus {4}10 min/u);
+      assert.match(rows[3], /^ {2}● PLAN {4}mc\/headless-plan +memoro-cli {2}opus {4}5 min/u);
+      assert.match(rows[4], /^ {2}● BUILD {3}mc-ui +memoro-cli/u);
+      assert.match(rows[5], /^ {2}· lane 6 {2}idle$/u);
+      // The same column for what it works on, whatever the kind.
+      assert.equal(new Set(rows.slice(0, 5).map((row) => row.indexOf('memoro'))).size, 1, rows.join('\n'));
+    }
+    // A long project name gives way to its step, which is the part that changes.
+    assert.equal(sessionWork({ name: 'study-starter-sessions', step: 1, steps: 4 }, 21), 'study-starter-se… 1/4');
+    assert.equal(sessionWork({ goal: 'mc/runner-sessions', name: 'goal:mc/runner-sessions' }, 21), 'mc/runner-sessions');
+    // Coloured, the kind is the kind's colour: build green, review magenta, plan cyan.
+    const painted = paintedPage(pageData({ runner }));
+    for (const [word, tone] of [['● BUILD   mc/', 'green'], ['● REVIEW', 'magenta'], ['● PLAN', 'cyan']]) {
+      assert.equal(signature(rowWith(painted, word)).split(' ')[1], tone, word);
+    }
+  });
+
+  /**
+   * The day counts outcomes per kind. A row under an old word is the build or
+   * review it was; what is not a session of the runner's kinds — a merge
+   * round, the helper — is `other`, and is not counted as a session.
+   */
+  it('counts the day per kind, reading old rows as the kinds they were', () => {
+    const row = (kind, note, exit = '0') => ({ kind, note, exit });
+    // The notes as run.js writes them: the exit word, then where the step stands.
+    const day = dayByKind([
+      row('step', 'success,built'), row('step', 'timeout,built'), row('build-project', 'success,merged'),
+      row('step', 'success,blocked'), row('goal', 'stalled'), row('build-goal', 'no-json', '143'),
+      row('review', 'success,queued'), row('review-goal', 'success'),
+      row('plan', 'success,open'), row('merge', 'success,merged'), row('helper', 'success'),
+    ]);
+    const counted = (over) => ({
+      sessions: 0, merged: 0, queued: 0, built: 0, open: 0, red: 0, blocked: 0, failed: 0, timeout: 0, other: 0, ...over,
+    });
+    // A session that timed out but left its step built counts where it left it.
+    assert.deepEqual(day.build, counted({ sessions: 6, built: 2, merged: 1, blocked: 1, timeout: 1, failed: 1 }));
+    assert.deepEqual(day.review, counted({ sessions: 2, queued: 1, other: 1 }));
+    assert.deepEqual(day.plan, counted({ sessions: 1, open: 1 }));
+    assert.equal(day.other, 2);
+    const runner = runnerSection({ rows: ROWS, now: NOW, alive: () => false });
+    runner.day.by_kind = day;
+    const dayAt = (columns) => renderPageLines(pageData({ runner }), { columns, now: NOW }).find((l) => /^ {2}24 h /u.test(l));
+    const counts = '  24 h · build 6 (1 merged, 2 built, 1 blocked, 1 failed, 1 timed out) · review 2 (1 queued) · plan 1 (1 open) · other 2';
+    assert.equal(dayAt(160), `${counts} · ≈$8.07 list (opus, 2026-06)`);
+    // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
+    assert.equal(dayAt(140), `${counts} · ≈$8.07 list`);
+    assert.equal(dayAt(120), counts);
   });
 
   // The section is the machine and nothing else now: a person's session is
@@ -166,8 +261,8 @@ describe('STEPS', () => {
       now: NOW,
       alive: live,
     });
-    assert.deepEqual(runner.steps.map((step) => step.repo), ['memoro', 'memoro-cli']);
-    assert.deepEqual(runner.steps.map((step) => step.name), ['docx-editor', 'mc-ui']);
+    assert.deepEqual(runner.sessions.map((step) => step.repo), ['memoro', 'memoro-cli']);
+    assert.deepEqual(runner.sessions.map((step) => step.name), ['docx-editor', 'mc-ui']);
   });
 
   /**
@@ -181,17 +276,17 @@ describe('STEPS', () => {
     });
     // The steps fill from the top: a running row is its step's repository, and
     // an idle one is only a number.
-    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.step?.name ?? null]),
+    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.session?.name ?? null]),
       [[1, 'memoro-cli', 'mc-ui'], [2, null, null]]);
     // The step on the lane is the one in `steps`, not a copy of it: there is
     // one of it, so the two cannot come to disagree.
-    assert.equal(runner.lanes[0].step, runner.steps[0]);
-    // A repository nobody named is a lane all the same when a lane file says
-    // the runner is in it.
+    assert.equal(runner.lanes[0].session, runner.sessions[0]);
+    // The lanes are the total, whatever repositories there are: a lane file
+    // names the repository of the session in it.
     assert.deepEqual(runnerSection({ runner: RUNNER, currents: [CURRENT], repos: [], now: NOW, alive: live })
-      .lanes.map((lane) => lane.repo), ['memoro-cli']);
-    assert.deepEqual(runnerSection({ repos: ['memoro'], now: NOW, alive: () => false })
-      .lanes, [{ number: 1, repo: null, lane: null, step: null }]);
+      .lanes.map((lane) => lane.repo), ['memoro-cli', null]);
+    assert.deepEqual(runnerSection({ repos: ['memoro'], lanes: { lanes: 1 }, now: NOW, alive: () => false })
+      .lanes, [{ number: 1, repo: null, lane: null, session: null }]);
   });
 
   /**
@@ -209,25 +304,24 @@ describe('STEPS', () => {
     };
     const runner = runnerSection({
       runner: RUNNER, currents: [CURRENT, second], repos: ['memoro', 'memoro-cli'],
-      lanes: { per_repo: 2, total: 3 }, now: NOW, alive: live,
+      lanes: { lanes: 3 }, now: NOW, alive: live,
     });
-    // Two lanes on each of two repositories under a cap of three is three
-    // rows, not four: the fourth could never hold a step beside the others.
-    // Oldest step first, so a row moves only when one above it ends.
-    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.lane, lane.step?.name ?? null]), [
+    // Three lanes in total are three rows, whatever the repositories. Oldest
+    // step first, so a row moves only when one above it ends.
+    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.lane, lane.session?.name ?? null]), [
       [1, 'memoro-cli', 0, 'mc-ui'], [2, 'memoro-cli', 1, 'docx-editor'], [3, null, null, null],
     ]);
-    assert.deepEqual(runner.setting, { per_repo: 2, total: 3 });
+    assert.deepEqual(runner.setting, { lanes: 3 });
     // What the step is running on rides along: the advisor is on the row.
-    assert.equal(runner.steps.find((step) => step.name === 'docx-editor').advisor, 'opus');
+    assert.equal(runner.sessions.find((step) => step.name === 'docx-editor').advisor, 'opus');
     // A file past the setting is still a lane: the runner was started under a
     // higher count than the file holds now, and the file is the fact.
     const wider = runnerSection({
-      runner: RUNNER, currents: [second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
+      runner: RUNNER, currents: [second], repos: ['memoro-cli'], lanes: { lanes: 1 }, now: NOW, alive: live,
     });
-    assert.deepEqual(wider.lanes.map((lane) => [lane.number, lane.step?.name ?? null]), [[1, 'docx-editor']]);
+    assert.deepEqual(wider.lanes.map((lane) => [lane.number, lane.session?.name ?? null]), [[1, 'docx-editor']]);
     const over = runnerSection({
-      runner: RUNNER, currents: [CURRENT, second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
+      runner: RUNNER, currents: [CURRENT, second], repos: ['memoro-cli'], lanes: { lanes: 1 }, now: NOW, alive: live,
     });
     assert.equal(over.lanes.length, 2, 'a step past the setting still has its row');
 
@@ -237,18 +331,18 @@ describe('STEPS', () => {
       runner: RUNNER, currents: [second], repos: ['memoro-cli'], plans: [{ project: 'docx-editor', step: 4, steps: 6 }],
       now: NOW, alive: live,
     });
-    assert.deepEqual([planned.steps[0].step, planned.steps[0].steps], [4, 6]);
+    assert.deepEqual([planned.sessions[0].step, planned.sessions[0].steps], [4, 6]);
     assert.match(strip(rowWith(paintedPage(pageData({ runner: planned })), 'docx-editor')),
-      /^ {2}● memoro-cli {2}docx-editor {16}step 4\/6 {4}10 min {3}claude sonnet · opus advisor · 0 check-ins$/u);
+      /^ {2}● BUILD {3}docx-editor 4\/6 {15}memoro-cli {2}sonnet {2}10 min {3}opus advisor · 0 check-ins$/u);
 
     const lines = paintedPage(pageData({ runner }));
     assert.match(strip(rowWith(lines, 'docx-editor')),
-      /^ {2}● memoro-cli {2}docx-editor {16}step {8}10 min {3}claude sonnet · opus advisor · 0 check-ins$/u);
-    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli {2}mc-ui/u);
+      /^ {2}● BUILD {3}docx-editor {19}memoro-cli {2}sonnet {2}10 min {3}opus advisor · 0 check-ins$/u);
+    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● BUILD {3}mc-ui {25}memoro-cli/u);
     // An idle lane is a number and nothing else: it has no repository until a
     // step is in it.
-    assert.match(strip(rowWith(lines, 'lane 3')), /^ {2}· lane 3 {6}idle$/u);
-    assert.match(strip(rowWith(lines, 'STEPS')), /STEPS {2}2 in flight · 3 lanes/u);
+    assert.match(strip(rowWith(lines, 'lane 3')), /^ {2}· lane 3 {2}idle$/u);
+    assert.match(strip(rowWith(lines, 'SESSIONS')), /SESSIONS {2}2 of 3 lanes/u);
   });
 
   // step-credits: a lane on the API credit says so beside tool and model; one
@@ -264,12 +358,12 @@ describe('STEPS', () => {
       return { runner, row: strip(rowWith(paintedPage(pageData({ runner })), 'docx-editor')) };
     };
     const credits = rowFor('credits');
-    assert.equal(credits.runner.steps[0].billing, 'credits');
-    assert.match(credits.row, /claude sonnet credits · 0 check-ins$/u);
+    assert.equal(credits.runner.sessions[0].billing, 'credits');
+    assert.match(credits.row, /sonnet {2}10 min {3}credits · 0 check-ins$/u);
     for (const billing of ['plan', undefined]) {
       const plain = rowFor(billing);
-      assert.equal(plain.runner.steps[0].billing, billing ?? null);
-      assert.match(plain.row, /claude sonnet · 0 check-ins$/u, String(billing));
+      assert.equal(plain.runner.sessions[0].billing, billing ?? null);
+      assert.match(plain.row, /sonnet {2}10 min {3}0 check-ins$/u, String(billing));
     }
   });
 
@@ -292,8 +386,8 @@ describe('STEPS', () => {
         alive: live,
       }),
     }));
-    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● memoro {6}docx-editor {16}step {8}10 min {3}claude opus · 0 check-ins$/u);
-    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli {2}mc-ui/u);
+    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● BUILD {3}docx-editor {19}memoro {6}opus {4}10 min {3}0 check-ins$/u);
+    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● BUILD {3}mc-ui {25}memoro-cli/u);
     for (const line of lines) assert.doesNotMatch(strip(line), /pid 4242/u, 'the runner’s own pid says nothing about a lane');
 
     // The lane with nothing in it is a row, and it is the row that says the
@@ -301,15 +395,15 @@ describe('STEPS', () => {
     const idle = paintedPage(pageData({
       runner: runnerSection({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live }),
     }));
-    assert.match(strip(rowWith(idle, 'lane 2')), /^ {2}· lane 2 {6}idle$/u);
-    assert.match(strip(rowWith(idle, 'STEPS')), /STEPS {2}1 in flight · 2 lanes/u);
+    assert.match(strip(rowWith(idle, 'lane 2')), /^ {2}· lane 2 {2}idle$/u);
+    assert.match(strip(rowWith(idle, 'SESSIONS')), /SESSIONS {2}1 of 2 lanes/u);
 
     // No runner, no lanes: a lane is something a process drives, and one line
     // says the process is not there. The heading beside it says `mc run`.
     const off = paintedPage(pageData());
     assert.equal(off.filter((line) => /^ {2}· lane /u.test(strip(line))).length, 0);
     assert.ok(off.some((line) => /the runner is not running — mc run starts it/u.test(strip(line))));
-    assert.match(strip(rowWith(off, 'STEPS')), /STEPS {2}not running/u);
+    assert.match(strip(rowWith(off, 'SESSIONS')), /SESSIONS {2}not running/u);
   });
 
   /**
@@ -826,7 +920,7 @@ describe('NEXT', () => {
     const lines = renderPageLines(pageData({ next }), { columns: 120 });
     // The heading is the one number anybody used, and a row is four columns:
     // repository, project, which step of its plan, and what the step is called.
-    assert.ok(lines.some((line) => /STEPS .*2 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /SESSIONS .*2 queued/u.test(line)), lines.join('\n'));
     assert.ok(!lines.some((line) => /^  NEXT /u.test(line)), 'the full next object is data-only');
     assert.equal(next.items.find(item => item.name === 'mc-ui').title, 'The page');
     // What was skipped, and why, is not the section's to say any more.
@@ -844,7 +938,7 @@ describe('NEXT', () => {
     const next = nextSection({ queueText: 'mc-ui\ndocx-editor\n', plans: PLANS });
     assert.equal(next.from_queue, 2);
     const named = renderPageLines(pageData({ next }), { columns: 120 });
-    assert.ok(named.some((line) => /STEPS .*2 queued/u.test(line)), named.join('\n'));
+    assert.ok(named.some((line) => /SESSIONS .*2 queued/u.test(line)), named.join('\n'));
     assert.ok(!named.some((line) => /queue\.md/u.test(line)), named.join('\n'));
   });
 
@@ -882,7 +976,7 @@ describe('NEXT', () => {
     const rows = lines.filter((line) => /^ {5}memoro(-cli)? /u.test(line));
     assert.deepEqual(rows.map((line) => line.trim().split(/\s+/u).slice(0, 2).join(' ')),
       [], 'queue names are no longer drawn');
-    assert.ok(lines.some((line) => /STEPS .*6 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /SESSIONS .*6 queued/u.test(line)), lines.join('\n'));
   });
 
   // The page used to answer "somebody has a session open here" as a skip of its
@@ -932,7 +1026,7 @@ describe('NEXT', () => {
   // then it says that rather than blaming the queue file for it.
   it('says so when there is no plan on main to run', () => {
     const lines = renderPageLines(pageData({ next: nextSection({ plans: [] }) }), { columns: 120 });
-    assert.ok(lines.some((line) => /STEPS .*0 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /SESSIONS .*0 queued/u.test(line)), lines.join('\n'));
   });
 });
 
@@ -1153,7 +1247,7 @@ describe('MERGES', () => {
     assert.match(strip(cli), /last #3/u);
     assert.match(cli, /\x1b\[90m0 merges in 24 h/u);
     const steps = renderPageLines(pageData({ runner: runnerSection({ rows: ROWS }) }));
-    assert.ok(steps.some((line) => /STEPS.*mc run/u.test(line)));
+    assert.ok(steps.some((line) => /SESSIONS.*mc run/u.test(line)));
     assert.ok(!steps.some((line) => /merged \d/u.test(line)));
   });
 
@@ -1823,7 +1917,7 @@ describe('the page', () => {
     // The order itself is Martin's (2026-09-19): the listing, the two desks
     // with what lies on each, what the runner takes next and what it is doing,
     // and the short end of the page — merges, the deploy, mc itself.
-    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'STEPS', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
+    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
@@ -1833,8 +1927,8 @@ describe('the page', () => {
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
-    assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step {8}20 min {3}claude opus · 0 check-ins$/mu);
-    assert.match(text, /^ {2}· lane 2 {6}idle$/mu);
+    assert.match(text, /^ {2}● BUILD {3}mc-ui {25}memoro-cli {2}opus {4}20 min {3}0 check-ins$/mu);
+    assert.match(text, /^ {2}· lane 2 {2}idle$/mu);
     assert.doesNotMatch(text, /pid 4242/u);
     assert.match(text, /■ stopping since an unknown time — waiting on mc-ui \(memoro-cli#1, 20 min\); 1 lane done/u);
     assert.match(text, /start takes over now/u);
@@ -1842,9 +1936,11 @@ describe('the page', () => {
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
-    assert.match(text, /STEPS {2}1 in flight · 2 lanes · 2 queued\s+mc run/u);
-    assert.match(text, /^ {2}3 steps in 24 h · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
-    assert.match(text, /STEPS .*2 queued/u);
+    assert.match(text, /SESSIONS {2}1 of 2 lanes · 2 queued\s+mc run/u);
+    // Per kind: the two old `step` rows are builds, and the triage row is not a
+    // session of the runner's kinds, so it is `other`.
+    assert.match(text, /^ {2}24 h · build 2 \(1 merged, 1 open\) · review 0 · other 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
+    assert.match(text, /SESSIONS .*2 queued/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
     assert.match(text, /MERGES {2}memoro 1 waiting merger stopped · memoro-cli idle/u);
     assert.match(text, /memoro +#10958/u);
@@ -1884,7 +1980,7 @@ describe('the page', () => {
       predecessor: { pid: 4242, steps: ['gmail-ready', 'claims-entity'] },
     });
     assert.match(renderPage({ ...DATA, mc: overlap }, { columns: 160, version: '0.7.11', now: NOW }),
-      /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · pid 9001 on abc1234 · pid 4242 finishing 2 steps \(gmail-ready, claims-entity\)$/mu);
+      /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · pid 9001 on abc1234 · pid 4242 finishing 2 sessions \(gmail-ready, claims-entity\)$/mu);
     assert.doesNotMatch(text, /--fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
@@ -2021,7 +2117,7 @@ describe('the page', () => {
       const lines = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW });
       const over = lines.filter((line) => width(line) > wide);
       assert.deepEqual(over, [], `${columns} columns: ${over.join('\n')}`);
-      assert.ok(lines.some((line) => /STEPS/u.test(line)), `${columns} columns lost STEPS`);
+      assert.ok(lines.some((line) => /SESSIONS/u.test(line)), `${columns} columns lost SESSIONS`);
     }
   });
 
@@ -2236,7 +2332,7 @@ describe('collectPage', () => {
       },
     });
     assert.deepEqual(asked, ['tmux'], 'the default page runs no fetch and no gh');
-    assert.deepEqual(data.runner.steps.map((step) => step.name), ['docx-editor', 'mc-ui'],
+    assert.deepEqual(data.runner.sessions.map((step) => step.name), ['docx-editor', 'mc-ui'],
       'one current-<repo>.json per lane, and the page reads every one of them');
     assert.equal(data.sessions.desks.brief.verb, 'brief');
     assert.equal(data.runner.day.steps, 3);
@@ -2475,7 +2571,7 @@ describe('MC', () => {
     delete data.mc.hooks;
     assert.deepEqual(data.mc, {
       up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
-      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 0 },
+      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 2 },
     });
   });
 
@@ -2565,12 +2661,12 @@ describe('the palette', () => {
     'yellow yellow', //                                  1 proposal · untagged 1
     'red grey grey', //                                  1 blocked · 1 on a decision · held most by assistant-avatar-1 1
     '',
-    'bold+cyan green+bold grey grey grey grey grey', //          RUNNER  1 in flight · 2 lanes              mc run
-    'green green grey grey', //                      ● memoro-cli  mc-ui  step  20 min  claude opus · 0 check-ins
+    'bold+cyan green+bold grey grey grey', //          SESSIONS  1 of 2 lanes · 2 queued          mc run
+    'green green grey grey', //                      ● BUILD  mc-ui  memoro-cli  opus  20 min  0 check-ins
     'grey grey grey', //                             · lane 2      idle
     'red+bold grey', //                              ■ stopping since … — waiting on mc-ui (memoro-cli#1, 20 min); 1 lane done
     'grey', //                                           start takes over now — a new runner on every lane …
-    'grey grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
+    'grey grey green grey grey grey magenta grey grey grey grey', // 24 h · build 2 (1 merged, 1 open) · review 0 · other 1 · ≈$7.28 list …
     '',
     'bold+cyan grey red grey grey grey', // MERGES counts, stopped merger, second queue, verb
     'grey grey grey', // memoro waiting PR and grey detail/day count
@@ -2644,8 +2740,10 @@ describe('the palette', () => {
     assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'language', 'caches', 'notes']);
   });
 
-  it('gives a step kind one colour wherever a kind is printed', () => {
-    for (const [kind, tone] of [['step', 'green'], ['triage', 'blue'], ['brief', 'cyan'], ['plan', 'cyan']]) {
+  it('gives a session kind one colour wherever a kind is printed', () => {
+    // The runner's three kinds, `step` as the build it was before, and the
+    // foreground verbs a lane file could name.
+    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['plan', 'cyan'], ['triage', 'blue'], ['brief', 'cyan']]) {
       const data = pageData({
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
@@ -2672,10 +2770,11 @@ describe('the palette', () => {
         }),
       });
       const lines = paintedPage(data);
-      // The lane row: the mark, then the kind — the repository and the name are
-      // the terminal's own text, and have no run of their own.
-      const now = signature(rowWith(lines, `● memoro-cli  thing`)).split(' ');
-      assert.equal(now[1], tone, `RUNNER says ${kind} in ${now[1]}`);
+      // The lane row: the mark, then the kind as its first word — what it
+      // works on and the repository are the terminal's own text, and have no
+      // run of their own.
+      const now = signature(rowWith(lines, `● ${kind === 'step' ? 'BUILD' : kind.toUpperCase()} `)).split(' ');
+      assert.equal(now[1], tone, `SESSIONS says ${kind} in ${now[1]}`);
       assert.ok(!lines.some(line => strip(line).includes('go on')), 'project rows omit the last-run and next detail');
     }
   });
@@ -2754,19 +2853,19 @@ describe('the palette', () => {
         alive: live,
       }),
     });
-    const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns)), '● memoro-cli  thing');
+    const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns)), '● BUILD');
     const clock = (spent, checkIns) => signature(row(spent, checkIns)).split(' ');
     // Before its first check-in the clock carries no colour of its own and no
     // bold either — nothing on a lane row is bold (Martin, 2026-09-19) — so the
-    // row is the mark, the kind, and the greys of the tool and the count.
+    // row is the mark, the kind, and the greys of the model and the count.
     const QUIET = clock(600);
     assert.deepEqual(QUIET, ['green', 'green', 'grey', 'grey'], 'ten minutes in, the clock is just a clock');
     assert.deepEqual(clock(3599), QUIET);
-    assert.match(strip(row(47 * 60)), /47 min {3}claude opus · 0 check-ins/u);
-    // Past it the clock is a run of its own, at index 2, and yellow.
-    assert.equal(clock(3600)[2], 'yellow', 'past the first check-in');
-    assert.equal(clock(600, 1)[2], 'yellow', 'a check-in the runner wrote turns it too');
-    assert.equal(clock(600, 1).at(-1), 'yellow', 'and the count beside the tool says how many');
+    assert.match(strip(row(47 * 60)), /opus {4}47 min {3}0 check-ins/u);
+    // Past it the clock is a run of its own, at index 3 after the model, and yellow.
+    assert.equal(clock(3600)[3], 'yellow', 'past the first check-in');
+    assert.equal(clock(600, 1)[3], 'yellow', 'a check-in the runner wrote turns it too');
+    assert.equal(clock(600, 1).at(-1), 'yellow', 'and the count beside the clock says how many');
     assert.match(strip(row(3 * 3600 + 60, 3)), /3 check-ins/u);
     for (const line of paintedPage(stepAt(3600, 1))) {
       if (/^ {2}[●·] /u.test(strip(line)) && /lane \d|thing/u.test(strip(line))) assert.ok(!signature(line).includes('bold'), strip(line));
@@ -2889,8 +2988,8 @@ describe('PULL REQUESTS', () => {
     });
     const programmes = programmesSection({ plans: PLANS, openPrs: PRS });
     const runner = runnerSection({ rows: [], now: AT, alive: () => false });
-    runner.steps = [{ name: 'one-operation', repo: 'memoro', kind: 'step', step: 7, steps: 7, elapsed_seconds: 300, tool: 'claude', model: 'opus' }];
-    runner.lanes = [{ number: 1, repo: 'memoro', step: runner.steps[0] }];
+    runner.sessions = [{ name: 'one-operation', repo: 'memoro', kind: 'build', variant: 'project', goal: null, step: 7, steps: 7, elapsed_seconds: 300, tool: 'claude', model: 'opus' }];
+    runner.lanes = [{ number: 1, repo: 'memoro', session: runner.sessions[0] }];
     attachPrs({ programmes, runner, pulls });
     return { pulls, programmes, runner };
   };
@@ -2948,7 +3047,7 @@ describe('PULL REQUESTS', () => {
     const painted = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, colour: true, now: AT });
     assert.ok(painted.some((line) => line.includes('\u001b[33m\u001b[1m#12314') || line.includes('\u001b[1m\u001b[33m#12314')), painted.join('\n'));
     // The running lane says which pull request its project has open.
-    assert.ok(lines.some((line) => /^ {2}● memoro {6}one-operation +step 7\/7 +5 min +#13048 {2}claude opus$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}● BUILD {3}one-operation 7\/7 +memoro +opus +5 min +#13048$/u.test(line)), lines.join('\n'));
   });
 
   it('lists what no project row draws, the one nobody holds in yellow with the waiting mark', () => {

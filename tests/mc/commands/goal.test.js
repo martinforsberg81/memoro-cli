@@ -221,6 +221,34 @@ test('mc goal open, review, blocked and done set the status and log the reason',
   }
 });
 
+/**
+ * A goal's branch is made when the goal can start: one written blocked got its
+ * branch at `mc goal new`, before what it waited for landed.
+ */
+test('mc goal open remakes a branch with no commits of its own from origin/main, and leaves one with commits alone', async () => {
+  const blocked = seededGoal({ [`${DIR}/GOAL.md`]: GOAL_TEXT.replace('status: open', 'status: blocked') });
+  const counts = ({ own, behind }) => (cwd, args) => {
+    if (args[0] === 'rev-list') return ok(`${args[2] === 'origin/main..HEAD' ? own : behind}\n`);
+    return ok();
+  };
+
+  const fresh = fixture({ files: blocked, git: counts({ own: 0, behind: 7 }) });
+  assert.equal(await run(['open', 'mc/plain', '--reason', 'what it waited for has landed'], fresh.deps), 0, fresh.err());
+  const reset = fresh.calls.find((call) => call.args[0] === 'reset');
+  assert.deepEqual(reset, { cwd: `${DIR}/memoro-cli`, args: ['reset', '-q', '--keep', 'origin/main'] });
+  assert.ok(fresh.calls.findIndex((call) => call.args[0] === 'fetch') < fresh.calls.indexOf(reset), 'fetched first');
+  assert.match(fresh.out(), /memoro-cli {2}goal\/plain remade from origin\/main — it had no commits of its own, and main has 7 more/u);
+
+  const built = fixture({ files: blocked, git: counts({ own: 3, behind: 7 }) });
+  assert.equal(await run(['open', 'mc/plain'], built.deps), 0, built.err());
+  assert.equal(built.calls.some((call) => call.args[0] === 'reset'), false, 'a branch with commits is never moved');
+  assert.match(built.out(), /goal\/plain left as it is — 3 commits of its own/u);
+
+  const already = fixture({ files: seededGoal(), git: counts({ own: 0, behind: 7 }) });
+  assert.equal(await run(['open', 'mc/plain'], already.deps), 0, already.err());
+  assert.equal(already.calls.some((call) => call.args[0] === 'reset'), false, 'a goal already open is not a goal going open');
+});
+
 test('a goal session ends in review and may not set done; a person may', async () => {
   const session = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_MODEL: 'opus' };
   const built = fixture({ files: seededGoal(), env: session });

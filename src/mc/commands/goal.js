@@ -6,6 +6,7 @@
  *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]
  *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
  *   mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
+ *                                  going open, a worktree whose branch has no commits of its own is remade from origin/main
  *   mc goal show <programme>/<goal>      the front matter, the body, the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each
  *
@@ -175,7 +176,37 @@ function logEntry(args, fields, ctx) {
     appendEntry({ dir: target.dir, entry, read, write });
   }
   stdout.write(`mc: ${target.name} · ${status}\n`);
+  if (status === 'open' && goal.status !== 'open') remakeUnbuiltBranches(target, goal, ctx);
   return 0;
+}
+
+/**
+ * A goal's branch is made when the goal can start. A goal written `blocked`
+ * behind another got its branch at `mc goal new`, before what it waits for
+ * landed; when it goes `open`, each worktree whose branch has no commits of
+ * its own — nothing past `origin/main` — is moved to `origin/main` as it is
+ * now, which is that branch made again. A branch with commits is never
+ * moved, nor one under uncommitted changes `git reset --keep` will not carry.
+ * What happened is said per repository; nothing here fails the status change.
+ */
+function remakeUnbuiltBranches(target, goal, ctx) {
+  const { stdout, git } = ctx;
+  for (const repo of goal.repos) {
+    const path = join(target.dir, repo);
+    const say = (text) => stdout.write(`  ${repo}  goal/${target.goal} ${text}\n`);
+    const fetched = git(path, ['fetch', '-q', 'origin']);
+    if (!fetched.ok) { say(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
+    const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
+    if (!own.ok) { say(`left as it is — no worktree at ${path}`); continue; }
+    const count = Number(own.stdout.trim());
+    if (count > 0) { say(`left as it is — ${count} commit${count === 1 ? '' : 's'} of its own`); continue; }
+    const behind = Number(git(path, ['rev-list', '--count', 'HEAD..origin/main']).stdout.trim());
+    if (!behind) { say('is origin/main already'); continue; }
+    const moved = git(path, ['reset', '-q', '--keep', 'origin/main']);
+    say(moved.ok
+      ? `remade from origin/main — it had no commits of its own, and main has ${behind} more`
+      : `left as it is — ${moved.stderr.trim() || 'git reset --keep refused'}`);
+  }
 }
 
 /**
@@ -254,7 +285,7 @@ function listGoals(args, ctx) {
  */
 function goalNamed(arg, { env, home }) {
   const given = arg ?? env.MC_GOAL;
-  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
+  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a build-goal session' };
   const parts = given.split('/');
   if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
     return { error: `${given} is not <programme>/<goal> — lower-case letters, digits and hyphens` };

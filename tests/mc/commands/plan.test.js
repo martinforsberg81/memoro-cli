@@ -462,8 +462,8 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
     for (const [cwd, extra, role] of [
       ['/outside', { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' }, 'plan'],
       ['/outside', { MC_ROLE: 'review' }, 'review'],
-      ['/outside', { MC_GOAL: 'mc/g' }, 'goal'],
-      ['/outside', { MC_STEP: 'p:0' }, 'step'],
+      ['/outside', { MC_GOAL: 'mc/g' }, 'build-goal'],
+      ['/outside', { MC_STEP: 'p:0' }, 'build-project'],
       ['/mc/programs/mc', {}, 'plan'],
       ['/outside', { CLAUDECODE: '1' }, 'coding-agent'],
       ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent'],

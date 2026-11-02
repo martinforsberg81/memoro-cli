@@ -22,7 +22,7 @@ PLAN AND FOLLOW
 RUN AND LAND
   mc run                          The headless runner
   mc run start|stop [--force]      Person: start/stop the runner; --force: now
-  mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
+  mc run lanes [<n>]              Headless sessions at once, in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun
   mc test <repo> <pr>              Measure a pull request; merge nothing

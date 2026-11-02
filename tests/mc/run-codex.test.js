@@ -151,14 +151,14 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   assert.match(ts, /^\d{4}-\d{2}-\d{2}T/u);
   assert.deepEqual(
     { name, kind, exit, pr, turns, input, output, cacheRead, cacheWrite, session, note },
-    { name: 'cx', kind: 'step', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,failed' },
+    { name: 'cx', kind: 'build-project', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,failed' },
   );
   assert.match(seconds, /^\d+$/u);
 
   // The launch, in runner.log where a night is read back from.
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: step starting \(codex own default model, no check-in, no stall guard\)/u);
-  assert.match(log, /cx: step done rc=0 \d+s pr=- turns=- note=success/u);
+  assert.match(log, /cx: build starting \(codex own default model, no check-in, no stall guard\)/u);
+  assert.match(log, /cx: build done rc=0 \d+s pr=- turns=- note=success/u);
 
   // The argument list the process was actually started with.
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
@@ -236,7 +236,7 @@ test('a codex step on gpt-6.1-sol at high effort is launched with its model and 
   assert.equal(argv.includes('--effort'), false);
   assert.equal(argv.includes('--advisor'), false);
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: step starting \(codex gpt-6\.1-sol · effort high, no check-in, no stall guard\)/u);
+  assert.match(log, /cx: build starting \(codex gpt-6\.1-sol · effort high, no check-in, no stall guard\)/u);
 });
 
 test('a fast step on a refused claude runs on codex: the row and the log name the class, the route and the billing', async (t) => {
@@ -261,7 +261,7 @@ test('a fast step on a refused claude runs on codex: the row and the log name th
   const rows = readFileSync(join(work, 'runner', 'log', 'runs.tsv'), 'utf8').trim().split('\n');
   assert.deepEqual(rows[1].split('\t').slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan']);
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: step starting \(codex gpt-6-luna · effort high, no check-in, no stall guard\) · class fast: known \(codex has 80 % headroom\)/u);
+  assert.match(log, /cx: build starting \(codex gpt-6-luna · effort high, no check-in, no stall guard\) · class fast: known \(codex has 80 % headroom\)/u);
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
   assert.deepEqual(argv.slice(4, 6), ['-m', 'gpt-6-luna']);
 });

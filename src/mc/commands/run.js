@@ -24,12 +24,11 @@
  *                          nothing and says so (`--force` writes anyway).
  *                          On a runner already draining it prints the drain
  *                          — since when, and the steps it waits on.
- *   mc run lanes [<n>] [--total <n>|none]
- *                          how many steps may be in flight — the positional
- *                          per repository, `--total` on this machine across
- *                          both. No argument prints both and what is running.
- *                          Both read live, so a running runner takes new
- *                          counts without `--update`
+ *   mc run lanes [<n>]     how many headless sessions run at once, in total
+ *                          across every repository and kind. No argument
+ *                          prints it and what is running. Read live, so a
+ *                          running runner takes a new count without
+ *                          `--update`
  *   mc run --billing      plan usage and next billing for Claude and Codex
  *                          (`mc run billing` is the same). Billing is chosen
  *                          automatically at each new session.
@@ -53,7 +52,7 @@ import { commandUsage } from '../command-help.js';
 import { readBillingApi, readBillingState, writeBillingApi } from '../billing.js';
 import { billingRoute, billingStatus } from '../billing-route.js';
 import { readCapacity } from '../model-capacity.js';
-import { laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
+import { LANES_REPLACED, readLaneCount, writeLaneCount } from '../lane-count.js';
 import { runnerDir } from '../paths.js';
 import { IF_WAS_RUNNING, requestUpdate, startRunner, stopRunner } from '../run-control.js';
 import { REPO_NAMES, runLoop } from '../run.js';
@@ -98,46 +97,30 @@ function order(opts, deps) {
 }
 
 /**
- * `mc run lanes [<n>] [--total <n>|none]` — both counts, printed or set.
+ * `mc run lanes [<n>]` — the total, printed or set.
  *
- * Printed is the deliverable here, not the afterthought. The old line said
- * `lanes 3 — 3 steps in flight per repository`, which is true and produced the
- * wrong picture: it never says there are two repositories, so it never says
- * the machine is running six. This one says both numbers, what they come to
- * together, and how many steps are actually in flight while it is read.
+ * One number: how many headless sessions run at once, across every repository
+ * and every kind. Printed with how many are in flight while it is read, and
+ * with the old setting it was read from when this read migrated one.
  */
 function lanes(opts, deps) {
-  const read = deps.readLanes || readLaneCount;
+  const read = deps.readLanes || (() => readLaneCount({ repos: (deps.repos || REPO_NAMES).length }));
   const write = deps.writeLanes || writeLaneCount;
-  const check = deps.laneValue || laneValue;
-  const repos = (deps.repos || REPO_NAMES).length;
 
-  if (opts.count === null && opts.total === null) {
-    const pair = read();
-    return { ok: true, code: 0, lines: [`lanes ${phrase(pair, repos)} — ${inFlight(deps)} in flight`, ...neverBinds(pair, repos)] };
+  if (opts.count === null) {
+    const set = read();
+    const lines = [`lanes ${set.lanes} — ${inFlight(deps)} of ${set.lanes} in flight, across every repository`];
+    if (set.migrated) lines.push(`read from the old setting (per_repo ${set.migrated.per_repo ?? 'unset'}, total ${set.migrated.total ?? 'unset'}): the ${set.lanes} it allowed`);
+    return { ok: true, code: 0, lines };
   }
-
-  // Both values are asked about before either is written: `lanes 3 --total 12`
-  // must not land the 3 and then refuse the 12, leaving the operator with half
-  // of what they typed and no line saying which half.
-  for (const [field, value] of [['per_repo', opts.count], ['total', opts.total]]) {
-    if (value === null) continue;
-    const seen = check(value, { field });
-    if (!seen.ok) return { ok: false, code: 2, lines: [seen.reason] };
-  }
-  const written = [];
-  if (opts.count !== null) written.push(write(opts.count));
-  if (opts.total !== null) written.push(write(opts.total, { field: 'total' }));
-  const refused = written.find((set) => !set.ok);
-  if (refused) return { ok: false, code: 2, lines: [refused.reason] };
-  const pair = written[written.length - 1];
+  const written = write(opts.count);
+  if (!written.ok) return { ok: false, code: 2, lines: [written.reason] };
   return {
     ok: true,
     code: 0,
     lines: [
-      `lanes ${phrase(pair, repos)} — applies now`,
-      ...neverBinds(pair, repos),
-      'a running runner takes both at once: a new lane starts within half a minute, a lane above the new count ends after the step it is in',
+      `lanes ${written.lanes} — applies now, across every repository`,
+      'a running runner takes it at once: a new lane starts within half a minute, a lane above the new count ends after the session it is in',
     ],
   };
 }
@@ -167,35 +150,10 @@ function billing(opts, deps) {
 }
 
 /**
- * The pair as one phrase, in the order and the words the runner's own log line
- * uses (`run.js`: `lanes: 3 per repository, 3 in total`), so the verb and the
- * log cannot be read as two different settings.
- *
- * An absent total is said rather than left out. `3 per repository` alone does
- * not tell a reader whether the total is unset or happens to be 3, and the
- * consequence — two repositories at 3 is six sessions at once — is the
- * sentence whose absence started this.
- */
-function phrase({ per_repo: per, total }, repos) {
-  const cap = total === null ? `no total cap (up to ${per * repos} across ${repos} repositories)` : `${total} in total`;
-  return `${per} per repository, ${cap}`;
-}
-
-/**
- * A total at or above `per_repo × repositories` can never refuse a lane a
- * slot, so setting one is a no-op. Saying so costs a line; not saying so
- * leaves an operator believing they capped the machine.
- */
-function neverBinds({ per_repo: per, total }, repos) {
-  if (total === null || total < per * repos) return [];
-  return [`that total never binds: ${per} per repository across ${repos} repositories is at most ${per * repos}`];
-}
-
-/**
- * How many steps are in flight this second, from the `current-<repo>.json`
+ * How many sessions are in flight this second, from the `current-*.json`
  * files the runner keeps — one per lane, for as long as its session runs. A
  * file naming a dead pid is a killed runner's leftovers rather than a running
- * step, which is the test the page applies to the same files (`nowBlock`), so
+ * session, which is the test the page applies to the same files (`nowBlock`), so
  * the two cannot disagree.
  *
  * A printed count is a snapshot for a person to read. The count that has to be
@@ -234,23 +192,15 @@ export function parseRunArgs(argv) {
     return opts.error ? opts : { ...opts, verb: 'start', pass: argv.slice(1) };
   }
 
-  // The counts, read or set. `mc run lanes` says both; `mc run lanes 4` writes
-  // the per-repository one and `--total` the machine's, and either says a
-  // running runner takes it at once.
-  //
-  // A second form rather than a second verb, and the bare positional still
-  // means what it has always meant: nobody's muscle memory changes meaning
-  // under them. `--total` is strict, so `mc run lanes --total` with nothing
-  // after it is an error rather than a silent read.
+  // The total, read or set. `per_repo` and `--total` are answered by name
+  // with what replaced them, rather than as an unknown flag.
   if (head === 'lanes') {
-    const scanned = scanArgs(argv.slice(1), { strictValues: ['--total'] });
+    const rest = argv.slice(1);
+    if (rest.some((arg) => arg === '--total' || String(arg).startsWith('--total=') || arg === 'per_repo' || arg === '--per-repo')) return { error: LANES_REPLACED };
+    const scanned = scanArgs(rest, {});
     if (scanned.error) return { error: scanned.error };
     if (scanned.positional.length > 1) return { error: `lanes takes one number, not ${scanned.positional.join(' ')}` };
-    return {
-      verb: 'lanes',
-      count: scanned.positional.length ? scanned.positional[0] : null,
-      total: scanned.flags.total,
-    };
+    return { verb: 'lanes', count: scanned.positional.length ? scanned.positional[0] : null };
   }
 
   // The next provider route is automatic at each launch; the one thing set by
