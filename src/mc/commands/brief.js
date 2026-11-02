@@ -3,8 +3,8 @@
  *
  * Opens the foreground brief session — the terminal's, never tmux — standing
  * in `~/mc/brief/`. A brief session already there is resumed where it was; with
- * none, or with `--new`, a fresh one starts with the Coding Profile and the
- * `brief` role from `canon/roles/brief.md`, and no opening words — Martin types
+ * none, or with `--new`, a fresh one starts with the `brief` role from
+ * `canon/roles/brief.md` (and `_common.md`), and no opening words — Martin types
  * the first message. Nothing is gathered for it: the ground is read where it lives
  * — the page, `mc status`, `mc step` — and the role says where. Until
  * 2026-09-19 a script (`mc brief --collect`) wrote `~/mc/brief/<date>.md` and

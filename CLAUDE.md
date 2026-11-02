@@ -1,29 +1,21 @@
 # CLAUDE.md
 
-Repo-owned instruction contract for **Claude Code**. The full, tool-agnostic
-content lives at [`docs/coding-agent-protocol.md`](docs/coding-agent-protocol.md) — **read
-that first**.
+memoro-cli is `mc`, the terminal coordinator that runs Martin's coding work:
+the page, plans and goals under `~/mc/programs/`, the runner, and the one door
+work lands through. Node 22+, ESM, `node --test`.
 
-Work here is projects: `PLAN.json` and `STATE.json` under
-`~/mc/programs/<programme>/<project>/`, written through `mc project` and
-`mc step`, built by `mc run`, landed through `mc merge`. Martin opens an
-interactive plan session in `~/mc/programs/<programme>/` with `mc plan`.
-A session already there never runs `mc plan`: use `mc project new`,
-`mc project step add` and `mc project send`. `MC_ROLE` names a launched
-session; SessionStart names the role first, with cwd fallback for a session
-opened by hand. A headless plan session is not built yet. The protocol's
-*How work is organized* is the account; never edit plan state by hand.
+How to work here is mc's, not this file's:
 
-Beside projects, a goal is `GOAL.md` and `LOG.md` and a worktree per repository
-under `~/mc/programs/<programme>/goals/<goal>/`: a goal session logs with
-`mc goal log` and pushes with `mc publish --no-merge`, and `mc merge` is never
-its act (the protocol's *How work is organized*, and `docs/technical/mc-goals.md`).
+- **Task skills** — test and publish, merge conflicts, git in a shared git
+  directory, proposals, processes, scratch files, measuring the app, dev
+  servers, asking Martin, memory — are installed as `mc-*` in
+  `~/.claude/skills/` and `~/.agents/skills/`. Their source is
+  `canon/skills/`; see `docs/technical/mc-skills.md`.
+- **A session mc launches** is told its role from `canon/roles/`
+  (`docs/technical/mc-roles.md`) and needs nothing from this file.
+- **This repository's code** — conventions, the credential boundary, critical
+  paths — is `docs/technical/mc-codebase.md`; every subsystem has its own file
+  in `docs/technical/`.
 
-This file belongs to the repository and to whoever edits it. mc does not
-write it, read it, or check it for drift — that machinery is gone. To update
-project conventions, edit `docs/coding-agent-protocol.md` and reflect the
-change here by hand.
-
-There is no Coding Profile: mc hands a session its role and nothing else
-(ruling 24, `docs/project/mc/rulings.md` § 24).
-
+A rule about how to work is changed in `canon/`, in a pull request, never here
+and never in a memory.

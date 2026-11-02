@@ -79,12 +79,14 @@ creation, never acquired.
 ## The shared file
 
 `canon/roles/_common.md` is the text every role session is told, whichever role
-it is. It holds what is true of any session mc starts: what a turn costs, that
-you read the code before deciding and say what you actually ran, the shape of a
-question that reaches Martin, what to do with a finding that is not your job
-and why that is `~/mc/proposals/` and not `~/mc/intake/`, how a stopped merge is
-resolved, the route to `main` and what `mc merge` decides, what stays Martin's,
-and what changes when a session is running under `mc run`.
+it is. It holds only what is true of any session and is not a task: what a turn
+costs, that you are already a session, that you read the code before deciding
+and say what you actually ran, that task rules are skills the role names, and
+what is written in English. Everything that is a task — the gate, publishing
+and merging, conflicts, the shared git directory, proposals, processes, scratch
+files and probes, `mc shot`, dev servers, asking Martin, memory — is a skill in
+`canon/skills/` (goal `agent-skills-text`, 2026-11-02), and a role file that
+needs one names it with `@skill`.
 
 It began as the turn-cost paragraph, which was byte-identical in four role
 files with two variants in two more — six places for one rule to drift, and the

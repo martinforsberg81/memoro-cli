@@ -1,26 +1,21 @@
 # AGENTS.md
 
-Repo-owned instruction contract for **Codex CLI**. The full, tool-agnostic
-content lives at [`docs/coding-agent-protocol.md`](docs/coding-agent-protocol.md) — **read
-that first**.
+memoro-cli is `mc`, the terminal coordinator that runs Martin's coding work:
+the page, plans and goals under `~/mc/programs/`, the runner, and the one door
+work lands through. Node 22+, ESM, `node --test`.
 
-Work here is projects: `PLAN.json` and `STATE.json` under
-`~/mc/programs/<programme>/<project>/`, written through `mc project` and
-`mc step`, built by `mc run`, landed through `mc merge`. Martin opens an
-interactive plan session in `~/mc/programs/<programme>/` with `mc plan`.
-A session already there never runs `mc plan`: use `mc project new`,
-`mc project step add` and `mc project send`. `MC_ROLE` names a launched
-session; SessionStart names the role first, with cwd fallback for a session
-opened by hand. A headless plan session is not built yet. The protocol's
-*How work is organized* is the account; never edit plan state by hand.
+How to work here is mc's, not this file's:
 
-This file belongs to the repository and to whoever edits it. mc does not
-write it, read it, or check it for drift — that machinery is gone. To update
-project conventions, edit `docs/coding-agent-protocol.md` and reflect the
-change here by hand.
+- **Task skills** — test and publish, merge conflicts, git in a shared git
+  directory, proposals, processes, scratch files, measuring the app, dev
+  servers, asking Martin, memory — are installed as `mc-*` in
+  `~/.agents/skills/` and `~/.claude/skills/`. Their source is
+  `canon/skills/`; see `docs/technical/mc-skills.md`.
+- **A session mc launches** is told its role from `canon/roles/`
+  (`docs/technical/mc-roles.md`) and needs nothing from this file.
+- **This repository's code** — conventions, the credential boundary, critical
+  paths — is `docs/technical/mc-codebase.md`; every subsystem has its own file
+  in `docs/technical/`.
 
-It is not a Coding Profile mirror. Work-method changes are the user's, live in
-Memoro, and reach a new conversation as a launch argument. mc reads the
-profile and hands it over; it has no verb for editing one (`mc coding-profile`
-went with mc-cut), so it is edited in Memoro.
-
+A rule about how to work is changed in `canon/`, in a pull request, never here
+and never in a memory.

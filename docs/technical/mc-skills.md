@@ -23,7 +23,20 @@ that belongs to one programme goes in that programme's skill.
 
 | Skill | What it covers |
 | --- | --- |
-| `publish-and-merge` | `mc gate`, `mc publish`, `mc merge` as the code has them; not who approves a merge |
+| `publish-and-merge` | `mc gate`, `mc publish`, `mc merge` as the code has them, and the test rules; not who approves a merge |
+| `merge-conflicts` | keeping both intents, separate merge and commit, generated files |
+| `git` | the shared git directory: no stash, one command at a time, commits, branches, pushing |
+| `proposals` | a finding that is not your job: `~/mc/proposals/`, not `~/mc/intake/` |
+| `processes` | never signal a process you did not start |
+| `scratch-and-probes` | `$MC_SCRATCH`, and `MC_HOME`/`MC_WORK_ROOT` for a probe of mc's own code |
+| `measure-the-app` | `mc shot`, measuring, proving which tree is served |
+| `dev-servers` | servers only through mc, at most two |
+| `asking-martin` | a question answerable in a word; what to tell him; what stays his |
+| `memory` | what a memory may hold; a rule about how to work goes in `canon/` |
+
+Each rule has one home: `tests/mc/canon-text.test.js` asserts a defining
+sentence of each skill is in that skill's file and no other canon file, that no
+role file repeats a skill's sentence, and that each role names what it needs.
 
 ## The programme skill
 
