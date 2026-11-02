@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import {
   intakeSection, mcSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
-import { frameWrites, reprintPlan, reprintWhole, topOffScreen } from '../../src/mc/page-frame.js';
+import { CLEAR_ALL, frameWrites, topOffScreen } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
@@ -86,17 +86,6 @@ describe('the difference between two frames', () => {
     assert.equal(frameWrites(before, [], { above: 4 }), '\r\x1b[4A\x1b[2K\x1b[1B\x1b[2K\x1b[1B\x1b[2K\x1b[1B\x1b[2K\x1b[1B');
   });
 
-  it('reprints a frame that grew, erasing from its first row to the end of the screen', () => {
-    const before = ['a', 'b'];
-    const after = ['a', 'B', 'c'];
-    // Up to the page's first row, erase everything from there down — the rows
-    // below belong to the caller and it reprints them — then print the frame.
-    // The terminal scrolls at the bottom exactly as the first print did.
-    assert.equal(frameWrites(before, after, { above: 4 }), '\r\x1b[4A\x1b[0Ja\nB\nc');
-    // A first frame with nothing on screen yet is the same case.
-    assert.equal(frameWrites([], ['a', 'b'], { above: 0 }), '\r\x1b[0Ja\nb');
-  });
-
   it('addresses the row absolutely when the terminal has said where the cursor is', () => {
     const before = ['a', 'b', 'c', 'd'];
     const after = ['a', 'B', 'c', 'D'];
@@ -121,13 +110,6 @@ describe('the difference between two frames', () => {
     assert.equal(frameWrites(before, after, { above: 5, anchor: 4 }), '\x1b[1;1H\x1b[2KC\x1b[4;1H');
   });
 
-  it('reprints a grown frame from the reported row', () => {
-    assert.equal(frameWrites(['a', 'b'], ['a', 'B', 'c'], { above: 4, anchor: 10 }), '\x1b[6;1H\x1b[0Ja\nB\nc');
-    // Starting above the screen: the reprint begins at row 1 and the rows that
-    // scrolled off are not printed again.
-    assert.equal(frameWrites(['a', 'b', 'c'], ['a', 'b', 'c', 'd'], { above: 5, anchor: 3 }), '\x1b[1;1H\x1b[0Jd');
-  });
-
   it('leaves rows that have scrolled off the top alone', () => {
     const before = frame(7200);
     const after = [...frame(10800)];
@@ -143,20 +125,13 @@ describe('the difference between two frames', () => {
     hidden[2] = '  a row nobody can see any more';
     assert.equal(frameWrites(before, hidden, { above: before.length + 4, rows: 10 }), '');
   });
-
-  it('reprints a grown frame from the first row it can still reach', () => {
-    const before = ['a', 'b', 'c'];
-    const after = ['a', 'b', 'c', 'd'];
-    // Four rows tall: three rows above the cursor are addressable, so the
-    // reprint starts at row 1 and row 0 is left in the scrollback.
-    assert.equal(frameWrites(before, after, { above: 4, rows: 4 }), '\r\x1b[3A\x1b[0Jb\nc\nd');
-  });
 });
 
 /**
  * A project's status changed in a row that has scrolled off the top. The
  * differ leaves that row alone, correctly, and so it stood there wrong until a
- * key was pressed (Martin, 2026-09-19). The way out is the whole page again.
+ * key was pressed (Martin, 2026-09-19). The way out is the whole page again,
+ * which `page-live.js` prints from an empty terminal.
  */
 describe('the whole page again, when what changed is out of reach', () => {
   it('knows when the top of the page is off the screen', () => {
@@ -168,47 +143,15 @@ describe('the whole page again, when what changed is out of reach', () => {
     assert.equal(topOffScreen({ above: 10, rows: 50, anchor: 10 }), true);
   });
 
-  it('prints every line, from the highest row it can reach', () => {
-    const page = ['a', 'b', 'c', 'd'];
-    // Four rows tall, the page's top five rows up: the erase starts three up,
-    // and unlike a growth frame nothing is skipped — row 0 is the row that
-    // changed.
-    assert.equal(reprintWhole(page, { above: 5, rows: 4 }), '\r\x1b[3A\x1b[0Ja\nb\nc\nd');
-    assert.equal(reprintWhole(page, { above: 5, anchor: 3 }), '\x1b[1;1H\x1b[0Ja\nb\nc\nd');
-    assert.equal(reprintWhole(page, { above: 2, anchor: 10 }), '\x1b[8;1H\x1b[0Ja\nb\nc\nd');
-  });
-});
-
-describe('where a reprint leaves the page', () => {
-  /** The shape Martin was looking at: 45 rows, and 98 lines to put in them. */
-  const page = Array.from({ length: 98 }, (unused, index) => `row ${index}`);
-
-  it('says how much of a page taller than the screen is printed again', () => {
-    // The page's first row is 56 rows above the top of the screen, so 57 lines
-    // are history; the 41 that are left are what the reprint draws.
-    const plan = reprintPlan(page, { above: 101, rows: 45, anchor: 45 });
-    assert.deepEqual(plan, { skip: 57, printed: 41, below: 97 });
-    // And by count it is the same arithmetic through `reach`.
-    assert.deepEqual(reprintPlan(page, { above: 101, rows: 45 }), { skip: 57, printed: 41, below: 97 });
+  it('starts from an empty terminal: home, erase the screen, erase the scrollback', () => {
+    assert.equal(CLEAR_ALL, '\x1b[H\x1b[2J\x1b[3J');
   });
 
-  it('counts the cursor onto the last row it printed, not under it', () => {
-    // The lines are joined, not terminated: three rows printed leaves the
-    // cursor two rows below the first of them, which is one less than the
-    // first print of the same page — that one row is the whole of the fault.
-    assert.deepEqual(reprintPlan(['a', 'b', 'c'], { above: 4, anchor: 10 }), { skip: 0, printed: 3, below: 2 });
-    assert.deepEqual(reprintPlan([], { above: 0 }), { skip: 0, printed: 0, below: 0 });
+  it('leaves the rows of a longer frame past the old footprint to the caller', () => {
+    // Growth is a whole reprint, the caller's: the differ writes the rows it
+    // has, and nothing that erases or scrolls.
+    const writes = frameWrites(['a', 'b'], ['a', 'B', 'c'], { above: 4, anchor: 10 });
+    assert.equal(writes, '\x1b[7;1H\x1b[2KB\x1b[10;1H');
   });
 
-  it('is the arithmetic the reprint itself uses', () => {
-    // Said as an assertion rather than as a comment: the bytes start at the
-    // row `skip` names, so a caller reading `reprintPlan` is reading what the
-    // page did, not a second opinion about it.
-    for (const at of [{ above: 101, rows: 45, anchor: 45 }, { above: 101, rows: 45 }]) {
-      const { skip } = reprintPlan(page, at);
-      const writes = frameWrites(page.slice(0, 97), page, at);
-      assert.ok(writes.endsWith(page.slice(skip).join('\n')), JSON.stringify(writes.slice(0, 40)));
-      assert.ok(!writes.includes(page[skip - 1]), 'and nothing above it');
-    }
-  });
 });

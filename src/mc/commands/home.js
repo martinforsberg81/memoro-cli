@@ -38,6 +38,7 @@ import { run as runGit } from '../git.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import { PRS_STALE_SECONDS } from '../page-cache.js';
 import { collectPage } from '../page-collect.js';
+import { CLEAR_ALL } from '../page-frame.js';
 import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
@@ -150,9 +151,6 @@ export function codeCommit({ checkout = mcCheckout(), spawn = (_git, args) => ru
   return out.status === 0 ? String(out.stdout).trim() || null : null;
 }
 
-/** Cursor home, erase the screen, erase the scrollback. */
-const CLEAR_ALL = '\x1b[H\x1b[2J\x1b[3J';
-
 /**
  * `mc` again, on the code that is on disk now, in this terminal: the same
  * arguments, and the shell wrapper's fd 3 when it holds one, so a project
@@ -230,7 +228,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
  * The live loop compares it between frames. PROGRAMMES is the top of a page
  * that is taller than most terminals, so its rows are the ones that scroll out
  * of reach, and a status that changed up there is the one change worth printing
- * the page again for (page-frame.js, `reprintWhole`). A planning session's age
+ * the page again for (page-live.js, `draw`). A planning session's age
  * changes every minute and is deliberately not in it.
  */
 export function pageKey(data) {
