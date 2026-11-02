@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { VERB_MODULES, runModule } from '../../src/mc-verbs.js';
+import { HELP_TEXT } from '../../src/mc/help-text.js';
 import { runMc } from './_helpers/cli.js';
 
 /**
@@ -53,6 +54,15 @@ function routedVerbs() {
 }
 
 describe('mc --help', () => {
+  it('fits the daily page in 40 lines at 80 columns', () => {
+    const page = HELP_TEXT.split('\nIN FULL\n')[0];
+    assert.notEqual(page, HELP_TEXT, 'the full reference must stay reachable');
+    const lines = page.split('\n');
+    const screenLines = lines.reduce((count, line) => count + Math.max(1, Math.ceil([...line].length / 80)), 0);
+    assert.ok(screenLines <= 40, `daily page takes ${screenLines} screen lines`);
+    for (const line of lines) assert.ok([...line].length <= 80, `wraps at 80 columns: ${line}`);
+  });
+
   it('mentions every verb either router routes', () => {
     const result = runMc(['--help']);
     assert.equal(result.status, 0, `stderr:${result.stderr}`);

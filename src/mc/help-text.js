@@ -5,6 +5,41 @@
 export const HELP_TEXT = `mc — source-owned coding sessions
 
 THE PAGE
+  mc                              The one page; at a terminal, a way in
+  mc --json [--fresh]              The same page as data; --fresh asks GitHub
+
+PLAN AND FOLLOW
+  mc brief                        Decide what to work on next
+  mc plan [<programme>]            Plan a programme; no name asks which
+  mc status <name>                 One project, whole
+  mc step <project>                Where each step stands
+  mc project <name>                Show a sent plan or a draft
+  mc goal list [<programme>]       Goals and their last session's next action
+  mc goal show <programme>/<goal>  One goal, its log and its worktrees
+
+RUN AND LAND
+  mc run                          The headless runner
+  mc run start | stop [--force]    Start, or stop after its steps (--force: now)
+  mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
+  mc run --billing                Plan usage and next billing
+  mc gate [<test files…>]          Affected tests and gates, or a focused rerun
+  mc test <repo> <pr>              Measure a pull request; merge nothing
+  mc publish                      Push, open the PR and queue it for the merger
+  mc merge <repo> <pr>             Gate and merge a pull request
+
+SEE AND SHIP
+  mc test dev | prod              Measure the running app, locally or live
+  mc shot dev | prod <target>     A PNG of the running app; prints its path
+  mc dev list                     Which dev server runs in which worktree
+  mc deploy [--dry-run]            memoro's main to production, after a question
+  mc build ios                    Does memoro need a new iOS binary?
+
+WORKSPACES
+  mc work <name>                  Open that workarea
+  mc prs [--offline] [--json]      Open pull requests and whose they are
+  mc tidy [--apply]               Preview removals; --apply rechecks and removes
+
+IN FULL
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
@@ -15,68 +50,15 @@ THE PAGE
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
-
-  mc brief                         Decide what to work on next
-  mc plan [<programme>]            Plan a programme; no name asks which
-  mc plan <programme> --archive    End a programme: off main and off disk
-  mc run                           The runner: headless steps, a lane per repository
-  mc run start | stop [--force]    Turn it on, or off — after the steps in flight, or now;
-                                    start on a stopping runner takes over at once
-                                    (start, stop, update work at the mc page's prompt too)
-  mc run start --if-was-running    Only when the last runner died rather than stopped —
-                                    the login agent every start writes runs this
-  mc run --update [--force]        New code, new process: the successor starts at once,
-                                    the old runner finishes the steps it holds and exits
-                                    Already on origin/main: nothing written (--force writes anyway)
-                                    Already draining: the drain, and the steps it waits on
-  mc run lanes [<n>] [--total <n>] Steps in flight: <n> per repository, --total across
-                                    every repository at once; no argument prints both
-  mc run --billing                  Plan usage and next billing for Claude and Codex
-  mc test <repo> <pr>              Measure a pull request; merge nothing
-  mc test dev | prod               The app running, measured — locally or live
-  mc keys run <script> [args…]    Run a main-matching script with its declared vault keys
+  mc keys run <script> [args…]     Run a main-matching script with its declared vault keys
   mc keys list                    Declared names and custody status, never values
-  mc gate <test files…>            The tests a change reaches, in the gate lane, in 2 KB
-  mc shot dev | prod <target>      A PNG of the running app; prints its path
-  mc publish                       Push this branch, open its PR, queue it to merge
-  mc hook session-start | pre-tool The coding agent's hooks: the worktree's state
-                                    at start, shell commands turned to mc verbs
-  mc merge <repo> <pr>             The same measurement, then the merge
-  mc deploy [--dry-run]            memoro's main to production, after one question
-  mc deploy --follow               Watch the deploy that is running
-  mc build ios                     Does memoro need a new iOS binary? Builds nothing
-  mc build ios --device            The commit production runs, on the paired iPhone
-  mc build ios --testflight [--yes | --no-upload]
-                                    The same, verified, uploaded after one question
-  mc build ios --shipped <build> <sha>
-                                    Record a binary built before mc build existed
-  mc language [status <lang>]      Each language's last reading and run; status reads one again
-  mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
-  mc language run <manifest>       A cutover's acts in order, a question before every write
-  mc language promote              The curated grammar waiting, to production after one question
-  mc prs [--offline] [--json]      Every open pull request, and whose it is: a project's
-                                    step, a plan session, a workarea, or nobody
-  mc deps [<repo>]                 Which dependencies need updating, and how urgently
-  mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
-  mc dev list                      Which dev server runs in which worktree
-  mc dev admit <service>           May one more dev server start here?
-  mc docker [ensure|release|prune] The container runtime the gates need: up or
-                                    stopped, its leases, and what it holds
-  mc status <name>                 One project, whole
   mc step <project>                Where each step stands, from the register
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
                                     person starts it again
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
-  mc goal new <p>/<g> --repo <r> --class fast|large --title "…"
-                                    A goal: GOAL.md, LOG.md, a worktree per repository
-  mc goal log|open|blocked|done|show|list  A session's entry, its status, one goal whole, or every goal
-  mc work <name>                  Open that workarea, ~/mc/work/<name>
-  mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
-  mc repos                        Where mc's two repositories live
-
-IN FULL
+  mc deploy --follow               Watch the deploy that is running
   mc status <name>                 One project: its PLAN.md frontmatter and
                                     step, the decisions that belong to it,
                                     its last three runner steps and the open
@@ -122,7 +104,7 @@ IN FULL
   mc tidy [--apply] [--json] [--days <n>]
                                     What mc may remove, per root, written to a
                                     list under ~/mc/runner/tidy/ first; --apply
-                                    removes from that list after asking again.
+                                    removes from that list after rechecking it.
                                     Docker images unused for 3 days go too,
                                     if the runtime is up
   mc tidy --docker [--apply] [--json]
@@ -593,6 +575,18 @@ IN FULL
                                     ~/mc/runner/STOP to exit after the step.
                                     Runs mc helper --intake once a day too,
                                     in the first chore loop after 05:00Z
+  mc run start | stop [--force]    Turn it on, or off — after the steps in flight, or now;
+                                    start on a stopping runner takes over at once
+                                    (start, stop, update work at the mc page's prompt too)
+  mc run start --if-was-running    Only when the last runner died rather than stopped —
+                                    the login agent every start writes runs this
+  mc run --update [--force]        New code, new process: the successor starts at once,
+                                    the old runner finishes the steps it holds and exits
+                                    Already on origin/main: nothing written (--force writes anyway)
+                                    Already draining: the drain, and the steps it waits on
+  mc run lanes [<n>] [--total <n>] Steps in flight: <n> per repository, --total across
+                                    every repository at once; no argument prints both
+  mc run --billing                  Plan usage and next billing for Claude and Codex
   mc run --once                    One step for the first runnable project,
                                     and no helper
   mc run [--no-merge] [--idle-sleep <s>]
