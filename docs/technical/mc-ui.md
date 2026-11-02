@@ -46,10 +46,10 @@ fetched or not.
 ## The sections
 
 In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF,
-RUNNER, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
+STEPS, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
 still keeps the rule the page had — **what does not move above what does**.
 PROGRAMMES and WORK are the page as a listing; the two desks change when
-somebody sits down; RUNNER changes with every pick and every frame;
+somebody sits down; STEPS changes with every pick and every frame;
 MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
 of them: while a language run has stopped inside an `opens_gap` window it
@@ -124,8 +124,8 @@ below is about.
   more — flipping the step back to `ready` is a plan edit somebody makes.
 - **Queue data** — NEXT is not drawn. `mc --json` still carries `data.next`,
   including the runner's order, lane picks, skip reasons and stale blockers.
-  `nextFor` and `assembleQueue` are unchanged; RUNNER carries counts instead.
-- **RUNNER** — the heading carries the answer: how many steps are **in
+  `nextFor` and `assembleQueue` are unchanged; STEPS carries counts instead.
+- **STEPS** — the heading carries the answer: how many steps are **in
   flight** (bold green while it is not zero, `not running` in bold yellow when
   there is no process), how many lanes there are to hold them, and how many
   projects are queued. Under it
@@ -152,51 +152,38 @@ below is about.
   github.com`, or the error itself when neither diagnosis holds — read from
   `~/mc/runner/github.json` and gone once the round has asked again and been
   answered (`runner.github` in `mc --json`; the backoff is in
-  [mc-run.md](mc-run.md)), and one line of the day behind it: steps, merged, open,
+  [mc-run.md](mc-run.md)), and one line of the day behind it: steps, open,
   failed, timed out, and an estimated **list-price** cost — `failed` red and
   `timed out` yellow only while the count is not zero.
-- **MERGES** — the gate round landing right now, and the two queues behind it
-  ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
-  is `mergesSection`, `page-collect.js`, and `runningMerge`,
-  `merges-collect.js`, joins the gate lock to a name). The heading's count is
-  `N landing · N mending · N fixing · N red · N waiting`, each part shown only when it is not zero,
-  and `nothing landing, nothing waiting` — the literal phrase, not per missing
-  part — when both are. Under it, in order: the round itself, laid out like
-  a running RUNNER lane — the `●` in the gutter, then the repository — and
-  green like one because it is the same fact: `● memoro      #13265
-  email-inbox-fixes step 2  <title>  landing · merged origin/main into the
-  candidate · 2 min`. The name is the queue entry's step, or its branch; the
-  title is the open pull request's, and it is what a narrow terminal drops
-  first. With the gate idle the heading has already said so and there is no
-  row. A `check`-mode round (`mc test`, not `mc merge`) says *measuring, not
-  landing* where a landing says `landing`. Then **waiting**, one line —
-  `· waiting     #13255 #13250 #13248  (longest 4 min)`: the numbers from
-  `~/mc/runner/merges.json` in the order the merger takes them, green, with
-  the repository on each only when the queue spans two, `… N more` for what
-  does not fit, and how long the oldest has waited (Martin, 2026-10-09).
-  Under the round, three kinds of row for what came back red. A red getting
-  its one mend (`state: 'mending'`, `mend.js`) is yellow with the running
-  mark: `● memoro      #13370  card-views step 3  mending — <reason>  6 min`.
-  A red a runner session is fixing (ruling 39) is yellow the same way:
-  `● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min`.
-  It is a red whose queue entry's `step: { project, index }` some lane file
-  (`current-*.json`) holds: `kind` is `step`, `name` is the project, `step` is
-  `index + 1`, and its `pid` is alive. The sentence after `fixing —` is the
-  session's last assistant text, read from the last 64 KiB of
-  `<session.log>.jsonl` — `session.log` is that step's in the register
-  (`~/mc/runner/projects/<project>.json`) — with `claudeTail`, or `codexTail`
-  for a codex lane (`work-status.js`). With no transcript yet it is the red's
-  reason. The time is how long the session has run. The sentence gives way
-  first on a narrow terminal; the number and the name never do. A fixing red
-  is in `merges.fixing` in `mc --json` and not in `merges.red`. A red nobody
-  holds is the red row, `✗ memoro      #13301  main-chat-d1 step 3  <reason>
-  13 min ago`, until `mc merge` queues it again. The held rows that stood under it went with `held.json` (ruling 21): a step that
-  did not land is `failed` in the register and is
-  drawn where every other plan state is. `mc --json` carries `merges.queued`
-  whole, and `mc status <name>` says `#N is landing now — <phase>
-  (<age>)` or `#N is being measured (mc test), not landed` when the round
-  matches this project's own open pull request, and `#N is queued for merge
-  (since …)` for a queued one ([`mc-run.md`](mc-run.md) § *The merge*).
+- **MERGES** — two queues, one per repository. The heading gives each queue's
+  short counts (`memoro 2 waiting · memoro-cli idle`); PR numbers belong on
+  the rows, in landing order. A red `paused deploy`, `paused gate round` or
+  `paused lease held` belongs on that repository's heading, never on a row of
+  its own. These are the merger's actual pre-round barriers: `runningDeploy`
+  (memoro only), `runningRound` in the repository's gate lane, and `readLease`
+  with `held && !orphaned`. A landing's own lock and lease are not pauses.
+  Queued work without a running merger says `merger stopped` in red instead
+  of appearing idle.
+  There is **exactly one row per repository**, including idle queues. The row
+  keeps the repository and PR number; titles and secondary detail give way
+  first at 80 columns. A landing carries its phase in words (`gate`, `rebase`,
+  `landing`), elapsed clock and age in the queue. Waiting numbers follow in
+  landing order, with grey words instead of unexplained marks: `awaits
+  <project> step <n>`, `mended`, `after #N`. Long lists become `… N more`.
+  Reds, mends and fixes stay on their repository's row. Normal work, including
+  mending and fixing, is plain terminal text; clocks, reasons and the fixing
+  session's last sentence are grey. A PR the merger answered red is red.
+  Fixing still means a live runner lane holds the red's project and step; its
+  last sentence is read from the last 64 KiB of `<session.log>.jsonl` with
+  `claudeTail` or `codexTail`. No transcript means the red's reason instead.
+  Each row owns `N merges in 24 h`, green when nonzero. This counts landed PRs
+  in `gate-rounds.jsonl`, including manual and batch merges, not runner step
+  outcomes. The record's start plus duration supplies the landing time. Idle
+  rows also say `last #N · 2 h ago`, in grey, or `no landing recorded`.
+  `mc --json` carries the drawing's exact input as `merges.repos[]`: `repo`,
+  `state`, `pause`, `merger_stopped`, `landing`, `landings`, `waiting`, `reds`,
+  `mending`, `fixing`, `day_count`, `last`. The older aggregate fields remain
+  for status and PR ownership readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
   `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
   the branch rule; a plan session's, checked out under `~/mc/plan/<programme>/`
@@ -206,7 +193,7 @@ below is about.
   project's pull request is a column of its own on the project's row in
   PROGRAMMES, after the steps — `#N`, or `#N+1` for more than one; one row per
   project (Martin, 2026-10-09), and a blocked project holding one is never
-  collapsed — and the merger's are in MERGES. A running RUNNER lane carries its project's
+  collapsed — and the merger's are in MERGES. A running STEPS lane carries its project's
   `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
   any pull request quiet for a day turns its `quiet …` yellow. The open pull
   requests come from `prs.json`, which every runner round now refills for the
@@ -218,7 +205,7 @@ below is about.
   it stopped at, or one running now; then the sha from the last `deployed` row
   of `~/mc/runner/log/deploys.tsv`, and last the bookkeeping — how long ago,
   which build — which is what a narrow terminal drops. It was a line under
-  RUNNER's day. The holder is not on the line at all: on 2026-09-06 a failed
+  STEPS's day. The holder is not on the line at all: on 2026-09-06 a failed
   deploy's own `Deploy source preflight` was clipped off the end while `by
   martin@laptop` sat in the middle of it. When the `/api/version` the helper
   last cached names another commit than the last deploy, the line leads with
@@ -293,8 +280,11 @@ the helper and the sessions already write.
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | where every step stands | `~/mc/runner/projects/<project>.json` (per step: status, pr, branch, blocked_by, reason, comments, session, attempts, landed) | `mc run`, `mc merge`, `mc step` |
-| a `mc merge` waiting for the gate | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder, pid) | `mc merge`, while it waits its turn |
+| queued merges and reds | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder, pid) | `mc merge`, while it waits its turn |
 | the round landing right now | `~/.memoro/mc/gate-running.json` (pid, repo slug, pr, mode, since, phase, phase_at), joined to a name through `repos` and to a holder through the repository's lease | `mc merge`/`mc test`, for the length of the round (`runningMerge`, `merges-collect.js`) |
+| merge pauses | `runningDeploy` from `deploys.tsv`, `runningRound` from the repository's gate lock/claim, `readLease` from its lease | the same readers as `merger.js` before a round |
+| merge success count and last landing | landed PRs in `~/.memoro/mc/gate-rounds.jsonl`, per repository | the merger's round record |
+| merger liveness | `~/mc/runner/merger.json` and its live pid | the merger |
 | the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | the container runtime | `~/.memoro/mc/docker/state.json` (runtime, leases, started_by_mc, last_release_at, inventory, idle_stop) | `mc docker`, `ensure`/`release`, the runner's Docker sweep |
@@ -312,7 +302,7 @@ when their scope ends, the removal paired in a `finally` so a step that
 throws still clears the file.
 
 There is one current file **per lane**: `mc run` drives `per_repo` lanes on
-memoro's queue and on memoro-cli's at the same time, so RUNNER is a list rather
+memoro's queue and on memoro-cli's at the same time, so STEPS is a list rather
 than a line, and the page reads `runner/current-*.json` by name instead of one
 fixed file — `current-memoro.json` for a repository's first lane,
 `current-memoro-1.json` for its second, and the file's own `lane` field is
@@ -450,7 +440,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a project state have one colour each, wherever
-they are printed.** RUNNER says `step` in the same
+they are printed.** STEPS says `step` in the same
 green, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -490,38 +480,35 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `STEPS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
-| RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
-| RUNNER | the heading's lane setting and uptime | grey |
-| RUNNER | a lane with a step: its `●`, the project's name | green, bold |
-| RUNNER | a lane's name (`memoro`, `memoro #2`) | grey |
-| RUNNER | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | bold, bold yellow |
-| RUNNER | the check-ins beside the clock, the tool, the advisor | grey |
-| RUNNER | the day's `failed`, `timed out` while not zero | red, yellow |
-| RUNNER | `■ STOP requested` | bold red |
-| RUNNER | `GitHub unreachable for <repo> …` | yellow |
-| RUNNER | a stale runner file | red |
-| RUNNER | a quota answer under 6 h old, older | yellow, grey |
-| RUNNER | the production sha, the rest of that line | plain, grey |
-| RUNNER | `/api/version` naming another commit than the last deploy | bold yellow |
-| RUNNER | a deploy running now, one that has not come back in an hour | green, bold yellow |
-| RUNNER | a deploy that failed after the last good one | yellow |
-| RUNNER | an idle lane, no runner, the rest of the day's line | grey |
+| STEPS | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
+| STEPS | the heading's lane setting and uptime | grey |
+| STEPS | a lane with a step: its `●`, the project's name | green, bold |
+| STEPS | a lane's name (`memoro`, `memoro #2`) | grey |
+| STEPS | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | bold, bold yellow |
+| STEPS | the check-ins beside the clock, the tool, the advisor | grey |
+| STEPS | the day's `failed`, `timed out` while not zero | red, yellow |
+| STEPS | `■ STOP requested` | bold red |
+| STEPS | `GitHub unreachable for <repo> …` | yellow |
+| STEPS | a stale runner file | red |
+| STEPS | a quota answer under 6 h old, older | yellow, grey |
+| STEPS | the production sha, the rest of that line | plain, grey |
+| STEPS | `/api/version` naming another commit than the last deploy | bold yellow |
+| STEPS | a deploy running now, one that has not come back in an hour | green, bold yellow |
+| STEPS | a deploy that failed after the last good one | yellow |
+| STEPS | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
 | WORK | a session's `●` and its area | cyan, bold |
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
 | WORK | the workareas no project explains: their numbers, the file | grey |
-| MERGES | the round landing now: `● repo #pr name title` | green |
-| MERGES | the round's `landing` (or `measuring, not landing`), phase, age | plain, plain, grey |
-| MERGES | the queue line: `· waiting`, the numbers in landing order, `(longest …)` | grey, green, grey |
-| MERGES | a red nobody is fixing: `✗ repo #pr name` and its reason; how long ago | bold red, red; grey |
-| MERGES | a red getting its mend: `● repo #pr name mending —` and its reason; the session's age | yellow; grey |
-| MERGES | a red a runner session is fixing: `● repo #pr name fixing —` and what it last said; the session's age | yellow; grey |
-| MERGES | the heading's `N mending`, `N fixing`; `N red` | yellow; bold red |
-| RUNNER | a lane's project's open pull request, after the clock | bold cyan |
+| MERGES | repository, landing PR and phase, waiting PRs, mending and fixing | plain |
+| MERGES | clocks, queue counts, waiting explanations, mend/fix detail, idle and last landing | grey |
+| MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
+| MERGES | `paused` with reason; `merger stopped`; a PR answered red | red |
+| STEPS | a lane's project's open pull request, after the clock | bold cyan |
 | PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
 | PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |
 | PULL REQUESTS | one nobody holds: its `◆` and whose | yellow |

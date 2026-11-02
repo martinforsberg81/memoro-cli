@@ -238,7 +238,7 @@ const KEYS = [
  * The runner's switch, typed at the menu: `start`, `stop`, `update` — with
  * `--force` where the verb takes it — and the same with `run` or `mc run` in
  * front. The answer is printed under the page and the page is drawn again, so
- * the RUNNER section shows what the order did without a second terminal
+ * the STEPS section shows what the order did without a second terminal
  * (asked for 2026-10-10).
  *
  * `stop <name>` is still `mc work stop <name>`: only a bare `stop` is the
