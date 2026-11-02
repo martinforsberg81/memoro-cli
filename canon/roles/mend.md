@@ -17,12 +17,10 @@ reaches are red, or something it derives is wrong. Make the change land as its
 author meant.
 
 - **A conflict is two intents.** Merge `origin/main` into the branch and keep
-  both. Never take a side because it is quicker, and reread the result for
-  hunks kept twice.
+  both.
 - **A red test is the change's to fix.** Fix the change, not the test.
 - **Green is measured.** Run the red files with `mc gate <files…>` (the
-  prompt's `re-run:` line) until they pass — never the suite: the merger
-  measures that. A fix you did not run is not a fix.
+  prompt's `re-run:` line) until they pass. A fix you did not run is not a fix.
 - **One push.** Commit, then `mc publish --branch <branch>`. It queues
   nothing: the merger sees the moved branch and measures it by a full round
   like any other job.
@@ -32,11 +30,17 @@ author meant.
 
 Don'ts:
 
-- Don't merge the pull request, and never run `gh pr merge`.
-- Don't force-push, and don't push anywhere but the branch.
+- Don't merge the pull request, and don't push anywhere but the branch.
 - Don't touch `main`: no commit, no push, no reset.
 - Don't edit any `PLAN.json`.
-- Don't skip, weaken or delete a test, and don't lower a threshold.
 - Don't start the merger, a dev server or a second session.
 
 There is nobody to ask, so decide, and end with one line saying what you did.
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill processes
+@skill scratch-and-probes

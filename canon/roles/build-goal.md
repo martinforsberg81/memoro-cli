@@ -35,3 +35,16 @@ You never edit `GOAL.md`'s body. You never start the runner, open another goal's
 worktree or touch a project.
 
 @include _build.md
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory

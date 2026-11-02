@@ -17,8 +17,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  SHARED_ROLE_FILE, canonRolesDir, instructionsFor, readCanonRole,
+  canonRolesDir, instructionsFor, readCanonRole,
 } from '../../src/mc/roles.js';
+import { canonSkillsDir } from '../../src/mc/skills.js';
 
 /**
  * Every role that writes a question down for Martin to find. `brief` answers
@@ -48,16 +49,22 @@ const toldTo = (name) => {
   return instructionsFor('claude-code', role.overlay);
 };
 
+/** A skill's own text, as the tool loads it. */
+const skillText = (name) => readFileSync(join(canonSkillsDir(), name, 'SKILL.md'), 'utf8');
+
 /**
- * Asserted on the assembled text rather than on the role's own overlay. The
- * shape used to be written out in each of these three files; it is one
- * paragraph of `canon/roles/_common.md` now, and what matters is that a
- * session of this role is told it — not which file it came from.
+ * The shape used to be written out in each of these role files, then once in
+ * `canon/roles/_common.md`; it is the `asking-martin` skill now. What matters
+ * is that a session of this role is pointed at it, and that the skill says it.
  */
 describe('the decision shape every role writes', () => {
   for (const name of AUTHORS) {
     describe(name, () => {
-      const told = toldTo(name);
+      const told = skillText('asking-martin');
+
+      it('is pointed at the asking-martin skill', () => {
+        assert.match(toldTo(name), /Skill `mc-asking-martin`/u);
+      });
 
       it('asks for a proposal, not a menu', () => {
         assert.match(told, /\bGO\b|[Nn]ever\s+(as\s+)?a\s+menu|not\s+a\s+menu/u);
@@ -111,37 +118,38 @@ describe('the decision shape every role writes', () => {
 
 /**
  * The other half of the same subject: what a session does with something it
- * found that nobody asked it about, and who settles the route to `main`.
+ * found that nobody asked it about, and how a change reaches `main`.
  *
- * These are not one role's rules, so they are not in a role file. They are in
- * `canon/roles/_common.md`, and this asserts they arrive at all seven through
- * the assembler.
+ * These are not one role's rules, so they are not in a role file. They are
+ * the `proposals` and `publish-and-merge` skills, and every role that needs
+ * them names them.
  */
 describe('the rules every session gets, whichever role it is', () => {
   const CANON_ROLES = ['brief', 'build-goal', 'build-project', 'helper', 'intake', 'plan', 'worker'];
+  const PUBLISHERS = ['brief', 'build-goal', 'build-project', 'plan', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
-  const ROUTE = phrase('The practical route to `main` is yours to settle');
 
   for (const name of CANON_ROLES) {
-    it(`${name} is told both`, () => {
+    it(`${name} is pointed at the proposals skill${PUBLISHERS.includes(name) ? ' and the publish-and-merge skill' : ''}`, () => {
       const told = toldTo(name);
-      assert.match(told, LOOSE_THREAD, `${name}: no loose-thread rule`);
-      assert.match(told, ROUTE, `${name}: no route rule`);
+      assert.match(told, /Skill `mc-proposals`/u, `${name}: no proposals skill`);
+      if (PUBLISHERS.includes(name)) assert.match(told, /Skill `mc-publish-and-merge`/u, `${name}: no publish skill`);
     });
   }
 
   // One rule, one home. A copy in a role file is a copy that drifts.
-  it('and the text of them exists in exactly one file', () => {
+  it('and the text of them exists in no role file', () => {
     const carriers = readdirSync(canonRolesDir())
       .filter((file) => file.endsWith('.md'))
       .filter((file) => LOOSE_THREAD.test(readFileSync(join(canonRolesDir(), file), 'utf8')));
-    assert.deepEqual(carriers, [SHARED_ROLE_FILE]);
+    assert.deepEqual(carriers, []);
+    assert.match(skillText('proposals'), LOOSE_THREAD);
   });
 
   // A loose thread is a proposal and not intake, and the reason is in the text
   // — a session that is only told which directory picks the one it saw last.
   it('says why a finding is a proposal and not intake', () => {
-    const told = toldTo('worker');
+    const told = skillText('proposals');
     assert.match(told, /~\/mc\/proposals\/<date>-<system>-<slug>\.md/u);
     assert.match(told, phrase('drained one file'));
     assert.match(told, phrase('asks a second session to work it out again'));

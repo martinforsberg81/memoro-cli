@@ -67,3 +67,16 @@ resolve them, commit, then do the step on the same branch and PR.
 Fields: `docs/project/README.md` § *What a PLAN.json is*.
 
 @include _build.md
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory

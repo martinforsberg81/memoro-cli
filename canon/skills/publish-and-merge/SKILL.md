@@ -1,51 +1,56 @@
 ---
 name: publish-and-merge
-description: How a change in an mc repository (memoro, memoro-cli) gets from a branch to main with mc gate, mc publish and mc merge. Use before running tests for a change, pushing a branch, opening or editing a pull request, or merging one.
+description: How a change in an mc repository (memoro, memoro-cli) is tested and gets from a branch to main with mc gate, mc publish and mc merge. Use before running any test, pushing a branch, opening or editing a pull request, or merging one.
 ---
 # Publish and merge
 
-What the three verbs do today. Who may land a pull request is not said here;
-your role, or the person, says that. These verbs replace `node --test`,
-`npm test`, `npm run ci`, `git push`, `gh pr create`/`edit` and `gh pr merge`:
-the hook turns those to the verb.
+What the three verbs do today. Who may land a pull request is your role's to
+say, or the person's. The verbs replace `node --test`, `npm test`, `npm run ci`,
+`git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
+those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
+in it and say why in the reply.
 
 ## `mc gate` — the tests your change reaches
 
-- `mc gate` with no files: the repository's selector maps the branch's and the
-  tree's changes against `origin/main` to test files and command gates.
-  Costly ones may be left to the merge round; the tests the change touches
-  always run.
-- `mc gate <files…> [--test-name-pattern <p>]`: those files, a focused rerun.
-- It answers within 540 s (`--budget <s>`) with GREEN or RED, the counts, the
-  failing lines and the log path, at most 2 KB. Past the budget: `RUNNING`,
-  exit 3; `mc gate --wait` reads the same log.
-- Exit 0 green, 1 red, 2 refused or another gate already running in this
-  worktree, 3 still running. `--full` is refused: the whole suite is the
-  merger's.
+- Bare: the repository's selector maps the branch's and the tree's changes
+  against `origin/main` to test files and command gates. `mc gate <files…>
+  [--test-name-pattern <p>]` is a focused rerun.
+- It answers within 540 s with GREEN or RED, the failing lines and the log
+  path; give the Bash call `timeout: 600000`. Past the budget: `RUNNING`,
+  exit 3, and `mc gate --wait` reads the same log. Red: fix, then run the
+  `re-run:` line it printed.
+- `--full` is refused, and so is bypassing the lane with `npm test`,
+  `npm run ci` or a bare `node --test`: the whole suite is the merger's.
+  Dependencies are attached for you: never `npm ci` or a bare `npm install`;
+  in memoro `npm run deps:ensure` re-attaches the shared cache.
+- Never lower a threshold, or skip, weaken or delete a test to turn it green.
 
 ## `mc publish` — push and open the pull request
 
-- Refuses on `main`, on a dirty tree, and when `origin`'s branch has moved
-  (it never forces). Then a plain `git push -u`, and `gh pr create` — or, for a
-  branch with an open pull request, edits only the fields given.
-- Title and body from the last commit, or `--title`, `--body`,
-  `--body-file <path>`, `--base <branch>`.
-- Then it queues the pull request for the merger, as `mc merge <repo> <pr>`
-  does, in the same call. `--no-merge` pushes and opens and queues nothing;
-  so do `--json` and `--branch <name>` (a detached HEAD).
+- Refuses on `main`, on a dirty tree, and when `origin`'s branch has moved; it
+  never forces. Then `git push -u` and `gh pr create`, or, for a branch with an
+  open pull request, edits only the fields given (`--title`, `--body`,
+  `--body-file`, `--base`).
+- Then it queues the pull request for the merger in the same call.
+  `--no-merge` pushes and opens and queues nothing; so do `--json` and
+  `--branch <name>` (a detached HEAD).
+- The body says what changed, why, the user impact, the root cause of a fix,
+  what was run and what was not, and known gaps. Never claim a run you did
+  not make: "suite not run" is an acceptable sentence.
 
 ## `mc merge <repo> <pr>` — the one door to main
 
-- Queues the pull request for the merger and returns at once. The merger, one
-  process per machine, takes the queue one at a time per repository lane: it
-  runs the gate round on a candidate with the current base and squashes only
-  on green. A red is never landed; there is no flag that lands one.
+- Queues the pull request and returns. The merger takes the queue one at a
+  time per repository lane, runs the gate round on a candidate with the
+  current base and squashes only on green. No flag lands a red.
 - A pull request whose every file is a document under `docs/` (no script) runs
-  the tests that read documents and lands in the call when they are green
-  (`--docs` forces that route).
-- `--watch` (or `mc merge watch <repo> <pr>`) follows it until it lands or goes
-  red. The page's MERGES section shows the queue; `mc prs` lists every open
-  pull request and whose it is.
-- `--admin` squashes past the gate with GitHub's admin override. It is the
-  person's verb, run only on their word.
-- Never `gh pr merge`.
+  the tests that read documents and lands in the call when they are green.
+- `mc merge <repo> <a> <b>` takes only pull requests aimed at one base, and is
+  not atomic: a red lands a prefix and stops.
+- Do not poll: no loop, no `sleep`, no `mc merge watch` unless asked. One
+  `gh pr view --json …` snapshot is the state; an empty check list is normal.
+- When it stops a green pull request for a reason that is not the PR's (main
+  moved, a lease, the base could not be re-checked): look once
+  (`mc repo who <repo>`), report, stop. `--admin` lands past the gate; it is
+  the person's verb, run only on their word. Never `gh pr merge`, never
+  `--delete-branch`.

@@ -16,3 +16,16 @@ There is no PM to escalate to and nothing watching this pane. A question only
 Martin can answer stops the step: `mc step blocked --on <decision-name>`
 naming what the answer is about, and the question itself in the pull request.
 A step's state is in the register `mc step` writes, never in the plan file.
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory
