@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import { stepAreaName } from './paths.js';
 import { openPrsFor } from './project-prs.js';
 import { REFUSAL, chooseKind, holdingPrs, inFlight, kindFor } from './run-plan.js';
+import { sessionKind } from './session-kind.js';
 import { listStepAreas } from './work-area.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
@@ -263,9 +264,9 @@ function readJson(path) {
  * STOP file anyone can touch.
  *
  * There is one `current-<repo>[-<lane>].json` per lane and one runner.json for
- * the process that drives them all, so `steps` is a list: `mc run` runs
- * `per_repo` lanes on every repository at the same time (`mc run lanes`), and
- * NOW names every one of them.
+ * the process that drives them all, so `steps` is a list: `mc run` runs as
+ * many headless sessions at once as `mc run lanes` says, across every
+ * repository and every kind, and NOW names every one of them.
  *
  * A file whose pid is dead is a crashed runner, not a running one: it is
  * reported as stale and counts as nothing running. `runs.tsv` cannot answer
@@ -302,9 +303,17 @@ export function nowBlock({
     const checkInSeconds = Number.isFinite(interval) && interval > 0 ? interval * 60 : null;
     const checkIns = Number(current.check_ins);
     const elapsed = since(current.started);
+    // The session's kind in today's words — `plan`, `build`, `review` — and,
+    // for a build or a review, what of: a project or a goal. A lane file from
+    // before says `step` or `goal`, and is read as the build it was.
+    const named = sessionKind(current.kind, current.variant);
+    const goal = /^goal:(.+)$/u.exec(String(current.name || ''))?.[1] ?? null;
     steps.push({
       name: current.name || null,
-      kind: current.kind || null,
+      kind: named?.kind ?? (current.kind || null),
+      variant: named?.variant ?? (goal ? 'goal' : null),
+      // `mc/<goal>` for a session on a goal, null for a project's.
+      goal,
       repo: current.repo || null,
       lane,
       tool: current.tool || null,

@@ -23,7 +23,7 @@
  *
  * The palette is a table rather than a habit, so a kind and a status look the
  * same wherever they are printed: `KIND_TONE` for what the runner is doing
- * (step, triage, the foreground verbs) and `STATUS_TONE` for where
+ * (plan, build, review, the foreground verbs) and `STATUS_TONE` for where
  * a plan stands. Everything else is structure — cyan headings, grey for the
  * bookkeeping, and the terminal's own foreground for the text a person is
  * reading, with `bold` on the name a row is about.
@@ -76,9 +76,15 @@ const STATUS_TONE = {
   done: ['grey'],
 };
 
-/** What is being done, one colour each, wherever a kind is printed. */
+/**
+ * What is being done, one colour each, wherever a kind is printed. The
+ * runner's three session kinds — `plan`, `build`, `review` — and the
+ * foreground verbs. `step` is a project's build under the word it had before.
+ */
 const KIND_TONE = {
+  build: ['green'],
   step: ['green'],
+  review: ['magenta'],
   triage: ['blue'],
   brief: ['cyan'],
   plan: ['cyan'],
@@ -225,21 +231,21 @@ function row(c, wide, left, middle, right, tone = null) {
 /* --------------------------------------------------------------- sections */
 
 /**
- * STEPS — what `mc run` is doing, and nothing else.
+ * SESSIONS — the headless sessions `mc run` is running, and nothing else.
  *
- * It was NOW, and NOW drew the runner's steps and the sessions a person had
- * open as one list of dots. The two are stopped by different things and read
- * for different reasons; together they meant a `mc plan` left open since
- * Sunday sat in the same column as a step four minutes old. The
- * sessions have a section of their own now.
+ * The runner runs three kinds of session: `plan`, `build` (a project's step,
+ * or a goal) and `review` (Martin, 2026-11-02). The section was STEPS while
+ * every session was a project's step; a goal's build and a review are not
+ * steps, and RUNNER names the machine rather than what it holds — `mc run` on
+ * the right of the heading already does that. So the heading names what the
+ * rows are, and carries the answer: `n of N lanes`, how many sessions are
+ * running out of the total `mc run lanes` set, and how much is queued.
  *
- * The heading carries the section's answer — how many steps are in flight and
- * how many lanes there are to hold them — so the rows under it are only the
- * lanes and what each one holds. One row per lane, step or no step: a lane is
- * a lane between steps as much as during one, and with a row only where there
- * was a step, a lane waiting for its next project and a lane whose process had
- * died looked exactly alike, which is nothing at all. A runner that is not
- * running has no lanes, and says so in one line.
+ * One row per lane, session or no session: a lane is a lane between sessions
+ * as much as during one, and with a row only where there was a session, a
+ * lane waiting for its next work and a lane whose process had died looked
+ * exactly alike. A runner that is not running has no lanes, and says so in
+ * one line.
  *
  * How long the process has been up, and what is in production, were here.
  * The first is a fact about mc and is on the MC line; the second has DEPLOY.
@@ -248,25 +254,25 @@ function runnerLines(lines, c, wide, runner) {
   const now = runner;
   const lanes = now.lanes || [];
   const alive = Boolean(now.process?.alive);
-  const flight = (now.steps || []).length;
+  const sessions = now.sessions || [];
+  const flight = sessions.length;
   // The answer first and in the state's colour: green while something runs,
   // grey when the runner is idle, yellow when it is not there at all — that is
   // the one of the three a person has to do something about.
   const counts = [
     alive || flight
-      ? { text: `${flight} in flight`, styles: flight ? ['green', 'bold'] : ['grey'] }
+      ? { text: `${flight} of ${lanes.length || flight} lane${(lanes.length || flight) === 1 ? '' : 's'}`, styles: flight ? ['green', 'bold'] : ['grey'] }
       : { text: 'not running', styles: ['yellow', 'bold'] },
   ];
-  if ((alive || flight) && lanes.length) counts.push({ text: `${lanes.length} lane${lanes.length === 1 ? '' : 's'}`, styles: ['grey'] });
   counts.push({ text: `${now.queue?.projects ?? 0} queued`, styles: ['grey'] });
-  heading(lines, c, wide, 'STEPS', between(counts, ' · '), 'mc run');
+  heading(lines, c, wide, 'SESSIONS', between(counts, ' · '), 'mc run');
   if (lanes.length && (alive || flight)) {
     for (const lane of lanes) lines.push(laneLine(c, wide, lane));
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
   }
   // Stopping, in the words `mc run stop` prints (run-control.js `stopLine`):
-  // since when, the steps it still waits on, how many lanes have left — and
+  // since when, the sessions it still waits on, how many lanes have left — and
   // the one thing to type to have a runner running again without waiting.
   // A STOP with no runner alive is a leftover the next start removes.
   if (now.stop) {
@@ -276,8 +282,8 @@ function runnerLines(lines, c, wide, runner) {
         stopping: true,
         stop_requested: now.stop_requested?.at ?? null,
         stop_since_seconds: now.stop_requested?.age_seconds ?? null,
-        inFlight: (now.steps || []).map((step) => ({
-          name: step.name, step: step.step ?? null, lane: `${step.repo}#${(step.lane || 0) + 1}`, elapsed_seconds: step.elapsed_seconds,
+        inFlight: sessions.map((session) => ({
+          name: session.goal ?? session.name, step: session.step ?? null, lane: `${session.repo}#${(session.lane || 0) + 1}`, elapsed_seconds: session.elapsed_seconds,
         })),
         lanes: lanes.length || null,
       })
@@ -286,7 +292,7 @@ function runnerLines(lines, c, wide, runner) {
       { text: `${MARK.stopped} ${stopping ? 'stopping' : 'STOP left behind'}`, styles: ['red', 'bold'] },
       { text: stopping ? reading.slice('stopping'.length) : ' — the next start removes it', styles: ['grey'] },
     ], wide - 2)}`);
-    if (stopping) say(lines, c, wide, 4, 'start takes over now — a new runner on every lane, this one only finishes its steps', 'grey');
+    if (stopping) say(lines, c, wide, 4, 'start takes over now — a new runner on every lane, this one only finishes its sessions', 'grey');
   }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
   for (const failure of now.github || []) say(lines, c, wide, 2, githubLine(failure), 'yellow');
@@ -321,24 +327,45 @@ export function githubLine(failure) {
 }
 
 /**
- * The day behind the lanes, one line: how many steps, and how they ended.
+ * The day behind the lanes, one line: per session kind, how many and how they
+ * ended — `build 9 (6 open, 1 failed) · review 3 (3 merged)` — then what else
+ * the runner logged, and what it all cost at list price.
  *
- * Grey is the bookkeeping and the colour is the outcome that needs a look:
- * a failed step is red and a timed-out one yellow, each only while its count
- * is not zero — a `failed 0` is the quietest thing on the row, and painting
- * it red would make the row cry wolf every day.
+ * Grey is the bookkeeping and the colour is the outcome that needs a look: a
+ * failed session is red and a timed-out one yellow. An outcome with no
+ * sessions is not drawn at all, and `plan` only once there has been one: a
+ * `failed 0` is the quietest thing on the row, and painting it red would make
+ * the row cry wolf every day.
  */
+const DAY_OUTCOMES = [
+  ['merged', 'merged', ['grey']],
+  ['open', 'open', ['grey']],
+  ['failed', 'failed', ['red']],
+  ['timeout', 'timed out', ['yellow']],
+];
+
 function dayLine(lines, c, wide, day) {
   const cost = money(day.cost);
-  const count = (label, n, styles) => ({ text: `${label} ${n}`, styles: n ? styles : ['grey'] });
-  lines.push(`  ${paint(c, between([
-    { text: `${day.steps} steps in 24 h`, styles: ['grey'] },
-    count('open', day.open, ['grey']),
-    count('failed', day.failed, ['red']),
-    count('timed out', day.timeout, ['yellow']),
-    ...(day.other ? [count('other', day.other, ['grey'])] : []),
-    cost ? { text: `${cost} list (${day.model}, ${day.prices_dated})`, styles: ['grey'] } : null,
-  ], ' · '), wide - 2)}`);
+  const kinds = day.by_kind || {};
+  const dot = { text: ' · ', styles: ['grey'] };
+  const parts = [{ text: '24 h', styles: ['grey'] }];
+  for (const kind of ['build', 'review', 'plan']) {
+    const counted = kinds[kind];
+    if (!counted || (kind === 'plan' && !counted.sessions)) continue;
+    parts.push(dot, { text: `${kind} ${counted.sessions}`, styles: kindTone(kind) });
+    const outcomes = DAY_OUTCOMES.filter(([key]) => counted[key]);
+    outcomes.forEach(([key, label, styles], index) => {
+      parts.push({ text: `${index ? ', ' : ' ('}${counted[key]} ${label}${index === outcomes.length - 1 ? ')' : ''}`, styles });
+    });
+  }
+  if (kinds.other) parts.push(dot, { text: `other ${kinds.other}`, styles: ['grey'] });
+  // The cost gives way first on a narrow terminal — its basis, then itself —
+  // so the counts keep their colours.
+  const used = parts.reduce((n, part) => n + part.text.length, 0);
+  const priced = [cost && `${cost} list (${day.model}, ${day.prices_dated})`, cost && `${cost} list`]
+    .find((text) => text && used + 3 + text.length <= wide - 2);
+  if (priced) parts.push(dot, { text: priced, styles: ['grey'] });
+  lines.push(`  ${paint(c, parts, wide - 2)}`);
 }
 
 /** A painted cell, padded to its column with spaces that carry no colour. */
@@ -346,57 +373,63 @@ function cell(c, text, columns, styles) {
   return `${styles?.length ? c(text, ...styles) : text}${' '.repeat(Math.max(0, columns - text.length))}`;
 }
 
-/** The columns of a lane row: where, the project, its step, and the clock. */
-const LANE_REPO = 11;
-/** The project's name: it gives way on a narrow terminal, the cells after it do not. */
-const nameWidth = (wide) => (wide >= 90 ? 26 : 18);
-const LANE_STEP = 11;
+/** The columns of a lane row: the kind, what it works on, where, the model and the clock. */
+const LANE_KIND = 7;
+/** What the session works on: it gives way on a narrow terminal, the cells after it do not. */
+const workWidth = (wide) => (wide >= 90 ? 30 : 22);
+const LANE_REPO = 12;
+const LANE_MODEL = 8;
 const LANE_CLOCK = 8;
 
+/** What a session works on, as the row says it: `mc/<goal>`, or a project and its step. */
+export function sessionWork(session) {
+  if (session.goal) return session.goal;
+  const at = session.step && session.steps ? ` ${session.step}/${session.steps}` : '';
+  return `${session.name || '?'}${at}`;
+}
+
 /**
- * One lane. Idle it is `lane 3`, and the number is all it has to say; with a
- * step in it the same cell is the step's repository, because a running row is
- * read for what is running and the lane's number is not part of that (Martin,
- * 2026-09-19). The rows were `memoro #2` and `memoro-cli #4`, which spent the
- * widest cell on the row on the one fact nobody acts on.
+ * One lane. Idle it is `lane 3`, and the number is all it has to say. With a
+ * session in it, the row is read for what is running, in that order: its
+ * kind as the first word — `PLAN`, `BUILD`, `REVIEW`, in the kind's colour —
+ * what it works on (a goal `mc/<goal>`, a project and `4/6`, which step of
+ * its plan), the repository, the model and the clock. After them the
+ * project's or the goal's open pull requests, in the colour a pull request
+ * has everywhere on the page, and the bookkeeping: credits when the session
+ * runs on the API credit, the advisor when it has one, and the check-ins.
+ * Nothing on the row is bold (Martin, 2026-09-19); the clock turns yellow past
+ * a check-in. There is no end on it: nothing is killed on elapsed time
+ * (ruling 18).
  *
- * Then what a person reads a running row for, in that order: the repository,
- * the project, which step of its plan — `step 4/6`, the same words NEXT uses —
- * how long it has run, and after that the bookkeeping: tool and model, the
- * advisor when the step has one, and the check-ins. Nothing on the row is bold
- * (Martin, 2026-09-19); the clock turns yellow past a check-in. There is no end
- * on it: nothing is killed on elapsed time (ruling 18).
- *
- * The pid is not here. It was, and it was the runner's own — every lane file
- * carries the one process — so the same number was drawn on every row and
- * killed nothing. It stays in `mc --json` and in `mc status`.
+ * The variant of a build is in what it works on — a goal reads `mc/<goal>`,
+ * a project its name and step — so it costs the row no cell of its own; it
+ * is `variant` in `mc --json`. The tool and the pid are there too and not
+ * here: the model names the tool, and the pid is the runner's own, the same
+ * number on every row.
  */
 function laneLine(c, wide, lane) {
-  const s = lane.step;
+  const s = lane.session;
   if (!s) {
-    return `  ${c(MARK.quiet, 'grey')} ${c(pad(`lane ${lane.number ?? '?'}`, LANE_REPO), 'grey')} ${c('idle', 'grey')}`;
+    return `  ${c(MARK.quiet, 'grey')} ${c(pad(`lane ${lane.number ?? '?'}`, LANE_KIND + 1), 'grey')}${c('idle', 'grey')}`;
   }
-  const where = pad(clip(s.repo || lane.repo || 'unplaced', LANE_REPO - 1), LANE_REPO);
-  const at = s.step && s.steps ? `${s.kind || 'step'} ${s.step}/${s.steps}` : (s.kind || '');
+  const kind = String(s.kind || 'build');
+  const named = workWidth(wide);
   const checkIns = s.check_ins == null ? null : `${s.check_ins} check-in${s.check_ins === 1 ? '' : 's'}`;
-  const named = nameWidth(wide);
-  // The project's open pull requests ride right after the clock, in the colour
-  // a pull request has everywhere on the page: a lane working on a project
-  // whose step is already open as #N is the row that says why (Martin,
-  // 2026-10-09).
   const open = (s.prs || []).map((pr) => `#${pr.number}`).join(' ');
-  const left = `  ${c(MARK.running, 'green')} ${where} ${pad(clip(s.name, named - 1), named)} `
-    // Padded outside the paint, so the spaces after a cell are plain ones and
-    // a row that ends on a cell ends where its text does.
-    + `${cell(c, clip(at, LANE_STEP - 1), LANE_STEP, kindTone(s.kind))} `
+  // Padded outside the paint, so the spaces after a cell are plain ones and
+  // a row that ends on a cell ends where its text does.
+  const left = `  ${c(MARK.running, 'green')} ${cell(c, kind.toUpperCase(), LANE_KIND, kindTone(kind))} `
+    + `${pad(clip(sessionWork(s), named - 1), named)}`
+    + `${pad(clip(s.repo || lane.repo || 'unplaced', LANE_REPO - 1), LANE_REPO)}`
+    + `${cell(c, clip(s.model || s.tool || '', LANE_MODEL - 1), LANE_MODEL, ['grey'])}`
     // The clock carries its own colour: `elapsedTone` says when it has turned.
-    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))} `
+    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))}`
     + (open ? `${c(open, ...PR_TONE)}  ` : '');
   const room = Math.max(0, wide - width(left));
   const meta = paint(c, fitting(trailing([
-    // `credits` when the step runs on the API credit (step-credits); the plan
-    // is the ordinary case and says nothing.
-    { text: [s.tool, s.model, s.billing === 'credits' ? 'credits' : null].filter(Boolean).join(' '), styles: ['grey'] },
+    // `credits` when the session runs on the API credit (step-credits); the
+    // plan is the ordinary case and says nothing.
+    s.billing === 'credits' ? { text: 'credits', styles: ['grey'] } : null,
     s.advisor ? { text: `${s.advisor} advisor`, styles: ['grey'] } : null,
     checkIns ? { text: checkIns, styles: s.check_ins ? ['yellow'] : ['grey'] } : null,
   ]), room), room);
@@ -1406,7 +1439,7 @@ function mcLine(lines, c, wide, mc, caches, version) {
     { text: info.commit ? `${info.predecessor && info.pid ? `pid ${info.pid} ` : ''}on ${info.commit}` : '', styles: ['grey'] },
     {
       text: info.predecessor
-        ? `pid ${info.predecessor.pid} finishing ${info.predecessor.steps.length} step${info.predecessor.steps.length === 1 ? '' : 's'}${info.predecessor.steps.length ? ` (${info.predecessor.steps.join(', ')})` : ''}`
+        ? `pid ${info.predecessor.pid} finishing ${info.predecessor.steps.length} session${info.predecessor.steps.length === 1 ? '' : 's'}${info.predecessor.steps.length ? ` (${info.predecessor.steps.join(', ')})` : ''}`
         : '',
       styles: ['grey'],
     },
@@ -1462,13 +1495,13 @@ export function renderPageLines(data, {
   const cost = money(data.runner?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold')}${version ? c(`  ${version}`, 'grey') : ''}`;
   // What is true of the work, in three numbers that are all on the page below:
-  // the steps the runner has in flight (RUNNER), and the plans that are ready
+  // the sessions the runner has in flight (SESSIONS), and the plans that are ready
   // and blocked (PROGRAMMES). It said `N of M queued` until 2026-09-06, which
   // on an empty `queue.md` was `0 of 0 queued` while 41 projects had plans and
   // the runner was stepping one of them. The three ride in one part so that a
   // narrow terminal drops the cost rather than half of the answer.
   const statuses = data.programmes?.statuses || {};
-  const flight = (data.runner?.steps || []).length;
+  const flight = (data.runner?.sessions || []).length;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
     { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.waiting || 0} waiting · ${statuses.blocked || 0} blocked` },

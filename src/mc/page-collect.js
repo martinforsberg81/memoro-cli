@@ -57,6 +57,7 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
+import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
@@ -114,11 +115,19 @@ export const DECISIONS_NAMED = 3;
 /** How many stale blockers the line names before it only counts them. */
 export const STALE_NAMED = 3;
 
-/* ------------------------------------------------------------------- STEPS */
+/* ---------------------------------------------------------------- RUNNER */
 
 /**
- * The machine: the runner's steps, one per lane (`nowBlock`), a pending STOP,
- * the lane files whose process is gone, and one line of the day behind it.
+ * The machine: the runner's headless sessions, one per lane (`nowBlock`), a
+ * pending STOP, the lane files whose process is gone, and one line of the day
+ * behind it.
+ *
+ * A session is one of three kinds (session-kind.js): `plan`, `build` — of a
+ * project's step (variant `project`) or of a goal (variant `goal`) — and
+ * `review`. Each carries its `kind` and `variant`, and what it works on:
+ * `goal` (`mc/<goal>`) for a goal's, `name`, `step` and `steps` for a
+ * project's. The list is `sessions`, and the day counts outcomes per kind in
+ * `day.by_kind`; the page draws from these and nothing else.
  *
  * This was NOW, and NOW held two different kinds of thing at once — the
  * runner's steps and the sessions a person had open, drawn as one list of
@@ -256,7 +265,7 @@ export function runnerSection({
   memory = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
+  const { runner: process, steps: sessions, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -264,18 +273,20 @@ export function runnerSection({
     cacheWrite: acc.cacheWrite + (Number(r.cache_write) || 0),
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  for (const step of base.steps) {
-    const plan = byProject.get(step.name);
-    step.step = plan?.step ?? null;
-    step.steps = plan?.steps ?? null;
+  for (const session of sessions) {
+    // A goal's session has no plan step; its name is `goal:<programme>/<goal>`.
+    const plan = session.goal ? null : byProject.get(session.name);
+    session.step = plan?.step ?? null;
+    session.steps = plan?.steps ?? null;
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
     ...base,
+    sessions,
     stop_requested: stop && !Number.isNaN(stopAt)
       ? { at: new Date(stopAt).toISOString(), age_seconds: Math.max(0, Math.round((now.getTime() - stopAt) / 1000)) }
       : null,
-    lanes: lanesOfRunner(base.steps, repos, setting),
+    lanes: lanesOfRunner(sessions, setting),
     setting: { lanes: setting.lanes ?? DEFAULT_LANES },
     process,
     // One entry per repository the round could not ask GitHub about, while
@@ -285,6 +296,7 @@ export function runnerSection({
     production: productionSection({ deploy, attempt, live, now, alive }),
     day: {
       ...summariseRuns(rows),
+      by_kind: dayByKind(rows),
       tokens,
       cost: estimateCost(tokens, RUNNER_MODEL),
       model: RUNNER_MODEL,
@@ -294,7 +306,32 @@ export function runnerSection({
 }
 
 /**
- * The lanes, numbered through, whether or not each has a step.
+ * The day's outcomes per session kind: `{ plan, build, review }`, each with
+ * `sessions` and the buckets `summariseRuns` puts a row in — `merged`, `open`,
+ * `failed`, `timeout`, `other` — so the three add up to every session the
+ * runner ran. A row under an old word (`step`, `goal`) counts as the build it
+ * was. What is not a session of these kinds — a merge round, a mend, the
+ * helper's turns — is `other` beside them, a count and nothing more: the line
+ * before counted every row as a step, merge rounds and helper turns with them.
+ */
+export function dayByKind(rows = []) {
+  const groups = Object.fromEntries(SESSION_KINDS.map((kind) => [kind, []]));
+  let other = 0;
+  for (const row of rows) {
+    const named = sessionKind(row.kind);
+    if (named) groups[named.kind].push(row);
+    else other += 1;
+  }
+  const out = { other };
+  for (const kind of SESSION_KINDS) {
+    const { steps, merged, open, failed, timeout, other: rest } = summariseRuns(groups[kind]);
+    out[kind] = { sessions: steps, merged, open, failed, timeout, other: rest };
+  }
+  return out;
+}
+
+/**
+ * The lanes, numbered through, whether or not each has a session.
  *
  * A lane is what `mc run` drives and it exists between steps as much as during
  * one, so the rows are there step or no step: a lane between steps and a lane
@@ -304,29 +341,28 @@ export function runnerSection({
  * at four lanes on each of two repositories was eight rows under a cap of five:
  * three of them could never hold a step at the same time as the rest. The rows
  * are the slots the runner can actually fill now — the total `mc run lanes`
- * set — and a row is `lane 3`
- * until a step is in it, when the step's own repository is what the row says
- * (Martin, 2026-09-19).
+ * set, across every repository and every kind — and a row is `lane 3` until
+ * a session is in it, when the session is what the row says.
  *
- * The steps fill from the top, oldest first, so a row only moves when a step
- * above it ends. A step past the count — a runner started under a higher
+ * The sessions fill from the top, oldest first, so a row only moves when one
+ * above it ends. A session past the count — a runner started under a higher
  * setting than the file holds now — still gets its row: the lane file is the
  * runner saying it is there, and the page believes it over the setting.
  *
- * The step is the same object `steps` carries, not a copy — the two cannot
- * disagree about a lane, because there is one of it.
+ * The lane's `session` is the same object `sessions` carries, not a copy —
+ * the two cannot disagree about a lane, because there is one of it.
  */
-function lanesOfRunner(steps = [], repos = [], setting = {}) {
+function lanesOfRunner(sessions = [], setting = {}) {
   const slots = Number.isInteger(setting?.lanes) && setting.lanes > 0 ? setting.lanes : DEFAULT_LANES;
-  const running = [...steps].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
+  const running = [...sessions].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
     || String(a.name).localeCompare(String(b.name)));
   return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
-    const step = running[index] || null;
-    return { number: index + 1, repo: step?.repo ?? null, lane: step?.lane ?? null, step };
+    const session = running[index] || null;
+    return { number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, session };
   });
 }
 
-/* ---------------------------------------------------------------- SESSIONS */
+/* ------------------------------------------------------------- FOREGROUND */
 
 /** The two singleton desks, drawn whether or not anybody is at them. */
 export const DESKS = Object.freeze(['helper', 'brief']);
@@ -923,7 +959,13 @@ export function attachPrs({ programmes, runner, pulls }) {
   for (const group of programmes?.programmes || []) {
     for (const project of group.projects || []) project.prs = mine(project.repo, project.name);
   }
-  for (const step of runner?.steps || []) step.prs = mine(step.repo, step.name);
+  // A goal's pull request is its branch's, `goal/<goal>`; a project's, its own.
+  for (const session of runner?.sessions || []) {
+    session.prs = session.goal
+      ? pulls.items.filter((item) => item.branch === `goal/${session.goal.split('/').pop()}`
+        && (session.repo == null || item.repo === session.repo))
+      : mine(session.repo, session.name);
+  }
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -1796,7 +1838,7 @@ export async function collectPage({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
-    running: runner.steps.map((step) => step.name).filter(Boolean),
+    running: runner.sessions.map((session) => session.name).filter(Boolean),
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),
@@ -1853,7 +1895,7 @@ export async function collectPage({
       predecessor: runnerFile?.predecessor?.pid && alive(runnerFile.predecessor.pid)
         ? {
           pid: runnerFile.predecessor.pid,
-          steps: runner.steps.filter((step) => step.pid === runnerFile.predecessor.pid).map((step) => step.name).filter(Boolean),
+          steps: runner.sessions.filter((session) => session.pid === runnerFile.predecessor.pid).map((session) => session.name).filter(Boolean),
         }
         : null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),
