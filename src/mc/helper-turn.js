@@ -36,6 +36,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
+import { withoutSessionIdentity } from './session-role.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -248,7 +249,7 @@ export async function runHelperTurn({
   const tool = gatewayLaunch({ provider, model: model || role.model, bin: launch.spec.bin, args, billing: billing.billing });
 
   const result = await (deps.session || realSession)({
-    bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv(env),
+    bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake' }),
   });
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,

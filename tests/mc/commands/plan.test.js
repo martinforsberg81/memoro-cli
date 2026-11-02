@@ -341,6 +341,8 @@ describe('the launch', () => {
     assert.equal(opened[0].areaRoot, '/work/plan/msr-core');
     assert.equal(opened[0].worktree.path, '/work/plan/msr-core');
     assert.equal(opened[0].areaName, 'plan/msr-core');
+    assert.equal(opened[0].programme, 'msr-core');
+    assert.equal(opened[0].roleName, 'plan');
     // The session already in the directory is picked up, with no intro;
     // `pick: null` is `openInWorkArea`'s "the most recent one here, else new".
     assert.equal(opened[0].pick, null);
@@ -451,5 +453,30 @@ describe('a standing planning checkout', () => {
     assert.equal(result.ok, true);
     assert.deepEqual(attached, [checkout]);
     assert.match(stderr.out.text, /mc: dependencies not attached in .*memoro — npm error boom/u);
+  });
+});
+
+
+describe('mc plan is the person’s entrance, not a session’s next action', () => {
+  it('refuses every recognised session and agent before choosing or creating anything', async () => {
+    for (const [cwd, extra, role] of [
+      ['/outside', { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' }, 'plan'],
+      ['/outside', { MC_ROLE: 'review' }, 'review'],
+      ['/outside', { MC_GOAL: 'mc/g' }, 'goal'],
+      ['/outside', { MC_STEP: 'p:0' }, 'step'],
+      ['/mc/programs/mc', {}, 'plan'],
+      ['/outside', { CLAUDECODE: '1' }, 'coding-agent'],
+      ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent'],
+    ]) {
+      const stderr = sink();
+      const code = await run(['mc'], {
+        cwd, env: { MC_WORK_ROOT: '/mc', ...extra }, stderr, stdout: sink(),
+        ensure: () => { throw new Error('must not create an area'); },
+        open: () => { throw new Error('must not open another session'); },
+      });
+      assert.equal(code, 1);
+      assert.match(stderr.out.text, new RegExp(`already in a ${role} session`));
+      for (const command of ['mc project new', 'mc project step add', 'mc project send']) assert.ok(stderr.out.text.includes(command));
+    }
   });
 });

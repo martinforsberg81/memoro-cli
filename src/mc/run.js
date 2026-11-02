@@ -155,6 +155,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
+import { withoutSessionIdentity } from './session-role.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
 import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
@@ -641,7 +642,7 @@ export function realDeps(env = process.env) {
     // is taken out of the merged environment by `streamSession`.
     session: (options) => streamSession({
       ...options,
-      env: { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...(options.env || {}) },
+      env: { ...withoutSessionIdentity(env), BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...(options.env || {}) },
     }),
     // `mc run --update`: this runner's replacement, on the code that is on
     // disk now. Node read its whole module graph at process start, so the only
@@ -2278,6 +2279,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          MC_ROLE: 'goal', MC_PROGRAMME: goal.programme,
           MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
           ...scratchEnv,
@@ -2688,6 +2690,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          MC_ROLE: kind,
+          ...(plan?.programme ? { MC_PROGRAMME: plan.programme } : {}),
           ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
           ...scratchEnv,
         },

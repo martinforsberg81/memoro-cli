@@ -20,9 +20,8 @@
  * and removed the round its plan says done (Martin, 2026-08-31: "en mc plan
  * sessions workarea ska aldrig vara hopkopplad till något som körs av mc run").
  *
- * So planning sessions live under `plan/` — mc's own directory, beside
- * `runner/`, `intake/` and `brief/` — as `plan/<programme>/` (`programs/` in
- * layout 2), holding a
+ * Planning sessions live under `programs/<programme>/` (layout 2),
+ * or `plan/<programme>/` on a legacy layout-1 machine, holding a
  * checkout of both repositories on branch `plan/<programme>`. The runner
  * cannot reach one, and not by a rule about names that could be forgotten:
  * `mc run`'s `workareas()` and `mc status`'s `areasWithCheckout()` both list
@@ -47,6 +46,7 @@ import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { run as runGit } from '../git.js';
+import { planSessionRefusal } from '../session-role.js';
 import { scanArgs } from './flags.js';
 
 function sh(cmd, args, { cwd } = {}) {
@@ -79,7 +79,9 @@ export const planArea = (programme, env = process.env) => planAreaName(programme
 export const planBranch = (programme) => `plan/${programme}`;
 
 const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n'
-  + '        mc plan <programme> --archive\n';
+  + '        mc plan <programme> --archive\n'
+  + 'Person only: opens or resumes an interactive plan session. Never run inside a session.\n'
+  + 'Already planning? Use mc project new, mc project step add and mc project send.\n';
 
 /** What `chooseProgramme` returns for "not one of these" — never a real name. */
 const NEW_PROGRAMME = Symbol('new programme');
@@ -99,6 +101,11 @@ export async function run(argv, deps = {}) {
   }
 
   const env = deps.env || process.env;
+  const refusal = planSessionRefusal({ cwd: deps.cwd || process.cwd(), env });
+  if (refusal) {
+    stderr.write(`mc: ${refusal}\n`);
+    return 1;
+  }
   const repos = deps.repos || defaultRepos(env);
 
   let programme = opts.name;
@@ -166,6 +173,8 @@ export async function run(argv, deps = {}) {
   // session, ska samma öppnas utan intro").
   const launch = planLaunch({ programme, repos: ready.repos, role, env });
   const result = await (deps.open || openInWorkArea)({
+    env,
+    programme,
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },
     tool: opts.tool || role.tools?.[0] || 'claude',

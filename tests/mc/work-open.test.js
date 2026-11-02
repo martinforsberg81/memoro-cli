@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { sessionArgs, toolArgs } from '../../src/adapters/claude-code.js';
+import { SESSION_IDENTITY_ENV } from '../../src/mc/session-role.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
@@ -30,6 +31,7 @@ const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 // Every claude launch carries these: no CLAUDE.md, no auto-memory, and the
 // role's prompt-cache TTL — an hour unless the caller says otherwise.
 const SETTINGS = [...toolArgs(), ...sessionArgs()];
+const QUOTED_IDENTITY = ['env', ...SESSION_IDENTITY_ENV.flatMap((key) => ['-u', key]), 'MC_ROLE=work'].map((arg) => `'${arg}'`).join(' ');
 const QUOTED_SETTINGS = SETTINGS.map((arg) => `'${arg}'`).join(' ');
 
 /** A work area plus a tool store, both throwaway. */
@@ -375,8 +377,19 @@ describe('startInBackground and --model', () => {
     const { calls, run } = tmux();
     startInBackground({ name: 'x', areaRoot, worktree, env, run });
     const command = creation(calls);
-    assert.match(command, /^'env' '-u' 'ANTHROPIC_API_KEY' '-u' 'OPENAI_API_KEY' 'claude'/u);
+    assert.match(command, /^'env' '-u' 'ANTHROPIC_API_KEY' '-u' 'OPENAI_API_KEY'.*'MC_ROLE=work' 'claude'/u);
     assert.doesNotMatch(command, /ambient-(?:anthropic|openai)-key/u);
+  });
+
+  it('passes a worker role without inheriting the caller goal, on a new launch and a resume', () => {
+    const { areaRoot, worktree, env } = fixture();
+    Object.assign(env, { MC_ROLE: 'goal', MC_GOAL: 'mc/g', MC_PROGRAMME: 'mc' });
+    for (const conversation of [null, { id: CONVERSATION_ID }]) {
+      const { calls, run } = tmux();
+      startInBackground({ name: 'x', areaRoot, worktree, env, roleName: 'worker', conversation, run });
+      assert.match(creation(calls), /'MC_ROLE=worker'/u);
+      assert.doesNotMatch(creation(calls), /'MC_GOAL=|'MC_PROGRAMME=/u);
+    }
   });
 
   it('the model survives the shell, quoting and all', () => {
@@ -388,7 +401,7 @@ describe('startInBackground and --model', () => {
     assert.equal(started.ok, true);
     // Single-quoted for the shell tmux runs the command through: an embedded
     // quote becomes '\'' and spaces stay inside one argument.
-    assert.equal(creation(calls), `'claude' '--model' 'o'\\''pus model' ${QUOTED_SETTINGS} 'fix it'`);
+    assert.equal(creation(calls), `${QUOTED_IDENTITY} 'claude' '--model' 'o'\\''pus model' ${QUOTED_SETTINGS} 'fix it'`);
   });
 
   it('the model rides in front of the instructions, both quoted', () => {
@@ -399,17 +412,17 @@ describe('startInBackground and --model', () => {
     });
     assert.equal(started.ok, true);
     const quoted = `${sharedRoleText()}\n\n---\n\nTHE\nOVERLAY`.replace(/'/gu, "'\\''");
-    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' '${quoted}' ${QUOTED_SETTINGS}`);
+    assert.equal(creation(calls), `${QUOTED_IDENTITY} 'claude' '--model' 'opus' '--append-system-prompt' '${quoted}' ${QUOTED_SETTINGS}`);
   });
 
-  it('without the flag the command is exactly what it always was', () => {
+  it('without the flag only the session identity precedes the tool', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
       name: 'x', areaRoot, worktree, tool: 'claude', env, run,
     });
     assert.equal(started.ok, true);
-    assert.equal(creation(calls), `'claude' ${QUOTED_SETTINGS}`);
+    assert.equal(creation(calls), `${QUOTED_IDENTITY} 'claude' ${QUOTED_SETTINGS}`);
   });
 
   it('opening the area again removes the mark mc work stop left (KP-09)', async () => {
@@ -432,7 +445,7 @@ describe('startInBackground and --model', () => {
     const { areaRoot, worktree, env } = fixture();
     const fresh = tmux();
     startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', cache: '5m', env, run: fresh.run });
-    assert.equal(creation(fresh.calls), `'claude' ${[...toolArgs(), ...sessionArgs({ cache: '5m' })].map((arg) => `'${arg}'`).join(' ')} 'go'`);
+    assert.equal(creation(fresh.calls), `${QUOTED_IDENTITY} 'claude' ${[...toolArgs(), ...sessionArgs({ cache: '5m' })].map((arg) => `'${arg}'`).join(' ')} 'go'`);
     assert.match(creation(fresh.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"/u);
 
     const resumed = tmux();
@@ -440,7 +453,7 @@ describe('startInBackground and --model', () => {
       name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', env, run: resumed.run,
       conversation: { id: CONVERSATION_ID, model: null },
     });
-    assert.equal(creation(resumed.calls), `'claude' '--resume' '${CONVERSATION_ID}' ${QUOTED_SETTINGS} 'go'`);
+    assert.equal(creation(resumed.calls), `${QUOTED_IDENTITY} 'claude' '--resume' '${CONVERSATION_ID}' ${QUOTED_SETTINGS} 'go'`);
     assert.match(creation(resumed.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"/u);
   });
 
@@ -452,6 +465,27 @@ describe('startInBackground and --model', () => {
       defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex',
     });
     assert.equal(started.ok, true);
-    assert.equal(creation(calls), `'claude' ${QUOTED_SETTINGS}`);
+    assert.equal(creation(calls), `${QUOTED_IDENTITY} 'claude' ${QUOTED_SETTINGS}`);
+  });
+});
+
+
+describe('foreground launch identity', () => {
+  it('sets the role for plan, brief and helper, on a new conversation and a resume', async () => {
+    for (const roleName of ['plan', 'brief', 'helper']) {
+      for (const resumed of [false, true]) {
+        const { areaRoot, worktree, env } = fixture(resumed ? { entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
+        const { calls, options } = opening();
+        Object.assign(env, { MC_ROLE: 'goal', MC_GOAL: 'wrong/g', MC_PROGRAMME: 'wrong', MC_STEP: 'wrong:0', MC_PROJECT: 'wrong' });
+        await openInWorkArea({ areaRoot, worktree, env, roleName, programme: roleName === 'plan' ? 'mc' : null, ...options });
+        assert.equal(calls[0].args.includes('--resume'), resumed);
+        const child = calls[0].spawnOptions.env;
+        assert.equal(child.MC_ROLE, roleName);
+        assert.equal(child.MC_PROGRAMME, roleName === 'plan' ? 'mc' : undefined);
+        assert.equal(child.MC_GOAL, undefined);
+        assert.equal(child.MC_STEP, undefined);
+        assert.equal(child.MC_PROJECT, undefined);
+      }
+    }
   });
 });

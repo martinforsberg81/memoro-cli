@@ -148,3 +148,18 @@ describe('mc <verb> --help', () => {
     assert.equal(result.stderr, '');
   });
 });
+
+
+describe('help names the caller, not only the operation', () => {
+  it('marks session entrances as the person’s and names the session’s plan-writing verbs', () => {
+    const result = runMc(['--help']);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Person: mc plan, mc brief, mc helper open interactive sessions/u);
+    assert.match(result.stdout, /mc run start\|stop controls the headless runner/u);
+    assert.match(result.stdout, /Session: mc project new \/ step add \/ send/u);
+    const plan = runMc(['plan', '--help'], { env: { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' } });
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.match(plan.stdout, /Person only: opens or resumes an interactive plan session/u);
+    assert.match(plan.stdout, /Never run inside a session/u);
+  });
+});

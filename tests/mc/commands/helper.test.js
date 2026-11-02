@@ -86,6 +86,7 @@ describe('mc helper — the desk', () => {
     assert.equal(result.opened.worktree.is_git, false);
     assert.equal(result.opened.pick, null);
     assert.equal(result.opened.verb, 'helper');
+    assert.equal(result.opened.roleName, 'helper');
     assert.equal(result.opened.tool, 'claude');
     assert.equal(result.opened.defaultModel, 'sonnet');
     assert.match(result.opened.overlay, /^You are the helper/u);

@@ -72,9 +72,17 @@ async function turn(overrides = {}, options = {}) {
 }
 
 describe('the helper turn', () => {
+  it('does not inherit its caller’s goal or step identity', async () => {
+    const { seen } = await turn({}, { env: { ...env(), MC_ROLE: 'goal', MC_PROGRAMME: 'wrong', MC_GOAL: 'wrong/g', MC_STEP: 'p:0', MC_PROJECT: 'p' } });
+    assert.equal(seen.env.MC_ROLE, 'intake');
+    for (const key of ['MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT']) assert.equal(seen.env[key], undefined);
+  });
+
   it('runs the role\'s tool and model, standing in the intake directory', async () => {
     const { result, seen, env: e } = await turn();
     assert.equal(seen.bin, '/usr/bin/claude');
+    assert.equal(seen.env.MC_ROLE, 'intake');
+    assert.equal(seen.env.MC_PROGRAMME, undefined);
     assert.equal(seen.cwd, intakeDir(e), 'nothing outside ~/mc/intake is in reach');
     assert.equal(seen.timeoutMs, 10 * 60_000);
     assert.deepEqual(seen.args.slice(0, 2), ['-p', seen.args[1]]);

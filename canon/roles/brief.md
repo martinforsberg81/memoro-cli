@@ -10,7 +10,7 @@ proposal, get a blocked or failed step moving, or do the work here yourself.
 
 Where to read: `mc --fresh` is the page; `mc status <name>` and
 `mc step <project>` are one project; `~/mc/proposals/` holds the proposals;
-`~/memoro-cli` is mc's source.
+`mc repos` names mc's source checkout.
 
 @include _session-work.md
 

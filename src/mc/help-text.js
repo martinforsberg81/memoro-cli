@@ -9,8 +9,8 @@ THE PAGE
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
 
 PLAN AND FOLLOW
-  mc brief                        Decide what to work on next
-  mc plan [<programme>]            Plan a programme; no name asks which
+  mc brief                        Person: open or resume the brief session
+  mc plan [<programme>]            Person: open or resume a plan session
   mc status <name>                 One project, whole
   mc step <project>                Where each step stands
   mc project <name>                Show a sent plan or a draft
@@ -19,7 +19,7 @@ PLAN AND FOLLOW
 
 RUN AND LAND
   mc run                          The headless runner
-  mc run start | stop [--force]    Start, or stop after its steps (--force: now)
+  mc run start|stop [--force]      Person: start/stop the runner; --force: now
   mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun
@@ -40,6 +40,15 @@ WORKSPACES
   mc tidy [--apply]               Preview removals; --apply rechecks and removes
 
 IN FULL
+WHO USES THE VERBS
+  Person: mc plan, mc brief, mc helper open interactive sessions;
+          mc run start|stop controls the headless runner. A session never
+          starts itself with these verbs. mc plan refuses inside a session.
+  Session: mc project new / step add / send writes plans; mc step records
+           progress; mc gate, mc shot and mc publish do the work.
+  Person's acts: mc deploy, mc language writes, runner controls and session
+                 open/stop/replace verbs. Read-only views serve both.
+
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
@@ -522,17 +531,17 @@ IN FULL
   mc log --open                    Gate rounds that started and never ended,
                                     with the lease each left behind. It only
                                     reads: releasing one stays your decision
-  mc brief [--new]                 The evaluation session: opens (or
+  mc brief [--new]                 Person: opens (or
                                     resumes) the brief in ~/mc/brief/ with
                                     its role and gathers nothing — it reads
                                     the page, mc status and mc step itself
-  mc helper                        The desk: a session in ~/mc/helper/ that
+  mc helper                        Person: opens the desk in ~/mc/helper/; it
                                     takes your report of a bug or something
                                     that should be better and writes it into
                                     ~/mc/proposals/<date>-<mc|memoro>-<x>.md.
                                     It reads no digest, touches no proposal
                                     that is already there, and fixes nothing
-                                    — you pick it up at mc brief or mc plan
+                                    — Martin picks it up in his brief or plan session
                                     (--codex|--claude, --model <m> as usual)
   mc helper --intake               The eye on production: the daily digest,
                                     then one headless turn that reads it and
@@ -551,14 +560,16 @@ IN FULL
                                     …a different window, more fingerprints,
                                     another bar for marking one \`!\`, or a
                                     model other than the role's
-  mc plan <programme>              A session in a directory, told which
+  mc plan <programme>              Person: opens a plan session, told which
                                     programme it is for. A fresh foreground
                                     session in the programme's directory, both
                                     repositories checked out on
                                     plan/<programme>. What comes out of it is
                                     yours and its to work out — the prompt
                                     predicts no plan, no project and no PR.
-                                    Never a workarea — mc run cannot see it
+                                    Never a workarea — mc run cannot see it.
+                                    Already a session: never run mc plan; use
+                                    mc project new / step add / send instead
   mc plan                          …asks which programme first: the ones on
                                     main, the ones being planned, or a new
                                     one you name. --codex|--claude, --model

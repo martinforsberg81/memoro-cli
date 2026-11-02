@@ -3,13 +3,13 @@
 Ruling 51 moves a programme's directory, the runner's step and deps areas, and
 each project's register beside its plan. mc knows two layouts at once:
 
-- **layout 1** — today's: `~/mc/plan/`, `~/mc/step/`, `~/mc/runner/projects/`.
-- **layout 2** — ruling 51's: `~/mc/programs/`, `~/mc/runner/step/`,
+- **layout 1** — legacy: `<work root>/plan/`, `~/mc/step/`, `~/mc/runner/projects/`.
+- **layout 2** — current: `~/mc/programs/`, `~/mc/runner/step/`,
   `~/mc/runner/deps/`, and each project's `STATE.json` beside its `PLAN.json`.
 
 Every module asks which one holds; none of them knows the paths of its own. Layout
-1's code is still here. It goes in a later project, once this machine is on
-layout 2 — until then both are supported, and the layout file decides.
+1's code is still here. It goes in a later project, after the compatibility
+period. Both are still supported, and the layout file decides.
 
 ## The two layouts side by side
 
@@ -34,10 +34,10 @@ Layout 2 is the tree in [ruling 51](../project/mc/rulings.md) and
 ~/mc/work/<name>/<repo>/              a person's workareas, unchanged
 ```
 
-Layout 1, which this machine is on until it migrates:
+Legacy layout 1, before migration:
 
 ```
-~/mc/plan/<programme>/<repo>/         the programme session's worktrees
+<work root>/plan/<programme>/<repo>/         the programme session's worktrees
 ~/mc/step/<project>/<repo>/           a step's worktree; step/deps-… for mc deps bump
 ~/mc/runner/projects/<project>.json   the register
 ~/mc/runner/projects/.lock            the lock

@@ -22,6 +22,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { SESSION_IDENTITY_ENV, sessionLaunchEnvironment } from './session-role.js';
 import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { workAreaName, workAreaPath, workRoot } from './paths.js';
@@ -55,6 +56,7 @@ export async function openInWorkArea({
   // is handed the text and could never say what it was; the register that
   // outlives this launch has to (see `roleRecord`).
   roleName = null,
+  programme = null,
   roleSource = null,
   // The role's prompt-cache TTL (ruling 40); a launch without a role is an hour.
   cache = '1h',
@@ -162,7 +164,8 @@ export async function openInWorkArea({
   });
   let result;
   try {
-    result = spawn(toolLaunch.bin, toolLaunch.args, { cwd: worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(env) });
+    const childEnv = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName, programme });
+    result = spawn(toolLaunch.bin, toolLaunch.args, { cwd: worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(childEnv) });
   } finally {
     release();
   }
@@ -312,6 +315,8 @@ export function startInBackground({
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  roleName = null,
+  programme = null,
   cache = '1h',
   env = process.env,
   run = null,
@@ -326,7 +331,7 @@ export function startInBackground({
   }
 
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
+    task, model, overlay, defaultModel, defaultModelTool, conversation, roleName, programme, cache,
     areaRoot, cwd: worktree.path, env,
   });
 
@@ -386,6 +391,8 @@ function launchCommand(launch, {
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  roleName = null,
+  programme = null,
   cache = '1h',
   areaRoot,
   cwd,
@@ -422,8 +429,10 @@ function launchCommand(launch, {
   // prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
   // --append-system-prompt-file to point at instead.
-  const unset = PROVIDER_API_ENV_NAMES.filter((name) => Object.hasOwn(env, name));
-  return [...(unset.length ? ['env', ...unset.flatMap((name) => ['-u', name])] : []), ...args].map(shellQuote).join(' ');
+  const unset = [...PROVIDER_API_ENV_NAMES.filter((name) => Object.hasOwn(env, name)), ...SESSION_IDENTITY_ENV];
+  const childEnv = sessionLaunchEnvironment({ env, cwd, role: roleName, programme });
+  const identity = SESSION_IDENTITY_ENV.filter((key) => childEnv[key]).map((key) => `${key}=${childEnv[key]}`);
+  return ['env', ...unset.flatMap((name) => ['-u', name]), ...identity, ...args].map(shellQuote).join(' ');
 }
 
 /**
@@ -460,6 +469,8 @@ export function respawnInBackground({
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  roleName = null,
+  programme = null,
   cache = '1h',
   graceful = true,
   env = process.env,
@@ -479,7 +490,7 @@ export function respawnInBackground({
   }
   const window = `${target}:${index}`;
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
+    task, model, overlay, defaultModel, defaultModelTool, conversation, roleName, programme, cache,
     areaRoot, cwd: worktree.path, env,
   });
 

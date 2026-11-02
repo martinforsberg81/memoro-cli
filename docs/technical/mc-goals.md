@@ -6,7 +6,7 @@
 
 A goal is two text files and a worktree, beside projects. It has no steps, no
 register, no owner and no merge door. A goal session does the work and
-publishes its pull request; a person or a plan session merges it. The ruling is [`rulings.md`](../project/mc/rulings.md) § 60 with its
+publishes its pull request; a person or the interactive plan session Martin opens merges it. The ruling is [`rulings.md`](../project/mc/rulings.md) § 60 with its
 2026-11-01 clarification; the earlier brief,
 [`autonomy-goals.md`](../project/mc/autonomy-goals.md), is superseded.
 
@@ -140,8 +140,8 @@ person; the runner sets `blocked` only in step 5. `open` goals are picked.
   session runs, and the `runs.tsv` row. Nothing else.
 - **No owner, lease, revision or capability report.** Anyone may work in the
   worktree; the last entry says what was done.
-- **No review of its own.** A person or a plan session reads the pull request.
-- **No merge door.** `mc merge` is a person's or a plan session's act. The role
+- **No review of its own.** A person or the interactive plan session Martin opens reads the pull request.
+- **No merge door.** `mc merge` is a person's or the interactive plan session's act. The role
   holds a goal session to `--no-merge`; neither `mc merge` nor `mc publish` checks.
 - **No close-out.** No archive verb; a `done` goal stays where it is.
 

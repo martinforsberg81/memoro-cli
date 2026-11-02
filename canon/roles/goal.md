@@ -19,7 +19,8 @@ Commit as you go, in commits that stand on their own; never leave work only in
 the tree. Before you finish: `mc gate` on what you changed, fix the red, commit,
 then `mc publish --no-merge --title "…" --body-file <file>` (file in
 `$MC_SCRATCH`). That pushes and opens the PR and queues nothing. Merging is not
-yours: a person or a plan session runs `mc merge` when the goal is done.
+yours: a person or the interactive plan session Martin opens runs `mc merge`
+when the goal is done. A headless plan session is not built yet.
 
 End with `mc goal log --done "…" --comment "…" --next "…"`.
 

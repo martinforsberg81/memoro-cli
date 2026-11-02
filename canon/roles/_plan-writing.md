@@ -75,7 +75,7 @@ start to finish, and know when it is done? If not, it is not a step
     plan or the API is billing's to decide, not the step's. A plan sent before
     this rule keeps its concrete models and runs on them. A catalog edit never
     rewrites a plan, and `mc plan` remains the tool Martin chooses when starting
-    a plan.
+    a plan session; the session never runs `mc plan` itself.
   - **Review is not a class a step names.** `mc project send` adds the review
     step last. It runs the one review model Martin configures with
     `mc model set review` (Claude Opus at high effort at launch), on either tool,
@@ -84,8 +84,9 @@ start to finish, and know when it is done? If not, it is not a step
   - Never put `model` in the plan's own `runner`: it makes every step that
     model. The model is named on each step, never left to the default.
 - **Codex.** `gpt-6.1-sol` and `gpt-6-luna` are Codex's models, not stand-ins
-  for `haiku` or `opus`. A concrete Codex name goes on a `--tool codex` plan, and
-  a Claude name is refused there. A class names no tool, so the plan's
+  for `haiku` or `opus`. On a legacy sent plan, a concrete Codex name belongs
+  to a `--tool codex` plan, and a Claude name is refused there. New steps name
+  a work class, never a concrete model. A class names no tool, so the plan's
   `runner.tool` does not apply to it. `effort` takes the same five levels on
   both tools; on codex it reaches the session as `-c model_reasoning_effort=<level>`.
   The name goes to `codex exec -m`, and which names exist is for the installed,
@@ -97,8 +98,8 @@ start to finish, and know when it is done? If not, it is not a step
 - **Leave out:** the case for the plan, history, what the code already shows.
 - **Validate:** `mc project send` is the validation; it refuses and says why.
 - **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
-  move, name them in the PR body, and carry into the plan everything it needs
-  from them — nobody reads the archive (ruling 22).
+  move, name them in the session's account, and carry into the plan everything
+  it needs from them — nobody reads the archive (ruling 22).
 - **Decisions:** cite by name, never by path. Record the ruling in
   `docs/project/<programme>/rulings.md`: the question, Martin's answer quoted,
   the plan that carries it.

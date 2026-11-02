@@ -254,11 +254,15 @@ describe('a mend (merger-hardening step 6)', () => {
     register();
     writeQueue([JOB]);
     const mm = mendMachine({ pushed: true });
+    mm.deps.env = { ...process.env, MC_ROLE: 'goal', MC_PROGRAMME: 'wrong', MC_GOAL: 'wrong/g', MC_STEP: 'p:0', MC_PROJECT: 'p' };
     const run = await serveWith({ reports: [conflict, green], mm });
     assert.equal(run.code, 0);
     assert.equal(mm.sessions.length, 1);
     const dir = join(root, 'runner', 'mend', 'memoro-cli-671');
     assert.equal(mm.sessions[0].cwd, dir);
+    assert.equal(mm.sessions[0].env.MC_ROLE, 'mend');
+    assert.equal(mm.sessions[0].env.MC_PROGRAMME, 'mc');
+    for (const key of ['MC_GOAL', 'MC_STEP', 'MC_PROJECT']) assert.equal(mm.sessions[0].env[key], undefined);
     const add = mm.git.find((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
     assert.deepEqual(add.args, ['worktree', 'add', '-q', '--detach', dir, 'origin/mq']);
     assert.equal(add.cwd, '/repos/memoro-cli');
