@@ -360,7 +360,7 @@ in [mc-keys.md](technical/mc-keys.md).
 
 | Command | Does |
 |---|---|
-| `mc vault <verb>` | **Person**: The Memoro token vault: `setup`, `unlock`, `lock`, `status`, `set`, `get`, `list`, `rm`, `rotate`, `bind`, `bindings`, `import`, `scan`, `audit`, `adopt`, `hydrate`, `devices`, `recovery`, `recover`, `migrate`. Bare `mc vault` prints them with what each one takes. |
+| `mc vault <verb>` | **Person**: The Memoro token vault: `setup`, `unlock`, `lock`, `status`, `set`, `get`, `list`, `rm`, `rotate`, `bind`, `bindings`, `import`, `scan`, `audit`, `adopt`, `hydrate`, `devices`, `revoke-device`, `change-password`, `recovery`, `recover`, `destroy-forgotten`, `migrate`. Bare `mc vault` prints them with what each one takes. |
 
 `mc vault` is the whole of `src/bin-mc.js`'s table. It is kept by the `mc-cut`
 contract rather than by reachability, which is a distinction worth writing
@@ -400,7 +400,7 @@ These existed before the V1 cutover and are gone. Nothing forwards to them.
 | `mc reconcile` | Reconciled the global registry, which no longer exists. |
 | `mc fanout`, `mc gather` | Plan-driven multi-session orchestration built on the registry. |
 | `mc sessions watch \| stop \| remove` | Broker-owned session control. There is no broker and no session to control; `mc work stop <name>` stops what is running in a work area. |
-| `mc setup`, `mc install-shell`, `mc auth`, `mc tool-auth`, `mc connections`, `mc github`, `mc coding-profile`, `mc dev`, `mc deps`, `mc cloud-session`, `mc cloud-runtime`, `mc security`, `mc migrate` | The capability table, removed 2026-09-03. Every one of them was a door into the session manager, the managed providers or the cloud runtimes — none is reached by the page or by any verb that survives it. `mc vault` is what is left of that table. |
+| `mc setup`, `mc install-shell`, `mc auth`, `mc tool-auth`, `mc connections`, `mc github`, `mc coding-profile`, `mc dev`, `mc deps`, `mc cloud-session`, `mc cloud-runtime`, `mc security`, `mc migrate` | The capability table, removed 2026-09-03. Every one of them was a door into the session manager, the managed providers or the cloud runtimes — none is reached by the page or by any verb that survives it. `mc vault` is what is left of that table. Today's `mc dev` and `mc deps` are later verbs that share only the name. |
 
 `registry.json`, `hosts/`, `managed-sessions/`, `managed-session-identities/`,
 and the broker sockets were read only by the migrator. They were removed from

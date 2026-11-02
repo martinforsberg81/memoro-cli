@@ -555,12 +555,12 @@ ${commandReference('model')}
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,
                                     bind, bindings, import, scan, audit,
-                                    adopt, hydrate, devices, recovery,
-                                    recover, migrate. mc vault with no verb
-                                    prints them with what each one takes. The
-                                    one capability verb that is not a door
-                                    into the session manager, and the one
-                                    this cut keeps
+                                    adopt, hydrate, devices, revoke-device,
+                                    change-password, recovery, recover,
+                                    destroy-forgotten, migrate. mc vault with
+                                    no verb prints them with what each one
+                                    takes. The one capability verb that is
+                                    not a door into the session manager
 
 WHAT IS NOT HERE
   There is no verb that lists work. mc is the page; a second list beside the
@@ -571,7 +571,8 @@ WHAT IS NOT HERE
   the fourteen verbs that were their doors — setup, install-shell, auth,
   tool-auth, connections, github, coding-profile, dev, deps, cloud-session,
   cloud-runtime, security, doctor, migrate, and the session verbs before them
-  — went on 2026-09-03. A work area is a directory, the worktrees it spans and
+  — went on 2026-09-03. Today's mc dev and mc deps are later verbs that
+  share only the name: dev servers, and dependency updates. A work area is a directory, the worktrees it spans and
   the conversations started in it, and nothing else about it is mc's to know.
 
 REQUIREMENTS
