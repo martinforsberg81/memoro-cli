@@ -243,7 +243,7 @@ describe('the live page under the prompt', () => {
     assert.ok(writes.startsWith(SAVE), writes);
     assert.ok(writes.endsWith(RESTORE), writes);
     assert.ok(writes.includes('cached 3 h'), 'the row that changed is written');
-    assert.ok(!writes.includes('RUNNER') && !writes.includes('PROGRAMMES'), 'no other row is');
+    assert.ok(!writes.includes('STEPS') && !writes.includes('PROGRAMMES'), 'no other row is');
     assert.ok(!writes.includes('>'), 'the prompt is not reprinted');
     // Three page rows and four newlines under them: the first page row sits 7
     // rows above the cursor, the last of them 5.
@@ -311,7 +311,7 @@ describe('the live page under the prompt', () => {
     const held = it_.stdout.since(mark);
     assert.match(held, /holding the last frame — git: not a repository/u);
     assert.ok(!held.includes('and a second line'), 'one line, not a stack');
-    assert.ok(!held.includes('RUNNER'), 'the frame on screen is left exactly where it is');
+    assert.ok(!held.includes('STEPS'), 'the frame on screen is left exactly where it is');
     // In the blank row the menu prints between the page and the keys: four
     // rows up, and back, so nothing grows and nothing scrolls.
     assert.ok(held.startsWith(`${SAVE}${ESC}[4A`), JSON.stringify(held));

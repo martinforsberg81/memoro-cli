@@ -225,7 +225,7 @@ function row(c, wide, left, middle, right, tone = null) {
 /* --------------------------------------------------------------- sections */
 
 /**
- * RUNNER — what `mc run` is doing, and nothing else.
+ * STEPS — what `mc run` is doing, and nothing else.
  *
  * It was NOW, and NOW drew the runner's steps and the sessions a person had
  * open as one list of dots. The two are stopped by different things and read
@@ -259,7 +259,7 @@ function runnerLines(lines, c, wide, runner) {
   ];
   if ((alive || flight) && lanes.length) counts.push({ text: `${lanes.length} lane${lanes.length === 1 ? '' : 's'}`, styles: ['grey'] });
   counts.push({ text: `${now.queue?.projects ?? 0} queued`, styles: ['grey'] });
-  heading(lines, c, wide, 'RUNNER', between(counts, ' · '), 'mc run');
+  heading(lines, c, wide, 'STEPS', between(counts, ' · '), 'mc run');
   if (lanes.length && (alive || flight)) {
     for (const lane of lanes) lines.push(laneLine(c, wide, lane));
   } else {
@@ -333,7 +333,6 @@ function dayLine(lines, c, wide, day) {
   const count = (label, n, styles) => ({ text: `${label} ${n}`, styles: n ? styles : ['grey'] });
   lines.push(`  ${paint(c, between([
     { text: `${day.steps} steps in 24 h`, styles: ['grey'] },
-    count('merged', day.merged, ['green']),
     count('open', day.open, ['grey']),
     count('failed', day.failed, ['red']),
     count('timed out', day.timeout, ['yellow']),
@@ -762,172 +761,116 @@ function elapsedTone(step) {
   return [];
 }
 
-/** How many queued pull requests the page names before it only counts them. */
+/** How many queued pull requests a repository row names before counting the rest. */
 export const QUEUED_DRAWN = 6;
 
-/**
- * The queue's numbers for the MERGES heading, in landing order: `#N` while
- * the queue is one repository, `repo#N` with two, `→#M` on one built on
- * another, `⏸` on one whose plan's earlier step is not done (`waits_for`),
- * `↻` on one back in line after its mend (`mended`).
- * Numbers that do not fit in `room` become `… N more`, never a clipped half.
- */
-function waitingNumbers(items, room) {
-  const repos = new Set(items.map((item) => item.repo));
-  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.mended ? '↻' : ''}${item.parent ? `→#${item.parent.pr}` : ''}${item.waits_for ? '⏸' : ''}`;
-  let shown = '';
-  for (const [index, item] of items.entries()) {
-    const text = `${shown ? ' ' : ''}${label(item)}`;
-    const rest = items.length - index - 1;
-    const reserve = rest ? ` … ${rest} more`.length : 0;
-    if (shown.length + text.length + reserve > room) return `${shown}${shown ? ' ' : ''}… ${items.length - index} more`;
-    shown += text;
-  }
-  return shown;
+/** Queue labels never contain PR numbers: those belong on their repository row. */
+function mergeQueueLabel(repo, compact = false, stopped = false) {
+  const counts = [
+    repo.landings.length ? `${repo.landings.length} landing` : '',
+    repo.waiting.length ? `${repo.waiting.length} waiting` : '',
+    repo.mending.length ? `${repo.mending.length} mending` : '',
+    repo.fixing.length ? `${repo.fixing.length} fixing` : '',
+    repo.reds.length ? `${repo.reds.length} red` : '',
+  ].filter(Boolean);
+  const count = compact && counts.length
+    ? `${repo.landings.length + repo.waiting.length + repo.mending.length + repo.fixing.length + repo.reds.length}`
+    : counts.join(', ') || 'idle';
+  return [
+    { text: `${repo.repo} ${count}`, styles: ['grey'] },
+    repo.pause ? { text: ` paused ${compact ? repo.pause.kind : repo.pause.reason}`, styles: ['red'] }
+      : repo.merger_stopped && !stopped ? { text: ' merger stopped', styles: ['red'] } : null,
+  ].filter(Boolean);
 }
 
-/**
- * The one round running now, as a row laid out like a running RUNNER lane —
- * the mark in the gutter, the repository, then what is landing — because it is
- * the same fact: something is in flight and nobody has to do anything for it
- * to move (Martin, 2026-10-09). Green from the mark through the title: the
- * repository, the number, the project (or the branch) and the pull request's
- * own title. Then where the round stands — `landing`, or *measuring, not
- * landing* for `mc test`'s check mode — its phase, and how long it has run.
- *
- * The title is what gives way on a narrow terminal, and after it the tail from
- * the end; the number and the name never do.
- *
- * A batch member after the round's first (`batch_of`) has the same green head
- * and, where the tail would be, `same round as #<first>` in grey: the phase
- * and the clock are the round's, and are on the first row.
- */
-function landingLine(c, wide, landing) {
-  const where = pad(clip(landing.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
-  const number = landing.pr != null ? `#${landing.pr}  ` : '';
-  const name = landing.name ? `${clip(landing.name, nameWidth(wide) - 1)}${landing.step ? ` step ${landing.step}` : ''}  ` : '';
-  const head = `  ${MARK.running} ${where} ${number}${name}`;
-  const tail = landing.batch_of != null ? [{ text: `same round as #${landing.batch_of}`, styles: ['grey'] }] : trailing([
-    { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
-    landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
-    landing.phase ? { text: landing.phase } : null,
-    { text: ageWords(landing.age_seconds), styles: ['grey'] },
+/** A queue item has a primary identity and optional grey detail; titles give way first. */
+function mergeRepoLine(c, wide, repo) {
+  const chunks = [];
+  for (const item of repo.landings) {
+    chunks.push({
+      text: `#${item.pr} ${item.phase_words}`, styles: [],
+      detail: [item.age_seconds != null ? ageWords(item.age_seconds) : '',
+        item.queue_age_seconds != null ? `queued ${ageWords(item.queue_age_seconds)}` : ''].filter(Boolean).join(' · '),
+    });
+  }
+  for (const [items, label] of [[repo.mending, 'mending'], [repo.fixing, 'fixing'], [repo.reds, 'red']]) {
+    for (const item of items) chunks.push({
+      text: `#${item.pr} ${label}`, styles: label === 'red' ? ['red'] : [],
+      detail: [label === 'mending' && item.waiting ? 'waiting for session'
+        : item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
+      one(item.said || item.reason)].filter(Boolean).join(' · '),
+    });
+  }
+  for (const item of repo.waiting) {
+    chunks.push({
+      text: `#${item.pr}`, styles: [],
+      detail: [item.waits_for ? `awaits ${item.waits_for}` : 'waiting',
+        item.mended ? 'mended' : '', item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
+    });
+  }
+  const head = `    ${pad(repo.repo, 11)} `;
+  const success = `${repo.day_count} merges in 24 h`;
+  const room = wide - head.length - success.length - 3;
+  let parts = [];
+  if (!chunks.length) {
+    const last = repo.last;
+    parts = [{ text: clip(last ? `idle · last #${last.pr} · ${ageWords(last.age_seconds)} ago` : 'idle · no landing recorded', room), styles: ['grey'] }];
+  } else {
+    // Keep identities before detail, and whole PR numbers before a count of overflow.
+    const shown = [];
+    let used = 0;
+    for (const [index, chunk] of chunks.entries()) {
+      const more = chunks.length - index - 1;
+      const reserve = more ? ` · … ${more} more`.length : 0;
+      const size = chunk.text.length + (shown.length ? 3 : 0);
+      if (shown.length && (shown.length >= QUEUED_DRAWN || used + size + reserve > room)) break;
+      shown.push({ ...chunk });
+      used += size;
+    }
+    const remaining = chunks.length - shown.length;
+    let spare = room - used - (remaining ? ` · … ${remaining} more`.length : 0);
+    for (const chunk of shown) {
+      if (!chunk.detail || spare < 8) continue;
+      const detail = clip(chunk.detail, spare - 3);
+      chunk.extra = ` · ${detail}`;
+      spare -= chunk.extra.length;
+    }
+    parts = shown.flatMap((chunk, index) => [
+      ...(index ? [{ text: ' · ', styles: ['grey'] }] : []),
+      { text: chunk.text, styles: chunk.styles },
+      ...(chunk.extra ? [{ text: chunk.extra, styles: ['grey'] }] : []),
+    ]);
+    if (remaining) parts.push({ text: ` · … ${remaining} more`, styles: ['grey'] });
+    // A title is secondary to all queue facts, never to the repository or number.
+    const title = repo.landing?.title;
+    if (title && spare >= 12) parts.push({ text: ` · ${clip(one(title), spare - 3)}` });
+  }
+  return paint(c, [
+    { text: head, styles: repo.state === 'idle' ? ['grey'] : [] },
+    ...parts,
+    { text: ' · ', styles: ['grey'] },
+    { text: success, styles: repo.day_count ? ['green'] : ['grey'] },
   ]);
-  const tailText = tail.map((part) => part.text).join('');
-  const room = wide - head.length - tailText.length - 2;
-  const title = landing.title && room >= 12 ? `${clip(one(landing.title), room)}  ` : '';
-  const fitted = fitting(tail, Math.max(0, wide - head.length - title.length));
-  return paint(c, [
-    { text: head, styles: ['green'] },
-    { text: title, styles: ['green'] },
-    ...fitted,
-  ]).replace(/[ ]+$/u, '');
 }
 
-/**
- * A pull request the merger answered red and nobody has queued again: one
- * row each, red, under the queue (Martin, 2026-10-10: *"en misslyckad merge
- * pr bör ligga kvar som en rad i mc (röd) medan merge-kön fortsätter med
- * nästa"*). The number and the project (or the branch) never give way; the
- * reason is what is read, and gives way from its end; how long ago is last.
- */
-function redLine(c, wide, item) {
-  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
-  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
-  const head = `  ${MARK.red} ${where} #${item.pr}  ${name}`;
-  const age = item.age_seconds != null ? `  ${ageWords(item.age_seconds)} ago` : '';
-  const room = Math.max(8, wide - head.length - age.length - 2);
-  return paint(c, [
-    { text: head, styles: ['red', 'bold'] },
-    { text: clip(one(item.reason || 'red'), room), styles: ['red'] },
-    { text: age, styles: ['grey'] },
-  ]).replace(/[ ]+$/u, '');
-}
-
-/**
- * A red getting its one mend (mend.js): drawn as `redLine` is, in yellow with
- * the running mark — a session has the branch and nobody has to do anything
- * yet. The reason gives way first; the number and the name never do.
- */
-function mendLine(c, wide, item) {
-  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
-  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
-  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}mending — `;
-  const age = `  ${item.waiting ? 'waiting' : ageWords(item.age_seconds)}`;
-  const room = Math.max(8, wide - head.length - age.length - 2);
-  return paint(c, [
-    { text: head, styles: ['yellow'] },
-    { text: clip(one(item.reason || 'red'), room), styles: ['yellow'] },
-    { text: age, styles: ['grey'] },
-  ]).replace(/[ ]+$/u, '');
-}
-
-/**
- * A red a runner session is on (ruling 39, Martin, 2026-10-11: *"bli
- * gulmarkerad när en runner är igång med den med status-uppdateringar"*):
- * drawn as `mendLine` is, in yellow with the running mark, with the session's
- * last sentence in place of the reason (the reason when it has said nothing
- * yet) and how long the session has run. The sentence gives way first; the
- * number and the name never do.
- */
-function fixingLine(c, wide, item) {
-  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
-  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
-  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}fixing — `;
-  const age = item.age_seconds != null ? `  ${ageWords(item.age_seconds)}` : '';
-  const room = Math.max(8, wide - head.length - age.length - 2);
-  return paint(c, [
-    { text: head, styles: ['yellow'] },
-    { text: clip(one(item.said || item.reason || 'red'), room), styles: ['yellow'] },
-    { text: age, styles: ['grey'] },
-  ]).replace(/[ ]+$/u, '');
-}
-
-/**
- * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
- * waiters behind them.
- *
- * Between NEXT and RUNNER because it is the third fact about the same
- * question, *what is the runner doing with a pull request*: NEXT is the order
- * it would still start, RUNNER is the steps it is running, and this is what a
- * pull request is doing once a step has become a round — landing, or waiting
- * for its turn. The held rows went with `held.json` (ruling 21, 2026-09-12).
- */
+/** MERGES is exactly one row per repository, drawn only from the JSON's repos[]. */
 function mergesLines(lines, c, wide, merges) {
-  // The queue is on the heading, after what is landing and what came back
-  // red (Martin, 2026-10-10: *"1 landing · 2 red · 3 waiting: pr pr pr"*):
-  // the rows below are only the round in flight and the reds.
-  const verb = 'mc merge <repo> <pr>';
-  const reds = merges.red?.items || [];
-  const mends = merges.mending?.items || [];
-  const fixing = merges.fixing?.items || [];
-  const parts = [];
-  const landings = merges.landings || [].concat(merges.landing || []);
-  // A session's gate has a row of its own and lands nothing (2026-10-31: read
-  // as a merge starting over, its clock new with every gate).
-  const landed = landings;
-  if (landed.length) parts.push({ text: `${landed.length} landing`, styles: ['grey'] });
-  if (mends.length) parts.push({ text: `${mends.length} mending`, styles: ['yellow'] });
-  if (fixing.length) parts.push({ text: `${fixing.length} fixing`, styles: ['yellow'] });
-  if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
-  const items = merges.queued.items || [];
-  if (merges.queued.count) {
-    const lead = `${merges.queued.count} waiting: `;
-    const used = parts.reduce((n, part) => n + part.text.length + 3, 0) + lead.length;
-    const room = Math.max(8, wide - 2 - 'MERGES'.length - 2 - verb.length - 4 - used);
-    parts.push({ text: lead, styles: ['grey'] });
-    parts.push({ text: waitingNumbers(items, room), styles: ['green'] });
-  }
-  const counts = parts.length
-    ? [...between(parts.slice(0, merges.queued.count ? -1 : undefined), ' · '), ...(merges.queued.count ? [parts.at(-1)] : [])]
-    : [{ text: 'nothing landing, nothing waiting', styles: ['grey'] }];
+  const repos = merges.repos || [];
+  // Liveness and barriers are independent facts. If both hold, name the
+  // stopped process once so neither repository loses its pause at 80 columns.
+  const stopped = repos.some((repo) => repo.merger_stopped && repo.pause);
+  const labels = (compact) => [
+    ...repos.flatMap((repo, index) => [
+      ...(index ? [{ text: ' · ', styles: ['grey'] }] : []), ...mergeQueueLabel(repo, compact, stopped),
+    ]),
+    ...(stopped ? [{ text: ' · ', styles: ['grey'] }, { text: 'merger stopped', styles: ['red'] }] : []),
+  ];
+  let counts = labels(false);
+  const countWidth = () => counts.reduce((n, part) => n + part.text.length, 0);
+  if (countWidth() > wide - 10) counts = labels(true);
+  const verb = countWidth() + 10 + 2 + 'mc merge <repo> <pr>'.length <= wide ? 'mc merge <repo> <pr>' : null;
   heading(lines, c, wide, 'MERGES', counts, verb);
-  // The heading has already said *nothing landing*; a row that says it again
-  // is a row.
-  for (const landing of landings) lines.push(landingLine(c, wide, landing));
-  for (const item of mends) lines.push(mendLine(c, wide, item));
-  for (const item of fixing) lines.push(fixingLine(c, wide, item));
-  for (const item of reds) lines.push(redLine(c, wide, item));
+  for (const repo of repos) lines.push(mergeRepoLine(c, wide, repo));
 }
 
 /** The words for whose a pull request is, on a PULL REQUESTS row. */

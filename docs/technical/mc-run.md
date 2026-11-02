@@ -228,7 +228,7 @@ repository. What it does, for as long as the runner runs:
      a modal and a process behind (2026-09-20). Each failure is diagnosed in
      two calls of two seconds at most — `security show-keychain-info` (hangs
      or fails on a locked keychain), then `gh auth status` (fails on a bad
-     token) — and the page's RUNNER line names the cause and its command,
+     token) — and the page's STEPS line names the cause and its command,
      `security unlock-keychain` or `gh auth login -h github.com`,
    - that has no open pull request (`inFlight`),
    - that no other lane has claimed (`claims`),
@@ -312,7 +312,7 @@ the volume where `MC_SCRATCH` is made (`diskRoom`, `deps.freeBytes` on
 constant in `run.js` — the pass starts nothing and returns `skipped:disk`; the
 lane says `disk: <n> GiB free, below 5 GiB — no step started` once in
 `runner.log` and writes the same line to `~/mc/runner/disk.json`, which the
-page's RUNNER block shows in yellow while the runner is alive. The step stays
+page's STEPS block shows in yellow while the runner is alive. The step stays
 `ready` and nothing is written into a plan; the first pass with room removes
 the file and the line goes with it. Sessions already running, their check-ins
 and their landings are not in a pass and go on. A reader that throws, or no
@@ -865,12 +865,13 @@ Four answers the merger gives without a person (ruling 37,
   starts nothing for it. A push puts the job back in line at its old place
   with `mended` set; anything else is red as before, and the step goes
   through `redPatch` with the round's reason and what the mend said.
-- **The page.** MERGES draws one landing row per pull request in a round: the
-  round's phase and age on the first, and no batch member counted as
-  waiting. A mend is a yellow row of its own under the landing rows, with the
-  red's reason and how long the session has run (`waiting` before it has a
-  pid). The heading counts it: `1 landing · 1 mending · 2 red · 3 waiting:
-  …`. `mc status <project>` says the same for a step's pull request.
+- **The page.** MERGES draws one queue per repository, with its counts and
+  red pause/stopped labels on the heading. Each repository keeps one row,
+  landing or idle: PRs, phase and clocks, waiting numbers in landing order,
+  reds and plain-text mends/fixes. Its own green success count is landed PRs
+  in 24 hours, including merges outside runner steps. STEPS is the runner's
+  section, still expanded by `mc run`; its day line contains step outcomes,
+  not the merged count. See [mc-ui.md](mc-ui.md).
 
 **One job lands in one round** (ruling 55, 2026-10-24). The merger takes the
 next queued job that may go (`nextJob`) and hands it to the round alone:
@@ -1318,7 +1319,7 @@ thing it writes into a repository: a blocked step (below).
   however that session returns, so a step that throws still clears it. A file
   whose runner pid is gone is moved to `runner/log/dead-<file>-<pid>.json` by
   the next runner that reads it, and the drain and stop lines leave it out.
-  Readers — the page's RUNNER block, `mc status <name>` — glob
+  Readers — the page's STEPS block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block
   is a list of lines and not a line.
 - **`projects/<project>.json`** — the register: where every step of every
@@ -1575,7 +1576,7 @@ keeps no parent process.
   `MEMORY_MIN_FREE_PERCENT` (20). It says `disk: <n> GiB free, below 5 GiB —
   no step started` or `memory: <n>% free, below 20% — no step started` once
   per pass and writes `disk.json` or `memory.json`. The file is removed when
-  there is room again. `nowBlock` reads both, so the page's RUNNER block shows
+  there is room again. `nowBlock` reads both, so the page's STEPS block shows
   either hold. Sessions already running, their check-ins and landings, go on.
   No reading is room: a guess must not stop the runner.
 - **`~/mc/runner/UPDATE`** — read between picks only, and answered by a
