@@ -5839,3 +5839,142 @@ test('a goal keeps no slot once its session has ended', async () => {
   assert.equal((await runner.pass({ repo: 'memoro', lane: 1 })).name, 'alpha');
   assert.equal(f.log.some((line) => /waiting for a lane/u.test(line)), false);
 });
+
+/* ---------------------------------------------------------- goal reviews */
+
+const HEAD = 'abc1234def5678';
+const builtBy = (who, at = '2026-08-28T10:00Z') => `## ${at} · ${who} · review\n\nGjort: built it\n`;
+
+/** A goal in review whose branch has `pr` open at `head` (null: none), as `gh pr list --head` answers. */
+function reviewFixture({ log = builtBy('codex gpt-6.1-sol'), pr = 31, head = HEAD, goals = {} } = {}) {
+  const f = goalFixture({ judged: { status: 'review', log }, ...goals });
+  const { gh } = f.deps;
+  f.head = head;
+  f.deps.gh = (cwd, args) => {
+    if (args.includes('--head')) {
+      f.calls.gh.push([cwd, ...args]);
+      return { ok: true, stdout: JSON.stringify(pr === null ? [] : [{ number: pr, headRefOid: f.head }]) };
+    }
+    return gh(cwd, args);
+  };
+  return f;
+}
+
+/** A review session that writes its verdict, as `mc goal log` does, and leaves the status it names. */
+const judges = (f, done, status, inner = okSession()) => (call) => {
+  const path = `${GOALS}/judged/LOG.md`;
+  f.files[path] = `${f.files[path]}\n## 2026-08-29T10:00Z · claude opus · ${status}\n\nGjort: ${done}\nKommentar: criterion 1 met — ran it\n`;
+  f.files[`${GOALS}/judged/GOAL.md`] = f.files[`${GOALS}/judged/GOAL.md`].replace(/^status: \w+$/mu, `status: ${status}`);
+  return inner(call);
+};
+const goalEntries = (f, name = 'judged') => parseLog(f.files[`${GOALS}/${name}/LOG.md`]);
+const goalStatusOf = (f, name = 'judged') => f.files[`${GOALS}/${name}/GOAL.md`].match(/^status: (\w+)$/mu)[1];
+
+test('a goal in review gets a review session: the goal-review role, the review model, its pull request and head', async () => {
+  const f = reviewFixture();
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'goal-review');
+  assert.equal(call.env.MC_GOAL, 'prog/judged');
+  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review.model);
+  assert.match(call.args.join('\n'), /ROLE goal-review/u);
+  assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
+  assert.equal(call.prompt.includes('\n'), false);
+});
+
+test('a review never runs on the model of the goal\'s last build entry: the goal waits, and an open goal behind it runs', async () => {
+  // The review catalog's model and the build session's are the same: claude opus.
+  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review.model}`, '2026-08-20T10:00Z');
+  const f = reviewFixture({ log: sameModel, goals: { other: { log: goalLog('2026-08-28T10:00Z') } } });
+  f.answer = logsItself(f, 'other');
+  const runner = createRunner({ deps: f.deps });
+  const r = await runner.pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/other', 'the waiting review does not stand in front');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'goal');
+  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — the review model is claude opus, the model its last build session ran on/u.test(line)));
+  assert.equal(goalStatusOf(f), 'review', 'it waits; it is not reviewed by its builder');
+
+  // A review's own entry is no build entry: the one before it is what counts.
+  const reviewed = `${sameModel}\n## 2026-08-21T10:00Z · codex gpt-6.1-sol · review\n\nGjort: green ${HEAD}\n`;
+  const g = reviewFixture({ log: reviewed });
+  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(g.calls.sessions.length, 0);
+});
+
+test('a red review leaves the goal blocked with its entry, and no session is started for it until someone sets it open', async () => {
+  const f = reviewFixture();
+  f.answer = judges(f, `red ${HEAD}`, 'blocked');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(goalStatusOf(f), 'blocked');
+  assert.match(goalEntries(f).at(-1).done, /^red abc1234def5678$/u);
+  assert.equal(f.calls.rounds.length, 0, 'nothing queued');
+
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+
+  // A red that left the status as it was is blocked by the runner.
+  const g = reviewFixture();
+  g.answer = judges(g, `red ${HEAD}`, 'review');
+  await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
+  assert.equal(goalStatusOf(g), 'blocked');
+  assert.equal(goalEntries(g).at(-1).tool, 'runner');
+  assert.match(goalEntries(g).at(-1).comment, /red review of abc1234def5678 — waits on plan/u);
+
+  // Plan sets it open: the next pass starts a build session.
+  g.files[`${GOALS}/judged/GOAL.md`] = g.files[`${GOALS}/judged/GOAL.md`].replace('status: blocked', 'status: open');
+  g.answer = logsItself(g, 'judged');
+  await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
+  assert.equal(g.calls.sessions.at(-1).env.MC_ROLE, 'goal');
+});
+
+test('a green review queues the head it judged for the merger, and the goal then waits for the merger', async () => {
+  const f = reviewFixture();
+  f.answer = judges(f, `green ${HEAD.slice(0, 8)}`, 'review');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.calls.rounds.length, 1);
+  const [queued] = f.calls.rounds;
+  assert.equal(queued.repo, 'memoro');
+  assert.equal(queued.pr, 31);
+  assert.equal(queued.branch, 'goal/judged');
+  assert.equal(queued.sha, HEAD);
+  assert.deepEqual(queued.goal, { programme: 'prog', goal: 'judged', dir: `${GOALS}/judged` });
+  assert.equal(queued.step, undefined);
+  assert.equal(goalStatusOf(f), 'review');
+  assert.equal(goalEntries(f).at(-1).tool, 'runner');
+  assert.equal(goalEntries(f).at(-1).done, `queued #31 at ${HEAD} for the merger`);
+
+  // Queued, it is the merger's: no second review.
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a green on a head that is no longer the branch\'s queues nothing, and the goal stays in review', async () => {
+  const f = reviewFixture();
+  f.answer = judges(f, `green ${HEAD}`, 'review', (call) => {
+    f.head = 'fff9999000';
+    return okSession()(call);
+  });
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(f.calls.rounds.length, 0);
+  assert.equal(goalStatusOf(f), 'review');
+  assert.match(goalEntries(f).at(-1).comment, /green on abc1234def5678, but #31 is at fff9999000 now — not queued/u);
+});
+
+test('a goal in review with no open pull request is blocked, and a review that leaves no verdict blocks it too', async () => {
+  const f = reviewFixture({ pr: null });
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(goalStatusOf(f), 'blocked');
+  assert.match(goalEntries(f).at(-1).comment, /goal\/judged has no open pull request — waits on plan/u);
+
+  const g = reviewFixture();
+  g.answer = judges(g, 'looked at it', 'review');
+  await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
+  assert.equal(goalStatusOf(g), 'blocked');
+  assert.match(goalEntries(g).at(-1).comment, /the review left no verdict/u);
+});

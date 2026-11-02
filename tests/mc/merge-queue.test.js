@@ -259,3 +259,15 @@ test('heldLanding with held leaves out the landing entry another live merger hol
   assert.deepEqual(heldLanding(entries, { ordered }).map((e) => e.pr), [1]);
   assert.deepEqual(heldLanding(entries, { ordered, held: heldBy({ pid: 1, alive: (p) => p === 4242 }) }), []);
 });
+
+test('a goal job keeps its goal and head; queued again by mc merge it stays the goal\'s, with the new call\'s head', () => {
+  const goal = { programme: 'mc', goal: 'g', dir: '/p/mc/goals/g' };
+  const [entry] = queueEntries([{ repo: 'memoro-cli', pr: 9, goal, sha: 'abc1234' }]);
+  assert.deepEqual(entry.goal, goal);
+  assert.equal(entry.sha, 'abc1234');
+  assert.equal(queueEntries([{ repo: 'memoro-cli', pr: 9, goal: { programme: 'mc' } }])[0].goal, null, 'a goal without its dir is none');
+  const again = enqueue([{ ...entry, state: 'red' }], { repo: 'memoro-cli', pr: 9 });
+  assert.deepEqual(again[0].goal, goal);
+  assert.equal(again[0].sha, null);
+  assert.equal(again[0].state, 'queued');
+});

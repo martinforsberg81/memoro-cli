@@ -65,6 +65,13 @@ function normalise(entry) {
     parent: plain(entry.parent) && Number.isFinite(Number(entry.parent.pr)) && typeof entry.parent.sha === 'string'
       ? { project: entry.parent.project ?? null, index: entry.parent.index ?? null, pr: Number(entry.parent.pr), sha: entry.parent.sha }
       : null,
+    // A goal's pull request (goals.js), queued by its green review: the goal
+    // whose status the answer sets, and the head the review judged. Only that
+    // head lands; one that has moved sends the goal back to review.
+    goal: plain(entry.goal) && typeof entry.goal.programme === 'string' && typeof entry.goal.goal === 'string' && typeof entry.goal.dir === 'string'
+      ? { programme: entry.goal.programme, goal: entry.goal.goal, dir: entry.goal.dir }
+      : null,
+    sha: typeof entry.sha === 'string' && entry.sha ? entry.sha : null,
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,
@@ -121,8 +128,10 @@ export function enqueue(entries, entry) {
   const was = entries[at];
   // A mend session has the branch: what it pushes is measured next.
   if (was.state === 'landing' || was.state === 'mending') return entries;
-  // Queued again, a job keeps its one mend spent: a job gets at most one.
-  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since, mended: was.mended } : item));
+  // Queued again, a job keeps its one mend spent: a job gets at most one. A
+  // goal's job queued again by `mc merge` stays the goal's, so its landing
+  // still sets the goal done; the head is the new call's, none for a person's.
+  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since, mended: was.mended, goal: next.goal || was.goal } : item));
 }
 
 /** The entries without it: landed, or nothing left to land. */

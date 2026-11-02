@@ -120,8 +120,8 @@ import { gateLaneOf } from './repo-gate-table.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
-import { branchFlow, deliverableStep } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, LOG_FILE, logStamp, nextGoal, parseGoal, parseLog, programsGoals, setStatus } from './goals.js';
+import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
+import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, nextGoal, parseGoal, parseLog, programsGoals, queuedText, REVIEW_ROLE, setStatus, verdictOf } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -170,7 +170,7 @@ import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
-  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPrompt, headlessArgs, quietPrompt,
+  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPrompt, goalReviewPrompt, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
@@ -2139,7 +2139,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   async function goalPass({ repo, lane, label, passed }) {
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
-    const goal = nextGoal(goals(), { repos: repo ? [repo] : repos.map((item) => item.name), held });
+    // A review that cannot run now is left out, so it does not stand in front
+    // of every other goal; why is said once, when it changes.
+    const may = (goal) => {
+      if (goal.status !== 'review') return true;
+      const why = reviewRoute(goal).reason ?? null;
+      const name = goalName(goal);
+      if (why && reviewWaits.get(name) !== why) say(`${name}: its review waits — ${why}`);
+      if (why) reviewWaits.set(name, why); else reviewWaits.delete(name);
+      return !why;
+    };
+    const goal = nextGoal(goals(), { repos: repo ? [repo] : repos.map((item) => item.name), held, may });
     if (!goal) return { ran: 0 };
     const name = goalName(goal);
     say(`${label}: no step to run — next, ${name}`);
@@ -2158,6 +2168,92 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return { ...ran, stop: true };
     }
     return ran;
+  }
+
+  /** The reason each goal's review last waited on, so it is said once. */
+  const reviewWaits = new Map();
+
+  /**
+   * The route a goal's review runs on: the review class's candidate (`mc model
+   * set review`), as `{ ok, route, settings }`, or `{ reason }` when it may not
+   * run now. It never runs on the model of the goal's last build entry — the
+   * heading's `<tool> <model>` — so a goal is not reviewed by its builder: with
+   * no other model, the goal waits.
+   */
+  function reviewRoute(goal) {
+    const route = routeClass(REVIEW_CLASS);
+    if (!route.ok) return { reason: route.reason };
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const built = lastBuildEntry(goal.log);
+    if (built?.model && built.model === settings.model) {
+      return { reason: `the review model is ${settings.tool} ${settings.model}, the model its last build session ran on (${built.at}); set another with mc model set review` };
+    }
+    return { ok: true, route, settings };
+  }
+
+  /**
+   * The open pull request on a goal's branch, as `{ number, head }`, or
+   * `{ error }` when GitHub cannot say, or null when there is none.
+   */
+  function goalPr(repo, branch) {
+    const asked = deps.gh(repo.path, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number,headRefOid']);
+    if (!asked.ok) return { error: lastLine(asked) || 'gh failed' };
+    try {
+      const [pr] = JSON.parse(asked.stdout || '[]');
+      return pr ? { number: pr.number, head: pr.headRefOid } : null;
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  /** A runner entry with a status change, said. */
+  function goalStatus(goal, name, status, fields) {
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status, done: null, comment: null, next: null, ...fields };
+    const set = setStatus({ dir: goal.dir, status, entry, read: deps.read, write: deps.write });
+    say(set.problems ? `${name}: could not be set ${status} (${set.problems.join('; ')})` : `${name}: ${status} — ${fields.done ?? fields.comment}`);
+  }
+
+  /**
+   * What a review session's verdict leads to (`canon/roles/goal-review.md`).
+   * Red, or no verdict: `blocked`, and nothing goes back to a build session
+   * until plan sets the goal open. Green: queued for the merger as `mc merge`
+   * queues — but only the head it judged. A branch that has moved since is not
+   * green, and the goal stays in `review` for another review.
+   */
+  function settleReview(goal, name, { repo, pr, branch, before }) {
+    const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
+    const status = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '').status ?? goal.status;
+    const found = log.slice(before).findLast((entry) => entry.tool !== 'runner' && verdictOf(entry));
+    const verdict = found ? verdictOf(found) : null;
+    if (!verdict) {
+      goalStatus(goal, name, 'blocked', { comment: 'the review left no verdict (`green <sha>` or `red <sha>` in Gjort) — waits on plan' });
+      return;
+    }
+    if (verdict.verdict === 'red') {
+      if (status !== 'blocked') goalStatus(goal, name, 'blocked', { comment: `red review of ${verdict.sha} — waits on plan` });
+      return;
+    }
+    if (status !== 'review') { say(`${name}: green, but the goal is ${status} now — nothing is queued`); return; }
+    const standing = goalPr(repo, branch);
+    if (!standing || standing.error || standing.number !== pr) {
+      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} ${standing?.error ? `could not be read (${standing.error})` : 'is no longer the open pull request'} — not queued` });
+      return;
+    }
+    if (!standing.head || !standing.head.startsWith(verdict.sha)) {
+      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} is at ${String(standing.head).slice(0, 12)} now — not queued; the new head is reviewed again` });
+      return;
+    }
+    try {
+      const queued = deps.queueMerge({
+        root, repo: repo.name, repoPath: repo.path, pr, branch, holder: { name },
+        goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, sha: standing.head,
+        now: deps.now(), lock: register.lock,
+      });
+      goalStatus(goal, name, 'review', { done: queuedText(pr, standing.head) });
+      if (queued?.place) say(`${name}: ${queued.place} ahead of #${pr}`);
+    } catch (error) {
+      goalStatus(goal, name, 'blocked', { comment: `green on ${verdict.sha}, but #${pr} could not be queued for the merger (${error?.message || error})` });
+    }
   }
 
   /**
@@ -2191,7 +2287,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     appendEntry({ dir, entry: entry(status, comment), read: deps.read, write: deps.write });
     say(`${name}: ${comment}`);
     const last = parseLog(deps.read(join(dir, LOG_FILE)) ?? '').slice(-3);
-    if (status !== 'open' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
+    if ((status !== 'open' && status !== 'review') || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
     const text = 'three sessions ended without a word — see the logs under runner/log';
     const blocked = setStatus({ dir, status: 'blocked', entry: entry('blocked', text), read: deps.read, write: deps.write });
     say(blocked.problems ? `${name}: could not be blocked (${blocked.problems.join('; ')})` : `${name}: blocked — ${text}`);
@@ -2200,7 +2296,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * One goal session: the lane and total caps, the class routing and the billing
    * of a step, in the goal's worktree with the goal role. Returns 'ran', 'stop'
-   * or a `skipped` word, as `runStep` does.
+   * or a `skipped` word, as `runStep` does. A goal in `review` gets a review
+   * session instead: the goal-review role, on the review model (`reviewRoute`),
+   * with its pull request and head, and `settleReview` after it.
    *
    * It is not `runStep`, because nearly all of that is the plan and the register
    * a goal has neither of. A session cut off by the API is not resumed either,
@@ -2215,15 +2313,30 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
-    const role = deps.role('goal');
-    if (!role?.overlay) { say(`${name}: canon/roles/goal.md is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const route = routeClass(goal.class);
+    const review = goal.status === 'review';
+    const roleName = review ? REVIEW_ROLE : 'goal';
+    const role = deps.role(roleName);
+    if (!role?.overlay) { say(`${name}: canon/roles/${roleName}.md is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const routed = review ? reviewRoute(goal) : { route: routeClass(goal.class) };
+    if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
+    const { route } = routed;
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
     const lost = placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+    const branch = `goal/${goal.goal}`;
+    const repo = repos.find((item) => item.name === repoName);
+    let pr = null;
+    if (review) {
+      pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
+      if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
+      if (!pr) {
+        goalStatus(goal, name, 'blocked', { comment: `in review, but ${branch} has no open pull request — waits on plan` });
+        return 'skipped:no-pr';
+      }
+    }
     const attached = await deps.attachDeps(worktree);
     if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
     const slot = await waitForSlot(name, { repo: repoName, lane });
@@ -2236,8 +2349,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return 'skipped:no-capacity';
     }
 
-    const branch = `goal/${goal.goal}`;
-    const prompt = goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch });
+    const prompt = review
+      ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head })
+      : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
     const ts = stamp().replace(/[-:]/gu, '');
@@ -2255,7 +2369,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
-      role: roleRecord({ name: role.name || 'goal', source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
+      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
     };
     writeJson(currentPath, current);
     const scratch = join(paths.scratch, stem);
@@ -2279,7 +2393,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
-          MC_ROLE: 'goal', MC_PROGRAMME: goal.programme,
+          MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
           MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
           ...scratchEnv,
@@ -2298,7 +2412,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const provider = launch.id === 'codex' ? 'codex' : 'claude';
     if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
     const spoke = parseLog(deps.read(logPath) ?? '').length > entriesBefore;
-    if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
+    if (!spoke) goalWithoutWord(goal, name, `${review ? 'review' : 'session'} ended without a log entry (exit ${result.status}, ${seconds} s)`);
+    else if (review) settleReview(goal, name, { repo, pr: pr.number, branch, before: entriesBefore });
     const note = spoke ? read.note : `${read.note},no-log`;
     logRun({ ts: stamp(), name, kind: 'goal', exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
     say(`${name}: goal done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);

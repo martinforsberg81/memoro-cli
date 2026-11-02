@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appendEntry, appendLog, GOAL_FILE, goalDirIn, LOG_FILE, parseGoal, parseLog, programsGoals, renderEntry, renderGoal, sessions, setStatus } from '../../src/mc/goals.js';
+import { appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitsOnPlan } from '../../src/mc/goals.js';
 import { programsPlans } from '../../src/mc/plan-source.js';
 
 const GOAL_TEXT = [
@@ -72,8 +72,8 @@ test('parseGoal reads the front matter and the title, and keeps the body as it i
 
 test('parseGoal names each problem: no front matter, a status or class unknown, no repository, a bad repository name', () => {
   assert.deepEqual(parseGoal('# no front matter\n').problems, ['GOAL.md has no front matter between --- lines']);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, blocked, done, not started/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, blocked, done, not missing/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, not started/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, not missing/u);
   assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: huge')).problems.join(), /class is fast or large, not huge/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: ')).problems.join(), /repos names no repository/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: Memoro_CLI')).problems.join(), /repo Memoro_CLI is not a repository name/u);
@@ -175,4 +175,48 @@ test('appendEntry adds to LOG.md alone, and starts it when there is none', () =>
   const { store, read, write } = model({});
   appendEntry({ dir: '/p/mc/goals/plain', entry: { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }, read, write });
   assert.equal(store['/p/mc/goals/plain/LOG.md'], '## 2026-11-01T20:00Z · person · open\n\nGjort: skapat\n');
+});
+
+test('verdictOf reads green or red and the head sha off the first Gjort line, and nothing else is a verdict', () => {
+  assert.deepEqual(verdictOf({ done: 'green 46a61dea' }), { verdict: 'green', sha: '46a61dea' });
+  assert.deepEqual(verdictOf({ done: 'red — head 46a61dea0b1c\nmore' }), { verdict: 'red', sha: '46a61dea0b1c' });
+  assert.equal(verdictOf({ done: 'green light for the page' }), null);
+  assert.equal(verdictOf({ done: 'built the reader 46a61dea' }), null);
+  assert.equal(verdictOf({ done: null }), null);
+});
+
+test('lastBuildEntry is the last entry a build session wrote: not the runner\'s, a person\'s or a review\'s', () => {
+  const log = parseLog([
+    '## 2026-11-02T09:00Z · person · open', '', 'Gjort: skapat', '',
+    '## 2026-11-02T10:00Z · claude opus · review', '', 'Gjort: built', '',
+    '## 2026-11-02T11:00Z · codex gpt-6.1-sol · blocked', '', 'Gjort: red abc1234', '',
+    '## 2026-11-02T12:00Z · runner · blocked', '', 'Kommentar: x', '',
+  ].join('\n'));
+  assert.equal(lastBuildEntry(log).model, 'opus');
+  assert.equal(lastBuildEntry(log.slice(0, 1)), null);
+});
+
+test('a goal in review is due a review until the runner has queued its green; then it waits for the merger', () => {
+  const entry = (tool, done) => ({ at: '2026-11-02T10:00Z', tool, model: null, status: 'review', done, comment: null, next: null });
+  assert.equal(queuedText(12, 'abc1234'), 'queued #12 at abc1234 for the merger');
+  assert.deepEqual(queuedOf(entry('runner', queuedText(12, 'abc1234'))), { pr: 12, sha: 'abc1234' });
+  assert.equal(queuedOf(entry('claude', queuedText(12, 'abc1234'))), null, 'only the runner queues');
+  assert.equal(reviewDue({ status: 'review', log: [entry('claude', 'built')] }), true);
+  assert.equal(reviewDue({ status: 'review', log: [entry('runner', queuedText(12, 'abc1234'))] }), false);
+  assert.equal(reviewDue({ status: 'open', log: [] }), false);
+});
+
+test('nextGoal takes open goals and goals due a review, oldest first, and leaves out what may refuses', () => {
+  const goal = (name, status, at) => ({ programme: 'p', goal: name, status, repos: ['memoro'], problems: [], log: [{ at, tool: 'claude', done: 'x' }] });
+  const goals = [goal('a', 'open', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'blocked', '2026-11-01T10:00Z')];
+  assert.equal(nextGoal(goals, { repos: ['memoro'] }).goal, 'b');
+  assert.equal(nextGoal(goals, { repos: ['memoro'], may: (g) => g.status !== 'review' }).goal, 'a');
+});
+
+test('waitsOnPlan: a goal blocked by a red review or a red merge, not one blocked on a question', () => {
+  const blocked = (tool, done) => ({ status: 'blocked', log: [{ tool, done }] });
+  assert.equal(waitsOnPlan(blocked('codex', 'red abc1234')), true);
+  assert.equal(waitsOnPlan(blocked('runner', 'merger answered red on #12')), true);
+  assert.equal(waitsOnPlan(blocked('claude', null)), false);
+  assert.equal(waitsOnPlan({ status: 'open', log: [{ tool: 'codex', done: 'red abc1234' }] }), false);
 });
