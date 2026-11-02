@@ -49,6 +49,11 @@ themselves always exit 0 and print at most one JSON object.
 
 ## `mc hook session-start`
 
+First it syncs mc's task skills into `~/.claude/skills/` and `~/.agents/skills/`
+([mc-skills.md](mc-skills.md)); when that changed something, one line says
+which. A sync that fails is silence, like everything else here. `mc hook
+install` syncs them once too.
+
 Reads the hook JSON (`cwd`) on stdin. Its first line names the session's role
 and programme: `MC_ROLE` first, then older `MC_GOAL`/`MC_STEP` markers, then cwd
 under the work root for a session opened by hand. In `~/mc/programs/mc/` it

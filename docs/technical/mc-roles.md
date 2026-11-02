@@ -17,6 +17,11 @@ session to find, and nothing has to be cleaned up after one.
 
 The code is [`src/mc/roles.js`](../../src/mc/roles.js).
 
+A role reaches only a session mc launches. The guidance every session reaches —
+launched by mc or opened by hand — is a task skill, installed where Claude Code
+and Codex look for skills: [mc-skills.md](mc-skills.md). A role names one with
+`@skill <name>` instead of repeating it (below).
+
 ## The catalogue
 
 A role is a markdown file: frontmatter for what mc needs to know, body text for
@@ -168,6 +173,13 @@ sentence is left alone. And a name that resolves to nothing is left standing in
 the text rather than dropped: a visible `@include` line in a session's
 instructions is a broken install somebody can see, and a rule that quietly
 vanished is not.
+
+A role names a task skill the same way: `@skill publish-and-merge` on a line of
+its own becomes, in `instructionsFor`, a pointer to the installed
+`mc-publish-and-merge` — its description and its path for the session's tool
+(`~/.claude/skills/…` or `~/.agents/skills/…`) — not its text; the tool loads
+the skill as it loads any. A name `canon/skills/` does not ship is left standing,
+as an unknown `@include` is. See [mc-skills.md](mc-skills.md).
 
 `canon/roles/plan.md` had no body at all until #656 — six lines, every one of
 them frontmatter — so an `mc plan <programme>` session was told its model,
