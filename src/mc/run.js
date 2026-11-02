@@ -3053,7 +3053,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       note = `${note},failed`;
     }
 
-    logRun({ ts: stamp(), name, kind: runsKind(sessionKind(kind)), exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model, cls, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+    logRun({ ts: stamp(), name, kind: runsKind({ kind: sessionKind(kind).kind, variant: 'project' }), exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model, cls, tool: settings.tool, effort: settings.effort, billing: picked.billing });
     say(`${name}: ${sessionKind(kind).kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota && !waited && !handOver && !route) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
@@ -3394,6 +3394,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const word = [...waited.values()][0];
         return word ? { ran: 0, waited: word } : { ran: 0 };
       }
+      // The project this lane carried has let go the moment the lane takes
+      // something else: its slot is the one this session is about to use.
+      if (last?.name && pick.name !== last.name) carried.delete(last.name);
       if (pick.variant === 'goal') {
         say(`${label}: next — ${pick.name} (${pick.kind} ${pick.variant})`);
         const ran = await goalPass(pick.goal, { lane, label });
@@ -3641,7 +3644,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, nextStep: (options = {}) => nextWork({ ...options, carry: options.first ?? null }), claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, queue, stopRequested,
+    paths, repos, say, pass, nextWork, letGo: (name) => { carried.delete(name); }, nextStep: (options = {}) => nextWork({ ...options, carry: options.first ?? null }), claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, queue, stopRequested,
     writeUnreadable,
     blockStep,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
@@ -3669,7 +3672,7 @@ export async function runLoop({
   // read by `reconcile` on every poll slice, which starts the lanes that are
   // missing, by each lane at the top of a pass, which ends a lane above it,
   // and by `takeSlot` each time a session is about to start.
-  const laneSetting = laneTotal(deps);
+  const laneSetting = laneTotal(deps) || DEFAULT_LANES;
   const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
@@ -3883,6 +3886,8 @@ export async function runLoop({
           // lane waiting on its predecessor's session below is not in one, so
           // it leaves here too.
           if (retired()) {
+            // The project it carried keeps no slot in a lane that is gone.
+            if (last?.name) runner.letGo(last.name);
             runner.say(`${tag}: lanes is now ${lanesNow()} — this lane exits`);
             return { retired: true };
           }

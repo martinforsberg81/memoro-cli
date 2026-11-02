@@ -186,11 +186,11 @@ describe('STEPS', () => {
     // The step on the lane is the one in `steps`, not a copy of it: there is
     // one of it, so the two cannot come to disagree.
     assert.equal(runner.lanes[0].step, runner.steps[0]);
-    // A repository nobody named is a lane all the same when a lane file says
-    // the runner is in it.
+    // The lanes are the total, whatever repositories there are: a lane file
+    // names the repository of the session in it.
     assert.deepEqual(runnerSection({ runner: RUNNER, currents: [CURRENT], repos: [], now: NOW, alive: live })
-      .lanes.map((lane) => lane.repo), ['memoro-cli']);
-    assert.deepEqual(runnerSection({ repos: ['memoro'], now: NOW, alive: () => false })
+      .lanes.map((lane) => lane.repo), ['memoro-cli', null]);
+    assert.deepEqual(runnerSection({ repos: ['memoro'], lanes: { lanes: 1 }, now: NOW, alive: () => false })
       .lanes, [{ number: 1, repo: null, lane: null, step: null }]);
   });
 
@@ -209,25 +209,24 @@ describe('STEPS', () => {
     };
     const runner = runnerSection({
       runner: RUNNER, currents: [CURRENT, second], repos: ['memoro', 'memoro-cli'],
-      lanes: { per_repo: 2, total: 3 }, now: NOW, alive: live,
+      lanes: { lanes: 3 }, now: NOW, alive: live,
     });
-    // Two lanes on each of two repositories under a cap of three is three
-    // rows, not four: the fourth could never hold a step beside the others.
-    // Oldest step first, so a row moves only when one above it ends.
+    // Three lanes in total are three rows, whatever the repositories. Oldest
+    // step first, so a row moves only when one above it ends.
     assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.lane, lane.step?.name ?? null]), [
       [1, 'memoro-cli', 0, 'mc-ui'], [2, 'memoro-cli', 1, 'docx-editor'], [3, null, null, null],
     ]);
-    assert.deepEqual(runner.setting, { per_repo: 2, total: 3 });
+    assert.deepEqual(runner.setting, { lanes: 3 });
     // What the step is running on rides along: the advisor is on the row.
     assert.equal(runner.steps.find((step) => step.name === 'docx-editor').advisor, 'opus');
     // A file past the setting is still a lane: the runner was started under a
     // higher count than the file holds now, and the file is the fact.
     const wider = runnerSection({
-      runner: RUNNER, currents: [second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
+      runner: RUNNER, currents: [second], repos: ['memoro-cli'], lanes: { lanes: 1 }, now: NOW, alive: live,
     });
     assert.deepEqual(wider.lanes.map((lane) => [lane.number, lane.step?.name ?? null]), [[1, 'docx-editor']]);
     const over = runnerSection({
-      runner: RUNNER, currents: [CURRENT, second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
+      runner: RUNNER, currents: [CURRENT, second], repos: ['memoro-cli'], lanes: { lanes: 1 }, now: NOW, alive: live,
     });
     assert.equal(over.lanes.length, 2, 'a step past the setting still has its row');
 
@@ -2475,7 +2474,7 @@ describe('MC', () => {
     delete data.mc.hooks;
     assert.deepEqual(data.mc, {
       up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
-      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 0 },
+      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 2 },
     });
   });
 
