@@ -406,7 +406,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env }) {
   return { overlay: role.overlay || null, prompt: lines.join('\n'), model: role.model || null };
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   // `--repo` was how the old, project-shaped `mc plan` chose which repository
   // to make a workarea in. A programme is not in one repository, so the flag
   // has nothing left to select — said plainly, because "unknown flag" reads

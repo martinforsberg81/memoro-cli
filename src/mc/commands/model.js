@@ -24,11 +24,15 @@ export function usage() {
   return commandUsage('model');
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+const SCAN = { booleans: ['--json'] };
+export const ROUTES = { '': SCAN, list: SCAN, add: SCAN, remove: SCAN, set: SCAN };
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const { flags, positional, error } = scanArgs(argv, { booleans: ['--json'] });
+  const { flags, positional, error } = scanArgs(argv, SCAN);
   if (error) return usageError(stderr, error);
   const [verb = 'list', ...rest] = positional;
 

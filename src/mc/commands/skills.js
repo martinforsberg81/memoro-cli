@@ -20,15 +20,20 @@ export function usage() {
   return commandUsage('skills');
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json'] } };
+ROUTES.sync = ROUTES[''];
+ROUTES.list = ROUTES[''];
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const json = argv.includes('--json');
-  const rest = argv.filter((arg) => arg !== '--json');
+  const rest = argv.filter((arg) => !ROUTES[''].booleans.includes(arg));
   const unknown = rest.find((arg) => arg.startsWith('--'));
   const error = unknown ? `unknown flag: ${unknown}`
-    : rest[0] && !['sync', 'list'].includes(rest[0]) ? `unknown skills command "${rest[0]}"`
+    : rest[0] && (rest[0] === '' || !Object.hasOwn(ROUTES, rest[0])) ? `unknown skills command "${rest[0]}"`
       : rest.length > 1 ? `unexpected arg: ${rest[1]}` : null;
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
   if (rest[0] === 'sync') {

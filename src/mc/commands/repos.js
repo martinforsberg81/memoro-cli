@@ -18,12 +18,15 @@ export function usage() {
   return commandUsage('repos');
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json'] } };
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const home = deps.home ?? homedir();
-  const scanned = scanArgs(argv, { booleans: ['--json'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   let error = scanned.error;
   if (!error && scanned.positional.length) error = `mc repos takes no ${scanned.positional[0]}`;
   if (error) {

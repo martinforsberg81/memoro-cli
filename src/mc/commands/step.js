@@ -50,6 +50,22 @@ import { scanArgs } from './flags.js';
 
 const STATES = new Set(['failed', 'blocked', 'ready', 'done', 'note']);
 
+/**
+ * The verb's flags, read before anything else. `--after-deploy` takes a step
+ * number when one follows it, and none otherwise: the step before is the
+ * default. Exported for help-routes.test.js, which walks the help with it.
+ */
+export function scanStepArgs(argv) {
+  const args = [...argv];
+  let afterDeploy = null;
+  const at = args.indexOf('--after-deploy');
+  if (at >= 0) {
+    afterDeploy = /^\d+$/u.test(args[at + 1] || '') ? Number(args[at + 1]) : 'previous';
+    args.splice(at, afterDeploy === 'previous' ? 1 : 2);
+  }
+  return { ...scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--answer', '--on', '--on-project', '--pr', '--until', '--hours'] }), afterDeploy };
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -59,16 +75,7 @@ export async function run(argv, deps = {}) {
   const io = { read: deps.read, write: deps.write, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
-  // `--after-deploy` takes a step number when one follows it, and none
-  // otherwise: the step before is the default.
-  const args = [...argv];
-  let afterDeploy = null;
-  const at = args.indexOf('--after-deploy');
-  if (at >= 0) {
-    afterDeploy = /^\d+$/u.test(args[at + 1] || '') ? Number(args[at + 1]) : 'previous';
-    args.splice(at, afterDeploy === 'previous' ? 1 : 2);
-  }
-  const scanned = scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--answer', '--on', '--on-project', '--pr', '--until', '--hours'] });
+  const { afterDeploy, ...scanned } = scanStepArgs(argv);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   // `--answer` is `--reason` for a step set ready: the words a person gives the

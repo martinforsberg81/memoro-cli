@@ -24,7 +24,7 @@ import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { knownRepositories } from '../work-area.js';
-import { scanArgs } from './flags.js';
+import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
 const VALUE_FLAGS = ['--repo', '--class', '--title', '--done', '--comment', '--next', '--status', '--reason'];
@@ -37,6 +37,11 @@ const VERB_FLAGS = {
   list: [],
 };
 const STATUS_VERBS = ['open', 'review', 'blocked', 'done'];
+/** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
+export const ROUTES = Object.fromEntries([
+  ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
+  ...STATUS_VERBS.map((verb) => [verb, VERB_FLAGS.status]),
+].map(([verb, names]) => [verb, only({ strictValues: VALUE_FLAGS }, names)]));
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;

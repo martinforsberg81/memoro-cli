@@ -52,7 +52,7 @@ export async function run(argv, deps = {}) {
   return status(opts, ctx);
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
     booleans: ['--json', '--dry-run'],
     strictValues: ['--pid', '--run', '--repo', '--timeout'],

@@ -29,11 +29,13 @@ import { ensureAppServer, readDeclaration } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import { answer, servedTree, usage } from './shot.js';
 
-const STEP_FLAGS = {
+export const STEP_FLAGS = {
   booleans: ['--full', '--json', '--open', '--reload', '--no-shot'],
   strictValues: ['--wait-for', '--scroll', '--measure', '--el', '--shell', '--timeout', '--out', '--goto'],
   repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
 };
+export const CLOSE_FLAGS = { booleans: ['--all'] };
+export const SESSIONS_FLAGS = {};
 
 /**
  * `--keep`: the shot's request in mode `session`, its answer printed as a
@@ -199,7 +201,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
 
 /** `mc shot close [<id>|--all]`. */
 export async function close(argv, { stdout, stderr, deps = {} }) {
-  const scanned = scanArgs(argv, { booleans: ['--all'] });
+  const scanned = scanArgs(argv, CLOSE_FLAGS);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   const env = deps.env || process.env;
@@ -228,7 +230,7 @@ export async function close(argv, { stdout, stderr, deps = {} }) {
 
 /** `mc shot sessions`: one line per live session; the dead ones' files go. */
 export async function sessions(argv, { stdout, stderr, deps = {} }) {
-  const scanned = scanArgs(argv, {});
+  const scanned = scanArgs(argv, SESSIONS_FLAGS);
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || 'mc shot sessions takes nothing more'}\n${usage()}`);
     return 2;

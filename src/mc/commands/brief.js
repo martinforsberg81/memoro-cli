@@ -29,10 +29,13 @@ export function usage() {
   return commandUsage('brief');
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--new'], strictValues: ['--model'], toolSugar: true } };
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, { booleans: ['--new'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, ROUTES['']);
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
     stderr.write(usage());

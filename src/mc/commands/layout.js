@@ -35,13 +35,17 @@ export function usage() {
   return commandUsage('layout');
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json', '--apply'] } };
+ROUTES.migrate = ROUTES[''];
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const root = deps.root || workRoot(env);
   const home = deps.home ?? homedir();
-  const scanned = scanArgs(argv, { booleans: ['--json', '--apply'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   const [sub, ...rest] = scanned.positional;
   let error = scanned.error;
   if (!error && sub !== undefined && sub !== 'migrate') error = `mc layout knows migrate, not ${sub}`;

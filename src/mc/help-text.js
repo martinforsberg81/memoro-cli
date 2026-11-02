@@ -21,7 +21,7 @@ PLAN AND FOLLOW
 
 RUN AND LAND
   mc run                          The headless runner
-  mc run start|stop [--force]      Person: start/stop the runner; --force: now
+  mc run start|stop               Person: start or stop the runner
   mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun

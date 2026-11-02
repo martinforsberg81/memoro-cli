@@ -95,13 +95,17 @@ export function gateOwner(cwd, env = process.env, io = SYSTEM) {
   return { root: mcHome(env), repo: gateLaneOf(common ? repositoryDir(common) : cwd) };
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json', '--wait', '--full'], strictValues: ['--base', '--budget', '--test-name-pattern'] } };
+ROUTES['*'] = ROUTES[''];
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
   const io = { ...SYSTEM, ...deps };
-  const scanned = scanArgs(argv, { booleans: ['--json', '--wait', '--full'], strictValues: ['--base', '--budget', '--test-name-pattern'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.flags.full) {
     stderr.write('mc: there is no whole gate in a worktree — the merger measures the pull request once, in its lane (mc publish queues it); mc gate <files…> runs the tests your change reaches\n');

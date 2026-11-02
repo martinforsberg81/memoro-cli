@@ -17,11 +17,14 @@ import { colourFor, columnsFor, renderPrsLines } from '../page-render.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json', '--offline'] } };
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const scanned = scanArgs(argv, { booleans: ['--json', '--offline'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc prs takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
 

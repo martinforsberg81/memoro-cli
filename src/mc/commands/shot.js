@@ -49,11 +49,28 @@ import {
 } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import {
-  close, keep, next, sessions,
+  CLOSE_FLAGS, SESSIONS_FLAGS, STEP_FLAGS, close, keep, next, sessions,
 } from './shot-session.js';
 import { commandUsage } from '../command-help.js';
 
 const PLACES = ['dev', 'prod'];
+
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '*': {
+    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
+    strictValues: [
+      '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
+    ],
+    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
+  },
+  next: STEP_FLAGS,
+  close: CLOSE_FLAGS,
+  sessions: SESSIONS_FLAGS,
+  login: { booleans: ['--paste'] },
+  logout: {},
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -65,14 +82,7 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'close') return close(argv.slice(1), io);
   if (argv[0] === 'sessions') return sessions(argv.slice(1), io);
 
-  const scanned = scanArgs(argv, {
-    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
-    strictValues: [
-      '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
-    ],
-    repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
-  });
+  const scanned = scanArgs(argv, ROUTES['*']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   const [where, word, ...extra] = positional;
@@ -328,7 +338,7 @@ export function answer(result, {
 
 /** `mc shot login prod [--paste]` and `mc shot logout prod`. */
 async function account(verb, argv, { stdout, stderr, deps }) {
-  const scanned = scanArgs(argv, { booleans: verb === 'login' ? ['--paste'] : [] });
+  const scanned = scanArgs(argv, ROUTES[verb]);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const [where, ...extra] = scanned.positional;
   if (where !== 'prod' || extra.length) {

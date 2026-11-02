@@ -58,6 +58,8 @@ import { commandUsage } from '../command-help.js';
 
 /** The one word left: the tick is the runner's, so there is nothing to start or stop. */
 const METER_VERBS = ['status'];
+/** What `mc test token` reads (help-routes.test.js walks the help with it). */
+export const TOKEN_FLAGS = { booleans: ['--set', '--rm', '--json'] };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -450,7 +452,7 @@ export function parseEnvironmentArgs(where, argv) {
  * `src/lib/keychain.js` has spoken since long before this verb.
  */
 async function token(argv, { stdout, stderr, deps = {} }) {
-  const scanned = scanArgs(argv, { booleans: ['--set', '--rm', '--json'] });
+  const scanned = scanArgs(argv, TOKEN_FLAGS);
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `mc test token takes no argument (${scanned.positional[0]})`}\n`);
     stderr.write('usage — mc test token [--set | --rm] [--json]\n');

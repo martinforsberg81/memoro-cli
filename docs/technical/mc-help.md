@@ -28,9 +28,8 @@ every routed handler's usage, expanding finite alternatives (including nested
 `project criterion` and `repo watch` forms). It checks `--help` and `-h` for
 exit 0 and the same usage text. It separately walks the vault dispatch table,
 checking help before credentials can be read, and probes representative forms
-through the binary. This is **not yet** a parser/route-validity test: the
-central help interceptor would also answer an invented subcommand. That
-independent validation remains required below.
+through the binary. It is not a route-validity test: the central help
+interceptor would also answer an invented subcommand. The route check below is.
 
 ## Usage measured again
 
@@ -227,14 +226,48 @@ PR/log. The role PR no longer adds separate work to this PR's diff against main.
 ## Third session: routed names, undocumented forms, subcommand inventory
 
 `tests/mc/help-routes.test.js` reads every synopsis row of the long help and of
-each verb's usage, without the help interceptor. A subcommand word or flag must
-be a literal in the verb's handler or a local module it imports; vault verbs
-must be in the vault table, `mc --…` flags in `mc-cli.js`'s page flags. Negative
-controls include the three guessed verbs, an invented subcommand, flag, vault
-verb and page flag. It is a name check, not a parse of every combination: the
-runner alone is parsed for real (help-shared.test.js). A second check reads
-each handler's `…VERBS`/`SUBCOMMANDS` dispatch table and fails on a routed
-subcommand with no IN FULL row; stubs that answer "is now …" are skipped.
+each verb's usage, without the help interceptor: each `mc <verb> …` row, a
+`[--flag]` line that continues one (shot, log), and the piped `mc language key
+set`. Each row is expanded into command lines: the required words with a sample
+for each placeholder, then one line more for every optional part and every
+alternative (`a|b`, `<dev|prod>`, `--on <d> | --on-project <p>`, a bare `@<name>`
+as another value of the flag before it). Each line goes through what the
+handler reads its arguments with:
+
+- its exported parser, where it has one: `parseRunArgs`, work, dev, repo,
+  `parseMergeArgs`/`parseWatchArgs`, test's environment and nightly parsers,
+  build, deploy, tidy, log, worker, roles, docker, plan, `scanStepArgs`, and
+  `parsePageArgs` for `mc --json`;
+- otherwise the shared scanner with the spec the handler scans that subcommand
+  with, from its exported `ROUTES` (`''` the bare verb, `*` a first word that
+  names something). The handlers scan with those same objects; `mc project` and
+  `mc goal` build theirs, through `only()` in `flags.js`, from the per-form
+  lists they refuse by.
+
+command-help.js and help-text.js decide nothing here. Then every `--flag` a
+usage names anywhere, prose included, must be read by the verb its clause is
+about (`mc test dev --here --url` inside hook's text is mc test's) on at least
+one of its forms; `node --test` and npm's `--package-lock-only` are named as
+other programs' flags. Negative controls that must fail: the three guessed
+verbs, `mc dev archive`, `mc work add <name> <repo> --testflight`,
+`mc run start --force` (and `start|stop [--force]`), `--fictional` on a shot
+continuation line and a log one, an invented goal, hook and language
+subcommand, `mc project criterion vanish`, an invented vault verb and page
+flag. A second check fails on a subcommand a `ROUTES` table or a
+`…VERBS`/`WORDS`/`SUBCOMMANDS` dispatch table routes with no IN FULL row; stubs
+that answer "is now …" are skipped.
+
+In the fifth session (after the review on aa4c46f) it replaced a check that
+only asked whether each name was a string literal somewhere in the handler's
+import closure, a closure that included command-help.js itself. What the new
+check found: `mc run start|stop [--force]` on the page (start refuses
+`--force`; the page now says `mc run start|stop`, IN FULL keeps `stop
+[--force]`); `mc skills list`, routed but undocumented (now `mc skills [list]`);
+`mc repo who` and `mc dev unregister` rows with one space before their
+description, read as part of the synopsis. `mc test <repo> <pr>` described a
+baseline and a candidate compared by name; it now says what repo-gate.js does:
+one tree, the head with main merged in, the reached test files and command
+gates, main run only for a file that went red.
 
 What it found, now fixed: `mc vault` revoke-device, change-password and
 destroy-forgotten were routed but missing from the vault row and the matrix;

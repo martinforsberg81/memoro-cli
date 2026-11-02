@@ -107,6 +107,17 @@ export function withoutCloudflare(env) {
   return { env: clean, removed };
 }
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': { booleans: ['--json'] },
+  status: {},
+  key: { booleans: ['--json'], strictValues: ['--account'] },
+  run: { booleans: ['--dry-run'] },
+  resume: { booleans: ['--from-head'], strictValues: ['--manifest'] },
+  promote: { strictValues: ['--langs'] },
+};
+ROUTES['key set'] = ROUTES.key;
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -126,7 +137,7 @@ export async function run(argv, deps = {}) {
 /* ------------------------------------------------------------------- key */
 
 async function key(argv, { stdout, stderr, deps }) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--account'] });
+  const scanned = scanArgs(argv, ROUTES.key);
   const [what, ...extra] = scanned.positional;
   if (scanned.error || extra.length || (what !== undefined && what !== 'set')) {
     stderr.write(`mc: ${scanned.error || `mc language key takes set or nothing (${scanned.positional.join(' ')})`}\n${usage()}`);
@@ -318,7 +329,7 @@ export function prepareWorktree({ path, git, env, alive }) {
 }
 
 async function status(argv, { stdout, stderr, env, deps }) {
-  const scanned = scanArgs(argv, {});
+  const scanned = scanArgs(argv, ROUTES.status);
   const [lang, ...extra] = scanned.positional;
   if (scanned.error || !lang || extra.length || !LANG.test(lang)) {
     stderr.write(`mc: ${scanned.error || 'mc language status takes one language code, e.g. sv'}\n${usage()}`);
@@ -438,7 +449,7 @@ export function lastRuns(env = process.env) {
 }
 
 async function overview(argv, { stdout, stderr, env, deps }) {
-  const scanned = scanArgs(argv, { booleans: ['--json'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `unknown subcommand: ${scanned.positional[0]}`}\n${usage()}`);
     return 2;
@@ -590,7 +601,7 @@ export function spawnActDefault({ argv, cwd, env, onStderr, signals = process })
 const STOP_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGTERM'];
 
 async function runVerb(argv, io) {
-  const scanned = scanArgs(argv, { booleans: ['--dry-run'] });
+  const scanned = scanArgs(argv, ROUTES.run);
   const [name, ...extra] = scanned.positional;
   if (scanned.error || !name || extra.length) {
     io.stderr.write(`mc: ${scanned.error || 'mc language run takes one manifest, e.g. sv-forms-cutover'}\n${usage()}`);
@@ -605,7 +616,7 @@ async function runVerb(argv, io) {
 }
 
 async function resumeVerb(argv, io) {
-  const scanned = scanArgs(argv, { booleans: ['--from-head'], strictValues: ['--manifest'] });
+  const scanned = scanArgs(argv, ROUTES.resume);
   if (scanned.error || scanned.positional.length) {
     io.stderr.write(`mc: ${scanned.error || `mc language resume takes no argument (${scanned.positional[0]}) — --manifest <name> picks one`}\n${usage()}`);
     return 2;
@@ -1053,7 +1064,7 @@ export function markPromoted(langs, { env = process.env, now = () => new Date() 
 }
 
 async function promoteVerb(argv, io) {
-  const scanned = scanArgs(argv, { strictValues: ['--langs'] });
+  const scanned = scanArgs(argv, ROUTES.promote);
   const langs = scanned.flags.langs ?? null;
   if (scanned.error || scanned.positional.length || (langs !== null && !LANGS.test(langs))) {
     io.stderr.write(`mc: ${scanned.error || 'mc language promote takes --langs <list>, e.g. --langs sv,fr, or nothing for every language'}\n${usage()}`);

@@ -20,13 +20,17 @@ import { scanArgs } from './flags.js';
 import { resolveRepoPath } from './repo.js';
 import { commandUsage } from '../command-help.js';
 
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json', '--refresh'] }, bump: { booleans: ['--dry-run', '--json'] } };
+ROUTES['*'] = ROUTES[''];
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
 
   if (argv[0] === 'bump') return runBump(argv.slice(1), { ...deps, stdout, stderr, env });
-  const scanned = scanArgs(argv, { booleans: ['--json', '--refresh'] });
+  const scanned = scanArgs(argv, ROUTES['']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   if (positional.length > 1) {
@@ -82,7 +86,7 @@ export async function run(argv, deps = {}) {
 
 async function runBump(argv, deps) {
   const { stdout, stderr, env } = deps;
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json'] });
+  const scanned = scanArgs(argv, ROUTES.bump);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   if (positional.length !== 2) {
