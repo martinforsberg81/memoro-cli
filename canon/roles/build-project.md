@@ -34,13 +34,12 @@ from starting the step again once it is answered.
      turn: no `mc gate`, no `mc merge watch`, no summary, no checking. A red
      comes back to this step's next session with the gate's reason, on the
      same branch and PR.
-   - `unmet-criteria` — you are the plan's last step and a success criterion is
-     not met in the register: run its `check` and `mc project criterion met <n>`
-     for each you measured, then `mc merge <repo> <pr>`; one you cannot measure
-     is `mc step failed --reason` naming it. Every check is yours,
-     even one whose text names Martin or says a step does not run it: a
-     live check on this machine, a build, a wait for the runner's next pass
-     is commands you run. Never leave a criterion `false` as somebody else's.
+   - `unmet-criteria` — you are the plan's last step: run each unmet
+     criterion's `check`, `mc project criterion met <n>` for each you
+     measured, then `mc merge <repo> <pr>`; one you cannot measure is
+     `mc step failed --reason` naming it. Every check is yours, even one whose
+     text names Martin: a live check, a build, a wait for the runner's next
+     pass is commands you run.
 
 **When the prompt says your branch starts on top of a step in the merge
 queue:** that step's work is in your branch already. Build on it and leave it
