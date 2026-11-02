@@ -72,7 +72,7 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(text, /b · 0 behind \/ 2 ahead of origin\/main · 1 changed file · dev server http:\/\/127\.0\.0\.1:8920/u);
     assert.match(text, /mc shot dev/u);
     assert.match(text, /mc publish/u);
-    assert.equal(sessionStartContext({ cwd: '/x', inside: true, states: [] }), null, 'nothing of mc here, nothing said');
+    assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL.*MC_STEP.*cwd \/x/u);
   });
 
   it('finds the worktrees of a workarea, and only those mc knows', () => {
@@ -463,12 +463,36 @@ describe('mc hook — the door', () => {
     await run(['session-start'], {
       stdout: none, stderr: sink(), readStdin: async () => '{"cwd":"/tmp"}', worktreesAt: () => ({ inside: false, worktrees: [] }),
     });
-    assert.equal(none.text, '');
+    assert.match(JSON.parse(none.text).hookSpecificOutput.additionalContext, /^mc — session role unknown/u);
   });
 
   it('refuses a form it does not know', async () => {
     const stderr = sink();
     assert.equal(await run(['post-tool'], { stdout: sink(), stderr }), 2);
     assert.match(stderr.text, /session-start or pre-tool/u);
+  });
+});
+
+
+describe('SessionStart names the session before anything else', () => {
+  it('names plan, step, goal and unknown directories even without a repository', async () => {
+    for (const [cwd, extra, expected] of [
+      ['/mc/programs/mc', {}, /^You are the plan session for programme `mc`.*you never run it.*mc project/u],
+      ['/mc/runner/step/p/memoro', {}, /^You are the step session\./u],
+      ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the goal session for programme `mc`\./u],
+      ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL, MC_STEP and cwd \/elsewhere against \/mc\./u],
+      ['/mc/programs/mc', { MC_ROLE: 'review', MC_PROGRAMME: 'mc' }, /^You are the review session for programme `mc`\./u],
+      ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the brief session\./u],
+      ['/elsewhere', { MC_ROLE: 'helper' }, /^You are the helper session\./u],
+      ['/elsewhere', { MC_ROLE: 'mend' }, /^You are the mend session\./u],
+    ]) {
+      const stdout = { text: '', write(text) { this.text += text; } };
+      await run(['session-start'], {
+        stdout, env: { MC_WORK_ROOT: '/mc', ...extra }, readStdin: async () => JSON.stringify({ cwd }),
+        worktreesAt: () => ({ inside: false, worktrees: [] }), listServers: () => ({ servers: [] }),
+      });
+      const text = JSON.parse(stdout.text).hookSpecificOutput.additionalContext;
+      assert.match(text.split('\n')[0], expected, cwd);
+    }
   });
 });

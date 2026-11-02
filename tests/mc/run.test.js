@@ -2047,6 +2047,8 @@ test('a review class step runs on the catalog\'s review model whatever the usage
   const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review');
+  assert.equal(call.env.MC_PROGRAMME, 'prog');
   assert.equal(call.bin, '/bin/claude');
   const at = call.args.indexOf('--model');
   assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'opus', '--effort', 'high']);
@@ -5003,7 +5005,7 @@ test('register: a step is running with its pid, then done with its pull request 
   assert.equal(seen.session.pid, 31337, 'with the pid onSpawn handed over');
   assert.equal(seen.branch, 'alpha');
   const [call] = f.calls.sessions;
-  assert.deepEqual(call.env, { MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, and where its scratch is');
+  assert.deepEqual(call.env, { MC_ROLE: 'step', MC_PROGRAMME: 'prog', MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, and where its scratch is');
   const after = registerOf(f, 'alpha').steps[0];
   assert.equal(after.status, 'done');
   assert.equal(after.pr, 77);
@@ -5683,6 +5685,8 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   const [call] = f.calls.sessions;
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(call.cwd, `${GOALS}/older/memoro`);
+  assert.equal(call.env.MC_ROLE, 'goal');
+  assert.equal(call.env.MC_PROGRAMME, 'prog');
   assert.equal(call.env.MC_GOAL, 'prog/older');
   assert.equal(call.env.MC_REPO, 'memoro');
   assert.equal(call.env.MC_WORKAREA, `${GOALS}/older/memoro`);

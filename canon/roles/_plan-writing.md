@@ -75,7 +75,7 @@ start to finish, and know when it is done? If not, it is not a step
     plan or the API is billing's to decide, not the step's. A plan sent before
     this rule keeps its concrete models and runs on them. A catalog edit never
     rewrites a plan, and `mc plan` remains the tool Martin chooses when starting
-    a plan.
+    a plan session; the session never runs `mc plan` itself.
   - **Review is not a class a step names.** `mc project send` adds the review
     step last. It runs the one review model Martin configures with
     `mc model set review` (Claude Opus at high effort at launch), on either tool,
@@ -97,8 +97,8 @@ start to finish, and know when it is done? If not, it is not a step
 - **Leave out:** the case for the plan, history, what the code already shows.
 - **Validate:** `mc project send` is the validation; it refuses and says why.
 - **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
-  move, name them in the PR body, and carry into the plan everything it needs
-  from them — nobody reads the archive (ruling 22).
+  move, name them in the session's account, and carry into the plan everything
+  it needs from them — nobody reads the archive (ruling 22).
 - **Decisions:** cite by name, never by path. Record the ruling in
   `docs/project/<programme>/rulings.md`: the question, Martin's answer quoted,
   the plan that carries it.

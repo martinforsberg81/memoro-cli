@@ -144,8 +144,9 @@ export function workAreaStatePath(name, env = process.env) {
 }
 
 /**
- * `~/mc/plan/` — mc's own directory for planning sessions, beside `runner/`,
- * `intake/` and `brief/`. A programme's session is `~/mc/plan/<programme>/`.
+ * Legacy layout 1's planning root, `<work root>/plan/`. Current programme
+ * sessions stand in `~/mc/programs/<programme>/`; `planAreaRoot` selects the
+ * installed layout.
  *
  * It is deliberately *not* a work area, and the reason is structural rather
  * than a rule about names: `mc run`'s `workareas()` and `mc status`'s

@@ -5,14 +5,16 @@ mc plan [<programme>] [--new] [--codex|--claude] [--model <m>]
 mc plan <programme> --archive
 ```
 
-That is the whole verb. It opens a foreground session in
-`~/mc/plan/<programme>/` with both repositories checked out, and hands it one
+This is the person's entrance, not an instruction to a session already
+planning. It opens or resumes an interactive foreground session in
+`~/mc/programs/<programme>/` with both repositories checked out, and hands it one
 prompt naming the programme and where it stands; what a planning session is
 for is the `plan` role's to say. Martin is at the terminal for all of it.
 `--archive` is the one other thing it does: it ends a programme
 ([below](#archiving-a-programme)).
 
-The directory is `~/mc/plan/<programme>/` in layout 1 and `~/mc/programs/<programme>/` in layout 2; [mc-layout.md](mc-layout.md) says which holds.
+The current directory is `~/mc/programs/<programme>/`. Legacy layout 1 uses
+`<work root>/plan/<programme>/`; [mc-layout.md](mc-layout.md) describes compatibility.
 
 **It predicts nothing beyond that**, and that is the point rather than an
 omission. How many projects the programme needs, what they are called, whether
@@ -52,20 +54,17 @@ till något som körs av mc run").
 So a planning session lives at:
 
 ```
-~/mc/plan/<programme>/
+~/mc/programs/<programme>/
 ├── memoro/        worktree on branch plan/<programme>
 └── memoro-cli/    worktree on branch plan/<programme>
 ```
 
-`~/mc/plan/` is mc's own directory, beside `runner/`, `intake/` and `brief/`.
-**The runner cannot reach what is under it**, and not by a rule about names
-that could drift: `mc run`'s `workareas()` and `mc status`'s
-`areasWithCheckout()` list the directories under `~/mc/step/` — and, from
-before it, directly under `~/mc` — that hold a checkout of a repository mc
-knows, and `~/mc/plan/` holds none. The programmes are one level below that,
-where neither looks. `listWorkAreas` lists only `~/mc/work/`, so `mc work` does
-not list a "workarea" called `plan` whose repositories are programme names. The name lives
-once, in [`paths.js`](../../src/mc/paths.js).
+`~/mc/programs/` is mc's own directory, beside `runner/`, `intake/` and `brief/`.
+**The runner does not treat a programme's checkouts as step areas.** Current
+step areas are under `~/mc/runner/step/`, and ordinary workareas under
+`~/mc/work/`. The runner reads project plans and goals under `programs/`, but
+never turns the programme session's `memoro/` or `memoro-cli/` worktree into a
+step area. The layout names live in [`paths.js`](../../src/mc/paths.js).
 
 The session's working directory is the programme directory itself, not either
 checkout: both repositories are siblings under it, and a programme that spans
@@ -86,7 +85,7 @@ separate:
 |---|---|
 | `listProgrammes` — `git ls-tree -d origin/main docs/project/` | which programmes **exist** |
 | `listPlans` — the `PLAN.json` files under `~/mc/programs/` | what is **in** them |
-| `openPlanAreas` — the directories under `~/mc/plan/` | which are **being planned** |
+| `openPlanAreas` — the directories under `~/mc/programs/` | which are **being planned** |
 
 Asking only the second would drop a programme whose projects the runner has
 already archived: the directory is left holding its own documents, with no
@@ -101,14 +100,18 @@ on main.
 
 ## What the verb does
 
-[`src/mc/commands/plan.js`](../../src/mc/commands/plan.js) does four things.
+[`src/mc/commands/plan.js`](../../src/mc/commands/plan.js) first refuses a caller that is already a session, then does four things.
+The refusal reads `MC_ROLE`, older goal/step identity and cwd, or the coding
+agent markers `CLAUDECODE`, `CODEX_THREAD_ID`, `CODEX_SESSION_ID` and `CODEX_CI`.
+It names the caller and points to `mc project new`, `mc project step add` and
+`mc project send`; it opens nothing. Help remains available inside a session.
 
 **Refuses a reserved name.** `mc plan pm` would make a directory wearing the
 name that means "the singleton role's workspace". `reservedRoleName` is the
-same guard `mc new` and `mc worker` use.
+guard `mc worker` uses too.
 
 **Makes the session's directory if it is missing**, in `ensurePlanArea`:
-`~/mc/plan/<programme>/` with a worktree of **every** repository mc knows, each
+`~/mc/programs/<programme>/` with a worktree of **every** repository mc knows, each
 on branch `plan/<programme>` **from `origin/main` after a fetch**. The base
 matters more here than anywhere else: a session opened on a stale local branch
 reads a `docs/project/` that has already moved. An existing directory is used
@@ -138,26 +141,18 @@ yesterday.
 
 ## What the session is told
 
-The prompt, in full:
+The opening prompt names the programme, `~/mc/programs/<programme>/`, its
+repository worktrees on `plan/<programme>`, and the project directories beside
+them. It says plans change only through `mc project` and `mc step`, keeps the
+project-named branch for the runner, then waits for Martin. A resume gets no
+opening prompt.
 
-```
-You are the planning session for the `<programme>` programme.
-
-You stand in `~/mc/plan/<programme>/`, with `memoro/` and `memoro-cli/` beside
-you — each a worktree on branch `plan/<programme>`. This is not a workarea:
-nothing `mc run` does can reach it.
-
-Martin is at the terminal. Start by reading `docs/project/README.md` and what
-`docs/project/<programme>/` already holds in each repository, and say what you
-found.
-```
-
-And nothing else, because nothing else is knowable when the session opens.
-
-`docs/project/README.md` is named because that is where the convention and the
-`PLAN.json` schema actually live, in the repository being planned, the same
-text in memoro and memoro-cli. Naming the file rather than restating it is what
-keeps this from becoming a second copy that drifts.
+The launch sets `MC_ROLE=plan` and `MC_PROGRAMME=<programme>` on both a new
+conversation and a resume. A SessionStart hook names the role in its first
+line, including a session Martin opens by hand in that programme directory.
+The role and the hook both say never to run `mc plan` from inside the session.
+No headless plan session is built yet; the plan session is the interactive one
+Martin opens.
 
 Behind the prompt are `canon/roles/_common.md` and `canon/roles/plan.md`, assembled by `instructionsFor` the way every other role
 session's instructions are ([`mc-roles.md`](mc-roles.md)). The role file was
@@ -169,7 +164,7 @@ assembler. With a body it inherits like the rest, so that fold is gone and the
 same rules twice.
 
 What the role says is what a planning session *is*: the programme as the unit,
-`~/mc/plan/<programme>/` and why it is not a workarea, the two kinds of work
+`~/mc/programs/<programme>/` and why it is not a workarea, the two kinds of work
 that are its own — thinking a programme through, and a step parked on
 `blocked_by: plan-review` — and the project the brief has already decided,
 which it does not take. How a plan is written is the passage it shares with
@@ -180,7 +175,7 @@ to.
 The role also says the checkouts stay on `plan/<programme>`, and that a
 planning session never checks out or creates a branch named after a project.
 It said only "you create neither" until 2026-09-26, when a planning session in
-`~/mc/plan/entity-detail/memoro` wrote a plan on a local branch named after the
+`<work root>/plan/entity-detail/memoro` (the old layout) wrote a plan on a local branch named after the
 project and stayed on it: the runner's `addWorktree` (`src/mc/work-area.js`)
 found that branch, git refused to check it out a second time, and the step went
 `blocked` on `worktree-missing` until somebody detached the planning tree.
@@ -203,7 +198,7 @@ an intro nobody asked for.
 `mc plan <programme> --archive` is how a programme ends, and the only way:
 `mc run` archives a project once its plan says done (a repository plan the round it is read, a plan under `~/mc/programs/` 24 hours after it is done), but nothing removes
 the programme above it — `docs/project/<programme>/` keeps its own document and
-rulings, and `~/mc/plan/<programme>/` keeps two worktrees on `plan/<programme>`.
+rulings, and `~/mc/programs/<programme>/` keeps two worktrees on `plan/<programme>`.
 No machine can tell that a programme is over, since one whose projects are all
 done is also where the next piece of that work belongs, so it is typed and
 never triggered.
@@ -213,7 +208,7 @@ never triggered.
    refuses — listing every reason — while any plan under the programme is under
    `~/mc/programs/` (a `done` one is `mc run`'s to archive
    first), or while `releaseWorkArea`'s dry run would keep anything in
-   `~/mc/plan/<programme>/`: uncommitted work, commits main lacks, a process
+   `~/mc/programs/<programme>/`: uncommitted work, commits main lacks, a process
    standing in it (the session itself, if run from inside), a file somebody
    put there. A name that is neither on main nor being planned is refused too.
 2. **Main first.** In each repository whose `docs/project/` holds the
@@ -226,7 +221,7 @@ never triggered.
    function. An archive PR for the programme still open from an earlier
    attempt is landed instead of opening a second.
 3. **Then the planning session**, only once every PR has merged:
-   `releaseWorkArea('plan/<programme>')`, as `mc work release` — each worktree
+   `releaseWorkArea(planArea(<programme>))`, as `mc work release` — each worktree
    handed back, `plan/<programme>` deleted, the conversations and the
    directory gone with them. In layout 2 the directory is
    `~/mc/programs/<programme>/` and holds the programme's projects and

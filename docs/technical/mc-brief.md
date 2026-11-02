@@ -122,7 +122,7 @@ running them rather than by reading (2026-09-05, against the real `~/mc` with
 the worktree in place). The worktree sits a level below `~/mc/brief/`, where
 `areasWithCheckout` and the runner's `workareas()` cannot see it — both list a
 top-level directory only when `<area>/<repo>/.git` exists, which is why
-`~/mc/plan/` and `~/mc/gate/` are invisible too; with the worktree at
+the old `<work root>/plan/` and `~/mc/gate/` are invisible too; with the worktree at
 `~/mc/brief/unblock/memoro-cli`, `areasWithCheckout` listed 80 areas and
 neither `brief` nor `unblock` was among them. And the branch is not `<project>`
 or `<project>-…`, which is the shape `projectForBranch`

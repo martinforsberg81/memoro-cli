@@ -526,6 +526,7 @@ export async function openArea(name, opts, deps) {
       task: opts.task,
       model: opts.model,
       overlay,
+      roleName,
       defaultModel: roleModel,
       defaultModelTool: roleTool,
       // Only what the user asked for. The transcript-derived model persistence
@@ -591,6 +592,7 @@ export async function openArea(name, opts, deps) {
         tool: tool || roleTool || area.conversations[0]?.tool || 'claude',
         model: opts.model,
         overlay,
+        roleName,
         defaultModel: roleModel,
         defaultModelTool: roleTool,
         graceful: !inside,

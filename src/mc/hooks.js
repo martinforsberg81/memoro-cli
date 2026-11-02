@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
 import { run as runGit } from './git.js';
+import { sessionIdentity, sessionRoleLine } from './session-role.js';
 import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
 
@@ -148,10 +149,9 @@ export const TOOLBOX = [
 ];
 
 /** The SessionStart context: the worktrees' state, the warnings, the toolbox. */
-export function sessionStartContext({ cwd, inside, states }) {
-  if (!states.length) return null;
-  const lines = ['mc — session start'];
-  if (!inside) {
+export function sessionStartContext({ cwd, inside, states, env = process.env }) {
+  const lines = [sessionRoleLine(sessionIdentity({ cwd, env }), { cwd, env })];
+  if (!inside && states.length) {
     lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md was NOT loaded; their PreToolUse hooks are run by mc hook pre-tool.`);
     lines.push(`Read ${states.map((state) => join(state.worktree, 'CLAUDE.md')).join(' and ')} before changing anything, and run commands from inside the worktree.`);
   }

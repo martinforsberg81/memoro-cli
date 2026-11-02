@@ -244,7 +244,7 @@ stays.
 
 | Root | What lives there | What tidy may remove |
 |---|---|---|
-| `~/mc/plan/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no project that is not done (I) |
+| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no project that is not done (I) |
 | `~/mc/step/<project>/` | a step area the runner made | nothing (S) |
 | `~/mc/work/<name>/` | a work area `mc work` made | nothing (W) |
 | `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
