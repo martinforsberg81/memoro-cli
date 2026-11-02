@@ -89,7 +89,8 @@ export const COMMAND_USAGE = Object.freeze({
     "The catalog does not poll capacity. --json applies only to list.\n",
   ].join(''),
   goal: [
-    "usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title \"<title>\"   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main\n",
+    "usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title \"<title>\" [--after <p>/<g>[,<p>/<g>]]   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main; waiting until its after has landed\n",
+    "        mc goal after <programme>/<goal> [<p>/<g>...]   the goals it starts after, replaced (none clears them); waiting while one has not landed, and the runner opens it when all have\n",
     "        mc goal log [<programme>/<goal>] [--done \"…\"] [--comment \"…\"] [--next \"…\"] [--status open|review|blocked|done]   append a session's entry to LOG.md; the goal is MC_GOAL's when none is named\n",
     "        mc goal open|review|blocked|done [<programme>/<goal>] [--reason \"…\"]   set the goal's status, and log the reason; done is a person's;\n",
     "                                    going open, a branch with no commits of its own is remade from origin/main\n",

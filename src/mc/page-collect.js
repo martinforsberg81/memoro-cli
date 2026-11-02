@@ -59,7 +59,7 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
-import { goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
+import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -1542,6 +1542,8 @@ export function programmesSection({
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
+ * `after` is the goals it starts after; `waiting_on` those of them that have
+ * not landed, which is what a `waiting` goal waits on.
  */
 export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
   return goals.map((goal) => ({
@@ -1549,6 +1551,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     programme: goal.programme,
     repos: goal.repos,
     status: goal.status,
+    after: goal.after ?? [],
+    waiting_on: afterOf(goal, goals).pending,
     sessions: goalSessions(goal.log),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),

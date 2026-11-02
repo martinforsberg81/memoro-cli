@@ -1173,7 +1173,9 @@ function projectLine(c, wide, project) {
  * green — a review session or the merger moves it by itself — `blocked` is the
  * blocked colour, and `done` is grey: the project rows' colours for the same
  * words. A goal blocked by a red review or a red merge waits on plan, and its
- * tail says so first, in the colour of what waits on a person.
+ * tail says so first, in the colour of what waits on a person. A `waiting`
+ * goal is yellow, the projects' waiting colour — the runner lets it go when
+ * its `after` has landed — and its tail says first what it waits on.
  */
 function goalLine(c, wide, goal) {
   const column = projectColumns(wide);
@@ -1181,7 +1183,7 @@ function goalLine(c, wide, goal) {
   const word = goal.status ?? '—';
   const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
     : goal.status === 'review' ? ['green']
-    : (goal.status === 'blocked' ? statusTone('blocked') : ['grey']);
+    : (goal.status === 'blocked' || goal.status === 'waiting' ? statusTone(goal.status) : ['grey']);
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
     : '';
@@ -1198,10 +1200,11 @@ function goalLine(c, wide, goal) {
   if (room <= 0) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
   const said = goal.last?.next ?? goal.last?.comment ?? null;
-  if (goal.plan) {
-    const head = 'waits on plan';
-    const tail = said ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
-    return `${left}${c(clip(head, room), ...statusTone('blocked'))}${tail ? c(tail, 'grey') : ''}`;
+  const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
+  if (goal.plan || waits) {
+    const head = waits ?? 'waits on plan';
+    const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
+    return `${left}${c(clip(head, room), ...statusTone(waits ? 'waiting' : 'blocked'))}${tail ? c(tail, 'grey') : ''}`;
   }
   return said ? `${left}${c(clip(one(said), room), 'grey')}` : left;
 }

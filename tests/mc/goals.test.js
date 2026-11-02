@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitsOnPlan } from '../../src/mc/goals.js';
+import { afterCycle, afterGoneText, afterOf, appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitingMoves, waitsOnPlan } from '../../src/mc/goals.js';
 import { programsPlans } from '../../src/mc/plan-source.js';
 
 const GOAL_TEXT = [
@@ -72,8 +72,8 @@ test('parseGoal reads the front matter and the title, and keeps the body as it i
 
 test('parseGoal names each problem: no front matter, a status or class unknown, no repository, a bad repository name', () => {
   assert.deepEqual(parseGoal('# no front matter\n').problems, ['GOAL.md has no front matter between --- lines']);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, not started/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, not missing/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, waiting, not started/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, waiting, not missing/u);
   assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: huge')).problems.join(), /class is fast or large, not huge/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: ')).problems.join(), /repos names no repository/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: Memoro_CLI')).problems.join(), /repo Memoro_CLI is not a repository name/u);
@@ -219,4 +219,73 @@ test('waitsOnPlan: a goal blocked by a red review or a red merge, not one blocke
   assert.equal(waitsOnPlan(blocked('runner', 'merger answered red on #12')), true);
   assert.equal(waitsOnPlan(blocked('claude', null)), false);
   assert.equal(waitsOnPlan({ status: 'open', log: [{ tool: 'codex', done: 'red abc1234' }] }), false);
+});
+
+/* ------------------------------------------------------------- after, waiting */
+
+/** A goal as `programsGoals` gives it, for the after tests. */
+const listed = (name, status, after = [], extra = {}) => {
+  const [programme, goal] = name.split('/');
+  return { programme, goal, dir: `/p/${programme}/goals/${goal}`, status, repos: ['memoro-cli'], class: 'large', after, log: [], problems: [], ...extra };
+};
+
+test('parseGoal reads after as <programme>/<goal> names, and renderGoal writes it back', () => {
+  const text = GOAL_TEXT.replace('created: 2026-11-01T20:00:00Z\n', 'created: 2026-11-01T20:00:00Z\nafter: mc/runner-sessions, mc/agent-skills-text\n').replace('status: open', 'status: waiting');
+  const goal = parseGoal(text);
+  assert.equal(goal.status, 'waiting');
+  assert.deepEqual(goal.after, ['mc/runner-sessions', 'mc/agent-skills-text']);
+  assert.equal(renderGoal(goal), text);
+  assert.deepEqual(parseGoal(GOAL_TEXT).after, [], 'no after line, no after');
+  assert.doesNotMatch(renderGoal(parseGoal(GOAL_TEXT)), /after:/u, 'no after, no line');
+  assert.deepEqual(parseGoal(text.replace('mc/agent-skills-text', 'agent-skills-text')).problems, ['after agent-skills-text is not <programme>/<goal>']);
+});
+
+test('setStatus with after writes both, and keeps the after it has when given none', () => {
+  const store = { '/g/GOAL.md': GOAL_TEXT, '/g/LOG.md': '' };
+  const io = { read: (path) => store[path] ?? null, write: (path, text) => { store[path] = text; } };
+  const entry = { at: '2026-11-02T10:00Z', tool: 'person', model: null, status: 'waiting', done: 'after mc/a', comment: null, next: null };
+  setStatus({ dir: '/g', status: 'waiting', after: ['mc/a'], entry, ...io });
+  assert.match(store['/g/GOAL.md'], /^status: waiting\n.*\nafter: mc\/a\n---/msu);
+  setStatus({ dir: '/g', status: 'blocked', entry: { ...entry, status: 'blocked' }, ...io });
+  assert.deepEqual(parseGoal(store['/g/GOAL.md']).after, ['mc/a']);
+});
+
+test('afterOf: done is landed, a goal not there is gone, anything else — blocked too — is pending', () => {
+  const goals = [listed('mc/landed', 'done'), listed('mc/stuck', 'blocked'), listed('mc/going', 'open')];
+  assert.deepEqual(afterOf({ after: ['mc/landed', 'mc/stuck', 'mc/going', 'mc/discarded'] }, goals), {
+    landed: ['mc/landed'], pending: ['mc/stuck', 'mc/going'], gone: ['mc/discarded'],
+  });
+  assert.deepEqual(afterOf({ after: [] }, goals), { landed: [], pending: [], gone: [] });
+});
+
+test('waitingMoves opens a goal whose after has all landed, keeps one behind a blocked goal waiting, and blocks one whose after is gone', () => {
+  const goals = [
+    listed('mc/runner-sessions', 'done'),
+    listed('mc/stuck', 'blocked'),
+    listed('mc/ready', 'waiting', ['mc/runner-sessions']),
+    listed('mc/behind', 'waiting', ['mc/runner-sessions', 'mc/stuck']),
+    listed('mc/orphan', 'waiting', ['mc/discarded']),
+    listed('mc/early', 'open', ['mc/stuck']),
+    listed('mc/judged', 'review', ['mc/stuck']),
+    listed('mc/asked', 'blocked', ['mc/runner-sessions']),
+  ];
+  const moves = waitingMoves(goals).map((move) => ({ goal: move.goal.goal, status: move.status, done: move.done, comment: move.comment }));
+  assert.deepEqual(moves, [
+    { goal: 'ready', status: 'open', done: 'mc/runner-sessions landed — starting', comment: null },
+    { goal: 'orphan', status: 'blocked', done: null, comment: afterGoneText(['mc/discarded']) },
+    { goal: 'early', status: 'waiting', done: null, comment: 'waits on mc/stuck' },
+  ]);
+  assert.equal(waitsOnPlan({ status: 'blocked', log: [{ tool: 'runner', done: null, comment: afterGoneText(['mc/discarded']) }] }), true, 'a gone after waits on plan');
+});
+
+test('nextGoal never picks a waiting goal', () => {
+  const goals = [listed('mc/held', 'waiting', ['mc/other']), listed('mc/other', 'blocked')];
+  assert.equal(nextGoal(goals, { repos: ['memoro-cli'] }), null);
+});
+
+test('afterCycle finds a ring of goals waiting on each other', () => {
+  const goals = [listed('mc/a', 'waiting', ['mc/b']), listed('mc/b', 'waiting', ['mc/c']), listed('mc/c', 'open')];
+  assert.equal(afterCycle('mc/c', ['mc/a'], goals), 'mc/a');
+  assert.equal(afterCycle('mc/c', ['mc/x'], goals), null);
+  assert.equal(afterCycle('mc/d', ['mc/a'], goals), null);
 });
