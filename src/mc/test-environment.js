@@ -438,7 +438,9 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     registerBy = now() + registerMs;
     const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
       + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
-    if (deps.onWaiting) deps.onWaiting(line);
+    // Its own callback: `onWaiting` is handed admission verdicts, and a line
+    // given to it reached `holdersText` as a verdict and threw (2026-11-02).
+    if (deps.onSlowStart) deps.onSlowStart(line);
     else process.stderr.write(`${line}\n`);
   }
   if (!server) {
@@ -502,6 +504,9 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     // Two app servers already up is a wait, not a failure — said once a
     // minute with who holds the slots, so the wait has a name on it.
     onWaiting: json ? null : (verdict) => stdout.write(`mc: waiting for a slot — held by ${holdersText(verdict)}\n`),
+    // A wrapper still building when its register window lapses gets one more;
+    // the line says so, on stdout with the others.
+    onSlowStart: json ? null : (line) => stdout.write(`${line}\n`),
   });
   if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
   const { server } = ensured;
