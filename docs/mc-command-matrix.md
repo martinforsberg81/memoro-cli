@@ -434,3 +434,16 @@ status page. Four hundred lines of vocabulary for one sentence, under a name
 nobody could say out loud without explaining it. Removed 2026-08-30 on Martin's
 word: *"Vi använder enbart mc test för de stora testerna. En instans kan köra
 åt gången. Det löser hela problemet."*
+
+## Help and discovery
+
+`mc --help` starts with a daily page of at most 40 lines at 80 columns,
+grouped by task. IN FULL retains the less-used forms; moving one off the
+first screen is not removing its command. `mc <verb> [<subcommand>] --help`
+and `-h` print usage and exit 0, including vault subcommands, before an
+operation or authentication. After `mc keys run <script>`, flags belong to
+the declared script instead, including its `--help`.
+
+The ongoing help/handler audit and usage measurements are recorded in
+[`mc-help.md`](technical/mc-help.md). This first pass does not yet replace
+the long help and handler usages with one source, or complete the flag audit.
