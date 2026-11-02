@@ -168,3 +168,4 @@ existed?
 | 2026-11-01 | mc | goals-checkpoint-verifier | delivered | Review the project against its goal | [docs/technical/mc-session-control.md](../technical/mc-session-control.md) | [#1187](https://github.com/martinforsberg81/memoro-cli/pull/1187) |
 | 2026-11-01 | mc | goals-activation-fixes | delivered | Review the project against its goal | none | [#1185](https://github.com/martinforsberg81/memoro-cli/pull/1185) |
 | 2026-11-01 | mc | goals-awake-clock | delivered | Review the project against its goal | [docs/technical/mc-session-control.md](../technical/mc-session-control.md) | [#1188](https://github.com/martinforsberg81/memoro-cli/pull/1188) |
+| 2026-11-02 | mc | goals-runner-wiring | delivered | Review the project against its goal | none | [#1190](https://github.com/martinforsberg81/memoro-cli/pull/1190) |
