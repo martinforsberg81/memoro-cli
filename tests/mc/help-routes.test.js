@@ -124,6 +124,23 @@ describe('every name in the help is routed', () => {
     assert.deepEqual([...listed].sort(), [...VAULT_VERBS].sort());
   });
 
+  it('documents in IN FULL every subcommand a handler dispatch table routes', () => {
+    const documented = new Set(synopses(HELP_TEXT).flatMap(({ verb, words }) => words.map((word) => `${verb} ${word}`)));
+    let tables = 0;
+    for (const [verb, path] of Object.entries(VERB_MODULES)) {
+      const source = read(resolve(SRC, path));
+      for (const table of source.matchAll(/^const [A-Z_]*(?:VERBS|SUBCOMMANDS) = \[([^\]]*)\]/gmu)) {
+        tables += 1;
+        for (const [, word] of table[1].matchAll(/'([a-z][a-z-]*)'/gu)) {
+          // A moved verb answers with where it went; it is not documented as a form.
+          if (source.includes(`mc ${verb} ${word} is now`)) continue;
+          assert.ok(documented.has(`${verb} ${word}`), `mc ${verb} ${word} is routed but not in IN FULL`);
+        }
+      }
+    }
+    assert.ok(tables >= 5, `only ${tables} dispatch tables found`);
+  });
+
   it('catches invented verbs, subcommands, flags and vault verbs', () => {
     for (const row of [
       '  mc programme <name>              invented verb',

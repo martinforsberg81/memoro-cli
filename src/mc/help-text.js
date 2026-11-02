@@ -97,6 +97,7 @@ ${commandReference('status')}
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work
+  mc work list [--json]            The same as mc, or mc --json
   mc work remove <name> <repo>     Take one repository out of that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest.
                                     A runner area is refused: it closes with
@@ -259,6 +260,16 @@ ${commandReference('goal')}
                                     workerd whose parent is gone — and
                                     registrations whose worktree is gone. The
                                     runner runs it every chore pass
+  mc dev open <surface> [--account <name>] [--onboarding] [--here] [--json]
+                                    This worktree's server up, and one line:
+                                    the URL that signs in and lands on the
+                                    surface, account/state, branch @ commit.
+                                    --open [--viewport <v>] [--theme light|dark]
+                                    [--locale <code>] [--safe-area <t,r,b,l>|0]
+                                    also leaves a headed browser there
+  mc dev surfaces [--here] [--json]
+                                    The surfaces and accounts memoro's
+                                    .mc/shot.json declares
   mc docker [--json]               The container runtime: up or stopped, and why
                                     not; the leases on it; what it holds on
                                     disk; and the containers and volumes mc
@@ -500,6 +511,13 @@ ${commandReference('goal')}
                                     lets a deliberate push through. mc installs
                                     it in every repository it adds a worktree
                                     to; --json says whether it is in place
+  mc repo push-check <remote> <url>
+                                    What the installed pre-push hook calls,
+                                    with git's ref lines on stdin; exit 1
+                                    refuses the push. Not for typing
+  mc repo rounds [--json]          Every gate round run from this machine,
+                                    counted by where it ended, and the pull
+                                    requests they landed
   mc log [--failures] [--limit n]  What mc did and how it ended. Every
                                     invocation writes a start and an end; a
                                     start with no end is a command that died

@@ -806,6 +806,8 @@ export function usage() {
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
     '        mc repo guard [repo] [--json]\n',
+    '        mc repo push-check <remote> <url>   the pre-push hook\'s call; ref lines on stdin\n',
+    '        mc repo rounds [--json]             every gate round, by where it ended\n',
   ].join('');
 }
 
