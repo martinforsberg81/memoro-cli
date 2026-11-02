@@ -113,7 +113,7 @@ if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`)
 ```
 
 A shared preamble folded in ahead of that check would make a missing
-`step.md` look present, and the runner would launch a ninety-minute session
+`build-project.md` look present, and the runner would launch a ninety-minute session
 with no instructions for what it is doing.
 
 ## The assembler
@@ -150,7 +150,7 @@ Each of them used to write the join out by hand.
 `_common.md` is what *every* role session is told. Since 2026-09-06 there is a
 second kind of shared text, and it is not that: two roles write plans — the
 planning session, and the brief for a proposal Martin said GO to (ruling 11) —
-and six do not. Telling a `step` session how to write a `PLAN.json` it may
+and the rest do not. Telling a build session how to write a `PLAN.json` it may
 never write is worse than telling it nothing, so the plan-writing rules are
 neither in `_common.md` nor copied into both role files. They are
 `canon/roles/_plan-writing.md`, and each of the two names it on a line of its
@@ -180,6 +180,23 @@ its own becomes, in `instructionsFor`, a pointer to the installed
 (`~/.claude/skills/…` or `~/.agents/skills/…`) — not its text; the tool loads
 the skill as it loads any. A name `canon/skills/` does not ship is left standing,
 as an unknown `@include` is. See [mc-skills.md](mc-skills.md).
+
+The build role is the second use of it. The runner's `build` sessions come in
+two variants (Martin, 2026-11-02: *"Rollen är 'build goal', precis som 'build
+project' är den andra subtypen."*): `canon/roles/build-project.md` for one step
+of a project and `canon/roles/build-goal.md` for a goal. What is true of every
+build is written once, in `canon/roles/_build.md`, and both name it on a line
+of their own; each variant keeps only what differs — GOAL.md and LOG.md for a
+goal, the plan, `done_when` and the register for a project. `_build.md` says
+two things the variants used to say apart or not at all: **one branch, built
+to the end** — a build never fetches or merges `origin/main` to keep up, and
+a conflict the merger reports is the one time it does — and **when a session
+ends**: at a boundary between two items, only when the work is done, when it
+is blocked, or when its turns cost more than a fresh session reading the log
+would. They were `step.md` and `goal.md` until 2026-11-02; the runner
+launches the new names (`BUILD_ROLES`, `run-plan.js`), and `roles.test.js`
+holds that both include `_build.md` and that no build role tells a session
+to merge `origin/main` otherwise.
 
 `canon/roles/plan.md` had no body at all until #656 — six lines, every one of
 them frontmatter — so an `mc plan <programme>` session was told its model,
@@ -242,16 +259,16 @@ today's file would be a claim about it nobody checked.
 `mc roles check [<role>]` is the reader:
 
 ```
-$ mc roles check step
-step  (canon)  …/canon/roles/step.md
+$ mc roles check build-project
+build-project  (canon)  …/canon/roles/build-project.md
   role text     sha256:43046c402ec7
   instructions  sha256:345f6ea5956c   _common.md + overlay, as a launch joins them
 
 2 live sessions: 1 ok, 1 drift
-  55012  step the-page-remade     2026-09-06T10:06:46Z  step   ok
-  55130  step total-lane-cap      2026-09-06T09:34:57Z  step   drift — started on sha256:9c1…, step.md is sha256:430… now
+  55012  build the-page-remade    2026-09-06T10:06:46Z  build-project  ok
+  55130  build total-lane-cap     2026-09-06T09:34:57Z  build-project  drift — started on sha256:9c1…, build-project.md is sha256:430… now
 
------ what a launch would hand a step session today -----
+----- what a launch would hand a build-project session today -----
 …
 ```
 

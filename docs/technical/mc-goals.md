@@ -3,7 +3,8 @@
 **Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
 `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
 `reviewRoute`, `settleReview`, `goalWithoutWord`), `src/mc/merger.js`
-(`tellGoal`), `canon/roles/goal.md` and `canon/roles/goal-review.md`
+(`tellGoal`), `canon/roles/build-goal.md` (with `_build.md`) and
+`canon/roles/goal-review.md`
 
 A goal is two text files and a worktree, beside projects. It has no steps, no
 register and no owner. A build session does the work and publishes its pull
@@ -31,7 +32,7 @@ blocked  ── plan sets it open ───────────────�
 ```
 
 One worktree per repository the goal names. Anyone may work in one: a person,
-a plan session, or a goal session. `<programme>` must be a directory under
+a plan session, or the runner's build and review sessions on the goal. `<programme>` must be a directory under
 `~/mc/programs/`; `<programme>` and `<goal>` are lower-case letters, digits and
 hyphens. mc keeps nothing else for a goal.
 
@@ -101,11 +102,24 @@ Five verbs; the status verbs are four words.
   goal, refused unless its flags are valid and its names are new. Each
   repository is fetched first; then GOAL.md, LOG.md, and a worktree of each on
   `goal/<g>` from `origin/main` (or that branch as it stands, when it exists).
+  **One branch, built to the end**: the goal is built on this branch, and
+  whether `main` moves meanwhile is not the build's concern — the merger
+  brings the candidate up to date when it lands it.
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]`** —
   appends one entry; at least one field is needed. `--status` also sets the
   status line. The goal is `MC_GOAL`'s when none is named.
 - **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
   logs the reason as the entry's `Kommentar`.
+- **A goal's branch is made when the goal can start.** A goal written
+  `blocked` behind another got its branch at `new`, before what it waits for
+  landed. When it goes `open` (by `open` or `log --status open`), each
+  worktree is fetched, and one whose branch has no commits past
+  `origin/main` is moved to `origin/main` as it is now (`git reset --keep`) —
+  that branch made again. A branch with commits of its own is never moved,
+  nor one with uncommitted changes `--keep` will not carry; each repository
+  says which (`remade from origin/main — it had no commits of its own, and
+  main has 12 more`, `left as it is — 3 commits of its own`), and nothing
+  here fails the status change (`remakeUnbuiltBranches`, `commands/goal.js`).
 - A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
   by either verb: only the merger and a person set it. A review session
   (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
@@ -117,11 +131,13 @@ Five verbs; the status verbs are four words.
 
 ## How the runner takes a goal
 
-Goals are asked for only after project steps. In a lane with no runnable step,
-`goalPass` in `src/mc/run.js` takes the next goal:
+A goal is one more candidate for a free lane, beside project steps and
+reviews: `pickWork` (`lane-pick.js`) orders them all, and a goal is not
+waiting for the steps to run out ([mc-run.md](mc-run.md), *What a free lane
+takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
 
-1. **Pick.** Of the goals that parse and are `open` or due a review, whose
-   first repository this lane serves and that are not held, the one whose last
+1. **Pick.** Of the goals that parse and are `open` or due a review and
+   that are not held, on any repository (a lane serves them all), the one whose last
    entry is oldest. A goal in `review` is due a review unless its last entry is
    the runner's `queued` one: then it waits for the merger. A review that
    cannot run now (step 3) is left out of the pick, so it does not stand in
@@ -131,7 +147,8 @@ Goals are asked for only after project steps. In a lane with no runnable step,
    tick. A goal keeps no slot between its sessions.
 2. **Worktrees.** A repository's worktree that has gone is made again on
    `goal/<goal>`, as `mc goal new` makes it.
-3. **Launch.** An `open` goal gets a build session with the `goal` role, in
+3. **Launch.** An `open` goal gets a build session with the `build-goal` role
+   (`canon/roles/build-goal.md`, which includes `_build.md`), in
    the first repository's worktree, with the goal's class routing, model and
    billing as a step has them. A goal in `review` gets a review session with
    the `goal-review` role instead, on the review class's candidate
@@ -162,13 +179,24 @@ Goals are asked for only after project steps. In a lane with no runnable step,
      request is no longer open, nothing is queued and a runner entry says so;
      the goal stays `review`, and the new head gets a review of its own.
 
-Each session is a row in `runs.tsv`, of kind `goal`, named `goal:<p>/<g>`.
+Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
+`build-goal` or `review-goal`; rows from before say `goal`, and are read as
+the build they were. On the page it is a `BUILD` or `REVIEW` row in
+SESSIONS working on `<p>/<g>`, and it waits behind a project's build and
+every review for a free lane ([mc-run.md](mc-run.md) § *Lanes*).
 
 ## What a build session does
 
-The role (`canon/roles/goal.md`) has it merge `origin/main` into its worktree,
-work until the criteria hold, run `mc gate`, commit, and publish with
-`mc publish --no-merge`. It ends with `mc goal log`, adding `--status review`
+The role is `canon/roles/build-goal.md`, one of the two variants of the
+build role: what every build does is written once in `canon/roles/_build.md`,
+which it and `build-project.md` both `@include`, and the variant keeps only
+what is a goal's — GOAL.md and LOG.md. It works on the branch as it is, never
+fetching or merging `origin/main` to keep up: a conflict the merger reports
+is the one time a build merges `origin/main`. It works item after item until
+the criteria hold, and ends at a boundary between two only when the work is
+done, when it is blocked, or when its turns cost more than a fresh session
+reading the log would — a finished part that reads well is not a reason to
+stop. It runs `mc gate`, commits, and publishes with `mc publish --no-merge`. It ends with `mc goal log`, adding `--status review`
 when the criteria hold and the pull request carries them, or `--status blocked`
 when it cannot go on. A build session publishes, and never merges or sets
 `done`.
@@ -239,4 +267,6 @@ head; that is a person's act, and its landing still sets the goal `done`.
 - **No close-out.** No archive verb; a `done` goal stays where it is.
 
 The headless plan session (`autonomy on`) and phases are not built; they wait
-until goal sessions have run for real.
+until goal sessions have run for real. The page draws a `PLAN` row already,
+from the lane file's `kind`; the runner starts no plan session (goal
+`headless-plan`).

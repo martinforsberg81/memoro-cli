@@ -55,6 +55,15 @@ export const SESSION_DEFAULTS = Object.freeze({
 // that lands the project (`chooseKind`). Anything that asks whether a session is
 // for a plan's step asks this set; nothing compares a kind to 'step' by hand.
 export const STEP_KINDS = new Set(['step', 'review']);
+/**
+ * The role a session runs with. A project's step and a goal are both a build
+ * (`canon/roles/build-project.md`, `build-goal.md`, which share `_build.md`);
+ * a project's review step is a review (`review.md`).
+ */
+export const BUILD_ROLES = Object.freeze({ project: 'build-project', goal: 'build-goal' });
+export function roleOfKind(kind) {
+  return kind === 'review' ? 'review' : BUILD_ROLES.project;
+}
 // The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
 // context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
@@ -430,21 +439,32 @@ function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}) {
  * has already asked `machineState` about a dirty worktree, which this cannot
  * see. Given none, the reading is the plan and the open pull requests.
  */
-export function nextFor({
-  repo = null, world = {}, claimed = new Set(), passed = new Set(), state = null,
+export function nextFor(options = {}) {
+  return runnableFor({ ...options, first: true })[0] ?? null;
+}
+
+/**
+ * Every name `nextFor` would take, in its order: the candidates a free lane
+ * weighs against the goals (`lane-pick.js`). `first` stops at the first, which
+ * is `nextFor`.
+ */
+export function runnableFor({
+  repo = null, world = {}, claimed = new Set(), passed = new Set(), state = null, first = false,
 } = {}) {
   const { names = [], plans = [], prs = [], prsFailed = [] } = world;
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
   const read = state || ((name) => pickState(name, { plans, prs, prsFailed }));
+  const found = [];
   for (const name of names) {
     const at = byProject.get(name)?.repo || null;
     if (repo != null && at !== repo) continue;
     if (claimed.has(name) || passed.has(name)) continue;
     const answer = read(name);
     if (!answer?.runnable) continue;
-    return { name, kind: answer.kind || null, repo: at };
+    found.push({ name, kind: answer.kind || null, repo: at });
+    if (first) break;
   }
-  return null;
+  return found;
 }
 
 /**
@@ -936,7 +956,7 @@ export function builtPreamble(built) {
 
 /**
  * What a goal session is told: where the goal is and where it works. The rest
- * is the goal role's (`canon/roles/goal.md`) and `GOAL.md`'s.
+ * is the build-goal role's (`canon/roles/build-goal.md`) and `GOAL.md`'s.
  */
 export function goalPrompt({ name, dir, worktree, branch }) {
   return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
@@ -950,7 +970,7 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
   return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
 }
 
-/** `checkInPrompt` for a goal session, which has no step to judge or to block. */
+/** `checkInPrompt` for a goal's build session, which has no step to judge or to block. */
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
@@ -1048,7 +1068,7 @@ export const STEP_WORKER_AGENTS = Object.freeze({
     effort: 'high',
     tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
     prompt: [
-      'You are a worker for a step session in mc, headless, in its workarea. The step session leads; you do the work it briefs.',
+      'You are a worker for a build session in mc, headless, in its workarea. The build session leads; you do the work it briefs.',
       'Do the brief and nothing beside it: read, search, edit, write the tests it describes, run the commands it names.',
       'Never weaken, skip or delete a test the brief did not name, never touch a threshold or the plan file.',
       'Never run `mc`, `gh`, or a git command that changes the tree or history (`commit`, `push`, `checkout`, `reset`, `stash`); the workarea is shared.',

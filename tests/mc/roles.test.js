@@ -77,7 +77,7 @@ describe('role files', () => {
   });
 
   it('the canon step and mend roles run on 5m and plan on an hour', () => {
-    assert.equal(readCanonRole('step').cache, '5m');
+    assert.equal(readCanonRole('build-project').cache, '5m');
     assert.equal(readCanonRole('mend').cache, '5m');
     assert.equal(readCanonRole('plan').cache, '1h');
   });
@@ -216,7 +216,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'goal', 'goal-review', 'helper', 'intake', 'review', 'step', 'worker']) {
+    for (const name of ['brief', 'build-goal', 'build-project', 'goal-review', 'helper', 'intake', 'review', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -226,7 +226,7 @@ describe('the text every role session shares', () => {
   // 2026-10-10: a step session ran `kill` on the merger's test process,
   // taking it for its own hung test. The rule reaches every session.
   it('tells a step session never to signal a process it did not start', () => {
-    const told = instructionsFor('claude-code', readCanonRole('step').overlay);
+    const told = instructionsFor('claude-code', readCanonRole('build-project').overlay);
     assert.match(told, /Never signal a process you did not start/u);
   });
 
@@ -241,7 +241,7 @@ describe('the text every role session shares', () => {
   // own body — folding the shared text in ahead of it would make a missing
   // `repair.md` look present.
   it('stays out of a role\'s own overlay', () => {
-    assert.doesNotMatch(readCanonRole('step').overlay, TURN_COST);
+    assert.doesNotMatch(readCanonRole('build-project').overlay, TURN_COST);
   });
 });
 
@@ -309,7 +309,7 @@ describe('a passage two roles share', () => {
   it('leaves a marker nobody can resolve standing, rather than dropping the rule', () => {
     assert.equal(expandRoleIncludes('a\n@include _nothing-here.md\nb'), 'a\n@include _nothing-here.md\nb');
     // Only an underscored name, so a role cannot include a role.
-    assert.equal(expandRoleIncludes('@include step.md'), '@include step.md');
+    assert.equal(expandRoleIncludes('@include build-project.md'), '@include build-project.md');
     // A line of its own, not a mention inside a sentence.
     assert.equal(expandRoleIncludes('see @include _plan-writing.md there'), 'see @include _plan-writing.md there');
   });
@@ -375,8 +375,51 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'goal-review.md', 'goal.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'step.md', 'worker.md',
+      '_build.md', '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'build-goal.md', 'build-project.md', 'goal-review.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'worker.md',
     ]);
   });
 });
 
+/**
+ * One build role in two variants (Martin, 2026-11-02: "Rollen är 'build goal',
+ * precis som 'build project' är den andra subtypen."). What is true of every
+ * build is written once, in `_build.md`, and both variants include it.
+ */
+describe('the build roles', () => {
+  const BUILDS = ['build-project', 'build-goal'];
+  const ONE_BRANCH = /One branch, built to the end/u;
+  const WHEN_ENDS = /When the session ends/u;
+
+  it('are the two variants, and the old step and goal roles are gone', () => {
+    for (const name of BUILDS) assert.ok(readCanonRole(name)?.overlay, name);
+    assert.equal(readCanonRole('step'), null);
+    assert.equal(readCanonRole('goal'), null);
+  });
+
+  it('both include _build.md, and its text reaches each session', () => {
+    for (const name of BUILDS) {
+      const { overlay } = readCanonRole(name);
+      assert.match(overlay, /^@include _build\.md$/mu, name);
+      const told = instructionsFor('claude-code', overlay);
+      assert.match(told, ONE_BRANCH, name);
+      assert.match(told, WHEN_ENDS, name);
+      assert.match(told, /a finished part that reads well as a first pass is not a\s+reason to stop/u, name);
+    }
+  });
+
+  it('write what every build shares once, in _build.md', () => {
+    const carriers = readdirSync(canonRolesDir()).filter((file) => file.endsWith('.md'))
+      .filter((file) => ONE_BRANCH.test(readFileSync(join(canonRolesDir(), file), 'utf8')));
+    assert.deepEqual(carriers, ['_build.md']);
+  });
+
+  it('tell no session to merge origin/main except for a conflict the merger reported', () => {
+    for (const name of BUILDS) {
+      const told = instructionsFor('claude-code', readCanonRole(name).overlay);
+      assert.doesNotMatch(told, /Bring it to\s+`origin\/main`/u, name);
+      assert.doesNotMatch(told, /git fetch origin && git merge origin\/main/u, name);
+      const merges = told.split(/\n\s*\n/u).filter((paragraph) => /merge\s+`?origin\/main`?|merging\s+`origin\/main`/u.test(paragraph) && !/never\s+`git fetch`/u.test(paragraph));
+      for (const paragraph of merges) assert.match(paragraph, /merger/u, `${name}: ${paragraph}`);
+    }
+  });
+});

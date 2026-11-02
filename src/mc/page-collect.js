@@ -57,11 +57,12 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
+import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
-import { readLaneCount } from './lane-count.js';
+import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import {
@@ -80,7 +81,7 @@ import { watcherState } from './repo-watch.js';
 import { billingStatus } from './billing-route.js';
 import { readCapacity } from './model-capacity.js';
 import { readBillingState } from './billing.js';
-import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
+import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
@@ -114,11 +115,19 @@ export const DECISIONS_NAMED = 3;
 /** How many stale blockers the line names before it only counts them. */
 export const STALE_NAMED = 3;
 
-/* ------------------------------------------------------------------- STEPS */
+/* ---------------------------------------------------------------- RUNNER */
 
 /**
- * The machine: the runner's steps, one per lane (`nowBlock`), a pending STOP,
- * the lane files whose process is gone, and one line of the day behind it.
+ * The machine: the runner's headless sessions, one per lane (`nowBlock`), a
+ * pending STOP, the lane files whose process is gone, and one line of the day
+ * behind it.
+ *
+ * A session is one of three kinds (session-kind.js): `plan`, `build` — of a
+ * project's step (variant `project`) or of a goal (variant `goal`) — and
+ * `review`. Each carries its `kind` and `variant`, and what it works on:
+ * `goal` (`mc/<goal>`) for a goal's, `name`, `step` and `steps` for a
+ * project's. The list is `sessions`, and the day counts outcomes per kind in
+ * `day.by_kind`; the page draws from these and nothing else.
  *
  * This was NOW, and NOW held two different kinds of thing at once — the
  * runner's steps and the sessions a person had open, drawn as one list of
@@ -240,9 +249,9 @@ export function runnerSection({
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
   deploy = null, attempt = null, live = null, repos = REPO_NAMES,
-  // What `mc run lanes` set: how many lane loops each repository has, and the
-  // cap across them. The rows are one per lane, so the page needs the number.
-  lanes: setting = { per_repo: 1, total: null },
+  // What `mc run lanes` set: how many sessions run at once, across every
+  // repository. The rows are one per lane, so the page needs the number.
+  lanes: setting = { lanes: DEFAULT_LANES },
   // The plans, for the one thing a lane file does not carry: which step of its
   // plan the session is on.
   plans = [],
@@ -256,7 +265,7 @@ export function runnerSection({
   memory = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
+  const { runner: process, steps: sessions, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -264,19 +273,21 @@ export function runnerSection({
     cacheWrite: acc.cacheWrite + (Number(r.cache_write) || 0),
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  for (const step of base.steps) {
-    const plan = byProject.get(step.name);
-    step.step = plan?.step ?? null;
-    step.steps = plan?.steps ?? null;
+  for (const session of sessions) {
+    // A goal's session has no plan step; its name is `goal:<programme>/<goal>`.
+    const plan = session.goal ? null : byProject.get(session.name);
+    session.step = plan?.step ?? null;
+    session.steps = plan?.steps ?? null;
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
     ...base,
+    sessions,
     stop_requested: stop && !Number.isNaN(stopAt)
       ? { at: new Date(stopAt).toISOString(), age_seconds: Math.max(0, Math.round((now.getTime() - stopAt) / 1000)) }
       : null,
-    lanes: lanesOfRunner(base.steps, repos, setting),
-    setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
+    lanes: lanesOfRunner(sessions, setting),
+    setting: { lanes: setting.lanes ?? DEFAULT_LANES },
     process,
     // One entry per repository the round could not ask GitHub about, while
     // that lasts: the round's `prsFailed`, carried between rounds.
@@ -285,6 +296,7 @@ export function runnerSection({
     production: productionSection({ deploy, attempt, live, now, alive }),
     day: {
       ...summariseRuns(rows),
+      by_kind: dayByKind(rows),
       tokens,
       cost: estimateCost(tokens, RUNNER_MODEL),
       model: RUNNER_MODEL,
@@ -294,7 +306,53 @@ export function runnerSection({
 }
 
 /**
- * The lanes, numbered through, whether or not each has a step.
+ * Where a session left its work, in the order the day line names them. A
+ * runs.tsv note is the session's own exit word — `success`, `timeout`,
+ * `no-json`, `failed` — and after it where the step stands (run.js): `merged`,
+ * `queued` for the merge queue, `built` on its branch, `open`, `red` back
+ * from the merger, `blocked`, `failed`.
+ */
+export const DAY_OUTCOMES = Object.freeze(['merged', 'queued', 'built', 'open', 'red', 'blocked', 'failed', 'timeout']);
+
+/**
+ * One row's outcome: the last of its note's words that says where the work
+ * stands; failing that, what the exit word says — `timeout` for a timeout or
+ * a stall (the runner's only kill since ruling 18), `failed` for an exit that
+ * is not a success, and `other` for a success that moved nothing on (a
+ * goal's session, whose work is in its log, or a hand-over between billings).
+ */
+export function outcomeOf(row) {
+  const words = String(row?.note ?? '').split(',').map((word) => word.trim());
+  const where = words.slice(1).reverse().find((word) => DAY_OUTCOMES.includes(word));
+  if (where) return where;
+  if (words[0] === 'timeout' || words[0].startsWith('stalled')) return 'timeout';
+  if (String(row?.exit ?? '0') !== '0' || words[0] !== 'success') return 'failed';
+  return 'other';
+}
+
+/**
+ * The day's outcomes per session kind: `{ plan, build, review }`, each with
+ * `sessions` and a count per outcome (`DAY_OUTCOMES`, and `other`), so each
+ * kind's outcomes add up to its sessions. A row under an old word (`step`,
+ * `goal`) counts as the build it was. What is not a session of these kinds — a
+ * merge round, a mend, the helper's turns — is `other` beside them, a count
+ * and nothing more: the line before counted every row as a step, merge rounds
+ * and helper turns with them.
+ */
+export function dayByKind(rows = []) {
+  const blank = () => ({ sessions: 0, ...Object.fromEntries([...DAY_OUTCOMES, 'other'].map((word) => [word, 0])) });
+  const out = { ...Object.fromEntries(SESSION_KINDS.map((kind) => [kind, blank()])), other: 0 };
+  for (const row of rows) {
+    const named = sessionKind(row.kind);
+    if (!named) { out.other += 1; continue; }
+    out[named.kind].sessions += 1;
+    out[named.kind][outcomeOf(row)] += 1;
+  }
+  return out;
+}
+
+/**
+ * The lanes, numbered through, whether or not each has a session.
  *
  * A lane is what `mc run` drives and it exists between steps as much as during
  * one, so the rows are there step or no step: a lane between steps and a lane
@@ -303,34 +361,29 @@ export function runnerSection({
  * They were one row per repository lane — `memoro #2`, `memoro-cli #4` — which
  * at four lanes on each of two repositories was eight rows under a cap of five:
  * three of them could never hold a step at the same time as the rest. The rows
- * are the slots the runner can actually fill now — `total` when `mc run lanes`
- * set one, `per_repo` times the repositories otherwise — and a row is `lane 3`
- * until a step is in it, when the step's own repository is what the row says
- * (Martin, 2026-09-19).
+ * are the slots the runner can actually fill now — the total `mc run lanes`
+ * set, across every repository and every kind — and a row is `lane 3` until
+ * a session is in it, when the session is what the row says.
  *
- * The steps fill from the top, oldest first, so a row only moves when a step
- * above it ends. A step past the count — a runner started under a higher
+ * The sessions fill from the top, oldest first, so a row only moves when one
+ * above it ends. A session past the count — a runner started under a higher
  * setting than the file holds now — still gets its row: the lane file is the
  * runner saying it is there, and the page believes it over the setting.
  *
- * The step is the same object `steps` carries, not a copy — the two cannot
- * disagree about a lane, because there is one of it.
+ * The lane's `session` is the same object `sessions` carries, not a copy —
+ * the two cannot disagree about a lane, because there is one of it.
  */
-function lanesOfRunner(steps = [], repos = [], setting = {}) {
-  const perRepo = Number.isInteger(setting?.per_repo) && setting.per_repo > 0 ? setting.per_repo : 1;
-  const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))];
-  const slots = Number.isInteger(setting?.total) && setting.total > 0
-    ? Math.min(setting.total, perRepo * names.length)
-    : perRepo * names.length;
-  const running = [...steps].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
+function lanesOfRunner(sessions = [], setting = {}) {
+  const slots = Number.isInteger(setting?.lanes) && setting.lanes > 0 ? setting.lanes : DEFAULT_LANES;
+  const running = [...sessions].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
     || String(a.name).localeCompare(String(b.name)));
   return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
-    const step = running[index] || null;
-    return { number: index + 1, repo: step?.repo ?? null, lane: step?.lane ?? null, step };
+    const session = running[index] || null;
+    return { number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, session };
   });
 }
 
-/* ---------------------------------------------------------------- SESSIONS */
+/* ------------------------------------------------------------- FOREGROUND */
 
 /** The two singleton desks, drawn whether or not anybody is at them. */
 export const DESKS = Object.freeze(['helper', 'brief']);
@@ -927,7 +980,13 @@ export function attachPrs({ programmes, runner, pulls }) {
   for (const group of programmes?.programmes || []) {
     for (const project of group.projects || []) project.prs = mine(project.repo, project.name);
   }
-  for (const step of runner?.steps || []) step.prs = mine(step.repo, step.name);
+  // A goal's pull request is its branch's, `goal/<goal>`; a project's, its own.
+  for (const session of runner?.sessions || []) {
+    session.prs = session.goal
+      ? pulls.items.filter((item) => item.branch === `goal/${session.goal.split('/').pop()}`
+        && (session.repo == null || item.repo === session.repo))
+      : mine(session.repo, session.name);
+  }
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -1426,11 +1485,17 @@ export function programmesSection({
 
   const groups = names.map((name) => {
     const own = projects.filter((project) => project.programme === name);
+    const goals = goalList.filter((goal) => goal.programme === name);
     return {
       programme: name,
+      // A programme with no project of any status and no goal of any status.
+      // An open plan session does not make it active: nothing is on it yet.
+      // Twenty-seven of forty-one headings said `no project yet` on
+      // 2026-11-02; the renderer folds these into one line (Martin).
+      dormant: own.length === 0 && goals.length === 0,
       projects: own,
       // The programme's goals, after its project rows (programmesLines).
-      goals: goalList.filter((goal) => goal.programme === name),
+      goals,
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
@@ -1449,9 +1514,12 @@ export function programmesSection({
     if (kind) kinds[kind] = (kinds[kind] || 0) + 1;
   }
 
+  const dormant = groups.filter((group) => group.dormant).length;
   return {
     count: projects.length,
     programmes: groups,
+    active: groups.length - dormant,
+    dormant,
     statuses: statusesOf(projects),
     // Every stopped project at once: how many wait on an answer from Martin (a
     // decision or a workarea), and which blockers hold the most. A project that
@@ -1629,6 +1697,45 @@ export function readStrays(root, { git = runGit } = {}) {
   });
 }
 
+/**
+ * PROGRAMMES alone, from the sources `collectPage` reads it from — the plans,
+ * the register over them, the goals, the open plan sessions and the tree's own
+ * programmes (`listProgrammes`) — and through the same `programmesSection`, so
+ * `mc programs list` and the page cannot give a programme two verdicts. No
+ * fetch, no GitHub, no tmux: none of those decide whether a programme is
+ * active, and the verb answers in the time it takes to read files.
+ */
+export function readProgrammes({
+  env = process.env,
+  now = new Date(),
+  repos = defaultRepos(env),
+  git = runGit,
+  alive = pidAlive,
+  cache = { loadPlans },
+  programmes = (repo) => listProgrammes(repo),
+} = {}) {
+  const root = workRoot(env);
+  const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
+  const { plans: filed } = cache.loadPlans({ root, repos: present, now, git });
+  const plans = overlayPlans(filed, { root, lock: realLock, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
+  const sessions = sessionsSection({ foreground: readForeground(join(root, 'runner', 'foreground')), now, alive });
+  // Which repository's tree each programme is a directory in: the one fact a
+  // programme with no project and no goal has about where it lives.
+  const homes = {};
+  for (const repo of present) {
+    for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
+  }
+  const section = programmesSection({
+    plans,
+    planning: sessions.planning,
+    planningSessions: sessions.planning_sessions,
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
+    programmes: Object.keys(homes),
+    now,
+  });
+  return { section, homes };
+}
+
 /* ----------------------------------------------------------------- collect */
 
 /**
@@ -1754,7 +1861,7 @@ export async function collectPage({
 
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
   // one head per lane.
-  const laneSetting = laneCount({ root: home });
+  const laneSetting = laneCount({ root: home, repos: present.length });
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
   // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
   const currents = readCurrents(join(root, 'runner'));
@@ -1764,9 +1871,8 @@ export async function collectPage({
     stop,
     stopText: stop ? readText(join(root, 'runner', 'STOP')) : null,
     rows,
-    // `per_repo` lanes per repository this machine has a checkout of, drawn
-    // whether or not each has a step: a lane between steps and a lane that has
-    // died were the same absence until the row existed.
+    // The repositories this machine has a checkout of; the lanes are the
+    // total `mc run lanes` set, across all of them.
     repos: present.map((repo) => repo.name),
     lanes: laneSetting,
     plans,
@@ -1801,7 +1907,7 @@ export async function collectPage({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
-    running: runner.steps.map((step) => step.name).filter(Boolean),
+    running: runner.sessions.map((session) => session.name).filter(Boolean),
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),
@@ -1822,9 +1928,9 @@ export async function collectPage({
     next: nextSection({
       queueText,
       plans,
-      // How many lane loops each repository has, so the block bolds as many
-      // heads as there are lanes to start them (`mc run lanes`).
-      lanes: laneSetting.per_repo,
+      // How many lanes there are, so a block bolds no more heads than there
+      // are lanes to start them (`mc run lanes`).
+      lanes: laneSetting.lanes,
       machine: (name) => machineState(name, {
         plans,
         prs: prs.prs,
@@ -1858,7 +1964,7 @@ export async function collectPage({
       predecessor: runnerFile?.predecessor?.pid && alive(runnerFile.predecessor.pid)
         ? {
           pid: runnerFile.predecessor.pid,
-          steps: runner.steps.filter((step) => step.pid === runnerFile.predecessor.pid).map((step) => step.name).filter(Boolean),
+          steps: runner.sessions.filter((session) => session.pid === runnerFile.predecessor.pid).map((session) => session.name).filter(Boolean),
         }
         : null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),
@@ -1874,7 +1980,7 @@ export async function collectPage({
         read: readText,
         list: (dir) => { try { return readdirSync(dir); } catch { return []; } },
         now,
-        lanes: laneSlots(laneSetting, present.length),
+        lanes: laneSetting.lanes,
       }),
       now,
     }),

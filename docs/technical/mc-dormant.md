@@ -22,7 +22,7 @@ was written in a workarea, which no checkout contains and nothing keeps.
 | triage: what to work on next | `mc run` — the queue is `~/mc/queue.md` and every plan under `~/mc/programs/` with a `ready` step |
 | holding the queue | the same; `queue.md` is a strict list of names that empties itself |
 | taking questions to Martin | `mc brief` — the proposals waiting in `~/mc/proposals/` are the agenda |
-| waking the sessions that stalled | nobody; a step session is one fresh headless conversation that ends |
+| waking the sessions that stalled | nobody; a build session is one fresh headless conversation that ends |
 | the boards | `mc` — the one page (decision mc-3) |
 
 The PM was the middle of a world where sessions were long-lived and had to
@@ -128,7 +128,7 @@ escalate to, no inbox to write into and nothing watching its pane, so a
 question only Martin can answer stops the step: `status: blocked` with
 `blocked_by` saying what the answer has to be about, and the question itself in
 the pull request, written as a proposal he says GO to. That is the same channel
-`mc plan` and the runner's step sessions use.
+`mc plan` and the runner's build sessions use.
 
 ## How it is tested
 

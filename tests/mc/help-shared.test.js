@@ -74,7 +74,7 @@ describe('shared command help', () => {
   it('routes every runner synopsis and flag through its real parser without help interception', () => {
     const examples = checkRunner(commandUsage('run'));
     assert.ok(examples.length >= 40, `only ${examples.length} examples expanded`);
-    for (const example of [[], ['start', '--once'], ['stop', '--force'], ['lanes', '1', '--total', 'none'], ['--billing', 'codex', 'off']]) {
+    for (const example of [[], ['start', '--once'], ['stop', '--force'], ['lanes', '1'], ['--billing', 'codex', 'off']]) {
       assert.ok(examples.some((seen) => JSON.stringify(seen) === JSON.stringify(example)), `missed ${example.join(' ')}`);
     }
   });

@@ -40,7 +40,7 @@ export function runAmend(scanned, deps) {
     return 2;
   }
   if (env.MC_STEP) {
-    stderr.write('mc: a step session cannot amend a project; use the planning session\n');
+    stderr.write('mc: a build session cannot amend a project; use the planning session\n');
     return 1;
   }
   const home = deps.home || programsHome(env);

@@ -93,7 +93,7 @@ start to finish, and know when it is done? If not, it is not a step
   signed-in codex CLI to decide, not mc.
 - **Overall:** `goal`; `contract` (what may not change without Martin);
   `out_of_scope`, named; `success_criteria` with a `check` — for anything
-  with a surface, measured in the running app. All frozen: a step session
+  with a surface, measured in the running app. All frozen: a build session
   records a met criterion with mc project criterion met, never in the file.
 - **Leave out:** the case for the plan, history, what the code already shows.
 - **Validate:** `mc project send` is the validation; it refuses and says why.

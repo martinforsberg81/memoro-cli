@@ -46,9 +46,9 @@ DECISIONS
   none
 
 LAST RUNS
-  08-29 06:42Z  step        880s  #427    success,merged
-  08-30 11:31Z  step        384s  #481    success,merged
-  08-30 11:44Z  step        737s  #476    success,merged
+  08-29 06:42Z  build       880s  #427    success,merged
+  08-30 11:31Z  build       384s  #481    success,merged
+  08-30 11:44Z  review      737s  #476    success,merged
 
 OPEN PR
   none on this branch
@@ -84,9 +84,9 @@ From the page's menu, `s <name>` runs this same verb and redraws
 
 | fact | file | written by |
 |---|---|---|
-| the plan, its state and its steps | `~/mc/programs/<programme>/<name>/PLAN.json`, read as it stands (no `git fetch`) | the step sessions, through `mc run` |
+| the plan, its state and its steps | `~/mc/programs/<programme>/<name>/PLAN.json`, read as it stands (no `git fetch`) | the build sessions, through `mc run` |
 | the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/programs/`, nor `mc work`, whose areas are under `~/mc/work/` |
-| the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
+| the last three runs | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project, each named by its session kind — `build` or `review`, with `variant` in `--json`; a row from before that says `step` is the build it was (`sessionKind`) | `mc run`, after each session |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 | whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
 | whether the runner could start it at all | the workarea's `git status --porcelain`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |

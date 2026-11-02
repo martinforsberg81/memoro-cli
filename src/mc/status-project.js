@@ -33,6 +33,7 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { gitDirOf } from './repos.js';
 import { listEntries, overlayPlans, realLock } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
+import { sessionKind } from './session-kind.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -314,7 +315,12 @@ export async function collectProject(name, {
     plan,
     problems,
     workarea,
-    runs: runsFor(tsv, name, 3),
+    // In today's words: a row's `step` is the project's build it was, and its
+    // `build-project` cell is `build` with the variant beside it.
+    runs: runsFor(tsv, name, 3).map((row) => {
+      const named = sessionKind(row.kind);
+      return named ? { ...row, kind: named.kind, variant: named.variant } : row;
+    }),
     prs,
     machine,
     landing,

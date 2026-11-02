@@ -17,12 +17,13 @@ PLAN AND FOLLOW
   mc step <project>                Where each step stands
   mc project <name>                Show a sent plan or a draft
   mc goal list [<programme>]       Goals and their last session's next action
+  mc programs list [--json]        Every programme, active or dormant
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
 
 RUN AND LAND
   mc run                          The headless runner
   mc run start|stop               Person: start or stop the runner
-  mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
+  mc run lanes [<n>]              Headless sessions at once, in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun
   mc test <repo> <pr>              Measure a pull request; merge nothing
@@ -68,6 +69,8 @@ ${commandReference('project')}
 ${commandReference('step')}
 
 ${commandReference('goal')}
+
+${commandReference('programs')}
 
 ${commandReference('run')}
 

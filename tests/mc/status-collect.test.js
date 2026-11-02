@@ -89,7 +89,8 @@ describe('NOW', () => {
     assert.deepEqual(block.runner, { pid: 4242, started: '2026-08-29T08:30:00Z', alive: true, up_seconds: 7200 });
     assert.equal(block.steps.length, 1);
     assert.equal(block.steps[0].name, 'mc-ui');
-    assert.equal(block.steps[0].kind, 'step');
+    // A lane file from before says `step`, and is read as a project's build.
+    assert.deepEqual([block.steps[0].kind, block.steps[0].variant, block.steps[0].goal], ['build', 'project', null]);
     assert.equal(block.steps[0].tool, 'claude');
     assert.equal(block.steps[0].repo, 'memoro-cli');
     assert.equal(block.steps[0].elapsed_seconds, 1800);

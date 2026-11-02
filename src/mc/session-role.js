@@ -15,20 +15,20 @@ export function withoutSessionIdentity(env) {
 /** Environment first; cwd is the fallback for a session opened by hand. */
 export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {}) {
   if (env.MC_ROLE) return { role: env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
-  if (env.MC_GOAL) return { role: 'goal', programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
-  if (env.MC_STEP) return { role: 'step', programme: env.MC_PROGRAMME || null, source: 'MC_STEP' };
+  if (env.MC_GOAL) return { role: 'build-goal', programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
+  if (env.MC_STEP) return { role: 'build-project', programme: env.MC_PROGRAMME || null, source: 'MC_STEP' };
 
   const path = relative(resolve(workRoot(env)), resolve(cwd));
   const parts = path.split(sep);
   const [first, second, third, fourth] = parts;
   const found = (role, programme = null) => ({ role, programme, source: 'cwd' });
   if (first === 'programs' && second) {
-    if (third === 'goals') return fourth ? found('goal', second) : found(null);
+    if (third === 'goals') return fourth ? found('build-goal', second) : found(null);
     return found('plan', second);
   }
   // Layout 1 remains readable while machines move to programs/.
   if (first === 'plan' && second) return found('plan', second);
-  if ((first === 'step' && second) || (first === 'runner' && second === 'step' && third)) return found('step');
+  if ((first === 'step' && second) || (first === 'runner' && second === 'step' && third)) return found('build-project');
   if (first === 'runner' && second === 'mend' && third) return found('mend');
   if (['brief', 'helper', 'intake'].includes(first)) return found(first);
   return found(null);
