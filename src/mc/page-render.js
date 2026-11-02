@@ -408,6 +408,23 @@ export function sessionWork(session, room = Infinity) {
 }
 
 /**
+ * A session's open pull requests in at most `room` columns: all of them when
+ * they fit, else as many as fit followed by `+N` for the rest — `#14709 +3` —
+ * and nothing when not even the first and its `+N` do. The first is the
+ * oldest a session opened, the one a reader looks for.
+ */
+export function sessionPrs(prs = [], room = Infinity) {
+  const names = (prs || []).map((pr) => `#${pr.number}`);
+  const all = names.join(' ');
+  if (all.length <= room) return all;
+  for (let n = names.length - 1; n >= 1; n -= 1) {
+    const text = `${names.slice(0, n).join(' ')} +${names.length - n}`;
+    if (text.length <= room) return text;
+  }
+  return '';
+}
+
+/**
  * One lane. Idle it is `lane 3`, and the number is all it has to say. With a
  * session in it, the row is read for what is running, in that order: its
  * kind as the first word — `PLAN`, `BUILD`, `REVIEW`, in the kind's colour —
@@ -434,16 +451,18 @@ function laneLine(c, wide, lane) {
   const kind = String(s.kind || 'build');
   const named = workWidth(wide);
   const checkIns = s.check_ins == null ? null : `${s.check_ins} check-in${s.check_ins === 1 ? '' : 's'}`;
-  const open = (s.prs || []).map((pr) => `#${pr.number}`).join(' ');
   // Padded outside the paint, so the spaces after a cell are plain ones and
   // a row that ends on a cell ends where its text does.
-  const left = `  ${c(MARK.running, 'green')} ${cell(c, kind.toUpperCase(), LANE_KIND, kindTone(kind))} `
+  const cells = `  ${c(MARK.running, 'green')} ${cell(c, kind.toUpperCase(), LANE_KIND, kindTone(kind))} `
     + `${pad(sessionWork(s, named - 1), named)}`
     + `${pad(clip(s.repo || lane.repo || 'unplaced', SESSION_REPO - 1), SESSION_REPO)}`
     + `${cell(c, clip(s.model || s.tool || '', LANE_MODEL - 1), LANE_MODEL, ['grey'])}`
     // The clock carries its own colour: `elapsedTone` says when it has turned.
-    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))}`
-    + (open ? `${c(open, ...PR_TONE)}  ` : '');
+    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))}`;
+  // The pull requests are fitted in the room the cells leave, not appended
+  // after it was measured: four of them ran an 80-column row over its edge.
+  const open = sessionPrs(s.prs, Math.max(0, wide - width(cells) - 2));
+  const left = cells + (open ? `${c(open, ...PR_TONE)}  ` : '');
   const room = Math.max(0, wide - width(left));
   const meta = paint(c, fitting(trailing([
     // `credits` when the session runs on the API credit (step-credits); the

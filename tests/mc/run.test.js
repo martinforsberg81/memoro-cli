@@ -4234,6 +4234,36 @@ test('a project between two sessions keeps its machine slot; it goes when the pr
   assert.equal(waits, 1, 'and not before');
 });
 
+/**
+ * The deadlock of 2026-11-02: four lanes, each waiting, with nothing running.
+ * A lane carried the project it had just run; its next pass picked another
+ * one, and waited for a slot while the carried name still counted — so the
+ * lane held a slot for itself and waited for a second. With every lane doing
+ * that, the machine read `4 of 4 in flight` and ran nothing for an hour. The
+ * carried slot is let go the moment the lane picks something else, before it
+ * waits: the slot the lane held is the one its next session uses.
+ */
+test('a lane that picks another project lets its carried slot go before it waits, so it is not counted twice', async (t) => {
+  const f = fixture({ plans: { memoro: { a: ready, c: ready } }, session: okSession() });
+  f.deps.laneCount = () => ({ lanes: 1 });
+  let waits = 0;
+  f.deps.sleep = async () => {
+    waits += 1;
+    // Never wake on its own: a regression would otherwise poll for ever.
+    if (waits > 3) f.files['/w/runner/STOP'] = '';
+  };
+  t.after(() => { f.files['/w/runner/STOP'] = ''; });
+  const runner = createRunner({ deps: f.deps });
+  const first = await runner.pass({ repo: 'memoro' });
+  assert.equal(first.ran, 1);
+  const next = await runner.pass({ repo: 'memoro', last: { name: first.name, step: first.step }, passed: [first.name] });
+  assert.equal(next.ran, 1, `the lane ran its next pick: ${JSON.stringify(next)}`);
+  assert.notEqual(next.name, first.name);
+  assert.equal(waits, 0, 'it never waited: the one slot was its own');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /waiting for a lane/u);
+  assert.deepEqual(f.calls.sessions.map((call) => areaOf(call.cwd)).sort(), ['a', 'c']);
+});
+
 test('runLoop: lanes 2 — four runnable projects, a blocking step, and two sessions', async (t) => {
   const r = laneRace({ total: 2 });
   // A failed assert must not leave the loop polling for a STOP nobody writes:

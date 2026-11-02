@@ -259,16 +259,16 @@ today's file would be a claim about it nobody checked.
 `mc roles check [<role>]` is the reader:
 
 ```
-$ mc roles check step
-step  (canon)  …/canon/roles/step.md
+$ mc roles check build-project
+build-project  (canon)  …/canon/roles/build-project.md
   role text     sha256:43046c402ec7
   instructions  sha256:345f6ea5956c   _common.md + overlay, as a launch joins them
 
 2 live sessions: 1 ok, 1 drift
-  55012  step the-page-remade     2026-09-06T10:06:46Z  step   ok
-  55130  step total-lane-cap      2026-09-06T09:34:57Z  step   drift — started on sha256:9c1…, step.md is sha256:430… now
+  55012  build the-page-remade    2026-09-06T10:06:46Z  build-project  ok
+  55130  build total-lane-cap     2026-09-06T09:34:57Z  build-project  drift — started on sha256:9c1…, build-project.md is sha256:430… now
 
------ what a launch would hand a step session today -----
+----- what a launch would hand a build-project session today -----
 …
 ```
 

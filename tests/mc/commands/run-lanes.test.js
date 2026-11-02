@@ -59,9 +59,9 @@ test('lanes: <n> sets the total and says a running runner takes it now', async (
 test('lanes: a refused value names the form it takes and changes nothing', async () => {
   const mc = cli();
   await mc.lanes('3');
-  const bad = await mc.lanes('12');
+  const bad = await mc.lanes('17');
   assert.equal(bad.code, 2);
-  assert.match(bad.err[0], /mc: lanes is a whole number from 1 to 8, not "12"/u);
+  assert.match(bad.err[0], /mc: lanes is a whole number from 1 to 16, not "17"/u);
   assert.equal(readLaneCount({ root: mc.root }).lanes, 3);
 });
 

@@ -20,7 +20,7 @@ import {
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
-import { colourFor, columnsFor, renderPage, renderPageLines, sessionWork } from '../../src/mc/page-render.js';
+import { colourFor, columnsFor, renderPage, renderPageLines, sessionPrs, sessionWork } from '../../src/mc/page-render.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
 import { codeCommit, pageKey, restartPage, run as page } from '../../src/mc/commands/home.js';
@@ -206,6 +206,44 @@ describe('SESSIONS', () => {
     for (const [word, tone] of [['● BUILD   mc/', 'green'], ['● REVIEW', 'magenta'], ['● PLAN', 'cyan']]) {
       assert.equal(signature(rowWith(painted, word)).split(' ')[1], tone, word);
     }
+  });
+
+  /**
+   * A project stacked over four pull requests has four on its row. They are
+   * fitted inside the row's width — as many as fit, then `+N` — and never
+   * appended after the room was measured, which ran an 80-column row over
+   * its edge (review of e942e30).
+   */
+  it('fits a session\'s pull requests inside the row: four at 120 columns, the first and +N at 80', () => {
+    assert.equal(sessionPrs([{ number: 1 }, { number: 2 }], 20), '#1 #2');
+    assert.equal(sessionPrs([{ number: 14709 }, { number: 14710 }, { number: 14711 }, { number: 14712 }], 12), '#14709 +3');
+    assert.equal(sessionPrs([{ number: 14709 }, { number: 14710 }, { number: 14711 }, { number: 14712 }], 20), '#14709 #14710 +2');
+    assert.equal(sessionPrs([{ number: 14709 }, { number: 14710 }], 5), '', 'not even the first and its +N: nothing');
+    assert.equal(sessionPrs([], 0), '');
+    const runner = runnerSection({
+      runner: RUNNER,
+      currents: [{ name: 'docx-editor', kind: 'build', variant: 'project', repo: 'memoro', lane: 0, tool: 'claude', model: 'sonnet',
+        check_in_minutes: 60, check_ins: 1, pid: 4242, worktree: '/w/x', started: '2026-08-29T11:40:00Z' }],
+      rows: ROWS,
+      lanes: { lanes: 2 },
+      plans: [{ project: 'docx-editor', step: 4, steps: 6 }],
+      now: NOW,
+      alive: live,
+    });
+    const prs = [14709, 14710, 14711, 14712].map((number) => ({ repo: 'memoro', number }));
+    for (const lane of runner.lanes) if (lane.session) lane.session.prs = prs;
+    for (const session of runner.sessions) session.prs = prs;
+    const rowAt = (columns) => {
+      const lines = renderPageLines(pageData({ runner }), { columns, version: '0.7.11', now: NOW });
+      for (const line of lines) assert.ok(width(line) <= columns, `${columns}: ${line}`);
+      return lines.find((line) => /^ {2}● BUILD {3}docx-editor/u.test(line));
+    };
+    const wide = rowAt(120);
+    assert.match(wide, /#14709 #14710 #14711 #14712/u, wide);
+    const narrow = rowAt(80);
+    assert.ok(width(narrow) <= 80, narrow);
+    assert.match(narrow, /#14709( #\d+)* \+\d/u, narrow);
+    assert.doesNotMatch(narrow, /#14712/u, 'the last ones give way');
   });
 
   /**

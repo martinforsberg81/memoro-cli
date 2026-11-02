@@ -60,7 +60,7 @@ import { run as runGit } from './git.js';
 import { readLaneCount } from './lane-count.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
 import { ageWords } from './page-cache.js';
-import { workRoot } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
 /** How long a forced stop waits for a signal to be obeyed before the next one. */
@@ -126,8 +126,9 @@ export function realControlDeps(env = process.env) {
       const r = runGit(undefined, ['-C', cwd, ...args]);
       return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
     },
-    // How many lanes the runner has in all: the total (`mc run lanes`).
-    laneCount: () => readLaneCount({ repos: defaultRepos(env).length }).lanes,
+    // How many lanes the runner has in all: the total (`mc run lanes`), read
+    // under this env's MC_HOME like the rest of its state — not process.env's.
+    laneCount: () => readLaneCount({ root: mcHome(env), repos: defaultRepos(env).length }).lanes,
     // The login agent, written only when its text differs, and only on the
     // machine that has a launchd to read it.
     writeAgent: (path, text) => {
