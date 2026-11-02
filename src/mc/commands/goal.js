@@ -3,20 +3,22 @@
  *
  *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"
  *                                  GOAL.md, LOG.md and a worktree per repository on goal/<goal>, from origin/main
- *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|blocked|done]
+ *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]
  *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
- *   mc goal open|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
+ *   mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
  *   mc goal show <programme>/<goal>      the front matter, the body, the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each
  *
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's, and mc writes the status line and the log, nothing else.
+ * A session never sets `done`: the merger does when the pull request lands, and
+ * a person may by hand. A review session never sets `open`: plan does.
  */
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { run as runGit } from '../git.js';
-import { addGoalWorktree, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, sessions, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, renderEntry, renderGoal, REVIEW_ROLE, sessions, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -33,7 +35,7 @@ const VERB_FLAGS = {
   show: [],
   list: [],
 };
-const STATUS_VERBS = ['open', 'blocked', 'done'];
+const STATUS_VERBS = ['open', 'review', 'blocked', 'done'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -148,6 +150,8 @@ function logEntry(args, fields, ctx) {
     stderr.write('mc: log needs --done, --comment, --next or --status\n');
     return 2;
   }
+  const refused = refusedStatus(fields.status, env);
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const text = read(join(target.dir, GOAL_FILE));
   if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
   const goal = parseGoal(text);
@@ -216,7 +220,8 @@ function showGoal(args, ctx) {
 
 /**
  * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
- * status · n sessions · the last entry's Nästa`. A goal that does not parse is
+ * status · n sessions · the last entry's Nästa`. A goal blocked by a red review
+ * or a red merge reads `blocked, waits on plan` (`waitsOnPlan`). A goal that does not parse is
  * listed with its first problems, not skipped.
  */
 function listGoals(args, ctx) {
@@ -236,7 +241,8 @@ function listGoals(args, ctx) {
       continue;
     }
     const next = (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
-    stdout.write(`${name} · ${goal.repos.join(',')} · ${goal.status} · ${sessions(goal.log)} sessions · ${next}\n`);
+    const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan` : goal.status;
+    stdout.write(`${name} · ${goal.repos.join(',')} · ${status} · ${sessions(goal.log)} sessions · ${next}\n`);
   }
   return 0;
 }
@@ -254,6 +260,20 @@ function goalNamed(arg, { env, home }) {
   }
   const [programme, goal] = parts;
   return { programme, goal, name: given, dir: goalDirIn(home, programme, goal) };
+}
+
+/**
+ * Why this caller may not set `status`, or null. A session is a caller with
+ * MC_GOAL set and an MC_TOOL that is not `person`. It never sets `done`: the
+ * merger does when the goal's pull request lands. A review session never sets
+ * `open`: a red review waits on plan, and plan sets it open again.
+ */
+export function refusedStatus(status, env) {
+  const session = Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
+  if (!session) return null;
+  if (status === 'done') return 'a session does not set done — end in review; the merger sets done when the pull request lands';
+  if (status === 'open' && env.MC_ROLE === REVIEW_ROLE) return 'a review does not set open — red is blocked, and plan sets the goal open again';
+  return null;
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */
@@ -279,8 +299,8 @@ function stampSeconds(date) {
 export function usage() {
   return [
     'usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main\n',
-    '        mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|blocked|done]   append a session\'s entry to LOG.md; the goal is MC_GOAL\'s when none is named\n',
-    '        mc goal open|blocked|done [<programme>/<goal>] [--reason "…"]   set the goal\'s status, and log the reason\n',
+    '        mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]   append a session\'s entry to LOG.md; the goal is MC_GOAL\'s when none is named\n',
+    '        mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]   set the goal\'s status, and log the reason; done is a person\'s\n',
     '        mc goal show <programme>/<goal>   the goal, its last three log entries, and each worktree\'s state\n',
     '        mc goal list [<programme>]   every goal, one line each\n',
   ].join('');

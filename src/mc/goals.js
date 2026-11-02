@@ -25,8 +25,15 @@ export const GOAL_FILE = 'GOAL.md';
 export const LOG_FILE = 'LOG.md';
 /** The directory under a programme that holds its goals. */
 export const GOALS_DIR = 'goals';
-/** `status` is one of these; a goal starts `open`. */
-export const STATUSES = ['open', 'blocked', 'done'];
+/**
+ * `status` is one of these; a goal starts `open`. A build session ends a goal
+ * it holds met in `review`; the review session sets `blocked` on red; the
+ * merger sets `done` when the pull request lands. Only a person sets `done` by
+ * hand, and only plan sets a blocked goal `open` again.
+ */
+export const STATUSES = ['open', 'review', 'blocked', 'done'];
+/** The role a goal's review session runs with: `canon/roles/goal-review.md`. */
+export const REVIEW_ROLE = 'goal-review';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
 export const CLASSES = ['fast', 'large'];
 
@@ -169,22 +176,83 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
   return goals;
 }
 
+/**
+ * A review's verdict, from its entry's `Gjort:` line — `green <sha>` or
+ * `red <sha>`, the head the review read — as `{ verdict, sha }`, or null for an
+ * entry that is no verdict.
+ */
+export function verdictOf(entry) {
+  const [first] = String(entry?.done ?? '').split('\n');
+  const match = first.match(/^(green|red)\b.*?\b([0-9a-f]{7,40})\b/u);
+  return match ? { verdict: match[1], sha: match[2] } : null;
+}
+
+/** The runner's entry for a green review it queued: `Gjort: queued #<pr> at <sha> for the merger`. */
+export function queuedText(pr, sha) {
+  return `queued #${pr} at ${sha} for the merger`;
+}
+
+/** `{ pr, sha }` of the runner's queued entry (`queuedText`), or null. */
+export function queuedOf(entry) {
+  if (entry?.tool !== 'runner') return null;
+  const match = String(entry.done ?? '').match(/^queued #(\d+) at ([0-9a-f]+) for the merger/u);
+  return match ? { pr: Number(match[1]), sha: match[2] } : null;
+}
+
+/**
+ * The last entry a build session wrote: neither the runner's nor a person's,
+ * and no review's verdict. Its heading's `<tool> <model>` is the model a review
+ * of the goal may not run on. Null when no build session has written one.
+ */
+export function lastBuildEntry(log) {
+  return log.findLast((entry) => entry.tool !== 'runner' && entry.tool !== 'person' && !verdictOf(entry)) ?? null;
+}
+
+/**
+ * Whether a goal waits for a review session: it is in `review`, and the last
+ * entry is not the runner's for a green it has queued — that one waits for the
+ * merger, which writes the next entry.
+ */
+export function reviewDue(goal) {
+  return goal.status === 'review' && !queuedOf(goal.log.at(-1));
+}
+
+/** The runner's entry for a red merge (`merger.js`): `Gjort: merger answered red on #<pr>`. */
+export function redMergeText(pr) {
+  return `merger answered red on #${pr}`;
+}
+
+/**
+ * Whether a blocked goal waits on plan: blocked by a red review (its last entry
+ * is a `red` verdict) or by a red merge (the runner's `redMergeText` entry).
+ * Nothing goes back to a build session from there until plan sets it open.
+ */
+export function waitsOnPlan(goal) {
+  if (goal.status !== 'blocked') return false;
+  const last = goal.log.at(-1);
+  return verdictOf(last)?.verdict === 'red'
+    || (last?.tool === 'runner' && String(last.done ?? '').startsWith('merger answered red'));
+}
+
 /** A goal's name where a runner names sessions: `goal:<programme>/<goal>`, in its current file and its runs.tsv row. */
 export function goalName({ programme, goal }) {
   return `goal:${programme}/${goal}`;
 }
 
 /**
- * The goal a lane of `repos` takes next, or null: of the open goals that parse,
- * whose first repository is one of `repos` and whose name is not in `held`, the
- * one whose last log entry is oldest, so goals share sessions fairly. A goal
- * with no entry is oldest of all, and a tie goes to the first listed. A log
- * stamp is a fixed-width UTC minute, so stamps compare as strings.
+ * The goal a lane of `repos` takes next, or null: of the goals that parse and
+ * are open or due a review (`reviewDue`), whose first repository is one of
+ * `repos`, whose name is not in `held` and that `may` allows, the one whose
+ * last log entry is oldest, so goals share sessions fairly. A goal with no
+ * entry is oldest of all, and a tie goes to the first listed. A log stamp is a
+ * fixed-width UTC minute, so stamps compare as strings. `may` is how the runner
+ * leaves out a review that cannot run now, so it does not stand in front of
+ * every other goal.
  */
-export function nextGoal(goals, { repos = [], held = new Set() } = {}) {
+export function nextGoal(goals, { repos = [], held = new Set(), may = () => true } = {}) {
   const lastAt = (goal) => goal.log.at(-1)?.at ?? '';
-  const eligible = goals.filter((goal) => goal.status === 'open' && goal.problems.length === 0
-    && repos.includes(goal.repos[0]) && !held.has(goalName(goal)));
+  const eligible = goals.filter((goal) => (goal.status === 'open' || reviewDue(goal)) && goal.problems.length === 0
+    && repos.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal));
   return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
 }
 

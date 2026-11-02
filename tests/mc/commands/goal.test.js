@@ -207,11 +207,11 @@ test('mc goal log --status rewrites the status in the front matter and logs the 
 
   const bad = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--status', 'started', '--comment', 'x'], bad.deps), 2);
-  assert.match(bad.err(), /--status is open, blocked, done, not started/u);
+  assert.match(bad.err(), /--status is open, review, blocked, done, not started/u);
 });
 
-test('mc goal open, blocked and done set the status and log the reason', async () => {
-  for (const verb of ['open', 'blocked', 'done']) {
+test('mc goal open, review, blocked and done set the status and log the reason', async () => {
+  for (const verb of ['open', 'review', 'blocked', 'done']) {
     const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } });
     assert.equal(await run([verb, '--reason', `because ${verb}`], f.deps), 0, f.err());
     assert.equal(parseGoal(f.store[`${DIR}/GOAL.md`]).status, verb);
@@ -219,6 +219,36 @@ test('mc goal open, blocked and done set the status and log the reason', async (
     assert.equal(last.status, verb);
     assert.equal(last.comment, `because ${verb}`);
   }
+});
+
+test('a goal session ends in review and may not set done; a person may', async () => {
+  const session = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_MODEL: 'opus' };
+  const built = fixture({ files: seededGoal(), env: session });
+  assert.equal(await run(['log', '--done', 'built', '--status', 'review'], built.deps), 0, built.err());
+  assert.equal(parseGoal(built.store[`${DIR}/GOAL.md`]).status, 'review');
+
+  for (const argv of [['log', '--done', 'x', '--status', 'done'], ['done', '--reason', 'x']]) {
+    const f = fixture({ files: seededGoal(), env: session });
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), /a session does not set done — end in review; the merger sets done/u);
+    assert.equal(f.store[`${DIR}/GOAL.md`], GOAL_TEXT, 'nothing written');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry');
+  }
+
+  // MC_TOOL person, or no MC_TOOL at all, is a person, even with MC_GOAL set.
+  for (const env of [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person' }, { MC_GOAL: 'mc/plain' }, {}]) {
+    const f = fixture({ files: seededGoal(), env });
+    assert.equal(await run(['done', 'mc/plain', '--reason', 'landed by hand'], f.deps), 0, f.err());
+    assert.equal(parseGoal(f.store[`${DIR}/GOAL.md`]).status, 'done');
+  }
+});
+
+test('a review session may not set a goal open again', async () => {
+  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'goal-review' } });
+  assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'open'], f.deps), 2);
+  assert.match(f.err(), /a review does not set open/u);
+  assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'blocked'], f.deps), 0, f.err());
+  assert.equal(parseGoal(f.store[`${DIR}/GOAL.md`]).status, 'blocked');
 });
 
 test('mc goal open|blocked|done take only --reason', async () => {
@@ -252,7 +282,7 @@ test('mc goal show refuses a goal that does not parse, and says why', async () =
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.md`]: '---\nstatus: maybe\nrepos: memoro\nclass: fast\n---\n' }) });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 1);
   assert.match(f.err(), /mc\/plain does not parse:/u);
-  assert.match(f.err(), /status is open, blocked, done, not maybe/u);
+  assert.match(f.err(), /status is open, review, blocked, done, not maybe/u);
 });
 
 test('mc goal list prints one line a goal: its name, repositories, status, sessions and what is next', async () => {
@@ -269,6 +299,29 @@ test('mc goal list prints one line a goal: its name, repositories, status, sessi
   assert.equal(lines[1], 'mc/plain · memoro-cli · open · 2 sessions · —');
 });
 
+test('mc goal list shows review, and a goal blocked by a red review or a red merge as waiting on plan', async () => {
+  const goal = (status) => GOAL_TEXT.replace('status: open', `status: ${status}`);
+  const f = fixture({
+    files: {
+      [`${HOME}/mc/goals/a/GOAL.md`]: goal('review'),
+      [`${HOME}/mc/goals/a/LOG.md`]: '## 2026-11-02T10:00Z · claude opus · review\n\nGjort: built\n',
+      [`${HOME}/mc/goals/b/GOAL.md`]: goal('blocked'),
+      [`${HOME}/mc/goals/b/LOG.md`]: '## 2026-11-02T10:00Z · codex gpt-6.1-sol · blocked\n\nGjort: red abc1234\n',
+      [`${HOME}/mc/goals/c/GOAL.md`]: goal('blocked'),
+      [`${HOME}/mc/goals/c/LOG.md`]: '## 2026-11-02T10:00Z · runner · blocked\n\nGjort: merger answered red on #12\n',
+      [`${HOME}/mc/goals/d/GOAL.md`]: goal('blocked'),
+      [`${HOME}/mc/goals/d/LOG.md`]: '## 2026-11-02T10:00Z · claude opus · blocked\n\nKommentar: which table?\n',
+    },
+  });
+  assert.equal(await run(['list'], f.deps), 0, f.err());
+  assert.deepEqual(f.out().trim().split('\n'), [
+    'mc/a · memoro-cli · review · 1 sessions · —',
+    'mc/b · memoro-cli · blocked, waits on plan · 1 sessions · —',
+    'mc/c · memoro-cli · blocked, waits on plan · 0 sessions · —',
+    'mc/d · memoro-cli · blocked · 1 sessions · —',
+  ]);
+});
+
 test('mc goal list <programme> lists that programme alone, and says when it has no goals', async () => {
   const f = fixture({ files: seededGoal() });
   assert.equal(await run(['list', 'mc'], f.deps), 0);
@@ -281,7 +334,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal log', 'mc goal open|blocked|done', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal log', 'mc goal open\\|review\\|blocked\\|done', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];
