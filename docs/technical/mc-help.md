@@ -1,4 +1,4 @@
-# Help cleanup: measurements, shared usage and remaining audit
+# Help cleanup: measurements, shared usage and audit
 
 **Status:** partial goal work, third session, 2026-11-02 (the first two landed
 in #1221). This is not the completed
@@ -268,6 +268,25 @@ separators, here-documents dropped). Zero in sessions and terminal:
 | `work remove` | None | For Martin |
 | `log`, `worker` (whole verbs) | None, as above | For Martin |
 
-Still open after this session: word-for-word agreement for the 24 verbs whose
-usage is not yet in `command-help.js` (dev, shot, test, repo, work … each says
-the same thing in two texts), and the description audit of their long rows.
+## Fourth session: one text per verb
+
+Every routed verb now has its usage in `src/mc/command-help.js`; the handler's
+`usage()` returns it and IN FULL prints it through `commandReference`, so
+`mc <verb> --help` and the long form are the same words. `help-shared.test.js`
+requires an entry for exactly the verbs `mc-verbs.js` routes, the handler to
+return it, and IN FULL to carry it once. The top-level page and vault row stay
+in `help-text.js` (vault's own usage lives in `cli/vault.js`, and the route test
+checks the row against its table).
+
+Where the two texts differed, the handler's synopses won: they were the ones
+kept in step with the parser. Forms only the handler named are now in IN FULL
+(`merge --check/--watch/--admin`, `merge watch`, `test token`, `test dev
+--url/--list/--stop`, `work --repo`, `work add --from`, `work discard [repo]`,
+`build ios --testflight --sha`, `log --repo/--since/--verb/--all/--where`,
+`shot`'s acting flags and `next/close/sessions`, `skills`). Facts only the long
+form carried were folded into the shared prose, after checking the numbers in
+code: docker's 60 s ensure and 10 minute idle stop (`docker.js`), dev admit's
+2 servers and 15 % (`dev-servers.js`), deps' 6 h reuse (`deps.js`), tidy's
+three-day image age (`docker.js`), the gate's 540 s budget (`gate.js`).
+Rewordings: `mc repos` says "the repositories" rather than "the two";
+`mc test <repo> <pr>` takes several pull requests, as the handler does.
