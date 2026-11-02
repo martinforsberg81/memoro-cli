@@ -1,6 +1,7 @@
 # Help cleanup: measurements, shared usage and remaining audit
 
-**Status:** partial goal work, second session, 2026-11-02. This is not the completed
+**Status:** partial goal work, third session, 2026-11-02 (the first two landed
+in #1221). This is not the completed
 line-by-line command/flag audit. No working command has been removed.
 
 ## What changed
@@ -221,3 +222,52 @@ remains in IN FULL. No generated files were involved.
 The pre-sync 3,561-test green is historical, not evidence for the final merged
 head; subsequent post-sync measurements supersede it and are recorded in the
 PR/log. The role PR no longer adds separate work to this PR's diff against main.
+
+
+## Third session: routed names, undocumented forms, subcommand inventory
+
+`tests/mc/help-routes.test.js` reads every synopsis row of the long help and of
+each verb's usage, without the help interceptor. A subcommand word or flag must
+be a literal in the verb's handler or a local module it imports; vault verbs
+must be in the vault table, `mc --…` flags in `mc-cli.js`'s page flags. Negative
+controls include the three guessed verbs, an invented subcommand, flag, vault
+verb and page flag. It is a name check, not a parse of every combination: the
+runner alone is parsed for real (help-shared.test.js). A second check reads
+each handler's `…VERBS`/`SUBCOMMANDS` dispatch table and fails on a routed
+subcommand with no IN FULL row; stubs that answer "is now …" are skipped.
+
+What it found, now fixed: `mc vault` revoke-device, change-password and
+destroy-forgotten were routed but missing from the vault row and the matrix;
+`mc work list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
+`mc repo push-check` were routed but absent from IN FULL (the last two also
+from `mc repo --help`). WHAT IS NOT HERE listed dev and deps among removed
+verbs; it now says today's verbs only share the name. The matrix gains
+`mc repo guard` and `mc repo push-check` rows.
+
+### Subcommands with no observed use
+
+Same window and corpus as above, scanned again for `mc <verb> <sub>` (shell
+separators, here-documents dropped). Zero in sessions and terminal:
+
+| Form | Caller found | Decision |
+| --- | --- | --- |
+| `hook install`, `hook pre-tool`, `hook session-start` | Registered by `hooks.js` as agent hooks | Keep: hook-called |
+| `repo push-check` | The pre-push hook `push-guard.js` installs | Keep: hook-called |
+| `dev register`, `dev unregister` | memoro `scripts/dev.mjs` (`invokeMcDev`) | Keep: script-called |
+| `language status`, `language resume` | Recommended by `deploy.js` and the page | Keep: mc's own way forward |
+| `test token` | Recommended by `shot.js`, `test-environment.js` | Keep: mc's own way forward |
+| `step failed` | Session role text in `run-plan.js`, `project.js` | Keep: session instruction |
+| `work discard` | Recommended by `deps-bump.js`, `work-area.js` | Keep: mc's own way forward |
+| `dev open` | Implemented by `dev-open.js`, named beside `mc shot` | Keep: newer, same module as shot |
+| `docker release`, `docker prune` | None; the gate uses `docker.js` directly | For Martin |
+| `keys run` | None; memoro's `owner.mjs` names it as a future path | For Martin |
+| `model add`, `model remove`, `model set` | None; catalog edits by a person | For Martin |
+| `project amend` | None | For Martin |
+| `repo claim`, `repo release` | None as verbs; the gate takes leases through `repo-lease.js` | For Martin |
+| `roles list`, `roles show` | None (`roles check` was used) | For Martin |
+| `work remove` | None | For Martin |
+| `log`, `worker` (whole verbs) | None, as above | For Martin |
+
+Still open after this session: word-for-word agreement for the 24 verbs whose
+usage is not yet in `command-help.js` (dev, shot, test, repo, work … each says
+the same thing in two texts), and the description audit of their long rows.
