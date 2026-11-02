@@ -1093,6 +1093,18 @@ describe('MERGES', () => {
     assert.equal(section({ merger: null }).repos[0].state, 'idle');
   });
 
+  it('keeps both pause reasons and the stopped merger visible when the facts coincide', () => {
+    const merges = section({ merger: null, queued: [job(1), job(2, { repo: 'memoro-cli' })],
+      pauses: { memoro: { kind: 'deploy', reason: 'deploy' }, 'memoro-cli': { kind: 'gate', reason: 'gate round' } } });
+    for (const columns of [80, 120]) {
+      const head = drawing(merges, columns, true)[0];
+      assert.equal((strip(head).match(/paused/gu) || []).length, 2);
+      assert.match(strip(head), /merger stopped/u);
+      assert.equal((head.match(/\x1b\[31m/gu) || []).length, 3, 'each warning keeps its red style');
+      assert.ok(width(head) <= columns);
+    }
+  });
+
   it('reads the same deploy, gate-lane and non-orphaned lease barriers as the merger', () => {
     const repos = [{ name: 'memoro', path: '/repos/memoro' }, { name: 'memoro-cli', path: '/repos/memoro-cli' }];
     const free = { repos, deploy: () => null, round: () => null, lease: () => null };

@@ -765,7 +765,7 @@ function elapsedTone(step) {
 export const QUEUED_DRAWN = 6;
 
 /** Queue labels never contain PR numbers: those belong on their repository row. */
-function mergeQueueLabel(repo, compact = false) {
+function mergeQueueLabel(repo, compact = false, stopped = false) {
   const counts = [
     repo.landings.length ? `${repo.landings.length} landing` : '',
     repo.waiting.length ? `${repo.waiting.length} waiting` : '',
@@ -773,13 +773,13 @@ function mergeQueueLabel(repo, compact = false) {
     repo.fixing.length ? `${repo.fixing.length} fixing` : '',
     repo.reds.length ? `${repo.reds.length} red` : '',
   ].filter(Boolean);
-  const count = compact && counts.length > 1
-    ? `${repo.landings.length + repo.waiting.length + repo.mending.length + repo.fixing.length + repo.reds.length} PRs`
+  const count = compact && counts.length
+    ? `${repo.landings.length + repo.waiting.length + repo.mending.length + repo.fixing.length + repo.reds.length}`
     : counts.join(', ') || 'idle';
   return [
     { text: `${repo.repo} ${count}`, styles: ['grey'] },
-    repo.merger_stopped ? { text: ' merger stopped', styles: ['red'] }
-      : repo.pause ? { text: ` paused ${compact ? repo.pause.kind : repo.pause.reason}`, styles: ['red'] } : null,
+    repo.pause ? { text: ` paused ${compact ? repo.pause.kind : repo.pause.reason}`, styles: ['red'] }
+      : repo.merger_stopped && !stopped ? { text: ' merger stopped', styles: ['red'] } : null,
   ].filter(Boolean);
 }
 
@@ -856,13 +856,18 @@ function mergeRepoLine(c, wide, repo) {
 /** MERGES is exactly one row per repository, drawn only from the JSON's repos[]. */
 function mergesLines(lines, c, wide, merges) {
   const repos = merges.repos || [];
-  let counts = repos.flatMap((repo, index) => [
-    ...(index ? [{ text: ' · ', styles: ['grey'] }] : []), ...mergeQueueLabel(repo),
-  ]);
+  // Liveness and barriers are independent facts. If both hold, name the
+  // stopped process once so neither repository loses its pause at 80 columns.
+  const stopped = repos.some((repo) => repo.merger_stopped && repo.pause);
+  const labels = (compact) => [
+    ...repos.flatMap((repo, index) => [
+      ...(index ? [{ text: ' · ', styles: ['grey'] }] : []), ...mergeQueueLabel(repo, compact, stopped),
+    ]),
+    ...(stopped ? [{ text: ' · ', styles: ['grey'] }, { text: 'merger stopped', styles: ['red'] }] : []),
+  ];
+  let counts = labels(false);
   const countWidth = () => counts.reduce((n, part) => n + part.text.length, 0);
-  if (countWidth() > wide - 10) counts = repos.flatMap((repo, index) => [
-    ...(index ? [{ text: ' · ', styles: ['grey'] }] : []), ...mergeQueueLabel(repo, true),
-  ]);
+  if (countWidth() > wide - 10) counts = labels(true);
   const verb = countWidth() + 10 + 2 + 'mc merge <repo> <pr>'.length <= wide ? 'mc merge <repo> <pr>' : null;
   heading(lines, c, wide, 'MERGES', counts, verb);
   for (const repo of repos) lines.push(mergeRepoLine(c, wide, repo));
