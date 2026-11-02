@@ -942,6 +942,14 @@ export function goalPrompt({ name, dir, worktree, branch }) {
   return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
 }
 
+/**
+ * What a goal's review session is told: the goal, its worktree, and the pull
+ * request with the head it is to judge. The rest is `canon/roles/goal-review.md`'s.
+ */
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
+  return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
+}
+
 /** `checkInPrompt` for a goal session, which has no step to judge or to block. */
 export function goalCheckInPrompt({ minutes, count }) {
   return [
