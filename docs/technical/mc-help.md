@@ -205,3 +205,19 @@ of the remaining handlers and vault, then add independent parser/route checks
 for all documented forms. Finish the per-subcommand usage/caller inventory;
 no new unused determination was made in this session. Preserve the measurements
 above rather than treating unobserved syntax as unused by inference.
+
+
+### Main moved during publication
+
+The first publish of shared-help head 4f46a497 reported a conflicting PR.
+Fetching origin/main brought in #1219 (repository MERGES queues / STEPS) and
+#1220 (the role work already integrated here, now squash-landed at 46a61dea).
+Resolved the matrix by retaining the new repository queue row plus the shared
+help corrections and caller labels. The repeated role patch also reinserted
+its role-guidance section above the short page: removed that duplicate and
+added an explicit one-section assertion. The single complete guidance block
+remains in IN FULL. No generated files were involved.
+
+The pre-sync 3,561-test green is historical, not evidence for the final merged
+head; subsequent post-sync measurements supersede it and are recorded in the
+PR/log. The role PR no longer adds separate work to this PR's diff against main.
