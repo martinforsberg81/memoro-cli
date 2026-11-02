@@ -30,6 +30,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { commandUsage } from '../command-help.js';
 import { defaultRepos, listArchived, listPlans } from '../brief-collect.js';
 import { closable, closeArea } from '../close-workarea.js';
 import { run as runGit } from '../git.js';
@@ -1163,22 +1164,5 @@ function waitingOn(project, records) {
 }
 
 export function usage() {
-  return [
-    'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>... [--tool codex]   draft a plan, as DRAFT.json; --tool codex runs its steps on Codex\n',
-    '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
-    '        mc project amend <project> --amendment-file <json> --reason "<authorization>"  validate a sent plan amendment while its first unfinished step stays blocked\n',
-    '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
-    '        mc project criterion edit <project> <n> --check <command>     change success criterion <n>\'s check, and record it not met\n',
-    '        mc project step add <project> <title> --model fast|large --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
-    '        mc project step edit <project> <n> [--title <text>] [--model fast|large] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
-    '        a step names a work class; mc picks the model when the step starts (ruling 59)\n',
-    '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
-    '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
-    '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
-    '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
-    '        mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure from a draft or a sent plan; the register and its log record why\n',
-    '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
-    '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
-    '        the project defaults to MC_STEP\'s in a runner session\n',
-  ].join('');
+  return commandUsage('project');
 }

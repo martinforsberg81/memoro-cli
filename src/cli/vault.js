@@ -56,6 +56,7 @@ import * as VaultApi from '../vault/engine/api.js';
 
 import { readFileSync } from 'node:fs';
 import { rememberRuntimeSecretNames } from '../mc/runtime-secrets.js';
+import { wantsHelp } from '../mc-verbs.js';
 import { isAbsolute, join } from 'node:path';
 
 import { getSecret as keychainGet, deleteSecret as keychainDelete } from '../lib/keychain.js';
@@ -113,7 +114,7 @@ const VERBS = {
 };
 
 export async function run(argv, opts = {}) {
-  if (!argv.length || argv[0] === '--help' || argv[0] === '-h') {
+  if (!argv.length || wantsHelp(argv)) {
     printHelp();
     return 0;
   }

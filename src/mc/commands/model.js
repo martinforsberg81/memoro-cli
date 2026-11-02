@@ -13,6 +13,7 @@
  * A catalog mc cannot read is an error with its path and what to do about it,
  * never a silent return to the defaults.
  */
+import { commandUsage } from '../command-help.js';
 import {
   CLASSES, ModelConfigError, addCandidate, candidateSpec, changeModels, parseCandidate, parseTarget,
   readModels, removeCandidate, setReview,
@@ -20,12 +21,7 @@ import {
 import { scanArgs } from './flags.js';
 
 export function usage() {
-  return [
-    'usage — mc model [list] [--json]\n',
-    '        mc model add fast|large <tool>:<model>:<effort>\n',
-    '        mc model remove fast|large <tool>:<model>\n',
-    '        mc model set review <tool>:<model>:<effort>\n',
-  ].join('');
+  return commandUsage('model');
 }
 
 export async function run(argv, deps = {}) {

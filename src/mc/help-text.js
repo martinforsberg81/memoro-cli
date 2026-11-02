@@ -1,9 +1,47 @@
+import { commandReference } from './command-help.js';
+
 /**
- * The complete top-level help text. Keep this module dependency-free so the
- * thin entry point can print help without loading a runtime implementation.
+ * The complete top-level help text. Its only dependency is shared help data,
+ * so the thin entry point never loads a runtime handler to print help.
  */
 export const HELP_TEXT = `mc — source-owned coding sessions
 
+THE PAGE
+  mc                              The one page; at a terminal, a way in
+  mc --json [--fresh]              The same page as data; --fresh asks GitHub
+
+PLAN AND FOLLOW
+  mc brief                        Person: open or resume the brief session
+  mc plan [<programme>]            Person: open or resume a plan session
+  mc status <name>                 One project, whole
+  mc step <project>                Where each step stands
+  mc project <name>                Show a sent plan or a draft
+  mc goal list [<programme>]       Goals and their last session's next action
+  mc goal show <programme>/<goal>  One goal, its log and its worktrees
+
+RUN AND LAND
+  mc run                          The headless runner
+  mc run start|stop [--force]      Person: start/stop the runner; --force: now
+  mc run lanes [<n>] [--total <n>]  Steps in flight, per repository and in total
+  mc run --billing                Plan usage and next billing
+  mc gate [<test files…>]          Affected tests and gates, or a focused rerun
+  mc test <repo> <pr>              Measure a pull request; merge nothing
+  mc publish                      Push, open the PR and queue it for the merger
+  mc merge <repo> <pr>             Gate and merge a pull request
+
+SEE AND SHIP
+  mc test dev | prod              Measure the running app, locally or live
+  mc shot dev | prod <target>     A PNG of the running app; prints its path
+  mc dev list                     Which dev server runs in which worktree
+  mc deploy [--dry-run]            memoro's main to production, after a question
+  mc build ios                    Does memoro need a new iOS binary?
+
+WORKSPACES
+  mc work <name>                  Open that workarea
+  mc prs [--offline] [--json]      Open pull requests and whose they are
+  mc tidy [--apply]               Preview removals; --apply rechecks and removes
+
+IN FULL
 WHO USES THE VERBS
   Person: mc plan, mc brief, mc helper open interactive sessions;
           mc run start|stop controls the headless runner. A session never
@@ -13,7 +51,6 @@ WHO USES THE VERBS
   Person's acts: mc deploy, mc language writes, runner controls and session
                  open/stop/replace verbs. Read-only views serve both.
 
-THE PAGE
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
@@ -24,74 +61,14 @@ THE PAGE
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
-
-  mc brief                         Person: open or resume the brief session
-  mc plan [<programme>]            Person: open or resume a plan session; never inside one
-  mc plan <programme> --archive    End a programme: off main and off disk
-  mc run                           The runner: headless steps, a lane per repository
-  mc run start | stop [--force]    Person: turn the runner on, or off — after the steps in flight, or now;
-                                    start on a stopping runner takes over at once
-                                    (start, stop, update work at the mc page's prompt too)
-  mc run start --if-was-running    Only when the last runner died rather than stopped —
-                                    the login agent every start writes runs this
-  mc run --update [--force]        New code, new process: the successor starts at once,
-                                    the old runner finishes the steps it holds and exits
-                                    Already on origin/main: nothing written (--force writes anyway)
-                                    Already draining: the drain, and the steps it waits on
-  mc run lanes [<n>] [--total <n>] Steps in flight: <n> per repository, --total across
-                                    every repository at once; no argument prints both
-  mc run --billing                  Plan usage and next billing for Claude and Codex
-  mc test <repo> <pr>              Measure a pull request; merge nothing
-  mc test dev | prod               The app running, measured — locally or live
-  mc keys run <script> [args…]    Run a main-matching script with its declared vault keys
+  mc keys run <script> [args…]     Run a main-matching script with its declared vault keys
   mc keys list                    Declared names and custody status, never values
-  mc gate <test files…>            The tests a change reaches, in the gate lane, in 2 KB
-  mc shot dev | prod <target>      A PNG of the running app; prints its path
-  mc publish                       Push this branch, open its PR, queue it to merge
-  mc hook session-start | pre-tool The coding agent's hooks: the worktree's state
-                                    at start, shell commands turned to mc verbs
-  mc merge <repo> <pr>             The same measurement, then the merge
-  mc deploy [--dry-run]            memoro's main to production, after one question
-  mc deploy --follow               Watch the deploy that is running
-  mc build ios                     Does memoro need a new iOS binary? Builds nothing
-  mc build ios --device            The commit production runs, on the paired iPhone
-  mc build ios --testflight [--yes | --no-upload]
-                                    The same, verified, uploaded after one question
-  mc build ios --shipped <build> <sha>
-                                    Record a binary built before mc build existed
-  mc language [status <lang>]      Each language's last reading and run; status reads one again
-  mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
-  mc language run <manifest>       A cutover's acts in order, a question before every write
-  mc language promote              The curated grammar waiting, to production after one question
-  mc prs [--offline] [--json]      Every open pull request, and whose it is: a project's
-                                    step, a plan session, a workarea, or nobody
-  mc deps [<repo>]                 Which dependencies need updating, and how urgently
-  mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
-  mc dev list                      Which dev server runs in which worktree
-  mc dev admit <service>           May one more dev server start here?
-  mc docker [ensure|release|prune] The container runtime the gates need: up or
-                                    stopped, its leases, and what it holds
-  mc status <name>                 One project, whole
-  mc step <project>                Where each step stands, from the register
-  mc step failed|blocked|ready|done  Move one step: a session gives up, a
-                                    person starts it again
-  mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
-  mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
-  mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
-  mc goal new <p>/<g> --repo <r> --class fast|large --title "…"
-                                    A goal: GOAL.md, LOG.md, a worktree per repository
-  mc goal log|open|blocked|done|show|list  A session's entry, its status, one goal whole, or every goal
-  mc work <name>                  Open that workarea, ~/mc/work/<name>
-  mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
-  mc repos                        Where mc's two repositories live
+${commandReference('step')}
 
-IN FULL
-  mc status <name>                 One project: its PLAN.md frontmatter and
-                                    step, the decisions that belong to it,
-                                    its last three runner steps and the open
-                                    PR on its branch. --json and --offline
-                                    as above. Without a name it says where
-                                    the page went: mc is the page
+${commandReference('project')}
+
+  mc deploy --follow               Watch the deploy that is running
+${commandReference('status')}
   mc work                          The page — mc by another name
   mc work <name>                   Open ~/mc/work/<name> — the name is enough,
                                     new or not. A name that is only the
@@ -131,7 +108,7 @@ IN FULL
   mc tidy [--apply] [--json] [--days <n>]
                                     What mc may remove, per root, written to a
                                     list under ~/mc/runner/tidy/ first; --apply
-                                    removes from that list after asking again.
+                                    removes from that list after rechecking it.
                                     Docker images unused for 3 days go too,
                                     if the runtime is up
   mc tidy --docker [--apply] [--json]
@@ -148,24 +125,8 @@ IN FULL
   mc layout migrate --apply        The move: the plan made again, each move
                                     done in order and logged; the first that
                                     fails stops it, a second run continues
-  mc goal new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…"
-                                    A goal beside projects: GOAL.md and LOG.md under
-                                    ~/mc/programs/<p>/goals/<g>/, and one worktree per
-                                    repository on goal/<g>, from origin/main. Each
-                                    repository is fetched first; a failed fetch leaves
-                                    nothing behind
-  mc goal log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]
-                                    One session's entry appended to LOG.md, tagged with
-                                    MC_TOOL and MC_MODEL (person when neither is set).
-                                    --status sets the goal's status too. The goal is
-                                    MC_GOAL's when none is named
-  mc goal open|blocked|done [<p>/<g>] [--reason "…"]
-                                    Sets the status, and logs the reason
-  mc goal show <p>/<g>             The brief, the last three entries, and each
-                                    worktree: changed files, commits past origin/main,
-                                    the last commit's date
-  mc goal list [<p>]               Every goal, one line each: repositories, status,
-                                    sessions, the last entry's Nästa
+${commandReference('goal')}
+
   mc repos [--json]                The two repositories: bare or primary, the git
                                     directory, the checkout mc serves, and the
                                     linked worktrees each has
@@ -553,31 +514,8 @@ IN FULL
                                     resumes) the brief in ~/mc/brief/ with
                                     its role and gathers nothing — it reads
                                     the page, mc status and mc step itself
-  mc helper                        Person: opens the desk in ~/mc/helper/; it
-                                    takes your report of a bug or something
-                                    that should be better and writes it into
-                                    ~/mc/proposals/<date>-<mc|memoro>-<x>.md.
-                                    It reads no digest, touches no proposal
-                                    that is already there, and fixes nothing
-                                    — Martin picks it up in his brief or plan session
-                                    (--codex|--claude, --model <m> as usual)
-  mc helper --intake               The eye on production: the daily digest,
-                                    then one headless turn that reads it and
-                                    proposes from it — zero on a quiet day.
-                                    Never the queue: the next brief lists
-                                    them, and you decide. mc run does this
-                                    once a day on its own; mc shows the
-                                    digest and its \`!\` lines
-  mc helper --collect              Only the digest, no model:
-                                    ~/mc/intake/errors-<date>.md from the
-                                    error survey, the analysis items,
-                                    AI-provider errors, health and deploys
-                                    — plus what is new since the last digest.
-                                    Reads production, writes nothing to it
-  mc helper --intake [--collect] --since <iso> [--limit <n>] [--threshold <n>] [--model <model>]
-                                    …a different window, more fingerprints,
-                                    another bar for marking one \`!\`, or a
-                                    model other than the role's
+${commandReference('helper')}
+
   mc plan <programme>              Person: opens a plan session, told which
                                     programme it is for. A fresh foreground
                                     session in the programme's directory, both
@@ -597,16 +535,8 @@ IN FULL
                                     work; else docs/project/<programme>/ off
                                     main (docs PR, one 'closed' log row) and
                                     the programme's directory released
-  mc run                           The runner: one fresh headless session per
-                                    step of the next project, merged direct;
-                                    queue = ~/mc/queue.md then every ready
-                                    PLAN.md on origin/main. Touch
-                                    ~/mc/runner/STOP to exit after the step.
-                                    Runs mc helper --intake once a day too,
-                                    in the first chore loop after 05:00Z
-  mc run --once                    One step for the first runnable project,
-                                    and no helper
-  mc run [--no-merge] [--idle-sleep <s>]
+${commandReference('run')}
+
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every
                                     conversation started in it gets the
@@ -615,10 +545,7 @@ IN FULL
   mc roles show <role>             One role whole: facts, then overlay text
   mc roles check [<role>]          What a launch would hand a session today,
                                     and any live session running other text
-  mc model [list] [--json]         The model catalog: the candidates a fast or
-                                    large step may run on, in order, and the
-                                    review model. Changed with mc model add,
-                                    mc model remove and mc model set review
+${commandReference('model')}
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,
                                     bind, bindings, import, scan, audit,
