@@ -462,6 +462,29 @@ test('mc goal open on a goal whose after has not landed is refused with what it 
   assert.equal(goalOf(landed, 'plain').status, 'open');
 });
 
+test('mc goal after on a blocked goal: waiting while one has not landed; all landed, it stays blocked and says how it opens', async () => {
+  // The migration of 2026-11-02: headless-plan blocked, after runner-sessions and goal-waiting, both done.
+  const landed = fixture({ files: { ...goalAt('plain', 'blocked'), ...goalAt('landed', 'done'), ...goalAt('also', 'done') } });
+  assert.equal(await run(['after', 'mc/plain', 'mc/landed', 'mc/also'], landed.deps), 0, landed.err());
+  assert.equal(goalOf(landed, 'plain').status, 'blocked');
+  assert.match(landed.out(), /mc\/plain · blocked — mc\/landed, mc\/also landed; it stays blocked, mc goal open mc\/plain opens it/u);
+  assert.equal(await run(['open', 'mc/plain'], landed.deps), 0, landed.err());
+  assert.equal(goalOf(landed, 'plain').status, 'open');
+
+  const pending = fixture({ files: { ...goalAt('plain', 'blocked'), ...goalAt('first', 'open') } });
+  assert.equal(await run(['after', 'mc/plain', 'mc/first'], pending.deps), 0, pending.err());
+  assert.equal(goalOf(pending, 'plain').status, 'waiting', 'a blocked goal that names what it waits on is waiting');
+});
+
+test('mc goal open is refused on a goal already open whose after has not landed', async () => {
+  const f = fixture({ files: { ...goalAt('early', 'open', 'mc/first'), ...goalAt('first', 'blocked') } });
+  const before = { ...f.store };
+  assert.equal(await run(['open', 'mc/early'], f.deps), 1);
+  assert.match(f.err(), /mc\/early is not opened — it waits on mc\/first, not landed/u);
+  assert.equal(await run(['log', 'mc/early', '--status', 'open', '--comment', 'go'], f.deps), 1);
+  assert.deepEqual(f.store, before, 'nothing is written');
+});
+
 test('nobody sets waiting by --status: a goal waits by its after', async () => {
   const f = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--status', 'waiting'], f.deps), 2);

@@ -180,7 +180,8 @@ function logEntry(args, fields, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  if (fields.status === 'open' && goal.status !== 'open') {
+  // Refused whatever the goal says now: an open goal whose after has not landed is opened by nobody.
+  if (fields.status === 'open') {
     const { pending, gone } = afterOf(goal, programsGoals({ home: ctx.home, list: ctx.list, read }));
     if (pending.length || gone.length) {
       const why = [pending.length ? `waits on ${pending.join(', ')}, not landed` : null, gone.length ? `${gone.join(', ')} gone without landing` : null].filter(Boolean).join('; ');
@@ -269,7 +270,11 @@ function setAfter(args, ctx) {
     for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  stdout.write(`mc: ${target.name} · ${status}${entry.comment ? ` — ${entry.comment}` : ''}\n`);
+  // A blocked goal stays blocked: a person or plan blocked it, and only they open it.
+  const hint = status === 'blocked' && after.names.length && !after.pending.length
+    ? ` — ${after.names.join(', ')} landed; it stays blocked, mc goal open ${target.name} opens it`
+    : '';
+  stdout.write(`mc: ${target.name} · ${status}${entry.comment ? ` — ${entry.comment}` : ''}${hint}\n`);
   if (status === 'open' && goal.status !== 'open') remakeBranches(target, goal, ctx);
   return 0;
 }

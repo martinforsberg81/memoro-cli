@@ -123,6 +123,9 @@ Six verbs; the status verbs are four words.
   is a goal in `review` or `done`: it waits on nothing. An `open`, `blocked`
   or `waiting` goal becomes `waiting` while a name has not landed; a `waiting`
   one with nothing left is `open` again, its branches remade as `open` does.
+  A `blocked` one with nothing left stays `blocked` — a person or plan blocked
+  it, and `mc goal open` opens it; the line says so. `open` itself is refused
+  while an `after` has not landed, whatever the goal's status is now.
   The change is an entry: `Gjort: after <names>` (or `after cleared`). It is a
   verb of its own, not a flag on `log` or a status verb, because it changes
   the `after` line and the status follows from it.
