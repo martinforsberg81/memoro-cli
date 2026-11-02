@@ -6,15 +6,6 @@ import { commandReference } from './command-help.js';
  */
 export const HELP_TEXT = `mc — source-owned coding sessions
 
-WHO USES THE VERBS
-  Person: mc plan, mc brief, mc helper open interactive sessions;
-          mc run start|stop controls the headless runner. A session never
-          starts itself with these verbs. mc plan refuses inside a session.
-  Session: mc project new / step add / send writes plans; mc step records
-           progress; mc gate, mc shot and mc publish do the work.
-  Person's acts: mc deploy, mc language writes, runner controls and session
-                 open/stop/replace verbs. Read-only views serve both.
-
 THE PAGE
   mc                              The one page; at a terminal, a way in
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
