@@ -35,7 +35,8 @@ SEE AND SHIP
   mc shot dev | prod <target>     A PNG of the running app; prints its path
   mc dev list                     Which dev server runs in which worktree
   mc deploy [--dry-run]            memoro's main to production, after a question
-  mc build ios                    Does memoro need a new iOS binary?
+  mc asc build                    Does memoro need a new iOS binary?
+  mc asc status [<version>]       An iOS version's state, build and storefronts
 
 WORKSPACES
   mc work <name>                  Open that workarea
@@ -88,7 +89,7 @@ ${commandReference('shot')}
 
 ${commandReference('deploy')}
 
-${commandReference('build')}
+${commandReference('asc')}
 
 ${commandReference('work')}
 

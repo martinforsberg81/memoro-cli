@@ -172,7 +172,7 @@ function changeList({ paths, packages }) {
 }
 
 /**
- * `mc build ios` with no flag: the answer, printed. Exit 0 in every answered
+ * `mc asc build` with no flag: the answer, printed. Exit 0 in every answered
  * case, 1 when it cannot be answered — no checkout, no declaration,
  * production silent, a commit this checkout does not have.
  */
@@ -182,7 +182,7 @@ export async function iosQuestion({
 } = {}) {
   const repoPath = memoroRepo(env, repos || defaultRepos(env));
   if (!repoPath) {
-    stderr.write(`mc: no checkout of ${REPO} on this machine — mc build ios reads that repository\n`);
+    stderr.write(`mc: no checkout of ${REPO} on this machine — mc asc build reads that repository\n`);
     return 1;
   }
   const warnings = [];
@@ -236,7 +236,7 @@ export async function iosQuestion({
 
   for (const warning of warnings) stdout.write(`mc: ${warning}\n`);
   if (!shipped) {
-    stdout.write('mc: no shipped build is recorded — mc build ios --shipped <build> <sha> records the last one (memoro docs/releases/ios.md names it)\n');
+    stdout.write('mc: no shipped build is recorded — mc asc build --shipped <build> <sha> records the last one (memoro docs/releases/ios.md names it)\n');
   } else {
     const date = String(shipped.ended || shipped.started || '').slice(0, 10);
     stdout.write(`mc: last shipped: build ${shipped.build} from ${short(shipped.sha)} (${date})\n`);
@@ -246,7 +246,7 @@ export async function iosQuestion({
   if (needed) {
     if (changes.paths.length) stdout.write(`mc: native paths: ${changes.paths.join(', ')}\n`);
     if (changes.packages.length) stdout.write(`mc: native packages: ${changes.packages.join(', ')}\n`);
-    stdout.write('mc: a new binary is needed — mc build ios --device to try it, --testflight to ship it\n');
+    stdout.write('mc: a new binary is needed — mc asc build --device to try it, --testflight to ship it\n');
   } else {
     stdout.write(`mc: no native change since build ${shipped.build} — mc deploy is enough\n`);
   }
@@ -257,7 +257,7 @@ export async function iosQuestion({
 }
 
 /**
- * `mc build ios --shipped <build> <sha>`: a binary made before the verb
+ * `mc asc build --shipped <build> <sha>`: a binary made before the verb
  * existed, written as a `seed` row so `lastShipped` has something to compare
  * against. The sha is stored whole, as the checkout resolves it.
  */
@@ -281,7 +281,7 @@ export function recordShipped({
   const at = new Date().toISOString();
   recordStart({
     started: at, ended: at, sha: full, kind: SEED, build: String(build), outcome: UPLOADED,
-    note: 'recorded by mc build ios --shipped',
+    note: 'recorded by mc asc build --shipped',
   }, env);
   stdout.write(`mc: recorded build ${build} from ${short(full)} as the last shipped binary\n`);
   return 0;
@@ -407,13 +407,13 @@ export function resolveTarget({ repoPath, live, ref = null, git = gitRead }) {
     }
   }
   if (git(repoPath, ['merge-base', '--is-ancestor', sha, 'origin/main']) === null) {
-    return { line: `${short(sha)} is not on memoro's origin/main — mc build ios builds only what main has` };
+    return { line: `${short(sha)} is not on memoro's origin/main — mc asc build builds only what main has` };
   }
   return { sha };
 }
 
 /**
- * Everything `mc build ios --device` checks in the asking process before it
+ * Everything `mc asc build --device` checks in the asking process before it
  * starts anything, in order, each a refusal of one line that names the fix:
  * a build already running (exit 2), Xcode, the signing identity, the phone,
  * then the commit — after a fetch, the declaration from origin/main, and
@@ -429,7 +429,7 @@ export async function devicePreflight({
 } = {}) {
   const refuse = (lines, code = 1) => ({ ok: false, code, lines: [].concat(lines) });
   const other = runningIosBuild(env, alive ? { alive } : {});
-  if (other) return refuse(`an iOS build is running (pid ${other.pid}) — mc build ios --follow`, 2);
+  if (other) return refuse(`an iOS build is running (pid ${other.pid}) — mc asc build --follow`, 2);
   const xcode = checkXcode({ run, env });
   if (xcode) return refuse(xcode);
   const signing = checkSigning({ run, env, identity: testflight ? 'Apple Distribution' : 'Apple Development' });
@@ -438,7 +438,7 @@ export async function devicePreflight({
   if (!testflight && !chosen.device) return refuse(chosen.lines);
 
   const repoPath = memoroRepo(env, repos || defaultRepos(env));
-  if (!repoPath) return refuse(`no checkout of ${REPO} on this machine — mc build ios builds from it`);
+  if (!repoPath) return refuse(`no checkout of ${REPO} on this machine — mc asc build builds from it`);
   const warnings = [];
   if (git(repoPath, ['fetch', 'origin', '--quiet'], { timeoutMs: 30_000 }) === null) {
     warnings.push('could not fetch origin — this is what the checkout already had');
@@ -547,9 +547,13 @@ export function exportAtRev(repoPath, rev, path, dir) {
  * The tree is read from `repoPath`, where git runs; the packages are
  * `checkout`'s, memoro's working tree on main (repos.js), since a bare
  * repository has none. Without one it refuses in words.
+ *
+ * `paths` are further top-level directories written out beside it, as `rev`
+ * has them: the `script_paths` the declaration names (`marketing/`), which
+ * memoro's App Store Connect scripts read relative to their own tree.
  */
 export function atRev(argv, {
-  repoPath, checkout = repoPath, rev = null, git = gitRead, exportTree = exportAtRev,
+  repoPath, checkout = repoPath, rev = null, git = gitRead, exportTree = exportAtRev, paths = [],
 }) {
   if (!checkout) return { missing: 'no memoro checkout to run it in — ~/mc/self/memoro is missing' };
   if (!rev || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || isAbsolute(argv[1])) {
@@ -559,7 +563,9 @@ export function atRev(argv, {
   if (script.startsWith('..')) return { argv, cwd: checkout };
   if (git(repoPath, ['cat-file', '-e', `${rev}:${script}`]) === null) return { missing: `${script} is not on ${rev}` };
   const dir = mkdtempSync(join(tmpdir(), 'mc-ios-script-'));
-  const why = exportTree(repoPath, rev, script.split('/')[0], dir);
+  const tops = [...new Set([script.split('/')[0], ...paths.map((path) => normalize(path).split('/')[0])])]
+    .filter((top) => top && !top.startsWith('..') && !isAbsolute(top));
+  const why = tops.reduce((first, top) => first || exportTree(repoPath, rev, top, dir), null);
   if (why) {
     rmSync(dir, { recursive: true, force: true });
     return { missing: why };

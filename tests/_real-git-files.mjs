@@ -12,7 +12,7 @@ export const REAL_GIT_FILES = new Set([
   'tests/mc/repo-merge-live.test.js',
   'tests/mc/push-guard.test.js',
   // `git archive`, `worktree move`, and worktree removal on disk.
-  'tests/mc/ios-build-testflight.test.js',
+  'tests/mc/asc-build-testflight.test.js',
   'tests/mc/layout-migrate.test.js',
   'tests/mc/archive-programme.test.js',
   'tests/mc/work-layout.test.js',
