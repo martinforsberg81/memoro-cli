@@ -150,15 +150,44 @@ export function codeCommit({ checkout = mcCheckout(), spawn = (_git, args) => ru
   return out.status === 0 ? String(out.stdout).trim() || null : null;
 }
 
+/** Cursor home, erase the screen, erase the scrollback. */
+const CLEAR_ALL = '\x1b[H\x1b[2J\x1b[3J';
+
 /**
  * `mc` again, on the code that is on disk now, in this terminal: the same
  * arguments, and the shell wrapper's fd 3 when it holds one, so a project
  * opened from the new page still `cd`s the shell (run-control.js, `childEnv`).
- * This process waits for it and leaves with its code.
+ *
+ * The process is replaced (`process.execve`), not waited on: a child under a
+ * waiting parent left one parked `mc` per restart, and after a day of
+ * fast-forwards in `~/mc/self` a tab held a chain of them. Replaced, only the
+ * newest page's process is left. fd 3 survives the exec with nothing passed:
+ * it is the shell's descriptor, inherited when this process started, and
+ * nothing in mc opens or marks it — libuv sets close-on-exec only on the
+ * descriptors it opens itself — so the new image holds it as this one did.
+ * A replaced process runs no `finally` and no `exit` handler, which is why
+ * the live reader's `ask` has given the terminal back (timer, resize
+ * listener, raw mode, `/dev/tty`) before `menu` calls this.
+ *
+ * At a terminal the screen and the scrollback are cleared first, so the tab
+ * holds one page rather than one more per restart. A stdout that is not a TTY
+ * gets the line it always got. Where `execve` is missing (Node 22 before
+ * 22.15) or throws, mc waits on a child as it did before and leaves with its
+ * code.
  */
-export function restartPage({ stdout, env = process.env, from, to, spawn = spawnSync, argv = process.argv }) {
+export function restartPage({
+  stdout, env = process.env, from, to, spawn = spawnSync, argv = process.argv, execve = process.execve,
+}) {
   const short = (sha) => String(sha || '').slice(0, 8);
-  stdout.write(`\nmc: mc moved from ${short(from)} to ${short(to)} under this page — starting it again on the new code\n`);
+  const tty = stdout.isTTY === true;
+  stdout.write(`${tty ? CLEAR_ALL : '\n'}mc: mc moved from ${short(from)} to ${short(to)} under this page — starting it again on the new code\n`);
+  if (typeof execve === 'function') {
+    try {
+      execve(process.execPath, [process.execPath, ...argv.slice(1)], env);
+      // Never reached on a real exec; a test's `execve` returns here.
+      return 0;
+    } catch { /* the child below, as before */ }
+  }
   const run = (fds) => spawn(process.execPath, argv.slice(1), { stdio: ['inherit', 'inherit', 'inherit', ...fds], env });
   let child = null;
   try {
