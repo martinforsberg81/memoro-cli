@@ -1700,3 +1700,97 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
   });
 });
 
+
+describe('a goal\'s pull request (goals.js): done at landing, blocked on red, review again when its head moved', () => {
+  const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
+  const GOAL_JOB = { repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 90, branch: 'goal/g', holder: { name: 'goal:mc/g' }, step: null, goal: GOAL, sha: 'aaa111' };
+  /** `setGoal`, recorded: what the merger writes to GOAL.md and LOG.md. */
+  const goalWrites = () => {
+    const writes = [];
+    return { writes, setGoal: (call) => { writes.push(call); return { goal: {} }; } };
+  };
+  const headAt = (sha) => (args) => (args.includes('headRefOid') && !args.includes('state,headRefOid,mergeCommit,baseRefName')
+    ? { status: 0, stdout: JSON.stringify({ headRefOid: sha }) }
+    : { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) });
+
+  it('queueMerge keeps the goal and the reviewed head on the job', () => {
+    const { place } = queueMerge({ root, repo: 'memoro-cli', repoPath: '/repos/memoro-cli', pr: 90, branch: 'goal/g', goal: GOAL, sha: 'aaa111', lock, start: () => null });
+    assert.equal(place, 0);
+    const [entry] = queue();
+    assert.deepEqual(entry.goal, GOAL);
+    assert.equal(entry.sha, 'aaa111');
+  });
+
+  it('landed: the goal is done, with a runner entry naming the pull request and the landed sha', async () => {
+    const { writes, setGoal } = goalWrites();
+    const m = machine([green], { gh: headAt('aaa111'), setGoal });
+    const [answer] = await landJob(GOAL_JOB, m.deps);
+    assert.equal(answer.landed, true);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].dir, GOAL.dir);
+    assert.equal(writes[0].status, 'done');
+    assert.equal(writes[0].entry.tool, 'runner');
+    assert.equal(writes[0].entry.status, 'done');
+    assert.equal(writes[0].entry.done, 'landed #90 as abc1234def');
+    assert.equal(m.rows[0].name, 'goal:mc/g');
+  });
+
+  it('red: the goal is blocked with a runner entry saying why, and gets no mend', async () => {
+    const { writes, setGoal } = goalWrites();
+    const m = machine([red], { gh: headAt('aaa111'), setGoal, mayMend: () => true });
+    const [answer] = await landJob(GOAL_JOB, m.deps);
+    assert.equal(answer.landed, false);
+    assert.equal(answer.mending, undefined, 'a mend would push a head no review read');
+    assert.equal(writes[0].status, 'blocked');
+    assert.equal(writes[0].entry.done, 'merger answered red on #90');
+    assert.match(writes[0].entry.comment, /^red: 2 tests red: a › b — waits on plan$/u);
+  });
+
+  it('a head other than the reviewed one is not landed: no round, the goal back in review', async () => {
+    const { writes, setGoal } = goalWrites();
+    const m = machine([green], { gh: headAt('bbb222'), setGoal });
+    const [answer] = await landJob(GOAL_JOB, m.deps);
+    assert.equal(m.rounds.length, 0, 'no round spent on it');
+    assert.equal(answer.landed, false);
+    assert.equal(answer.moved, true);
+    assert.equal(answer.back, undefined);
+    assert.equal(writes[0].status, 'review');
+    assert.match(writes[0].entry.comment, /#90 is at bbb222, not aaa111, the head its review judged — reviewed again/u);
+  });
+
+  it('a push while the round runs is moved too, not back in line', async () => {
+    const { writes, setGoal } = goalWrites();
+    const gh = (args) => {
+      if (args.includes('state,headRefOid,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: 'ccc333' }) };
+      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: 'aaa111' }) };
+      return { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) };
+    };
+    const m = machine([], {
+      gh, watchMs: 5, setGoal,
+      mergeRound: (options) => new Promise((resolve) => {
+        options.signal.addEventListener('abort', () => resolve({ ok: false, merged: false, stopped_at: 'gone', reason: options.signal.reason.message }));
+      }),
+    });
+    const [answer] = await landJob(GOAL_JOB, m.deps);
+    assert.equal(answer.moved, true);
+    assert.equal(answer.back, undefined);
+    assert.equal(writes[0].status, 'review');
+  });
+
+  it('serve: a moved goal job leaves the queue', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...GOAL_JOB, since: '2026-10-09T12:01:00Z' }]));
+    let rounds = 0;
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE,
+      land: async ([job], lane, { onAnswer }) => {
+        rounds += 1;
+        const answer = { job, landed: false, report: { ok: false, merged: false, stopped_at: 'moved', reason: 'moved' }, moved: true };
+        await onAnswer(answer);
+        return [answer];
+      },
+    });
+    assert.equal(rounds, 1);
+    assert.deepEqual(queue(), []);
+  });
+});
