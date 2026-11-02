@@ -311,7 +311,9 @@ export function nowBlock({
     steps.push({
       name: current.name || null,
       kind: named?.kind ?? (current.kind || null),
-      variant: named?.variant ?? (goal ? 'goal' : null),
+      // A plan session has no variant; a file with no kind it knows is a
+      // goal's when its name says so.
+      variant: named ? named.variant : (goal ? 'goal' : null),
       // `mc/<goal>` for a session on a goal, null for a project's.
       goal,
       repo: current.repo || null,

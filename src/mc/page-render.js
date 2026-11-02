@@ -377,7 +377,9 @@ function cell(c, text, columns, styles) {
 const LANE_KIND = 7;
 /** What the session works on: it gives way on a narrow terminal, the cells after it do not. */
 const workWidth = (wide) => (wide >= 90 ? 30 : 22);
-const LANE_REPO = 12;
+/** The repository's cell: a pull request row's, and one more on a session row, where the model follows it. */
+const LANE_REPO = 11;
+const SESSION_REPO = 12;
 const LANE_MODEL = 8;
 const LANE_CLOCK = 8;
 
@@ -420,7 +422,7 @@ function laneLine(c, wide, lane) {
   // a row that ends on a cell ends where its text does.
   const left = `  ${c(MARK.running, 'green')} ${cell(c, kind.toUpperCase(), LANE_KIND, kindTone(kind))} `
     + `${pad(clip(sessionWork(s), named - 1), named)}`
-    + `${pad(clip(s.repo || lane.repo || 'unplaced', LANE_REPO - 1), LANE_REPO)}`
+    + `${pad(clip(s.repo || lane.repo || 'unplaced', SESSION_REPO - 1), SESSION_REPO)}`
     + `${cell(c, clip(s.model || s.tool || '', LANE_MODEL - 1), LANE_MODEL, ['grey'])}`
     // The clock carries its own colour: `elapsedTone` says when it has turned.
     + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))}`
