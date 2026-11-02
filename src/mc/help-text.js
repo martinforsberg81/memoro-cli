@@ -22,7 +22,7 @@ PLAN AND FOLLOW
 
 RUN AND LAND
   mc run                          The headless runner
-  mc run start|stop [--force]      Person: start/stop the runner; --force: now
+  mc run start|stop               Person: start or stop the runner
   mc run lanes [<n>]              Headless sessions at once, in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun
@@ -35,7 +35,8 @@ SEE AND SHIP
   mc shot dev | prod <target>     A PNG of the running app; prints its path
   mc dev list                     Which dev server runs in which worktree
   mc deploy [--dry-run]            memoro's main to production, after a question
-  mc build ios                    Does memoro need a new iOS binary?
+  mc asc build                    Does memoro need a new iOS binary?
+  mc asc status [<version>]       An iOS version's state, build and storefronts
 
 WORKSPACES
   mc work <name>                  Open that workarea
@@ -62,512 +63,80 @@ WHO USES THE VERBS
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
-  mc keys run <script> [args…]     Run a main-matching script with its declared vault keys
-  mc keys list                    Declared names and custody status, never values
-${commandReference('step')}
+${commandReference('status')}
 
 ${commandReference('project')}
 
-  mc deploy --follow               Watch the deploy that is running
-${commandReference('status')}
-  mc work                          The page — mc by another name
-  mc work <name>                   Open ~/mc/work/<name> — the name is enough,
-                                    new or not. A name that is only the
-                                    runner's area for a project opens
-                                    that area, and says so
-  mc work <name> --tmux [task]     Start it in the background, for another
-                                    session to talk to; mc work <name> joins
-                                    it, and ctrl-b d leaves it running
-  mc work <name> new               A new conversation rather than the last one —
-                                    including when one is running in the
-                                    background: it is ended and replaced in the
-                                    same window, so anyone attached stays
-                                    attached. Nothing is deleted
-  mc work <name> new --model <m>   …on a chosen model, passed to the tool as
-                                    given; a resumed conversation stays on the
-                                    model its transcript says it ran on
-  mc work <name> <id>              One particular conversation, by the id shown.
-                                    While another is running there it is
-                                    refused, with both ways on: join what runs,
-                                    or stop it and open the one you named
-  mc work <name> --resume <id>     The same, said explicitly — and the only way
-                                    to name one with --tmux, where the rest of
-                                    the line is the task. An id that matches
-                                    nothing is an error before anything starts,
-                                    never a new conversation in its place
-  mc work add <name> <repo> [branch]
-                                    Add a repository's worktree to that work
-  mc work stop <name>              Stop what is running there; keep the work
-  mc work remove <name> <repo>     Take one repository out of that work
-  mc work release <name> [--apply] Remove what git says can go; keep the rest.
-                                    A runner area is refused: it closes with
-                                    its project
-  mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
-                                    conversations, which nothing brings back
-  mc work tidy [--apply] [--days <n>]
-                                    The same as mc tidy
-  mc tidy [--apply] [--json] [--days <n>]
-                                    What mc may remove, per root, written to a
-                                    list under ~/mc/runner/tidy/ first; --apply
-                                    removes from that list after rechecking it.
-                                    Docker images unused for 3 days go too,
-                                    if the runtime is up
-  mc tidy --docker [--apply] [--json]
-                                    Docker only; with --apply it starts the
-                                    runtime when it is down
-  mc layout [--json]               layout 1 or 2, and where the planning
-                                    sessions, step areas, deps areas and
-                                    registers are
-  mc layout migrate [--json]       The move to layout 2 as a dry run: every
-                                    move in order, and what refuses it — a
-                                    runner, a session, the merger, a process
-                                    standing in an old area. Writes nothing;
-                                    exit 1 when something refuses
-  mc layout migrate --apply        The move: the plan made again, each move
-                                    done in order and logged; the first that
-                                    fails stops it, a second run continues
+${commandReference('step')}
+
 ${commandReference('goal')}
 
-  mc programs list [--json]        Every programme, one line each, by name:
-                                    active (a project or a goal, of any
-                                    status) or dormant, its repositories, its
-                                    projects and their states, its goals and
-                                    open plan sessions. The page draws the
-                                    dormant ones as one line pointing here
-  mc repos [--json]                The two repositories: bare or primary, the git
-                                    directory, the checkout mc serves, and the
-                                    linked worktrees each has
-  mc repo status [repo]            One repository seen whole: main, what the
-                                    last full run found on it and since when,
-                                    the open pull requests and how far behind
-                                    main each one is, the work areas standing on
-                                    it, and whether this machine's installation
-                                    is in step. Without a name, every repository
-                                    mc can see
-  mc repo status --offline         The same without touching the network; the
-                                    page says which parts are last-seen
-  mc repo status --json            The same, for a session rather than a person
-  mc repo watch start [--interval <seconds>]
-                                    Keep the answer fresh in the background:
-                                    one process refreshes a snapshot, and every
-                                    reader — person, session, board — gets it
-                                    for the price of a file read
-  mc repo watch stop               Stop it; the last snapshot stays and ages
-  mc repo watch status [--json]    Whether it is running and when it last wrote
-  mc repo claim <repo> "<what for>"
-                                    Say you are holding a round on it: verify,
-                                    merge, deploy. mc refuses a second claim
-                                    and blocks no git at all — the lease is an
-                                    agreement, visible to everyone in the view
-  mc repo release <repo> [--force] Give it back. --force takes it from someone
-                                    else, and is always written to the log
-  mc repo who <repo> [--json]      Who holds it, for what, since when — and
-                                    whether that holder is still working, read
-                                    off the board rather than off a clock. A
-                                    holder mc cannot see reads unknown, never
-                                    a guess
-  mc test <repo> <pr>              Measure that pull request, and stop there —
-                                    take the lease, build a fresh baseline and
-                                    a candidate with main merged in, run what
-                                    the change reaches on BOTH sides, and
-                                    compare the failures by name at every
-                                    level. What runs is what the repository
-                                    declares: with a select command it is the
-                                    test files the change reaches, without one
-                                    it is the whole suite. Both sides always
-                                    run the CANDIDATE's list, because a
-                                    selection is a function of the diff and the
-                                    base's diff against itself is empty. Merges
-                                    nothing, and cannot
-  mc test <repo> --full            The repository's own whole suite on the
-                                    default branch as fetched — one tree, no
-                                    pull request, no selection
-  mc test nightly status [--json]  Where the tick comes from, and — per
-                                    repository — what the last full run found:
-                                    red, and since when. The tick is a chore of
-                                    the runner, a full run of every repository mc
-                                    knows once a day, taken with nobody asking
-                                    and stopped by mc run stop; nothing it finds
-                                    refuses a merge or delays a round
-  mc test dev [--here] [--suite <name>] [--json]
-                                    The round no tree can answer: the app
-                                    running, measured by the suites the
-                                    repository declares in .mc/test.json —
-                                    module graphs that link, surfaces that
-                                    settle, routes that render. mc ensures a
-                                    dev server first and reuses the one already
-                                    serving that worktree, decided from the
-                                    inventory rather than from a port
-                                    answering. One shared server, started from
-                                    the installation on main, because ten lanes
-                                    with ten wranglers is a machine nobody can
-                                    work on; --here gives the calling worktree
-                                    its own, for a change that is not on main
-                                    yet. A suite the repository marks
-                                    server: "static" never talks to the app and
-                                    runs against the file server it names as
-                                    static_service instead — chosen alone, it
-                                    starts no Worker at all — and a server that
-                                    leaves takes only its own tier's suites. --url prints the address and runs
-                                    nothing; --list says what is running
-                                    anywhere on the machine, and --stop ends
-                                    the one for this worktree by asking the
-                                    project's own stop command — mc holds the
-                                    index and signals nothing itself
-  mc test prod [--here] [--suite <name>] [--json]
-                                    The same suites against meetmemoro.app,
-                                    for the answers that are only true there:
-                                    real bindings, real assets, real latency.
-                                    The suites that sign in use the managed
-                                    test account and need TEST_SEEDED_TOKEN in
-                                    the shell; without it they report skipped
-                                    rather than passing quietly. Neither of
-                                    these runs by itself — no round, no page
-                                    and no schedule starts one. --here runs
-                                    this worktree's copy of the suites, for
-                                    when the instrument is what changed
-  mc dev list [--json]             The machine's dev servers: one line each —
-                                    instance, url, session and worktree. A
-                                    registration whose process is gone is swept
-                                    as it is read, so the answer is what is
-                                    running rather than what once was. It exits
-                                    0 on an empty machine, because memoro's dev
-                                    wrapper runs it to find out whether this mc
-                                    speaks the protocol at all
-  mc dev register <manifest> [--json]
-                                    Take a copy of the manifest a project's dev
-                                    wrapper just wrote. mc holds the index; the
-                                    wrapper stays authoritative for how its
-                                    server starts, stops and becomes healthy
-  mc dev unregister <manifest> [--json]
-                                    Forget it. Not an error when nothing was
-                                    registered — the end state is the one asked
-                                    for either way
-  mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
-                                    May one more app server start? At most
-                                    MC_DEV_MAX_SERVERS (2) live servers that are
-                                    not resource_class light, the asker's own
-                                    worktree and service not counted, and none
-                                    while kern.memorystatus_level is under
-                                    MC_DEV_MIN_FREE_PERCENT (15). --wait polls
-                                    for a slot, naming the holders once a
-                                    minute. Exit 0 admitted, 75 refused, with
-                                    the holders; mc test dev asks it before it
-                                    starts a server, and stops nothing to make
-                                    room
-  mc dev stop <instance_id>        Stop one live server through its manifest's
-                                    own stop command, and log it. mc also stops
-                                    a worktree's servers itself when mc work
-                                    remove or the runner's close takes the
-                                    worktree away
-  mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]
-                                   Remove the dev processes nobody owns any
-                                    more — an unregistered server, esbuild or
-                                    workerd whose parent is gone — and
-                                    registrations whose worktree is gone. The
-                                    runner runs it every chore pass
-  mc docker [--json]               The container runtime: up or stopped, and why
-                                    not; the leases on it; what it holds on
-                                    disk; and the containers and volumes mc
-                                    labelled and the ones it did not. With the
-                                    runtime down it runs no docker command,
-                                    because a docker call would start OrbStack
-  mc docker ensure [--pid <n>] [--run <label>] [--repo <name>] [--timeout <s>]
-                                    Start OrbStack or Docker Desktop if it is
-                                    down, wait for docker info (60 s by
-                                    default), and take a lease for the pid —
-                                    the calling shell by default. Exit 69 when
-                                    it cannot be started
-  mc docker release [--pid <n>] [--json]
-                                    Drop the leases of the pid, the calling
-                                    shell by default. It stops nothing: the
-                                    runner stops a runtime mc started once it
-                                    has been idle for 10 minutes
-  mc docker prune [--dry-run] [--json]
-                                    Remove the containers and volumes labelled
-                                    mc.holder whose pid is gone. Unlabelled
-                                    ones are reported and never removed
-  mc gate <test files…> [--test-name-pattern <p>] [--json] [--budget <s>]
-                                    The named test files with this
-                                    repository's node --test flags, started at
-                                    once at low priority beside merge rounds;
-                                    only a deploy or iOS build of memoro goes
-                                    first. The whole output in a
-                                    file and at most 2 KB printed: GREEN or RED,
-                                    the counts, the failing lines and their
-                                    locations, the re-run line, the file's path.
-                                    Answers within --budget s (default 540);
-                                    past it, RUNNING and exit 3 — the tests run
-                                    on, and --wait prints the verdict from the
-                                    same log. One gate per worktree
-  mc gate [--base <ref>]           Affected tests and command gates selected
-                                    from all changes against origin/main,
-                                    including staged, unstaged and untracked
-                                    files. Uses the repository selector and
-                                    bounded test runner; --full is refused
-  mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
-          [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
-          [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
-          [--scroll <css>[@end|@top|@<px>]] [--measure <css>]
-          [--account seeded|new] [--onboarding] [--me] [--here]
-          [--out <file.png>] [--open] [--json]
-                                    A PNG of the running app — a local dev
-                                    server, started as mc test dev starts one,
-                                    or production. Inside a memoro worktree dev
-                                    serves that worktree, restarted when it was
-                                    edited after the server started, and says
-                                    which branch and commit it served. The
-                                    target is a path under /app or /admin, or
-                                    a name from memoro's .mc/shot.json, whose
-                                    capture script takes the picture. The
-                                    file's path is printed first, alone; with
-                                    --measure the measured boxes follow as one
-                                    JSON line. A declared phone viewport
-                                    carries its safe area. dev signs in as
-                                    seeded (or --account new; --onboarding
-                                    reseeds and shows it), prod as the test
-                                    account, or as you with --me (prod only).
-                                    An /admin target is judged against the
-                                    account's role; a gate that did not hold
-                                    exits 1
-  mc shot <dev|prod> --list        The targets and viewports memoro declares
-  mc shot login prod [--paste]     Sign in once, in a browser or by pasting the
-                                    memoro_session cookie; mc keeps it in the
-                                    keychain as MEMORO_SHOT_SESSION
-  mc shot logout prod              Forget it
-  mc hook session-start            For a SessionStart hook: each mc worktree at
-                                    the session's directory — branch, behind and
-                                    ahead of origin/main, changed files, dev
-                                    server — the warnings (a merged branch, a
-                                    stale one, main, a session started outside
-                                    the repository) and the mc toolbox
-  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read|Edit|MultiEdit
-                                    and the Claude in Chrome tools: gh pr
-                                    create, gh pr edit and git push → mc publish, gh pr
-                                    merge → mc merge, npm run ci, npm test and
-                                    node --test → mc gate <files…>, npm
-                                    run dev → mc test dev --here --url, a scratch
-                                    Playwright script → mc shot, Chrome sent to a
-                                    local server → mc shot next. MC_HOOK_ALLOW=1
-                                    in the command lets it through. Both read
-                                    the hook JSON on stdin and always exit 0
-  mc hook install [--check]        Write mc's two hook entries into
-                                    ~/.claude/settings.json, changing no other
-                                    entry. --check only says whether they are
-                                    there (exit 1 when not)
-  mc publish [--title …] [--body-file …] [--base …]
-                                    Push the branch you stand on (never force)
-                                    and open its pull request, or find the one
-                                    it has — title and body from the last
-                                    commit for a new one; on an open one, edits
-                                    only the fields given — then one gh pr view.
-                                    Refuses on main, a dirty tree, or a remote
-                                    branch that moved. Then queues it for the
-                                    merger, as mc merge <repo> <pr> does — not
-                                    with --no-merge, --json or a detached
-                                    --branch (a mend's), which end with the
-                                    mc merge line to run
-  mc merge <repo> <pr>             Queue it for the merger and return: one
-                                    process lands the queue, one at a time,
-                                    with that same measurement — only if
-                                    nothing new went red and the base has not
-                                    moved since, squash-merge, pull the
-                                    source-linked installation, and log a line.
-                                    A step's red goes back to its next session
-                                    (~/mc/runner/log/merger.log says it all).
-                                    Nothing merges a red gate. The round does
-                                    not measure the base, so the verdict
-                                    carries no standing-red number: green is
-                                    green, and what ran is the count on the
-                                    line under it
-  mc merge <repo> <pr> <pr>...      Several at once: each queued for the
-                                    merger in the order given, each landed by
-                                    its own round
-  mc merge <repo> <pr> --docs      Land a pull request that touches nothing
-                                    outside docs/ — the tests that read documents, then squash.
-                                    Anything else is refused with the file
-                                    that is outside docs/
-  mc deploy [--dry-run] [--json]   memoro's main to production: the sha it
-                                    would ship, what is live now and the gap
-                                    between them, what the nightly said about
-                                    that tree — then one question, and on a
-                                    yes the repository's own npm run deploy,
-                                    in its own process, after the gate round
-                                    in flight; the merger starts no other
-                                    until it is done. ^C stops the watching,
-                                    not the deploy (mc deploy --follow
-                                    watches again). A second deploy while one
-                                    runs is refused with its sha and start
-                                    time — there is no queue. No flag skips
-                                    the question and without a terminal it
-                                    refuses; --dry-run is the reading and
-                                    stops there. Every deploy, and every
-                                    refusal, is a row in
-                                    ~/mc/runner/log/deploys.tsv — written
-                                    before the deploy and completed after it,
-                                    and read back by the page and
-                                    mc helper. It takes no repository:
-                                    memoro-cli is installed, not deployed
-  mc build ios [--json]            Whether memoro needs a new iOS binary,
-                                    without building: the last shipped build,
-                                    the commit production runs, and the native
-                                    paths and packages memoro's .mc/ios.json
-                                    declares that differ between them — or
-                                    that mc deploy is enough. Reads
-                                    ~/mc/runner/log/ios-builds.tsv
-  mc build ios --device [--sha <ref>] [--device-id <id>]
-                                   Build the commit production runs (or an
-                                    older one it contains) in its own
-                                    process, holding the heavy lane, read the
-                                    app back against .mc/ios.json and install
-                                    it on the paired iPhone. The terminal
-                                    follows ~/mc/runner/log/ios-build.log;
-                                    ^C stops watching, not the build
-  mc build ios --follow            Watch the iOS build that is running
-  mc build ios --testflight [--yes | --no-upload]
-                                   Build, verify the IPA and, after one
-                                    question, upload it to TestFlight;
-                                    --yes answers the question, for a
-                                    headless session; --no-upload stops at
-                                    the verified IPA
-  mc build ios --shipped <build> <sha>
-                                   Record a binary built before the verb
-                                    existed as the last shipped one
-  mc language [--json]             Every language with a cached reading or a
-                                    manifest: the reading's age, the manifests,
-                                    the last run. Offline and instant
-  mc language status <lang>        The language's four reads — selectors,
-                                    forms, grammar waiting, lemma bands — run
-                                    now in the memoro main mc deploy uses,
-                                    fast-forwarded first; refused while a
-                                    deploy runs or that main is dirty or
-                                    ahead. Names the manifests that close each
-                                    unresolved selector use, and caches the
-                                    reading under ~/mc/runner/log/language/
-  mc language key [--json]         Whether the Cloudflare key is held, and
-                                    its account id — never the token
-  printf %s "<token>" | mc language key set --account <id>
-                                   Keep the key in this machine's keychain.
-                                    The token is read from stdin only: an
-                                    argument is a shell history line and a
-                                    line in mc.log
-  mc language run <manifest> [--dry-run]
-                                   A memoro cutover manifest's acts in order:
-                                    each act's check read and compared, one
-                                    question before every write, the key only
-                                    in the child that names it. An exact
-                                    expectation that does not hold stops the
-                                    run with the act's if_not. Refused while a
-                                    deploy or another run is going on, and
-                                    without a terminal. --dry-run asks nothing
-                                    and checks up to the first production write
-  mc language resume [--manifest <name>] [--from-head]
-                                   The stopped run again: written acts
-                                    skipped, the interrupted one checked and
-                                    asked again. Refused when memoro's main
-                                    moved since, unless --from-head
-  mc language promote [--langs <list>]
-                                   The grammar promotion mc deploy no longer
-                                    does, as a one-act run: memoro's promote
-                                    check, one line per language waiting, one
-                                    question, then the write with the key.
-                                    Nothing waiting asks nothing. Recorded as
-                                    grammar-promote, resumed like a run
-  mc deps [<repo>] [--json] [--refresh]
-                                   What origin/main's lockfile is behind on:
-                                    npm audit and npm view of it, read in a
-                                    scratch directory, never a checkout — in
-                                    three groups, security within the major,
-                                    patch/minor and major, each row runtime or
-                                    tool by its section of package.json, then
-                                    the repository's declared notes (memoro:
-                                    the wrangler tally). Saved in
-                                    ~/.memoro/mc/deps/<repo>.json; the same
-                                    sha read under 6 h ago is reused unless
-                                    --refresh. No repo reads every one that
-                                    has a package-lock.json. The runner reads
-                                    every repository once a day; mc shows
-                                    the age of each reading under CHECKS
-  mc deps bump <repo> <what> [--dry-run] [--json]
-                                   Opens a pull request and lands it through
-                                    the gate: <what> is security, minor or
-                                    <package>[@<version>]; a fresh reading,
-                                    a workarea deps-<repo>-<what>-<yyyymmdd>
-                                    on origin/main, npm with
-                                    --package-lock-only on package.json and
-                                    package-lock.json only, one commit, mc
-                                    publish, mc merge <repo> <pr>. A group
-                                    never crosses a major. --dry-run prints
-                                    the change and makes nothing
-  mc repo guard [repo]             Install the pre-push guard: a push to a
-                                    branch whose pull request is already merged
-                                    is refused with the number and date, and
-                                    the way forward (a new branch from main).
-                                    Not knowing never refuses. MC_PUSH_ANYWAY=1
-                                    lets a deliberate push through. mc installs
-                                    it in every repository it adds a worktree
-                                    to; --json says whether it is in place
-  mc log [--failures] [--limit n]  What mc did and how it ended. Every
-                                    invocation writes a start and an end; a
-                                    start with no end is a command that died
-  mc log <run>                     One invocation whole: what it said, the
-                                    events it logged, the rounds it ran, the
-                                    leases it touched — the three files
-                                    joined on its run id
-  mc log --open                    Gate rounds that started and never ended,
-                                    with the lease each left behind. It only
-                                    reads: releasing one stays your decision
-  mc brief [--new]                 Person: opens (or
-                                    resumes) the brief in ~/mc/brief/ with
-                                    its role and gathers nothing — it reads
-                                    the page, mc status and mc step itself
-${commandReference('helper')}
+${commandReference('programs')}
 
-  mc plan <programme>              Person: opens a plan session, told which
-                                    programme it is for. A fresh foreground
-                                    session in the programme's directory, both
-                                    repositories checked out on
-                                    plan/<programme>. What comes out of it is
-                                    yours and its to work out — the prompt
-                                    predicts no plan, no project and no PR.
-                                    Never a workarea — mc run cannot see it.
-                                    Already a session: never run mc plan; use
-                                    mc project new / step add / send instead
-  mc plan                          …asks which programme first: the ones on
-                                    main, the ones being planned, or a new
-                                    one you name. --codex|--claude, --model
-                                    <m> as usual
-  mc plan <programme> --archive    End a programme: refused while any plan
-                                    under it is on main or its session holds
-                                    work; else docs/project/<programme>/ off
-                                    main (docs PR, one 'closed' log row) and
-                                    the programme's directory released
 ${commandReference('run')}
 
-  mc worker <name> [task]          A project folder that carries the worker
-                                    role, read from the roles mc ships: every
-                                    conversation started in it gets the
-                                    overlay and the model default
-  mc roles list                    The defined roles, read from their files
-  mc roles show <role>             One role whole: facts, then overlay text
-  mc roles check [<role>]          What a launch would hand a session today,
-                                    and any live session running other text;
-                                    then the installed skills against canon
-  mc skills [sync]                 mc's task skills (canon/skills, a programme's
-                                    SKILL.md) installed as mc-* for Claude
-                                    and Codex; sync rewrites a changed one
-                                    and removes a stale one. SessionStart
-                                    runs the sync too
+${commandReference('gate')}
+
+${commandReference('test')}
+
+${commandReference('publish')}
+
+${commandReference('merge')}
+
+${commandReference('dev')}
+
+${commandReference('shot')}
+
+${commandReference('deploy')}
+
+${commandReference('asc')}
+
+${commandReference('work')}
+
+${commandReference('tidy')}
+
+${commandReference('layout')}
+
+${commandReference('repos')}
+
+${commandReference('repo')}
+
+${commandReference('prs')}
+
+${commandReference('docker')}
+
+${commandReference('hook')}
+
+${commandReference('keys')}
+
+${commandReference('language')}
+
+${commandReference('deps')}
+
+${commandReference('log')}
+
+${commandReference('brief')}
+
+${commandReference('plan')}
+
+${commandReference('helper')}
+
+${commandReference('worker')}
+
+${commandReference('roles')}
+
+${commandReference('skills')}
+
 ${commandReference('model')}
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,
                                     bind, bindings, import, scan, audit,
-                                    adopt, hydrate, devices, recovery,
-                                    recover, migrate. mc vault with no verb
-                                    prints them with what each one takes. The
-                                    one capability verb that is not a door
-                                    into the session manager, and the one
-                                    this cut keeps
+                                    adopt, hydrate, devices, revoke-device,
+                                    change-password, recovery, recover,
+                                    destroy-forgotten, migrate. mc vault with
+                                    no verb prints them with what each one
+                                    takes. The one capability verb that is
+                                    not a door into the session manager
 
 WHAT IS NOT HERE
   There is no verb that lists work. mc is the page; a second list beside the
@@ -578,7 +147,8 @@ WHAT IS NOT HERE
   the fourteen verbs that were their doors — setup, install-shell, auth,
   tool-auth, connections, github, coding-profile, dev, deps, cloud-session,
   cloud-runtime, security, doctor, migrate, and the session verbs before them
-  — went on 2026-09-03. A work area is a directory, the worktrees it spans and
+  — went on 2026-09-03. Today's mc dev and mc deps are later verbs that
+  share only the name: dev servers, and dependency updates. A work area is a directory, the worktrees it spans and
   the conversations started in it, and nothing else about it is mc's to know.
 
 REQUIREMENTS

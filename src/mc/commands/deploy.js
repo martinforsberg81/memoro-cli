@@ -85,6 +85,7 @@ import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { realLock } from '../register.js';
 import { currentHolder } from '../repo-lease.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 /** The repository this verb is about. It takes no argument and never will:
  * memoro-cli is not deployed, it is installed. */
@@ -103,10 +104,7 @@ export function parseDeployArgs(argv) {
 }
 
 export function usage() {
-  return [
-    'usage — mc deploy [--dry-run] [--json]   memoro\'s main to production, after one question, in its own process\n',
-    '        mc deploy --follow                 watch the deploy that is running\n',
-  ].join('');
+  return commandUsage('deploy');
 }
 
 /** `GET /api/version` — what production says it is, public and uncached. */
@@ -1042,7 +1040,7 @@ export async function followDeploy({ log, pid, key = null, env = process.env, st
 }
 
 /**
- * The watching itself, shared with `mc build ios`: the log as it grows until
+ * The watching itself, shared with `mc asc build`: the log as it grows until
  * `pid` is gone. 130 after a ^C, saying `mc: stopped watching — <stopped>`;
  * null once the process has ended and the log is drained.
  */

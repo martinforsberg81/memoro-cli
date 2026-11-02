@@ -66,6 +66,7 @@ import { log } from '../logger.js';
 import { parseSafeArea, THEMES } from '../shot.js';
 import { callerWorktree } from '../test-environment.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const VERBS = ['list', 'register', 'unregister', 'admit', 'stop', 'reap', 'open', 'surfaces'];
 const SURFACE_VERBS = ['open', 'surfaces'];
@@ -320,20 +321,5 @@ function admitArgs(opts, positional, flags, { cwd, worktreeOf }) {
 }
 
 export function usage() {
-  return [
-    'usage — mc dev list [--json]                  what is running, and where\n',
-    '        mc dev register <manifest> [--json]   take a copy of it\n',
-    '        mc dev unregister <manifest> [--json] forget it\n',
-    '        mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]\n',
-    '                                              may one more server start? exit 0 yes, 75 no\n',
-    '        mc dev stop <instance_id>             stop it through its own stop command\n',
-    '        mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]\n',
-    '                                              remove orphaned dev processes and dead-worktree registrations\n',
-    '        mc dev open <surface> [--account <name>] [--onboarding] [--here] [--json]\n',
-    '                                              this worktree\'s server up, and one line: the URL that signs\n',
-    '                                              in and lands on the surface, account/state, branch @ commit\n',
-    '          [--open [--viewport <v>] [--theme light|dark] [--locale <code>] [--safe-area <t,r,b,l>|0]]\n',
-    '                                              …and a headed browser left there for a person\n',
-    '        mc dev surfaces [--here] [--json]     the surfaces and accounts memoro\'s .mc/shot.json declares\n',
-  ].join('');
+  return commandUsage('dev');
 }

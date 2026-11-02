@@ -47,9 +47,9 @@ function checkRunner(text) {
 }
 
 describe('shared command help', () => {
-  it('uses exactly the handler text once in IN FULL for each migrated verb', async () => {
+  it('uses exactly the handler text once in IN FULL for every routed verb', async () => {
     const reference = HELP_TEXT.split('\nIN FULL\n')[1];
-    assert.deepEqual(Object.keys(COMMAND_USAGE).sort(), ['goal', 'helper', 'model', 'project', 'run', 'status', 'step']);
+    assert.deepEqual(Object.keys(COMMAND_USAGE).sort(), Object.keys(VERB_MODULES).sort());
     for (const verb of Object.keys(COMMAND_USAGE)) {
       assert.ok(VERB_MODULES[verb], `${verb} is not routed`);
       const handler = await import(new URL(`../../src/${VERB_MODULES[verb]}`, import.meta.url));

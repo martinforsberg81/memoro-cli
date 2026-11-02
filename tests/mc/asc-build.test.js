@@ -1,5 +1,5 @@
 /**
- * `mc build ios` the question: the declaration read from origin/main, the
+ * `mc asc build` the question: the declaration read from origin/main, the
  * native difference between two commits, the answer, and `--shipped`. Against
  * a repository the test makes, with production's answer injected and the
  * register in a temporary work root.
@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { run } from '../../src/mc/commands/build.js';
+import { run } from '../../src/mc/commands/asc.js';
 import { fetchVersionDefault, nativeChanges, readIosDeclaration } from '../../src/mc/ios-build.js';
 import { lastShipped, readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -80,7 +80,7 @@ function capture() {
   return { write: (chunk) => { text += chunk; return true; }, get text() { return text; } };
 }
 
-async function ask({ repo, live, shipped, argv = ['ios'] }) {
+async function ask({ repo, live, shipped, argv = ['build'] }) {
   const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-work-')) };
   if (shipped) recordStart({ sha: shipped, kind: 'seed', build: '38', outcome: 'uploaded', ended: '2026-10-01T00:00:00.000Z' }, env);
   const stdout = capture();
@@ -137,7 +137,7 @@ describe('readIosDeclaration', () => {
   });
 });
 
-describe('mc build ios — the question', () => {
+describe('mc asc build — the question', () => {
   it('says mc deploy is enough when nothing native changed', async () => {
     const { repo, second } = makeRepo();
     const { code, out } = await ask({ repo, live: second, shipped: second });
@@ -155,7 +155,7 @@ describe('mc build ios — the question', () => {
     assert.match(out, /native paths: cap-config\/x\.swift\n/u);
     assert.match(out, /native packages: @capacitor\/core 6\.0\.0→6\.1\.0\n/u);
     assert.doesNotMatch(out, /left-pad|public\/js/u);
-    assert.match(out, /a new binary is needed — mc build ios --device to try it, --testflight to ship it/u);
+    assert.match(out, /a new binary is needed — mc asc build --device to try it, --testflight to ship it/u);
   });
 
   it('says to deploy first when origin/main has a native change production lacks', async () => {
@@ -177,7 +177,7 @@ describe('mc build ios — the question', () => {
     const { repo, second } = makeRepo();
     const { code, out } = await ask({ repo, live: second });
     assert.equal(code, 0);
-    assert.match(out, /no shipped build is recorded — mc build ios --shipped <build> <sha> records the last one/u);
+    assert.match(out, /no shipped build is recorded — mc asc build --shipped <build> <sha> records the last one/u);
     assert.match(out, /native paths: cap-config\/, capacitor\.config\.ts/u);
     assert.match(out, /a new binary is needed/u);
   });
@@ -185,10 +185,10 @@ describe('mc build ios — the question', () => {
   it('refuses another platform, and flags without their build', async () => {
     const { repo, second } = makeRepo();
     assert.equal((await ask({ repo, live: second, argv: ['android'] })).code, 2);
-    const noUpload = await ask({ repo, live: second, argv: ['ios', '--no-upload'] });
+    const noUpload = await ask({ repo, live: second, argv: ['build', '--no-upload'] });
     assert.equal(noUpload.code, 2);
     assert.match(noUpload.err, /--no-upload goes with --testflight/u);
-    assert.equal((await ask({ repo, live: second, argv: ['ios', '--sha', second] })).code, 2, '--sha goes with --device or --testflight');
+    assert.equal((await ask({ repo, live: second, argv: ['build', '--sha', second] })).code, 2, '--sha goes with --device or --testflight');
   });
 
   it('reads production through the injected fetch, and null when it fails', async () => {
@@ -202,10 +202,10 @@ describe('mc build ios — the question', () => {
   });
 });
 
-describe('mc build ios --shipped', () => {
+describe('mc asc build --shipped', () => {
   it('refuses a sha that does not resolve, and records nothing', async () => {
     const { repo } = makeRepo();
-    const { code, err, env } = await ask({ repo, argv: ['ios', '--shipped', '38', 'deadbeef'] });
+    const { code, err, env } = await ask({ repo, argv: ['build', '--shipped', '38', 'deadbeef'] });
     assert.equal(code, 1);
     assert.match(err, /deadbeef is not a commit/u);
     assert.deepEqual(readIosBuilds(env), []);
@@ -213,12 +213,12 @@ describe('mc build ios --shipped', () => {
 
   it('refuses a build that is not digits', async () => {
     const { repo, first } = makeRepo();
-    assert.equal((await ask({ repo, argv: ['ios', '--shipped', 'x38', first] })).code, 2);
+    assert.equal((await ask({ repo, argv: ['build', '--shipped', 'x38', first] })).code, 2);
   });
 
   it('records a seed row that lastShipped then returns', async () => {
     const { repo, first } = makeRepo();
-    const { code, env } = await ask({ repo, argv: ['ios', '--shipped', '38', first.slice(0, 7)] });
+    const { code, env } = await ask({ repo, argv: ['build', '--shipped', '38', first.slice(0, 7)] });
     assert.equal(code, 0);
     const shipped = lastShipped(env);
     assert.equal(shipped.kind, 'seed');

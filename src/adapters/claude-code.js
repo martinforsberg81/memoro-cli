@@ -100,8 +100,8 @@ export function detect() {
 // Interactive launch contract
 //
 // `launchSpec()` declares WHICH binary to spawn and HOW the session
-// identifies itself in heartbeats. Nothing about instruction files: the
-// Coding Profile reaches a new conversation as a launch argument, which the
+// identifies itself in heartbeats. Nothing about instruction files: a role's
+// instructions reach a new conversation as a launch argument, which the
 // caller assembles.
 //
 // `bin`            — the executable to spawn in the PTY.

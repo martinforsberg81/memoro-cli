@@ -11,12 +11,15 @@
  * No model here: the turn and the opener are stubs.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { helperLaunch, run } from '../../../src/mc/commands/helper.js';
 import { describeDigest, unreadableSections } from '../../../src/mc/helper-collect.js';
 import { describeTurn } from '../../../src/mc/helper-turn.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
+import { canonSkillsDir } from '../../../src/mc/skills.js';
 
 function sink() {
   const chunks = [];
@@ -158,7 +161,10 @@ describe('the helper role', () => {
     // other role's session — neither can act on the other's existence.
     assert.match(role.overlay, /desk Martin walks up to/u);
     assert.match(role.overlay, /do not fix it/u);
-    assert.match(role.overlay, /do not touch the proposals already waiting/u);
+    // Not touching the proposals already waiting is the proposals skill's rule
+    // now, for every role that writes one.
+    assert.match(role.overlay, /^@skill proposals$/mu);
+    assert.match(readFileSync(join(canonSkillsDir(), 'proposals', 'SKILL.md'), 'utf8'), /Never touch a proposal already waiting/u);
     assert.doesNotMatch(role.overlay, /You are not the intake turn/u);
   });
 
@@ -172,10 +178,13 @@ describe('the helper role', () => {
   // shape for a parser's sake. What it still has to say is where the file
   // goes and what its name looks like, because those two are mc's — the
   // directory it counts, and the date its ordering relies on.
+  // Both are the proposals skill's, which the helper names.
   it('names where a proposal goes and what it is called, and dictates no format', () => {
     const { overlay } = readCanonRole('helper');
-    assert.match(overlay, /~\/mc\/proposals\//u);
-    assert.match(overlay, /<date>-<system>-<slug>\.md/u);
+    assert.match(overlay, /^@skill proposals$/mu);
+    const skill = readFileSync(join(canonSkillsDir(), 'proposals', 'SKILL.md'), 'utf8');
+    assert.match(skill, /~\/mc\/proposals\//u);
+    assert.match(skill, /<date>-<system>-<slug>\.md/u);
   });
 
   it('is a different role from the one the intake turn wears', () => {

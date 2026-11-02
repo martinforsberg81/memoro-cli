@@ -19,11 +19,12 @@ import { describeSize } from '../conversations.js';
 import { tidyDocker } from '../docker.js';
 import { DEFAULT_DAYS, ROUTINE, runTidy, shortPath } from '../tidy.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const SHOWN = 10;
 
 export function usage() {
-  return 'usage — mc tidy [--apply] [--json] [--days <n>] [--docker]\n';
+  return commandUsage('tidy');
 }
 
 export async function run(argv, deps = {}) {

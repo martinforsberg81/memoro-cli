@@ -3,7 +3,7 @@
  * this file parses the two flags and prints.
  */
 import { commandUsage } from '../command-help.js';
-import { programsGoals } from '../goals.js';
+import { afterOf, programsGoals } from '../goals.js';
 import { programsHome } from '../paths.js';
 import { collectProject, renderProject } from '../status-project.js';
 
@@ -11,17 +11,25 @@ export function usage() {
   return commandUsage('status');
 }
 
-/** The first goal called `name` under the programmes home, or null. */
+/**
+ * The first goal called `name` under the programmes home, or null, with
+ * `waitingOn`: what in its `after` has not landed (`afterOf`).
+ */
 function goalNamed(name, env) {
-  return programsGoals({ home: programsHome(env) }).find((goal) => goal.goal === name) ?? null;
+  const goals = programsGoals({ home: programsHome(env) });
+  const goal = goals.find((each) => each.goal === name);
+  return goal ? { ...goal, waitingOn: afterOf(goal, goals).pending } : null;
 }
+
+/** The one form, a project's name and two flags (help-routes.test.js walks the help with it). */
+export const ROUTES = { '*': { booleans: ['--json', '--offline'] } };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const names = [];
   for (const arg of argv) {
-    if (arg === '--json' || arg === '--offline') continue;
+    if (ROUTES['*'].booleans.includes(arg)) continue;
     if (arg.startsWith('--')) {
       stderr.write(`mc: unknown argument ${arg}\n`);
       stderr.write(usage());
@@ -39,7 +47,8 @@ export async function run(argv, deps = {}) {
     // the goal is shown, and that is the answer to the question asked.
     const goal = goalNamed(names[0], deps.env || process.env);
     if (goal) {
-      stderr.write(`${goal.goal} is a goal — mc goal show ${goal.programme}/${goal.goal}\n`);
+      const state = goal.status === 'waiting' && goal.waitingOn.length ? `waiting on ${goal.waitingOn.join(', ')}` : goal.status;
+      stderr.write(`${goal.goal} is a goal${state ? ` · ${state}` : ''} — mc goal show ${goal.programme}/${goal.goal}\n`);
       return 1;
     }
     stderr.write(`mc: no project or workarea "${names[0]}" — mc lists them\n`);

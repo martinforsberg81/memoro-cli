@@ -27,20 +27,18 @@ from starting the step again once it is answered.
 
 1. Run `mc gate` on your changes and make it green.
 2. Commit, then `mc publish --title "…" --body-file <file>` (file in
-   `$MC_SCRATCH`). It pushes, opens the PR and queues it for the merger, in
-   one call. A landed PR is a `done` step, so a part you cannot finish is
+   `$MC_SCRATCH`). A landed PR is a `done` step, so a part you cannot finish is
    `mc step failed`, never a partial landing.
    - `queued for the merger` — your work is over. End the session in that
      turn: no `mc gate`, no `mc merge watch`, no summary, no checking. A red
      comes back to this step's next session with the gate's reason, on the
      same branch and PR.
-   - `unmet-criteria` — you are the plan's last step and a success criterion is
-     not met in the register: run its `check` and `mc project criterion met <n>`
-     for each you measured, then `mc merge <repo> <pr>`; one you cannot measure
-     is `mc step failed --reason` naming it. Every check is yours,
-     even one whose text names Martin or says a step does not run it: a
-     live check on this machine, a build, a wait for the runner's next pass
-     is commands you run. Never leave a criterion `false` as somebody else's.
+   - `unmet-criteria` — you are the plan's last step: run each unmet
+     criterion's `check`, `mc project criterion met <n>` for each you
+     measured, then `mc merge <repo> <pr>`; one you cannot measure is
+     `mc step failed --reason` naming it. Every check is yours, even one whose
+     text names Martin: a live check, a build, a wait for the runner's next
+     pass is commands you run.
 
 **When the prompt says your branch starts on top of a step in the merge
 queue:** that step's work is in your branch already. Build on it and leave it
@@ -67,3 +65,17 @@ resolve them, commit, then do the step on the same branch and PR.
 Fields: `docs/project/README.md` § *What a PLAN.json is*.
 
 @include _build.md
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill writing-tests
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory

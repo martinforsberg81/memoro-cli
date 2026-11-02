@@ -28,7 +28,7 @@ function prefixes(text, verb) {
 
 describe('help after documented subcommands', () => {
   it('walks the synopsis, not the aligned description', () => {
-    assert.deepEqual(prefixes('usage — mc build ios        does memoro need a binary?', 'build'), [[], ['ios']]);
+    assert.deepEqual(prefixes('usage — mc asc build        does memoro need a binary?', 'asc'), [[], ['build']]);
     assert.deepEqual(prefixes('        mc repo watch status [--json]   whether it is running', 'repo'), [[], ['watch'], ['watch', 'status']]);
   });
 
@@ -46,7 +46,7 @@ describe('help after documented subcommands', () => {
         }
       }
     }
-    for (const command of ['work add', 'run lanes', 'project criterion add', 'project step edit', 'goal blocked', 'repo watch start', 'shot login prod']) {
+    for (const command of ['work add', 'run lanes', 'project criterion add', 'project step edit', 'goal blocked', 'repo watch start', 'shot login prod', 'asc build', 'asc status', 'asc release']) {
       assert.ok(seen.has(command), `the walker missed ${command}`);
     }
   });

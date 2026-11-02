@@ -5685,8 +5685,8 @@ const runnerEntry = (at) => `## ${at} · runner · open\n\nKommentar: session en
 function goalFixture(goals, options = {}) {
   const f = fixture({ capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call), ...options });
   f.answer = okSession();
-  for (const [name, { status = 'open', log = '', repos = 'memoro', worktree = true }] of Object.entries(goals)) {
-    f.files[`${GOALS}/${name}/GOAL.md`] = `---\nstatus: ${status}\nrepos: ${repos}\nclass: large\ncreated: 2026-11-01T20:00:00Z\n---\n# ${name}\n`;
+  for (const [name, { status = 'open', log = '', repos = 'memoro', worktree = true, after = null }] of Object.entries(goals)) {
+    f.files[`${GOALS}/${name}/GOAL.md`] = `---\nstatus: ${status}\nrepos: ${repos}\nclass: large\ncreated: 2026-11-01T20:00:00Z\n${after ? `after: ${after}\n` : ''}---\n# ${name}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
     if (worktree) f.dirs.add(`${GOALS}/${name}/memoro`);
   }
@@ -5824,6 +5824,53 @@ test('a session with a word between runner entries keeps the goal open', async (
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.match(f.files[`${GOALS}/goal/GOAL.md`], /^status: open$/mu);
   assert.equal(parseLog(f.files[`${GOALS}/goal/LOG.md`]).length, 4);
+});
+
+test('a waiting goal is never started while its after has not landed, and an open goal given one goes waiting', async () => {
+  const f = goalFixture({
+    held: { status: 'waiting', after: 'prog/first' },
+    early: { status: 'open', after: 'prog/first' },
+    first: { status: 'blocked' },
+  });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files[`${GOALS}/held/GOAL.md`], /^status: waiting$/mu, 'a blocked after-goal keeps it waiting');
+  assert.equal(f.files[`${GOALS}/held/LOG.md`], '', 'nothing is written while it waits');
+  assert.match(f.files[`${GOALS}/early/GOAL.md`], /^status: waiting$/mu);
+  const entry = parseLog(f.files[`${GOALS}/early/LOG.md`]).at(-1);
+  assert.deepEqual([entry.tool, entry.status, entry.comment], ['runner', 'waiting', 'waits on prog/first']);
+});
+
+test('when the last after-goal lands the runner opens the waiting goal, logs what landed, remakes its branch and starts it', async () => {
+  const f = goalFixture({
+    next: { status: 'waiting', after: 'prog/first, prog/second' },
+    first: { status: 'done' },
+    second: { status: 'blocked' },
+  });
+  f.answer = logsItself(f, 'next');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.match(f.files[`${GOALS}/next/GOAL.md`], /^status: waiting$/mu, 'one after-goal still not landed');
+
+  f.files[`${GOALS}/second/GOAL.md`] = f.files[`${GOALS}/second/GOAL.md`].replace(/^status: \w+$/mu, 'status: done');
+  const r = await runner.pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/next', 'started in the same pass it was opened');
+  const [opened] = parseLog(f.files[`${GOALS}/next/LOG.md`]);
+  assert.deepEqual([opened.tool, opened.status, opened.done], ['runner', 'open', 'prog/first, prog/second landed — starting']);
+  assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/next/memoro` && call[1] === 'fetch'), 'its branch is looked at against origin/main');
+  assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/next/memoro` && call.slice(1).join(' ') === 'rev-list --count origin/main..HEAD'));
+  assert.ok(f.log.some((line) => /goal:prog\/next: open — prog\/first, prog\/second landed/u.test(line)));
+});
+
+test('a waiting goal whose after-goal is gone without landing goes blocked for plan', async () => {
+  const f = goalFixture({ orphan: { status: 'waiting', after: 'prog/discarded' } });
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.match(f.files[`${GOALS}/orphan/GOAL.md`], /^status: blocked$/mu);
+  const entry = parseLog(f.files[`${GOALS}/orphan/LOG.md`]).at(-1);
+  assert.deepEqual([entry.tool, entry.status], ['runner', 'blocked']);
+  assert.match(entry.comment, /^prog\/discarded is gone without landing — waits on plan/u);
+  assert.equal(f.calls.sessions.length, 0);
 });
 
 test('a blocked or done goal is never started', async () => {
