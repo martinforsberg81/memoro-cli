@@ -771,6 +771,16 @@ step session re-reads its context ~90 times. The six include `Grep` and
 `grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
 over 2026-09-15..25, each a screen of file kept in the context.
 
+mc defines no subagent of its own and starts none (Martin, 2026-11-02). From
+2026-10-11 a plan's `runner.subagents: on` gave a step `Agent` and one
+Haiku `step-worker`, with `canon/roles/_step-workers.md` in its
+instructions; all of it is gone, and the key is refused by `mc project send`
+and dropped by `mc project amend`. A sent plan that still carries it reads as
+before and the key means nothing. A session may use its own tool's subagents
+where the tool offers them (`canon/roles/_common.md`); mc neither starts nor
+counts them, and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (below) is set only
+because the tool's own subagents read it.
+
 Next to that body go `canon/roles/_common.md` and the build role —
 `canon/roles/build-project.md` for a project's step, `build-goal.md` for a
 goal, both including `_build.md` — assembled by `instructionsFor` and passed through the
