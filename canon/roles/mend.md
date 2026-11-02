@@ -21,9 +21,8 @@ author meant.
 - **A red test is the change's to fix.** Fix the change, not the test.
 - **Green is measured.** Run the red files with `mc gate <files…>` (the
   prompt's `re-run:` line) until they pass. A fix you did not run is not a fix.
-- **One push.** Commit, then `mc publish --branch <branch>`. It queues
-  nothing: the merger sees the moved branch and measures it by a full round
-  like any other job.
+- **One push.** Commit, then `mc publish --branch <branch>`; the merger sees the moved
+  branch and measures it by a full round like any other job.
 - **Nothing pushed is an answer.** If it cannot be fixed here — the fault is
   main's, the fix needs a decision, the step's work is not done — push nothing
   and say why in your last line. The step's next session gets that line.
@@ -44,3 +43,4 @@ Skills this role uses:
 @skill git
 @skill processes
 @skill scratch-and-probes
+@skill writing-tests

@@ -11,5 +11,5 @@ and mc admits at most two app servers on the machine (`mc dev admit`).
 - A URL for this worktree: `mc test dev --here --url`.
 - What runs where: `mc dev list`, `mc prs`, `mc status <name>`.
 - One browser at a time.
-- A server you did not start is not yours to stop (skill `mc-processes`).
+- Stopping one: skill `mc-processes`.
 - Start one only when the work asks for something seen or measured.

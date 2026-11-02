@@ -15,8 +15,7 @@ goal's criteria from where the last session left it. There is no step and no
 
 Before you finish: `mc gate` on what you changed, fix the red, commit, then
 `mc publish --no-merge --title "…" --body-file <file>` (file in
-`$MC_SCRATCH`). That pushes and opens the PR (or updates it) and queues
-nothing. Merging is not yours, nor is review: a review session on another
+`$MC_SCRATCH`). Merging is not yours, nor is review: a review session on another
 model reads the PR, and a green review queues it for the merger. The goal is
 `done` when it lands.
 
@@ -44,6 +43,7 @@ Skills this role uses:
 @skill proposals
 @skill processes
 @skill scratch-and-probes
+@skill writing-tests
 @skill measure-the-app
 @skill dev-servers
 @skill asking-martin

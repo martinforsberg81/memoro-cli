@@ -24,7 +24,9 @@ Skills this role uses:
 @skill proposals
 @skill processes
 @skill scratch-and-probes
+@skill writing-tests
 @skill measure-the-app
 @skill dev-servers
 @skill asking-martin
 @skill memory
+@skill writing-a-plan

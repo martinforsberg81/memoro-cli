@@ -27,8 +27,7 @@ from starting the step again once it is answered.
 
 1. Run `mc gate` on your changes and make it green.
 2. Commit, then `mc publish --title "…" --body-file <file>` (file in
-   `$MC_SCRATCH`). It pushes, opens the PR and queues it for the merger, in
-   one call. A landed PR is a `done` step, so a part you cannot finish is
+   `$MC_SCRATCH`). A landed PR is a `done` step, so a part you cannot finish is
    `mc step failed`, never a partial landing.
    - `queued for the merger` — your work is over. End the session in that
      turn: no `mc gate`, no `mc merge watch`, no summary, no checking. A red
@@ -75,6 +74,7 @@ Skills this role uses:
 @skill proposals
 @skill processes
 @skill scratch-and-probes
+@skill writing-tests
 @skill measure-the-app
 @skill dev-servers
 @skill asking-martin

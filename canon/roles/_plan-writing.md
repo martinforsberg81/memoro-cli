@@ -5,15 +5,8 @@ nobody watching. Every step must pass one test: can that session build it
 start to finish, and know when it is done? If not, it is not a step
 (ruling 19).
 
-- **Where:** only with `mc project` verbs, never by editing a file (ruling 48):
-  `mc project new <programme>/<project> --repo memoro|memoro-cli --goal …
-  --contract … --out-of-scope … [--tool codex]`; `mc project criterion add`
-  per criterion (`criterion drop <project> <n> --reason "…"` for one nobody
-  can measure); `mc project step add` per step (`--model`, `--done-when`,
-  `--instruction-file <md>`, `--after <repo>:<project>`); then
-  `mc project send <project>`, which checks the plan and hands it to the
-  runner. `mc project <project>` shows the draft and what send would refuse.
-  No branch, no pull request.
+- **Where:** only with `mc project` verbs, never by editing a file (ruling 48);
+  how: skill `mc-writing-a-plan`. No branch, no pull request.
 - **Shape:** `src/mc/plan-schema.js` and `docs/project/README.md` § *What a
   PLAN.json is*. Read them; do not guess.
 - **Before writing:** investigate yourself — read the code, measure, try it.

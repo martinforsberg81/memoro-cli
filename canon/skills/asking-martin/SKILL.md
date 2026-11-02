@@ -14,5 +14,6 @@ question is unclear or reading would settle it: then read.
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.
 - What is his to do stays his: `mc deploy`, `mc language`, production data,
-  remote migrations, credentials, `mc merge --admin`. Say what it would do; run
-  it when he says go.
+  remote migrations, credentials, and any verb a skill calls the person's
+  (`--admin`: skill `mc-publish-and-merge`). Say what it would do; run it when
+  he says go.

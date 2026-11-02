@@ -32,6 +32,8 @@ const DEFINING = {
   'dev-servers': 'Dev servers start only through mc',
   'asking-martin': 'Never a menu of options.',
   memory: 'A rule about how to work is never a memory.',
+  'writing-a-plan': 'A plan is written through the verbs; the files are mc',
+  'writing-tests': 'A pinned number is a summary of a list, and the list is what to pin.',
 };
 
 const roleFiles = () => readdirSync(canonRolesDir()).filter((f) => f.endsWith('.md')).map((f) => join(canonRolesDir(), f));
@@ -68,6 +70,22 @@ describe('one home per rule in canon/', () => {
       }
     }
   });
+
+  // Rules the review on 9fcf6d0 found stated twice: each has one home, and elsewhere a pointer.
+  const RULES = {
+    'publish-and-merge': [/--admin[^.]*person's verb/u, /pushes, opens the PR and queues it/u, /queues\s+nothing/u],
+    processes: [/not yours to stop/u, /Never signal a process/u],
+    'writing-a-plan': [/mc project step add <project>/u],
+    'writing-tests': [/pinned number is a summary/u, /scan reads what git tracks/u],
+  };
+  for (const [home, rules] of Object.entries(RULES)) {
+    it(`${home}: the rules it owns are stated there and nowhere else in canon`, () => {
+      for (const rule of rules) {
+        const carriers = [...roleFiles(), ...skillFiles()].filter((path) => rule.test(flat(read(path)))).map(rel);
+        assert.deepEqual(carriers, carriers.length ? [`canon/skills/${home}/SKILL.md`] : [], `${rule} in ${carriers.join(', ')}`);
+      }
+    });
+  }
 
   it('a skill is a page at most', () => {
     for (const path of skillFiles()) {
