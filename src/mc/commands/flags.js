@@ -67,3 +67,17 @@ export function scanArgs(argv, {
 function key(flag) {
   return flag.replace(/^--/u, '');
 }
+
+/**
+ * The part of a scan spec a subcommand accepts: `names` from `spec`, each kept
+ * in its own kind. For a verb that scans once and then refuses, per
+ * subcommand, every flag but its own (`mc project`, `mc goal`): its `ROUTES`
+ * are built from the lists it refuses by.
+ */
+export function only(spec, names) {
+  const pick = (list = []) => list.filter((name) => names.includes(name));
+  return {
+    booleans: pick(spec.booleans), values: pick(spec.values),
+    strictValues: pick(spec.strictValues), repeatable: pick(spec.repeatable),
+  };
+}

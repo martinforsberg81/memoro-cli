@@ -1,6 +1,7 @@
-# Help cleanup: measurements, shared usage and remaining audit
+# Help cleanup: measurements, shared usage and audit
 
-**Status:** partial goal work, second session, 2026-11-02. This is not the completed
+**Status:** partial goal work, third session, 2026-11-02 (the first two landed
+in #1221). This is not the completed
 line-by-line command/flag audit. No working command has been removed.
 
 ## What changed
@@ -27,9 +28,8 @@ every routed handler's usage, expanding finite alternatives (including nested
 `project criterion` and `repo watch` forms). It checks `--help` and `-h` for
 exit 0 and the same usage text. It separately walks the vault dispatch table,
 checking help before credentials can be read, and probes representative forms
-through the binary. This is **not yet** a parser/route-validity test: the
-central help interceptor would also answer an invented subcommand. That
-independent validation remains required below.
+through the binary. It is not a route-validity test: the central help
+interceptor would also answer an invented subcommand. The route check below is.
 
 ## Usage measured again
 
@@ -221,3 +221,133 @@ remains in IN FULL. No generated files were involved.
 The pre-sync 3,561-test green is historical, not evidence for the final merged
 head; subsequent post-sync measurements supersede it and are recorded in the
 PR/log. The role PR no longer adds separate work to this PR's diff against main.
+
+
+## Third session: routed names, undocumented forms, subcommand inventory
+
+`tests/mc/help-routes.test.js` reads every synopsis row of the long help and of
+each verb's usage, without the help interceptor: each `mc <verb> …` row, a
+`[--flag]` line that continues one (shot, log), and the piped `mc language key
+set`. Each row is expanded into command lines: the required words with a sample
+for each placeholder, then one line more for every optional part and every
+alternative (`a|b`, `<dev|prod>`, `--on <d> | --on-project <p>`, a bare `@<name>`
+as another value of the flag before it), and each of those once more on every
+other alternative of a route word before it (`stop --force` as well as
+`start --force`). Two optional parts are never combined: they may exclude each
+other. Each line goes through what the
+handler reads its arguments with:
+
+- its exported parser, where it has one: `parseRunArgs`, work, dev, repo,
+  `parseMergeArgs`/`parseWatchArgs`, test's environment and nightly parsers,
+  build, deploy, tidy, log, worker, roles, docker, plan, `scanStepArgs`, and
+  `parsePageArgs` for `mc --json`;
+- otherwise the shared scanner with the spec the handler scans that subcommand
+  with, from its exported `ROUTES` (`''` the bare verb, `*` a first word that
+  names something). The handlers scan with those same objects; `mc project` and
+  `mc goal` build theirs, through `only()` in `flags.js`, from the per-form
+  lists they refuse by.
+
+command-help.js and help-text.js decide nothing here. Then every `--flag` a
+usage names anywhere, prose included, must be read by the verb its clause is
+about (`mc test dev --here --url` inside hook's text is mc test's) on at least
+one of its forms; `node --test` and npm's `--package-lock-only` are named as
+other programs' flags. Negative controls that must fail: the three guessed
+verbs, `mc dev archive`, `mc work add <name> <repo> --testflight`,
+`mc run start --force` (and `start|stop [--force]`), `--fictional` on a shot
+continuation line and a log one, an invented goal, hook and language
+subcommand, `mc project criterion vanish`, an invented vault verb and page
+flag. A second check fails on a subcommand a `ROUTES` table or a
+`…VERBS`/`WORDS`/`SUBCOMMANDS` dispatch table routes with no IN FULL row; stubs
+that answer "is now …" are skipped.
+
+In the fifth session (after the review on aa4c46f) it replaced a check that
+only asked whether each name was a string literal somewhere in the handler's
+import closure, a closure that included command-help.js itself. What the new
+check found: `mc run start|stop [--force]` on the page (start refuses
+`--force`; the page now says `mc run start|stop`, IN FULL keeps `stop
+[--force]`); `mc skills list`, routed but undocumented (now `mc skills [list]`);
+`mc repo who` and `mc dev unregister` rows with one space before their
+description, read as part of the synopsis. `mc test <repo> <pr>` described a
+baseline and a candidate compared by name; it now says what repo-gate.js does:
+one tree, the head with main merged in, the reached test files and command
+gates, main run only for a file that went red.
+
+In the sixth session (after the review on 2e00b13) a scan was no longer taken
+as acceptance. A handler that refused a scanned form afterwards (shot's
+`dev|prod` first, `language key` set or nothing, `model set` review only,
+`--json` only on `model list`, `--answer` only with `step ready`) now has that
+refusal as a function: a route's `check` in `ROUTES` (shot and its kept-browser
+verbs, language, model, layout, deps, prs, repos, publish, helper, brief) or
+`refused` from `scanStepArgs`. The handler calls the same function, with the
+same message, and the walker runs it after the scan. Those five forms, and
+`mc shot prod … --here`, `close <id> --all`, `login dev`, `language run` with
+no manifest, `prs x`, `layout migrate --apply --json` and `deps bump x`, are
+negative controls. A continuation line said to be for one of the row's first
+alternatives (`[--me]  prod only: …` under `mc shot <dev|prod>`) is walked on
+that alternative alone. An example's shell continuation (` \`) is not a word.
+`mc hook`, `mc keys` and `mc skills` read their arguments without the scanner
+and keep their own checks; their routes have no `check`.
+
+In the seventh pass (the plan session, after the review on 5bd74a2) an optional
+part was still walked on the default line only, so `[--here]` under
+`mc shot <dev|prod>` was checked as `dev x --here` and never as
+`prod x --here`, which shot refuses. Each optional part is now walked on every
+alternative of a route word before it. It found that one line: shot's
+`[--here]` now says `dev only:` and is walked on dev alone. `mc run
+start|stop [--once]` and shot's `<dev|prod>` with an unqualified `[--here]` are
+negative controls.
+
+What it found, now fixed: `mc vault` revoke-device, change-password and
+destroy-forgotten were routed but missing from the vault row and the matrix;
+`mc work list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
+`mc repo push-check` were routed but absent from IN FULL (the last two also
+from `mc repo --help`). WHAT IS NOT HERE listed dev and deps among removed
+verbs; it now says today's verbs only share the name. The matrix gains
+`mc repo guard` and `mc repo push-check` rows.
+
+### Subcommands with no observed use
+
+Same window and corpus as above, scanned again for `mc <verb> <sub>` (shell
+separators, here-documents dropped). Zero in sessions and terminal:
+
+| Form | Caller found | Decision |
+| --- | --- | --- |
+| `hook install`, `hook pre-tool`, `hook session-start` | Registered by `hooks.js` as agent hooks | Keep: hook-called |
+| `repo push-check` | The pre-push hook `push-guard.js` installs | Keep: hook-called |
+| `dev register`, `dev unregister` | memoro `scripts/dev.mjs` (`invokeMcDev`) | Keep: script-called |
+| `language status`, `language resume` | Recommended by `deploy.js` and the page | Keep: mc's own way forward |
+| `test token` | Recommended by `shot.js`, `test-environment.js` | Keep: mc's own way forward |
+| `step failed` | Session role text in `run-plan.js`, `project.js` | Keep: session instruction |
+| `work discard` | Recommended by `deps-bump.js`, `work-area.js` | Keep: mc's own way forward |
+| `dev open` | Implemented by `dev-open.js`, named beside `mc shot` | Keep: newer, same module as shot |
+| `docker release`, `docker prune` | None; the gate uses `docker.js` directly | For Martin |
+| `keys run` | None; memoro's `owner.mjs` names it as a future path | For Martin |
+| `model add`, `model remove`, `model set` | None; catalog edits by a person | For Martin |
+| `project amend` | None | For Martin |
+| `repo claim`, `repo release` | None as verbs; the gate takes leases through `repo-lease.js` | For Martin |
+| `roles list`, `roles show` | None (`roles check` was used) | For Martin |
+| `work remove` | None | For Martin |
+| `log`, `worker` (whole verbs) | None, as above | For Martin |
+
+## Fourth session: one text per verb
+
+Every routed verb now has its usage in `src/mc/command-help.js`; the handler's
+`usage()` returns it and IN FULL prints it through `commandReference`, so
+`mc <verb> --help` and the long form are the same words. `help-shared.test.js`
+requires an entry for exactly the verbs `mc-verbs.js` routes, the handler to
+return it, and IN FULL to carry it once. The top-level page and vault row stay
+in `help-text.js` (vault's own usage lives in `cli/vault.js`, and the route test
+checks the row against its table).
+
+Where the two texts differed, the handler's synopses won: they were the ones
+kept in step with the parser. Forms only the handler named are now in IN FULL
+(`merge --check/--watch/--admin`, `merge watch`, `test token`, `test dev
+--url/--list/--stop`, `work --repo`, `work add --from`, `work discard [repo]`,
+`build ios --testflight --sha`, `log --repo/--since/--verb/--all/--where`,
+`shot`'s acting flags and `next/close/sessions`, `skills`). Facts only the long
+form carried were folded into the shared prose, after checking the numbers in
+code: docker's 60 s ensure and 10 minute idle stop (`docker.js`), dev admit's
+2 servers and 15 % (`dev-servers.js`), deps' 6 h reuse (`deps.js`), tidy's
+three-day image age (`docker.js`), the gate's 540 s budget (`gate.js`).
+Rewordings: `mc repos` says "the repositories" rather than "the two";
+`mc test <repo> <pr>` takes several pull requests, as the handler does.

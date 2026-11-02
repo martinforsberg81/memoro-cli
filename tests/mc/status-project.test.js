@@ -191,6 +191,8 @@ describe('collectProject', () => {
     assert.match(renderProject(data), /plan +\/w\/programs\/mc\/mc-status\/PLAN\.json$/mu);
     assert.match(data.workarea, /mc-status$/u);
     assert.deepEqual(data.runs.map((r) => [r.ts.slice(0, 10), r.pr]), [['2026-08-26', '401'], ['2026-08-27', '402'], ['2026-08-28', '-']]);
+    // The rows say `step`, from before the kinds: they are read as the project's builds they were.
+    assert.deepEqual(data.runs.map((r) => [r.kind, r.variant]), [['build', 'project'], ['build', 'project'], ['build', 'project']]);
     assert.deepEqual(data.prs, []);
     assert.deepEqual(data.notes, []);
   });
@@ -343,7 +345,7 @@ describe('the project page', () => {
     plan: JSON.parse(PLAN('ready', 'One project')),
     problems: [],
     workarea: '/tmp/mc/mc-status',
-    runs: [{ ts: '2026-08-27T18:00:00Z', kind: 'step', seconds: '300', pr: '402', note: 'success,merged' }],
+    runs: [{ ts: '2026-08-27T18:00:00Z', kind: 'build', variant: 'project', seconds: '300', pr: '402', note: 'success,merged' }],
     prs: [{ number: 427, title: 'mc status <name>' }],
     notes: ['gh pr list failed'],
   };
@@ -360,7 +362,7 @@ describe('the project page', () => {
     // The steps are the record: what is finished, with its PR, and where the
     // project is now.
     assert.match(text, /STEPS\n {2}✓ {2}1 {2}The first step\s+#401\n {2}▸ {2}2 {2}One project\s+ready/u);
-    assert.match(text, /08-27 18:00Z +step +300s +#402 +success,merged/u);
+    assert.match(text, /08-27 18:00Z +build +300s +#402 +success,merged/u);
     assert.match(text, /#427 {2}mc status <name>/u);
     assert.match(text, /note: gh pr list failed/u);
   });
@@ -445,5 +447,26 @@ describe('routing', () => {
       const result = runMcCli([...args, '--offline'], env);
       assert.equal(result.status, 0, `mc ${args.join(' ')}: ${result.stderr}`);
     }
+  });
+});
+
+describe('mc status on a goal', () => {
+  it('says it is a goal, and a waiting one what it waits on', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-status-goal-'));
+    const goal = (name, status, after = null) => {
+      mkdirSync(join(root, 'programs', 'mc', 'goals', name), { recursive: true });
+      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.md'),
+        `---\nstatus: ${status}\nrepos: memoro-cli\nclass: large\n${after ? `after: ${after}\n` : ''}---\n# ${name}\n`);
+    };
+    goal('headless-plan', 'waiting', 'mc/runner-sessions, mc/goal-waiting');
+    goal('runner-sessions', 'done');
+    goal('goal-waiting', 'review');
+    const err = [];
+    const code = await project(['headless-plan'], {
+      env: { MC_WORK_ROOT: root }, collect: async () => null,
+      stdout: { write: () => {} }, stderr: { write: (text) => err.push(text) },
+    });
+    assert.equal(code, 1);
+    assert.equal(err.join(''), 'headless-plan is a goal · waiting on mc/goal-waiting — mc goal show mc/headless-plan\n');
   });
 });

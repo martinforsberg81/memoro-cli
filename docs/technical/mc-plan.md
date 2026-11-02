@@ -193,6 +193,45 @@ and where the session stands, and then waits: the reading list and the
 and a session told to start by reading and reporting spent its first turn on
 an intro nobody asked for.
 
+### Why the plan-writing passage says what it says
+
+`canon/roles/_plan-writing.md` is a page of rules; the reasons are here.
+
+**Work classes, not models (ruling 59, ruling 42).** A class says how much
+judgement a step needs; it does not claim two providers' models are equal.
+When the step starts, mc resolves the class to a candidate from its catalog
+(`mc model list`) and from the subscription capacity it has observed; the
+candidate's tool, model and effort become the session's. Only included
+subscriptions are candidates, so a class step never spends a credit, and a
+started session is never switched to another provider. A step pinned to one
+concrete model waits whenever that model's usage is spent, where a class takes
+the next candidate; whether a session runs on the plan or the API is billing's
+to decide, not the step's. A plan sent before the rule keeps its concrete
+models and runs on them, and a catalog edit never rewrites a plan. `model` in
+the plan's own `runner` would make every step that model, so it is refused.
+
+**Codex names.** `gpt-6.1-sol` and `gpt-6-luna` are Codex's models, not
+stand-ins for Claude's. On a legacy sent plan a concrete Codex name belongs to
+a `--tool codex` plan, and a Claude name is refused there. A class names no
+tool, so `runner.tool` does not apply to it. `effort` takes the same five
+levels on both tools; which model names exist is for the installed, signed-in
+codex CLI to decide, not mc.
+
+**Review.** The review step runs the one review model Martin configures with
+`mc model set review` (Claude Opus at high effort at launch), on either tool,
+and does not inherit the implementation steps' provider; `mc project step add`
+refuses `review`.
+
+**Checks the review cannot reach.** The merge door refuses the review step
+until every criterion is `met` in the register, so a check that needs this plan
+landed first (the runner updated, the page redrawn from main) never passes. A
+plan lands once, at its review, so nothing in it can wait for its own deploy.
+`mc project criterion add` and `mc project send` refuse a check that says
+"after the deploy", "in production", "not a step's" or names Martin. A live
+check on this machine — a service restarted, a build, an install on the
+paired phone, a wait for the runner's next chore pass — is commands the review
+runs, so it stays a criterion.
+
 ## Archiving a programme
 
 `mc plan <programme> --archive` is how a programme ends, and the only way:

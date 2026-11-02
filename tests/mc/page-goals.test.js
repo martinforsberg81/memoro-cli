@@ -182,3 +182,36 @@ describe('a goal in review, and one waiting on plan', () => {
     assert.match(waiting, /\u001b\[31mwaits on plan/u, 'waits on plan is red');
   });
 });
+
+describe('a waiting goal', () => {
+  const log = [{ at: '2026-11-02T11:25Z', tool: 'person', model: null, status: 'waiting', done: 'skapat', comment: 'waits on mc/runner-sessions', next: null }];
+  const goals = [
+    { programme: 'mc', goal: 'goal-waiting', repos: ['memoro-cli'], status: 'done', after: [], log: [], problems: [] },
+    { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], status: 'open', after: [], log: [], problems: [] },
+    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], status: 'waiting', after: ['mc/runner-sessions', 'mc/goal-waiting'], log, problems: [] },
+  ];
+
+  it('goalsOf gives its after and what of it has not landed, and the page JSON carries both', () => {
+    const rows = goalsOf({ goals });
+    const row = rows.find((each) => each.name === 'headless-plan');
+    assert.equal(row.status, 'waiting');
+    assert.deepEqual(row.after, ['mc/runner-sessions', 'mc/goal-waiting']);
+    assert.deepEqual(row.waiting_on, ['mc/runner-sessions']);
+    assert.deepEqual(rows.find((each) => each.name === 'runner-sessions').waiting_on, []);
+
+    const section = programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW });
+    const json = JSON.parse(JSON.stringify(section));
+    const listed = json.programmes.flatMap((group) => group.goals ?? []).find((goal) => goal.name === 'headless-plan');
+    assert.equal(listed.status, 'waiting');
+    assert.deepEqual(listed.waiting_on, ['mc/runner-sessions']);
+  });
+
+  it('the page draws waiting in the projects\' waiting colour, and what it waits on first', () => {
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: goalsOf({ goals }), now: NOW }) });
+    const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
+    const row = lines.find((line) => plain(line).includes('g · headless-plan'));
+    assert.match(plain(row), /waiting .*waits on mc\/runner-sessions$/u, 'a comment saying the same is not said twice');
+    assert.match(row, /\u001b\[33mwaiting/u, 'waiting is yellow');
+    assert.match(row, /\u001b\[33mwaits on mc\/runner-sessions/u, 'what it waits on is yellow');
+  });
+});

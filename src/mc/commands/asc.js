@@ -60,6 +60,7 @@ import { workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { followLog, startDetached } from './deploy.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const BUILDER_RUN = fileURLToPath(new URL('../ios-build-run.js', import.meta.url));
 
@@ -78,24 +79,15 @@ export const SCRIPT_SUBVERBS = {
 };
 
 export function usage() {
-  return [
-    'usage — mc asc build                          does memoro need a new iOS binary? builds nothing\n',
-    '        mc asc build --device [--sha <ref>] [--device-id <id>]\n',
-    '                                              build the commit production runs, install it on the paired iPhone\n',
-    '        mc asc build --testflight [--yes | --no-upload] [--sha <ref>]\n',
-    '                                              build, verify and, after one question (--yes answers it), upload to TestFlight\n',
-    '        mc asc build --shipped <build> <sha>  record a binary built before this verb existed\n',
-    '        mc asc build --follow                 watch the build that is running\n',
-    '        mc asc status [<version>] [--json]    each iOS version\'s state, build, review and the storefronts; reads only\n',
-    '        mc asc metadata [--dry-run]           sync the store copy (marketing/store-copy) to App Store Connect\n',
-    '        mc asc screenshots [--dry-run]        upload the store screenshots (marketing/store-images)\n',
-    '        mc asc review-notes [--dry-run]       set the App Review notes from marketing/review/notes.md\n',
-    '        mc asc iap [--dry-run]                sync the in-app purchases\' metadata\n',
-    '        mc asc submit <version> <build> [--dry-run]\n',
-    '                                              submit the version with that build for App Review, after one question\n',
-    '        mc asc release <version> [--phased] [--dry-run]\n',
-    '                                              release an approved version to the store, after one question\n',
-  ].join('');
+  return commandUsage('asc');
+}
+
+/** What `run` refuses before it reads anything: the subverb, then its own words. */
+export function parseArgs(argv) {
+  const [subverb, ...rest] = argv;
+  if (subverb === 'build') return parseBuildArgs(rest);
+  if (Object.hasOwn(SCRIPT_SUBVERBS, subverb || '')) return parseScriptArgs(subverb, rest);
+  return { error: subverb ? `mc asc has no ${subverb}` : 'mc asc needs a subverb' };
 }
 
 /** `--shipped` takes two words, which the shared scanner has no grammar for. */

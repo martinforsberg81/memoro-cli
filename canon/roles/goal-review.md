@@ -48,3 +48,13 @@ gh pr comment <pr> --body-file <the same text, in $MC_SCRATCH>
 
 Then end the session, in that same turn. A review that leaves no verdict
 blocks the goal.
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill measure-the-app
+@skill dev-servers

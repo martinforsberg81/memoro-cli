@@ -12,7 +12,7 @@ and S3 (`mc vault adopt`, `tool-auth.js`). S4 (recovery + rotation) is
 Read the rest as history. `mc-contract.md`, `connected-capabilities.md` and
 `mc-v2-cloud.md` are named below and no longer exist — the trust model they
 carried is restated in
-[`docs/coding-agent-protocol.md`](../coding-agent-protocol.md) §*Credential
+[`docs/technical/mc-codebase.md`](../technical/mc-codebase.md) §*Credential
 boundary (normative)*, which is the normative copy. The "isolated credential
 domain", "typed adapter" and cloud-grant topologies this document plans for
 were never finished and their code is gone; `mc vault` is a trusted CLI

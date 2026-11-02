@@ -102,7 +102,7 @@ the shape with it.
 One case does not wait for whoever next opens the plan. A blocked step the
 brief settles by reading, once Martin has asked it to, is answered in the
 session that read it, and that
-makes the brief a fourth writer beside the step session, the planning session
+makes the brief a fourth writer beside the build session, the planning session
 and the runner ([`docs/project/README.md`](../project/README.md) § *Who writes
 what*). It reaches `main` by this route:
 

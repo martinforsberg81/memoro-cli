@@ -15,3 +15,18 @@ Where to read: `mc --fresh` is the page; `mc status <name>` and
 @include _session-work.md
 
 @include _plan-writing.md
+
+Skills this role uses:
+
+@skill publish-and-merge
+@skill merge-conflicts
+@skill git
+@skill proposals
+@skill processes
+@skill scratch-and-probes
+@skill writing-tests
+@skill measure-the-app
+@skill dev-servers
+@skill asking-martin
+@skill memory
+@skill writing-a-plan

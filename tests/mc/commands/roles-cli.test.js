@@ -48,15 +48,15 @@ describe('mc roles', () => {
 
   // `_common.md` is the text every role session is told, not a role. A
   // catalogue that has a copy of it must not list `_common` as one.
-  it('lists and shows the goal role mc ships', () => {
+  it('lists and shows the build-goal role mc ships', () => {
     const env = { MC_HOME: join(mkdtempSync(join(tmpdir(), 'mc-roles-cli-')), 'home') };
     const listed = runMcCli(['roles', 'list'], { ...env, MC_ROLES_DIR: canonRolesDir() });
     assert.equal(listed.status, 0, listed.stderr);
-    assert.match(listed.stdout, /\bgoal\b/u);
+    assert.match(listed.stdout, /\bbuild-goal\b/u);
     // No catalogue of its own: `show` falls back to canon, as a launch does.
-    const shown = runMcCli(['roles', 'show', 'goal'], env);
+    const shown = runMcCli(['roles', 'show', 'build-goal'], env);
     assert.equal(shown.status, 0, shown.stderr);
-    assert.match(shown.stdout, /You are one session on one goal/u);
+    assert.match(shown.stdout, /You are a build session on one goal/u);
     assert.match(shown.stdout, /mc publish --no-merge/u);
   });
 

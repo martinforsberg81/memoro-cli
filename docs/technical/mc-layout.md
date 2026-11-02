@@ -61,7 +61,7 @@ roots in use.
 
 Without the file nothing moves. A merged pull request is live on this machine at
 once (`deployPull` in `src/mc/repo-merge.js` pulls the installation every `mc`,
-the merger and every step session run), so no change may move anything before
+the merger and every build session run), so no change may move anything before
 the file says so.
 
 ## The helpers every module asks
@@ -179,7 +179,7 @@ calls it.
 **What it refuses.** Each refusal names its path or pid:
 
 - Something that must not run while areas move: a runner or its predecessor
-  alive; a step session with a live pid; the merger alive; a `merges.json` entry
+  alive; a build session with a live pid; the merger alive; a `merges.json` entry
   in `mending` or `landing`; a foreground planning session with a live pid in an
   old area; any process standing in an old area; a dev server serving one.
 - The plan itself: a destination that exists, or two moves to one destination;

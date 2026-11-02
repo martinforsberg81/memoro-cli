@@ -26,12 +26,14 @@ export const LOG_FILE = 'LOG.md';
 /** The directory under a programme that holds its goals. */
 export const GOALS_DIR = 'goals';
 /**
- * `status` is one of these; a goal starts `open`. A build session ends a goal
- * it holds met in `review`; the review session sets `blocked` on red; the
- * merger sets `done` when the pull request lands. Only a person sets `done` by
- * hand, and only plan sets a blocked goal `open` again.
+ * `status` is one of these; a goal starts `open`, or `waiting` when it names
+ * goals in `after` that have not landed. A build session ends a goal it holds
+ * met in `review`; the review session sets `blocked` on red; the merger sets
+ * `done` when the pull request lands. Only a person sets `done` by hand, and
+ * only plan sets a blocked goal `open` again. `waiting` is the runner's to
+ * release (`waitingMoves`): no session is started on it and nothing wakes plan.
  */
-export const STATUSES = ['open', 'review', 'blocked', 'done'];
+export const STATUSES = ['open', 'review', 'blocked', 'done', 'waiting'];
 /** The role a goal's review session runs with: `canon/roles/goal-review.md`. */
 export const REVIEW_ROLE = 'goal-review';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
@@ -58,11 +60,19 @@ export function goalDir(programme, goal, env = process.env) {
   return goalDirIn(programsHome(env), programme, goal);
 }
 
+/** `<programme>/<goal>`: how `after` names a goal. */
+export function isGoalRef(name) {
+  const parts = String(name).split('/');
+  return parts.length === 2 && NAME_RE.test(parts[0]) && NAME_RE.test(parts[1]);
+}
+
 /**
- * A GOAL.md, as `{ status, repos, class, created, title, body }`, or
+ * A GOAL.md, as `{ status, repos, class, created, after, title, body }`, or
  * `{ problems }` when it does not parse. `body` is everything after the front
  * matter, untouched; `title` is its first `# ` line, or null. `repos` is the
  * comma-separated list in order, the first being where a session starts.
+ * `after` is the goals this one starts after, as `<programme>/<goal>`, none
+ * when the line is absent.
  */
 export function parseGoal(text) {
   const match = String(text ?? '').match(FRONT);
@@ -79,15 +89,18 @@ export function parseGoal(text) {
   if (!CLASSES.includes(fields.class)) problems.push(`class is ${CLASSES.join(' or ')}, not ${fields.class ?? 'missing'}`);
   if (repos.length === 0) problems.push('repos names no repository');
   for (const repo of repos) if (!NAME_RE.test(repo)) problems.push(`repo ${repo} is not a repository name — lower-case letters, digits and hyphens`);
+  const after = [...new Set((fields.after ?? '').split(',').map((name) => name.trim()).filter(Boolean))];
+  for (const name of after) if (!isGoalRef(name)) problems.push(`after ${name} is not <programme>/<goal>`);
   if (problems.length) return { problems };
   const title = body.match(/^# (.+)$/mu)?.[1].trim() ?? null;
-  return { status: fields.status, repos, class: fields.class, created: fields.created || null, title, body };
+  return { status: fields.status, repos, class: fields.class, created: fields.created || null, after, title, body };
 }
 
-/** GOAL.md's text for a goal of the shape `parseGoal` gives. The body is written as it is. */
-export function renderGoal({ status, repos, class: cls, created, body }) {
+/** GOAL.md's text for a goal of the shape `parseGoal` gives. The body is written as it is; no `after`, no line. */
+export function renderGoal({ status, repos, class: cls, created, after = [], body }) {
   const front = [`status: ${status}`, `repos: ${repos.join(', ')}`, `class: ${cls}`];
   if (created) front.push(`created: ${created}`);
+  if (after.length) front.push(`after: ${after.join(', ')}`);
   return `---\n${front.join('\n')}\n---\n${body}`;
 }
 
@@ -151,7 +164,7 @@ export function sessions(log) {
 
 /**
  * Every goal under every programme, in listing order, each as
- * `{ programme, goal, dir, status, repos, class, created, title, log, problems }`.
+ * `{ programme, goal, dir, status, repos, class, created, after, title, log, problems }`.
  * A goal whose GOAL.md does not parse is listed with `problems` and no status.
  * A directory without a GOAL.md is not a goal and is skipped.
  */
@@ -167,9 +180,9 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
       const parsed = parseGoal(text);
       const base = { programme, goal, dir, log };
       if (parsed.problems) {
-        goals.push({ ...base, status: null, repos: [], class: null, created: null, title: null, problems: parsed.problems });
+        goals.push({ ...base, status: null, repos: [], class: null, created: null, after: [], title: null, problems: parsed.problems });
       } else {
-        goals.push({ ...base, status: parsed.status, repos: parsed.repos, class: parsed.class, created: parsed.created, title: parsed.title, problems: [] });
+        goals.push({ ...base, status: parsed.status, repos: parsed.repos, class: parsed.class, created: parsed.created, after: parsed.after, title: parsed.title, problems: [] });
       }
     }
   }
@@ -222,16 +235,90 @@ export function redMergeText(pr) {
   return `merger answered red on #${pr}`;
 }
 
+/** The runner's entry for a goal whose `after` goal is gone without landing: its `Kommentar:`. */
+export function afterGoneText(names) {
+  return `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} gone without landing — waits on plan to change after`;
+}
+
 /**
  * Whether a blocked goal waits on plan: blocked by a red review (its last entry
- * is a `red` verdict) or by a red merge (the runner's `redMergeText` entry).
- * Nothing goes back to a build session from there until plan sets it open.
+ * is a `red` verdict), by a red merge (the runner's `redMergeText` entry), or
+ * by an `after` goal gone without landing (`afterGoneText`). Nothing goes back
+ * to a build session from there until plan sets it open.
  */
 export function waitsOnPlan(goal) {
   if (goal.status !== 'blocked') return false;
   const last = goal.log.at(-1);
   return verdictOf(last)?.verdict === 'red'
-    || (last?.tool === 'runner' && String(last.done ?? '').startsWith('merger answered red'));
+    || (last?.tool === 'runner' && String(last.done ?? '').startsWith('merger answered red'))
+    || (last?.tool === 'runner' && / gone without landing — waits on plan/u.test(String(last.comment ?? '')));
+}
+
+/**
+ * Where a goal's `after` stands, against `goals` (`programsGoals`' answer):
+ * `{ landed, pending, gone }`, each a list of `<programme>/<goal>`. Landed is
+ * `done`; gone is no goal there any more — its directory or GOAL.md removed,
+ * which is how a goal is discarded or archived; pending is everything else,
+ * a `blocked` or unparsable one included: it may still land.
+ */
+export function afterOf(goal, goals) {
+  const byName = new Map(goals.map((other) => [`${other.programme}/${other.goal}`, other]));
+  const landed = [];
+  const pending = [];
+  const gone = [];
+  for (const name of goal.after ?? []) {
+    const other = byName.get(name);
+    if (!other) gone.push(name);
+    else if (other.status === 'done') landed.push(name);
+    else pending.push(name);
+  }
+  return { landed, pending, gone };
+}
+
+/**
+ * The status changes the runner makes for goals' `after`, as
+ * `[{ goal, status, done, comment }]`: a `waiting` goal whose `after` has all
+ * landed goes `open`, with what landed in `done`; one with an `after` goal
+ * gone goes `blocked` for plan (`afterGoneText`); an `open` goal with an
+ * `after` not landed goes `waiting`. A goal in review, blocked or done is not
+ * moved: a person or plan put it there.
+ */
+export function waitingMoves(goals) {
+  const moves = [];
+  for (const goal of goals) {
+    if (goal.problems.length || (goal.status !== 'waiting' && goal.status !== 'open')) continue;
+    const { landed, pending, gone } = afterOf(goal, goals);
+    if (gone.length) {
+      moves.push({ goal, status: 'blocked', done: null, comment: afterGoneText(gone) });
+    } else if (pending.length) {
+      if (goal.status === 'open') moves.push({ goal, status: 'waiting', done: null, comment: `waits on ${pending.join(', ')}` });
+    } else if (goal.status === 'waiting') {
+      moves.push({ goal, status: 'open', done: landed.length ? `${landed.join(', ')} landed — starting` : 'waits on nothing — starting', comment: null });
+    }
+  }
+  return moves;
+}
+
+/**
+ * Whether naming `after` for `name` would make goals wait on each other in a
+ * ring: the first goal of `after` from which `name` is reached again through
+ * the goals' own `after`, or null.
+ */
+export function afterCycle(name, after, goals) {
+  const afterBy = new Map(goals.map((other) => [`${other.programme}/${other.goal}`, other.after ?? []]));
+  afterBy.set(name, after);
+  for (const first of after) {
+    const seen = new Set();
+    const stack = [first];
+    while (stack.length) {
+      const at = stack.pop();
+      if (at === name) return first;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      stack.push(...(afterBy.get(at) ?? []));
+    }
+  }
+  return null;
 }
 
 /** A goal's name where a runner names sessions: `goal:<programme>/<goal>`, in its current file and its runs.tsv row. */
@@ -274,6 +361,34 @@ export function addGoalWorktree({ git, bare, path, goal }) {
   return { ...added, branch, existed };
 }
 
+/**
+ * A goal's branch is made when the goal can start. A goal that waited got its
+ * branch at `mc goal new`, before what it waits for landed; when it goes
+ * `open`, each worktree whose branch has no commits of its own — nothing past
+ * `origin/main` — is moved to `origin/main` as it is now, which is that branch
+ * made again. A branch with commits is never moved, nor one under uncommitted
+ * changes `git reset --keep` will not carry. `say(repo, text)` is told what
+ * happened per repository; nothing here fails.
+ */
+export function remakeUnbuiltBranches({ git, dir, goal, repos, say }) {
+  for (const repo of repos) {
+    const path = join(dir, repo);
+    const tell = (text) => say(repo, `goal/${goal} ${text}`);
+    const fetched = git(path, ['fetch', '-q', 'origin']);
+    if (!fetched.ok) { tell(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
+    const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
+    if (!own.ok) { tell(`left as it is — no worktree at ${path}`); continue; }
+    const count = Number(own.stdout.trim());
+    if (count > 0) { tell(`left as it is — ${count} commit${count === 1 ? '' : 's'} of its own`); continue; }
+    const behind = Number(git(path, ['rev-list', '--count', 'HEAD..origin/main']).stdout.trim());
+    if (!behind) { tell('is origin/main already'); continue; }
+    const moved = git(path, ['reset', '-q', '--keep', 'origin/main']);
+    tell(moved.ok
+      ? `remade from origin/main — it had no commits of its own, and main has ${behind} more`
+      : `left as it is — ${moved.stderr.trim() || 'git reset --keep refused'}`);
+  }
+}
+
 /** `2026-11-01T21:30Z`: the minute a log entry is stamped with. */
 export function logStamp(date) {
   return date.toISOString().replace(/:\d{2}\.\d{3}Z$/u, 'Z');
@@ -286,17 +401,18 @@ export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFi
 }
 
 /**
- * Sets the goal's status in its GOAL.md front matter and appends `entry` to its
- * LOG.md: the two writes that make a status change. Nothing is written when the
- * GOAL.md does not parse, or the status is not one of `STATUSES`; it returns
- * `{ problems }` then, and `{ goal }` with the goal as it now is otherwise.
+ * Sets the goal's status in its GOAL.md front matter — and its `after`, when
+ * one is given — and appends `entry` to its LOG.md: the two writes that make a
+ * status change. Nothing is written when the GOAL.md does not parse, or the
+ * status is not one of `STATUSES`; it returns `{ problems }` then, and
+ * `{ goal }` with the goal as it now is otherwise.
  */
-export function setStatus({ dir, status, entry, read = readTextOrNull, write = writeFileAtomic }) {
+export function setStatus({ dir, status, after = null, entry, read = readTextOrNull, write = writeFileAtomic }) {
   if (!STATUSES.includes(status)) return { problems: [`status is ${STATUSES.join(', ')}, not ${status}`] };
   const path = join(dir, GOAL_FILE);
   const parsed = parseGoal(read(path) ?? '');
   if (parsed.problems) return { problems: parsed.problems };
-  const goal = { ...parsed, status };
+  const goal = { ...parsed, status, ...(after ? { after } : {}) };
   write(path, renderGoal(goal));
   appendEntry({ dir, entry, read, write });
   return { goal };

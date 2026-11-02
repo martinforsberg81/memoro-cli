@@ -36,6 +36,7 @@ import { mcHome } from '../paths.js';
 import { leaseLogPath } from '../repo-lease.js';
 import { roundLogPath } from '../repo-round-log.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const DEFAULT_LIMIT = 25;
 
@@ -252,8 +253,7 @@ export function parseArgs(argv) {
 }
 
 export function usage() {
-  return 'usage — mc log [<run>] [--failures] [--open] [--repo <repo>] [--since <iso>]\n'
-    + '              [--verb <verb>] [--limit <n>] [--all] [--where] [--json]\n';
+  return commandUsage('log');
 }
 
 // Re-exported so the reading rules have one door for anything that wants them

@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, nextGoal, parseGoal, parseLog, programsGoals, queuedText, REVIEW_ROLE, setStatus, verdictOf } from './goals.js';
+import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -153,7 +153,9 @@ import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
-import { readLaneCount } from './lane-count.js';
+import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
+import { pickWork } from './lane-pick.js';
+import { runsKind, sessionKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
@@ -171,7 +173,7 @@ import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPrompt, goalReviewPrompt, headlessArgs, quietPrompt,
-  helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
+  BUILD_ROLES, helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor, roleOfKind, runnableFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
@@ -243,6 +245,16 @@ export const SLEEP_TICK_MS = 30 * 1000;
 export const SLEEP_GAP_MS = 3 * 60 * 1000;
 
 /** Short shas of two lengths name one commit when one starts the other. */
+/**
+ * The lane total as `lanes.json` says it now (`mc run lanes`). `deps.laneCount`
+ * answers `{ lanes }`, or the number itself.
+ */
+export function laneTotal(deps = {}) {
+  const read = deps.laneCount || (() => readLaneCount({ repos: REPO_NAMES.length }));
+  const value = read();
+  return typeof value === 'number' ? value : value?.lanes;
+}
+
 function sameCommit(a, b) {
   const [x, y] = [String(a).trim(), String(b).trim()];
   return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
@@ -835,7 +847,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // workspace use separate prompt caches.
     const billingNow = route?.billing === 'credits' ? 'credits' : billingRoute({ provider: tool === 'codex' ? 'codex' : 'claude', capacity: deps.capacity?.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now() }).billing;
     // The TTL the step was launched with is its role's (ruling 40).
-    const cache = deps.role(choice.kind)?.cache || '1h';
+    const cache = deps.role(roleOfKind(choice.kind))?.cache || '1h';
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow, modelNow: route ? model : null });
     return { ...decided, interrupted, index: choice.index };
   }
@@ -1934,50 +1946,40 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The machine's cap: at most `total` steps in flight anywhere, over every
-   * repository at once, when `mc run lanes --total` has set one. The total is
-   * read from `lanes.json` each time a slot is taken, so a new one applies to
-   * the next start of a step without a restart.
+   * The machine's cap: at most `mc run lanes` sessions in flight anywhere, over
+   * every repository and kind at once. The total is read from `lanes.json`
+   * each time a slot is taken, so a new one applies to the next start without
+   * a restart.
    *
-   * `per_repo` needs nothing like this because it is still structural — there
-   * are exactly that many lane loops on each repository at any moment, so no
-   * one has to count; the set of loops follows `lanes.json` (`runLoop`'s
-   * `reconcile`). A total cannot be: the lanes are independent loops over two repositories
-   * and nothing about their shape says three. So it is a count, in two parts.
-   * This process's own steps are claims, held in `running` beside `claims`
-   * below, for the reason that one does. A count of `current-*.json` files
-   * would be the wrong instrument for them: the file is written after the step
-   * begins, so two lanes reading it in one tick both see a free slot and both
-   * start. Another live runner's steps are counted by their lane files
-   * (`stepsHeld`), because after a handover that runner takes no new step and
-   * its count only falls — a predecessor finishing its last step while the
-   * successor starts is how two runners held up to twice the cap (ruling 28).
+   * The lane loops are that many already (`runLoop`'s `reconcile`), so in one
+   * runner the count only matters in the overlap of a handover, when another
+   * live runner is still finishing what it held. It is a count in two parts.
+   * This process's own sessions are claims, held in `running`: a count of
+   * `current-*.json` files would be the wrong instrument for them, because the
+   * file is written after the session begins, so two lanes reading it in one
+   * tick both see a free slot and both start. Another live runner's sessions
+   * are counted by their lane files (`stepsHeld`), because after a handover
+   * that runner takes no new work and its count only falls — a predecessor
+   * finishing its last session while the successor starts is how two runners
+   * held up to twice the cap (ruling 28).
    *
-   * Nothing is counted at all when no total is set. An operator who has never
-   * set one gets exactly what they got before this existed, which is what
-   * `lanes.json` promises for an absent number.
-   *
-   * Taken at the last moment before the session rather than at the top of the
-   * round: a slot held while `runStepClaimed` fetches, merges and reads a
-   * plan is a slot the other repository cannot use for the length of a `git
-   * status` and a fetch, and most of those readings end in a refusal that
-   * spends no session at all. What it costs is a reading thrown away when the
-   * machine turns out to be full — seconds against the hour a session is.
+   * Taken at the last moment before the session rather than at the pick: most
+   * readings between the two end in a refusal that spends no session at all.
    *
    * Between two sessions of one project the lane keeps the slot (`carried`):
    * a project holds its lane from its first step to its review, so nobody
    * else takes the moment in which the next session is being picked.
    *
-   * Admission to a free slot is FIFO, independently of the project pick order.
-   * A project continuing in its held slot is not competing for a free one.
-   * The durable waiting list also lets the operator inspect held lanes.
+   * Admission to a free slot is FIFO. A project continuing in its held slot is
+   * not competing for a free one. The durable waiting list also lets the
+   * operator inspect held lanes.
    */
   let running = 0;
   let seen = { held: 0, cap: null };
-  /** The total as `lanes.json` says it now: an integer above 0, or null for no cap. */
+  /** The total as `lanes.json` says it now: an integer above 0. */
   function capNow() {
-    const total = (deps.laneCount || readLaneCount)()?.total;
-    return Number.isInteger(total) && total > 0 ? total : null;
+    const lanes = laneTotal(deps);
+    return Number.isInteger(lanes) && lanes > 0 ? lanes : DEFAULT_LANES;
   }
   /**
    * Take a slot, or don't — in one tick, with no await between the test and the
@@ -1990,23 +1992,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function takeSlot(name, waiter = null) {
     const cap = capNow();
     const kept = [...carried].filter((held) => held !== name).length;
-    const held = cap === null ? running : running + kept + stepsHeld().filter((h) => h.other).length;
+    const held = running + kept + stepsHeld().filter((h) => h.other).length;
     seen = { held, cap };
-    if (cap !== null && (held >= cap || (!carried.has(name) && waiters.length && waiters[0] !== waiter))) return false;
+    if (held >= cap || (!carried.has(name) && waiters.length && waiters[0] !== waiter)) return false;
     running += 1;
     carried.delete(name);
     return true;
   }
   const dropSlot = () => { running -= 1; };
-  /** STOP, UPDATE and failed waits retire their tickets; an uncapped machine
-   * never enqueues a lane. No await separates admission from taking a slot. */
+  /** STOP, UPDATE and failed waits retire their tickets. No await separates
+   * admission from taking a slot. */
   async function waitForSlot(name, { repo = null, lane = 0 } = {}) {
     if (takeSlot(name)) return 'ok';
     const waiter = { name, repo, lane, pid, since: stamp() };
     waiters.push(waiter);
     try {
       saveWaiters();
-      say(`${name}: ${seen.held} of ${seen.cap} steps in flight on this machine — waiting for a lane`);
+      say(`${name}: ${seen.held} of ${seen.cap} sessions in flight on this machine — waiting for a lane`);
       for (;;) {
         await deps.sleep(TOTAL_POLL_MS);
         if (stopRequested()) return 'stop';
@@ -2131,16 +2133,19 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The goal a lane without a runnable step takes, run: the oldest eligible one
-   * (`nextGoal`). A goal is held by a current file on this machine, or by a claim
-   * while its lane is on the way to writing one: the claim is taken in the tick
-   * of the pick, as a step's is. A project step always comes first, because this
-   * is only asked when `nextStep` has answered nothing.
+   * The goals a lane could start now, as `pickWork` candidates: open, or due a
+   * review (`reviewDue`), parsing, on one of `repos` (its first repository),
+   * held by nobody — a current file on this machine, or a claim while its lane
+   * is on the way to writing one — and, for a review, with a model it may run
+   * on (`reviewRoute`). A review that cannot run now is left out, so it does
+   * not stand in front of every other goal; why is said once, when it changes.
+   * A goal waits from its last log entry. The goals' `after` is settled first
+   * (`releaseWaiting`), so a goal whose last `after` goal has landed is a
+   * candidate in the same pick.
    */
-  async function goalPass({ repo, lane, label, passed }) {
+  function goalWork({ repos: names, passed }) {
+    releaseWaiting();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
-    // A review that cannot run now is left out, so it does not stand in front
-    // of every other goal; why is said once, when it changes.
     const may = (goal) => {
       if (goal.status !== 'review') return true;
       const why = reviewRoute(goal).reason ?? null;
@@ -2149,10 +2154,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (why) reviewWaits.set(name, why); else reviewWaits.delete(name);
       return !why;
     };
-    const goal = nextGoal(goals(), { repos: repo ? [repo] : repos.map((item) => item.name), held, may });
-    if (!goal) return { ran: 0 };
+    return goals()
+      .filter((goal) => (goal.status === 'open' || reviewDue(goal)) && goal.problems.length === 0
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal))
+      .map((goal) => ({
+        name: goalName(goal), repo: goal.repos[0], kind: goal.status === 'review' ? 'review' : 'build', variant: 'goal',
+        since: goal.log.at(-1)?.at ?? '', resumed: false, goal,
+      }));
+  }
+
+  /**
+   * One goal session, claimed for its length: `{ ran, name, goal }`, `{ stop }`,
+   * or `{ ran: 0 }` when it did not start.
+   */
+  async function goalPass(goal, { lane, label }) {
     const name = goalName(goal);
-    say(`${label}: no step to run — next, ${name}`);
     claims.add(name);
     let outcome;
     try {
@@ -2203,6 +2219,24 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return pr ? { number: pr.number, head: pr.headRefOid } : null;
     } catch (error) {
       return { error: error.message };
+    }
+  }
+
+  /**
+   * The status changes goals' `after` asks for (`waitingMoves`), made: a
+   * waiting goal whose `after` has all landed goes open with an entry naming
+   * what landed, and its branches with no commits of their own are remade from
+   * `origin/main` as it is now; one whose `after` goal is gone goes blocked
+   * for plan; an open goal with an `after` not landed goes waiting. Nothing
+   * else is written, so a pass with nothing to move writes nothing.
+   */
+  function releaseWaiting() {
+    for (const move of waitingMoves(goals())) {
+      const { goal } = move;
+      const name = goalName(goal);
+      goalStatus(goal, name, move.status, { done: move.done, comment: move.comment });
+      if (move.status !== 'open') continue;
+      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
     }
   }
 
@@ -2314,7 +2348,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const review = goal.status === 'review';
-    const roleName = review ? REVIEW_ROLE : 'goal';
+    const roleName = review ? REVIEW_ROLE : BUILD_ROLES.goal;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: canon/roles/${roleName}.md is missing on this machine, skip`); return 'skipped:role-missing'; }
     const routed = review ? reviewRoute(goal) : { route: routeClass(goal.class) };
@@ -2359,13 +2393,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const stem = `goal-${goal.programme}-${goal.goal}-${ts}`;
     const out = join(paths.log, stem);
     const entriesBefore = parseLog(deps.read(logPath) ?? '').length;
-    say(`${name}: goal starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
+    say(`${name}: ${review ? 'review' : 'build'} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
     const t0 = deps.now().getTime();
     // As a step's: there exactly as long as the session is, so in flight and
     // slot are one fact, and the eligibility of this goal is that same fact.
     const currentPath = paths.currentFor(repoName, lane);
     const current = {
-      name, step: null, kind: 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
+      name, step: null, kind: review ? 'review' : 'build', variant: 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
@@ -2415,8 +2449,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (!spoke) goalWithoutWord(goal, name, `${review ? 'review' : 'session'} ended without a log entry (exit ${result.status}, ${seconds} s)`);
     else if (review) settleReview(goal, name, { repo, pr: pr.number, branch, before: entriesBefore });
     const note = spoke ? read.note : `${read.note},no-log`;
-    logRun({ ts: stamp(), name, kind: 'goal', exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
-    say(`${name}: goal done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+    logRun({ ts: stamp(), name, kind: runsKind({ kind: review ? 'review' : 'build', variant: 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+    say(`${name}: ${review ? 'review' : 'build'} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
     return 'ran';
   }
 
@@ -2623,10 +2657,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (attached.state === 'attached') say(`${name}: dependencies — ${attached.why}`);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
     }
-    const role = deps.role(kind);
+    const roleName = roleOfKind(kind);
+    const role = deps.role(roleName);
     if (!role?.overlay) {
-      abandonMerge(`canon/roles/${kind}.md is missing`);
-      return block(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing on this machine`);
+      abandonMerge(`canon/roles/${roleName}.md is missing`);
+      return block(REFUSAL['role-missing'], `canon/roles/${roleName}.md is missing on this machine`);
     }
     // A step that names a work class is routed here, before a tool is launched,
     // from the local catalog and capacity snapshot alone (ruling 59). The
@@ -2725,7 +2760,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
     if (resuming) say(`${name}: resuming ${settings.tool} session ${resuming.interrupted.session_id} (${resuming.why})`);
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''}${route ? ` · class ${cls}: ${route.basis} (${route.why})` : ''}`);
+    say(`${name}: ${sessionKind(kind).kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''}${route ? ` · class ${cls}: ${route.basis} (${route.why})` : ''}`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
@@ -2740,7 +2775,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The step as `mc step` numbers it, for the drain line (run-control.js
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
-      kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
+      kind: sessionKind(kind).kind, variant: 'project', repo: repo.name, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), ...(cls ? { class: cls } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
@@ -2750,7 +2785,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // and an hour-long session started before an edit lands is exactly the
       // case nobody could see (#659's goal).
       role: roleRecord({
-        name: role.name || kind,
+        name: role.name || roleName,
         source: roleSourceOf(role) || 'canon',
         overlay: role.overlay,
         instructions,
@@ -2805,7 +2840,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
-          MC_ROLE: kind,
+          MC_ROLE: roleName,
           ...(plan?.programme ? { MC_PROGRAMME: plan.programme } : {}),
           ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
           ...scratchEnv,
@@ -3039,8 +3074,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       note = `${note},failed`;
     }
 
-    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model, cls, tool: settings.tool, effort: settings.effort, billing: picked.billing });
-    say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
+    logRun({ ts: stamp(), name, kind: runsKind({ kind: sessionKind(kind).kind, variant: 'project' }), exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model, cls, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+    say(`${name}: ${sessionKind(kind).kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota && !waited && !handOver && !route) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
     // either. They are still told apart because the row and the log line are
@@ -3224,24 +3259,40 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * What this lane takes next: the first name in the queue's order, in this
-   * repository, that the plan on `origin/main` says is ready and that nothing
-   * else — an open pull request, another lane's claim — is
-   * holding. The rule is `nextFor` (run-plan.js), which is the same function
-   * the page draws NEXT from; what this adds is the two things only the
-   * running process knows: what the lanes are holding, and what this pass has
-   * already been refused on.
+   * What a free lane takes next, of every kind on every repository
+   * (`pickWork`, lane-pick.js): the projects `runnableFor` says could start —
+   * the same rule the page draws NEXT from — and the goals `goalWork` says
+   * could, each with its kind and how long it has waited, against the
+   * repositories of the sessions already in flight.
+   *
+   * What this adds to the rule is what only the running process knows: what
+   * the lanes are holding, and what this pass has already been refused on —
+   * a name (`passed`), or a whole repository whose refusal was about the
+   * moment (`waited`). The projects another runner is in a session on are
+   * claimed as well: after a handover the old runner is still landing what it
+   * holds, and a fresh pick of the same name would start it a second time
+   * (ruling 28).
    */
-  function nextStep({ repo = null, world = {}, passed = new Set(), first = null } = {}) {
-    // The projects another runner is in a step on are claimed here as well:
-    // after a handover the old runner is still landing what it holds, and a
-    // fresh pick of the same name would start that step a second time
-    // (ruling 28).
-    const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
-    // The project this lane just ran goes first: it keeps the lane until it has
-    // nothing to run, and only then does the queue's order speak.
-    const names = first && world.names?.includes(first) ? [first, ...world.names.filter((name) => name !== first)] : world.names;
-    return nextFor({ repo, world: { ...world, names }, claimed: others.length ? new Set([...claims, ...others]) : claims, passed });
+  function nextWork({ repo = null, world = {}, passed = new Set(), waited = new Map(), carry = null } = {}) {
+    const others = stepsHeld().filter((held) => held.other);
+    const claimed = new Set([...claims, ...others.map((held) => held.name).filter(Boolean)]);
+    const byProject = new Map((world.plans || []).map((plan) => [plan.project, plan]));
+    const projects = runnableFor({ repo, world, claimed, passed })
+      .filter((pick) => !waited.has(pick.repo))
+      .map((pick) => {
+        const entry = readEntry(root, pick.name, { read: deps.read });
+        const step = entry ? entry.steps[currentIndex(entry)] : null;
+        return {
+          name: pick.name, repo: pick.repo, kind: pick.kind === 'review' ? 'review' : 'build', variant: 'project',
+          since: step?.updated || entry?.updated || '', resumed: Boolean(step?.interrupted),
+        };
+      });
+    const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
+    const items = [...projects, ...goalWork({ repos: names, passed })];
+    const repoOfName = (name) => byProject.get(name)?.repo
+      ?? (String(name).startsWith('goal:') ? goals().find((goal) => goalName(goal) === name)?.repos[0] : null) ?? null;
+    const held = [...[...claims].map(repoOfName), ...others.map((item) => item.repo)].filter(Boolean);
+    return pickWork({ items, held, lanes: capNow(), carry });
   }
 
   /**
@@ -3265,7 +3316,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`lane file ${basename(path)} names pid ${owner}, which is gone — ${held?.name || 'no step'}${Number.isInteger(held?.step) ? ` step ${held.step}` : ''}; moved to log/${basename(to)}`);
         return [];
       }
-      return [{ path, name: held?.name || null, pid: known ? owner : null, other: foreign }];
+      const lane = Number.isInteger(held?.lane) && held.lane > 0 ? held.lane : 0;
+      return [{ path, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign }];
     });
   }
 
@@ -3280,10 +3332,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return own.length ? `the runner still finishes ${own.join(', ')}` : 'nothing else is in flight';
   }
 
-  /** The other runner holding this lane's file, or null when nothing does. */
-  function laneHolder(repo, lane) {
-    const path = paths.currentFor(repo, lane);
-    return stepsHeld().find((held) => held.path === path && held.other) || null;
+  /**
+   * The other runner holding a session in this lane, or null when nothing
+   * does. A lane is a number, not a repository: its file is named for the
+   * repository of the session in it (`paths.currentFor`), so a successor's lane
+   * waits while its predecessor holds any session under the same number. A
+   * file from before the total names a lane within its repository, and is
+   * read the same way.
+   */
+  function laneHolder(lane) {
+    return stepsHeld().find((held) => held.other && held.lane === lane) || null;
   }
 
   /**
@@ -3336,6 +3394,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // answer. A caller may seed it with names it already has an answer for —
     // which is how a test drives a lane over a whole queue without a clock.
     const passed = new Set(already);
+    // The repositories whose refusal this pass was about the moment rather
+    // than the project (`WAIT_REFUSALS`): nothing more is tried on them until
+    // the next pass, and the lane sleeps on the first such word when nothing
+    // on another repository runs instead.
+    const waited = new Map();
     const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
     if (!diskRoom()) {
       diskSkippedAt = deps.now().getTime();
@@ -3347,8 +3410,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
-      const pick = nextStep({ repo, world: known, passed, first: last?.name });
-      if (!pick) return goalPass({ repo, lane, label, passed });
+      const pick = nextWork({ repo, world: known, passed, waited, carry: last?.name });
+      if (!pick) {
+        const word = [...waited.values()][0];
+        return word ? { ran: 0, waited: word } : { ran: 0 };
+      }
+      // The project this lane carried has let go the moment the lane takes
+      // something else: its slot is the one this session is about to use.
+      if (last?.name && pick.name !== last.name) carried.delete(last.name);
+      if (pick.variant === 'goal') {
+        say(`${label}: next — ${pick.name} (${pick.kind} ${pick.variant})`);
+        const ran = await goalPass(pick.goal, { lane, label });
+        if (ran.ran || ran.stop) return ran;
+        passed.add(pick.name);
+        continue;
+      }
       if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
         say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
         passed.add(pick.name);
@@ -3357,7 +3433,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const plan = known.plans.find((item) => item.project === pick.name) || null;
       const at = plan?.step && plan?.steps ? ` (step ${plan.step}/${plan.steps})` : '';
       say(`${label}: next — ${pick.name}${at}`);
-      // The claim, taken in the tick the name was picked: `nextStep` has just
+      // The claim, taken in the tick the name was picked: `nextWork` has just
       // read this set, and a second lane picking a moment from now must see
       // the name taken before this one's session has opened anything.
       claims.add(pick.name);
@@ -3373,7 +3449,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       // A refusal that blocked the step is never a wait, whatever its word: the
       // plan on main is being told, and the next name is the lane's business.
-      if (!persistent.delete(pick.name) && WAIT_REFUSALS.has(outcome)) return { ran: 0, waited: outcome };
+      if (!persistent.delete(pick.name) && WAIT_REFUSALS.has(outcome)) {
+        if (!waited.has(pick.repo)) waited.set(pick.repo, outcome);
+        continue;
+      }
       passed.add(pick.name);
     }
   }
@@ -3586,7 +3665,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, queue, stopRequested,
+    paths, repos, say, pass, nextWork, letGo: (name) => { carried.delete(name); }, nextStep: (options = {}) => nextWork({ ...options, carry: options.first ?? null }), claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, queue, stopRequested,
     writeUnreadable,
     blockStep,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
@@ -3595,9 +3674,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 }
 
 /**
- * The loop: one lane loop per repository per `per_repo`, each taking the next
- * step of the next project until a STOP file appears or an UPDATE hands over —
- * or, under `--once`, one step and out.
+ * The loop: `mc run lanes` lane loops, each taking the next work of any kind
+ * on any repository (`nextWork`) until a STOP file appears or an UPDATE hands
+ * over — or, under `--once`, one session and out.
  */
 export async function runLoop({
   once = false, merge = true, idleSleepMs = 600_000,
@@ -3610,12 +3689,11 @@ export async function runLoop({
   awake = true,
   deps = realDeps(),
 } = {}) {
-  // Both numbers are read live; this reading is only for the start line.
-  // `per_repo` is read by `reconcile` on every poll slice, which starts the
-  // lanes that are missing, and by each lane at the top of a pass, which ends a
-  // lane above it. `total` is read by `takeSlot` each time a step is about to
-  // start.
-  const laneSetting = (deps.laneCount || readLaneCount)();
+  // The total is read live; this reading is only for the start line. It is
+  // read by `reconcile` on every poll slice, which starts the lanes that are
+  // missing, by each lane at the top of a pass, which ends a lane above it,
+  // and by `takeSlot` each time a session is about to start.
+  const laneSetting = laneTotal(deps) || DEFAULT_LANES;
   const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
@@ -3736,28 +3814,19 @@ export async function runLoop({
   })());
   try {
     if (!once) {
-      // The unattended run: one loop per repository, each on its own clock,
-      // each taking the next step of the next project (`pass`). The chores a
-      // round used to do around its lanes run in their own loop beside them.
-      // STOP and UPDATE are read between picks.
+      // The unattended run: `mc run lanes <n>` loops, each on its own clock,
+      // each taking the next work of any kind on any repository (`pass`). The
+      // chores a round used to do around its lanes run in their own loop
+      // beside them. STOP and UPDATE are read between picks.
       //
-      // `mc run lanes <n>` puts n of these loops on each repository. They take
-      // from one ordered list and claim what they pick (`claims`), so two
-      // never hold one project — until 2026-09-08 they took every nth name of
-      // the repository's list instead, which meant lane 2 took the second name
-      // whether or not lane 1 could run the first. What they share is the
-      // repository's main, and a landing that meets the other's at the gate
-      // waits for it (`landPr`).
-      //
-      // `--total` bounds the two repositories together: `lanes 3` on both is
-      // six sessions, and the total is what says three. Both bind and the
-      // smaller wins — the loops are still `per_repo` per repository, and a
-      // lane waits for a slot before it launches (`waitForSlot`). With no
-      // total set nothing is counted and this is what it always was.
-      const { per_repo: count, total } = laneSetting;
-      if (count > 1 || total !== null) {
-        runner.say(`lanes: ${count} per repository, ${total === null ? 'no total cap' : `${total} in total`}`);
-      }
+      // The lanes take from one picture of everything that could start and
+      // claim what they pick (`claims`), so two never hold one project or one
+      // goal. Until 2026-11-02 there were `per_repo` loops on each repository,
+      // capped by `--total`; a lane on a repository with nothing to do sat
+      // idle while the other repository's work waited. Now a free lane takes
+      // the next work wherever it is, and no repository takes every lane
+      // while another waits (`pickWork`, lane-pick.js).
+      runner.say(`lanes: ${laneSetting} in total, across every repository`);
       //
       // UPDATE hands over at once (ruling 28): the checkout is fast-forwarded,
       // the successor is started on the new code, and this runner takes no
@@ -3791,10 +3860,10 @@ export async function runLoop({
       // just gone to sleep would have read it ten minutes late, with nothing
       // anywhere saying the order had been seen.
       //
-      // Each slice also reconciles the lane set with `per_repo`, so every idle
+      // Each slice also reconciles the lane set with the total, so every idle
       // lane and the idle chore loop look once per `UPDATE_POLL_MS` with no
       // loop of their own. `until` ends the wait early for a lane that a
-      // lowered `per_repo` has retired.
+      // lowered total has retired.
       const nap = async (ms, { until = () => false } = {}) => {
         for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
           if (runner.stopRequested() || runner.updateRequested() || until()) return;
@@ -3802,7 +3871,7 @@ export async function runLoop({
           await deps.sleep(Math.min(left, UPDATE_POLL_MS));
         }
       };
-      const perRepoNow = () => (deps.laneCount || readLaneCount)().per_repo;
+      const lanesNow = () => laneTotal(deps) || DEFAULT_LANES;
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
       const drainTick = () => {
         if (!handedOver) return;
@@ -3814,12 +3883,12 @@ export async function runLoop({
         drainMark = now;
         runner.say(`update: pid ${runner.pid} still ${drainWaiting({ ...state, inFlight: own })}`);
       };
-      const lane = async (repo, index) => {
-        // A lane at or above `per_repo` as `lanes.json` says it now. Read only
-        // at the top of a pass, so a lane in a step finishes it, and a pass
-        // already waiting for a total slot still runs its step. Index 0 never
-        // retires: `per_repo` is at least 1.
-        const retired = () => index >= perRepoNow();
+      const lane = async (index) => {
+        // A lane at or above the total as `lanes.json` says it now. Read only
+        // at the top of a pass, so a lane in a session finishes it, and a pass
+        // already waiting for a slot still runs its session. Index 0 never
+        // retires: the total is at least 1.
+        const retired = () => index >= lanesNow();
         // The last line this lane said about having taken nothing. An idle
         // lane looks every ten minutes and would otherwise write the same
         // sentence 144 times a day; it says it once and then goes quiet until
@@ -3829,21 +3898,23 @@ export async function runLoop({
         // it found it is not started again the second it ends (`pass`).
         let last = null;
         for (;;) {
-          const tag = index > 0 || perRepoNow() > 1 ? `${repo.name}#${index + 1}` : repo.name;
+          const tag = `lane ${index + 1}`;
           if (runner.updateRequested()) {
             if (await update()) return { update: true };
             continue;
           }
-          // A lane above a lowered `per_repo` leaves between passes. A
-          // successor's lane waiting on its predecessor's file below is not in
-          // a step, so it leaves here too.
+          // A lane above a lowered total leaves between passes. A successor's
+          // lane waiting on its predecessor's session below is not in one, so
+          // it leaves here too.
           if (retired()) {
-            runner.say(`${tag}: per_repo is now ${perRepoNow()} — this lane exits`);
+            // The project it carried keeps no slot in a lane that is gone.
+            if (last?.name) runner.letGo(last.name);
+            runner.say(`${tag}: lanes is now ${lanesNow()} — this lane exits`);
             return { retired: true };
           }
-          // A successor's lane whose file the runner it replaced still holds:
-          // that runner is in a step here, and this lane starts when it ends.
-          const holder = runner.laneHolder(repo.name, index);
+          // A successor's lane whose number the runner it replaced still holds:
+          // that runner is in a session there, and this lane starts when it ends.
+          const holder = runner.laneHolder(index);
           if (holder) {
             const line = `${tag}: waiting for pid ${holder.pid} to finish ${holder.name || 'its step'}`;
             if (line !== quietLine) { runner.say(line); quietLine = line; }
@@ -3851,7 +3922,7 @@ export async function runLoop({
             if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
             continue;
           }
-          const r = await runner.pass({ repo: repo.name, lane: index, tag, last });
+          const r = await runner.pass({ lane: index, tag, last });
           // A lane that leaves says so: eleven silent exits are what made a
           // one-lane runner look like a busy one (2026-10-07). `pass` has
           // already said it when a step ran first.
@@ -3890,8 +3961,8 @@ export async function runLoop({
           await nap(idleSleepMs);
         }
       };
-      // The live lane set, keyed `<repo>#<index>`: `reconcile` starts each
-      // lane below `per_repo` that is not running, and a lane above it leaves
+      // The live lane set, keyed by index: `reconcile` starts each lane below
+      // the total that is not running, and a lane above it leaves
       // the set when it retires, so a later raise starts it again. After the
       // first call nothing starts once STOP or UPDATE is read or the runner
       // has handed over. The first call starts every lane whatever it finds,
@@ -3902,14 +3973,12 @@ export async function runLoop({
       let starting = true;
       function reconcile() {
         if (!starting && (runner.stopRequested() || runner.updateRequested() || handedOver)) return;
-        const n = perRepoNow();
-        for (const repo of runner.repos) {
-          for (let index = 0; index < n; index += 1) {
-            const key = `${repo.name}#${index}`;
-            if (live.has(key)) continue;
-            live.set(key, lane(repo, index).then((result) => ({ key, result })));
-            if (!starting) runner.say(`lanes: ${n} per repository now — ${repo.name}#${index + 1} started`);
-          }
+        const n = lanesNow();
+        for (let index = 0; index < n; index += 1) {
+          const key = `lane#${index}`;
+          if (live.has(key)) continue;
+          live.set(key, lane(index).then((result) => ({ key, result })));
+          if (!starting) runner.say(`lanes: ${n} in total now — lane ${index + 1} started`);
         }
       }
       // Until STOP, or until a handover that took and the steps this runner

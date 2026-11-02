@@ -17,6 +17,7 @@ import { conflictPaths, MEND_AT_ONCE, MEND_STOPS, mayMend, mendLine, mendPrompt,
 import { landerFor, serve } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 import { readCanonRole } from '../../src/mc/roles.js';
+import { canonSkillsDir } from '../../src/mc/skills.js';
 
 let root = null;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'mc-mend-')); });
@@ -195,7 +196,10 @@ describe('which reds are mended', () => {
     assert.equal(role?.name, 'mend');
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude']);
-    assert.match(role.overlay, /gh pr merge/u);
+    assert.match(role.overlay, /Don't merge the pull request/u);
+    // Never `gh pr merge` is the publish-and-merge skill's, which mend names.
+    assert.match(role.overlay, /^@skill publish-and-merge$/mu);
+    assert.match(readFileSync(join(canonSkillsDir(), 'publish-and-merge', 'SKILL.md'), 'utf8'), /Never `gh pr merge`/u);
     assert.match(role.overlay, /PLAN\.json/u);
   });
 });

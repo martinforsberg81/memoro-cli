@@ -3,8 +3,8 @@
  *
  * Opens the foreground brief session — the terminal's, never tmux — standing
  * in `~/mc/brief/`. A brief session already there is resumed where it was; with
- * none, or with `--new`, a fresh one starts with the Coding Profile and the
- * `brief` role from `canon/roles/brief.md`, and no opening words — Martin types
+ * none, or with `--new`, a fresh one starts with the `brief` role from
+ * `canon/roles/brief.md` (and `_common.md`), and no opening words — Martin types
  * the first message. Nothing is gathered for it: the ground is read where it lives
  * — the page, `mc status`, `mc step` — and the role says where. Until
  * 2026-09-19 a script (`mc brief --collect`) wrote `~/mc/brief/<date>.md` and
@@ -23,17 +23,23 @@ import { briefDir } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 export function usage() {
-  return 'usage — mc brief [--new] [--codex|--claude] [--model <model>]\n';
+  return commandUsage('brief');
 }
+
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--new'], strictValues: ['--model'], toolSugar: true, check: ({ positional }) => (positional.length ? `unknown argument ${positional[0]}` : null) } };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, { booleans: ['--new'], strictValues: ['--model'], toolSugar: true });
-  if (scanned.error || scanned.positional.length) {
-    stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
+  const scanned = scanArgs(argv, ROUTES['']);
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) {
+    stderr.write(`mc: ${refused}\n`);
     stderr.write(usage());
     return 2;
   }

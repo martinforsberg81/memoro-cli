@@ -322,10 +322,12 @@ describe('the launch', () => {
     const args = profileArgs('codex', instructionsFor('codex', launch.overlay));
     assert.equal(args[0], '-c');
     assert.match(args[1], /^instructions=/u);
-    assert.equal(
-      JSON.parse(args[1].slice('instructions='.length)),
-      instructionsFor('claude-code', launch.overlay),
-    );
+    // The same text claude gets, but for where each tool installs a skill the
+    // role names: `~/.agents/skills/` for codex, `~/.claude/skills/` for claude.
+    const told = JSON.parse(args[1].slice('instructions='.length));
+    assert.equal(told, instructionsFor('codex', launch.overlay));
+    assert.match(told, /~\/\.agents\/skills\/mc-publish-and-merge\/SKILL\.md/u);
+    assert.equal(told.replaceAll('~/.agents/skills/', '~/.claude/skills/'), instructionsFor('claude-code', launch.overlay));
   });
 
   it('opens the programme directory itself, not one of its checkouts', async () => {
@@ -462,8 +464,8 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
     for (const [cwd, extra, role] of [
       ['/outside', { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' }, 'plan'],
       ['/outside', { MC_ROLE: 'review' }, 'review'],
-      ['/outside', { MC_GOAL: 'mc/g' }, 'goal'],
-      ['/outside', { MC_STEP: 'p:0' }, 'step'],
+      ['/outside', { MC_GOAL: 'mc/g' }, 'build-goal'],
+      ['/outside', { MC_STEP: 'p:0' }, 'build-project'],
       ['/mc/programs/mc', {}, 'plan'],
       ['/outside', { CLAUDECODE: '1' }, 'coding-agent'],
       ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent'],

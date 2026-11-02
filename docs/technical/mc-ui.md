@@ -46,10 +46,10 @@ fetched or not.
 ## The sections
 
 In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF,
-STEPS, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
+SESSIONS, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
 still keeps the rule the page had — **what does not move above what does**.
 PROGRAMMES and WORK are the page as a listing; the two desks change when
-somebody sits down; STEPS changes with every pick and every frame;
+somebody sits down; SESSIONS changes with every pick and every frame;
 MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
 of them: while a language run has stopped inside an `opens_gap` window it
@@ -124,37 +124,54 @@ below is about.
   more — flipping the step back to `ready` is a plan edit somebody makes.
 - **Queue data** — NEXT is not drawn. `mc --json` still carries `data.next`,
   including the runner's order, lane picks, skip reasons and stale blockers.
-  `nextFor` and `assembleQueue` are unchanged; STEPS carries counts instead.
-- **STEPS** — the heading carries the answer: how many steps are **in
-  flight** (bold green while it is not zero, `not running` in bold yellow when
-  there is no process), how many lanes there are to hold them, and how many
-  projects are queued. Under it
-  **one row per lane**, numbered through: the slots the runner can actually
-  fill — `total` from `mc run lanes` when there is one, `per_repo` times the
-  repositories otherwise. They were one row per repository lane (`memoro #2`),
-  which at four lanes on each of two repositories under a cap of five was
-  eight rows, three of which could never hold a step beside the others. An
-  idle lane is `lane 3  idle`. With a step in it the same cell is the step's
-  **repository** — the lane's number is not what a running row is read for —
-  then the project, `step 4/6` (which step of its plan, read off the
-  plan because a lane file does not carry it), the clock (yellow past a check-in; nothing
-  on a lane row is bold), and the
-  bookkeeping: tool and model, the advisor when the step has one, and the
-  check-ins the runner has written into the session. The steps fill from the
-  top, oldest first, so a row moves only when one above it ends. The number of
-  turns a session has taken is not on the row: nothing mc writes while a
-  session runs carries it. The pid is not there either — every lane file
-  carries the runner's own. A runner that is not running has no lanes and one
-  line that says so. Then a pending `~/mc/runner/STOP`, the lane files whose
-  process is gone, one yellow line per repository the round cannot ask GitHub
-  about — `GitHub unreachable for memoro since 08:20Z (keychain locked) — run:
-  security unlock-keychain`, or `(gh token invalid) — run: gh auth login -h
+  `nextFor` and `assembleQueue` are unchanged; SESSIONS carries counts instead.
+- **SESSIONS** — the headless sessions `mc run` is running. The runner runs
+  three kinds (Martin, 2026-11-02): `plan`, `build` — of a project's step
+  (variant `project`) or of a goal (variant `goal`) — and `review`. The
+  section was STEPS while every session was a project's step; a goal's build
+  and a review are not steps, and RUNNER names the machine rather than what
+  it holds, which `mc run` on the right of the heading already does. The
+  heading carries the answer: **`n of N lanes`** — sessions running out of
+  the total `mc run lanes` sets, bold green while not zero, `not running` in
+  bold yellow when there is no process — and how many projects are queued.
+  Under it **one row per lane**, numbered through. An idle lane is `lane 3
+  idle`. A lane with a session in it is read for what is running, in that
+  order: the **kind as its first word** — `PLAN`, `BUILD`, `REVIEW`, in the
+  kind's colour — then what it works on (a goal `mc/<goal>`; a project and
+  which step of its plan, `docx-editor 4/6`, read off the plan because a
+  lane file does not carry it), the repository, the model in grey, and the
+  clock (yellow past a check-in; nothing on a lane row is bold). After them
+  the open pull requests of the project or of the goal's branch, `credits`
+  when the session runs on the API credit, the advisor when it has one, and
+  the check-ins. A build's variant is in what it works on, so it costs no
+  cell; it is `variant` in `mc --json`, beside `kind` and `goal`. The
+  sessions fill from the top, oldest first, so a row moves only when one
+  above it ends. The tool, the number of turns and the pid are not on the
+  row: the model names the tool, nothing mc writes while a session runs
+  carries the turns, and every lane file carries the runner's own pid. A
+  runner that is not running has no lanes and one line that says so. Then a
+  pending `~/mc/runner/STOP`, the lane files whose process is gone, one
+  yellow line per repository the round cannot ask GitHub about — `GitHub
+  unreachable for memoro since 08:20Z (keychain locked) — run: security
+  unlock-keychain`, or `(gh token invalid) — run: gh auth login -h
   github.com`, or the error itself when neither diagnosis holds — read from
   `~/mc/runner/github.json` and gone once the round has asked again and been
   answered (`runner.github` in `mc --json`; the backoff is in
-  [mc-run.md](mc-run.md)), and one line of the day behind it: steps, open,
-  failed, timed out, and an estimated **list-price** cost — `failed` red and
-  `timed out` yellow only while the count is not zero.
+  [mc-run.md](mc-run.md)), and one line of the day behind it, **per kind**:
+  `24 h · build 53 (40 built, 8 queued, 2 blocked) · review 15 (15 queued) ·
+  other 114 · ≈$846 list (opus, 2026-06)`. An outcome is where the session
+  left its work, read off the runs.tsv note (`outcomeOf`): `merged`,
+  `queued`, `built`, `open`, `red` (back from the merger), `blocked`,
+  `failed`, `timed out`. `plan` is drawn once there has been one; an outcome
+  with no sessions is not drawn; `red`, `blocked` and `failed` are red and
+  `timed out` yellow. `other` is what the runner logged that is not one of its session
+  kinds — merge rounds, mends, the helper's turns. The list-price cost gives
+  way first on a narrow terminal, its basis and then itself. `mc --json`
+  carries `runner.sessions` (one per lane file: `kind`, `variant`, `goal`,
+  `name`, `step`, `steps`, `repo`, `model`, the clock), `runner.lanes` (each
+  with its `session`) and `runner.day.by_kind` (`plan`, `build`, `review`,
+  each `sessions` and its outcomes, and `other`); the page draws from these
+  and nothing else.
 - **MERGES** — two queues, one per repository. The heading gives each queue's
   short counts (`memoro 2 waiting · memoro-cli idle`); PR numbers belong on
   the rows, in landing order. A red `paused deploy`, `paused gate round` or
@@ -193,8 +210,8 @@ below is about.
   project's pull request is a column of its own on the project's row in
   PROGRAMMES, after the steps — `#N`, or `#N+1` for more than one; one row per
   project (Martin, 2026-10-09), and a blocked project holding one is never
-  collapsed — and the merger's are in MERGES. A running STEPS lane carries its project's
-  `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
+  collapsed — and the merger's are in MERGES. A running SESSIONS lane carries its
+  project's or its goal's `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
   any pull request quiet for a day turns its `quiet …` yellow. The open pull
   requests come from `prs.json`, which every runner round now refills for the
   repositories it asked (`mergePrs`, `page-cache.js`) as well as `--fresh`.
@@ -205,7 +222,7 @@ below is about.
   it stopped at, or one running now; then the sha from the last `deployed` row
   of `~/mc/runner/log/deploys.tsv`, and last the bookkeeping — how long ago,
   which build — which is what a narrow terminal drops. It was a line under
-  STEPS's day. The holder is not on the line at all: on 2026-09-06 a failed
+  the runner's day. The holder is not on the line at all: on 2026-09-06 a failed
   deploy's own `Deploy source preflight` was clipped off the end while `by
   martin@laptop` sat in the middle of it. When the `/api/version` the helper
   last cached names another commit than the last deploy, the line leads with
@@ -276,9 +293,9 @@ the helper and the sessions already write.
 | fact | file | written by |
 |---|---|---|
 | a runner is here | `~/mc/runner/runner.json` (pid, started) | `mc run`, at start |
-| a step is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, repo, lane, tool, model, effort, advisor, check_in_minutes, check_ins, started, pid, worktree) | `mc run`, per step |
-| stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
-| the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
+| a session is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, variant, repo, lane, tool, model, effort, advisor, check_in_minutes, check_ins, started, pid, worktree) | `mc run`, per session |
+| stop after this session | `~/mc/runner/STOP` (every lane) | anyone |
+| the day behind it | `~/mc/runner/log/runs.tsv` (its `kind` is `plan`, `build-project`, `build-goal`, `review-project` or `review-goal`; rows from before say `step`, `goal` and `review`, and are read as the build or review they were) | `mc run`, after each session |
 | where every step stands | `~/mc/runner/projects/<project>.json` (per step: status, pr, branch, blocked_by, reason, comments, session, attempts, landed) | `mc run`, `mc merge`, `mc step` |
 | queued merges and reds | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder, pid) | `mc merge`, while it waits its turn |
 | the round landing right now | `~/.memoro/mc/gate-running.json` (pid, repo slug, pr, mode, since, phase, phase_at), joined to a name through `repos` and to a holder through the repository's lease | `mc merge`/`mc test`, for the length of the round (`runningMerge`, `merges-collect.js`) |
@@ -301,17 +318,16 @@ a program could read. They are written through `atomic-write.js` and removed
 when their scope ends, the removal paired in a `finally` so a step that
 throws still clears the file.
 
-There is one current file **per lane**: `mc run` drives `per_repo` lanes on
-memoro's queue and on memoro-cli's at the same time, so STEPS is a list rather
-than a line, and the page reads `runner/current-*.json` by name instead of one
+There is one current file **per lane**: `mc run` runs as many sessions at
+once as `mc run lanes` says, across every repository and kind, so SESSIONS
+is a list rather than a line, and the page reads `runner/current-*.json` by name instead of one
 fixed file — `current-memoro.json` for a repository's first lane,
 `current-memoro-1.json` for its second, and the file's own `lane` field is
-what puts a step on its row. The lanes themselves are in
-[`docs/technical/mc-run.md`](mc-run.md). The *rows* are `per_repo` per
-repository (`~/.memoro/mc/lanes.json`, read by `collectPage`) whether or not a
-current file exists for each — the repositories this machine has a checkout
-of, plus any a current file names that it does not — so a lane between steps
-has a row saying so rather than no row at all. A current file whose `lane` is
+what puts a session in its file. The lanes themselves are in
+[`docs/technical/mc-run.md`](mc-run.md). The *rows* are the total
+(`~/.memoro/mc/lanes.json`, read by `collectPage`) whether or not a current
+file exists for each, so a lane between sessions has a row saying so rather
+than no row at all. A current file whose `lane` is
 past the setting still gets a row: the runner was started under a higher count
 than the file holds now, and the file is the fact.
 
@@ -439,15 +455,17 @@ test can look at one row.
 
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
-page bends to: **a step kind and a project state have one colour each, wherever
-they are printed.** STEPS says `step` in the same
-green, so a kind is recognised before it is read. They are `KIND_TONE` and
+page bends to: **a session kind and a project state have one colour each,
+wherever they are printed.** SESSIONS says `BUILD` in the same green
+wherever a build is named, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
 
 | step kind | colour |
 |---|---|
+| `build` | green |
 | `step` | green |
+| `review` | magenta |
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |
@@ -471,6 +489,12 @@ or a workarea, which somebody has to open.
 | `done` | grey |
 | no plan | grey |
 
+A goal's row (`g · <goal>`) uses the same words' colours: `waiting` — its
+`after` has not landed, and the runner opens it when it has
+([mc-goals.md](mc-goals.md)) — is yellow, and so is the `waits on <p>/<g>`
+that leads its tail; `blocked` is red; `review` is green; `open` is green
+while a session is on it and grey otherwise; `done` is grey.
+
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the
 person set it to.
@@ -480,24 +504,26 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `STEPS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `SESSIONS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
-| STEPS | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
-| STEPS | the heading's lane setting and uptime | grey |
-| STEPS | a lane with a step: its `●`, the project's name | green, bold |
-| STEPS | a lane's name (`memoro`, `memoro #2`) | grey |
-| STEPS | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | bold, bold yellow |
-| STEPS | the check-ins beside the clock, the tool, the advisor | grey |
-| STEPS | the day's `failed`, `timed out` while not zero | red, yellow |
-| STEPS | `■ STOP requested` | bold red |
-| STEPS | `GitHub unreachable for <repo> …` | yellow |
-| STEPS | a stale runner file | red |
-| STEPS | a quota answer under 6 h old, older | yellow, grey |
-| STEPS | the production sha, the rest of that line | plain, grey |
-| STEPS | `/api/version` naming another commit than the last deploy | bold yellow |
-| STEPS | a deploy running now, one that has not come back in an hour | green, bold yellow |
-| STEPS | a deploy that failed after the last good one | yellow |
-| STEPS | an idle lane, no runner, the rest of the day's line | grey |
+| SESSIONS | the heading's `n of N lanes`: not zero, zero, no runner (`not running`) | bold green, grey, bold yellow |
+| SESSIONS | the heading's queued count | grey |
+| SESSIONS | a lane with a session: its `●`, its kind (`PLAN`, `BUILD`, `REVIEW`) | green, the kind's colour |
+| SESSIONS | what it works on, the repository | plain |
+| SESSIONS | the model | grey |
+| SESSIONS | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | plain, yellow |
+| SESSIONS | the check-ins beside the clock, credits, the advisor | grey |
+| SESSIONS | the day's kinds, each in its colour | the kind's colour |
+| SESSIONS | the day's `failed`, `timed out` while not zero | red, yellow |
+| SESSIONS | `■ STOP requested` | bold red |
+| SESSIONS | `GitHub unreachable for <repo> …` | yellow |
+| SESSIONS | a stale runner file | red |
+| SESSIONS | a quota answer under 6 h old, older | yellow, grey |
+| SESSIONS | the production sha, the rest of that line | plain, grey |
+| SESSIONS | `/api/version` naming another commit than the last deploy | bold yellow |
+| SESSIONS | a deploy running now, one that has not come back in an hour | green, bold yellow |
+| SESSIONS | a deploy that failed after the last good one | yellow |
+| SESSIONS | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
 | WORK | a session's `●` and its area | cyan, bold |
@@ -508,7 +534,7 @@ person set it to.
 | MERGES | clocks, queue counts, waiting explanations, mend/fix detail, idle and last landing | grey |
 | MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
 | MERGES | `paused` with reason; `merger stopped`; a PR answered red | red |
-| STEPS | a lane's project's open pull request, after the clock | bold cyan |
+| SESSIONS | a lane's project's or goal's open pull request, after the clock | bold cyan |
 | PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
 | PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |
 | PULL REQUESTS | one nobody holds: its `◆` and whose | yellow |

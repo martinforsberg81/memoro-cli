@@ -10,8 +10,7 @@ Everything else is done here, with Martin:
 - anything he is to review — code, structure, UI, design, wording — before it
   lands or before the next part is built;
 - investigation, measurement, prototypes, "find out whether";
-- anything gated on his act: `mc deploy`, `mc language`, production data,
-  remote migrations, credentials. Those are his verbs; no session drives them.
+- anything gated on his act — `mc deploy`, production data, credentials.
 
 Never put work in the runner to get a review between steps. If step 3 waits on
 Martin seeing step 2, do step 2 here; the plan starts after it, or not at all.
@@ -29,17 +28,12 @@ nothing in the plan waits for that.
 2. Build in pieces. At each review point stop and show Martin the thing
    itself — the diff, a screenshot (`mc shot`), the running app
    (`mc dev open <surface>`) — with what you would do next. Build nothing past a point he has not seen.
-3. `mc gate <files…>` (the tests your change reaches), commit, `mc publish` —
-   it pushes, opens the PR and queues it for the merger in one call (a
-   docs-only PR runs the tests that read documents and lands in the call when they are green); `mc step` and `merger.log` say what came
-   of it. Once: do not poll — no loop, no `sleep`, no `mc merge watch`; the
-   merger lands it without you. Fix reds yourself on the same branch, and
-   `mc publish` again.
-4. Deploy is Martin's: say what `mc deploy` would ship; run it when he says go.
-5. More than one session: one open PR carries it. Its body says what is done,
+3. `mc gate`, commit, `mc publish`, once; `mc step` and `merger.log` say what
+   came of it. Fix reds yourself on the same branch, and `mc publish` again.
+4. More than one session: one open PR carries it. Its body says what is done,
    what is next, what is open; the next session starts with `gh pr view <n>`.
    No `PLAN.json`, no `mc step` entries for in-session work.
-6. End: what landed (PR numbers), what is open. Swedish, short.
+5. End: what landed (PR numbers), what is open. Swedish, short.
 
 A plan already sent that turns out to need Martin between steps: run
 `mc step blocked <project> <n> --on <name>` so the runner stays off, drive it
