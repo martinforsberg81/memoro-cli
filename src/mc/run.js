@@ -2234,22 +2234,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return;
     }
     if (status !== 'review') { say(`${name}: green, but the goal is ${status} now — nothing is queued`); return; }
-    const now = goalPr(repo, branch);
-    if (!now || now.error || now.number !== pr) {
-      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} ${now?.error ? `could not be read (${now.error})` : 'is no longer the open pull request'} — not queued` });
+    const standing = goalPr(repo, branch);
+    if (!standing || standing.error || standing.number !== pr) {
+      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} ${standing?.error ? `could not be read (${standing.error})` : 'is no longer the open pull request'} — not queued` });
       return;
     }
-    if (!now.head || !now.head.startsWith(verdict.sha)) {
-      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} is at ${String(now.head).slice(0, 12)} now — not queued; the new head is reviewed again` });
+    if (!standing.head || !standing.head.startsWith(verdict.sha)) {
+      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} is at ${String(standing.head).slice(0, 12)} now — not queued; the new head is reviewed again` });
       return;
     }
     try {
       const queued = deps.queueMerge({
         root, repo: repo.name, repoPath: repo.path, pr, branch, holder: { name },
-        goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, sha: now.head,
+        goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, sha: standing.head,
         now: deps.now(), lock: register.lock,
       });
-      goalStatus(goal, name, 'review', { done: queuedText(pr, now.head) });
+      goalStatus(goal, name, 'review', { done: queuedText(pr, standing.head) });
       if (queued?.place) say(`${name}: ${queued.place} ahead of #${pr}`);
     } catch (error) {
       goalStatus(goal, name, 'blocked', { comment: `green on ${verdict.sha}, but #${pr} could not be queued for the merger (${error?.message || error})` });

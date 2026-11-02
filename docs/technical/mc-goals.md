@@ -1,14 +1,26 @@
 # mc goals
 
-**Status:** current · 2026-11-01 · derived from `src/mc/goals.js`,
+**Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
 `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
-`goalWithoutWord`) and `canon/roles/goal.md`
+`reviewRoute`, `settleReview`, `goalWithoutWord`), `src/mc/merger.js`
+(`tellGoal`), `canon/roles/goal.md` and `canon/roles/goal-review.md`
 
 A goal is two text files and a worktree, beside projects. It has no steps, no
-register, no owner and no merge door. A goal session does the work and
-publishes its pull request; a person or the interactive plan session Martin opens merges it. The ruling is [`rulings.md`](../project/mc/rulings.md) § 60 with its
-2026-11-01 clarification; the earlier brief,
-[`autonomy-goals.md`](../project/mc/autonomy-goals.md), is superseded.
+register and no owner. A build session does the work and publishes its pull
+request; a review session on another model judges it; a green review queues it
+for the merger; the goal is `done` when it lands. Martin decided the process on
+2026-11-02: *"Ingen review till build. Review skriver i LOG.md; plan öppnar som
+har helhetsförståelsen."* and *"Grön till merge direkt."*
+
+```
+open     ── build session holds the criteria met ──▶ review
+review   ── review: red, or no verdict ─────────────▶ blocked
+review   ── review: green, head unchanged ──────────▶ review, queued for the merger
+queued   ── merger landed ──────────────────────────▶ done
+queued   ── merger red ─────────────────────────────▶ blocked
+queued   ── head moved past the reviewed one ───────▶ review, reviewed again
+blocked  ── plan sets it open ──────────────────────▶ open
+```
 
 ## Layout
 
@@ -43,7 +55,7 @@ created: 2026-11-01T20:00:00Z
 ## Out of scope
 ```
 
-- `status` — `open`, `blocked` or `done`. A goal starts `open`.
+- `status` — `open`, `review`, `blocked` or `done`. A goal starts `open`.
 - `repos` — comma-separated repository names. The first is where a session
   starts, and the lane that serves it takes the goal.
 - `class` — `fast` or `large`, routed as a step's class is (ruling 59).
@@ -73,10 +85,17 @@ Nästa: what the next session should do
 - A heading that does not match the form is skipped with its lines.
 - `mc goal new` writes the first entry: `person`, `open`, `Gjort: skapat`.
 - A session count is every entry whose tool is neither `runner` nor `person`.
+- A review's entry is its verdict: `Gjort:` starts with `green` or `red`, then
+  the head sha it judged (`verdictOf`). The **last build entry** is the last
+  entry that is neither the runner's, a person's nor a verdict
+  (`lastBuildEntry`); its `<tool> <model>` is the model a review may not run on.
+- The runner writes `Gjort: queued #<pr> at <sha> for the merger` when it
+  queues a green, and the merger `Gjort: landed #<pr> as <sha>` or
+  `Gjort: merger answered red on #<pr>` when it answers.
 
 ## The verbs
 
-Five verbs; the status verbs are three words.
+Five verbs; the status verbs are four words.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…"`** — makes a
   goal, refused unless its flags are valid and its names are new. Each
@@ -85,52 +104,124 @@ Five verbs; the status verbs are three words.
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]`** —
   appends one entry; at least one field is needed. `--status` also sets the
   status line. The goal is `MC_GOAL`'s when none is named.
-- **`open|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and logs
-  the reason as the entry's `Kommentar`.
+- **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
+  logs the reason as the entry's `Kommentar`.
+- A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
+  by either verb: only the merger and a person set it. A review session
+  (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
 - **`show <p>/<g>`** — the front matter, the body, the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
-  n sessions · the last entry's Nästa`.
+  n sessions · the last entry's Nästa`. A goal blocked by a red review or a red
+  merge reads `blocked, waits on plan` (`waitsOnPlan`).
 
 ## How the runner takes a goal
 
 Goals are asked for only after project steps. In a lane with no runnable step,
 `goalPass` in `src/mc/run.js` takes the next goal:
 
-1. **Pick.** Of the open goals that parse, whose first repository this lane
-   serves and that are not held, the one whose last entry is oldest. No entry
+1. **Pick.** Of the goals that parse and are `open` or due a review, whose
+   first repository this lane serves and that are not held, the one whose last
+   entry is oldest. A goal in `review` is due a review unless its last entry is
+   the runner's `queued` one: then it waits for the merger. A review that
+   cannot run now (step 3) is left out of the pick, so it does not stand in
+   front of every other goal; why is said once in `runner.log`. No entry
    means oldest of all; a tie goes to the first listed. Held means a current
    file named `goal:<programme>/<goal>` exists, or the lane claimed it this
    tick. A goal keeps no slot between its sessions.
 2. **Worktrees.** A repository's worktree that has gone is made again on
    `goal/<goal>`, as `mc goal new` makes it.
-3. **Launch.** A headless session with the `goal` role runs in the first
-   repository's worktree, with the goal's class routing, model and billing as a
-   step has them. `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set. If
-   `canon/roles/goal.md` is missing on the machine, the goal is skipped.
+3. **Launch.** An `open` goal gets a build session with the `goal` role, in
+   the first repository's worktree, with the goal's class routing, model and
+   billing as a step has them. A goal in `review` gets a review session with
+   the `goal-review` role instead, on the review class's candidate
+   (`mc model set review`), never routed. It never runs on the model of the
+   goal's last build entry: when the review model is that model, the goal
+   waits until `mc model set review` names another; it is never reviewed by
+   its builder. The models are compared as the catalog spells them, which is
+   how `MC_MODEL` writes them into the heading. The review is told its pull
+   request and head: the open pull request on `goal/<goal>`, asked of GitHub
+   before the launch. With none, the goal is set `blocked` with a runner entry.
+   `MC_ROLE`, `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set. If the
+   role's file is missing on the machine, the goal is skipped.
 4. **Silent exit.** A session that leaves no entry gets one from the runner:
    tool `runner`, status unchanged, `Kommentar: session ended without a log
    entry (exit <n>, <s> s)`. A worktree that could not be made gets one too.
 5. **Three in a row.** When the last three entries are all the runner's and the
-   status is `open`, the runner sets `blocked` and writes a runner entry saying
-   so. That is the only guard against a session that fails the same way every
-   time; there is no attempt counter.
+   status is `open` or `review`, the runner sets `blocked` and writes a runner
+   entry saying so. That is the only guard against a session that fails the
+   same way every time; there is no attempt counter.
+6. **After a review.** The runner reads the verdict the review wrote
+   (`settleReview`):
+   - **No verdict:** `blocked`, with a runner entry.
+   - **Red:** `blocked`. The review sets it; the runner does if it did not.
+   - **Green:** the pull request is asked of GitHub again. When its head is the
+     sha the review judged, the runner queues it for the merger as `mc merge`
+     does, with the goal and that full sha on the job, and writes the `queued`
+     entry; the goal stays `review`. When the head has moved, or the pull
+     request is no longer open, nothing is queued and a runner entry says so;
+     the goal stays `review`, and the new head gets a review of its own.
 
-The runner never sets `done`. Each session is a row in `runs.tsv`, of kind
-`goal`, named `goal:<p>/<g>`.
+Each session is a row in `runs.tsv`, of kind `goal`, named `goal:<p>/<g>`.
 
-## What a goal session does
+## What a build session does
 
 The role (`canon/roles/goal.md`) has it merge `origin/main` into its worktree,
 work until the criteria hold, run `mc gate`, commit, and publish with
-`mc publish --no-merge`. It ends with `mc goal log`, adding `--status done`
+`mc publish --no-merge`. It ends with `mc goal log`, adding `--status review`
 when the criteria hold and the pull request carries them, or `--status blocked`
-when it cannot go on. A goal session publishes and never merges.
+when it cannot go on. A build session publishes, and never merges or sets
+`done`.
+
+## What a review session does
+
+The role (`canon/roles/goal-review.md`) judges and never builds: it does not
+edit, commit, push or comment-fix. It reads GOAL.md, LOG.md and the pull
+request's diff against `origin/main`, and checks, in order:
+
+- **Goal** — each criterion, with evidence it saw itself (`mc gate`, `mc`,
+  `mc shot`, the code). A builder's claim is not evidence.
+- **Structure** — the change fits where it sits, no duplication, the right
+  altitude, readable names, the documents the goal names updated.
+- **Bugs** — edge cases, error paths and regressions in what the diff touches.
+
+It writes one entry — `Gjort:` `green <sha>` or `red <sha>`; `Kommentar:` each
+criterion met or not met with its evidence, then structure, then bugs — with
+`--status review` for green and `--status blocked` for red, and posts the same
+text on the pull request.
+
+## The merger
+
+A goal's job carries the goal and the head its review judged (`merge-queue.js`
+`goal`, `sha`). The merger (`tellGoal`):
+
+- **Lands only that head.** It asks GitHub for the head before the round; a
+  head that has moved is answered `moved` with no round spent, and a push
+  while the round runs is `moved` too. A moved job leaves the queue and the
+  goal goes back to `review` with a runner entry.
+- **Landed:** `done`, with a runner entry naming the pull request and the
+  landed sha.
+- **Red:** `blocked`, with a runner entry giving the round's reason. A goal's
+  job gets no mend: the mend's push would be a head no review read. A red only
+  under load is requeued as any job's is, and says nothing to the goal until
+  it is answered.
+
+`mc merge` on a red goal job queues it again as the goal's, with no reviewed
+head; that is a person's act, and its landing still sets the goal `done`.
 
 ## Status
 
-Set by a session (`mc goal log --status`, `mc goal open|blocked|done`) or by a
-person; the runner sets `blocked` only in step 5. `open` goals are picked.
+- `open` — picked for a build session. Only plan or a person sets a blocked
+  goal open again, after reading the entry, revising GOAL.md if needed and
+  writing `Nästa:`.
+- `review` — set by a build session; picked for a review session, or waiting
+  for the merger once its green is queued.
+- `blocked` — set by a session that cannot go on, by a red review, by the
+  runner (steps 3, 5, 6) or by the merger on red. Nothing goes back to a build
+  session by itself. One blocked by a red review or a red merge waits on plan:
+  `mc goal list` says so, and the page leads its row's tail with
+  `waits on plan` in the colour of what waits on a person.
+- `done` — set by the merger when the pull request lands, or by a person.
 
 ## What a goal does not have
 
@@ -140,9 +231,11 @@ person; the runner sets `blocked` only in step 5. `open` goals are picked.
   session runs, and the `runs.tsv` row. Nothing else.
 - **No owner, lease, revision or capability report.** Anyone may work in the
   worktree; the last entry says what was done.
-- **No review of its own.** A person or the interactive plan session Martin opens reads the pull request.
-- **No merge door.** `mc merge` is a person's or the interactive plan session's act. The role
-  holds a goal session to `--no-merge`; neither `mc merge` nor `mc publish` checks.
+- **No review by its builder.** The review is a session of its own role on
+  the review model, never the last build entry's.
+- **No merge by a session.** A build session publishes with `--no-merge`; a
+  review session publishes nothing. Only a green review, through the runner,
+  queues a goal's pull request, and only the head it judged lands.
 - **No close-out.** No archive verb; a `done` goal stays where it is.
 
 The headless plan session (`autonomy on`) and phases are not built; they wait
