@@ -55,6 +55,13 @@ result for hunks kept twice.
 Files that are not the change (probes, output, scripts) go in `$MC_SCRATCH`,
 or the system temp directory when it is unset — never the worktree.
 
+A probe that runs mc's own code from a worktree — a review trying a branch,
+the page drawn from it, a runner function called by hand — sets
+`MC_HOME="$MC_SCRATCH/mc-home"` and `MC_WORK_ROOT="$MC_SCRATCH/mc-root"` first.
+Reading mc's state can write it (a migration, a heal), and without them it
+writes Martin's: `~/.memoro/mc/lanes.json` was rewritten that way on 2026-11-02
+and the running runner dropped to one lane per repository.
+
 Never signal a process you did not start in this session: not with `kill`,
 `pkill` or `killall`, and not by name. A gate round, a test run, a dev server
 or a session that looks stuck is someone's; a pid you did not get from your

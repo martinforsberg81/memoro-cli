@@ -131,11 +131,13 @@ Five verbs; the status verbs are four words.
 
 ## How the runner takes a goal
 
-Goals are asked for only after project steps. In a lane with no runnable step,
-`goalPass` in `src/mc/run.js` takes the next goal:
+A goal is one more candidate for a free lane, beside project steps and
+reviews: `pickWork` (`lane-pick.js`) orders them all, and a goal is not
+waiting for the steps to run out ([mc-run.md](mc-run.md), *What a free lane
+takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
 
-1. **Pick.** Of the goals that parse and are `open` or due a review, whose
-   first repository this lane serves and that are not held, the one whose last
+1. **Pick.** Of the goals that parse and are `open` or due a review and
+   that are not held, on any repository (a lane serves them all), the one whose last
    entry is oldest. A goal in `review` is due a review unless its last entry is
    the runner's `queued` one: then it waits for the merger. A review that
    cannot run now (step 3) is left out of the pick, so it does not stand in
@@ -145,7 +147,8 @@ Goals are asked for only after project steps. In a lane with no runnable step,
    tick. A goal keeps no slot between its sessions.
 2. **Worktrees.** A repository's worktree that has gone is made again on
    `goal/<goal>`, as `mc goal new` makes it.
-3. **Launch.** An `open` goal gets a build session with the `goal` role, in
+3. **Launch.** An `open` goal gets a build session with the `build-goal` role
+   (`canon/roles/build-goal.md`, which includes `_build.md`), in
    the first repository's worktree, with the goal's class routing, model and
    billing as a step has them. A goal in `review` gets a review session with
    the `goal-review` role instead, on the review class's candidate

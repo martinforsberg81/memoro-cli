@@ -203,18 +203,22 @@ which step that is. There is nothing that walks every project: a lane takes
 the next step, and then the next one (Martin, 2026-09-08 — ruling 17 below, in
 *Blocked by the runner*).
 
-A **lane** is one loop in `runLoop` (`lane`, `run.js`), bound to one
-repository. What it does, for as long as the runner runs:
+A **lane** is one loop in `runLoop` (`lane`, `run.js`), bound to no
+repository and no kind: each pass reads every repository's world and takes
+the next work of any of them (*What a free lane takes*, below). What it does,
+for as long as the runner runs:
 
 1. **STOP and UPDATE first.** A `STOP` file ends the lane; a pending `UPDATE`
    makes it take no new step and wait for the drain (*The switch*).
-2. **Read the world for its repository** — `queue({ only: repo })`:
+2. **Read the world** — `queue()`, every repository's:
    `~/mc/queue.md`, every `PLAN.json` under `~/mc/programs/`, and
    `gh pr list --state open`, on the same trip to the network. The open list
    also reconciles the register: a `running` step whose session is gone is failed
    leaves it.
-3. **Pick** — `nextFor` ([`run-plan.js`](../../src/mc/run-plan.js)): the first
-   name in `assembleQueue`'s order (*The queue*) that is in this repository and
+3. **Pick** — `pickWork` ([`lane-pick.js`](../../src/mc/lane-pick.js)) over
+   every repository's candidates, a project's by `nextFor`
+   ([`run-plan.js`](../../src/mc/run-plan.js)): the first name in
+   `assembleQueue`'s order (*The queue*)
    - whose plan under `~/mc/programs/` says its first unfinished step is `ready`
      (`kindFor`, the same call the page makes). A `landing` or a `built` step is
      behind the plan, as `planState` reads it, so the step after it is the one
@@ -767,7 +771,9 @@ step session re-reads its context ~90 times. The six include `Grep` and
 `grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
 over 2026-09-15..25, each a screen of file kept in the context.
 
-Next to that body go `canon/roles/_common.md` and `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
+Next to that body go `canon/roles/_common.md` and the build role —
+`canon/roles/build-project.md` for a project's step, `build-goal.md` for a
+goal, both including `_build.md` — assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
 them. How that is found and joined, for every session and not only this one, is
 [`mc-roles.md`](mc-roles.md).
@@ -1063,16 +1069,31 @@ no repository and no kind: n lane loops run at once, `lane 1` to `lane n`,
 each on its own clock, and a lane that frees takes the next work of any
 kind on any repository.
 
-The count lives in `~/.memoro/mc/lanes.json` (`lane-count.js`), one number,
-1 to 8, default 2 — what no file meant before, one lane on each of two
+The count lives in `lanes.json` under `MC_HOME` (`~/.memoro/mc/` unless it
+is set; `lane-count.js`), one number, 1 to 16, default 2 — what no file meant before, one lane on each of two
 repositories — read live: a raised count starts the new lanes within one poll
 (`UPDATE_POLL_MS`), a lowered one ends each lane above it after the session
 it is in. Until 2026-11-02 the file held two numbers, `per_repo` (that many
 lanes on each repository) and `--total` (a cap across them), and the machine
 ran the smaller of `per_repo × repositories` and `total`. A file in that
-shape is read once into the one number it actually allowed and written back,
-and `mc run lanes` says so the first time (`read from the old setting
-(per_repo 2, total 3): the 3 it allowed`). `mc run lanes 2 --total 3`, `mc
+shape is read once into the one number it actually allowed — `per_repo 8`
+with no total is sixteen, not a clamped eight — and written back, and `mc run
+lanes` says so the first time (`read from the old setting (per_repo 2, total
+3): the 3 it allowed`). Every write keeps `per_repo` and `total` beside
+`lanes`, set so a runner older than the total reads the same number from them
+(up to 8; above it, its widest, 8 on each): through a handover the old runner
+finishes its steps beside the new one, and on 2026-11-02 one read a file with
+`lanes` alone as a single lane per repository.
+
+**A probe never writes the person's file.** Reading the file can write it (the
+migration), so any run of mc's code that is not the person's — a test, a
+review's probe of a branch, `mc` started from a worktree to look at the page —
+sets `MC_HOME` to a directory of its own (`$MC_SCRATCH/mc-home`): `lanes.json`
+and the rest of what lives under `~/.memoro/mc/` are then that directory's.
+`tests/_isolate-home.mjs` does it for every suite; `run-control.js` reads the
+count under the `MC_HOME` of the env it is handed, not the process's. The
+runner's own state under `~/mc/runner/` follows `MC_WORK_ROOT`, the other
+variable a probe that starts a runner sets. `mc run lanes 2 --total 3`, `mc
 run lanes per_repo …` and `--per-repo` are refused with the line that says
 what replaced them. **A count of sessions is a proxy for load, not a
 measurement of it** — memory and quota are the honest measurements; the
