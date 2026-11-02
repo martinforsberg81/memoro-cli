@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -172,7 +172,7 @@ import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
-  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPrompt, goalReviewPrompt, headlessArgs, quietPrompt,
+  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, goalCheckInPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, quietPrompt,
   BUILD_ROLES, helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor, roleOfKind, runnableFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
@@ -2155,12 +2155,33 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return !why;
     };
     return goals()
-      .filter((goal) => (goal.status === 'open' || reviewDue(goal)) && goal.problems.length === 0
+      .filter((goal) => (goal.status === 'open' || reviewDue(goal) || planDue(goal)) && goal.problems.length === 0
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal))
       .map((goal) => ({
-        name: goalName(goal), repo: goal.repos[0], kind: goal.status === 'review' ? 'review' : 'build', variant: 'goal',
+        name: goalName(goal), repo: goal.repos[0], kind: goalKind(goal), variant: goalKind(goal) === 'plan' ? null : 'goal',
         since: goal.log.at(-1)?.at ?? '', resumed: false, goal,
       }));
+  }
+
+  /**
+   * The session a goal gets: `review` in review, `plan` when it is blocked and
+   * waits on plan (`planDue`), else `build`.
+   */
+  function goalKind(goal) {
+    if (goal.status === 'review') return 'review';
+    return goal.status === 'blocked' ? 'plan' : 'build';
+  }
+
+  /**
+   * The route a plan session runs on: the plan role's model (ruling 6, `fable`)
+   * on claude, pinned as a review is, at high effort. The billing is the
+   * session's as for any other (`billingFor`).
+   */
+  function planRoute(role) {
+    return {
+      ok: true, class: 'plan', candidate: { tool: 'claude', model: role.model || 'fable', effort: 'high' },
+      basis: 'pinned', headroom: null, why: 'a plan session runs on the planning model (ruling 6)',
+    };
   }
 
   /**
@@ -2347,18 +2368,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
-    const review = goal.status === 'review';
-    const roleName = review ? REVIEW_ROLE : BUILD_ROLES.goal;
+    const kind = goalKind(goal);
+    const review = kind === 'review';
+    const planning = kind === 'plan';
+    const roleName = review ? REVIEW_ROLE : planning ? PLAN_ROLE : BUILD_ROLES.goal;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: canon/roles/${roleName}.md is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routed = review ? reviewRoute(goal) : { route: routeClass(goal.class) };
+    const routed = review ? reviewRoute(goal) : { route: planning ? planRoute(role) : routeClass(goal.class) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    const lost = placeGoalWorktrees(goal, name);
+    // A plan session stands in the programme's directory, beside the goal and
+    // never in its worktree: it writes no code there (`canon/roles/plan.md`).
+    const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
+    const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
     const branch = `goal/${goal.goal}`;
     const repo = repos.find((item) => item.name === repoName);
@@ -2371,7 +2397,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return 'skipped:no-pr';
       }
     }
-    const attached = await deps.attachDeps(worktree);
+    const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
     if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
@@ -2385,6 +2411,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
     const prompt = review
       ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head })
+      : planning
+      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, why: goal.log.at(-1) })
       : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
@@ -2393,16 +2421,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const stem = `goal-${goal.programme}-${goal.goal}-${ts}`;
     const out = join(paths.log, stem);
     const entriesBefore = parseLog(deps.read(logPath) ?? '').length;
-    say(`${name}: ${review ? 'review' : 'build'} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
+    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
     const t0 = deps.now().getTime();
     // As a step's: there exactly as long as the session is, so in flight and
     // slot are one fact, and the eligibility of this goal is that same fact.
     const currentPath = paths.currentFor(repoName, lane);
     const current = {
-      name, step: null, kind: review ? 'review' : 'build', variant: 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
+      name, step: null, kind, variant: planning ? null : 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
-      started: stamp(), pid, worktree,
+      started: stamp(), pid, worktree: cwd,
       role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
     };
     writeJson(currentPath, current);
@@ -2420,15 +2448,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       result = await deps.session({
         bin: tool.bin,
         args: tool.args,
-        cwd: worktree,
+        cwd,
         logPath: `${out}.jsonl`,
         ...watchFor(launch, settings, {
-          prompt, name, checkInText: goalCheckInPrompt,
+          prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
           MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
-          MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
+          // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
+          MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
           ...scratchEnv,
         },
@@ -2446,12 +2475,28 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const provider = launch.id === 'codex' ? 'codex' : 'claude';
     if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
     const spoke = parseLog(deps.read(logPath) ?? '').length > entriesBefore;
-    if (!spoke) goalWithoutWord(goal, name, `${review ? 'review' : 'session'} ended without a log entry (exit ${result.status}, ${seconds} s)`);
+    if (planning) settlePlan(goal, name, { spoke });
+    else if (!spoke) goalWithoutWord(goal, name, `${review ? 'review' : 'session'} ended without a log entry (exit ${result.status}, ${seconds} s)`);
     else if (review) settleReview(goal, name, { repo, pr: pr.number, branch, before: entriesBefore });
     const note = spoke ? read.note : `${read.note},no-log`;
-    logRun({ ts: stamp(), name, kind: runsKind({ kind: review ? 'review' : 'build', variant: 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
-    say(`${name}: ${review ? 'review' : 'build'} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+    logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+    say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
     return 'ran';
+  }
+
+  /**
+   * After a plan session: a goal it left `blocked` gets the runner's
+   * `planHeldText` entry, so it waits on a person and wakes no plan session
+   * again (`waitsOnPlan`) — whether the session wrote its own entry or none.
+   * A goal it set `open` goes to its next build session as any open goal does;
+   * that one going red again wakes plan again, with the whole log to read.
+   */
+  function settlePlan(goal, name, { spoke }) {
+    const status = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '').status ?? goal.status;
+    if (status !== 'blocked') { say(`${name}: plan left it ${status}`); return; }
+    const text = planHeldText(spoke);
+    appendEntry({ dir: goal.dir, entry: { at: logStamp(deps.now()), tool: 'runner', model: null, status: 'blocked', done: text, comment: null, next: null }, read: deps.read, write: deps.write });
+    say(`${name}: ${text}`);
   }
 
   async function runStep(name, world = {}, { lane = 0, claimed = false } = {}) {
@@ -3418,8 +3463,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The project this lane carried has let go the moment the lane takes
       // something else: its slot is the one this session is about to use.
       if (last?.name && pick.name !== last.name) carried.delete(last.name);
-      if (pick.variant === 'goal') {
-        say(`${label}: next — ${pick.name} (${pick.kind} ${pick.variant})`);
+      // A goal's build or review, or the plan session a blocked goal wakes.
+      if (pick.goal) {
+        say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
         const ran = await goalPass(pick.goal, { lane, label });
         if (ran.ran || ran.stop) return ran;
         passed.add(pick.name);

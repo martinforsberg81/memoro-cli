@@ -6,12 +6,13 @@
  * of work, out of everything that could start now:
  *
  * - a `review` session — a project's review step, or a goal in review;
+ * - a `plan` session — a goal blocked on plan (goals.js `planDue`);
  * - a `build` session — a project's step (variant `project`) or a goal
  *   (variant `goal`).
  *
  * The order is finishing before starting: the project this lane has just run
  * goes on (a project holds its lane from its first step to its review), then
- * reviews, then a project's build, then a goal's. Within one of those, a step
+ * reviews and plan sessions, then a project's build, then a goal's. Within one of those, a step
  * the API cut off goes first (its cache is warm, ruling 33), and then the work
  * that has waited longest: the oldest `since`, which is when the work last
  * moved (a project's register entry, a goal's last log entry). A tie keeps the
@@ -30,16 +31,16 @@
  * necessity, and the two take turns by their wait.
  */
 
-/** The rank of a kind, finishing first. */
+/** The rank of a kind, finishing first: a plan session unblocks a goal, and ranks with a review. */
 function rankOf(item) {
-  if (item.kind === 'review') return 0;
+  if (item.kind === 'review' || item.kind === 'plan') return 0;
   return item.variant === 'goal' ? 2 : 1;
 }
 
 /**
  * `{ items, held, lanes, carry }` → the item to start, or null.
  *
- * `items`: `{ name, repo, kind: 'review'|'build', variant: 'project'|'goal',
+ * `items`: `{ name, repo, kind: 'review'|'plan'|'build', variant: 'project'|'goal'|null,
  * since, resumed }` — everything that could start now, already without what
  * another lane holds. `held`: the repository of every session in flight on
  * this machine, one entry per session. `carry`: the name this lane ran a

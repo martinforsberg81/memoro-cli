@@ -59,7 +59,7 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
-import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
+import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -1556,8 +1556,15 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     sessions: goalSessions(goal.log),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
-    // Blocked by a red review or a red merge: it waits on plan (`waitsOnPlan`).
+    // Blocked by a red review, a red merge or the runner: it waits on plan,
+    // which the runner wakes (`waitsOnPlan`). Blocked otherwise — by a person,
+    // a build session's question, or still after a plan session — it waits on
+    // a person (`waitsOnPerson`).
     plan: waitsOnPlan(goal),
+    person: waitsOnPerson(goal),
+    // What it waits on the person for: the last session's or person's comment,
+    // past the runner's own entry after a plan session.
+    question: waitsOnPerson(goal) ? (goal.log.findLast((entry) => entry.tool !== 'runner')?.comment ?? null) : null,
     problems: goal.problems,
   }));
 }

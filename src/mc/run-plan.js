@@ -970,6 +970,30 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
   return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
 }
 
+/**
+ * What a plan session woken by a blocked goal is told: the goal, why it is
+ * blocked (its last log entry), and where its worktree is — which it reads and
+ * never writes. The rest, and the three ways it may end, are
+ * `canon/roles/plan.md`'s.
+ */
+export function goalPlanPrompt({ name, dir, worktree, branch, why = null }) {
+  const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
+  return [
+    `The goal ${name} is blocked${reason ? `: ${reason}` : ''}. You are the plan session the runner woke for it, headless.`,
+    `Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\` — read it, never write in it. Your role says the rest.`,
+  ].join('\n');
+}
+
+/** `checkInPrompt` for a plan session on a blocked goal. */
+export function goalPlanCheckInPrompt({ minutes, count }) {
+  return [
+    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
+    'If you are still judging the goal, say so in one line and go on.',
+    '',
+    'If you cannot decide, end now: `mc goal log --status blocked --comment "<the question for Martin>"`, and stop.',
+  ].join('\n');
+}
+
 /** `checkInPrompt` for a goal's build session, which has no step to judge or to block. */
 export function goalCheckInPrompt({ minutes, count }) {
   return [
