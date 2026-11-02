@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { HELP_TEXT } from './mc/help-text.js';
+import { wantsHelp } from './mc-verbs.js';
 import { readConfig, getApiUrl } from './lib/config.js';
 import { needsDeviceAuth, runDeviceFlow } from './lib/device-flow.js';
 import {
@@ -69,6 +70,13 @@ export async function main() {
   if (argv[0] === '--version' || argv[0] === '-v') {
     console.log(await packageVersion());
     return 0;
+  }
+
+  // Help is a read, not a sign-in attempt. Answer before device auth, just
+  // as the page's verbs do, including a help flag after a subcommand.
+  if (Object.hasOwn(CAPABILITIES, argv[0]) && wantsHelp(argv.slice(1))) {
+    const mod = await CAPABILITIES[argv[0]]();
+    return mod.run(argv.slice(1));
   }
 
   const earlyAuthMode = requireLocalAuthMode(resolveLocalAuthModeFromArgv(argv));

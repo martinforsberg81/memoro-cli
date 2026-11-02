@@ -14,6 +14,7 @@
  * A session never sets `done`: the merger does when the pull request lands, and
  * a person may by hand. A review session never sets `open`: plan does.
  */
+import { commandUsage } from '../command-help.js';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
@@ -132,7 +133,7 @@ function newGoal(args, flags, ctx) {
 }
 
 /**
- * `mc goal log` and `mc goal open|blocked|done` — appends one entry to the
+ * `mc goal log` and `mc goal open|review|blocked|done` — appends one entry to the
  * goal's LOG.md, tagged with MC_TOOL and MC_MODEL (`person` when neither is
  * set). With a status the front matter is rewritten too. A goal whose GOAL.md
  * does not parse is refused.
@@ -297,11 +298,5 @@ function stampSeconds(date) {
 }
 
 export function usage() {
-  return [
-    'usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>"   a goal: GOAL.md, LOG.md, and a worktree per repository on goal/<goal>, from origin/main\n',
-    '        mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]   append a session\'s entry to LOG.md; the goal is MC_GOAL\'s when none is named\n',
-    '        mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]   set the goal\'s status, and log the reason; done is a person\'s\n',
-    '        mc goal show <programme>/<goal>   the goal, its last three log entries, and each worktree\'s state\n',
-    '        mc goal list [<programme>]   every goal, one line each\n',
-  ].join('');
+  return commandUsage('goal');
 }
