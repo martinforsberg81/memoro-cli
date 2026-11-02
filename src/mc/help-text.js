@@ -544,7 +544,13 @@ ${commandReference('run')}
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc roles check [<role>]          What a launch would hand a session today,
-                                    and any live session running other text
+                                    and any live session running other text;
+                                    then the installed skills against canon
+  mc skills [sync]                 mc's task skills (canon/skills, a programme's
+                                    SKILL.md) installed as mc-* for Claude
+                                    and Codex; sync rewrites a changed one
+                                    and removes a stale one. SessionStart
+                                    runs the sync too
 ${commandReference('model')}
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,

@@ -34,6 +34,7 @@ export const VERB_MODULES = {
   plan: './mc/commands/plan.js',
   run: './mc/commands/run.js',
   roles: './mc/commands/roles.js',
+  skills: './mc/commands/skills.js',
   model: './mc/commands/model.js',
   log: './mc/commands/log.js',
   step: './mc/commands/step.js',

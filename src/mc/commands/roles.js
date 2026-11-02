@@ -25,6 +25,7 @@ import {
   canonRolesDir, expandRoleIncludes, instructionsFor, listRoles, readCanonRole, readRole,
   rolesDir, textDigest, withWorkers,
 } from '../roles.js';
+import { skillStatus } from '../skills.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 
 export function usage() {
@@ -238,9 +239,10 @@ async function check(opts, { stdout, stderr, deps }) {
     sessions.push({ ...session, ...verdictFor(record, now) });
   }
   const named = sessions.filter((s) => NAMED.has(s.verdict));
+  const skills = (deps.skillStatus || skillStatus)(env);
 
   if (opts.json) {
-    stdout.write(`${JSON.stringify({ ok: true, role: asked, sessions, drifting: named.length }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ok: true, role: asked, sessions, drifting: named.length, skills }, null, 2)}\n`);
     return 0;
   }
 
@@ -274,9 +276,32 @@ async function check(opts, { stdout, stderr, deps }) {
     }
   }
 
+  stdout.write(skillReport(skills));
+
   if (asked?.instructions) {
     stdout.write(`\n----- what a launch would hand a ${asked.name} session today -----\n`);
     stdout.write(`${asked.instructions}\n`);
   }
   return 0;
+}
+
+/**
+ * The installed skills against their sources, one line per tool and a line for
+ * each entry that is not `ok`. `drift` is an install that is not what its
+ * source renders today; `missing` and `stale` are the two ends of the same
+ * question. Every one is answered by `mc skills sync`.
+ */
+export function skillReport({ rows, invalid }) {
+  const lines = ['\nskills\n'];
+  for (const tool of [...new Set(rows.map((r) => r.tool))]) {
+    const mine = rows.filter((r) => r.tool === tool);
+    const tally = [...new Set(mine.map((r) => r.state))].map((state) => `${mine.filter((r) => r.state === state).length} ${state}`);
+    lines.push(`  ${tool.padEnd(7)} ${mine[0].dir}  ${tally.join(', ') || 'none'}\n`);
+    for (const row of mine.filter((r) => r.state !== 'ok')) {
+      lines.push(`    ${row.name.padEnd(30)} ${row.state}${row.source ? ` (${row.source})` : ''}\n`);
+    }
+  }
+  for (const line of invalid) lines.push(`  canon: ${line} — not installed\n`);
+  if (rows.some((r) => r.state !== 'ok')) lines.push('  mc skills sync writes them\n');
+  return lines.join('');
 }

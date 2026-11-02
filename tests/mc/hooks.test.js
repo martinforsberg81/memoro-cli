@@ -446,6 +446,7 @@ describe('mc hook — the door', () => {
   it('answers session start with additional context, and silence where mc has nothing', async () => {
     const stdout = sink();
     await run(['session-start'], {
+      syncSkills: () => [],
       stdout,
       stderr: sink(),
       readStdin: async () => JSON.stringify({ cwd: '/w/memoro', hook_event_name: 'SessionStart' }),
@@ -461,6 +462,7 @@ describe('mc hook — the door', () => {
 
     const none = sink();
     await run(['session-start'], {
+      syncSkills: () => [],
       stdout: none, stderr: sink(), readStdin: async () => '{"cwd":"/tmp"}', worktreesAt: () => ({ inside: false, worktrees: [] }),
     });
     assert.match(JSON.parse(none.text).hookSpecificOutput.additionalContext, /^mc — session role unknown/u);
@@ -488,6 +490,7 @@ describe('SessionStart names the session before anything else', () => {
     ]) {
       const stdout = { text: '', write(text) { this.text += text; } };
       await run(['session-start'], {
+      syncSkills: () => [],
         stdout, env: { MC_WORK_ROOT: '/mc', ...extra }, readStdin: async () => JSON.stringify({ cwd }),
         worktreesAt: () => ({ inside: false, worktrees: [] }), listServers: () => ({ servers: [] }),
       });

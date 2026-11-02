@@ -149,8 +149,12 @@ export const TOOLBOX = [
 ];
 
 /** The SessionStart context: the worktrees' state, the warnings, the toolbox. */
-export function sessionStartContext({ cwd, inside, states, env = process.env }) {
+export function sessionStartContext({ cwd, inside, states, env = process.env, synced = [] }) {
   const lines = [sessionRoleLine(sessionIdentity({ cwd, env }), { cwd, env })];
+  // Said only when something moved: a skill rewritten after the tool listed its
+  // skills is read from disk when it is loaded, but the list itself may be old.
+  const moved = [...new Set(synced.map((row) => `${row.name} ${row.did}`))];
+  if (moved.length) lines.push(`mc skills synced: ${moved.join(', ')}.`);
   if (!inside && states.length) {
     lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md was NOT loaded; their PreToolUse hooks are run by mc hook pre-tool.`);
     lines.push(`Read ${states.map((state) => join(state.worktree, 'CLAUDE.md')).join(' and ')} before changing anything, and run commands from inside the worktree.`);
