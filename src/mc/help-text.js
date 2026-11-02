@@ -34,7 +34,8 @@ SEE AND SHIP
   mc shot dev | prod <target>     A PNG of the running app; prints its path
   mc dev list                     Which dev server runs in which worktree
   mc deploy [--dry-run]            memoro's main to production, after a question
-  mc build ios                    Does memoro need a new iOS binary?
+  mc asc build                    Does memoro need a new iOS binary?
+  mc asc status [<version>]       An iOS version's state, build and storefronts
 
 WORKSPACES
   mc work <name>                  Open that workarea
@@ -401,14 +402,14 @@ ${commandReference('goal')}
                                     and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
-  mc build ios [--json]            Whether memoro needs a new iOS binary,
+  mc asc build [--json]            Whether memoro needs a new iOS binary,
                                     without building: the last shipped build,
                                     the commit production runs, and the native
                                     paths and packages memoro's .mc/ios.json
                                     declares that differ between them — or
                                     that mc deploy is enough. Reads
                                     ~/mc/runner/log/ios-builds.tsv
-  mc build ios --device [--sha <ref>] [--device-id <id>]
+  mc asc build --device [--sha <ref>] [--device-id <id>]
                                    Build the commit production runs (or an
                                     older one it contains) in its own
                                     process, holding the heavy lane, read the
@@ -416,16 +417,45 @@ ${commandReference('goal')}
                                     it on the paired iPhone. The terminal
                                     follows ~/mc/runner/log/ios-build.log;
                                     ^C stops watching, not the build
-  mc build ios --follow            Watch the iOS build that is running
-  mc build ios --testflight [--yes | --no-upload]
+  mc asc build --follow            Watch the iOS build that is running
+  mc asc build --testflight [--yes | --no-upload]
                                    Build, verify the IPA and, after one
                                     question, upload it to TestFlight;
                                     --yes answers the question, for a
                                     headless session; --no-upload stops at
                                     the verified IPA
-  mc build ios --shipped <build> <sha>
+  mc asc build --shipped <build> <sha>
                                    Record a binary built before the verb
                                     existed as the last shipped one
+  mc asc status [<version>] [--json]
+                                   Each iOS App Store version's state,
+                                    release type, attached build, phased
+                                    release and latest review submission,
+                                    and the version the storefront shows in
+                                    us, se and dk. Reads only. Every mc asc
+                                    subverb but build runs the script
+                                    memoro's .mc/ios.json declares, as
+                                    origin/main has it; the script reads the
+                                    key, mc names where it is
+  mc asc metadata | screenshots | review-notes | iap [--dry-run]
+                                   Sync the store copy, the screenshots, the
+                                    App Review notes or the in-app purchases
+                                    from memoro's marketing/ on origin/main;
+                                    further words go to the script
+                                    (--version=, --locale=); --dry-run sends
+                                    nothing
+  mc asc submit <version> <build> [--dry-run]
+                                   Submit the version with that build for
+                                    App Review, after one question; refused
+                                    unless it is PREPARE_FOR_SUBMISSION with
+                                    that build and the review notes. Without
+                                    a terminal it refuses (exit 2)
+  mc asc release <version> [--phased] [--dry-run]
+                                   Release an approved version, after one
+                                    question; refused unless it is
+                                    PENDING_DEVELOPER_RELEASE. --phased
+                                    releases over seven days. Without a
+                                    terminal it refuses (exit 2)
   mc language [--json]             Every language with a cached reading or a
                                     manifest: the reading's age, the manifests,
                                     the last run. Offline and instant

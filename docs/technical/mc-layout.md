@@ -262,12 +262,12 @@ a caller takes the field for what it does:
 - `path` — where git plumbing runs: `fetch`, `show`, `rev-parse`, `log`,
   `branch`, `merge-base`, `worktree add|list|prune|repair`, and `gh`. The bare
   directory, or the primary checkout. Most callers take this one (`mc deploy`,
-  `mc language`, `mc build ios`, `mc plan`, `mc step`, `mc project`, `mc deps`,
+  `mc language`, `mc asc`, `mc plan`, `mc step`, `mc project`, `mc deps`,
   tidy, the runner).
 - `checkout` — a working tree on `main`, for reading a file or running a
   porcelain command: `self/<name>` when it exists, else the primary checkout,
   else `null`. `sharedWorktree` (`mc test`, `mc shot`), the helper digest's
-  `memoroRoot` and `mc build ios`'s declared `list_builds` script take it, and
+  `memoroRoot` and `mc asc`'s declared scripts take it, and
   each says what it does without one — `no memoro checkout to serve — ~/mc/self/memoro
   is missing`.
 - `git` — the git directory, which is what `--git-common-dir` of any worktree

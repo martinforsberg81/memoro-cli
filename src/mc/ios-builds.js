@@ -9,13 +9,13 @@
  * TSV cell and row helpers are that module's own, imported rather than copied.
  *
  * What it adds is `lastShipped`: the binary people have on their phones, which
- * is what `mc build ios` compares the commit production runs against. A
+ * is what `mc asc build` compares the commit production runs against. A
  * TestFlight upload is one, and so is a `seed` row — a build made before the
- * verb existed, recorded by hand with `mc build ios --shipped <build> <sha>`.
+ * verb existed, recorded by hand with `mc asc build --shipped <build> <sha>`.
  *
  * Every write is under the register's lock (`realLock`, register.js): a build
  * runs in its own process, and its row is completed while the asking terminal
- * or another `mc build ios` may be writing.
+ * or another `mc asc build` may be writing.
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
