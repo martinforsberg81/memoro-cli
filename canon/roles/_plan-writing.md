@@ -84,8 +84,9 @@ start to finish, and know when it is done? If not, it is not a step
   - Never put `model` in the plan's own `runner`: it makes every step that
     model. The model is named on each step, never left to the default.
 - **Codex.** `gpt-6.1-sol` and `gpt-6-luna` are Codex's models, not stand-ins
-  for `haiku` or `opus`. A concrete Codex name goes on a `--tool codex` plan, and
-  a Claude name is refused there. A class names no tool, so the plan's
+  for `haiku` or `opus`. On a legacy sent plan, a concrete Codex name belongs
+  to a `--tool codex` plan, and a Claude name is refused there. New steps name
+  a work class, never a concrete model. A class names no tool, so the plan's
   `runner.tool` does not apply to it. `effort` takes the same five levels on
   both tools; on codex it reaches the session as `-c model_reasoning_effort=<level>`.
   The name goes to `codex exec -m`, and which names exist is for the installed,
