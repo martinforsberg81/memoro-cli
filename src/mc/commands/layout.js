@@ -36,8 +36,17 @@ export function usage() {
 }
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--apply'] } };
-ROUTES.migrate = ROUTES[''];
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json', '--apply'], check: ({ positional: [sub, ...rest], flags }) => refusal(sub, rest, flags) } };
+ROUTES.migrate = { ...ROUTES[''], check: ({ positional, flags }) => refusal('migrate', positional, flags) };
+
+function refusal(sub, rest, flags) {
+  if (sub !== undefined && sub !== 'migrate') return `mc layout knows migrate, not ${sub}`;
+  if (rest.length) return `mc layout ${sub} takes no name`;
+  if (flags.apply && sub !== 'migrate') return '--apply belongs to mc layout migrate';
+  if (flags.apply && flags.json) return '--json belongs to the dry run, not --apply';
+  return null;
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -46,12 +55,8 @@ export async function run(argv, deps = {}) {
   const root = deps.root || workRoot(env);
   const home = deps.home ?? homedir();
   const scanned = scanArgs(argv, ROUTES['']);
-  const [sub, ...rest] = scanned.positional;
-  let error = scanned.error;
-  if (!error && sub !== undefined && sub !== 'migrate') error = `mc layout knows migrate, not ${sub}`;
-  if (!error && rest.length) error = `mc layout ${sub} takes no name`;
-  if (!error && scanned.flags.apply && sub !== 'migrate') error = '--apply belongs to mc layout migrate';
-  if (!error && scanned.flags.apply && scanned.flags.json) error = '--json belongs to the dry run, not --apply';
+  const [sub] = scanned.positional;
+  const error = scanned.error || ROUTES[''].check(scanned);
   if (error) {
     stderr.write(`mc: ${error}\n`);
     stderr.write(usage());

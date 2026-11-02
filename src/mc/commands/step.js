@@ -53,7 +53,8 @@ const STATES = new Set(['failed', 'blocked', 'ready', 'done', 'note']);
 /**
  * The verb's flags, read before anything else. `--after-deploy` takes a step
  * number when one follows it, and none otherwise: the step before is the
- * default. Exported for help-routes.test.js, which walks the help with it.
+ * default. `refused` is what a change of status may not be (`refuseStatus`).
+ * Exported for help-routes.test.js, which walks the help with it.
  */
 export function scanStepArgs(argv) {
   const args = [...argv];
@@ -63,7 +64,20 @@ export function scanStepArgs(argv) {
     afterDeploy = /^\d+$/u.test(args[at + 1] || '') ? Number(args[at + 1]) : 'previous';
     args.splice(at, afterDeploy === 'previous' ? 1 : 2);
   }
-  return { ...scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--answer', '--on', '--on-project', '--pr', '--until', '--hours'] }), afterDeploy };
+  const scanned = scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--answer', '--on', '--on-project', '--pr', '--until', '--hours'] });
+  return { ...scanned, refused: scanned.error ? null : refuseStatus(scanned), afterDeploy };
+}
+
+/**
+ * What a change of a step's status may not be, read before the register is:
+ * --answer only with ready, and a note says something. A reading — no status
+ * first — is not a change.
+ */
+function refuseStatus({ flags, positional: [status, ...line] }) {
+  if (!STATES.has(status)) return null;
+  if (flags.answer != null && status !== 'ready') return '--answer goes with mc step ready';
+  if (status === 'note' && !(line.at(-1) && line.at(-1).trim())) return 'a note says something — mc step note [<project> <n>] "…"';
+  return null;
 }
 
 export async function run(argv, deps = {}) {
@@ -75,8 +89,9 @@ export async function run(argv, deps = {}) {
   const io = { read: deps.read, write: deps.write, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
-  const { afterDeploy, ...scanned } = scanStepArgs(argv);
+  const { afterDeploy, refused, ...scanned } = scanStepArgs(argv);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const { flags, positional } = scanned;
   // `--answer` is `--reason` for a step set ready: the words a person gives the
   // question the step was parked on.
@@ -95,10 +110,8 @@ export async function run(argv, deps = {}) {
   }
 
   const [status, ...line] = positional;
-  if (flags.answer != null && status !== 'ready') { stderr.write('mc: --answer goes with mc step ready\n'); return 2; }
   // A note's text is the last word on the line; the rest names the step.
   const note = status === 'note' ? line.pop() : null;
-  if (status === 'note' && !(note && note.trim()) ) { stderr.write('mc: a note says something — mc step note [<project> <n>] "…"\n'); return 2; }
   const rest = line;
   const target = resolveTarget(rest, env);
   if (!target) { stderr.write('mc: which step? mc step <status> <project> <n>, or MC_STEP in a runner session\n'); return 2; }

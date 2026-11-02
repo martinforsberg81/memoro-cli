@@ -19,7 +19,8 @@ export function usage() {
 }
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json'] } };
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = { '': { booleans: ['--json'], check: ({ positional }) => (positional.length ? `mc repos takes no ${positional[0]}` : null) } };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -27,8 +28,7 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const home = deps.home ?? homedir();
   const scanned = scanArgs(argv, ROUTES['']);
-  let error = scanned.error;
-  if (!error && scanned.positional.length) error = `mc repos takes no ${scanned.positional[0]}`;
+  const error = scanned.error || ROUTES[''].check(scanned);
   if (error) {
     stderr.write(`mc: ${error}\n`);
     stderr.write(usage());

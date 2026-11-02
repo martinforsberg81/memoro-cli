@@ -29,13 +29,37 @@ import { ensureAppServer, readDeclaration } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import { answer, servedTree, usage } from './shot.js';
 
+/**
+ * Each verb's scan, and `check`: what its scanned arguments may not be, read
+ * before anything is looked up — null, or what is wrong. The verb runs it, and
+ * help-routes.test.js walks the help with it.
+ */
 export const STEP_FLAGS = {
   booleans: ['--full', '--json', '--open', '--reload', '--no-shot'],
   strictValues: ['--wait-for', '--scroll', '--measure', '--el', '--shell', '--timeout', '--out', '--goto'],
   repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
+  check: refuseStep,
 };
-export const CLOSE_FLAGS = { booleans: ['--all'] };
-export const SESSIONS_FLAGS = {};
+export const CLOSE_FLAGS = { booleans: ['--all'], check: refuseClose };
+export const SESSIONS_FLAGS = { check: ({ positional }) => (positional.length ? 'mc shot sessions takes nothing more' : null) };
+
+function refuseStep({ flags, positional }) {
+  if (positional.length > 1) return `one session at a time (${positional.slice(1).join(' ')} is extra)`;
+  if (flags.shell && !SHELLS.includes(flags.shell)) return `--shell is ${SHELLS.join(', ')}, not ${flags.shell}`;
+  if (flags.el && flags.shell) return '--el and --shell both pick what is pictured — give one';
+  if (flags.out && !flags.out.endsWith('.png')) return `--out ends in .png, and ${flags.out} does not`;
+  if (flags['no-shot'] && (flags.out || flags.el || flags.shell || flags.full || flags.open)) {
+    return '--no-shot takes no picture, so --out, --el, --shell, --full and --open have nothing to do';
+  }
+  if (flags.goto && flags.reload) return '--goto and --reload both load a page — give one';
+  return null;
+}
+
+function refuseClose({ flags, positional }) {
+  if (flags.all && positional.length) return '--all or one id, not both';
+  if (positional.length > 1) return `one session at a time (${positional.slice(1).join(' ')} is extra)`;
+  return null;
+}
 
 /**
  * `--keep`: the shot's request in mode `session`, its answer printed as a
@@ -86,7 +110,8 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   const scanned = scanArgs(argv, STEP_FLAGS);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
-  if (positional.length > 1) { stderr.write(`mc: one session at a time (${positional.slice(1).join(' ')} is extra)\n`); return 2; }
+  const refused = refuseStep(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const cwd = deps.cwd || process.cwd();
   const env = deps.env || process.env;
   const scroll = parseScroll(flags.scroll);
@@ -95,18 +120,6 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   if (!acting.ok) { stderr.write(`mc: ${acting.error}\n`); return 2; }
   const timeout = parseTimeout(flags.timeout);
   if (!timeout.ok) { stderr.write(`mc: ${timeout.error}\n`); return 2; }
-  if (flags.shell && !SHELLS.includes(flags.shell)) {
-    stderr.write(`mc: --shell is ${SHELLS.join(', ')}, not ${flags.shell}\n`);
-    return 2;
-  }
-  if (flags.el && flags.shell) { stderr.write('mc: --el and --shell both pick what is pictured — give one\n'); return 2; }
-  if (flags.out && !flags.out.endsWith('.png')) { stderr.write(`mc: --out ends in .png, and ${flags.out} does not\n`); return 2; }
-  if (flags['no-shot'] && (flags.out || flags.el || flags.shell || flags.full || flags.open)) {
-    stderr.write('mc: --no-shot takes no picture, so --out, --el, --shell, --full and --open have nothing to do\n');
-    return 2;
-  }
-  if (flags.goto && flags.reload) { stderr.write('mc: --goto and --reload both load a page — give one\n'); return 2; }
-
   const picked = pick(positional[0], { cwd, env, deps });
   if (picked.error) { stderr.write(`mc: ${picked.error}\n`); return picked.code; }
   const { session } = picked;
@@ -205,8 +218,8 @@ export async function close(argv, { stdout, stderr, deps = {} }) {
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   const env = deps.env || process.env;
-  if (flags.all && positional.length) { stderr.write('mc: --all or one id, not both\n'); return 2; }
-  if (positional.length > 1) { stderr.write(`mc: one session at a time (${positional.slice(1).join(' ')} is extra)\n`); return 2; }
+  const refused = refuseClose(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   let closing = [];
   if (flags.all) {
     closing = readSessions(env, deps);
@@ -231,8 +244,9 @@ export async function close(argv, { stdout, stderr, deps = {} }) {
 /** `mc shot sessions`: one line per live session; the dead ones' files go. */
 export async function sessions(argv, { stdout, stderr, deps = {} }) {
   const scanned = scanArgs(argv, SESSIONS_FLAGS);
-  if (scanned.error || scanned.positional.length) {
-    stderr.write(`mc: ${scanned.error || 'mc shot sessions takes nothing more'}\n${usage()}`);
+  const refused = scanned.error || SESSIONS_FLAGS.check(scanned);
+  if (refused) {
+    stderr.write(`mc: ${refused}\n${usage()}`);
     return 2;
   }
   const env = deps.env || process.env;

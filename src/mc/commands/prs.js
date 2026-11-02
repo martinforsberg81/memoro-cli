@@ -18,15 +18,18 @@ import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--offline'] } };
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': { booleans: ['--json', '--offline'], check: ({ positional }) => (positional.length ? `mc prs takes no positional (${positional.join(' ')})` : null) },
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const scanned = scanArgs(argv, ROUTES['']);
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  if (scanned.positional.length) { stderr.write(`mc: mc prs takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
 
   const offline = Boolean(scanned.flags.offline);
   const data = await (deps.collect || collectPage)({ fresh: !offline, offline });

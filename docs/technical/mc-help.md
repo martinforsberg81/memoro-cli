@@ -269,6 +269,22 @@ baseline and a candidate compared by name; it now says what repo-gate.js does:
 one tree, the head with main merged in, the reached test files and command
 gates, main run only for a file that went red.
 
+In the sixth session (after the review on 2e00b13) a scan was no longer taken
+as acceptance. A handler that refused a scanned form afterwards (shot's
+`dev|prod` first, `language key` set or nothing, `model set` review only,
+`--json` only on `model list`, `--answer` only with `step ready`) now has that
+refusal as a function: a route's `check` in `ROUTES` (shot and its kept-browser
+verbs, language, model, layout, deps, prs, repos, publish, helper, brief) or
+`refused` from `scanStepArgs`. The handler calls the same function, with the
+same message, and the walker runs it after the scan. Those five forms, and
+`mc shot prod … --here`, `close <id> --all`, `login dev`, `language run` with
+no manifest, `prs x`, `layout migrate --apply --json` and `deps bump x`, are
+negative controls. A continuation line said to be for one of the row's first
+alternatives (`[--me]  prod only: …` under `mc shot <dev|prod>`) is walked on
+that alternative alone. An example's shell continuation (` \`) is not a word.
+`mc hook`, `mc keys` and `mc skills` read their arguments without the scanner
+and keep their own checks; their routes have no `check`.
+
 What it found, now fixed: `mc vault` revoke-device, change-password and
 destroy-forgotten were routed but missing from the vault row and the matrix;
 `mc work list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and

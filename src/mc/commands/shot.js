@@ -55,9 +55,15 @@ import { commandUsage } from '../command-help.js';
 
 const PLACES = ['dev', 'prod'];
 
-/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+/**
+ * Each subcommand and the scan it is read with; '' is the bare verb, '*' a
+ * first word that names something. A route's `check` is what its scanned
+ * arguments may not be, read before anything is started: null, or what is
+ * wrong. The verb runs it, and help-routes.test.js walks the help with it.
+ */
 export const ROUTES = {
   '*': {
+    check: (scanned) => refuseShot(scanned)?.error ?? null,
     booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
@@ -68,9 +74,30 @@ export const ROUTES = {
   next: STEP_FLAGS,
   close: CLOSE_FLAGS,
   sessions: SESSIONS_FLAGS,
-  login: { booleans: ['--paste'] },
-  logout: {},
+  login: { booleans: ['--paste'], check: (scanned) => refuseAccount('login', scanned) },
+  logout: { check: (scanned) => refuseAccount('logout', scanned) },
 };
+
+/** What a shot's arguments may not be, and whether the usage goes with saying so. */
+function refuseShot({ flags, positional }) {
+  const [where, , ...extra] = positional;
+  if (!PLACES.includes(where)) return { error: `mc shot takes dev or prod first${where ? `, not ${where}` : ''}`, usage: true };
+  if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
+  if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
+  if (flags.here && where === 'prod') return { error: '--here is for dev — production has one app, not one per worktree' };
+  if ((flags.account || flags.onboarding) && where === 'prod') {
+    return { error: '--account and --onboarding are for dev — production signs in as the test account or as you' };
+  }
+  if (flags.compare && where === 'prod') return { error: '--compare is for dev — production has one tree' };
+  if (flags.keep && flags.compare) return { error: '--keep keeps one browser and --compare runs two' };
+  if (flags.compare && flags.out) return { error: '--compare writes two files and --out names one — two files need two names' };
+  return null;
+}
+
+function refuseAccount(verb, { positional }) {
+  const [where, ...extra] = positional;
+  return where !== 'prod' || extra.length ? `mc shot ${verb} is for prod only — a dev server signs in through /dev/login` : null;
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -85,36 +112,9 @@ export async function run(argv, deps = {}) {
   const scanned = scanArgs(argv, ROUTES['*']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
-  const [where, word, ...extra] = positional;
-  if (!PLACES.includes(where)) {
-    stderr.write(`mc: mc shot takes dev or prod first${where ? `, not ${where}` : ''}\n${usage()}`);
-    return 2;
-  }
-  if (extra.length) { stderr.write(`mc: one target at a time (${extra.join(' ')} is extra)\n`); return 2; }
-  if (flags.me && where === 'dev') {
-    stderr.write('mc: --me is for prod — a dev server has only the accounts /dev/login offers\n');
-    return 2;
-  }
-  if (flags.here && where === 'prod') {
-    stderr.write('mc: --here is for dev — production has one app, not one per worktree\n');
-    return 2;
-  }
-  if ((flags.account || flags.onboarding) && where === 'prod') {
-    stderr.write('mc: --account and --onboarding are for dev — production signs in as the test account or as you\n');
-    return 2;
-  }
-  if (flags.compare && where === 'prod') {
-    stderr.write('mc: --compare is for dev — production has one tree\n');
-    return 2;
-  }
-  if (flags.keep && flags.compare) {
-    stderr.write('mc: --keep keeps one browser and --compare runs two\n');
-    return 2;
-  }
-  if (flags.compare && flags.out) {
-    stderr.write('mc: --compare writes two files and --out names one — two files need two names\n');
-    return 2;
-  }
+  const [where, word] = positional;
+  const refused = refuseShot(scanned);
+  if (refused) { stderr.write(`mc: ${refused.error}\n${refused.usage ? usage() : ''}`); return 2; }
   const safeArea = parseSafeArea(flags['safe-area']);
   if (!safeArea.ok) { stderr.write(`mc: ${safeArea.error}\n`); return 2; }
   const scroll = parseScroll(flags.scroll);
@@ -340,11 +340,8 @@ export function answer(result, {
 async function account(verb, argv, { stdout, stderr, deps }) {
   const scanned = scanArgs(argv, ROUTES[verb]);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  const [where, ...extra] = scanned.positional;
-  if (where !== 'prod' || extra.length) {
-    stderr.write(`mc: mc shot ${verb} is for prod only — a dev server signs in through /dev/login\n`);
-    return 2;
-  }
+  const refused = ROUTES[verb].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   if (verb === 'logout') {
     await (deps.deleteSecret || deleteSecret)(SESSION_SECRET);
     stdout.write('mc: your session is forgotten\n');

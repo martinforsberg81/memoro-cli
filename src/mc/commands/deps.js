@@ -21,7 +21,14 @@ import { resolveRepoPath } from './repo.js';
 import { commandUsage } from '../command-help.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--refresh'] }, bump: { booleans: ['--dry-run', '--json'] } };
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': {
+    booleans: ['--json', '--refresh'],
+    check: ({ positional }) => (positional.length > 1 ? `one repository at a time (${positional.slice(1).join(' ')} is extra)` : null),
+  },
+  bump: { booleans: ['--dry-run', '--json'], check: ({ positional }) => (positional.length !== 2 ? 'mc deps bump takes a repository and what to bump' : null) },
+};
 ROUTES['*'] = ROUTES[''];
 
 export async function run(argv, deps = {}) {
@@ -31,12 +38,9 @@ export async function run(argv, deps = {}) {
 
   if (argv[0] === 'bump') return runBump(argv.slice(1), { ...deps, stdout, stderr, env });
   const scanned = scanArgs(argv, ROUTES['']);
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
-  if (positional.length > 1) {
-    stderr.write(`mc: one repository at a time (${positional.slice(1).join(' ')} is extra)\n${usage()}`);
-    return 2;
-  }
 
   const options = {
     refresh: flags.refresh,
@@ -87,12 +91,9 @@ export async function run(argv, deps = {}) {
 async function runBump(argv, deps) {
   const { stdout, stderr, env } = deps;
   const scanned = scanArgs(argv, ROUTES.bump);
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
+  const refused = scanned.error || ROUTES.bump.check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
-  if (positional.length !== 2) {
-    stderr.write(`mc: mc deps bump takes a repository and what to bump\n${usage()}`);
-    return 2;
-  }
   const repoPath = await (deps.resolveRepo || resolveRepoPath)(positional[0]);
   if (!repoPath) {
     stderr.write(`mc: no repository called "${positional[0]}" — mc repo status lists the ones mc can see\n`);

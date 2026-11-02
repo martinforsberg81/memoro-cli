@@ -9,7 +9,8 @@
  * part and every alternative. Each line goes through what the handler reads
  * its arguments with: its exported parser where it has one, or else the
  * scanner with the spec the handler scans that subcommand with (its exported
- * `ROUTES`). No text of the help, and nothing in command-help.js, decides
+ * `ROUTES`), then that route's `check`: what the handler refuses after the
+ * scan, before it reads anything, through the same function. No text of the help, and nothing in command-help.js, decides
  * what is routed.
  *
  * Then every `--flag` a usage names anywhere, prose included, must be one
@@ -54,6 +55,12 @@ const VAULT_VERBS = (() => {
 
 const errorOf = (result) => result?.error ?? null;
 
+/** A route's scan, then its check when it has one: the handler's own refusal of what it scanned. */
+function accepted(argv, spec) {
+  const scanned = scanArgs(argv, spec);
+  return errorOf(scanned) ?? spec.check?.(scanned) ?? null;
+}
+
 /**
  * A verb read through `ROUTES`: the longest leading words that name a route,
  * then `*` when a first word names something, then `''` for the bare verb.
@@ -62,14 +69,14 @@ function routed(routes, argv) {
   for (const width of [2, 1]) {
     const key = argv.slice(0, width).join(' ');
     if (argv.length >= width && !argv.slice(0, width).some((word) => word.startsWith('-')) && Object.hasOwn(routes, key) && key) {
-      return errorOf(scanArgs(argv.slice(width), routes[key]));
+      return accepted(argv.slice(width), routes[key]);
     }
   }
   // A word that begins a longer route is that route's noun, not a name: mc project criterion <what>.
   if (argv[0] && Object.keys(routes).some((route) => route.startsWith(`${argv[0]} `))) return `no subcommand ${argv.slice(0, 2).join(' ')}`;
   const key = argv[0] !== undefined && !argv[0].startsWith('-') ? '*' : '';
   if (!Object.hasOwn(routes, key)) return key === '*' ? `no subcommand ${argv[0]}` : 'not without a subcommand';
-  return errorOf(scanArgs(argv, routes[key]));
+  return accepted(argv, routes[key]);
 }
 
 /** What each verb's handler reads its arguments with. */
@@ -95,7 +102,7 @@ const PARSERS = {
   roles: (argv) => errorOf(parseRoles(argv)),
   docker: (argv) => errorOf(parseDocker(argv)),
   plan: (argv) => errorOf(parsePlan(argv)),
-  step: (argv) => errorOf(scanStepArgs(argv)),
+  step: (argv) => { const scanned = scanStepArgs(argv); return errorOf(scanned) ?? scanned.refused; },
   vault: (argv) => (VAULT_VERBS.includes(argv[0]) || argv.length === 0 ? null : `no vault verb ${argv[0]}`),
 };
 
@@ -262,11 +269,17 @@ export function expand(synopsis) {
 const ROW = /^(?: {2,8}|usage\s*[—:]\s*)mc ([a-z][a-z-]*|--[a-z-]+)(.*)$/u;
 const PIPED = /^ {2,8}\S.*\| mc ([a-z][a-z-]*)(.*)$/u;
 const CONTINUED = /^ {8,16}(\[--.*)$/u;
-const synopsisOf = (rest) => rest.split(/ {2,}/u)[0].trim();
+// An example's shell continuation (` \`) is not a word of it.
+const synopsisOf = (rest) => rest.split(/ {2,}/u)[0].trim().replace(/\s*\\$/u, '');
+const describedAs = (rest) => rest.split(/ {2,}/u)[1] ?? '';
 
 /**
  * The synopsis rows of a text: each `mc <verb> …` row (a usage head, a row
  * under it, a reference row) with the `[--flag]` lines that continue it.
+ *
+ * A continuation said to be for one of the row's first alternatives —
+ * `[--me]  prod only: …` under `mc shot <dev|prod>` — is walked on that
+ * alternative alone: a row of its own with `prod` in place of `<dev|prod>`.
  */
 export function synopses(text) {
   const rows = [];
@@ -280,6 +293,13 @@ export function synopses(text) {
     }
     const continued = CONTINUED.exec(line);
     if (continued && last) {
+      const [first, ...after] = last.synopsis.split(' ');
+      const only = /^([a-z]+) only:/u.exec(describedAs(continued[1]))?.[1];
+      const alternatives = /^<([a-z]+(?:\|[a-z]+)+)>$/u.exec(first)?.[1].split('|') ?? [];
+      if (only && alternatives.includes(only)) {
+        rows.push({ line: `${last.line} ${line.trim()}`, verb: last.verb, synopsis: [only, ...after, synopsisOf(continued[1])].join(' ') });
+        continue;
+      }
       last.synopsis = `${last.synopsis} ${synopsisOf(continued[1])}`;
       last.line = `${last.line} ${line.trim()}`;
       continue;
@@ -426,6 +446,20 @@ describe('every name in the help is routed', () => {
       'usage — mc shot <dev|prod> <target>   a PNG\n          [--fictional]               invented, on a continuation line',
       'usage — mc log [<run>] [--failures]\n              [--verb <verb>] [--fictional] [--json]',
       'usage — mc shot next [<id>] [--keep]',
+      // Forms the scan takes and the handler refuses after it.
+      '  mc shot archive x                a place that is neither dev nor prod',
+      '  mc language key frobnicate       key takes set or nothing',
+      '  mc model set fictional codex:gpt-6:high   set is for review only',
+      '  mc model add fast codex:gpt-6:high --json   --json is for list',
+      '  mc step done x 3 --answer x      --answer goes with ready',
+      '  mc shot prod /app --here         --here is for dev',
+      '  mc shot close x --all            --all or one id',
+      '  mc shot login dev                login is for prod',
+      '  mc language run                  run takes a manifest',
+      '  mc prs extra                     prs takes no positional',
+      '  mc layout migrate --apply --json   --json is the dry run\'s',
+      '  mc deps bump x                   bump takes a repository and what',
+      'usage — mc shot <dev|prod> <target>   a PNG\n          [--me]                      dev only: said of the wrong place',
     ]) {
       assert.notDeepEqual(unrouted(row), [], row);
     }
@@ -451,5 +485,9 @@ describe('every name in the help is routed', () => {
     assert.deepEqual(synopses('                                    mc can see'), []);
     assert.deepEqual(synopses('mc merge queues each pull request, in order'), []);
     assert.equal(synopses('usage — mc log [<run>]\n              [--verb <verb>] [--json]')[0].synopsis, '[<run>] [--verb <verb>] [--json]');
+    assert.deepEqual(synopses('usage — mc shot <dev|prod> <target>   a PNG\n          [--me]    prod only: as you\n          [--full]    the page').map((row) => row.synopsis), [
+      '<dev|prod> <target> [--full]', 'prod <target> [--me]',
+    ]);
+    assert.deepEqual(synopses('  mc shot dev /app --keep \\\n').map((row) => row.synopsis), ['dev /app --keep']);
   });
 });

@@ -43,15 +43,22 @@ import { run as merge } from './merge.js';
 import { commandUsage } from '../command-help.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--no-merge'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] } };
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': {
+    booleans: ['--json', '--no-merge'],
+    strictValues: ['--title', '--body', '--body-file', '--base', '--branch'],
+    check: ({ positional }) => (positional.length ? `mc publish takes no positional (${positional.join(' ')})` : null),
+  },
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
   const scanned = scanArgs(argv, ROUTES['']);
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
   const { flags } = scanned;
 
   const git = deps.git || ((args) => tryGit(cwd, args));
