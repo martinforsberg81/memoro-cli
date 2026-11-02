@@ -40,14 +40,25 @@ import { parseStepEnv, updateStep } from '../register.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
+import { commandUsage } from '../command-help.js';
+
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': {
+    booleans: ['--json', '--no-merge'],
+    strictValues: ['--title', '--body', '--body-file', '--base', '--branch'],
+    check: ({ positional }) => (positional.length ? `mc publish takes no positional (${positional.join(' ')})` : null),
+  },
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
-  const scanned = scanArgs(argv, { booleans: ['--json', '--no-merge'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
+  const scanned = scanArgs(argv, ROUTES['']);
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
   const { flags } = scanned;
 
   const git = deps.git || ((args) => tryGit(cwd, args));
@@ -231,15 +242,5 @@ function ghCommand(args, cwd) {
 }
 
 export function usage() {
-  return [
-    'usage — mc publish                          push this branch and open its pull request (title and body from the last commit)\n',
-    '        mc publish --title "…" --body "…"   named instead; on an open pull request each edits only its own field\n',
-    '        mc publish --body-file <path>       the body from a file\n',
-    '        mc publish --base <branch>          the base a new pull request aims at, or the open one is moved to\n',
-    '        mc publish --branch <name>          a detached HEAD (a mend\'s worktree) to that branch\n',
-    '        mc publish --json                   the pull request snapshot as one object; queues nothing\n',
-    '        mc publish --no-merge               push and open it, and queue nothing\n',
-    '\n',
-    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force); a detached HEAD only with --branch.\nThen queues the pull request for the merger, as mc merge <repo> <pr> does — not with --no-merge, --json or --branch.\n',
-  ].join('');
+  return commandUsage('publish');
 }

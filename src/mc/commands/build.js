@@ -41,19 +41,12 @@ import { workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { followLog, startDetached } from './deploy.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const BUILDER_RUN = fileURLToPath(new URL('../ios-build-run.js', import.meta.url));
 
 export function usage() {
-  return [
-    'usage — mc build ios                          does memoro need a new iOS binary? builds nothing\n',
-    '        mc build ios --device [--sha <ref>] [--device-id <id>]\n',
-    '                                              build the commit production runs, install it on the paired iPhone\n',
-    '        mc build ios --testflight [--yes | --no-upload] [--sha <ref>]\n',
-    '                                              build, verify and, after one question (--yes answers it), upload to TestFlight\n',
-    '        mc build ios --shipped <build> <sha>  record a binary built before this verb existed\n',
-    '        mc build ios --follow                 watch the build that is running\n',
-  ].join('');
+  return commandUsage('build');
 }
 
 /** `--shipped` takes two words, which the shared scanner has no grammar for. */

@@ -20,6 +20,7 @@ import {
   ENSURE_TIMEOUT_MS, ensure, IDLE_GRACE_MS, inventory, liveLeases, releasePid, removeDeadHolders, runtimeOf, writeState,
 } from '../docker.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
 
 const WORDS = ['ensure', 'release', 'prune'];
 
@@ -51,7 +52,7 @@ export async function run(argv, deps = {}) {
   return status(opts, ctx);
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
     booleans: ['--json', '--dry-run'],
     strictValues: ['--pid', '--run', '--repo', '--timeout'],
@@ -198,17 +199,5 @@ async function pruneVerb(opts, { stdout, stderr, root, env, io }) {
 }
 
 export function usage() {
-  return [
-    'usage: mc docker [--json]                  the container runtime: up or stopped and why not, the leases\n',
-    '                                           on it, what it holds on disk, and what mc labelled or did not\n',
-    '       mc docker ensure [--pid <n>] [--run <label>] [--repo <name>] [--timeout <s>] [--json]\n',
-    '                                           start OrbStack or Docker Desktop if it is down, wait for\n',
-    '                                           docker info, and lease it to --pid (the shell by default).\n',
-    '                                           Exit 69 when it cannot be started\n',
-    '       mc docker release [--pid <n>] [--json]\n',
-    '                                           drop the leases of --pid; stops nothing\n',
-    '       mc docker prune [--dry-run] [--json]\n',
-    '                                           remove containers and volumes labelled mc.holder whose pid is\n',
-    '                                           gone; unlabelled objects are reported, never removed\n',
-  ].join('');
+  return commandUsage('docker');
 }

@@ -27,6 +27,7 @@ import { currentHolder } from '../work-identity.js';
 import { scanArgs } from './flags.js';
 import { gate, parseMergeArgs, resolveRepoPath } from './repo.js';
 import { repoNameOf } from '../repos.js';
+import { commandUsage } from '../command-help.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -273,12 +274,5 @@ async function runWatch(argv, { stdout, stderr, ...deps }) {
 }
 
 export function usage() {
-  return [
-    'usage — mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash\n',
-    '        mc merge <repo> <pr> --watch [--json]                queue it, then follow it until it lands or goes red\n',
-    '        mc merge <repo> <pr> --docs [--json]                 docs-only: the tests that read documents, then squash, in this call\n',
-    '                                                             (a pull request of documents only under docs/ lands this way without --docs)\n',
-    '        mc merge <repo> <pr> --admin [--json]                Martin\'s: squash with GitHub\'s admin override, no gate round, booked as landed\n',
-    '        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n',
-  ].join('');
+  return commandUsage('merge');
 }

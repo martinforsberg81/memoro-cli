@@ -41,16 +41,24 @@ export function usage() {
   return commandUsage('helper');
 }
 
-export async function run(argv, deps = {}) {
-  const stdout = deps.stdout || process.stdout;
-  const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, {
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': {
     booleans: ['--intake', '--collect', '--new'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
-  });
-  if (scanned.error || scanned.positional.length) {
-    stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
+    check: ({ positional }) => (positional.length ? `unknown argument ${positional[0]}` : null),
+  },
+};
+
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const scanned = scanArgs(argv, ROUTES['']);
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) {
+    stderr.write(`mc: ${refused}\n`);
     stderr.write(USAGE);
     return 2;
   }

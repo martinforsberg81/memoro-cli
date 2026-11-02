@@ -15,14 +15,21 @@
 import { collectPage } from '../page-collect.js';
 import { colourFor, columnsFor, renderPrsLines } from '../page-render.js';
 import { scanArgs } from './flags.js';
+import { commandUsage } from '../command-help.js';
+
+/** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
+/** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
+export const ROUTES = {
+  '': { booleans: ['--json', '--offline'], check: ({ positional }) => (positional.length ? `mc prs takes no positional (${positional.join(' ')})` : null) },
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const scanned = scanArgs(argv, { booleans: ['--json', '--offline'] });
-  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  if (scanned.positional.length) { stderr.write(`mc: mc prs takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
+  const scanned = scanArgs(argv, ROUTES['']);
+  const refused = scanned.error || ROUTES[''].check(scanned);
+  if (refused) { stderr.write(`mc: ${refused}\n${usage()}`); return 2; }
 
   const offline = Boolean(scanned.flags.offline);
   const data = await (deps.collect || collectPage)({ fresh: !offline, offline });
@@ -41,12 +48,5 @@ export async function run(argv, deps = {}) {
 }
 
 export function usage() {
-  return [
-    'usage — mc prs                        every open pull request, and whose it is — asks GitHub\n',
-    '        mc prs --offline              the same, from the page\'s cache\n',
-    '        mc prs --json                 the same, as one object\n',
-    '\n',
-    'Groups: on a step (project and step), plan sessions, workareas, checked out elsewhere, nobody\'s.\n',
-    'Reads only: nothing is closed, merged or moved.\n',
-  ].join('');
+  return commandUsage('prs');
 }
