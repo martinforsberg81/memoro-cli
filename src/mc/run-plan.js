@@ -1068,7 +1068,7 @@ export const STEP_WORKER_AGENTS = Object.freeze({
     effort: 'high',
     tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
     prompt: [
-      'You are a worker for a step session in mc, headless, in its workarea. The step session leads; you do the work it briefs.',
+      'You are a worker for a build session in mc, headless, in its workarea. The build session leads; you do the work it briefs.',
       'Do the brief and nothing beside it: read, search, edit, write the tests it describes, run the commands it names.',
       'Never weaken, skip or delete a test the brief did not name, never touch a threshold or the plan file.',
       'Never run `mc`, `gh`, or a git command that changes the tree or history (`commit`, `push`, `checkout`, `reset`, `stash`); the workarea is shared.',
