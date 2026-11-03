@@ -3002,6 +3002,28 @@ describe('the selected files run in their resource classes', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
 
+  it('realTests: a test cut at its limit is kept in the work root\'s too-slow file, and goes when it passes under it', async () => {
+    // The real path: node reports each test's file resolved, and the row is relative to the cwd.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-too-slow-')));
+    try {
+      const tsv = join(dir, 'work', 'runner', 'too-slow', 'r.tsv');
+      const times = { root: join(dir, 'home'), repo: 'r', where: '#7' };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      // Before the run: `quick` was cut once, and so was a test this run does not reach.
+      mkdirSync(dirname(tsv), { recursive: true });
+      const seen = '2026-11-03T10:00:00.000Z';
+      writeFileSync(tsv, `file\ttest\tfirst_seen\tlast_seen\twhere\tlimit_ms\nslow.test.js\tquick\t${seen}\t${seen}\tgate\t100\nother.test.js\tx\t${seen}\t${seen}\tgate\t100\n`);
+      writeFileSync(join(dir, 'slow.test.js'), "import { test } from 'node:test';\ntest('slow', async () => { await new Promise((r) => setTimeout(r, 2000)); });\ntest('quick', () => {});\n");
+      await realTests({ cwd: dir, files: ['slow.test.js'], flags: ['--no-warnings', '--test-timeout=100'], env, times });
+      const rows = readFileSync(tsv, 'utf8').trim().split('\n').map((line) => line.split('\t'));
+      assert.equal(rows[0].join(','), 'file,test,first_seen,last_seen,where,limit_ms');
+      assert.deepEqual(rows.slice(1).map((row) => [row[0], row[1], row[4], row[5]]), [
+        ['other.test.js', 'x', 'gate', '100'],
+        ['slow.test.js', 'slow', '#7', '100'],
+      ], 'the test cut is added, the one that passed under its limit is gone, the one not run stays');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
   it('realTests: a round stopped from outside kills its test process at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-abort-'));
     try {

@@ -250,6 +250,7 @@ export const COMMAND_USAGE = Object.freeze({
     "The gate starts at once at low priority, beside merge rounds; a deploy or iOS build of memoro goes first.\n",
     "Costly affected tests are left to the merge round by measured time; those this change touches always run.\n",
     "Each test the change adds or changes is timed in the verdict — test <file> › <name> — 0.xyz s, as node measured it; a test over 1 s is rebuilt, not rerun. The time does not decide GREEN or RED.\n",
+    "A test cut at the repository's per-test limit is red, and every run keeps it in ~/mc/runner/too-slow/<repo>.tsv until it passes under the limit.\n",
     "Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, the timed tests, and the path of the whole output.\n",
     "Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n",
   ].join(''),

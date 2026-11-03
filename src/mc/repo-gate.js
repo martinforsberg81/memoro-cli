@@ -63,7 +63,7 @@ import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from '.
 import { runShell as runShellAsync, runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { log } from './logger.js';
-import { mcHome, workGatePath } from './paths.js';
+import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
@@ -72,7 +72,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes, runProgress, testsMeasured } from './test-times.js';
+import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -267,7 +267,8 @@ export async function runGate({
   // gate the free cores (`testLanes`). The round record names both.
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = testLanes({ env, load, mode: gateMode });
-  const timesOf = { root, repo: lane, track: (file) => tracked.push(file) };
+  // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
+  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: (file) => tracked.push(file) };
   const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal, times: timesOf }));
   const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal, times: timesOf }));
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
@@ -2415,13 +2416,16 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     const reporters = timesFile
       ? ['--test-reporter=tap', '--test-reporter-destination=stdout', `--test-reporter=${TIMES_REPORTER}`, `--test-reporter-destination=${timesFile}`]
       : ['--test-reporter=tap'];
-    // What the run measured, each test by name (`testsMeasured`), read before the file goes.
+    // What the run measured, each test by name (`testsMeasured`), read before the
+    // file goes; the tests cut at their limit go to the too-slow file (`recordTooSlow`).
     const noteTimes = () => {
       if (!timesFile) return [];
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       rmSync(timesFile, { force: true });
-      return testsMeasured(text, cwd);
+      const tests = testsMeasured(text, cwd);
+      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
+      return tests;
     };
     const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
@@ -2554,8 +2558,10 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
     const noteTimes = () => {
       if (!timesFile) return;
-      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      let text = '';
+      try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       rmSync(timesFile, { force: true });
+      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests: testsMeasured(text, cwd) });
     };
     const child = spawn(command, {
       cwd,

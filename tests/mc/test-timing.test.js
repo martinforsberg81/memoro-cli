@@ -3,14 +3,18 @@
  * which tests a diff reaches, and the line the verdict prints for each.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import timesReporter from '../../src/mc/test-times-reporter.mjs';
-import { changedRanges, measuredSeconds, testsMeasured, touchedTests } from '../../src/mc/test-times.js';
+import { changedRanges, measuredSeconds, readTooSlow, recordTooSlow, testsMeasured, tooSlowPath, touchedTests } from '../../src/mc/test-times.js';
 import { gateLines, timedTestLines, TIMED_LINES } from '../../src/mc/gate-local.js';
 
 const cwd = '/w';
 const lines = (entries) => `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
+const ended = { failed: false, timeout: null };
 
 /** The reporter's output for a list of node events. */
 async function reported(events) {
@@ -43,9 +47,82 @@ describe('the reporter writes each test, and the file times as before', () => {
     assert.deepEqual(testsMeasured(text, cwd).map((test) => test.name), ['inner']);
   });
 
-  it('a test node gave no time for is named without one', async () => {
+  it('a test node gave no time for is named without one, and a failed test says so', async () => {
     const text = await reported([{ type: 'test:fail', data: { file: '/w/a.test.js', nesting: 0, name: 'x', line: 2, details: {} } }]);
-    assert.deepEqual(testsMeasured(text, cwd), [{ file: 'a.test.js', name: 'x', line: 2, seconds: null }]);
+    assert.deepEqual(testsMeasured(text, cwd), [{ file: 'a.test.js', name: 'x', line: 2, seconds: null, failed: true, timeout: null }]);
+  });
+
+  it('a test node cut at its limit carries the limit; any other failure does not', async () => {
+    const cut = { failureType: 'testTimeoutFailure', code: 'ERR_TEST_FAILURE', message: 'test timed out after 1000ms' };
+    const broke = { failureType: 'testCodeFailure', code: 'ERR_TEST_FAILURE', message: 'timed out after 1000ms waiting for the server' };
+    const text = await reported([
+      { type: 'test:fail', data: { file: '/w/a.test.js', nesting: 1, name: 'slow', line: 4, details: { duration_ms: 1003, error: cut } } },
+      { type: 'test:fail', data: { file: '/w/a.test.js', nesting: 1, name: 'broken', line: 9, details: { duration_ms: 12, error: broke } } },
+    ]);
+    assert.deepEqual(testsMeasured(text, cwd), [
+      { file: 'a.test.js', name: 'slow', line: 4, seconds: 1.003, failed: true, timeout: 1000 },
+      { file: 'a.test.js', name: 'broken', line: 9, seconds: 0.012, failed: true, timeout: null },
+    ]);
+  });
+
+  it('a skipped or todo test ran nothing and gets no line', async () => {
+    const text = await reported([
+      { type: 'test:pass', data: { file: '/w/a.test.js', nesting: 0, name: 'skipped', line: 2, skip: true, details: { duration_ms: 1 } } },
+      { type: 'test:pass', data: { file: '/w/a.test.js', nesting: 0, name: 'todo', line: 3, todo: 'later', details: { duration_ms: 1 } } },
+      { type: 'test:pass', data: { file: '/w/a.test.js', nesting: 0, name: 'ran', line: 4, details: { duration_ms: 1 } } },
+    ]);
+    assert.deepEqual(testsMeasured(text, cwd).map((test) => test.name), ['ran']);
+  });
+});
+
+describe('the too-slow file', () => {
+  const root = () => mkdtempSync(join(tmpdir(), 'mc-too-slow-'));
+  const slow = (name, timeout = 1000) => ({ file: 'tests/a.test.js', name, line: 1, seconds: timeout / 1000, failed: true, timeout });
+  const green = (name, seconds = 0.2) => ({ file: 'tests/a.test.js', name, line: 1, seconds, failed: false, timeout: null });
+  const red = (name) => ({ file: 'tests/a.test.js', name, line: 1, seconds: 0.1, failed: true, timeout: null });
+
+  it('a test cut at its limit gets one row with file, name, when, where and the limit; the same test again keeps its row', () => {
+    const dir = root();
+    try {
+      const first = new Date('2026-11-03T10:00:00Z');
+      const rows = recordTooSlow({ root: dir, repo: 'r', where: 'gate', tests: [slow('one'), green('fine')], now: first });
+      assert.deepEqual(rows, [{ file: 'tests/a.test.js', name: 'one', first_seen: first.toISOString(), last_seen: first.toISOString(), where: 'gate', limit_ms: 1000 }]);
+      const text = readFileSync(tooSlowPath(dir, 'r'), 'utf8');
+      assert.equal(text, `file\ttest\tfirst_seen\tlast_seen\twhere\tlimit_ms\ntests/a.test.js\tone\t${first.toISOString()}\t${first.toISOString()}\tgate\t1000\n`);
+
+      const later = new Date('2026-11-03T11:00:00Z');
+      recordTooSlow({ root: dir, repo: 'r', where: '#12', tests: [slow('one', 2000)], now: later });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), [
+        { file: 'tests/a.test.js', name: 'one', first_seen: first.toISOString(), last_seen: later.toISOString(), where: '#12', limit_ms: 2000 },
+      ]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a test that passes under its limit is removed; one that fails otherwise, or is not run, stays', () => {
+    const dir = root();
+    try {
+      recordTooSlow({ root: dir, repo: 'r', tests: [slow('one'), slow('two'), slow('three')] });
+      recordTooSlow({ root: dir, repo: 'r', tests: [green('one'), red('two')] });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }).map((row) => row.name), ['three', 'two']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a round with nothing cut and nothing to remove writes no file', () => {
+    const dir = root();
+    try {
+      assert.equal(recordTooSlow({ root: dir, repo: 'r', tests: [green('fine')] }), null);
+      assert.throws(() => readFileSync(tooSlowPath(dir, 'r')), { code: 'ENOENT' });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), []);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a file that cannot be written costs the record, not the round', () => {
+    const dir = root();
+    try {
+      // A file where the directory should be: the write fails.
+      writeFileSync(join(dir, 'runner'), '');
+      assert.equal(recordTooSlow({ root: dir, repo: 'r', tests: [slow('one')] }), null);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -66,8 +143,8 @@ describe('what the times file says', () => {
       { file: '/w/tests/a.test.js', started: true },
     ])}not json\n`;
     assert.deepEqual(testsMeasured(text, cwd), [
-      { file: 'tests/a.test.js', name: 'one', line: 4, seconds: 0.0125 },
-      { file: 'tests/a.test.js', name: 'two', line: 9, seconds: 0.003 },
+      { file: 'tests/a.test.js', name: 'one', line: 4, seconds: 0.0125, ...ended },
+      { file: 'tests/a.test.js', name: 'two', line: 9, seconds: 0.003, ...ended },
     ]);
   });
 });

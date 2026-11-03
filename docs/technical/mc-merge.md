@@ -849,6 +849,20 @@ A per-test timeout is not run again by `retry_once`: the verdict says
 `too slow — rebuild` with the test name and timeout duration, so a timed-out
 test is rebuilt by a session rather than consuming another round.
 
+**A test cut at its limit is kept in `~/mc/runner/too-slow/<repo>.tsv`**
+(`recordTooSlow` in `src/mc/test-times.js`). Every run that measures times — a
+session's `mc gate`, `mc test`, `mc publish`'s round and the merger's — reads
+the reporter's lines after the run and writes the tests node cut
+(`test timed out after <n>ms`): one row per test with its file, its name, when
+it was first and last seen, where (the pull request, `full`, or `gate`) and
+the limit. A test already there keeps its first-seen time; one that passes
+under its row's limit in a later run is removed. The file is written whole
+or not at all, and a write that fails never turns a round red. The limit is
+the repository's `--test-timeout` (`pr_tests_flags` in
+`src/mc/repo-gate-table.js`; memoro-cli's is a ratchet on its way from 30 s
+to 1 s, lowered as its slow tests are rebuilt): node cuts the test, not its
+describe block, and the round goes on with the rest.
+
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
 `archive-plan.js`) and, when two rows share date, programme and project, stops

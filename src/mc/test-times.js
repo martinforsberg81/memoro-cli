@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { writeJsonAtomic } from './atomic-write.js';
+import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
 
 /** The estimated seconds a session's gate spends on the files it may leave. */
 export const SESSION_GATE_SECONDS = 180;
@@ -48,9 +48,11 @@ export function measuredSeconds(text, cwd) {
 }
 
 /**
- * Every test the reporter named, at any nesting: `{ file, name, line, seconds }`,
- * the file repository-relative and `seconds` null when node gave no time. A line
- * that will not parse, or that names no test line, is skipped.
+ * Every test the reporter named, at any nesting: `{ file, name, line, seconds,
+ * failed, timeout }`, the file repository-relative, `seconds` null when node
+ * gave no time, and `timeout` the limit in ms a test was cut at (null for a
+ * test that ended by itself). A line that will not parse, or that names no
+ * test line, is skipped.
  */
 export function testsMeasured(text, cwd) {
   const tests = [];
@@ -59,10 +61,76 @@ export function testsMeasured(text, cwd) {
     try { entry = JSON.parse(line); } catch { continue; }
     const test = entry?.test;
     if (typeof entry?.file !== 'string' || !test || typeof test.name !== 'string' || !(test.line > 0)) continue;
-    tests.push({ file: relative(cwd, entry.file), name: test.name, line: Number(test.line), seconds: test.ms >= 0 ? test.ms / 1000 : null });
+    tests.push({
+      file: relative(cwd, entry.file),
+      name: test.name,
+      line: Number(test.line),
+      seconds: test.ms >= 0 ? test.ms / 1000 : null,
+      failed: test.failed === true,
+      timeout: test.timeout > 0 ? Number(test.timeout) : null,
+    });
   }
   return tests;
 }
+
+/** Where the tests that reached their time limit are kept: `<work root>/runner/too-slow/<repo>.tsv`. */
+export function tooSlowPath(root, repo) {
+  return join(root, 'runner', 'too-slow', `${repo}.tsv`);
+}
+
+const TOO_SLOW_COLUMNS = ['file', 'test', 'first_seen', 'last_seen', 'where', 'limit_ms'];
+
+/** The rows of a repository's too-slow file, `{ file, name, first_seen, last_seen, where, limit_ms }`; none when there is no file. */
+export function readTooSlow({ root, repo }) {
+  let text = '';
+  try { text = readFileSync(tooSlowPath(root, repo), 'utf8'); } catch { return []; }
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const cells = line.split('\t');
+    if (cells.length < TOO_SLOW_COLUMNS.length || cells[0] === TOO_SLOW_COLUMNS[0]) continue;
+    rows.push({ file: cells[0], name: cells[1], first_seen: cells[2], last_seen: cells[3], where: cells[4], limit_ms: Number(cells[5]) > 0 ? Number(cells[5]) : null });
+  }
+  return rows;
+}
+
+/**
+ * The tests of a round that node cut at their time limit, kept in the
+ * repository's too-slow file until they pass under it (Martin, 2026-11-03: a
+ * test over the limit is red and is rebuilt, not rerun). `tests` is what
+ * `testsMeasured` read off the round; `where` names it, the pull request or
+ * `gate`. One row per test: a test already there keeps its `first_seen` and
+ * gets this round's `last_seen`, `where` and limit; a test that passed under
+ * its row's limit this round is removed. The file is written whole or not at
+ * all, and only when a row changed. A courtesy like `recordTestTimes`: a file
+ * that cannot be written costs the record, never the round its verdict. Returns
+ * the rows now in the file, or null when nothing was written.
+ */
+export function recordTooSlow({ root, repo, where = 'gate', tests = [], now = new Date() }) {
+  try {
+    const slow = tests.filter((test) => test.timeout > 0);
+    const passed = new Map(tests.filter((test) => !test.failed && test.seconds !== null).map((test) => [keyOf(test), test.seconds * 1000]));
+    const before = readTooSlow({ root, repo });
+    const rows = before.filter((row) => {
+      const ms = passed.get(keyOf(row));
+      return ms === undefined || (row.limit_ms !== null && ms >= row.limit_ms);
+    });
+    const stamp = now.toISOString();
+    for (const test of slow) {
+      const row = rows.find((one) => keyOf(one) === keyOf(test));
+      if (row) Object.assign(row, { last_seen: stamp, where, limit_ms: test.timeout });
+      else rows.push({ file: test.file, name: test.name, first_seen: stamp, last_seen: stamp, where, limit_ms: test.timeout });
+    }
+    if (!slow.length && rows.length === before.length) return null;
+    rows.sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
+    const cell = (value) => String(value ?? '').replace(/[\t\n\r]+/gu, ' ');
+    const text = [TOO_SLOW_COLUMNS, ...rows.map((row) => [row.file, row.name, row.first_seen, row.last_seen, row.where, row.limit_ms])]
+      .map((cells) => cells.map(cell).join('\t')).join('\n');
+    writeFileAtomic(tooSlowPath(root, repo), `${text}\n`, { mode: 0o600 });
+    return rows;
+  } catch { return null; }
+}
+
+const keyOf = (test) => `${test.file}\u0000${test.name}`;
 
 /**
  * The new-side line ranges a diff with no context adds or changes: each

@@ -7,3 +7,8 @@ section: Added
   round does. The time never changes GREEN or RED. `writing-tests` asks a session
   to rebuild a test over 1 s before it publishes, and `publish-and-merge` asks
   for each new or changed test's time in the pull request body.
+- **A test cut at its time limit is kept in `~/mc/runner/too-slow/<repo>.tsv`.**
+  Every run that measures times (`mc gate`, `mc test`, `mc publish`'s round,
+  the merger's) writes the tests node cut, one row each: file, name, first and
+  last seen, where, and the limit. A test that passes under the limit in a
+  later run is removed.
