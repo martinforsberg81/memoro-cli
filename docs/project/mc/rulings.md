@@ -2032,9 +2032,14 @@ The project that carries this is `project-branch`.
    and Codex Sol for `large`; `mc model add/remove fast|large` changes each
    class's candidates and their effort without rewriting plans. Existing plans
    with concrete models keep their meaning.
-2. Review is one separately configured model, changed by `mc model set review`:
-   Claude Opus at high effort now. It does not inherit the implementation
-   step's provider. `mc plan` remains the tool Martin chooses when starting it.
+2. Review is its own ordered list of candidates, changed by `mc model
+   add|remove review` and `mc model set review`: Claude Opus at high effort
+   alone at first. It does not inherit the implementation step's provider, and
+   the first candidate is the preferred one. Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on. `mc plan` remains the tool
+   Martin chooses when starting it. Rewritten 2026-11-03, Martin: *"Ja, gör
+   samma kandidatlista för review"* — with one review model, a review waited
+   for an hour on a spent codex plan, and a goal built on the review model
+   could not be reviewed at all.
 3. mc observes subscription capacity centrally, on roughly an hourly cadence
    and when sessions report usage or a refusal. Starting a step reads that
    observation locally and chooses a candidate in its class; it does not

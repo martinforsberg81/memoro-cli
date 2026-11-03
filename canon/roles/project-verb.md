@@ -80,7 +80,8 @@ start to finish, and know when it is done? If not, it is not a step
     `send` and `amend` refuse `haiku` and `opus` on claude, `gpt-6.1-sol` and
     `gpt-6-luna` on codex. Never put `model` in the plan's `runner`.
   - Review is not a class a step names: `mc project send` adds the review
-    step, on the model set with `mc model set review`.
+    step, on the review candidates `mc model add|remove review` and
+    `mc model set review` configure.
   - On codex, `effort` reaches the session as
     `-c model_reasoning_effort=<level>` and a model name goes to `codex exec -m`.
 - **Overall:** `goal`; `contract` (what may not change without Martin);

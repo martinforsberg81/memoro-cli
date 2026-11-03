@@ -126,7 +126,7 @@ carries:
   from the schema when the last reader of them does.
 - `runner` — `model` and `effort`. An ordinary step names a work class,
   `fast` or `large` (ruling 59). At launch mc picks a candidate for the class
-  from the catalog (`mc model list`; changed with `mc model add|remove fast|large`
+  from the catalog (`mc model list`; changed with `mc model add|remove fast|large|review`
   and `mc model set review`) and from the subscription capacity it has seen, on
   included subscriptions only. The candidate's tool, model and effort are the
   session's, and a catalog edit never rewrites a plan. A step written now names a

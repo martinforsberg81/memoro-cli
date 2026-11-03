@@ -2,20 +2,20 @@
  * `mc model` — the model catalog (ruling 59, `src/mc/model-config.js`).
  *
  * It says which models a fast or a large step may run on, in order, and which
- * one review uses. It says nothing about capacity: that is the routing's, and
- * this verb does not poll anything.
+ * ones review runs on, the first preferred. It says nothing about capacity:
+ * that is the routing's, and this verb does not poll anything.
  *
- *   mc model [list] [--json]                       the catalog, and whether it is the file's or the defaults
- *   mc model add fast|large <tool>:<model>:<effort>      append a candidate to a class
- *   mc model remove fast|large <tool>:<model>             remove the candidate with exactly that tool and model
- *   mc model set review <tool>:<model>:<effort>           replace the review candidate
+ *   mc model [list] [--json]                               the catalog, and whether it is the file's or the defaults
+ *   mc model add fast|large|review <tool>:<model>:<effort>  append a candidate to a list
+ *   mc model remove fast|large|review <tool>:<model>        remove the candidate with exactly that tool and model
+ *   mc model set review <tool>:<model>:<effort>             replace the whole review list with that one candidate
  *
  * A catalog mc cannot read is an error with its path and what to do about it,
  * never a silent return to the defaults.
  */
 import { commandUsage } from '../command-help.js';
 import {
-  CLASSES, ModelConfigError, addCandidate, candidateSpec, changeModels, parseCandidate, parseTarget,
+  LISTS, ModelConfigError, addCandidate, candidateSpec, changeModels, parseCandidate, parseTarget,
   readModels, removeCandidate, setReview,
 } from '../model-config.js';
 import { scanArgs } from './flags.js';
@@ -41,8 +41,8 @@ function refusal(verb, rest, flags) {
   if (!['add', 'remove', 'set'].includes(verb)) return `unknown model command "${verb}"`;
   if (flags.json) return '--json is for mc model list';
   if (verb === 'add' || verb === 'remove') {
-    if (rest.length !== 2) return verb === 'add' ? 'mc model add fast|large <tool>:<model>:<effort>' : 'mc model remove fast|large <tool>:<model>';
-    return CLASSES.includes(rest[0]) ? null : `"${rest[0]}" is not a class: ${verb} takes fast or large`;
+    if (rest.length !== 2) return verb === 'add' ? 'mc model add fast|large|review <tool>:<model>:<effort>' : 'mc model remove fast|large|review <tool>:<model>';
+    return LISTS.includes(rest[0]) ? null : `"${rest[0]}" is not a list: ${verb} takes fast, large or review`;
   }
   return rest.length !== 2 || rest[0] !== 'review' ? 'mc model set review <tool>:<model>:<effort>' : null;
 }
@@ -84,7 +84,7 @@ export async function run(argv, deps = {}) {
     if (verb === 'set') {
       const value = parseCandidate(rest[1]);
       changeModels(env, (catalog) => setReview(catalog, value));
-      stdout.write(`mc: review is now ${candidateSpec(value)}\n`);
+      stdout.write(`mc: review is now ${candidateSpec(value)} alone\n`);
       return 0;
     }
   } catch (caught) {
@@ -112,10 +112,9 @@ function listText(models) {
     ? `${models.path}  (config)`
     : `${models.path}  (defaults — no file there yet)`;
   const lines = [head];
-  for (const cls of CLASSES) {
+  for (const cls of LISTS) {
     lines.push(cls);
     models[cls].forEach((value, index) => lines.push(`  ${index + 1}  ${candidateSpec(value)}`));
   }
-  lines.push('review', `  ${candidateSpec(models.review)}`);
   return `${lines.join('\n')}\n`;
 }

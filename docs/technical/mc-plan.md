@@ -221,10 +221,11 @@ tool, so `runner.tool` does not apply to it. `effort` takes the same five
 levels on both tools; which model names exist is for the installed, signed-in
 codex CLI to decide, not mc.
 
-**Review.** The review step runs the one review model Martin configures with
-`mc model set review` (Claude Opus at high effort at launch), on either tool,
-and does not inherit the implementation steps' provider; `mc project step add`
-refuses `review`.
+**Review.** The review step runs on the review candidates Martin configures
+with `mc model add|remove review` and `mc model set review` (Claude Opus at
+high effort alone at launch), on either tool, and does not inherit the
+implementation steps' provider; `mc project step add` refuses `review`. Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on.
+A project's review step has no build entry to pass over.
 
 **Checks the review cannot reach.** The merge door refuses the review step
 until every criterion is `met` in the register, so a check that needs this plan

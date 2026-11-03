@@ -81,11 +81,13 @@ export const COMMAND_USAGE = Object.freeze({
     "The runner calls collection and intake through their modules on separate cadences.\n",
   ].join(''),
   model: [
-    "usage — mc model [list] [--json]   the ordered fast/large candidates and the review model\n",
-    "        mc model add fast|large <tool>:<model>:<effort>   append a class candidate\n",
-    "        mc model remove fast|large <tool>:<model>   remove that exact tool/model\n",
-    "        mc model set review <tool>:<model>:<effort>   replace the review candidate\n",
+    "usage — mc model [list] [--json]   the ordered fast, large and review candidates\n",
+    "        mc model add fast|large|review <tool>:<model>:<effort>   append a candidate to the list\n",
+    "        mc model remove fast|large|review <tool>:<model>   remove that exact tool/model\n",
+    "        mc model set review <tool>:<model>:<effort>   replace the whole review list with that one candidate\n",
     "\n",
+    "Review is an ordered list of candidates: it takes the first that can run on its plan\n",
+    "now, and a later one only when an earlier cannot or is the model the goal was built on.\n",
     "The catalog does not poll capacity. --json applies only to list.\n",
   ].join(''),
   goal: [
