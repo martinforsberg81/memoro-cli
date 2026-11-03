@@ -608,7 +608,7 @@ test('mc goal convert turns a programme\'s GOAL.md files into GOAL.json with the
   const md = (status, extra = '') => [
     '---', `status: ${status}`, 'repos: memoro-cli, memoro', 'class: large', 'created: 2026-11-01T20:00:00Z', `prs: memoro#9${extra}`, '---',
     '# Make it so', '', '## Goal', '', 'Two files', 'and a worktree.', '', 'A second paragraph.', '',
-    '## Criteria', '', '- **Schema.** It parses. *Check:* mc gate tests/mc/goals.test.js', '  and nothing else.', '- It shows.', '',
+    '## Criteria', '', '- **Schema.** It parses. *Check:* mc gate tests/mc/goals.test.js', '  and nothing else.', '- It shows.', '3. A numbered one.', '',
     '## Out of scope', '', '- Phases.', '', '## Notes', '', 'Kept.', '',
   ].join('\n');
   const archived = md('done');
@@ -625,7 +625,7 @@ test('mc goal convert turns a programme\'s GOAL.md files into GOAL.json with the
   f.deps.list = (path) => list(path).filter((name) => !name.startsWith('.'));
   f.deps.remove = (path) => { removed.push(path); delete f.store[path]; };
   assert.equal(await run(['convert', 'mc'], f.deps), 0, f.err());
-  assert.match(f.out(), /mc\/building · converted, 2 criteria\nmc: mc\/judged · converted, 2 criteria\n/u);
+  assert.match(f.out(), /mc\/building · converted, 3 criteria\nmc: mc\/judged · converted, 3 criteria\n/u);
 
   const open = parseGoal(f.store[`${HOME}/mc/goals/building/GOAL.json`]);
   assert.equal(open.status, 'open');
@@ -637,8 +637,9 @@ test('mc goal convert turns a programme\'s GOAL.md files into GOAL.json with the
   assert.deepEqual(open.success_criteria, [
     { criterion: '**Schema.** It parses.', check: 'mc gate tests/mc/goals.test.js and nothing else.', met: false },
     { criterion: 'It shows.', check: 'It shows.', met: false },
+    { criterion: 'A numbered one.', check: 'A numbered one.', met: false },
   ]);
-  assert.deepEqual(parseGoal(f.store[`${HOME}/mc/goals/judged/GOAL.json`]).success_criteria.map((item) => item.met), [true, true], 'a goal in review has been judged');
+  assert.deepEqual(parseGoal(f.store[`${HOME}/mc/goals/judged/GOAL.json`]).success_criteria.map((item) => item.met), [true, true, true], 'a goal in review has been judged');
   assert.deepEqual(removed.sort(), [`${HOME}/mc/goals/building/GOAL.md`, `${HOME}/mc/goals/judged/GOAL.md`]);
   assert.equal(f.store[`${HOME}/mc/goals/.archive/old/GOAL.md`], archived, '.archive/ untouched');
   assert.equal(`${HOME}/mc/goals/.archive/old/GOAL.json` in f.store, false);

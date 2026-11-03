@@ -254,7 +254,7 @@ GOAL.json and removes the GOAL.md:
   become fields; the `# ` line is the title;
 - `## Goal` is `goal`, `## Contract` is `contract` and `## Out of scope` is
   `out_of_scope`, a paragraph per block between blank lines;
-- each top-level bullet of `## Criteria` is a criterion, whose check is the
+- each top-level bullet or numbered item of `## Criteria` is a criterion, whose check is the
   text after its `*Check:*`, or the whole bullet when it has none;
 - any other section is kept as paragraphs of `goal`, after its heading;
 - a goal in `review` or `done` has every criterion `met: true` — a session has

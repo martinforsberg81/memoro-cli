@@ -4,7 +4,7 @@
  *
  * Front matter becomes fields; `# ` is the title; `## Goal` the goal's
  * paragraphs, `## Contract` the contract's and `## Out of scope` its
- * out-of-scope; each top-level bullet of `## Criteria` a criterion, whose
+ * out-of-scope; each top-level bullet or numbered item of `## Criteria` a criterion, whose
  * check is the text after its `*Check:*`, or the whole bullet when it has
  * none. A section of any other name is kept as paragraphs of the goal under
  * its heading, so nothing is lost. A goal in `review` or `done` has its
@@ -33,11 +33,11 @@ function paragraphs(lines) {
   return out.filter(Boolean);
 }
 
-/** The top-level `- ` or `* ` items of `lines`, each with its continuation lines, as one line of text. */
+/** The top-level `- `, `* ` or `1. ` items of `lines`, each with its continuation lines, as one line of text. */
 function bullets(lines) {
   const items = [];
   for (const line of lines) {
-    const start = line.match(/^[-*] +(.*)$/u);
+    const start = line.match(/^(?:[-*]|\d+[.)]) +(.*)$/u);
     if (start) items.push([start[1]]);
     else if (items.length && line.trim() !== '') items.at(-1).push(line.trim());
   }
