@@ -201,7 +201,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc merge <repo> <pr> --watch [--json]                queue it, then follow it until it lands or goes red\n",
     "        mc merge <repo> <pr> --docs [--json]                 docs-only: the tests that read documents, then squash, in this call\n",
     "                                                             (a pull request of documents only under docs/ lands this way without --docs)\n",
-    "        mc merge <repo> <pr> --admin [--json]                Martin's: squash with GitHub's admin override, no gate round, booked as landed\n",
+    "        mc merge <repo> <pr> --admin [--json]                squash with GitHub's admin override, no gate round, booked as landed; refused headless\n",
     "        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n",
     "\n",
     "mc merge queues each pull request for the merger, in the order given, and returns. One\n",

@@ -5036,7 +5036,7 @@ test('register: a step is running with its pid, then done with its pull request 
   assert.equal(seen.session.pid, 31337, 'with the pid onSpawn handed over');
   assert.equal(seen.branch, 'alpha');
   const [call] = f.calls.sessions;
-  assert.deepEqual(call.env, { MC_ROLE: 'build-session:project', MC_PROGRAMME: 'prog', MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, and where its scratch is');
+  assert.deepEqual(call.env, { MC_HEADLESS: '1', MC_ROLE: 'build-session:project', MC_PROGRAMME: 'prog', MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, where its scratch is, and that it is headless');
   const after = registerOf(f, 'alpha').steps[0];
   assert.equal(after.status, 'done');
   assert.equal(after.pr, 77);
@@ -5717,6 +5717,7 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(call.cwd, `${GOALS}/older/memoro`);
   assert.equal(call.env.MC_ROLE, 'build-session:goal');
+  assert.equal(call.env.MC_HEADLESS, '1', 'a goal session is headless: the hook refuses Martin\'s acts');
   assert.equal(call.env.MC_PROGRAMME, 'prog');
   assert.equal(call.env.MC_GOAL, 'prog/older');
   assert.equal(call.env.MC_REPO, 'memoro');
@@ -5843,6 +5844,7 @@ test('a goal blocked by a red merge starts one plan session: the plan role, the 
   const [call] = f.calls.sessions;
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(call.env.MC_ROLE, 'plan-session');
+  assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
   assert.equal(call.env.MC_MODEL, 'fable', 'ruling 6: plan runs on fable');
   assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');

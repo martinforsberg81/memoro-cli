@@ -237,10 +237,10 @@ describe('the text every role session shares', () => {
   // 2026-10-10: a step session ran `kill` on the merger's test process,
   // taking it for its own hung test. The rule is the `processes` skill now,
   // and the step session is pointed at it.
-  it('points a step session at the rule never to signal a process it did not start', () => {
+  it('points a step session at the rule to know a process before signalling it', () => {
     const told = instructionsFor('claude-code', readCanonRole('build-session:project').overlay);
     assert.match(told, /Skill `mc-processes`/u);
-    assert.match(readFileSync(join(canonSkillsDir(), 'processes', 'SKILL.md'), 'utf8'), /Never signal a process you did not start/u);
+    assert.match(readFileSync(join(canonSkillsDir(), 'processes', 'SKILL.md'), 'utf8'), /know what it is before you signal it/u);
   });
 
   // A file named `all-sessions.md` in a catalogue directory is text, not a role:

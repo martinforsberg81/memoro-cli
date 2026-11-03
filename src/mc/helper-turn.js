@@ -249,7 +249,7 @@ export async function runHelperTurn({
   const tool = gatewayLaunch({ provider, model: model || role.model, bin: launch.spec.bin, args, billing: billing.billing });
 
   const result = await (deps.session || realSession)({
-    bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake' }),
+    bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake', MC_HEADLESS: '1' }),
   });
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,

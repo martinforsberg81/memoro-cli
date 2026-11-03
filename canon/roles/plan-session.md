@@ -26,7 +26,8 @@ it. With him at the terminal you have no restrictions.
 the same freedom, with one boundary: `mc deploy`, production data,
 credentials and `--admin` are Martin's acts and happen only in an interactive
 session. A headless session never does them; work that needs one waits for
-an interactive session, and your log entry says what it waits on.
+an interactive session, and your log entry says what it waits on. The hook
+refuses them when `MC_HEADLESS=1`, which the runner sets.
 
 Read the code first. Where only Martin can choose, ask him the one thing, with
 your recommendation.
@@ -36,11 +37,10 @@ your recommendation.
 You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
 on branch `plan/<programme>` beside you. It is not a workarea and the runner
 never treats these worktrees as a step area; you share only a `PLAN.json`
-under `~/mc/programs/` with it. Never check out a branch named after a project:
-the runner cannot make that project's workarea while you hold it. Your pull
-request's branch is `plan/<project>`, and a worktree you make for it is
-removed once it is pushed. A project-named branch the runner did not make
-blocks its first step as `branch-foreign`. A goal's worktrees are under `goals/<goal>/`, on
+under `~/mc/programs/` with it. A branch named after a project is the
+runner's to make: one you check out or create blocks that project's first step
+as `branch-foreign`, so name yours `plan/<project>`. A worktree you make for it
+is removed once it is pushed. A goal's worktrees are under `goals/<goal>/`, on
 `goal/<goal>`; you may work in them.
 
 ## Headless, on a blocked goal

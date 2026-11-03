@@ -19,15 +19,21 @@ and its `index.lock` are every session's at once.
 - **Commits.** Read `git status` and the diff; stage only the task's files and
   leave unrelated changes alone. A short imperative English subject (`Fix
   session expiry check`), no Conventional Commit prefix.
-- **Branches.** Stay on the branch you were given: a runner session's is
-  built to the end, and merges `origin/main` only for a conflict the merger
-  reported. A session opened by hand branches each delivery from a fresh
-  `origin/main`. Never continue a branch
-  that has merged: the same content lands twice under two SHAs. Never stack a
-  branch on an open one unless it cannot be built without it.
-- **Pushing.** Only through `mc publish`; never force-push, never rewrite
-  published history, never push to `main`. A stacked branch is rebuilt from
-  `main` once its parent lands, not rebased onto it.
-- **Worktrees and branches are mc's.** Never delete a local branch or a
-  worktree by hand. A remote branch gone after a merge is the repository's
-  `deleteBranchOnMerge`, not a fault.
+- **Branches.** A runner step's or goal's branch is built to the end on its
+  pull request, and merges `origin/main` when the merger reports a conflict.
+  New work starts from a fresh `origin/main`. A branch that has merged is
+  finished: building on it lands the same content twice under two SHAs. A
+  branch stacked on an open one is rebuilt from `main` once its parent lands,
+  not rebased onto it.
+- **Pushing.** `mc publish` pushes without force and opens the pull request.
+  A force-push rewrites what another session or the merger may already hold;
+  when one is meant (a rebased stack), `--force-with-lease` with
+  `MC_HOOK_ALLOW=1`. `main` changes only through a merge.
+- **Removing a branch or a worktree.** Check first, then do it:
+  `git worktree list` shows no worktree holding the branch (git refuses
+  otherwise), and `git cherry origin/main <branch>` lists nothing, or each `+`
+  commit is in a merged pull request. A worktree goes with
+  `git worktree remove <path>` (without `--force` when it has edits you have
+  not read). A runner workarea's or a goal's worktree is cheaper to leave to
+  `mc tidy` and `mc goal archive`, which do the same checks. A remote branch
+  gone after a merge is the repository's `deleteBranchOnMerge`, not a fault.
