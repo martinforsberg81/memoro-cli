@@ -8,13 +8,13 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from '../../src/mc/branch-landed.js';
-import { inspectWorkArea, releaseWorkArea, removeWorktree } from '../../src/mc/work-area.js';
+import { directoryInUse, inspectWorkArea, releaseWorkArea, removeWorktree } from '../../src/mc/work-area.js';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], {
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -22,12 +22,36 @@ const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], {
 }).trim();
 
 /**
+ * Each fixture's git history is built once per file, at load, and every test
+ * gets a copy of it on disk: the history is the same for every test, and
+ * building it per test cost two seconds of git processes each. The copy is a
+ * real repository; the origin URL in its config is pointed at its own copy of
+ * the bare origin, so a test's fetch or push never reaches another test's.
+ */
+const templates = [];
+after(() => { for (const root of templates) rmSync(root, { recursive: true, force: true }); });
+
+function template(prefix, build) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  templates.push(root);
+  const extra = build(root);
+  return { root, extra };
+}
+
+function copyOf({ root: from, extra }, prefix) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  cpSync(from, root, { recursive: true });
+  const config = join(root, 'repo', '.git', 'config');
+  writeFileSync(config, readFileSync(config, 'utf8').split(from).join(root));
+  return { root, repo: join(root, 'repo'), ...extra, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+/**
  * A repository whose branch was squash-merged: `feat` carries two commits
  * main lacks by SHA, and main carries their content in one. `origin/main`
  * is a plain ref — no network anywhere near this.
  */
-function squashed() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-landed-')));
+const SQUASHED = template('mc-landed-', (root) => {
   const repo = join(root, 'repo');
   mkdirSync(repo);
   git(repo, ['init', '-q', '-b', 'main']);
@@ -45,8 +69,9 @@ function squashed() {
   git(repo, ['merge', '--squash', '-q', 'feat']);
   git(repo, ['commit', '-q', '-m', 'feat, squashed']);
   git(repo, ['update-ref', 'refs/remotes/origin/main', 'main']);
-  return { root, repo, cleanup: () => rmSync(root, { recursive: true, force: true }) };
-}
+  return {};
+});
+const squashed = () => copyOf(SQUASHED, 'mc-landed-');
 
 describe('what landed means after a squash', () => {
   it('a squash-merged branch is landed: commits main lacks, and nothing main lacks', () => {
@@ -90,7 +115,22 @@ function area(fx, { branch = 'feat' } = {}) {
   return { workRoot, env: { ...process.env, MC_WORK_ROOT: workRoot } };
 }
 
+/**
+ * Nobody stands in the worktree: who does is lsof's answer (`directoryInUse`,
+ * asked for real once below), and the rest pin what release and remove decide
+ * on content.
+ */
+const nobody = () => null;
+
 describe('release and remove act on content', () => {
+  it('asks the system who stands in a directory: nobody in a fresh one, this process in its own', () => {
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), 'mc-unused-')));
+    try {
+      assert.equal(directoryInUse(fresh), null);
+      assert.ok(directoryInUse(process.cwd())?.includes('node'), 'this test stands in its cwd');
+    } finally { rmSync(fresh, { recursive: true, force: true }); }
+  });
+
   it('release cleans a landed branch, and says what it kept and why for the other two', () => {
     const fx = squashed();
     try {
@@ -98,7 +138,7 @@ describe('release and remove act on content', () => {
       const seen = inspectWorkArea('x', env).worktrees[0];
       assert.equal(seen.unmerged_commits, 2);
       assert.equal(seen.landed, 'landed');
-      const result = releaseWorkArea('x', { env, dryRun: false });
+      const result = releaseWorkArea('x', { env, dryRun: false, inUse: nobody });
       assert.equal(result.kept.length, 0, JSON.stringify(result.kept.map((k) => k.why)));
       assert.equal(result.removed[0].what, 'worktree and branch');
       assert.equal(existsSync(join(workRoot, 'x', 'repo')), false);
@@ -114,7 +154,7 @@ describe('release and remove act on content', () => {
       writeFileSync(join(wt, 'c.txt'), 'c\n');
       git(wt, ['add', 'c.txt']);
       git(wt, ['commit', '-q', '-m', 'three']);
-      const result = releaseWorkArea('x', { env, dryRun: false });
+      const result = releaseWorkArea('x', { env, dryRun: false, inUse: nobody });
       assert.equal(result.kept.length, 1);
       assert.match(result.kept[0].why, /3 commits main lacks/u);
     } finally { fx.cleanup(); }
@@ -131,7 +171,7 @@ describe('release and remove act on content', () => {
       writeFileSync(join(fx.repo, 'base.txt'), 'ours\n');
       git(fx.repo, ['commit', '-aqm', 'our base']);
       git(fx.repo, ['update-ref', 'refs/remotes/origin/main', 'main']);
-      const result = releaseWorkArea('x', { env, dryRun: false, gh: () => ({ ok: true, stdout: '[]' }) });
+      const result = releaseWorkArea('x', { env, dryRun: false, inUse: nobody, gh: () => ({ ok: true, stdout: '[]' }) });
       assert.equal(result.kept.length, 1);
       assert.match(result.kept[0].why, /cannot tell whether main has this content/u);
     } finally { fx.cleanup(); }
@@ -141,7 +181,7 @@ describe('release and remove act on content', () => {
     const fx = squashed();
     try {
       const { env } = area(fx);
-      const result = removeWorktree({ name: 'x', repo: 'repo', env });
+      const result = removeWorktree({ name: 'x', repo: 'repo', env, inUse: nobody });
       assert.equal(result.ok, true);
       assert.equal(result.branch_kept, false, result.branch_kept_why);
       assert.throws(() => git(fx.repo, ['rev-parse', '--verify', 'feat']));
@@ -156,7 +196,7 @@ describe('release and remove act on content', () => {
       writeFileSync(join(wt, 'c.txt'), 'c\n');
       git(wt, ['add', 'c.txt']);
       git(wt, ['commit', '-q', '-m', 'three']);
-      const result = removeWorktree({ name: 'x', repo: 'repo', env });
+      const result = removeWorktree({ name: 'x', repo: 'repo', env, inUse: nobody });
       assert.equal(result.branch_kept, true);
       assert.match(result.branch_kept_why, /3 commits main lacks/u);
       assert.equal(git(fx.repo, ['rev-parse', '--verify', '--quiet', 'feat']).length > 0, true, 'the work survived');
@@ -210,8 +250,7 @@ describe('mergedPullAtTip', () => {
  * A bare origin: `feat` carries A locally; the remote `feat` is A′, the same
  * patch on a newer main.
  */
-function restacked() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-restack-')));
+const RESTACKED = template('mc-restack-', (root) => {
   const origin = join(root, 'origin.git');
   const repo = join(root, 'repo');
   git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
@@ -240,8 +279,9 @@ function restacked() {
   git(repo, ['switch', '-q', 'feat']);
   git(repo, ['branch', '-qD', 'replay']);
   git(repo, ['fetch', '-q', 'origin']);
-  return { root, repo, head, cleanup: () => rmSync(root, { recursive: true, force: true }) };
-}
+  return { head };
+});
+const restacked = () => copyOf(RESTACKED, 'mc-restack-');
 
 /**
  * A mend after the step (2026-10-18, `sql-schema-drift-3`, #13762): `feat`
@@ -250,8 +290,7 @@ function restacked() {
  * `fetched` lets the workarea see B before the branch goes; `pullRef` says
  * whether GitHub kept `refs/pull/13762/head`.
  */
-function mended({ fetched = false, pullRef = true } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-mended-')));
+const buildMended = ({ fetched = false, pullRef = true }) => template('mc-mended-', (root) => {
   const origin = join(root, 'origin.git');
   const repo = join(root, 'repo');
   git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
@@ -279,8 +318,12 @@ function mended({ fetched = false, pullRef = true } = {}) {
   if (fetched) git(repo, ['fetch', '-q', 'origin']);
   git(other, ['push', '-q', 'origin', '--delete', 'feat']);
   git(repo, ['fetch', '-q', '--prune', 'origin']);
-  return { root, repo, head, cleanup: () => rmSync(root, { recursive: true, force: true }) };
-}
+  return { head };
+});
+// The three variants the tests below use, built at load.
+const MENDED = new Map([[true, true], [false, true], [false, false]].map(([fetched, pullRef]) => (
+  [`${fetched}/${pullRef}`, buildMended({ fetched, pullRef })])));
+const mended = ({ fetched = false, pullRef = true } = {}) => copyOf(MENDED.get(`${fetched}/${pullRef}`), 'mc-mended-');
 
 const hasCommit = (repo, sha) => {
   try { git(repo, ['cat-file', '-e', `${sha}^{commit}`]); return true; } catch { return false; }

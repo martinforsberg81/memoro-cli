@@ -285,7 +285,8 @@ export function dropEmptyArea(path) {
  * what people did because mc had no verb for it, and it is how a shell ends
  * up standing in a directory that no longer exists.
  */
-export function removeWorktree({ name, repo, env = process.env } = {}) {
+// `inUse` as for releaseWorkArea below.
+export function removeWorktree({ name, repo, env = process.env, inUse: standing = directoryInUse } = {}) {
   const area = inspectWorkArea(name, env);
   const worktree = area.worktrees.find((item) => item.repo === repo);
   if (!worktree) return { ok: false, reason: 'no-such-worktree' };
@@ -294,8 +295,8 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
   // the question below is asked. What is still standing there after that —
   // a shell, a session, a server that would not stop — still refuses.
   const servers = stopServersUnder(worktree.path, { reason: 'worktree-removed' });
-  if (servers.stopped.length) waitUntilUnused(worktree.path);
-  const inUse = directoryInUse(worktree.path);
+  if (servers.stopped.length) waitUntilUnused(worktree.path, { standing });
+  const inUse = standing(worktree.path);
   if (inUse) return { ok: false, reason: `in use by ${inUse.join(', ')}`, servers_stopped: servers.stopped };
   if (worktree.uncommitted > 0) return { ok: false, reason: `${worktree.uncommitted} uncommitted` };
   if (!worktree.is_git) {
@@ -324,8 +325,8 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
 }
 
 /** Up to 5 s, every 250 ms, for a stopped server's processes to leave. */
-function waitUntilUnused(path, { totalMs = 5000, stepMs = 250 } = {}) {
-  for (let waited = 0; waited < totalMs && directoryInUse(path); waited += stepMs) {
+function waitUntilUnused(path, { totalMs = 5000, stepMs = 250, standing = directoryInUse } = {}) {
+  for (let waited = 0; waited < totalMs && standing(path); waited += stepMs) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stepMs);
   }
 }
@@ -496,14 +497,16 @@ export function releaseWorktree(worktree) {
   return removed;
 }
 
-export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null } = {}) {
+// `inUse` is who stands in a directory (`directoryInUse`, one lsof per call);
+// a test that pins what release decides hands in the answer.
+export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null, inUse: standing = directoryInUse } = {}) {
   const area = inspectWorkArea(name, env);
   const removed = [];
   const kept = [];
   const pullAtTip = (wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {});
   for (const worktree of area.worktrees) {
     const verdict = releaseVerdict(worktree, {
-      inUse: worktree.is_git ? directoryInUse(worktree.path) : null,
+      inUse: worktree.is_git ? standing(worktree.path) : null,
       pullAtTip,
     });
     if (!verdict.remove) {
