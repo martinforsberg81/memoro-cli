@@ -233,8 +233,9 @@ export const SHIPPED = Object.freeze({
     // preflight until #13232. Rebuilt after `npm ci`, main never carries a
     // stale copy. The same holds for the generated session validator (ajv and
     // src/schemas/; mc deploy runs build:validators too, and check:validators
-    // is not selected for a lockfile bump) and the TipTap bundle, whose build
-    // is deterministic since #13233. The design-token stylesheets and their
+    // is not selected for a lockfile bump). The TipTap bundle is not here:
+    // memoro's email-compose (#14707) deletes it and its `build:tiptap`
+    // script. The design-token stylesheets and their
     // document are written from `sdk/tokens/*.json` alone (2026-10-12: steps
     // regenerated them by hand, one-window-path 8 among them). The SDK corpus
     // results and `card-html-digests.json` are not here: memoro re-records
@@ -246,10 +247,6 @@ export const SHIPPED = Object.freeze({
         paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
       }),
       Object.freeze({ command: 'npm run build:validators', paths: Object.freeze(['src/tenancy/validators.generated.mjs']) }),
-      Object.freeze({
-        command: 'npm run build:tiptap',
-        paths: Object.freeze(['public/vendor/tiptap.bundle.js', 'public/vendor/tiptap.version.json']),
-      }),
       Object.freeze({
         command: 'npm run tokens:build',
         paths: Object.freeze(['public/css/tokens/', 'public/css/theme/theme-memoro-light.css', 'public/css/theme/theme-memoro-dark.css']),
