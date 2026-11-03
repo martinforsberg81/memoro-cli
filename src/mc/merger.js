@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { logStamp, redMergeText, setStatus } from './goals.js';
+import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setStatus } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -521,6 +521,12 @@ export async function landJob(batch, {
   watchMs = SUBJECT_POLL_MS,
   // A goal job's answer written to its GOAL.md and LOG.md (goals.js `setStatus`).
   setGoal = realSetGoal,
+  // `() => goals` (goals.js `programsGoals`): how a pull request queued by
+  // anyone finds the goal whose `prs` carry it. Null knows only `job.goal`;
+  // merger-run.js gives the real one.
+  goalsOf = null,
+  // A goal entry with no status change (goals.js `appendEntry`).
+  noteGoal = appendEntry,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
@@ -536,7 +542,7 @@ export async function landJob(batch, {
     const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}) };
     answers.push({ job, landed, report, ...flags });
     await tell(job, landed, report, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, setGoal,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, setGoal, goalsOf, noteGoal,
     });
     // Outside any lock: `tell` has let go of the register's, and the queue's
     // is the same lock, which a second take by this process waits 5 s for.
@@ -730,33 +736,62 @@ function realSetGoal({ dir, status, entry }) {
 }
 
 /**
- * A goal job's answer, in its goal: landed is `done` with the pull request and
- * the landed sha; moved past its reviewed head is `review` again; red is
- * `blocked` with the round's reason, and waits on plan. A requeue says nothing
- * yet: the next round answers it.
+ * The goal a job answers to, as `{ programme, goal, dir, status, prs }`, or null: the
+ * job's own (a goal's green review queued it), else the goal whose `prs` name
+ * this pull request (`mc publish` or `mc goal pr` put it there), so a pull
+ * request a person or another session queued is the goal's too. `prs` is read
+ * from the goal as it stands; a goal `goalsOf` cannot read has none.
  */
-function tellGoal(job, landed, report, { say, now, setGoal, moved, requeued }) {
+export function goalOfJob(job, goalsOf) {
+  let goals = [];
+  try { goals = goalsOf ? goalsOf() : []; } catch { goals = []; }
+  if (job.goal) {
+    const found = goals.find((goal) => goal.programme === job.goal.programme && goal.goal === job.goal.goal);
+    return { ...job.goal, status: found?.status ?? null, prs: found?.prs ?? [] };
+  }
+  const found = goalOfPr(goals, job.repo, job.pr);
+  return found && !found.problems?.length ? { programme: found.programme, goal: found.goal, dir: found.dir, status: found.status, prs: found.prs } : null;
+}
+
+/**
+ * A goal job's answer, in its goal: landed is `done` with the pull request and
+ * the landed sha — unless the goal carries another pull request (`prs`) than
+ * this one, when the landing is written with no status change and the runner
+ * sets `done` once the rest has landed (`settleLanded`, run.js); moved past
+ * its reviewed head is `review` again; red is `blocked` with the round's
+ * reason, and waits on plan. A requeue says nothing yet: the next round
+ * answers it.
+ */
+function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued }) {
   if (requeued) return;
   const label = `${job.repo} #${job.pr}`;
+  const name = `${goal.programme}/${goal.goal}`;
   const at = logStamp(now());
   const entry = (status, done, comment = null) => ({ at, tool: 'runner', model: null, status, done, comment, next: null });
   const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
-  const [status, written] = landed
-    ? ['done', entry('done', `landed #${job.pr} as ${report?.merge_commit || 'an unknown sha'}`)]
-    : moved
-    ? ['review', entry('review', null, `not landed: ${report?.reason || 'the branch moved past the reviewed head'} — reviewed again`)]
-    : ['blocked', entry('blocked', redMergeText(job.pr), `${reason} — waits on plan`)];
+  const others = (goal.prs ?? []).filter((item) => !(item.repo === job.repo && item.pr === Number(job.pr)));
+  const landedText = `landed #${job.pr} as ${report?.merge_commit || 'an unknown sha'}`;
   try {
-    const set = setGoal({ dir: job.goal.dir, status, entry: written });
-    if (set?.problems) say(`${label}: goal ${job.goal.programme}/${job.goal.goal} could not be set ${status} (${set.problems.join('; ')})`);
-    else say(`${label}: goal ${job.goal.programme}/${job.goal.goal} is ${status}`);
+    if (landed && others.length) {
+      noteGoal({ dir: goal.dir, entry: entry(goal.status || 'review', `${prRef({ repo: job.repo, pr: job.pr })} ${landedText}`, `the goal carries ${others.map(prRef).join(', ')} too — done when every one has landed or closed`) });
+      say(`${label}: goal ${name} — landed; ${others.map(prRef).join(', ')} still to settle`);
+      return;
+    }
+    const [status, written] = landed
+      ? ['done', entry('done', landedText)]
+      : moved
+      ? ['review', entry('review', null, `not landed: ${report?.reason || 'the branch moved past the reviewed head'} — reviewed again`)]
+      : ['blocked', entry('blocked', redMergeText(job.pr), `${reason} — waits on plan`)];
+    const set = setGoal({ dir: goal.dir, status, entry: written });
+    if (set?.problems) say(`${label}: goal ${name} could not be set ${status} (${set.problems.join('; ')})`);
+    else say(`${label}: goal ${name} is ${status}`);
   } catch (error) {
-    say(`${label}: goal ${job.goal.programme}/${job.goal.goal} could not be written (${error?.message || error})`);
+    say(`${label}: goal ${name} could not be written (${error?.message || error})`);
   }
 }
 
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, setGoal = realSetGoal }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal is reviewed again`
     : back ? `${label}: ${report.reason}`
@@ -808,7 +843,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     }
   }
 
-  if (job.goal && !back) tellGoal(job, landed, report, { say, now, setGoal, moved, requeued });
+  const goal = back ? null : goalOfJob(job, goalsOf);
+  if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
 
   if (appendRun) {
     try {

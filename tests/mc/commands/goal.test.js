@@ -207,7 +207,7 @@ test('mc goal log --status rewrites the status in the front matter and logs the 
 
   const bad = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--status', 'started', '--comment', 'x'], bad.deps), 2);
-  assert.match(bad.err(), /--status is open, review, blocked, done, waiting, not started/u);
+  assert.match(bad.err(), /--status is open, review, blocked, done, waiting, dropped, not started/u);
 });
 
 test('mc goal open, review, blocked and done set the status and log the reason', async () => {
@@ -310,7 +310,7 @@ test('mc goal show refuses a goal that does not parse, and says why', async () =
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.md`]: '---\nstatus: maybe\nrepos: memoro\nclass: fast\n---\n' }) });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 1);
   assert.match(f.err(), /mc\/plain does not parse:/u);
-  assert.match(f.err(), /status is open, review, blocked, done, waiting, not maybe/u);
+  assert.match(f.err(), /status is open, review, blocked, done, waiting, dropped, not maybe/u);
 });
 
 test('mc goal list prints one line a goal: its name, repositories, status, sessions and what is next', async () => {

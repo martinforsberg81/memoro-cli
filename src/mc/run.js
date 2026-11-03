@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, GOAL_FILE, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, prsLanded, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -177,6 +177,9 @@ import {
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, routedSettings, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch, workClassOf,
   stepPrompt, STEP_KINDS, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
+
+/** How often the runner asks GitHub whether a goal's pull requests have all landed (`settleLanded`). */
+export const SETTLE_EVERY_MS = 5 * 60_000;
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
@@ -2144,6 +2147,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * candidate in the same pick.
    */
   function goalWork({ repos: names, passed }) {
+    settleLanded();
     releaseWaiting();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
     const may = (goal) => {
@@ -2209,6 +2213,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /** The reason each goal's review last waited on, so it is said once. */
   const reviewWaits = new Map();
+  // When `settleLanded` last asked GitHub, epoch ms.
+  let lastSettle = -Infinity;
 
   /**
    * The route a goal's review runs on: the review class's candidate (`mc model
@@ -2258,6 +2264,37 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       goalStatus(goal, name, move.status, { done: move.done, comment: move.comment });
       if (move.status !== 'open') continue;
       remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
+    }
+  }
+
+  /**
+   * Goals whose every pull request (`prs`) has landed or closed, one landed,
+   * set `done` — however each landed: the merger, `mc merge --docs`, `--admin`,
+   * or on GitHub by hand. The merger sets done itself when the pull request it
+   * lands is the goal's last; this pass is for the rest, and asks GitHub at
+   * most every `SETTLE_EVERY_MS`, only for goals that are not finished or
+   * waiting and carry pull requests. A pull request GitHub cannot say about
+   * leaves the goal as it is.
+   */
+  function settleLanded() {
+    const at = deps.now().getTime();
+    if (at - lastSettle < SETTLE_EVERY_MS) return;
+    lastSettle = at;
+    for (const goal of goals()) {
+      if (goal.problems.length || FINISHED.includes(goal.status) || goal.status === 'waiting' || !goal.prs?.length) continue;
+      const stateOf = ({ repo: repoName, pr }) => {
+        const repo = repos.find((item) => item.name === repoName);
+        if (!repo) return null;
+        const asked = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'state']);
+        if (!asked.ok) return null;
+        try { return JSON.parse(asked.stdout || 'null')?.state ?? null; } catch { return null; }
+      };
+      const settled = prsLanded(goal.prs, stateOf);
+      if (!settled.done) continue;
+      goalStatus(goal, goalName(goal), 'done', {
+        done: `landed ${settled.landed.join(', ')}`,
+        comment: settled.closed.length ? `closed without landing: ${settled.closed.join(', ')}` : null,
+      });
     }
   }
 

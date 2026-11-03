@@ -5951,6 +5951,39 @@ test('a waiting goal whose after-goal is gone without landing goes blocked for p
   assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['plan']);
 });
 
+test('a goal whose every pull request (prs) has landed or closed is set done by the runner, at most every five minutes', async () => {
+  const f = goalFixture({ asc: { status: 'blocked' }, open: { status: 'blocked' }, gone: { status: 'dropped' } });
+  const withPrs = (name, prs) => { f.files[`${GOALS}/${name}/GOAL.md`] = f.files[`${GOALS}/${name}/GOAL.md`].replace('class: large\n', `class: large\nprs: ${prs}\n`); };
+  withPrs('asc', 'memoro#14761, memoro#14756');
+  withPrs('open', 'memoro#20');
+  withPrs('gone', 'memoro#30');
+  const states = { 14761: 'OPEN', 14756: 'MERGED', 20: 'OPEN', 30: 'MERGED' };
+  const asked = [];
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => {
+    if (args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'state') {
+      asked.push(Number(args[2]));
+      return { ok: true, stdout: JSON.stringify({ state: states[args[2]] }) };
+    }
+    return gh(cwd, args);
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/asc/GOAL.md`], /^status: blocked$/mu, 'memoro#14761 is still open');
+  assert.equal(asked.includes(30), false, 'a dropped goal is not asked about');
+
+  states[14761] = 'MERGED';
+  await runner.pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/asc/GOAL.md`], /^status: blocked$/mu, 'not asked again within five minutes');
+
+  f.deps.now = () => new Date('2026-08-29T10:06:00Z');
+  await runner.pass({ repo: 'memoro' });
+  assert.match(f.files[`${GOALS}/asc/GOAL.md`], /^status: done$/mu);
+  const entry = parseLog(f.files[`${GOALS}/asc/LOG.md`]).at(-1);
+  assert.deepEqual([entry.tool, entry.status, entry.done], ['runner', 'done', 'landed memoro#14761, memoro#14756']);
+  assert.match(f.files[`${GOALS}/open/GOAL.md`], /^status: blocked$/mu, 'memoro#20 is open');
+});
+
 test('a blocked or done goal is never started', async () => {
   const f = goalFixture({ stuck: { status: 'blocked' }, finished: { status: 'done' } });
   f.files[`${GOALS}/broken/GOAL.md`] = 'no front matter\n';

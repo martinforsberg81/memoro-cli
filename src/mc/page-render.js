@@ -1169,8 +1169,9 @@ function projectLine(c, wide, project) {
  *
  * `open` is green while a session is on it and grey otherwise, `review` is
  * green — a review session or the merger moves it by itself — `blocked` is the
- * blocked colour, and `done` is grey: the project rows' colours for the same
- * words. A goal blocked by a red review, a red merge or the runner waits on
+ * blocked colour, and `done` and `dropped` are grey: the project rows' colours
+ * for the same words. A finished goal's tail is its last `Gjort:`, never a
+ * `Nästa:` that is over. A goal blocked by a red review, a red merge or the runner waits on
  * plan, which the runner wakes, and its tail says so first; any other blocked
  * goal — a person's, a build session's question, one plan left blocked —
  * `waits on a person`. Both are in the colour of what waits on a person. A `waiting`
@@ -1199,7 +1200,9 @@ function goalLine(c, wide, goal) {
   const room = wide - width(left);
   if (room <= 0) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
-  const said = goal.question ?? goal.last?.next ?? goal.last?.comment ?? null;
+  // A finished goal has no next action: its tail is what was done last.
+  const finished = goal.status === 'done' || goal.status === 'dropped';
+  const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
   if (goal.plan || goal.person || waits) {
     const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');

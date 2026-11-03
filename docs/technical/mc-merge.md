@@ -1107,6 +1107,12 @@ next session (ruling 30), which reads the reason and the red round's file
 goal's pull request the goal is set `blocked` with the runner's `merger
 answered red on #<pr>` entry (`tellGoal`), and the runner wakes a plan session
 for it ([`mc-goals.md`](mc-goals.md) § *A blocked goal wakes plan*).
+A pull request is a goal's when the job carries the goal (its green review
+queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
+`mc publish` queued is answered in its goal as well. Landed, it sets the goal
+`done` only when the goal carries no other pull request; otherwise the landing
+is an entry and the runner sets `done` once the rest has landed
+([`mc-goals.md`](mc-goals.md) § *Done when its work has landed*).
 
 Until 2026-11-02 a red the change itself caused got one *mend* first: a
 headless session of its own on the branch, while the entry stood `mending`

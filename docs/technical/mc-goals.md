@@ -36,6 +36,8 @@ blocked  ── a person sets it open ──────────────
 ~/mc/programs/<programme>/goals/<goal>/GOAL.md    the brief and its status
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive), its worktrees gone
+~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
 One worktree per repository the goal names. Anyone may work in one: a person,
@@ -54,6 +56,7 @@ repos: memoro-cli, memoro
 class: fast
 created: 2026-11-01T20:00:00Z
 after: mc/runner-sessions, mc/agent-skills-text
+prs: memoro#14761, memoro-cli#1238
 ---
 # Title
 
@@ -64,8 +67,9 @@ after: mc/runner-sessions, mc/agent-skills-text
 ## Out of scope
 ```
 
-- `status` — `open`, `waiting`, `review`, `blocked` or `done`. A goal starts
-  `open`, or `waiting` when its `after` names a goal that has not landed.
+- `status` — `open`, `waiting`, `review`, `blocked`, `done` or `dropped`. A
+  goal starts `open`, or `waiting` when its `after` names a goal that has not
+  landed.
 - `repos` — comma-separated repository names. The first is where a session
   starts, and the lane that serves it takes the goal.
 - `class` — `fast` or `large`, routed as a step's class is (ruling 59).
@@ -74,9 +78,12 @@ after: mc/runner-sessions, mc/agent-skills-text
   `<programme>/<goal>` names. Written by `mc goal new --after` and
   `mc goal after`; absent is none. A goal waits on goals only — not on a
   project, a deploy or a time (projects have those).
+- `prs` — optional; the pull requests that carry the goal's work, as
+  `<repo>#<n>`, comma-separated. `mc publish` writes the one it opens or
+  updates (*Done when its work has landed*), and `mc goal pr` names others.
 
 The body is Markdown, written by a person or a session. mc rewrites only the
-`status` and `after` lines. A GOAL.md whose front matter does not parse is listed by
+`status`, `after` and `prs` lines. A GOAL.md whose front matter does not parse is listed by
 `mc goal list` with its problems, and the runner never starts it.
 
 ## LOG.md
@@ -109,7 +116,7 @@ Nästa: what the next session should do
 
 ## The verbs
 
-Six verbs; the status verbs are four words.
+Nine verbs; the status verbs are five words.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--after <p>/<g>[,<p>/<g>]]`** — makes a
   goal, refused unless its flags are valid and its names are new. With
@@ -137,6 +144,24 @@ Six verbs; the status verbs are four words.
   appends one entry; at least one field is needed. `--status` also sets the
   status line, except `waiting`: a goal waits by its `after`, never by a
   status. The goal is `MC_GOAL`'s when none is named.
+- **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: status
+  `dropped`, never `done`, so a goal that starts after it does not start — it
+  is blocked for plan, as after a goal that is gone (`afterOf`). The reason is
+  required. Only a person or a plan session drops a goal.
+- **`pr <p>/<g> <repo>#<n>…`** — the pull requests named carry the goal: each
+  is added to `prs` once, with an entry `Gjort: carries <repo>#<n>`. For work
+  published before `mc publish` wrote `prs`, or from where it could not tell
+  the goal.
+- **`archive <p>/<g>…`** or **`archive <p>`** (every done or dropped goal of the
+  programme) — a finished goal leaves `mc goal list` and the page. Refused, by
+  name and reason and with nothing touched, for a goal that is not `done` or
+  `dropped`; that a goal not finished names in `after`; whose worktree has
+  uncommitted changes; with an open pull request on `goal/<g>` or in `prs`;
+  and, for a dropped one, whose branch has commits no remote holds. Otherwise
+  each worktree is removed with `git worktree remove` and the local branch
+  `goal/<g>` deleted, the directory moves to `goals/.archive/<g>/` (a
+  dot-directory, so no reader lists it), and `goals/goal_log.md` gets a row:
+  date, goal, status, pull requests, the last `Gjort:`.
 - **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
   logs the reason as the entry's `Kommentar`. Going `open` (by `open` or
   `log --status open`) is refused, with nothing written, while the goal's
@@ -155,11 +180,13 @@ Six verbs; the status verbs are four words.
 - A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
   by either verb: only the merger and a person set it. A review session
   (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
-  A plan session (`MC_ROLE=plan`) is refused `review`.
+  A plan session (`MC_ROLE=plan`) is refused `review`. Any session but plan is
+  refused `dropped`.
 - **`show <p>/<g>`** — the front matter (with `· after <names>` when set), the body, the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
-  n sessions · the last entry's Nästa`. A goal blocked by a red review, a red
+  n sessions · the last entry's Nästa` — `—` for a `done` or `dropped` goal,
+  whose last next action is over. A goal blocked by a red review, a red
   merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`); any other
   blocked goal `blocked, waits on a person` (`waitsOnPerson`); a waiting goal reads
   `waiting on <p>/<g>, …`, the names in its `after` that have not landed.
@@ -327,17 +354,54 @@ criterion met or not met with its evidence, then structure, then bugs — with
 `--status review` for green and `--status blocked` for red, and posts the same
 text on the pull request.
 
+## Done when its work has landed
+
+Martin, 2026-11-03: *"När ett goal steg landas så måste status uppdateras
+automatiskt till 'done'"*. Until then only a landing of the goal's own
+`goal/<g>` pull request, queued by its green review, set `done`; work landed
+from other branches — `ios-release/mc-asc` landed in six pull requests across
+memoro and memoro-cli — left the goal for a person to close by hand.
+
+- **A pull request carries its goal.** `mc publish` writes the pull request
+  into the goal's `prs`, with an entry `Gjort: published <repo>#<n>`, when it
+  knows the goal: `--goal <p>/<g>`, else `MC_GOAL`, else the goal whose
+  worktree it stands in (`goalOfPath`), else the one goal named as a
+  `goal/<g>` branch is. A `--goal` that is no goal is refused before the push;
+  found any other way, a goal that is not there is none. `mc goal pr` adds one
+  by hand.
+- **The merger tells the goal whoever queued it.** A job's goal is its own
+  (`job.goal`, a green review's), else the goal whose `prs` name it
+  (`goalOfJob`, merger.js, over `programsGoals`). So a pull request a person
+  queues with `mc merge`, or one `mc publish` queued, is the goal's too.
+- **Done when all have landed.** Landed, and the goal carries no other pull
+  request: `done`. Landed while it carries others: an entry with no status
+  change (`… the goal carries memoro-cli#1238 too — done when every one has
+  landed or closed`). The runner's `settleLanded` pass (run.js), at most every
+  five minutes, asks GitHub for the state of each pull request of every goal
+  that is not finished or waiting and carries any, and sets `done` when every
+  one is merged or closed and at least one merged (`prsLanded`) — however each
+  landed: the merger, `mc merge --docs`, `--admin`, or on GitHub. A pull
+  request GitHub cannot say about leaves the goal as it is.
+- **Review stays on the first repository.** A goal's review session is told
+  the open pull request on `goal/<g>` in its first repository, as before; a
+  second repository's pull request carries the goal and lands it, but is not
+  reviewed by the goal's review. A goal across two repositories whose second
+  half needs review publishes it from that repository's worktree, and plan or
+  a person reads it.
+
 ## The merger
 
 A goal's job carries the goal and the head its review judged (`merge-queue.js`
-`goal`, `sha`). The merger (`tellGoal`):
+`goal`, `sha`); a job without one answers to the goal whose `prs` name it
+(*Done when its work has landed*). The merger (`tellGoal`):
 
 - **Lands only that head.** It asks GitHub for the head before the round; a
   head that has moved is answered `moved` with no round spent, and a push
   while the round runs is `moved` too. A moved job leaves the queue and the
   goal goes back to `review` with a runner entry.
 - **Landed:** `done`, with a runner entry naming the pull request and the
-  landed sha.
+  landed sha — when the goal carries no other pull request; else the landing
+  is an entry and the runner sets `done` once the rest has landed.
 - **Red:** `blocked`, with a runner entry giving the round's reason, which
   wakes plan (*A blocked goal wakes plan*). A red only under load is requeued
   as any job's is, and says nothing to the goal until it is answered.
@@ -365,7 +429,11 @@ head; that is a person's act, and its landing still sets the goal `done`.
   waits on a person: the list says `waits on a person`, and the page leads its
   tail with `waits on a person` and the question (the last comment that is not
   the runner's). Both are in the colour of what waits on a person.
-- `done` — set by the merger when the pull request lands, or by a person.
+- `done` — set by the merger or the runner when every pull request the goal
+  carries has landed, or by a person.
+- `dropped` — let go without landing (`mc goal drop`), by a person or plan.
+  Never picked, never woken; a goal after it is blocked for plan. Archived as
+  a `done` goal is.
 
 ## What a goal does not have
 
@@ -380,7 +448,8 @@ head; that is a person's act, and its landing still sets the goal `done`.
 - **No merge by a session.** A build session publishes with `--no-merge`; a
   review session publishes nothing. Only a green review, through the runner,
   queues a goal's pull request, and only the head it judged lands.
-- **No close-out.** No archive verb; a `done` goal stays where it is.
+- **No close-out document.** `mc goal archive` moves a finished goal aside
+  and writes one row; nothing is written into a repository.
 
 Phases and programme-level goals are not built, and plan is woken only by a
 blocked goal: not for projects, and not by a goal that landed.
