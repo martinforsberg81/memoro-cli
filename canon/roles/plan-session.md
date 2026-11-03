@@ -37,9 +37,10 @@ You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
 on branch `plan/<programme>` beside you. It is not a workarea and the runner
 never treats these worktrees as a step area; you share only a `PLAN.json`
 under `~/mc/programs/` with it. Never check out a branch named after a project:
-the runner cannot make that project's workarea while you hold it. A
-project-named branch the runner did not make blocks its first step as
-`branch-foreign`. A goal's worktrees are under `goals/<goal>/`, on
+the runner cannot make that project's workarea while you hold it. Your pull
+request's branch is `plan/<project>`, and a worktree you make for it is
+removed once it is pushed. A project-named branch the runner did not make
+blocks its first step as `branch-foreign`. A goal's worktrees are under `goals/<goal>/`, on
 `goal/<goal>`; you may work in them.
 
 ## Headless, on a blocked goal

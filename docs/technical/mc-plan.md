@@ -147,14 +147,14 @@ them. It says plans change only through `mc project` and `mc step`, keeps the
 project-named branch for the runner, then waits for Martin. A resume gets no
 opening prompt.
 
-The launch sets `MC_ROLE=plan` and `MC_PROGRAMME=<programme>` on both a new
+The launch sets `MC_ROLE=plan-session` and `MC_PROGRAMME=<programme>` on both a new
 conversation and a resume. A SessionStart hook names the role in its first
 line, including a session Martin opens by hand in that programme directory.
 The role and the hook both say never to run `mc plan` from inside the session.
-No headless plan session is built yet; the plan session is the interactive one
-Martin opens.
+The runner also starts a headless plan session on a blocked goal, with the
+same role ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*).
 
-Behind the prompt are `canon/roles/_common.md` and `canon/roles/plan.md`, assembled by `instructionsFor` the way every other role
+Behind the prompt are `canon/roles/all-sessions.md` and `canon/roles/plan-session.md`, assembled by `instructionsFor` the way every other role
 session's instructions are ([`mc-roles.md`](mc-roles.md)). The role file was
 frontmatter and no body until #656 — the model and the tools, and nothing about
 planning — and `planLaunch` had to read `sharedRoleText()` and fold it into the
@@ -163,14 +163,18 @@ assembler. With a body it inherits like the rest, so that fold is gone and the
 `shared` parameter with it; folding it in as well would tell the session the
 same rules twice.
 
-What the role says is what a planning session *is*: the programme as the unit,
-`~/mc/programs/<programme>/` and why it is not a workarea, the two kinds of work
-that are its own — thinking a programme through, and a step parked on
-`blocked_by: plan-review` — and the project the brief has already decided,
-which it does not take. How a plan is written is the passage it shares with
-`canon/roles/brief.md`, pulled in by `@include _plan-writing.md`. None of that
-predicts this programme's deliverable, which is what the prompt is still held
-to.
+What the role says is what a plan session *is* (Martin, 2026-11-03): the
+programme's aim, written in `~/mc/programs/<programme>/README.md`, and full
+freedom to move the programme toward it — goals and plans as means, building
+and landing work itself, taking over a goal's branch when that is quicker than
+a new build session. Interactive, it has no restrictions; headless, it never
+does Martin's acts (`mc deploy`, production data, credentials, `--admin`). It
+also says where it stands, `~/mc/programs/<programme>/` and why that is not a
+workarea, and that a step parked on `blocked_by: plan-review` is its own. How
+`mc project`, `mc step` and `mc goal` are used are verb files it includes —
+`project-verb.md` (with how a plan is written) and `step-verb.md`, which
+`canon/roles/brief.md` includes too, and `goal-verb.md`. None of that predicts
+this programme's deliverable, which is what the prompt is still held to.
 
 The role also says the checkouts stay on `plan/<programme>`, and that a
 planning session never checks out or creates a branch named after a project.
@@ -189,13 +193,13 @@ named after the project and kept it checked out in a scratchpad worktree.
 The prompt rides as the **last positional argument**, which is how both tools
 take opening words, and only for a new conversation. It names the programme
 and where the session stands, and then waits: the reading list and the
-`plan-review` hand-off it used to carry are the role's (`canon/roles/plan.md`),
+`plan-review` hand-off it used to carry are the role's (`canon/roles/plan-session.md`),
 and a session told to start by reading and reporting spent its first turn on
 an intro nobody asked for.
 
 ### Why the plan-writing passage says what it says
 
-`canon/roles/_plan-writing.md` is a page of rules; the reasons are here.
+`canon/roles/project-verb.md` § *Writing a PLAN.json* is a page of rules; the reasons are here.
 
 **Work classes, not models (ruling 59, ruling 42).** A class says how much
 judgement a step needs; it does not claim two providers' models are equal.

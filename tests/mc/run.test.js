@@ -527,7 +527,7 @@ const ready = plan();
  * always named the role; this names the revision — the digest is over the
  * assembled instructions, `all-sessions.md` and the overlay joined the
  * way `instructionsFor` joins them, and `text_digest` is over the role's own
- * body alone. `mc roles check step` holds both against the files on disk, so a
+ * body alone. `mc roles check build-session:project` holds both against the files on disk, so a
  * role edited during an hour-long session is something a person can see.
  */
 const stepRole = {

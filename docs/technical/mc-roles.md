@@ -4,7 +4,7 @@ Every session mc starts in a role is told two things, in this order: the text
 **every role session shares**, and **that role's own words**. Nothing else —
 the user's Coding Profile, which once came first, was removed by ruling 24, and
 the one rule in it nothing else said (what is written in English) is a sentence
-in `_common.md`. This document is the one account of how those two are found
+in `all-sessions.md`. This document is the one account of how those two are found
 and joined. `mc run`, `mc plan`, `mc helper` and `mc brief` each described a corner
 of it from their own angle; they now point here, because four parallel accounts
 of one mechanism is four things to keep true.
@@ -29,12 +29,16 @@ what the conversation needs to be told.
 
 ```
 ---
-name: step
+name: build-session
 model: opus
 singleton: false
 tools: claude, codex
+cache: 5m
 ---
-You are one step of the runner: …
+@part goal
+You are a build session on one goal. …
+@end
+…
 ```
 
 `parseRole` reads exactly those four keys and treats everything else in the
@@ -56,18 +60,48 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today:
+What canon holds today: three roles, each one file, and the three that stay
+apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what the
+session is for; a verb file says how a verb is used).
 
-| role | model | who launches it |
-|---|---|---|
-| `brief` | opus | `mc brief`, a foreground session in `~/mc/brief/` |
-| `helper` | sonnet | `mc helper`, the desk, foreground in `~/mc/helper/` |
-| `intake` | sonnet | the inbox drain, one headless turn per file |
-| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
-| `goal` | opus | `mc run`, one headless session on a goal; no steps or merge authority |
-| `step` | opus | `mc run`, one step of a `PLAN.json` |
-| `review` | opus | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
-| `worker` | opus | `mc worker`, and every conversation in that area after |
+| role | model | started as | who launches it |
+|---|---|---|---|
+| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
+| `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
+| | | `build-session:project` | `mc run`, one step of a `PLAN.json` (with its `workers` part when the plan says `subagents: on`) |
+| | | `build-session:worker` | `mc worker`, and every conversation in that area after |
+| `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
+| | | `review-session:project` | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
+| `brief` | opus | `brief` | `mc brief`, a foreground session in `~/mc/brief/` |
+| `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
+| `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
+
+## Parts: one role, started more than one way
+
+A role started more than one way keeps each start's words in a part:
+
+```
+@part goal
+…only a goal's build is told this…
+@end
+@part goal project
+…every headless build is told this; a worker is not…
+@end
+```
+
+Text outside every part is the role's shared words. A start names its part
+after a colon — `readCanonRole('build-session:goal')` — and `parseRole` keeps
+the shared words and every part whose `@part` line lists that name, in file
+order, and drops the rest (`selectParts`). The whole reference is the role's
+name wherever one is kept: `MC_ROLE`, the register's role record, and
+`mc roles check build-session:goal`. A part the file does not have is no role,
+so a start never runs on the shared words alone; `readCanonRole` with no part
+gives the shared words and `parts`, which `mc roles show build-session` lists.
+`withWorkers(role, true)` keeps the `workers` part as well, for a step with
+Haiku workers. The constants are `PLAN_ROLE` and `REVIEW_ROLE` in `goals.js`,
+`BUILD_ROLES` and `PROJECT_REVIEW_ROLE` in `run-plan.js` and `WORKER_ROLE` in
+`roles.js`. An area marked `worker` before 2026-11-03 still opens as the
+worker part (`MOVED_MARKS`).
 
 `worker` is the one that reaches a session through a work area rather than a
 verb. `markAreaRole` writes `.mc-role` — one file, one word — when the area is
@@ -77,7 +111,7 @@ creation, never acquired.
 
 ## The shared file
 
-`canon/roles/_common.md` is the text every role session is told, whichever role
+`canon/roles/all-sessions.md` is the text every role session is told, whichever role
 it is. It holds only what is true of any session and is not a task: what a turn
 costs, that you are already a session, that you read the code before deciding
 and say what you actually ran, that task rules are skills the role names, and
@@ -94,14 +128,14 @@ something every other kind is.
 
 Two things about where it sits are mechanical rather than tidy:
 
-**The underscore means "not a role".** `listRoles` makes a role out of every
-`*.md` in a catalogue directory, so a `common.md` copied into a user's
-catalogue would be listed and shown by `mc roles list` as a role named
-`common`. `listRoles` skips a leading underscore instead. (The shipped file has
-no frontmatter either, so `parseRole` would reject it as well — but the name is
-the guard, and the guard is what is tested.) The alternative shape,
-`canon/common.md` beside `roles/`, could not be mistaken for a role at all;
-keeping every piece of instruction text in one directory won.
+**A passage is not a role.** `listRoles` makes a role out of every `*.md` in a
+catalogue directory, so a copy of `all-sessions.md` or a verb file in a user's
+catalogue would be listed by `mc roles list` as a role. `isPassageFile` names
+them — `all-sessions.md`, `*-verb.md`, and a leading underscore — and
+`listRoles` skips them. (None has frontmatter either, so `parseRole` would
+reject them as well — but the name is the guard, and the guard is what is
+tested.) Keeping every piece of instruction text in one directory won over a
+`canon/common.md` beside `roles/`.
 
 **It is read at assembly, not folded into `overlay`.** `readCanonRole(name).
 overlay` stays the role's *own* words. `mc roles show <role>` prints it as that
@@ -110,11 +144,11 @@ through it, and — the reason that matters — `run.js` tests `role.overlay` to
 decide whether a role file is installed at all:
 
 ```js
-if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
+if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
 ```
 
 A shared preamble folded in ahead of that check would make a missing
-`build-project.md` look present, and the runner would launch a ninety-minute session
+`build-session.md` look present, and the runner would launch a ninety-minute session
 with no instructions for what it is doing.
 
 ## The assembler
@@ -146,20 +180,23 @@ Four paths launch a session with instructions, and all four call it:
 
 Each of them used to write the join out by hand.
 
-## A passage two roles share
+## The verb files
 
-`_common.md` is what *every* role session is told. Since 2026-09-06 there is a
-second kind of shared text, and it is not that: two roles write plans — the
-planning session, and the brief for a proposal Martin said GO to (ruling 11) —
-and the rest do not. Telling a build session how to write a `PLAN.json` it may
-never write is worse than telling it nothing, so the plan-writing rules are
-neither in `_common.md` nor copied into both role files. They are
-`canon/roles/_plan-writing.md`, and each of the two names it on a line of its
-own:
+`all-sessions.md` is what *every* role session is told. How a verb is used is
+not that: the plan session and the brief write plans and a build session does
+not, and telling a build session how to write a `PLAN.json` it may never write
+is worse than telling it nothing. So each verb is a file of its own, and a role
+that uses the verb names it on a line of its own:
 
 ```
-@include _plan-writing.md
+@include project-verb.md
 ```
+
+| file | what it says | included by |
+|---|---|---|
+| `project-verb.md` | runner or session; driving work in a session; writing a `PLAN.json` | `plan-session`, `brief` |
+| `step-verb.md` | a step that waits on Martin, and bringing it back with `mc step ready` | `plan-session`, `brief` |
+| `goal-verb.md` | what a goal is, its entries, who sets which status | `plan-session` |
 
 `expandRoleIncludes` replaces that line with the file's text **in
 `instructionsFor`** — the same door, for the same reason a second one was never
@@ -167,7 +204,7 @@ opened. It is deliberately not expanded in `parseRole`: `overlay` stays the
 role's own words, which is what `run.js`'s installed-or-not check and
 `mc roles show` read.
 
-Three properties are mechanical rather than tidy. Only an underscored name in
+Three properties are mechanical rather than tidy. Only a `*-verb.md` name in
 `canon/roles/` can be included, so a role cannot include a role and there is no
 recursion to bound. The marker has to be a line of its own — a mention inside a
 sentence is left alone. And a name that resolves to nothing is left standing in
@@ -182,34 +219,34 @@ its own becomes, in `instructionsFor`, a pointer to the installed
 the skill as it loads any. A name `canon/skills/` does not ship is left standing,
 as an unknown `@include` is. See [mc-skills.md](mc-skills.md).
 
-The build role is the second use of it. The runner's `build` sessions come in
-two variants (Martin, 2026-11-02: *"Rollen är 'build goal', precis som 'build
-project' är den andra subtypen."*): `canon/roles/build-project.md` for one step
-of a project and `canon/roles/build-goal.md` for a goal. What is true of every
-build is written once, in `canon/roles/_build.md`, and both name it on a line
-of their own; each variant keeps only what differs — GOAL.md and LOG.md for a
-goal, the plan, `done_when` and the register for a project. `_build.md` says
-two things the variants used to say apart or not at all: **one branch, built
-to the end** — a build never fetches or merges `origin/main` to keep up, and
-a conflict the merger reports is the one time it does — and **when a session
-ends**: at a boundary between two items, only when the work is done, when it
-is blocked, or when its turns cost more than a fresh session reading the log
-would. They were `step.md` and `goal.md` until 2026-11-02; the runner
-launches the new names (`BUILD_ROLES`, `run-plan.js`), and `roles.test.js`
-holds that both include `_build.md` and that no build role tells a session
-to merge `origin/main` otherwise.
+The build role is the first role with parts. A goal's build, a project's step
+and a worker were three files until 2026-11-03 (`build-goal.md`,
+`build-project.md`, `worker.md`, with `_build.md` and `_step-workers.md`
+included); they are `build-session.md` now. What is true of every headless
+build is one part, `@part goal project`: **one branch, built to the end** — a
+build never fetches or merges `origin/main` to keep up, and a conflict the
+merger reports is the one time it does — and **when a session ends**: at a
+boundary between two items, only when the work is done, when it is blocked, or
+when its turns cost more than a fresh session reading the log would. The
+worker, at a person's terminal, is not told it. `roles.test.js` holds that each
+start is told its own part and no other start's, and that no build start tells
+a session to merge `origin/main` otherwise. The review role is the same shape:
+`review-session.md`, a `goal` part (judge, never build) and a `project` part
+(measure, close the gaps, land).
 
-`canon/roles/plan.md` had no body at all until #656 — six lines, every one of
-them frontmatter — so an `mc plan <programme>` session was told its model,
-`_common.md` and its first prompt, and nothing about planning. #580 was called
-*"Every role says a turn is the cost; the plan role gets a body"* and landed
-only the first half. It has one now: the programme as the unit, `~/mc/programs/`
-and why it is not a workarea, the two kinds of work that are its own (thinking
-a programme through, and a `plan-review` park), the project the brief has
-already decided and it therefore does not take, and the shared passage above.
-`planLaunch` no longer folds `sharedRoleText()` into its prompt — with a role
-body, the shared text arrives through the assembler like every other session's,
-and pasting it in as well would say it twice.
+**The plan session** (`plan-session.md`) is written around the programme's
+aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). It has, in
+principle, full freedom to move the programme toward it, a goal's branch
+included: it may finish a goal's work itself when that is quicker than a new
+build session. Interactive, it has no restrictions; headless, it never does
+Martin's acts — `mc deploy`, production data, credentials, `--admin`. A goal
+is what `mc build goal` runs, a means toward the aim. `refusedStatus`
+(`commands/goal.js`) refuses a plan session no status. Before 2026-11-03 the
+role was `plan.md`, which forbade a headless plan session code, commits, a
+publish and `review`/`done`, and listed three allowed ends; both are gone.
+`canon/roles/plan.md` had no body at all until #656 — six lines of
+frontmatter — and `tests/mc/roles.test.js` § *every canon role has a body* is
+the guard that keeps that from coming back, for every part of every role.
 
 ## What a session is running on, afterwards
 
@@ -225,7 +262,7 @@ rest of it (`roleRecord`, `roles.js`):
 
 ```json
 "role": {
-  "name": "step",
+  "name": "build-session:project",
   "source": "canon",
   "digest": "sha256:345f6ea5956c",
   "text_digest": "sha256:43046c402ec7"
@@ -239,11 +276,11 @@ page parses both on every draw: a kilobyte of overlay in there would be a cost
 for nothing.
 
 **Two digests, because they answer two questions.** `digest` is over the
-assembled instructions — `_common.md` and the overlay, joined as
+assembled instructions — `all-sessions.md` and the overlay, joined as
 `instructionsFor` joins them — and answers *is this session running what a
 launch would produce now*. `text_digest` is over the role's own body with its
 includes expanded, and answers *is this session running the role file on disk
-today*. An edit to `_common.md` moves the first and not the second. Both inputs
+today*. An edit to `all-sessions.md` moves the first and not the second. Both inputs
 are files in the repository; the Coding Profile, which could move the first
 from outside it, was removed by ruling 24.
 
@@ -260,16 +297,16 @@ today's file would be a claim about it nobody checked.
 `mc roles check [<role>]` is the reader:
 
 ```
-$ mc roles check build-project
-build-project  (canon)  …/canon/roles/build-project.md
+$ mc roles check build-session:project
+build-session:project  (canon)  …/canon/roles/build-session.md
   role text     sha256:43046c402ec7
-  instructions  sha256:345f6ea5956c   _common.md + overlay, as a launch joins them
+  instructions  sha256:345f6ea5956c   all-sessions.md + overlay, as a launch joins them
 
 2 live sessions: 1 ok, 1 drift
-  55012  build the-page-remade    2026-09-06T10:06:46Z  build-project  ok
-  55130  build total-lane-cap     2026-09-06T09:34:57Z  build-project  drift — started on sha256:9c1…, build-project.md is sha256:430… now
+  55012  build the-page-remade    2026-09-06T10:06:46Z  build-session:project  ok
+  55130  build total-lane-cap     2026-09-06T09:34:57Z  build-session:project  drift — started on sha256:9c1…, build-session.md is sha256:430… now
 
------ what a launch would hand a build-project session today -----
+----- what a launch would hand a build-session:project session today -----
 …
 ```
 
@@ -277,7 +314,7 @@ Named, it prints the whole assembled text — the same object the digests are
 taken from, so the two halves of the comparison cannot be different things —
 and checks the sessions running that role. Bare, it checks every live session
 against the role each one names. `--json` for both. The verdicts are `ok`,
-`drift` (the role file or `_common.md` has moved under it), `resumed`, `no-role-file`, and `unrecorded` —
+`drift` (the role file or `all-sessions.md` has moved under it), `resumed`, `no-role-file`, and `unrecorded` —
 an ordinary session with no role, or one started before this existed.
 
 **Two launches write no register and so cannot be checked:** a tmux session
@@ -295,14 +332,14 @@ tomorrow, which is what the brief above needed and did not have.
 
 | file | what |
 |---|---|
-| `src/mc/roles.js` | `parseRole`, the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, `textDigest`/`roleRecord`/`roleSourceOf`, the `.mc-role` mark, the reserved names |
+| `src/mc/roles.js` | `parseRole` and parts (`roleRef`, `selectParts`, `withWorkers`), the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, `textDigest`/`roleRecord`/`roleSourceOf`, the `.mc-role` mark, the reserved names |
 | `src/mc/canon.js` | `canonRoot` — where the packaged `canon/` is, resolved from the module's own path |
 | `src/mc/portrait.js` | `profileArgs` — the per-tool launch argument the assembled text rides on |
 | `src/mc/commands/roles.js` | `mc roles list`, `mc roles show <role>` over the user's catalogue; `mc roles check` over both catalogues and the two registers |
 | `src/mc/foreground.js` | `~/mc/runner/foreground/<pid>.json` — the register a verb holding a terminal writes, role record and all |
-| `canon/roles/_common.md` | the text every role session shares |
-| `canon/roles/_plan-writing.md` | the passage `plan` and `brief` share about writing a `PLAN.json` |
-| `canon/roles/<name>.md` | one role's frontmatter and its own words |
+| `canon/roles/all-sessions.md` | the text every role session shares |
+| `canon/roles/<verb>-verb.md` | how one verb is used, included by the roles that use it |
+| `canon/roles/<name>.md` | one role's frontmatter, its own words and its parts |
 
 ## How it is tested
 
@@ -312,24 +349,25 @@ the missing catalogue, the `.mc-role` mark, and the assembly: the join for both
 tools, and `null` when there is no overlay. Its *text every role session shares* block asserts the turn-cost rule
 is in exactly one file in `canon/roles/`, reaches every canon role that has a
 body, is **not** listed as a role with the file sitting in the catalogue
-directory under test, and is not in `step`'s own overlay.
+directory under test, and is not in a role's own overlay.
 
-Two blocks below it. *A passage two roles share* asserts three sentences of
-`_plan-writing.md` are each in exactly one file in `canon/roles/`, that `plan`
-and `brief` both carry the marker and neither a copy, that the passage is not
-itself listed as a role, that `instructionsFor` expands the marker and leaves
-none behind — and that an unresolvable marker is left standing. *Every canon
-role has a body* walks `canonRolesDir()` and fails any `*.md` without a leading
-underscore that does not parse to a role with a non-empty `overlay`; it is the
-guard that would have caught `plan.md`, and it failed on the tree that shipped
-it.
+Blocks below it. *The verb files* asserts the defining sentences of each verb
+file are in exactly that file, that `plan-session` and `brief` carry the
+markers and no copy, that a verb file is not listed as a role, that
+`instructionsFor` expands the marker and leaves none behind — and that an
+unresolvable marker is left standing. *Every canon role has a body* walks
+`canonRolesDir()` and fails any role file, and any part of one, that does not
+parse to a role with a non-empty `overlay` or leaves a `@part`, `@end` or
+`@include` line in what a session is told. *A role's parts*, *the build role*
+and *the review role* hold that each start is told its own part and no other
+start's.
 
 [`tests/mc/roles-decisions.test.js`](../../tests/mc/roles-decisions.test.js) —
 what each role is told, read through the path that actually delivers it: the
 assembler for the roles with a body, `planLaunch` for a role without one. It
-walks all six canon roles for the loose-thread and route rules, asserts their
-text exists in exactly one file, and holds the decision shape `worker` and
-`step` are held to.
+walks the canon roles and their starts for the loose-thread and route rules,
+asserts their text exists in exactly one file, and holds the decision shape a
+worker and a project's build are held to.
 
 The delivered text is asserted at each launch path too, against
 `sharedRoleText()` rather than a copy of it:
@@ -363,7 +401,10 @@ verified by opening a real planning session with it (2026-09-05, #614).
 Every launch sets `MC_ROLE` for its own session, including resumed foreground
 sessions and tmux replacements. `MC_PROGRAMME` accompanies plan, step, goal and
 review launches when the programme is known. The intake turn sets `MC_ROLE=intake`, not `helper`.
-An ordinary work conversation sets `MC_ROLE=work`; a worker uses `worker`.
+An ordinary work conversation sets `MC_ROLE=work`; a worker uses
+`build-session:worker`. Every other launch sets the role it was started on:
+`plan-session`, `build-session:goal`, `build-session:project`,
+`review-session:goal`, `review-session:project`.
 Launchers clear inherited role, programme, goal and step identity first, so a
 child never inherits its caller's job by accident.
 

@@ -90,12 +90,12 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 
 ### Role instructions
 
-mc hands a new conversation its role and nothing else: `canon/roles/_common.md`
+mc hands a new conversation its role and nothing else: `canon/roles/all-sessions.md`
 and the role's own file, as a launch argument (`docs/technical/mc-roles.md`);
 the role names the task skills in `canon/skills/` it needs
 (`docs/technical/mc-skills.md`).
 There is no Coding Profile — ruling 24 removed it, and the one rule in it
-nothing else said, what is written in English, is a sentence in `_common.md`.
+nothing else said, what is written in English, is a sentence in `all-sessions.md`.
 
 Most users only ever see `mc`, `mc setup`, and `mc new` / `mc resume`.
 

@@ -2389,7 +2389,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * One goal session: the lane and total caps, the class routing and the billing
    * of a step, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word, as `runStep` does. A goal in `review` gets a review
-   * session instead: the goal-review role, on the review model (`reviewRoute`),
+   * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head, and `settleReview` after it.
    *
    * It is not `runStep`, because nearly all of that is the plan and the register

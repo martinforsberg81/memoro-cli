@@ -283,7 +283,7 @@ merge and the booking together, and the merger's watch does the rest.
 A role is not the last word a session hears, which is what step 2 of this
 project cost a session to learn. All three now end with the merge:
 
-- `canon/roles/plan.md` — *when the PR is open, land it yourself*;
+- `canon/roles/plan.md` (now `plan-session.md` and `project-verb.md`) — *when the PR is open, land it yourself*;
 - `planLaunch()` in [`src/mc/commands/plan.js`](../../src/mc/commands/plan.js) —
   `mc plan` builds its own first prompt, and that prompt used to end with "open
   a PR … and stop", which is the most recent instruction a session reads and
