@@ -72,7 +72,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes } from './test-times.js';
+import { TIMES_REPORTER, readTestTimes, recordTestTimes } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -380,6 +380,21 @@ export async function runGate({
   const ownGateLock = held.took;
   if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane`);
   else say('the round lock could not be written — running anyway; another round could overlap this one');
+
+  // One deadline for the entire round, shared by merger, mc gate's caller and
+  // mc test. The session wait budget is only how long its caller waits; it
+  // must never extend the repository's lane reservation.
+  const deadlineController = new AbortController();
+  const externalSignal = signal;
+  signal = externalSignal ? AbortSignal.any([externalSignal, deadlineController.signal]) : deadlineController.signal;
+  const roundTimeoutMs = declared.declaration.round_timeout_ms || suiteTimeoutMs(env);
+  let timedOut = false;
+  let deadlineFiles = [];
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
+  }, roundTimeoutMs);
+  timeout.unref?.();
 
   // The other half of the way back. A SIGTERM — a shell's timeout, a closed
   // pane — ends node without running any `finally`; the pid in the lease
@@ -845,7 +860,7 @@ export async function runGate({
       if (previous.length) {
         say(`the last round was red in ${previous.join(', ')} — running ${previous.length === 1 ? 'it' : 'them'} alone first`);
         const first = await timed('previous red', () => measureSelected({
-          tests: runTests, git: askGit, cwd: headDir, files: previous, flags, say, is,
+          tests: runTests, git: askGit, cwd: headDir, files: previous, flags, say, is, signal,
         }));
         if (!first.ok) {
           report.previous_red = { files: previous, stopped: first.reason };
@@ -975,6 +990,7 @@ export async function runGate({
     // What the run below measures: the whole selection, or the delta's part.
     const runFiles = rerun ? rerun.files : selection?.files;
     const runCommands = rerun ? rerun.commands : selection?.commands;
+    deadlineFiles = runFiles || [];
     // A delta that reaches command gates and no test file: the files half is
     // the recorded green, not an empty run (which reports no tests and stops).
     const greenFiles = rerun && !rerun.files.length ? {
@@ -1025,7 +1041,7 @@ export async function runGate({
       greenFiles ? Promise.resolve(greenFiles)
         : selection
           ? (say(`running the ${runFiles.length} file${runFiles.length === 1 ? '' : 's'} this change reaches${rerun ? ' that main\'s movement can have changed' : ''}`), timed('suite', () => measureSelected({
-            tests: runTests, git: askGit, cwd: headDir, files: runFiles, flags, say, is,
+            tests: runTests, git: askGit, cwd: headDir, files: runFiles, flags, say, is, signal,
           })))
           : (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
             suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
@@ -1033,14 +1049,26 @@ export async function runGate({
       runCommands?.length
         ? runSelectedCommands({
           commands: runCommands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
-          docker: dockerIo, holderPid, dockerLabel, root,
+          docker: dockerIo, holderPid, dockerLabel, root, signal,
         })
         : Promise.resolve([]),
     ]);
     if (runCommands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
-    // A command gate that was running when the signal came was waited out, not
-    // killed (they run under three minutes); the round stops here.
-    if (signal?.aborted) return finish('gone', abortReason(signal));
+    // A command gate in flight also receives the abort and is stopped before
+    // this round releases its lane.
+    if (signal?.aborted) {
+      if (timedOut) {
+        const measured = readTestTimes({ root, repo: lane });
+        const slowest = [...deadlineFiles].sort((a, b) => (Number(measured[b]) || 0) - (Number(measured[a]) || 0)).slice(0, 5);
+        const names = [...new Set([...deadlineFiles, ...slowest])];
+        report.red_files = names;
+        report.candidate = { red_files: names, red_tests: [] };
+        const fileNote = names.length ? `; selected test files requiring follow-up: ${names.join(', ')}` : '';
+        say(`gate round exceeded its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling${fileNote}`);
+        return finish('red', `gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling${fileNote}`);
+      }
+      return finish('gone', abortReason(signal));
+    }
     const thrown = halves.find((half) => half.status === 'rejected');
     if (thrown) throw thrown.reason;
     const [after, selectedGates] = halves.map((half) => half.value);
@@ -1147,7 +1175,7 @@ export async function runGate({
     gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
     for (const gate of gates) {
       say(`extra gate ${gate.name}`);
-      const outcome = await timed('extra gates', async () => await shell(gate.command, { cwd: headDir, env: gateEnv }));
+      const outcome = await timed('extra gates', async () => await shell(gate.command, { cwd: headDir, env: gateEnv, signal }));
       const head = gateSide(outcome);
       report.extra_gates.push({
         // What an operator declared beside the suite, as opposed to what the
@@ -1172,9 +1200,19 @@ export async function runGate({
 
     return finish(null, null);
   } catch (error) {
+    if (error instanceof RoundAborted && timedOut) {
+      const measured = readTestTimes({ root, repo: lane });
+      const names = [...new Set([...deadlineFiles, ...[...deadlineFiles]
+        .sort((a, b) => (Number(measured[b]) || 0) - (Number(measured[a]) || 0)).slice(0, 5)])];
+      report.red_files = names;
+      report.candidate = { red_files: names, red_tests: [] };
+      const fileNote = names.length ? `; selected test files requiring follow-up: ${names.join(', ')}` : '';
+      return finish('red', `gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling${fileNote}`);
+    }
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
   } finally {
+    clearTimeout(timeout);
     for (const signal of caught) process.off(signal, onSignal);
     await clearWorkspace({ git: askGit, repoPath, workspace });
     // Always, and last. A round that died half way through must not leave the
@@ -1518,7 +1556,7 @@ function shellQuote(value) {
  */
 async function runSelectedCommands({
   commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell,
-  docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root,
+  docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root, signal = null,
 }) {
   const results = [];
   // The one thing the round's environment must not carry in: node sets
@@ -1566,7 +1604,7 @@ async function runSelectedCommands({
       : commandEnv;
     let outcome;
     try {
-      outcome = await timed('selected gates', async () => run(invocation, { cwd, env: gateEnv }));
+      outcome = await timed('selected gates', async () => run(invocation, { cwd, env: gateEnv, signal }));
     } finally {
       if (up) docker.release(up.lease, { root });
     }
@@ -1611,10 +1649,10 @@ async function runSelectedCommands({
  * matters more here than for a full suite: a selected list is short enough that
  * "no tests ran" is an easy accident and an expensive one.
  */
-async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
+async function measureSelected({ tests, git, cwd, files, flags, say, is, signal = null }) {
   const at = await git(['rev-parse', 'HEAD'], { cwd });
   const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
-  const run = await tests({ cwd, files, flags, onLine: (line) => say(line) });
+  const run = await tests({ cwd, files, flags, signal, onLine: (line) => say(line) });
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };

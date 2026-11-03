@@ -52,6 +52,7 @@ const gateOf = (report) => report?.gate || report || {};
  * run, which names no files — the files its red tests are in.
  */
 export function gateRedFiles(gate) {
+  if (gate?.red_files?.length) return [...new Set(gate.red_files)];
   const named = gate?.candidate?.red_files || [];
   if (named.length) return [...named];
   return [...new Set((gate?.candidate?.red_tests || []).map((test) => test.file).filter(Boolean))];

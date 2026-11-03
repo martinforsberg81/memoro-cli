@@ -60,7 +60,7 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // `retry_once` joined on 2026-10-17 (ruling 44 § 5), and
       // `select_changed_path` on 2026-10-18 (ruling 47): dropped, the round
       // says so and measures without the delta reuse — nothing else changes.
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'main_only', 'retry_once_why']);
+      assert.deepEqual(shadowedResult.shadowed, ['round_timeout_ms', 'round_timeout_why', 'select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'main_only', 'retry_once_why']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -406,6 +406,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         deps_notes: [],
         retry_once: { files: [], gates: [] },
         retry_once_why: null,
+        round_timeout_ms: 300_000,
+        round_timeout_why: SHIPPED['memoro-cli'].round_timeout_why,
       });
       // And every field is attributed to the file it came from.
       assert.equal(answer.sources.select, 'shipped');

@@ -82,6 +82,16 @@ were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
 seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
+**Every gate round has a repository ceiling.** `round_timeout_ms` and its
+`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 5
+minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01). The
+deadline bounds the complete round, not just a single test process. At the
+ceiling mc kills the active process group, returns a red verdict naming the
+selected test files and the slowest known files, and releases the lane so the
+next queued job can start. `mc gate` and the gate a session reaches through
+`mc publish` use this same repository ceiling; a caller's wait budget cannot
+extend it.
+
 ## The door
 
 Before the wait and before the gate, the door refuses a pull request GitHub

@@ -185,6 +185,20 @@ it('an interruption cannot become green even if a child reports success', async 
   assert.equal(result.ok, false);
 });
 
+it('a repository gate ceiling aborts a hanging test and reports its file red', async () => {
+  let output = '';
+  const result = await runSessionGate({ cwd: '/work', files: ['tests/hangs.test.js'], round_timeout_ms: 20 }, {
+    write: (text) => { output += text; },
+    tests: ({ signal }) => new Promise((resolve) => signal.addEventListener('abort', () => {
+      resolve({ code: null, tap: '', aborted: true });
+    }, { once: true })),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped_at, 'timeout');
+  assert.deepEqual(result.red_files, ['tests/hangs.test.js']);
+  assert.match(output, /reached its 1 s ceiling.*tests\/hangs\.test\.js/u);
+});
+
 it('test-name filters reach node as flags, before the test paths', async () => {
   let args;
   await runSessionGate({ cwd: '/work', files: ['a.test.js'], pattern: 'one|two', flags: ['--import', './loader.mjs'] }, {

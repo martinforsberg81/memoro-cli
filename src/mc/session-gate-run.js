@@ -28,14 +28,35 @@ export async function runSessionGate(request, {
   snapshot = captureWorktree, persist = persistGateReceipt, record = recordReceiptGreen,
   now = () => new Date().toISOString(), ...deps
 } = {}) {
-  if (!request.measurement) return executeSessionGate(request, deps);
+  const execute = async () => {
+    const controller = new AbortController();
+    const external = deps.signal;
+    const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
+    const timeoutMs = Number(request.round_timeout_ms) > 0 ? Number(request.round_timeout_ms) : 60 * 60_000;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error(`repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s`));
+    }, timeoutMs);
+    timeout.unref?.();
+    try {
+      const result = await executeSessionGate(request, { ...deps, signal });
+      if (!timedOut) return result;
+      const files = result.files || result.coverage?.files || [];
+      const slowest = files;
+      const note = slowest.length ? `; selected test files requiring follow-up: ${slowest.join(', ')}` : '';
+      (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling${note}\n`);
+      return { ...result, ok: false, code: 1, stopped_at: 'timeout', reason: `repository gate ceiling reached${note}`, red_files: slowest };
+    } finally { clearTimeout(timeout); }
+  };
+  if (!request.measurement) return execute();
   const started = now();
   let before = null;
   let after = null;
   let result = { ok: false, code: 1, stopped_at: 'content-changed' };
   try {
     before = snapshot(request.cwd);
-    if (sameContent(request.measurement.candidate, before)) result = await executeSessionGate(request, deps);
+    if (sameContent(request.measurement.candidate, before)) result = await execute();
     after = snapshot(request.cwd);
   } catch (error) {
     result = { ok: false, code: 1, stopped_at: 'evidence', error: error.message };
