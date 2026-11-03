@@ -5679,8 +5679,11 @@ const runnerEntry = (at) => `## ${at} · runner · open\n\nKommentar: session en
 function goalFixture(goals, options = {}) {
   const f = fixture({ capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call), ...options });
   f.answer = okSession();
-  for (const [name, { status = 'open', log = '', repos = 'memoro', worktree = true, after = null }] of Object.entries(goals)) {
-    f.files[`${GOALS}/${name}/GOAL.json`] = goalJson({ status, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [], after: after ? after.split(',').map((one) => one.trim()) : [] });
+  for (const [name, { status = 'open', log = '', repos = 'memoro', worktree = true, phase = 1, after = null }] of Object.entries(goals)) {
+    const text = goalJson({ status, phase, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [] });
+    // `after` writes a GOAL.json from before phases: no phase, the goals it started after.
+    const { phase: _phase, ...legacy } = JSON.parse(text);
+    f.files[`${GOALS}/${name}/GOAL.json`] = after === null ? text : `${JSON.stringify({ ...legacy, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
     if (worktree) f.dirs.add(`${GOALS}/${name}/memoro`);
   }
@@ -5844,6 +5847,19 @@ test('the chores archive a goal done or dropped for 24 hours, and leave one fini
   assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
 });
 
+test('when the runner archives the last goal of phase 1, phase 2 is phase 1 and phase 3 phase 2', async () => {
+  const f = goalFixture({
+    late: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
+    next: { phase: 2 },
+    after: { phase: 3 },
+  }, { now: ARCHIVE_NOW });
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(f.files[`${GOALS}/late/GOAL.json`], undefined, 'archived');
+  assert.equal(goalField(f.files[`${GOALS}/next/GOAL.json`], 'phase'), 1);
+  assert.equal(goalField(f.files[`${GOALS}/after/GOAL.json`], 'phase'), 2);
+  assert.ok(f.log.some((line) => /goal:prog\/next: phase 2 → 1/u.test(line)));
+});
+
 test('a goal the archive refuses stays, and the refusal is written into its log once, not at every pass', async () => {
   const f = goalFixture({ held: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') } }, { now: ARCHIVE_NOW, dirty: ['held'] });
   const runner = createRunner({ deps: f.deps });
@@ -5940,52 +5956,46 @@ test('a session with a word between runner entries keeps the goal open', async (
   assert.equal(parseLog(f.files[`${GOALS}/goal/LOG.md`]).length, 4);
 });
 
-test('a waiting goal is never started while its after has not landed, and an open goal given one goes waiting', async () => {
-  const f = goalFixture({
-    held: { status: 'waiting', after: 'prog/first' },
-    early: { status: 'open', after: 'prog/first' },
-    first: { status: 'blocked' },
-  });
-  const runner = createRunner({ deps: f.deps });
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(f.calls.sessions.length, 0);
-  assert.equal(goalField(f.files[`${GOALS}/held/GOAL.json`], 'status'), 'waiting', 'a blocked after-goal keeps it waiting');
-  assert.equal(f.files[`${GOALS}/held/LOG.md`], '', 'nothing is written while it waits');
-  assert.equal(goalField(f.files[`${GOALS}/early/GOAL.json`], 'status'), 'waiting');
-  const entry = parseLog(f.files[`${GOALS}/early/LOG.md`]).at(-1);
-  assert.deepEqual([entry.tool, entry.status, entry.comment], ['runner', 'waiting', 'waits on prog/first']);
+test('a goal in phase 2 is not started while a goal in phase 1 is open, review or blocked, and is once phase 1 is done or dropped', async () => {
+  for (const status of ['open', 'review', 'blocked']) {
+    // The phase-1 goal is on another repository, so this lane could not take it itself.
+    const f = goalFixture({ first: { status, repos: 'elsewhere' }, second: { phase: 2 } });
+    assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0, `phase 1 ${status}`);
+    assert.equal(f.calls.sessions.length, 0);
+    assert.equal(goalField(f.files[`${GOALS}/second/GOAL.json`], 'status'), 'open', 'it keeps its status');
+    assert.equal(f.files[`${GOALS}/second/LOG.md`], '', 'and nothing is written while it waits');
+  }
+  const f = goalFixture({ first: { status: 'done', repos: 'elsewhere' }, gone: { status: 'dropped', repos: 'elsewhere' }, second: { phase: 2 } });
+  f.answer = logsItself(f, 'second');
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/second', 'phase 1 done or dropped: phase 2 starts');
+  assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/second/memoro` && call.slice(1).join(' ') === 'rev-list --count origin/main..HEAD'), 'its unbuilt branch is looked at against origin/main before its first build');
 });
 
-test('when the last after-goal lands the runner opens the waiting goal, logs what landed, remakes its branch and starts it', async () => {
-  const f = goalFixture({
-    next: { status: 'waiting', after: 'prog/first, prog/second' },
-    first: { status: 'done' },
-    second: { status: 'blocked' },
-  });
-  f.answer = logsItself(f, 'next');
+test('two goals in one phase run side by side, while the next phase waits', async () => {
+  const f = goalFixture({ a: { log: goalLog('2026-08-20T10:00Z') }, b: { log: goalLog('2026-08-21T10:00Z') }, later: { phase: 2 } });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = [];
+  f.answer = async (call) => { started.push(call.env.MC_GOAL); if (started.length === 2) release(); await gate; return okSession()(call); };
   const runner = createRunner({ deps: f.deps });
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(goalField(f.files[`${GOALS}/next/GOAL.json`], 'status'), 'waiting', 'one after-goal still not landed');
-
-  f.files[`${GOALS}/second/GOAL.json`] = withGoal(f.files[`${GOALS}/second/GOAL.json`], { status: 'done' });
-  const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.name, 'goal:prog/next', 'started in the same pass it was opened');
-  const [opened] = parseLog(f.files[`${GOALS}/next/LOG.md`]);
-  assert.deepEqual([opened.tool, opened.status, opened.done], ['runner', 'open', 'prog/first, prog/second landed — starting']);
-  assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/next/memoro` && call[1] === 'fetch'), 'its branch is looked at against origin/main');
-  assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/next/memoro` && call.slice(1).join(' ') === 'rev-list --count origin/main..HEAD'));
-  assert.ok(f.log.some((line) => /goal:prog\/next: open — prog\/first, prog\/second landed/u.test(line)));
+  const both = Promise.all([runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#1' }), runner.pass({ repo: 'memoro', lane: 2, tag: 'memoro#2' })]);
+  const results = await both;
+  assert.deepEqual(started.sort(), ['prog/a', 'prog/b'], 'both phase-1 goals had a session at once');
+  assert.deepEqual(results.map((r) => r.name).sort(), ['goal:prog/a', 'goal:prog/b']);
 });
 
-test('a waiting goal whose after-goal is gone without landing goes blocked for plan, and wakes it', async () => {
-  const f = goalFixture({ orphan: { status: 'waiting', after: 'prog/discarded' } });
-  f.answer = plans(f, 'orphan', 'blocked');
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(goalField(f.files[`${GOALS}/orphan/GOAL.json`], 'status'), 'blocked');
-  const [entry] = parseLog(f.files[`${GOALS}/orphan/LOG.md`]);
-  assert.deepEqual([entry.tool, entry.status], ['runner', 'blocked']);
-  assert.match(entry.comment, /^prog\/discarded is gone without landing — waits on plan/u);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['plan-session']);
+test('the runner gives goals written with after a phase by the depth of the chain, and opens the waiting ones', async () => {
+  const f = goalFixture({
+    first: { status: 'blocked', after: '', repos: 'elsewhere' },
+    second: { status: 'waiting', after: 'prog/first' },
+    third: { status: 'waiting', after: 'prog/second' },
+  });
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0, 'phase 1 is still blocked');
+  assert.deepEqual(['first', 'second', 'third'].map((name) => [goalField(f.files[`${GOALS}/${name}/GOAL.json`], 'phase'), goalField(f.files[`${GOALS}/${name}/GOAL.json`], 'status')]), [[1, 'blocked'], [2, 'open'], [3, 'open']]);
+  const [entry] = parseLog(f.files[`${GOALS}/third/LOG.md`]);
+  assert.deepEqual([entry.tool, entry.status, entry.done], ['runner', 'open', 'phase 3, from after prog/second']);
+  assert.ok(f.log.some((line) => /goal:prog\/third: phase 3, open/u.test(line)));
 });
 
 test('a goal whose every pull request (prs) has landed or closed is set done by the runner, at most every five minutes', async () => {

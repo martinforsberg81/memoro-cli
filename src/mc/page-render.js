@@ -1127,9 +1127,9 @@ function projectLine(c, wide, project) {
  * `Next:` that is over. A goal blocked by a red review, a red merge or the runner waits on
  * plan, which the runner wakes, and its tail says so first; any other blocked
  * goal — a person's, a build session's question, one plan left blocked —
- * `waits on a person`. Both are in the colour of what waits on a person. A `waiting`
- * goal is yellow, the projects' waiting colour — the runner lets it go when
- * its `after` has landed — and its tail says first what it waits on.
+ * `waits on a person`. Both are in the colour of what waits on a person. A goal
+ * in a phase its programme has not reached (`held`) has the projects' waiting
+ * colour, and its tail says first which phase it waits on.
  */
 function goalLine(c, wide, goal) {
   const column = projectColumns(wide);
@@ -1137,7 +1137,7 @@ function goalLine(c, wide, goal) {
   const word = goal.status ?? '—';
   const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
     : goal.status === 'review' ? ['green']
-    : (goal.status === 'blocked' || goal.status === 'waiting' ? statusTone(goal.status) : ['grey']);
+    : (goal.status === 'blocked' ? statusTone(goal.status) : ['grey']);
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
     : '';
@@ -1157,7 +1157,7 @@ function goalLine(c, wide, goal) {
   // A finished goal has no next action: its tail is what was done last.
   const finished = goal.status === 'done' || goal.status === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
-  const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
+  const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
   if (goal.plan || goal.person || waits) {
     const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
     const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';

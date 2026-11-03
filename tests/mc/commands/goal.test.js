@@ -94,7 +94,8 @@ test('mc goal new writes a GOAL.json skeleton, LOG.md and one worktree per repo 
     { cwd: '/home/m/memoro', args: ['show-ref', '--verify', '--quiet', 'refs/heads/goal/plain'] },
     { cwd: '/home/m/memoro', args: ['worktree', 'add', '-q', '-b', 'goal/plain', `${DIR}/memoro`, 'origin/main'] },
   ]);
-  assert.match(f.out(), new RegExp(`mc: mc/plain — ${DIR}`, 'u'));
+  assert.match(f.out(), new RegExp(`mc: mc/plain · phase 1 — ${DIR}`, 'u'));
+  assert.equal(goal.phase, 1, 'phase 1 when --phase is not given');
   assert.match(f.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain/u);
 });
 
@@ -207,7 +208,7 @@ test('mc goal log --status rewrites the status in GOAL.json and logs the entry w
 
   const bad = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--status', 'started', '--comment', 'x'], bad.deps), 2);
-  assert.match(bad.err(), /--status is open, review, blocked, done, waiting, dropped, not started/u);
+  assert.match(bad.err(), /--status is open, review, blocked, done, dropped, not started/u);
 });
 
 test('mc goal open, review, blocked and done set the status and log the reason', async () => {
@@ -362,7 +363,7 @@ test('mc goal show prints the status line, the goal as text with each criterion\
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { repos: ['memoro-cli', 'memoro'], success_criteria: criteria }) }), git });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
   const text = f.out();
-  assert.match(text, /^mc\/plain · open · memoro-cli, memoro · large · criteria 1\/2 · created 2026-11-01T20:00:00Z\n/u);
+  assert.match(text, /^mc\/plain · open · phase 1 · memoro-cli, memoro · large · criteria 1\/2 · created 2026-11-01T20:00:00Z\n/u);
   assert.match(text, /\n# Make the goal plain\n\nGOAL\n  Two files and a worktree\./u);
   assert.match(text, /\nCRITERIA 1\/2\n  1 ✓ it parses\n      check: mc gate tests\/mc\/goals\.test\.js\n  2 ✗ it shows\n      check: a test on the text\n/u);
   assert.doesNotMatch(text, /Done: created/u, 'only the last three entries');
@@ -377,7 +378,7 @@ test('mc goal show refuses a goal that does not parse, and says why', async () =
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { status: 'maybe' }) }) });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 1);
   assert.match(f.err(), /mc\/plain does not parse:/u);
-  assert.match(f.err(), /status: one of open, review, blocked, done, waiting, dropped, not maybe/u);
+  assert.match(f.err(), /status: one of open, review, blocked, done, dropped, not maybe/u);
 });
 
 test('mc goal list prints one line a goal: its name, repositories, status, criteria, sessions and what is next', async () => {
@@ -389,9 +390,10 @@ test('mc goal list prints one line a goal: its name, repositories, status, crite
   });
   assert.equal(await run(['list'], f.deps), 0);
   const lines = f.out().trim().split('\n');
-  assert.match(lines[0], /^mc\/broken · does not parse — GOAL\.json is not JSON/u);
+  assert.equal(lines[0], 'mc · phase 1 · in progress');
   // Two sessions wrote entries; the last entry is the runner's, and it sets no Next.
-  assert.equal(lines[1], 'mc/plain · memoro-cli · open · criteria 0/1 · 2 sessions · —');
+  assert.equal(lines[1], '  mc/plain · memoro-cli · open · criteria 0/1 · 2 sessions · —');
+  assert.match(lines[2], /^ {2}mc\/broken · does not parse — GOAL\.json is not JSON/u, 'a goal that does not parse has no phase, and comes last');
 });
 
 test('mc goal list says criteria 1/2 for a goal with one of two met, and an open goal with none is not started', async () => {
@@ -402,9 +404,9 @@ test('mc goal list says criteria 1/2 for a goal with one of two met, and an open
     },
   });
   assert.equal(await run(['list'], f.deps), 0, f.err());
-  assert.deepEqual(f.out().trim().split('\n'), [
-    'mc/plain · memoro-cli · open · criteria 1/2 · 2 sessions · —',
-    'mc/skeleton · memoro-cli · open, no criteria — not started · criteria 0/0 · 0 sessions · —',
+  assert.deepEqual(f.out().trim().split('\n').slice(1), [
+    '  mc/plain · memoro-cli · open · criteria 1/2 · 2 sessions · —',
+    '  mc/skeleton · memoro-cli · open, no criteria — not started · criteria 0/0 · 0 sessions · —',
   ]);
 });
 
@@ -423,11 +425,11 @@ test('mc goal list shows review, and a goal blocked by a red review or a red mer
     },
   });
   assert.equal(await run(['list'], f.deps), 0, f.err());
-  assert.deepEqual(f.out().trim().split('\n'), [
-    'mc/a · memoro-cli · review · criteria 0/1 · 1 sessions · —',
-    'mc/b · memoro-cli · blocked, waits on plan · criteria 0/1 · 1 sessions · —',
-    'mc/c · memoro-cli · blocked, waits on plan · criteria 0/1 · 0 sessions · —',
-    'mc/d · memoro-cli · blocked, waits on a person · criteria 0/1 · 1 sessions · —',
+  assert.deepEqual(f.out().trim().split('\n').slice(1), [
+    '  mc/a · memoro-cli · review · criteria 0/1 · 1 sessions · —',
+    '  mc/b · memoro-cli · blocked, waits on plan · criteria 0/1 · 1 sessions · —',
+    '  mc/c · memoro-cli · blocked, waits on plan · criteria 0/1 · 0 sessions · —',
+    '  mc/d · memoro-cli · blocked, waits on a person · criteria 0/1 · 1 sessions · —',
   ]);
 });
 
@@ -446,7 +448,7 @@ test('a plan session may set every status; a build or review session never done 
 test('mc goal list <programme> lists that programme alone, and says when it has no goals', async () => {
   const f = fixture({ files: seededGoal() });
   assert.equal(await run(['list', 'mc'], f.deps), 0);
-  assert.equal(f.out(), 'mc/plain · memoro-cli · open · criteria 0/1 · 2 sessions · —\n');
+  assert.equal(f.out(), 'mc · phase 1 · in progress\n  mc/plain · memoro-cli · open · criteria 0/1 · 2 sessions · —\n');
 
   const none = fixture();
   assert.equal(await run(['list', 'nope'], none.deps), 0);
@@ -455,7 +457,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal convert', 'mc goal after', 'mc goal log', 'mc goal open\\|review\\|blocked\\|done', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal open\\|review\\|blocked\\|done', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];
@@ -464,142 +466,99 @@ test('usage names the five verbs, and mc goal --help prints it', async () => {
   assert.equal(printed.join(''), text);
 });
 
-/* ------------------------------------------------------------- after, waiting */
+/* ------------------------------------------------------------- phases */
 
-/** A goal under `mc` with `status` and, when given, an `after` (comma-separated). */
-const goalAt = (name, status, after = null) => ({
-  [`${HOME}/mc/goals/${name}/GOAL.json`]: withGoal(GOAL_TEXT, { status, after: after ? after.split(',').map((one) => one.trim()) : [] }),
-  [`${HOME}/mc/goals/${name}/LOG.md`]: '## 2026-11-01T20:00Z · person · open\n\nDone: created\n',
+/** A goal under `mc` with `status` and `phase`; `after` (comma-separated) writes a GOAL.json from before phases. */
+const goalAt = (name, status, phase = 1, after = null) => ({
+  [`${HOME}/mc/goals/${name}/GOAL.json`]: after === null
+    ? withGoal(GOAL_TEXT, { status, phase })
+    : (() => { const { phase: _phase, ...rest } = JSON.parse(withGoal(GOAL_TEXT, { status })); return `${JSON.stringify({ ...rest, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`; })(),
+  [`${HOME}/mc/goals/${name}/LOG.md`]: '',
 });
 const goalOf = (f, name) => parseGoal(f.store[`${HOME}/mc/goals/${name}/GOAL.json`]);
-const newArgs = (name, ...more) => ['new', name, '--repo', 'memoro-cli', '--class', 'large', '--title', 'T', ...more];
+const newArgs = (name, ...extra) => ['new', name, '--repo', 'memoro-cli', '--class', 'large', '--title', 'T', ...extra];
 
-test('mc goal new --after writes after, and the goal is waiting on what has not landed', async () => {
-  const f = fixture({ files: { ...goalAt('first', 'open'), ...goalAt('landed', 'done') } });
-  assert.equal(await run(newArgs('mc/second', '--after', 'mc/first,mc/landed'), f.deps), 0, f.err());
-  const goal = goalOf(f, 'second');
-  assert.equal(goal.status, 'waiting');
-  assert.deepEqual(goal.after, ['mc/first', 'mc/landed']);
-  assert.deepEqual(parseLog(f.store[`${HOME}/mc/goals/second/LOG.md`]).at(-1).comment, 'waits on mc/first');
-  assert.match(f.out(), /mc\/second · waiting — waits on mc\/first/u);
-
-  const all = fixture({ files: goalAt('landed', 'done') });
-  assert.equal(await run(newArgs('mc/third', '--after', 'mc/landed'), all.deps), 0, all.err());
-  assert.equal(goalOf(all, 'third').status, 'open', 'after all landed, it is open');
+test('mc goal new --phase puts the goal in that phase, and refuses one that would leave a hole', async () => {
+  const f = fixture({ files: { ...goalAt('first', 'open') } });
+  assert.equal(await run(newArgs('mc/second', '--phase', '2'), f.deps), 0, f.err());
+  assert.equal(goalOf(f, 'second').phase, 2);
+  assert.equal(goalOf(f, 'second').status, 'open', 'a later phase keeps the status: the phase holds it');
+  assert.match(f.out(), /mc: mc\/second · phase 2 — /u);
+  assert.equal(parseLog(f.store[`${HOME}/mc/goals/second/LOG.md`])[0].done, 'created, phase 2');
+  assert.equal(await run(newArgs('mc/fourth', '--phase', '4'), f.deps), 2);
+  assert.match(f.err(), /phase 4 would leave a hole — mc's phases run to 2, so 3 is the highest/u);
+  assert.equal(`${HOME}/mc/goals/fourth/GOAL.json` in f.store, false, 'nothing written');
+  for (const bad of ['0', 'two', '1.5']) {
+    const g = fixture();
+    assert.equal(await run(newArgs('mc/x', '--phase', bad), g.deps), 2, bad);
+    assert.match(g.err(), /--phase is a whole number from 1/u);
+  }
 });
 
-test('mc goal new --after refuses a name that is not a goal, and the goal itself, and writes nothing', async () => {
-  const unknown = fixture({ files: goalAt('first', 'open') });
-  assert.equal(await run(newArgs('mc/second', '--after', 'mc/first,mc/nowhere'), unknown.deps), 2);
-  assert.match(unknown.err(), /after mc\/nowhere is not a goal/u);
-  assert.equal(`${HOME}/mc/goals/second/GOAL.json` in unknown.store, false);
-  assert.equal(unknown.calls.length, 0, 'nothing fetched');
-
-  const malformed = fixture();
-  assert.equal(await run(newArgs('mc/second', '--after', 'first'), malformed.deps), 2);
-  assert.match(malformed.err(), /after first is not <programme>\/<goal>/u);
-
-  const self = fixture();
-  assert.equal(await run(newArgs('mc/second', '--after', 'mc/second'), self.deps), 2);
-  assert.match(self.err(), /cannot wait on itself/u);
+test('mc goal phase moves a goal, logs it, and renumbers a phase it left empty', async () => {
+  const f = fixture({ files: { ...goalAt('a', 'open', 1), ...goalAt('b', 'open', 2), ...goalAt('c', 'open', 3) } });
+  assert.equal(await run(['phase', 'mc/a', '3'], f.deps), 0, f.err());
+  // a left phase 1 empty: b is phase 1, c and a phase 2.
+  assert.deepEqual(['a', 'b', 'c'].map((name) => goalOf(f, name).phase), [2, 1, 2]);
+  assert.match(f.out(), /mc: mc\/a · phase 2\n {2}mc\/b {2}phase 2 → 1\n {2}mc\/c {2}phase 3 → 2\n/u);
+  assert.equal(parseLog(f.store[`${HOME}/mc/goals/a/LOG.md`]).at(-1).done, 'phase 3');
+  assert.equal(await run(['phase', 'mc/a', '4'], f.deps), 2);
+  assert.match(f.err(), /phase 4 would leave a hole/u);
+  assert.equal(await run(['phase', 'mc/a', 'x'], f.deps), 2);
+  assert.equal(await run(['phase', 'mc/missing', '1'], f.deps), 1);
 });
 
-test('mc goal after replaces after: waiting while one has not landed, open again when none is left', async () => {
-  const f = fixture({ files: { ...goalAt('plain', 'blocked'), ...goalAt('first', 'open'), ...goalAt('landed', 'done') } });
-  assert.equal(await run(['after', 'mc/plain', 'mc/first', 'mc/landed'], f.deps), 0, f.err());
-  assert.equal(goalOf(f, 'plain').status, 'waiting');
-  assert.deepEqual(goalOf(f, 'plain').after, ['mc/first', 'mc/landed']);
-  const entry = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-  assert.deepEqual([entry.tool, entry.status, entry.done, entry.comment], ['person', 'waiting', 'after mc/first, mc/landed', 'waits on mc/first']);
-  assert.match(f.out(), /mc\/plain · waiting — waits on mc\/first/u);
-
-  assert.equal(await run(['after', 'mc/plain', 'mc/landed'], f.deps), 0, f.err());
-  assert.equal(goalOf(f, 'plain').status, 'open', 'waiting with nothing left is open');
-  assert.ok(f.calls.some((call) => call.cwd === `${DIR}/memoro-cli` && call.args[0] === 'fetch'), 'its branch is looked at as mc goal open does');
-
-  assert.equal(await run(['after', 'mc/plain'], f.deps), 0, f.err());
-  assert.deepEqual(goalOf(f, 'plain').after, [], 'none given clears it');
-  assert.deepEqual(goalField(f.store[`${DIR}/GOAL.json`], 'after'), []);
-  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
+test('mc goal list groups by phase and says which phase is in progress; show gives the phase', async () => {
+  const f = fixture({ files: { ...goalAt('landed', 'done', 1), ...goalAt('let-go', 'dropped', 1), ...goalAt('now', 'open', 2), ...goalAt('also', 'blocked', 2), ...goalAt('later', 'open', 3) } });
+  assert.equal(await run(['list', 'mc'], f.deps), 0, f.err());
+  assert.deepEqual(f.out().trim().split('\n').map((line) => line.split(' · ').slice(0, 3).join(' · ')), [
+    'mc · phase 1 · done',
+    '  mc/landed · memoro-cli · done',
+    '  mc/let-go · memoro-cli · dropped',
+    'mc · phase 2 · in progress',
+    '  mc/also · memoro-cli · blocked, waits on a person',
+    '  mc/now · memoro-cli · open',
+    'mc · phase 3 · after phase 2',
+    '  mc/later · memoro-cli · open',
+  ]);
+  const shown = fixture({ files: { ...goalAt('later', 'open', 3), ...goalAt('a', 'open', 1), ...goalAt('b', 'open', 2) } });
+  assert.equal(await run(['show', 'mc/later'], shown.deps), 0, shown.err());
+  assert.match(shown.out(), /^mc\/later · open · phase 3 · memoro-cli/u);
 });
 
-test('mc goal after … none clears what a goal waits on, as the help says; none beside a goal name is refused', async () => {
-  const f = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/first'), ...goalAt('first', 'open') } });
-  assert.equal(await run(['after', 'mc/plain', 'none'], f.deps), 0, f.err());
-  assert.deepEqual(goalOf(f, 'plain').after, [], 'none clears it');
-  assert.equal(goalOf(f, 'plain').status, 'open', 'waiting with nothing left is open');
-  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
-  assert.equal(await run(['after', 'mc/plain', 'none', 'mc/first'], f.deps), 2);
-  assert.match(f.err(), /none clears after and names no goal/u);
+test('mc goal convert gives an after chain phases 1, 2, 3; waiting is open, a landed after holds nothing back', async () => {
+  const f = fixture({
+    files: {
+      ...goalAt('first', 'open', 1, ''),
+      ...goalAt('second', 'waiting', 1, 'mc/first'),
+      ...goalAt('third', 'waiting', 1, 'mc/second, mc/landed'),
+      ...goalAt('free', 'waiting', 1, 'mc/landed'),
+      ...goalAt('landed', 'done', 1, ''),
+    },
+  });
+  assert.equal(await run(['convert', 'mc'], f.deps), 0, f.err());
+  assert.deepEqual(['first', 'second', 'third', 'free', 'landed'].map((name) => [name, goalOf(f, name).phase, goalOf(f, name).status]), [
+    ['first', 1, 'open'], ['second', 2, 'open'], ['third', 3, 'open'], ['free', 1, 'open'], ['landed', 1, 'done'],
+  ]);
+  for (const name of ['first', 'second', 'third']) assert.equal('after' in JSON.parse(f.store[`${HOME}/mc/goals/${name}/GOAL.json`]), false, `${name} has no after`);
+  assert.deepEqual(parseLog(f.store[`${HOME}/mc/goals/third/LOG.md`]).map((entry) => [entry.tool, entry.status, entry.done]), [['person', 'open', 'phase 3, from after mc/second, mc/landed']]);
+  assert.equal(f.store[`${HOME}/mc/goals/first/LOG.md`], '', 'nothing changed for it but the key: no entry');
+  assert.match(f.out(), /mc: mc\/third · open, phase 3 \(was after mc\/second, mc\/landed\)/u);
+  assert.equal(await run(['convert', 'mc'], f.deps), 0);
+  assert.match(f.out(), /mc: nothing to convert\n$/u, 'a second run has nothing to do');
 });
 
-test('mc goal after refuses a name that is not a goal, a ring, and a goal in review or done', async () => {
-  const f = fixture({ files: { ...goalAt('plain', 'open'), ...goalAt('first', 'waiting', 'mc/plain'), ...goalAt('judged', 'review'), ...goalAt('landed', 'done') } });
-  const before = { ...f.store };
-  assert.equal(await run(['after', 'mc/plain', 'mc/nowhere'], f.deps), 2);
-  assert.match(f.err(), /after mc\/nowhere is not a goal/u);
-  assert.equal(await run(['after', 'mc/plain', 'mc/first'], f.deps), 2);
-  assert.match(f.err(), /mc\/first waits on mc\/plain already/u);
-  assert.equal(await run(['after', 'mc/judged', 'mc/first'], f.deps), 1);
-  assert.match(f.err(), /mc\/judged is review/u);
-  assert.equal(await run(['after', 'mc/landed', 'mc/first'], f.deps), 1);
-  assert.equal(await run(['after', 'nope'], f.deps), 2);
-  assert.equal(await run(['after', 'mc/missing', 'mc/first'], f.deps), 1);
-  assert.deepEqual(f.store, before, 'nothing is written');
-});
-
-test('mc goal open on a goal whose after has not landed is refused with what it waits on; landed, it opens', async () => {
-  const f = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/first, mc/landed'), ...goalAt('first', 'blocked'), ...goalAt('landed', 'done') } });
-  const before = { ...f.store };
-  assert.equal(await run(['open', 'mc/plain'], f.deps), 1);
-  assert.match(f.err(), /mc\/plain is not opened — it waits on mc\/first, not landed/u);
-  assert.equal(await run(['log', 'mc/plain', '--status', 'open', '--comment', 'go'], f.deps), 1);
-  assert.deepEqual(f.store, before, 'nothing is written');
-
-  const gone = fixture({ files: { ...goalAt('plain', 'blocked', 'mc/discarded') } });
-  assert.equal(await run(['open', 'mc/plain'], gone.deps), 1);
-  assert.match(gone.err(), /mc\/discarded gone without landing/u);
-
-  const landed = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/landed'), ...goalAt('landed', 'done') } });
-  assert.equal(await run(['open', 'mc/plain'], landed.deps), 0, landed.err());
-  assert.equal(goalOf(landed, 'plain').status, 'open');
-});
-
-test('mc goal after on a blocked goal: waiting while one has not landed; all landed, it stays blocked and says how it opens', async () => {
-  // The migration of 2026-11-02: headless-plan blocked, after runner-sessions and goal-waiting, both done.
-  const landed = fixture({ files: { ...goalAt('plain', 'blocked'), ...goalAt('landed', 'done'), ...goalAt('also', 'done') } });
-  assert.equal(await run(['after', 'mc/plain', 'mc/landed', 'mc/also'], landed.deps), 0, landed.err());
-  assert.equal(goalOf(landed, 'plain').status, 'blocked');
-  assert.match(landed.out(), /mc\/plain · blocked — mc\/landed, mc\/also landed; it stays blocked, mc goal open mc\/plain opens it/u);
-  assert.equal(await run(['open', 'mc/plain'], landed.deps), 0, landed.err());
-  assert.equal(goalOf(landed, 'plain').status, 'open');
-
-  const pending = fixture({ files: { ...goalAt('plain', 'blocked'), ...goalAt('first', 'open') } });
-  assert.equal(await run(['after', 'mc/plain', 'mc/first'], pending.deps), 0, pending.err());
-  assert.equal(goalOf(pending, 'plain').status, 'waiting', 'a blocked goal that names what it waits on is waiting');
-});
-
-test('mc goal open is refused on a goal already open whose after has not landed', async () => {
-  const f = fixture({ files: { ...goalAt('early', 'open', 'mc/first'), ...goalAt('first', 'blocked') } });
-  const before = { ...f.store };
-  assert.equal(await run(['open', 'mc/early'], f.deps), 1);
-  assert.match(f.err(), /mc\/early is not opened — it waits on mc\/first, not landed/u);
-  assert.equal(await run(['log', 'mc/early', '--status', 'open', '--comment', 'go'], f.deps), 1);
-  assert.deepEqual(f.store, before, 'nothing is written');
-});
-
-test('nobody sets waiting by --status: a goal waits by its after', async () => {
-  const f = fixture({ files: seededGoal() });
-  assert.equal(await run(['log', 'mc/plain', '--status', 'waiting'], f.deps), 2);
-  assert.match(f.err(), /a goal waits by its after/u);
-});
-
-test('mc goal list and show say waiting and on what', async () => {
-  const f = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/first, mc/landed'), ...goalAt('first', 'open'), ...goalAt('landed', 'done') } });
-  assert.equal(await run(['list'], f.deps), 0);
-  assert.match(f.out(), /^mc\/plain · memoro-cli · waiting on mc\/first · criteria 0\/1 · 0 sessions · —$/mu);
-  assert.equal(await run(['show', 'mc/plain'], f.deps), 0);
-  assert.match(f.out(), /^mc\/plain · waiting · memoro-cli · large · criteria 0\/1 · created 2026-11-01T20:00:00Z · after mc\/first, mc\/landed$/mu);
+test('mc goal archive of the last goal in phase 1 makes phase 2 phase 1 and phase 3 phase 2', async () => {
+  const f = fixture({ files: { ...goalAt('one', 'done', 1), ...goalAt('two', 'open', 2), ...goalAt('three', 'open', 3) } });
+  f.deps.gh = () => ok('[]');
+  f.deps.appendText = (path, text) => { f.store[path] = `${f.store[path] ?? ''}${text}`; };
+  f.deps.move = (from, to) => {
+    for (const key of Object.keys(f.store)) if (key.startsWith(`${from}/`)) { f.store[`${to}${key.slice(from.length)}`] = f.store[key]; delete f.store[key]; }
+  };
+  assert.equal(await run(['archive', 'mc/one'], f.deps), 0, f.err());
+  assert.equal(`${HOME}/mc/goals/one/GOAL.json` in f.store, false, 'archived');
+  assert.deepEqual([goalOf(f, 'two').phase, goalOf(f, 'three').phase], [1, 2]);
+  assert.match(f.out(), /mc: mc\/one · archived — .*\n {2}mc\/three {2}phase 3 → 2\n {2}mc\/two {2}phase 2 → 1\n/u);
 });
 
 /* ------------------------------------------------------------- convert */

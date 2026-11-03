@@ -454,22 +454,21 @@ describe('routing', () => {
 });
 
 describe('mc status on a goal', () => {
-  it('says it is a goal, and a waiting one what it waits on', async () => {
+  it('says it is a goal, and one in a later phase which phase it waits on', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-status-goal-'));
-    const goal = (name, status, after = null) => {
+    const goal = (name, status, phase) => {
       mkdirSync(join(root, 'programs', 'mc', 'goals', name), { recursive: true });
-      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.json'),
-        goalJson({ status, title: name, after: after ? after.split(',').map((one) => one.trim()) : [] }));
+      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.json'), goalJson({ status, title: name, phase }));
     };
-    goal('headless-plan', 'waiting', 'mc/runner-sessions, mc/goal-waiting');
-    goal('runner-sessions', 'done');
-    goal('goal-waiting', 'review');
+    goal('headless-plan', 'open', 2);
+    goal('runner-sessions', 'done', 1);
+    goal('goal-waiting', 'review', 1);
     const err = [];
     const code = await project(['headless-plan'], {
       env: { MC_WORK_ROOT: root }, collect: async () => null,
       stdout: { write: () => {} }, stderr: { write: (text) => err.push(text) },
     });
     assert.equal(code, 1);
-    assert.equal(err.join(''), 'headless-plan is a goal · waiting on mc/goal-waiting — mc goal show mc/headless-plan\n');
+    assert.equal(err.join(''), 'headless-plan is a goal · open, phase 2 — after phase 1 — mc goal show mc/headless-plan\n');
   });
 });

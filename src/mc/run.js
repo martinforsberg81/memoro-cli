@@ -121,7 +121,8 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, phaseOpen, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf } from './goals.js';
+import { phaseGoals } from './goal-convert.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -1505,18 +1506,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * written into its LOG.md once, as a runner entry, not at every pass.
    */
   function archiveGoalsDue() {
+    convertAfter();
     const all = goals();
     const now = deps.now();
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.status)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
-      const result = archiveGoal(goal, all, {
+      const result = archiveGoal(goal, {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
-        appendText: (path, text) => deps.append(path, text), read: deps.read, now,
+        appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       });
-      if (result.refused) refuseGoalOnce(goal, result.refused);
-      else say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+      if (result.refused) { refuseGoalOnce(goal, result.refused); continue; }
+      say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+      for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
   }
 
@@ -2155,13 +2158,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
    * not stand in front of every other goal; why is said once, when it changes.
-   * A goal waits from its last log entry. The goals' `after` is settled first
-   * (`releaseWaiting`), so a goal whose last `after` goal has landed is a
-   * candidate in the same pick.
+   * A goal waits from its last log entry. A goal in a phase after the one its
+   * programme is in is no candidate (`phaseOpen`): it keeps its status and is
+   * picked once every goal in a lower phase is done or dropped, the goals of
+   * one phase side by side. A goal still written with `after` is given its
+   * phase first (`convertAfter`).
    */
   function goalWork({ repos: names, passed }) {
     settleLanded();
-    releaseWaiting();
+    convertAfter();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
     const may = (goal) => {
       if (goal.status !== 'review') return true;
@@ -2172,9 +2177,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return !why;
     };
     const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    return goals()
+    const all = goals();
+    return all
       .filter((goal) => (goal.status === 'open' || reviewDue(goal, merging) || planDue(goal)) && goal.problems.length === 0
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
       .map((goal) => ({
         name: goalName(goal), repo: goal.repos[0], kind: goalKind(goal), variant: goalKind(goal) === 'plan' ? null : 'goal',
         since: goal.log.at(-1)?.at ?? '', resumed: false, goal,
@@ -2263,21 +2269,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The status changes goals' `after` asks for (`waitingMoves`), made: a
-   * waiting goal whose `after` has all landed goes open with an entry naming
-   * what landed, and its branches with no commits of their own are remade from
-   * `origin/main` as it is now; one whose `after` goal is gone goes blocked
-   * for plan; an open goal with an `after` not landed goes waiting. Nothing
-   * else is written, so a pass with nothing to move writes nothing.
+   * Goals written before phases, with `after`, given their phase by the depth
+   * of that chain and opened (`phaseGoals`, as `mc goal convert` does), each
+   * with a runner entry. A pass with nothing to convert writes nothing.
    */
-  function releaseWaiting() {
-    for (const move of waitingMoves(goals())) {
-      const { goal } = move;
-      const name = goalName(goal);
-      goalStatus(goal, name, move.status, { done: move.done, comment: move.comment });
-      if (move.status !== 'open') continue;
-      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
-    }
+  function convertAfter() {
+    const answers = phaseGoals({ home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, now: deps.now(), tool: 'runner' });
+    for (const answer of answers) say(answer.problems ? `goal:${answer.name}: not given a phase — ${answer.problems.join('; ')}` : `goal:${answer.name}: phase ${answer.phase}, ${answer.status}`);
   }
 
   /**
@@ -2285,8 +2283,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * set `done` — however each landed: the merger, `mc merge --docs`, `--admin`,
    * or on GitHub by hand. The merger sets done itself when the pull request it
    * lands is the goal's last; this pass is for the rest, and asks GitHub at
-   * most every `SETTLE_EVERY_MS`, only for goals that are not finished or
-   * waiting and carry pull requests. A pull request GitHub cannot say about
+   * most every `SETTLE_EVERY_MS`, only for goals that are not finished and
+   * carry pull requests. A pull request GitHub cannot say about
    * leaves the goal as it is.
    */
   function settleLanded() {
@@ -2294,7 +2292,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
     for (const goal of goals()) {
-      if (goal.problems.length || FINISHED.includes(goal.status) || goal.status === 'waiting' || !goal.prs?.length) continue;
+      if (goal.problems.length || FINISHED.includes(goal.status) || !goal.prs?.length) continue;
       const stateOf = ({ repo: repoName, pr }) => {
         const repo = repos.find((item) => item.name === repoName);
         if (!repo) return null;
@@ -2436,6 +2434,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+    // A goal's branch is made when it can start: one made at `mc goal new` in a
+    // later phase is remade from origin/main before its first build, if unbuilt.
+    if (kind === 'build' && !lastBuildEntry(goal.log)) {
+      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
+    }
     const branch = `goal/${goal.goal}`;
     const repo = repos.find((item) => item.name === repoName);
     let pr = null;
