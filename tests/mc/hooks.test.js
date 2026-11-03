@@ -4,6 +4,7 @@
  * so they are tested without a session or a repository.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -270,7 +271,17 @@ describe('mc hook — Claude in Chrome against a local dev server is turned to m
 });
 
 describe('mc hook — a repository\'s own hooks, for a session that started outside it', () => {
-  function repoWithHooks() {
+  /**
+   * One area per file, its hook scripts run once here. On macOS a freshly
+   * written script pays 0.3-0.9 s at its first exec, and the tests paid it per
+   * test (3.2 s, 2026-11-03). Built while the file loads, outside any test's
+   * time; the tests only read the area.
+   */
+  const shared = buildRepoWithHooks();
+  for (const script of ['block.sh', 'stop.sh']) spawnSync(join(shared.area, 'memoro', '.claude', 'hooks', script), { input: '' });
+  const repoWithHooks = () => shared;
+
+  function buildRepoWithHooks() {
     const area = mkdtempSync(join(tmpdir(), 'mc-hook-repo-'));
     const hooks = join(area, 'memoro', '.claude', 'hooks');
     mkdirSync(hooks, { recursive: true });
