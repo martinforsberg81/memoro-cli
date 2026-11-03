@@ -305,7 +305,8 @@ by a build session's own `--status blocked` waits on a person and wakes
 nothing; so does a `waiting` goal.
 
 - **Where and on what.** The `plan-session` role (`canon/roles/plan-session.md`,
-  its section *Headless, on a blocked goal*), on the role's model — `fable`, ruling 6 — on
+  its section *Headless, on a blocked goal*), on opus — the role's `fable`
+  (ruling 6) until 2026-11-03, when the headless plan moved to opus — on
   claude at high effort, pinned as a review is (`planRoute`), with the billing
   any session has. It stands in the programme's directory
   (`~/mc/programs/<programme>/`), beside the goal's worktree: `MC_ROLE=plan-session`,

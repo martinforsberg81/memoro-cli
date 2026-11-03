@@ -5883,7 +5883,7 @@ test('a goal blocked by a red merge starts one plan session: the plan role, the 
   assert.equal(call.env.MC_ROLE, 'plan-session');
   assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
-  assert.equal(call.env.MC_MODEL, 'fable', 'ruling 6: plan runs on fable');
+  assert.equal(call.env.MC_MODEL, 'opus', 'a headless plan runs on opus high (2026-11-03), not the role\'s fable');
   assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
   assert.equal('MC_WORKAREA' in call.env, false);
   assert.equal('MC_REPO' in call.env, false);
