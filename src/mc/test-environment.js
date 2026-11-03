@@ -393,7 +393,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   if (!start.ok) return start;
   const registerMs = deps.registerTimeoutMs ?? start.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
 
-  // Admission before the start, never after: at most two app servers on the
+  // Admission before the start, never after: at most four app servers on the
   // machine and none while memory is short (`mc dev admit`). A profile that
   // says it is `light` does not count as a holder, so it does not ask either.
   // The child is told it was admitted, so a wrapper that would ask for itself

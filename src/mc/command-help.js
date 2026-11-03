@@ -384,7 +384,7 @@ export const COMMAND_USAGE = Object.freeze({
     "gone; it exits 0 on an empty machine, because memoro's dev wrapper asks it whether this\n",
     "mc speaks the protocol. The wrapper stays authoritative for how its server starts, stops\n",
     "and becomes healthy; unregistering nothing is not an error. admit allows at most\n",
-    "MC_DEV_MAX_SERVERS (2) servers that are not resource_class light, the asker's own not\n",
+    "MC_DEV_MAX_SERVERS (4) servers that are not resource_class light, the asker's own not\n",
     "counted, and none under MC_DEV_MIN_FREE_PERCENT (15) free memory; --wait polls for a\n",
     "slot, and it stops nothing to make room. mc also stops a worktree's servers when mc work\n",
     "remove or the runner's close takes the worktree away. The runner reaps every chore pass.\n",
