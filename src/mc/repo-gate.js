@@ -165,6 +165,14 @@ export async function runGate({
   // Stops the round from outside: step 2 of round-abort, the merger's watch.
   signal = null,
   clock = () => Date.now(),
+  // How the round's ceiling is armed: `(fire, ms) => cancel`, a timer of `ms`
+  // by default. A test hands in one it fires itself, at the moment its stuck
+  // child is reached, rather than waiting the ceiling out.
+  armCeiling = (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -431,13 +439,12 @@ export async function runGate({
   // The files the run was asked for, once the selection has said which (none
   // for a whole-suite round, which names no files until its output does).
   let deadlineFiles = [];
-  const timeout = setTimeout(() => {
+  const cancelCeiling = armCeiling(() => {
     timedOut = true;
     // Read before the abort: the runs' files are gone once their processes close.
     ceilingRuns = runProgress(tracked);
     deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
   }, roundTimeoutMs);
-  timeout.unref?.();
 
   // The round's verdict once its ceiling has come: red, and named. The files
   // that did not finish are the red — the ones to rebuild. The slowest files
@@ -1283,7 +1290,7 @@ export async function runGate({
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
   } finally {
-    clearTimeout(timeout);
+    cancelCeiling();
     for (const signal of caught) process.off(signal, onSignal);
     // The raw git: the ceiling may have come, and the clean-up must still run.
     await clearWorkspace({ git: askGitRaw, repoPath, workspace });
