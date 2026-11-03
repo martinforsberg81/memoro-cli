@@ -33,7 +33,7 @@ describe('the foreground register', () => {
     });
     const path = join(foregroundDir(env), '4711.json');
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), {
-      verb: 'brief', area: null, tool: 'claude', model: 'opus', pid: 4711,
+      verb: 'brief', area: null, programme: null, tool: 'claude', model: 'opus', pid: 4711,
       started: '2026-08-29T12:00:00Z', role: null,
     });
     release();

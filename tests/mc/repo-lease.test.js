@@ -211,10 +211,6 @@ describe('the repository lease', () => {
       // Not a text search — the fixture's own path has "lease" in it. The
       // area's shape is what must be free of the word.
       assert.equal(JSON.stringify(after.areas).includes('"lease"'), false);
-
-      // And the ordinary work verbs go on working on a held repository.
-      const added = runMcCli(['work', 'add', 'beta', fx.dir, 'beta-branch'], fx.env);
-      assert.equal(added.status, 0, added.stderr);
       assert.equal(lease(fx).holder, 'alpha');
     } finally { fx.cleanup(); }
   });

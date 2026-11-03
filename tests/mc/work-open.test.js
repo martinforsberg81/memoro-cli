@@ -282,7 +282,7 @@ describe('openInWorkArea and the foreground register', () => {
       areaRoot, worktree, env, verb: 'plan', areaName: 'mc-ui', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'mc-ui', tool: 'claude', model: 'opus', env, role: null },
+      { event: 'register', verb: 'plan', area: 'mc-ui', programme: null, tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
   });
@@ -346,7 +346,7 @@ describe('openInWorkArea and the foreground register', () => {
     const { options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, register, ...options });
     assert.deepEqual(events, [
-      { event: 'register', verb: null, area: null, tool: 'claude', model: null, env, role: null },
+      { event: 'register', verb: null, area: null, programme: null, tool: 'claude', model: null, env, role: null },
       { event: 'release' },
     ]);
   });
