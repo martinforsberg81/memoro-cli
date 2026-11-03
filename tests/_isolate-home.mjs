@@ -12,6 +12,7 @@
  *
  * Loaded via --import before any test module (see the npm test script).
  */
+import { spawnSync } from 'node:child_process';
 import { accessSync, appendFileSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, relative } from 'node:path';
@@ -101,6 +102,10 @@ if (!process.env.MC_GIT_CALLS) {
       `exec '${realGit.replace(/'/gu, "'\\''")}' "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
+    // Run once now, before any test, and before the log is named: on macOS a
+    // freshly written script pays 0.3-0.9 s at its first exec (2026-11-03),
+    // and the first real-git test of a run paid it inside its own time.
+    spawnSync(join(bin, 'git'), ['--version'], { env: { PATH: process.env.PATH || '' }, stdio: 'ignore' });
     writeFileSync(log, '');
     process.env.MC_GIT_CALLS = log;
     process.env.PATH = `${bin}${delimiter}${process.env.PATH || ''}`;
