@@ -1,12 +1,15 @@
 /**
  * `mc run` — the decisions the runner makes without starting anything.
  *
- * Everything here is a function of text and small objects: the queue from
- * `~/mc/queue.md` and the plans on origin/main; which kind of step a
- * project gets; the prompt a step is given; the headless argument list per
- * tool; what a finished session's output means; and the runs.tsv row. The
- * process-touching half (git, gh, tmux, the session itself) is run.js, and
- * it calls in here so that the tests can cover the rules with no session.
+ * Everything here is a function of text and small objects: the prompts a
+ * goal's build, review and plan session is given; the headless argument list
+ * per tool; what a finished session's output means; when the helper, intake
+ * and nightly chores are due; and the runs.tsv row. The process-touching half
+ * (git, gh, the session itself) is run.js, and it calls in here so that the
+ * tests can cover the rules with no session. The project readings below the
+ * queue (`assembleQueue`, `chooseKind`, `kindFor`, `nextFor`, the refusal
+ * words) are no longer the runner's — it starts goals only — and stay for the
+ * page and `mc status`, which still read them.
  *
  * These rules began as `~/mc/bin/runner.sh`'s, line by line — the shell
  * runner nights 1–2 measured (`~/mc/runner/log/natt-1.md`). That file is
@@ -18,8 +21,7 @@
  */
 import { CLAUDE_TOOLS } from '../adapters/claude-code.js';
 import { parseRuns } from './brief-collect.js';
-import { redLines } from './merge-red.js';
-import { deliverableStep, EFFORT_LEVELS, REVIEW_CLASS, WORK_CLASSES } from './plan-schema.js';
+import { deliverableStep, EFFORT_LEVELS } from './plan-schema.js';
 import { estimateCost } from './prices.js';
 import { describePr, openPrsFor } from './project-prs.js';
 
@@ -51,20 +53,11 @@ export const SESSION_DEFAULTS = Object.freeze({
   step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
   review: Object.freeze({ model: 'opus', effort: 'high', advisor: null }),
 });
-// The session kinds that run one of a plan's steps: a step, or the review step
-// that lands the project (`chooseKind`). Anything that asks whether a session is
-// for a plan's step asks this set; nothing compares a kind to 'step' by hand.
-export const STEP_KINDS = new Set(['step', 'review']);
 /**
- * The role a session runs with. A project's step and a goal are both a build
- * (`canon/roles/build-session.md`, its `project` and `goal` parts); a project's
- * review step is a review (`review-session.md`, its `project` part).
+ * The role a goal's build session runs with (`canon/roles/build-session.md`,
+ * its `goal` part).
  */
-export const BUILD_ROLES = Object.freeze({ project: 'build-session:project', goal: 'build-session:goal' });
-export const PROJECT_REVIEW_ROLE = 'review-session:project';
-export function roleOfKind(kind) {
-  return kind === 'review' ? PROJECT_REVIEW_ROLE : BUILD_ROLES.project;
-}
+export const BUILD_ROLES = Object.freeze({ goal: 'build-session:goal' });
 // The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
 // context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
@@ -89,21 +82,13 @@ export const DEFAULT_STALL_MINUTES = 20;
 // `sql-w2-search-closure` sat twenty minutes after a successful result).
 export const RESULT_GRACE_MS = 2 * 60 * 1000;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
-// A session the API ended mid-step — a limit, a lost login, a 5xx — is
-// resumed where it stopped rather than failed (`apiInterruption`). Measured
-// 2026-09-13..25: ten such sessions, four of them over 280 turns, each written
-// off as a failed step whose work stood uncommitted in the worktree. A server
-// error is waited out this long in its own lane; three interruptions in a row
-// end the step, whatever each one was.
-export const SERVER_RETRY_MS = 5 * 60 * 1000;
-export const RESUME_LIMIT = 3;
 export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in runs.tsv
 
 /* ------------------------------------------------------------------ queue */
 
 /**
  * Martin's order first (`queue.md`, comments and blanks ignored), then every
- * project with a PLAN.md on origin/main that the queue did not name, sorted.
+ * project with a plan on origin/main that the queue did not name, sorted.
  *
  * A name with no plan on main is not in the queue at all. It used to be —
  * queue.md was taken literally and whatever it named was attempted — and the
@@ -113,9 +98,9 @@ export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in
  * WITHOUT A PROJECT block.
  */
 export function assembleQueue(queueText, plans) {
-  // A plan still written as PLAN.md is not one the runner reads. It is left out
-  // here rather than skipped in the round, because a skip line per unmigrated
-  // project per round is a line nobody reads — `mc status` is where they show.
+  // A legacy plan is not one the runner reads. It is left out here rather
+  // than skipped, because a skip line per unmigrated project per pass is a
+  // line nobody reads — `mc status` is where they show.
   const planned = new Set(plans.filter((p) => !p.legacy).map((p) => p.project));
   const named = queueFileNames(queueText).filter((name) => planned.has(name));
   const seen = new Set(named);
@@ -133,58 +118,17 @@ export function queueFileNames(queueText) {
     .filter((line) => QUEUE_NAME.test(line));
 }
 
-/**
- * `~/mc/queue.md` is a strict list (Martin, 2026-08-29: "ett träsk — där ska
- * INTE finnas någonting annat än en lista över vad som ska köras"). One
- * project name per line and nothing else: no comments, no headings, no
- * blank-line sections.
- *
- * A name leaves it when its plan is `done` or has left `main`, and not
- * before (2026-09-08). It used to leave the moment one step had run, which
- * made sense while a round walked every name once; with NEXT as the only
- * order there is, a prioritised five-step project would drop to alphabetical
- * after its first step and the file would stop meaning *these first*.
- *
- * Returns `{ names, dropped }` — `dropped` is `{ line, why }` per line that
- * goes, one runner.log line each. The 2026-08-29 file had seven comment
- * lines and twenty names that were already done or had no plan on main.
- */
-export function strictQueue(queueText, plans) {
-  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  const names = [];
-  const dropped = [];
-  const seen = new Set();
-  for (const raw of String(queueText || '').split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (!QUEUE_NAME.test(line)) { dropped.push({ line, why: 'not a project name' }); continue; }
-    if (seen.has(line)) { dropped.push({ line, why: 'named twice' }); continue; }
-    const plan = byProject.get(line);
-    if (!plan) { dropped.push({ line, why: 'no plan on main' }); continue; }
-    if (plan.legacy) { dropped.push({ line, why: 'still a PLAN.md — migrate it to PLAN.json' }); continue; }
-    if (plan.status === 'done') { dropped.push({ line, why: 'the plan is done' }); continue; }
-    seen.add(line);
-    names.push(line);
-  }
-  return { names, dropped };
-}
-
-/** The queue file as it is written back: names, one per line, nothing else. */
-export function queueFileText(names) {
-  return names.length ? `${names.join('\n')}\n` : '';
-}
-
 /* --------------------------------------------------------------- refusals */
 
 /**
- * The words a round refuses a project on for a reason that is not in its plan,
- * in the order `runStepClaimed` asks them — the vocabulary the round and the
- * reading beside `kindFor` (`machineState`, status-collect.js) share.
+ * The words a round refused a project on for a reason that is not in its plan
+ * — the vocabulary the reading beside `kindFor` (`machineState`,
+ * status-collect.js) answers in. The runner no longer starts a project's step.
  *
  * Two lists maintained by hand is the failure this exists to stop. The round
  * says these words (`refuse` in run.js returns `skipped:<reason>`), the reading
  * answers with them, and the agreement test drives one case per word through
- * both — so a reason added to `runStepClaimed` that the reading does not know
+ * both — so a reason added to the round that the reading does not know
  * fails the suite rather than quietly making `mc status` wrong.
  *
  * The plan-shaped words — `blocked`, `done`, `unparseable`, `unmigrated`,
@@ -308,37 +252,15 @@ export function holdingPrs(openPrs = [], record = null) {
 }
 
 /**
- * The step a pull request carries, for judging what a session was allowed to
- * change in the plan. The step that names it is the answer when the plan has
- * one — a session that already wrote its own `pr` on its step — and the
- * deliverable step is the answer before that edit has landed.
- */
-export function stepOfPr(plan, pr) {
-  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const at = steps.findIndex((step) => step && Number(step.pr) === Number(pr));
-  return at >= 0 ? at : deliverableStep(plan).index;
-}
-
-/**
- * The branch a workarea moves to when the one it stands on has already
- * landed: `<name>-<n>`, the smallest `<n>` no branch is using. `<name>` is
- * the first of them, so the count starts at two.
- */
-export function nextBranch(name, taken = []) {
-  const held = taken instanceof Set ? taken : new Set(taken);
-  for (let n = 2; ; n += 1) if (!held.has(`${name}-${n}`)) return `${name}-${n}`;
-}
-
-/**
  * What a project gets this round. `openPrs` non-empty means its work is
- * already in flight and nothing is started; `plan` is null when no PLAN.md
+ * already in flight and nothing is started; `plan` is null when no plan
  * exists in the worktree.
  *
  * A merge left in conflict is not one of the answers here. It used to be the
  * first of them — `conflicts.length` returned a kind of its own before the
  * plan was so much as looked at, and the round did not even read the plan
- * while a merge was in progress. A conflict is now something the step session
- * is *told* about (`stepPrompt`'s preamble): it resolves the merge and then
+ * while a merge was in progress. A conflict was then something the step
+ * session was *told* about, in its prompt: it resolved the merge and then
  * does its step, in the session that had to read the code anyway, rather than
  * a cold session that finishes a merge and stops.
  *
@@ -366,7 +288,7 @@ export function chooseKind({ plan, openPrs = [] }) {
   const flight = inFlight(openPrs);
   if (flight) return flight;
   if (!plan) return { kind: null, skip: null };
-  if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a PLAN.md — migrate it to PLAN.json' };
+  if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a legacy plan — the runner reads none' };
   if (!plan.plan) {
     const first = plan.problems?.[0] || 'the plan does not parse';
     return { kind: null, reason: 'unparseable', skip: `the plan does not parse: ${first}`, problems: plan.problems || [] };
@@ -398,8 +320,7 @@ export function kindFor(name, { plans }) {
  * `origin/main`, then what that project has open. `{ runnable: true, kind }`,
  * or `{ runnable: false, reason }` in the word both surfaces refuse in.
  *
- * It is the same order `runStepClaimed` asks in and the same order
- * `machineState` asks in, minus everything that needs a worktree — this is
+ * It is the same order `machineState` asks in, minus everything that needs a worktree — this is
  * read from what `queue()` already fetched, so a pick costs no git at all.
  */
 function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}) {
@@ -672,288 +593,6 @@ export function intakeNote(turn) {
 
 /* ---------------------------------------------------------------- prompts */
 
-const today = (now) => now.toISOString().slice(0, 10);
-
-/**
- * What a step session is told before anything else when the worktree it is
- * handed has a merge in progress: which files, that it stopped there, and
- * that the merge is the first thing it does rather than the job.
- *
- * It goes above the body and the body does not change — the step, its
- * `done_when` and what may be written in the plan are all still true. That is
- * the whole of what the runner used to spend a session of its own on: a cold
- * session that read the conflicting code, resolved it, and stopped. This
- * session has to read that code anyway.
- */
-function conflictPreamble(conflicts, then = null) {
-  if (!conflicts.length) return [];
-  return [
-    'A `git merge origin/main` is in progress in this worktree and stopped on',
-    `conflicts in: ${conflicts.join(' ')}`,
-    '',
-    "Resolve them first: keep this branch's intent and main's changes both,",
-    ...(then || [
-      'commit the merge, and then do your step below. It is the first thing you',
-      'do and not the job — one session, one pull request, and the step is what',
-      'the pull request is for.',
-    ]),
-    '',
-    // A modify/delete is the one conflict "keep both" does not answer, and
-    // guessing it wrong restores something a finished project removed on
-    // purpose. `role-instructions`' #614 is exactly this: its branch edits
-    // `canon/roles/reconcile.md`, which `no-reconcile` deleted from main.
-    'A file main deleted stays deleted — `git rm` it and carry whatever your',
-    'branch was doing to it wherever main moved it, if anywhere. Restoring it',
-    'undoes a project that finished on purpose, and no test will say so.',
-    '',
-  ];
-}
-
-/** A field that is prose — one string, or an array of paragraph strings. */
-const paragraphs = (value) => (Array.isArray(value) ? value : (value == null ? [] : [value])).map(String);
-
-/** One field of the session's own step, as the prompt shows it. */
-function stepField(key, value) {
-  if (Array.isArray(value)) return [`${key}:`, '', ...paragraphs(value).flatMap((p) => [p, ''])];
-  if (value && typeof value === 'object') return [`${key}: ${JSON.stringify(value)}`];
-  return [`${key}: ${value ?? 'null'}`];
-}
-
-/**
- * The part of the plan a step session needs, rendered from the parsed plan:
- * the project's own terms in full, the session's step in full, and every
- * other step as one line.
- *
- * It used to be the whole file. The session has that file in its worktree,
- * so the copy in the prompt was only ever for reading — and it
- * was read on every turn, because it was in the prompt. The other steps'
- * instructions are what made it large (memoro's `sql-w1-universe-closure` was
- * 115k characters on 2026-09-11); a session that needs one reads the file.
- *
- * Every key of the session's own step is shown, not a known list, so a key the
- * schema gains later reaches the session without a change here.
- */
-function planExcerpt(plan, index, step) {
-  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const lines = [];
-  const section = (heading, body) => lines.push(`----- ${heading} -----`, ...body, '');
-  section('goal', paragraphs(plan?.goal).flatMap((p) => [p, '']));
-  section('contract', paragraphs(plan?.contract).flatMap((p) => [`- ${p}`, '']));
-  section('out_of_scope', paragraphs(plan?.out_of_scope).flatMap((p) => [`- ${p}`, '']));
-  section('success_criteria', (plan?.success_criteria || []).flatMap((c, i) => [
-    `success_criteria[${i}] · met: ${c?.met === true}`,
-    `criterion: ${c?.criterion ?? ''}`,
-    `check: ${c?.check ?? ''}`,
-    '',
-  ]));
-  section('documents', (plan?.documents || []).map((d) => `- ${d?.label ?? ''}: ${d?.path ?? ''}`));
-  if (plan?.runner) section('runner', [JSON.stringify(plan.runner)]);
-  const own = steps[index] || step || {};
-  section(`Your step: steps[${index}]`, Object.entries(own).flatMap(([key, value]) => stepField(key, value)));
-  const others = steps.flatMap((s, i) => (i === index ? [] : [
-    [`steps[${i}]`, s?.status, s?.title, `done when: ${s?.done_when ?? ''}`, ...(s?.pr ? [`PR #${s.pr}`] : [])].join(' · '),
-  ]));
-  section('The other steps', others.length ? others : ['(none)']);
-  return lines.join('\n').replace(/\n{3,}/gu, '\n\n').trimEnd();
-}
-
-/**
- * What a step session is told. `plan` is the parsed plan (`readPlanText`'s
- * `plan`); the prompt quotes the part of it this step needs and says where the
- * whole file is, rather than carrying the file — see `planExcerpt`.
- */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, built = null, earlier = null, now = new Date() }) {
-  const ordinal = Number.isInteger(index) ? index + 1 : 1;
-  return [
-    ...conflictPreamble(conflicts),
-    ...retryPreamble(retry, repo),
-    ...answeredPreamble(retry ? null : answered, repo),
-    ...earlierPreamble(earlier),
-    ...interruptedPreamble(interrupted),
-    ...stackedPreamble(retry ? null : stacked),
-    ...builtPreamble(retry ? null : built),
-    `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
-    `is merged in). Your plan is at \`${planPath}\`, under ~/mc/programs/. It is mc's and`,
-    'changes only through `mc project` and `mc step` verbs: read it, never edit it;',
-    'what follows below is the part of it this step needs — the frozen fields,',
-    'your step in full, and every other step as one line. Read the file for',
-    'anything else.',
-    '',
-    `Your step is \`steps[${index}]\` — ${ordinal}, "${step?.title || ''}".`,
-    `Done when: ${step?.done_when || ''}`,
-    'That sentence is your success criterion for this session — verify it before',
-    'you stop, and say in the PR body how you verified it.',
-    '',
-    'Where your step stands is not in the plan file. It is in the register mc',
-    'keeps, and `mc step` is how you write it — the file\'s `status`, `pr`,',
-    '`blocked_by` and `comments` are read by nothing, and a state written there',
-    'is a state nobody sees (2026-09-12: a step blocked in the file showed',
-    '`ready` for six days). Nothing in the plan file is yours. A success',
-    'criterion you measured with its check is recorded with `mc project criterion',
-    "met <n>` — the register, not the file; on the plan's last step `mc merge`",
-    'refuses the pull request until every criterion is met there.',
-    '',
-    'What the next session needs to know that the code in front of it does not',
-    'show goes in the pull request body, and as `mc step note "…"` — one',
-    'paragraph a call, shown to whoever reads this step next.',
-    '',
-    'If the contract must change, or a later step is wrong, stop: run',
-    '`mc step blocked --on <decision-name> --reason "…"` (or `--on-project',
-    '<project>` when it waits for another project) — the name is a name, lower',
-    'case and hyphens, because a blocked step that does not say what it waits for',
-    'is one nobody can unblock. Say it in the pull request too, with one',
-    'recommendation rather than a menu; that is where it will be read.',
-    '',
-    'Build all of it — a pull request that lands is a `done` step, whatever its',
-    'body says is left; what you cannot finish is `mc step failed`, not a partial',
-    'landing. `mc gate <files…>` runs the test files your change reaches in the',
-    'gate lane and prints the verdict — never the whole suite, which is the',
-    'merger\'s. `mc publish` pushes this branch, opens the pull request and',
-    `queues it for the merger as \`mc merge ${repo} <pr>\` would: it checks the`,
-    'plan\'s criteria and returns at once. When it says queued, your work is',
-    'over — end the session in that turn. The merger lands it and writes',
-    '`done`; a red goes to this step\'s next session with the reason.',
-    'Never `gh pr merge`. Giving up is `mc step failed --reason "…"`. Do not ask',
-    'questions.',
-    '',
-    planExcerpt(plan, index, step),
-  ].join('\n');
-}
-
-/**
- * What a session is told first when its step came back red from the merger
- * (ruling 30): the pull request is open on this branch, and the gate's reason
- * is the work — with a red round's files, its kept failures and the line that
- * runs just those again, when it named them (ruling 44). Empty when the step
- * is fresh.
- */
-function retryPreamble(retry, repo) {
-  if (!retry) return [];
-  return [
-    `This step came back from the merger: #${retry.pr} did not land (attempt ${retry.attempts}).`,
-    `The gate said: ${retry.reason}`,
-    ...redLines(retry.red),
-    `#${retry.pr} is still open, on this branch, with the earlier session's work.`,
-    'Start there — `gh pr view` and the diff — fix what the gate named (never by',
-    'lowering a threshold or skipping a test), run the red files again with `mc gate <files…>`, commit, and run `mc publish` (it pushes to the same branch, lists your commits under the description — `--body-file` when the description itself is now wrong — and queues',
-    `#${retry.pr} for the merger again, as \`mc merge ${repo} ${retry.pr}\` would). No new pull request.`,
-    '',
-  ];
-}
-
-/**
- * What a session is told first when its step was parked on a question and a
- * person answered it (`mc step ready` on a blocked step). With the pull request
- * kept, it is open on this branch with the earlier session's work and the
- * answer is what to build the rest under. Without one, nothing is in a pull
- * request: the work is on this branch (`earlierPreamble`) and in the notes.
- * Empty when the step was not answered.
- */
-function answeredPreamble(answered, repo) {
-  if (!answered) return [];
-  const parked = [
-    `This step was parked${answered.name ? ` on the decision \`${answered.name}\`` : ''}, and it has been answered.`,
-    `The answer: ${answered.answer || '(no words given — read the step\'s notes with `mc step`)'}`,
-  ];
-  if (!answered.pr) {
-    return [
-      ...parked,
-      'Nothing of the earlier session\'s work is in a pull request; what it built is on this branch, below, and in its notes (`mc step`).',
-      '',
-    ];
-  }
-  return [
-    ...parked,
-    `#${answered.pr} is still open, on this branch, with the earlier session's work.`,
-    'Start there — `gh pr view` and the diff; its body says what was left — and',
-    'build the rest under the answer. Commit, run `mc publish` (it pushes to the',
-    'same branch — `--body-file` when the description is now wrong — and queues',
-    `#${answered.pr} for the merger, as \`mc merge ${repo} ${answered.pr}\` would). No new pull request.`,
-    '',
-  ];
-}
-
-/**
- * What a session is told when its branch already carries commits from an
- * earlier session of this step that no pull request holds yet (run.js hands
- * the commits past origin/main, at most 20, for a step with no pull request).
- * Empty when there are none.
- */
-function earlierPreamble(earlier) {
-  const commits = (earlier?.commits || []).slice(0, 20);
-  if (!commits.length) return [];
-  return [
-    'This branch already carries work from an earlier session of this step that is in no pull request:',
-    ...commits.map((line) => `- ${line}`),
-    'Read it (`git diff origin/main...HEAD`) and build on it — do not start over. Then commit and `mc publish` as for any step.',
-    '',
-  ];
-}
-
-/**
- * The handover a fresh session on an interrupted step is given (ruling 33):
- * when the session before it was cut off and why it was not resumed, its
- * commits on this branch (at most 20, `git log --oneline origin/main..HEAD`),
- * the WIP commit the runner made of what it had not committed, its last
- * words, and the checkpoint ref when one exists. Empty when the step was not
- * interrupted.
- */
-function interruptedPreamble(interrupted) {
-  if (!interrupted) return [];
-  const commits = (interrupted.commits || []).slice(0, 20);
-  return [
-    `An earlier session on this step was cut off at ${interrupted.at || 'an unknown time'}${interrupted.why ? ` (${interrupted.why})` : ''}.`,
-    ...(commits.length
-      ? ['Its commits on this branch (`git log --oneline origin/main..HEAD`):', ...commits.map((line) => `    ${line}`)]
-      : ['It left no commits on this branch.']),
-    ...(interrupted.wip
-      ? [`${interrupted.wip.slice(0, 7)} is a WIP commit the runner made of the files it had not committed; nothing in it has been checked.`]
-      : []),
-    ...(interrupted.lastText
-      ? ['Its last words were:', ...String(interrupted.lastText).split('\n').map((line) => `> ${line}`)]
-      : []),
-    ...(interrupted.checkpoint ? [`\`${interrupted.checkpoint}\` holds the last snapshot of its uncommitted work.`] : []),
-    'Read the diff of the branch before writing anything, and do not redo what the commits already did.',
-    '',
-  ];
-}
-
-/**
- * What a session is told when its branch starts on top of a step still in
- * the merge queue (ruling 30, A): that step's work is already in the branch
- * and is not this session's to change; its pull request will show those
- * commits too until the merger has landed the one below and moved this one
- * onto main. Empty when the branch starts from main.
- */
-function stackedPreamble(stacked) {
-  if (!stacked) return [];
-  return [
-    `Your branch starts on top of step ${stacked.index + 1}, whose #${stacked.pr} is in the merge queue.`,
-    'Its work is in this branch already: build on it, and leave it as it is — a',
-    'red in it is that step\'s, and comes back to it. Your pull request shows its',
-    'commits too until it has landed; the merger lands it first and moves yours',
-    'onto main after.',
-    '',
-  ];
-}
-
-/**
- * What a session is told when its step continues on the project's branch (the
- * branch flow, a plan ending in a review step): the steps before it are built
- * there, in one pull request that lands with the review, and their work is
- * this session's to keep green. Empty when no step before it is built.
- */
-export function builtPreamble(built) {
-  if (!built) return [];
-  return [
-    `Your branch, ${built.branch}, is the project's: steps 1–${built.through + 1} are built on it, in #${built.pr}, which does not land until the project's review step.`,
-    'Their work is yours to build on and to keep. origin/main is merged in.',
-    'First run bare `mc gate` — the test files this branch changed. A red there, from an earlier step or from main, is yours to fix before your own work.',
-    'Then do your step, commit, and `mc publish`: it pushes and records the step built; nothing is queued, and your session is over.',
-    '',
-  ];
-}
-
 
 /**
  * The goal as text (`renderGoalText`, what `mc goal show` prints), after a
@@ -994,7 +633,7 @@ export function goalPlanPrompt({ name, dir, worktree, branch, why = null, brief 
   ].join('\n'), brief);
 }
 
-/** `checkInPrompt` for a plan session on a blocked goal. */
+/** What the runner writes to a running plan session on a blocked goal every `check_in_minutes` (ruling 18). */
 export function goalPlanCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
@@ -1004,7 +643,11 @@ export function goalPlanCheckInPrompt({ minutes, count }) {
   ].join('\n');
 }
 
-/** `checkInPrompt` for a goal's build session, which has no step to judge or to block. */
+/**
+ * What the runner writes to a running goal session every `check_in_minutes`
+ * (ruling 18). Nothing is killed on elapsed time; instead the session is
+ * asked to judge whether it is still moving the goal.
+ */
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
@@ -1100,133 +743,6 @@ export function userMessageLine(text) {
 }
 
 /**
- * The message a resumed session gets: the API's own words for why its last
- * turn ended, and that nothing was done to the workarea in between.
- */
-export function resumePrompt({ said }) {
-  return [
-    `The runner resumed this session: the API ended your last turn with "${said}".`,
-    'Nothing touched the workarea in between — the files, the branch and anything',
-    'uncommitted are exactly as you left them.',
-    '',
-    'Continue the step from where you stopped. Do not start it over.',
-  ].join('\n');
-}
-
-/**
- * The message a session resumed after it died under its step gets (ruling
- * 33): when it was cut off, that its tree is as it left it, and that what it
- * had running is not.
- */
-export function restartPrompt({ at, why = null }) {
-  return [
-    `The runner resumed this session: it was cut off at ${at || 'an unknown time'} because the machine restarted or the runner was stopped${why ? ` (${why})` : ''}.`,
-    'The files, the branch and anything uncommitted are exactly as you left them.',
-    'The processes you had started — dev servers, background tasks, test runs — are',
-    'gone; start them again if you still need them.',
-    '',
-    'Run `git status` first, then continue the step from where you stopped. Do not start it over.',
-  ].join('\n');
-}
-
-/**
- * How close to the cache's end a resume may still count as warm: the resumed
- * session's first request has to reach the API inside the TTL, after the
- * launch and the tool's own start-up.
- */
-export const WARM_MARGIN_MS = 5 * 60_000;
-
-/**
- * The largest conversation resumed when its cache has gone cold. Below half
- * the compaction window, writing the conversation to the cache once costs
- * less than a new session re-reading the code; above it the resumed session
- * would compact soon and lose what it knew.
- */
-export const COLD_RESUME_MAX_TOKENS = AUTOCOMPACT_TOKENS / 2;
-
-const groupDigits = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/gu, ' ');
-
-/**
- * Whether an interrupted step's session is resumed or a fresh one started,
- * from its `interrupted` record alone (ruling 33): `{ mode, why }`, `why`
- * one line for the log. Fresh when there is no session to resume, when the
- * last resume of it did not start, or when the plan's tool is not the one
- * the session ran on. Resume while the prompt cache is warm; past it, resume
- * a conversation small enough to be worth writing to the cache again.
- *
- * A resume onto another billing than the session ran on (`billingNow`,
- * step-credits) is never warm: the prompt cache is per organisation and
- * workspace, and the plan's login and the key's workspace do not share one.
- *
- * `modelNow` is set only for a class-routed step (ruling 59): the model the
- * launch would run on. A session is never resumed on another model than it
- * ran on, so a different one is a cold start. A concrete plan passes none and
- * is decided as it always was.
- */
-export function recoveryFor({ interrupted, toolNow, ttlMs, now, billingNow = null, modelNow = null }) {
-  const record = interrupted || {};
-  if (!record.session_id) return { mode: 'fresh', why: 'no session id — fresh' };
-  if (record.resume_failed) return { mode: 'fresh', why: 'the last resume did not start — fresh' };
-  if (toolNow !== record.tool) return { mode: 'fresh', why: `the tool is ${toolNow} now, the session ran on ${record.tool || 'an unknown tool'} — fresh` };
-  if (modelNow != null && modelNow !== record.model) return { mode: 'fresh', why: `the model is ${modelNow} now, the session ran on ${record.model || 'an unknown model'} — fresh` };
-  const ran = record.billing || 'plan';
-  const changed = billingNow != null && ran !== billingNow ? `billing changed ${ran}→${billingNow}, ` : '';
-  const last = record.last_activity ? Date.parse(record.last_activity) : NaN;
-  const nowMs = now instanceof Date ? now.getTime() : Number(now);
-  if (!changed && Number.isFinite(last) && nowMs - last < ttlMs - WARM_MARGIN_MS) {
-    return { mode: 'resume', why: `warm, ${Math.max(0, Math.round((nowMs - last) / 60_000))} min since last request` };
-  }
-  const tokens = record.context_tokens;
-  if (tokens == null) return { mode: 'resume', why: `${changed}cold, context size unknown` };
-  if (tokens <= COLD_RESUME_MAX_TOKENS) return { mode: 'resume', why: `${changed}cold, ${groupDigits(tokens)} tokens` };
-  return { mode: 'fresh', why: `${changed}cold, ${groupDigits(tokens)} tokens — fresh` };
-}
-
-/**
- * Whether a session said anything at all: a real assistant event for claude,
- * a completed item or turn for codex. A resume that died before it did is
- * one that never started (`No conversation found`, a rollout that is gone).
- */
-export function sessionSpoke({ toolId, stdout }) {
-  for (const line of String(stdout || '').split('\n')) {
-    if (!line.trim()) continue;
-    let event = null;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (!event || typeof event !== 'object') continue;
-    if (toolId === 'codex') {
-      if (event.type === 'item.completed' || event.type === 'turn.completed') return true;
-    } else if (event.type === 'assistant' && event.message?.model !== '<synthetic>' && !event.parent_tool_use_id) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * What the runner writes to a running session every `check_in_minutes`
- * (ruling 18). Nothing is killed on elapsed time; instead the session is
- * asked to judge its own step and, if it cannot finish it, to leave it
- * `blocked` on a decision named after the project — `NAME_RE` in
- * plan-schema.js, so the blocker is a name somebody can answer.
- */
-export function checkInPrompt({ project, minutes, count }) {
-  return [
-    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
-    'Judge whether this step can be finished in this session.',
-    '',
-    'If it can, say so in one line and go on — no other answer is needed.',
-    '',
-    'If it cannot — you are going in circles, a test cannot be made green, the',
-    'plan does not match the code — commit what you have, run `mc step note "…"`',
-    'with what you found and what the next session should do differently, then',
-    `\`mc step blocked --on ${project}-check-in --reason "…"\`, open the pull`,
-    'request, and stop.',
-    '',
-    'Do not start anything new after a check-in that says it cannot be finished.',
-  ].join('\n');
-}
-
-/**
  * What the runner writes instead of killing a session that has been silent
  * for `stall_minutes` while a background task of its own runs. Waiting on
  * one is silence, and before this every wait longer than the stall guard was
@@ -1309,69 +825,6 @@ export function streamSummary(stdout) {
     if (c != null) { u.costUSD = c; cost += c; }
   }
   return { type: 'result', subtype: 'killed', is_error: false, session_id: session, num_turns: messages.size, usage, modelUsage, total_cost_usd: cost, model, last_usage: last };
-}
-
-/**
- * Interruptions in a row after which a step is `failed` rather than `ready`
- * again: three restarts on one step is a step that kills the machine, or a
- * loop — either way a person's.
- */
-export const INTERRUPT_LIMIT = 3;
-
-const LAST_TEXT_MAX = 3000;
-
-/**
- * Where a session stood when its stream stopped, read from the stream alone:
- * `{ session_id, context_tokens, last_text }`. What a session that died under
- * its step leaves for the one that picks it up — which session to resume, how
- * big its conversation had become, and what it said last.
- *
- * Claude: the id from any event carrying `session_id`; the context as the last
- * real (`<synthetic>` is claude's own placeholder) assistant event's input,
- * cache-read and cache-write tokens; the text blocks of the last assistant
- * message that has any. Codex: the id from `thread_id`, the context from the
- * last `usage.input_tokens`, the text of the last completed `agent_message`.
- * A partial last line — the process died mid-write — is skipped; a field the
- * stream does not give is null, never a guess.
- */
-export function sessionStanding({ toolId, stdout }) {
-  const lines = String(stdout || '').split('\n');
-  lines.pop();
-  const out = { session_id: null, context_tokens: null, last_text: null };
-  let textId = null;
-  let texts = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    let event = null;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (!event || typeof event !== 'object') continue;
-    if (toolId === 'codex') {
-      if (event.thread_id) out.session_id = String(event.thread_id);
-      if (event.usage?.input_tokens != null) out.context_tokens = Number(event.usage.input_tokens);
-      if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') out.last_text = event.item.text;
-      continue;
-    }
-    if (typeof event.session_id === 'string' && event.session_id) out.session_id = event.session_id;
-    // A subagent's events carry the tool call they answer; the session's own
-    // context and words are the ones without.
-    if (event.type !== 'assistant' || event.message?.model === '<synthetic>' || event.parent_tool_use_id) continue;
-    const usage = event.message?.usage;
-    if (usage) {
-      out.context_tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
-    }
-    // claude prints one event per content block, all of one message under
-    // the same id: the text is that message's blocks joined.
-    const said = (Array.isArray(event.message?.content) ? event.message.content : [])
-      .filter((block) => block?.type === 'text' && typeof block.text === 'string' && block.text)
-      .map((block) => block.text);
-    if (!said.length) continue;
-    const id = event.message?.id ?? null;
-    if (id == null || id !== textId) { textId = id; texts = []; }
-    texts.push(...said);
-    out.last_text = texts.join('\n');
-  }
-  if (out.last_text && out.last_text.length > LAST_TEXT_MAX) out.last_text = out.last_text.slice(-LAST_TEXT_MAX);
-  return out;
 }
 
 /**
@@ -1475,7 +928,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   // and `quotaSeen` would call it a quota (its `usage limit`) in a short session.
   const quota = interrupted ? interrupted.kind === 'quota' : (fewTurns && quotaSeen(text));
   return {
-    // Only on a session the API ended: `run.js` resumes it (`RESUME_LIMIT`).
+    // Only on a session the API ended.
     // `creditsUntil` is the date a workspace limit names, for `noteRefusal`.
     ...(quota || interrupted ? { interrupted: quota ? 'quota' : interrupted.kind, said: interrupted?.said ?? null, creditsUntil: interrupted?.until ?? null } : {}),
     turns: pick(json.num_turns),
@@ -1518,24 +971,6 @@ function readCodexEvents(stdout) {
     if (id) out.session = String(id);
   }
   return out;
-}
-
-/**
- * What claude says it is paid by: `apiKeySource` off the first
- * `{"type":"system","subtype":"init"}` line of a stream-json run, or null when
- * there is none. `ANTHROPIC_API_KEY` is the environment's key — measured
- * 2026-10-11 with claude 2.1.296, which also warns that the key takes
- * precedence over the claude.ai login.
- */
-export function initSource(stdout) {
-  for (const line of String(stdout || '').split('\n')) {
-    if (!line.includes('"init"')) continue;
-    let event = null;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (event?.type !== 'system' || event.subtype !== 'init') continue;
-    return typeof event.apiKeySource === 'string' && event.apiKeySource ? event.apiKeySource : null;
-  }
-  return null;
 }
 
 /**
@@ -1745,14 +1180,6 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
  * out rather than printed as `null`, and a tool that picks its own model says
  * so.
  */
-/**
- * The work class a step names (ruling 59): `fast`, `large` or `review`, or null
- * for a step that names a concrete model or none. Only a class is routed.
- */
-export function workClassOf(step) {
-  const model = step?.runner?.model;
-  return WORK_CLASSES.includes(model) || model === REVIEW_CLASS ? model : null;
-}
 
 /**
  * What a class-routed step runs on: `sessionSettings` for the candidate the

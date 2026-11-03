@@ -57,10 +57,11 @@
  * rules are tested without a file.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { LOCK_WAIT_MS, lockPath, realLock } from './runner-lock.js';
 import { invocationShape, rotateIfLarge, runId } from './logger.js';
 import { ARCHIVE_HOME, ARCHIVED_PROJECTS, PROGRAMS_HOME, RUNNER_HOME, layoutVersion } from './paths.js';
 import { findArchivedProjectDir, findProjectDir } from './plan-write.js';
@@ -742,67 +743,5 @@ export function dropCriterion({ root, project, text, reason, read = realRead, wr
   });
 }
 
-/**
- * One writer at a time across the register: a lock file with the writer's
- * pid, taken with `O_EXCL`, held for the milliseconds a read-patch-write
- * takes. A file naming a dead pid is litter from a killed writer and is
- * taken over; a live one is waited on, briefly, and then the write goes
- * ahead anyway — a register that cannot be written is worse than one written
- * a moment early, and every write is whole (`writeJsonAtomic`).
- *
- * The file stays under `runner/`, whatever the layout, because it also guards
- * `merges.json`, deploys, language runs and iOS builds: `runner/projects/.lock`
- * in layout 1 (so a process on older code and one on newer still exclude each
- * other), `runner/register.lock` in layout 2 (`lockPath`).
- * A plan amendment uses `strict: true`: it must not commit without the lock.
- * Existing register callers retain their timeout policy.
- */
-export const LOCK_WAIT_MS = 5000;
-const LOCK_POLL_MS = 25;
-
-export function lockPath(root) {
-  return layoutVersion({ root }) === 2 ? join(root, RUNNER_HOME, 'register.lock') : join(root, RUNNER_HOME, REGISTER_DIR, '.lock');
-}
-
-export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS, strict = false } = {}) {
-  const path = lockPath(root);
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    let fd = null;
-    try {
-      fd = openSync(path, 'wx');
-      writeSync(fd, String(process.pid));
-      closeSync(fd);
-      break;
-    } catch (error) {
-      if (error?.code === 'ENOENT') {
-        // The directory is not there yet: the first lock makes it.
-        try { mkdirSync(dirname(path), { recursive: true }); } catch (mkdirError) { if (strict) throw mkdirError; break; }
-        continue;
-      }
-      if (error?.code !== 'EEXIST') { if (strict) throw error; break; }
-      const holder = Number(realRead(path));
-      if (!alive(holder)) { try { rmSync(path, { force: true }); } catch { /* raced */ } continue; }
-      if (Date.now() > deadline) {
-        if (strict) throw new Error(`register is being written by pid ${holder} — try again`);
-        break;
-      }
-      sleepSync(LOCK_POLL_MS);
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    try { if (Number(realRead(path)) === process.pid) rmSync(path, { force: true }); } catch { /* gone */ }
-  }
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function pidAlive(pid) {
-  const n = Number(pid);
-  if (!Number.isInteger(n) || n <= 0) return false;
-  try { process.kill(n, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
-}
+/** The lock moved to `runner-lock.js`; re-exported for this module's remaining callers. */
+export { LOCK_WAIT_MS, lockPath, realLock };

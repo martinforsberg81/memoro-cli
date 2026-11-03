@@ -70,7 +70,6 @@ import { regenerateDerived } from './repo-derived.js';
 import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
-import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
@@ -621,16 +620,6 @@ export async function runGate({
       if (twice) {
         return finish('project-log', `project_log.md carries the same row twice: ${twice.date} ${twice.programme} ${twice.project} — delete the copy and push`);
       }
-    }
-
-    // A plan file in the candidate's tree. Plans live under `~/mc/programs/`
-    // since ruling 48 and no repository holds one, so this is a ratchet: the
-    // pull request that brings one back is the one turned red. A git that
-    // fails here does not refuse; the suite still decides.
-    const listing = await askGit(lsTreeArgs('HEAD'), { cwd: headDir });
-    const planFile = listing.status === 0 ? plansInTree(listing.stdout)[0] : undefined;
-    if (planFile) {
-      return finish('plan-in-repo', `${planFile.path} is a plan file — plans live under ~/mc/programs/ (mc project new); delete it from the branch and push`);
     }
 
     // The tree the candidate resolves through, made to match the candidate.
@@ -1321,8 +1310,6 @@ export function verdictFor(report) {
   if (report.stopped_at === 'derived-outside') return 'red';
   // So is a project log row its tree carries twice.
   if (report.stopped_at === 'project-log') return 'red';
-  // And a plan file the tree carries: plans live under ~/mc/programs/.
-  if (report.stopped_at === 'plan-in-repo') return 'red';
   // A file killed from outside the round is measured again, not judged.
   if (report.stopped_at === 'file-killed') return 'stopped';
   // Nor is a red that passes alone on the base and on the candidate.

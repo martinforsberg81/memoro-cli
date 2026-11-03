@@ -107,7 +107,7 @@ export function parsePlanFrontmatter(text) {
  * Asked of the tree rather than derived from the plans, because a programme
  * outlives its projects. `mc run` archives a project directory the round its
  * plan says done, so a programme whose work is finished for now holds only its
- * own document and its rulings — no PLAN.json anywhere under it — and
+ * own document and its rulings — no plan anywhere under it — and
  * `listPlans` cannot see it at all. It is still a programme, and still the
  * place the next piece of that work belongs (`mc plan`).
  */

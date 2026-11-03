@@ -15,7 +15,6 @@
 import { spawnSync } from 'node:child_process';
 
 import { measureDocs } from './docs-measure.js';
-import { isRepoPlanPath } from './plan-source.js';
 
 export const DOCS_PREFIX = 'docs/';
 /**
@@ -84,7 +83,6 @@ export async function runDocsMerge({
   report.head = head;
   if (!head) return finish('read', `gh gave no head for #${pr}`);
   report.pr = { number: info.number, title: info.title, base: info.baseRefName };
-  // The branch and the body name the step the verb books the landing on.
   report.branch = info.headRefName || null;
   report.body = info.body || null;
   report.files = (info.files || []).map((f) => f.path);
@@ -94,10 +92,6 @@ export async function runDocsMerge({
   if (outside) return finish('not-docs', `#${pr} touches ${outside} — outside ${DOCS_PREFIX}, so this is the gate's, not --docs'`);
   const script = firstScript(report.files);
   if (script) return finish('script', `#${pr} carries ${script} — a script is not a document; land it through the gate: mc merge <repo> ${pr}`);
-  // The same objects as report.files, with their line counts: a file that only
-  // removes lines (a plan taken out) lands; one that adds them does not.
-  const plan = (info.files || []).find((f) => isRepoPlanPath(f.path) && f.additions > 0);
-  if (plan) return finish('plan', `#${pr} writes ${plan.path} — a plan is written with mc project new … and lives under ~/mc/programs/, never in a repository`);
   if (!report.files.length) return finish('empty', `#${pr} changes no files`);
 
   // GitHub reports UNKNOWN for a few seconds after a push; merging then

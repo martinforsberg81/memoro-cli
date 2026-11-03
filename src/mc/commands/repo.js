@@ -20,12 +20,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
-import { criteriaDoor } from '../merge-boundary.js';
 import { followMerge } from '../merge-watch.js';
-import { stepForMerge } from '../merge-step.js';
-import { projectForBranch } from '../project-prs.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
-import { listEntries } from '../register.js';
 import { workRoot } from '../paths.js';
 import { tryGit } from '../git.js';
 import { painter } from '../status-render.js';
@@ -373,10 +369,7 @@ function doorRefusal({ pr, mergeable, head, worktreeBranch, localHead, remoteHea
 
 /**
  * `mc merge <repo> <pr>`, past the door: the pull request handed to the
- * merger (`merger.js`), and the caller told where it stands. The step it is —
- * from `MC_STEP` in a runner session's environment, else from the branch
- * (merge-step.js) — is `landing` in the register; the merger writes `done`,
- * or sends a red back as `ready` for the step's next session. Exit 0: the
+ * merger (`merger.js`), and the caller told where it stands. Exit 0: the
  * pull request is queued, which is all this call can know.
  */
 async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps }) {
@@ -410,38 +403,10 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
     stderr.write(`${refusal}\n`);
     return 1;
   }
-  const step = stepForMerge({ env, head, entries: listEntries(root, io) });
-  // A step that started on top of one still landing (ruling 30, A): the
-  // merger lands it after that one, which the job names as its parent. Once
-  // that one is done, the pull request stands on main alone.
-  const recorded = step ? step.entry.steps[step.index]?.stacked_on || null : null;
-  const stacked = recorded && step.entry.steps[recorded.index]?.status !== 'done' ? recorded : null;
-  const parent = stacked ? { project: step.project, index: stacked.index, pr: stacked.pr, sha: stacked.sha } : null;
-
-  // The plan's last step lands only with every success criterion met
-  // (Martin, 2026-10-18) — `criteriaDoor`.
-  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, root, env,
-    step: step ? { project: step.project, index: step.index } : null });
-  if (door.checked && !door.ok) {
-    const now = deps.now ? deps.now() : new Date();
-    recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
-    recordRound({
-      ok: false,
-      stopped_at: door.stop || 'unmet-criteria',
-      reason: door.problems.join('; '),
-      repo: repoPath,
-      pr: { number: opts.pr },
-      started_at: now.toISOString(),
-      finished_at: now.toISOString(),
-    }, { mode });
-    for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
-    return 1;
-  }
-
   let queued;
   try {
     queued = queueMerge({
-      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent,
+      root, repo, repoPath, pr: opts.pr, branch: head, holder,
       now: deps.now ? deps.now() : new Date(), env, ...io,
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });
@@ -453,7 +418,6 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   if (opts.json) {
     stdout.write(`${JSON.stringify({
       queued: true, repo, pr: Number(opts.pr), place, merger_pid: merger?.pid ?? null,
-      step: step ? { project: step.project, index: step.index } : null,
     }, null, 2)}\n`);
     return 0;
   }
@@ -463,11 +427,6 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   stdout.write(`mc: #${opts.pr} is queued for the merger — ${where}\n`);
   if (merger?.pid) stdout.write(`mc: the merger (pid ${merger.pid}${merger.started ? ', just started' : ''}) lands it; follow it in ${mergerLogPath(root)}\n`);
   else stdout.write(`mc: no merger could be started${merger?.error ? ` (${merger.error})` : ''} — the job waits in the queue for the next mc merge or runner round\n`);
-  if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session. Your work is over: end the session now — no gate, no watch, no summary\n`);
-  else if (head && projectForBranch(head, listEntries(root, io).map((entry) => entry.project))) {
-    stdout.write(`mc: ${head} is named after a project but is none of its steps' branches — landing it marks no step done\n`);
-  }
-  if (parent) stdout.write(`mc: it lands after #${parent.pr} (step ${parent.index + 1}), which it is built on\n`);
   return 0;
 }
 

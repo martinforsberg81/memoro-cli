@@ -89,8 +89,8 @@ export function log(event, fields = {}) {
  * An invocation reduced to what is safe to keep forever.
  *
  * The argument vector is the most useful thing to have when a command
- * misbehaved and the most dangerous thing to write down: `mc project send
- * <name> --note "<message>"` carries a person's words, and this file's whole promise is
+ * misbehaved and the most dangerous thing to write down: `mc goal log
+ * --comment "<message>"` carries a person's words, and this file's whole promise is
  * that it holds identifiers, paths, codes and counts and nothing else.
  *
  * So the rule is shape, not content. Flags are kept by NAME and their values

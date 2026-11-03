@@ -66,7 +66,7 @@ import {
 } from '../language-runs.js';
 import { workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
-import { realLock } from '../register.js';
+import { realLock } from '../runner-lock.js';
 import { currentHolder } from '../repo-lease.js';
 import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
 import {

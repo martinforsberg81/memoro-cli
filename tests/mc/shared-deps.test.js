@@ -23,7 +23,6 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { sharedDepsLockPath, sharedDepsManifestPath, sharedDepsPath } from '../../src/mc/paths.js';
-import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
 import { ATTACHED_MARK, INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureSharedDeps, sharedDepsManifest } from '../../src/mc/shared-deps.js';
@@ -269,11 +268,6 @@ describe('the tree is not a piece of work', () => {
 
   it('is not on the page', () => {
     assert.deepEqual(areasWithCheckout(work).map((area) => area.name), ['alpha']);
-  });
-
-  it('is not a workarea to the runner', () => {
-    const runner = createRunner({ deps: { ...realDeps(env), log: () => {}, tmuxHas: () => false } });
-    assert.deepEqual(runner.workareas(), ['alpha']);
   });
 });
 

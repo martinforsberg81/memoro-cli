@@ -11,9 +11,7 @@
  * that does not parse is reported with its problems, never skipped.
  *
  * The readers take `list` and `read` as arguments, so the tests use a file
- * model; `programsPlans` in `plan-source.js` works the same way. It skips a
- * programme's `goals/` directory on its own: no `PLAN.json` sits directly
- * under it.
+ * model.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -107,7 +105,7 @@ export function parsePrRef(text) {
 /**
  * What is wrong with a GOAL.json's value, field by field — everything, not the
  * first thing. `success_criteria` takes at least one criterion, each with a
- * `check`, as PLAN.json's does (`criteria.js`); `draft` lets a goal that has no
+ * `check` (`criteria.js`); `draft` lets a goal that has no
  * criterion yet through — `mc goal new`'s skeleton, filled by `mc goal
  * criterion add` — and nothing else. A goal with none is not started by the
  * runner (`nextGoal`) and cannot go to review.

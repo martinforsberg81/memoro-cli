@@ -116,7 +116,7 @@ export function appendRow(text, row) {
  * The summary cell: what the project was last doing, which for a plan that
  * reached `done` is what it finished.
  *
- * In a `PLAN.json` that is the last step's title — the steps are the record,
+ * In a JSON plan that is the last step's title — the steps are the record,
  * and the last one is where the project got to. A `PLAN.md` still on the old
  * shape answers with its `next:`, which was the one line written to be read on
  * its own; that arm goes when the last plan is migrated.

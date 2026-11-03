@@ -28,9 +28,7 @@
  * after its work is done is a turn for nothing). A session's publish was
  * always followed by that `mc merge`, one model turn later, to read one line.
  * Not with `--no-merge`, not with `--json` (a script decides). Nor when GitHub does not yet hold
- * the head that was pushed — `mc merge` would refuse it at the door. In a
- * branch flow a step before the review is booked built instead, and queues
- * nothing (`bookBuilt`).
+ * the head that was pushed — `mc merge` would refuse it at the door.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -40,11 +38,6 @@ import { run as runGit, tryGit } from '../git.js';
 import { addPr, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { programsHome } from '../paths.js';
-import { projectPlan } from '../merge-boundary.js';
-import { builtPatch } from '../merge-step.js';
-import { branchFlow } from '../plan-schema.js';
-import { workRoot } from '../paths.js';
-import { parseStepEnv, updateStep } from '../register.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
@@ -159,35 +152,7 @@ export async function run(argv, deps = {}) {
   const queue = !flags['no-merge'] && held;
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
   if (!queue) return 0;
-  const built = bookBuilt({ branch, number: pr.number, localHead, deps, stdout, stderr });
-  if (built !== null) return built;
   return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
-}
-
-/**
- * A step before a branch flow's review is `built`, not landed: its work stands
- * on the project's branch, in the project's one pull request, and the review
- * step's landing makes it `done`. Only a runner's session names its step
- * (`MC_STEP`); a plan that cannot be read, or no step, is queued as before.
- * Returns the exit code when the step was booked, else null.
- */
-function bookBuilt({ branch, number, localHead, deps, stdout, stderr }) {
-  const env = deps.env || process.env;
-  const told = parseStepEnv(env.MC_STEP);
-  if (!told) return null;
-  let found = null;
-  try { found = (deps.projectPlan || projectPlan)({ project: told.project }); } catch { return null; }
-  if (!found || !branchFlow(found.plan) || told.index >= found.plan.steps.length - 1) return null;
-  const root = deps.root || workRoot(env);
-  const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
-  try {
-    (deps.updateStep || updateStep)({ root, project: told.project, index: told.index, patch: builtPatch({ pr: number, branch, sha: localHead, now: stamp }), now: stamp });
-  } catch (error) {
-    stderr.write(`mc: ${told.project} step ${told.index + 1} is not booked built (${error?.message || error}) — #${number} is open and nothing is queued\n`);
-    return 1;
-  }
-  stdout.write(`mc: built — step ${told.index + 1} stands on ${branch} at ${localHead.slice(0, 7)} in #${number}; the next step continues on this branch. Your work is over.\n`);
-  return 0;
 }
 
 /**

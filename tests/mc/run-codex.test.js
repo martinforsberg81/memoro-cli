@@ -6,29 +6,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, realDeps, runLoop } from '../../src/mc/run.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 /**
- * A codex step, end to end, with a stub codex.
+ * A codex goal session, end to end, with a stub codex.
  *
  * Every other runner test drives `deps` on fakes: nothing is spawned and the
  * launch is a table. This one is the opposite — real `realDeps`, a real git
- * repository with a real origin, a real worktree whose `.git` is a file
+ * repository with a real origin, a real goal worktree whose `.git` is a file
  * pointing outside it, and a real process spawned for the session. Only the
  * three binaries on PATH are not real.
  *
- * `codex` is a stub because codex is not installed on this machine, which is
- * the whole reason step 3 of `docs/project/mc/mc-run/PLAN.md` could not be
- * measured against the real CLI. What the stub does prove is everything on
- * mc's side of the boundary: that `tool: codex` in a plan's frontmatter
- * reaches `resolveLaunch`, that the argument list mc builds is the one the
- * process is started with, that the event stream codex answers in is read
- * into the usage columns, and that a `codex` step lands in runs.tsv and in
- * runner.log. What it cannot prove is that the real codex accepts those
- * arguments — that needs codex installed, and is said so in the plan.
+ * `codex` is a stub because codex is not installed on this machine. What the
+ * stub does prove is everything on mc's side of the boundary: that a goal's
+ * class routed to codex reaches `resolveLaunch`, that the argument list mc
+ * builds is the one the process is started with, that the event stream codex
+ * answers in is read into the usage columns, and that the session lands in
+ * runs.tsv and in runner.log. What it cannot prove is that the real codex
+ * accepts those arguments — that needs codex installed.
  */
 
-// Arguments are recorded one per record and not one per line: the prompt is
-// a whole PLAN.json and has newlines of its own.
+// Arguments are recorded one per record and not one per line: the prompt has
+// newlines of its own.
 const ARG_SEP = '<<mc-arg>>\n';
 
 // It writes beside the bin it is reached from: `<base>/codex-argv.txt`.
@@ -41,43 +40,6 @@ echo '{"type":"item.completed","item":{"type":"agent_message"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":900,"output_tokens":340}}'
 exit 0
 `;
-
-const PLAN = {
-  "schema": "mc-plan",
-  "version": 1,
-  "goal": [
-    "The one step runs through the codex adapter."
-  ],
-  "contract": [
-    "The step runs on codex."
-  ],
-  "out_of_scope": [
-    "Everything else."
-  ],
-  "success_criteria": [
-    {
-      "met": false,
-      "criterion": "The step ran.",
-      "check": "runs.tsv holds its row."
-    }
-  ],
-  "documents": [],
-  "runner": {
-    "tool": "codex"
-  },
-  "steps": [
-    {
-      "title": "The one step",
-      "status": "ready",
-      "done_when": "the row is written",
-      "instruction": [
-        "Do the one step."
-      ],
-      "pr": null,
-      "blocked_by": null
-    }
-  ]
-};
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, '-c', 'user.email=t@example.com', '-c', 'user.name=T', ...args], { encoding: 'utf8' });
@@ -105,10 +67,12 @@ function stub(dir, name) {
 }
 
 /**
- * The world the runner is started in: a stub codex, a repository with one
- * ready plan on its origin/main, and a workarea that is a real worktree of it.
+ * The world the runner is started in: a stub codex, a repository with an
+ * origin, and one open goal of class `fast` under the work root's
+ * `programs/mc/goals/cx/`, whose worktree is a real worktree of it on
+ * `goal/cx`.
  */
-function codexWorld(t, plan = PLAN) {
+function codexWorld(t) {
   const base = mkdtempSync(join(tmpdir(), 'mc-run-codex-'));
   const bin = join(base, 'bin');
   const reposHome = join(base, 'repos');
@@ -118,28 +82,41 @@ function codexWorld(t, plan = PLAN) {
   const argvFile = join(base, 'codex-argv.txt');
   for (const dir of [bin, reposHome, work, join(base, 'origin')]) mkdirSync(dir, { recursive: true });
 
-  // The three binaries the runner reaches for. `gh` answers nothing, so the
-  // step finds no PR and the row's pr column is `-`; `tmux` says no session.
+  // The three binaries the runner reaches for. `gh` answers nothing; `tmux`
+  // says no session.
   stub(bin, 'codex');
   stub(bin, 'gh');
   stub(bin, 'tmux');
 
-  // A repository with one ready plan on origin/main, and a workarea that is
-  // a real worktree of it — so the session's cwd has a `.git` file pointing
-  // into `${repo}/.git/worktrees/cx`, exactly as a workarea does.
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
   execFileSync('git', ['init', '-q', '-b', 'main', repo]);
   writeFileSync(join(repo, 'README.md'), '# memoro-cli\n');
   git(repo, 'add', '-A');
   git(repo, 'commit', '-qm', 'readme');
-  // The plan is under the work root's programs/, naming its repository.
-  mkdirSync(join(work, 'programs', 'mc', 'cx'), { recursive: true });
-  writeFileSync(join(work, 'programs', 'mc', 'cx', 'PLAN.json'), JSON.stringify({ ...plan, repo: 'memoro-cli' }, null, 2));
   git(repo, 'remote', 'add', 'origin', origin);
   git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'fetch', '-q', 'origin');
-  git(repo, 'worktree', 'add', '-q', '-b', 'cx', join(work, 'cx', 'memoro-cli'), 'origin/main');
-  assert.match(readFileSync(join(work, 'cx', 'memoro-cli', '.git'), 'utf8'), /gitdir: .*\/\.git\/worktrees\//u);
+  const dir = join(work, 'programs', 'mc', 'goals', 'cx');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'open', repos: ['memoro-cli'], class: 'fast', title: 'cx' }));
+  writeFileSync(join(dir, 'LOG.md'), '');
+  const worktree = join(dir, 'memoro-cli');
+  git(repo, 'worktree', 'add', '-q', '-b', 'goal/cx', worktree, 'origin/main');
+  assert.match(readFileSync(join(worktree, '.git'), 'utf8'), /gitdir: .*\/\.git\/worktrees\//u);
+
+  // Claude refused for an hour, codex seen with room: the default catalog puts
+  // claude first for `fast`, so the goal runs on codex.
+  const now = Date.now();
+  const later = new Date(now + 3 * 3600_000).toISOString();
+  mkdirSync(join(work, 'runner'), { recursive: true });
+  writeFileSync(join(work, 'runner', 'model-capacity.json'), JSON.stringify({
+    schema: 'mc-model-capacity',
+    version: 1,
+    providers: {
+      claude: { observed_at: new Date(now).toISOString(), windows: { five_hour: { fraction_used: 0.1, resets_at: later }, seven_day: { fraction_used: 0.1, resets_at: later } }, models: null, refusal_until: new Date(now + 3600_000).toISOString(), failure: null },
+      codex: { observed_at: new Date(now).toISOString(), windows: { primary: { fraction_used: 0.2, resets_at: later }, secondary: null }, models: [{ id: 'gpt-6-luna', efforts: ['high'] }], refusal_until: null, failure: null },
+    },
+  }));
 
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, MC_WORK_ROOT: work, MC_REPOS_HOME: reposHome };
   // `resolveLaunch` finds codex with `which -a codex`, which reads the
@@ -148,40 +125,40 @@ function codexWorld(t, plan = PLAN) {
   process.env.PATH = env.PATH;
   t.after(() => { process.env.PATH = realPath; });
 
-  return { env, work, repo, argvFile, worktree: join(work, 'cx', 'memoro-cli') };
+  return { env, work, argvFile, worktree };
 }
 
-test('a codex step runs through the adapter and lands in runs.tsv', async (t) => {
-  const { env, work, argvFile } = codexWorld(t);
-  // The disk and the memory are the host's: a full disk (2026-10-10, 1.7 GiB
-  // free) or a loaded machine would refuse the step this test is about, so
-  // both read as room enough.
+test('a fast goal on a refused claude runs on codex through the adapter, and lands in runs.tsv and runner.log', async (t) => {
+  const { env, work, argvFile, worktree } = codexWorld(t);
+  // The disk and the memory are the host's: a full disk or a loaded machine
+  // would refuse the session this test is about, so both read as room enough.
   const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
-  const code = await runLoop({ once: true, merge: false, deps });
-  assert.equal(code, 0);
+  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
 
-  // The row: a codex step, exit 0, the usage the event stream carried.
+  // The row: a goal's build, exit 0, the usage the event stream carried, and
+  // what it was routed to.
   const rows = readFileSync(join(work, 'runner', 'log', 'runs.tsv'), 'utf8').trim().split('\n');
   assert.equal(rows.length, 2, rows.join('\n'));
-  const [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note] = rows[1].split('\t');
+  const cells = rows[1].split('\t');
+  const [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note] = cells;
   assert.match(ts, /^\d{4}-\d{2}-\d{2}T/u);
   assert.deepEqual(
     { name, kind, exit, pr, turns, input, output, cacheRead, cacheWrite, session, note },
-    { name: 'cx', kind: 'build-project', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,failed' },
+    { name: 'goal:mc/cx', kind: 'build-goal', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,no-log' },
   );
   assert.match(seconds, /^\d+$/u);
+  assert.deepEqual(cells.slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan']);
 
   // The launch, in runner.log where a night is read back from.
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: build starting \(codex own default model, no check-in, no stall guard\)/u);
-  assert.match(log, /cx: build done rc=0 \d+s pr=- turns=- note=success/u);
+  assert.match(log, /goal:mc\/cx: build starting \(codex gpt-6-luna · effort high, no check-in, no stall guard\) · class fast: known \(codex has 80 % headroom\)/u);
+  assert.match(log, /goal:mc\/cx: build done rc=0 \d+s turns=- note=success,no-log/u);
 
   // The argument list the process was actually started with.
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 4), ['exec', '--json', '--sandbox', 'danger-full-access']);
-  // No model: the plan names none, and `opus` is claude's word.
-  assert.equal(argv.includes('-m'), false);
-  assert.equal(argv.includes('opus'), false);
+  assert.deepEqual(argv.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=high']);
+  assert.equal(argv.includes('--effort'), false);
+  assert.equal(argv.includes('--advisor'), false);
   // The shared text and the role overlay ride on codex's own instructions
   // channel, and the prompt is the last positional.
   // `-c project_doc_max_bytes=0` comes first: the session loads no AGENTS.md.
@@ -194,116 +171,6 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   assert.ok(at < argv.indexOf(instructions), 'the switch rides before the instructions');
   assert.match(instructions, /^instructions="/u);
   assert.match(instructions, /A turn is the unit of cost/u);
-  assert.match(argv.at(-1), /You are working in the `cx` workarea of memoro-cli/u);
-  // The prompt names the step by index and repeats its done_when: that
-  // sentence is what the session verifies before it stops.
-  assert.match(argv.at(-1), /Your step is `steps\[0\]` — 1, "The one step"/u);
-  assert.match(argv.at(-1), /Done when: the row is written/u);
-});
-
-test('an interrupted codex step is resumed through `codex exec resume`, its workarea untouched', async (t) => {
-  const { env, work, repo, argvFile, worktree } = codexWorld(t);
-  // Main moves on after the session died: a resume must not merge it in.
-  writeFileSync(join(repo, 'later.txt'), 'later\n');
-  git(repo, 'add', '-A');
-  git(repo, 'commit', '-qm', 'later on main');
-  git(repo, 'push', '-q', 'origin', 'main');
-  // What the dead session left: a modified file and an untracked one.
-  writeFileSync(join(worktree, 'notes.md'), 'half done\n');
-  writeFileSync(join(worktree, 'README.md'), 'edited\n');
-  const head = git(worktree, 'rev-parse', 'HEAD').trim();
-  const status = git(worktree, 'status', '--porcelain');
-  mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
-  writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
-    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: join(work, 'programs', 'mc', 'cx', 'PLAN.json'),
-    steps: [{
-      status: 'ready', branch: 'cx',
-      interrupted: {
-        at: '2026-10-10T08:00:00Z', session_id: '019a0c0d-0000-7000-8000-00000000c0de', tool: 'codex', model: null,
-        log: null, last_activity: '2026-10-10T07:55:00Z', context_tokens: 4000, branch: 'cx', count: 1,
-      },
-    }],
-  }));
-
-  const lines = [];
-  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: (line) => lines.push(line) };
-  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
-
-  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 3), ['exec', 'resume', '--json']);
-  assert.equal(argv.includes('--sandbox'), false, '`codex exec resume` has no --sandbox');
-  assert.equal(argv[argv.indexOf('-c') + 1], 'sandbox_mode="danger-full-access"');
-  assert.equal(argv.at(-2), '019a0c0d-0000-7000-8000-00000000c0de');
-  assert.match(argv.at(-1), /cut off at 2026-10-10T07:55:00Z/u);
-  assert.match(argv.at(-1), /Run `git status` first/u);
-  assert.match(lines.join('\n'), /cx: resuming codex session 019a0c0d-0000-7000-8000-00000000c0de \(cold, 4 000 tokens\)/u);
-
-  // The tree as the session left it: same commit, same changes, nothing of main's.
-  assert.equal(git(worktree, 'rev-parse', 'HEAD').trim(), head);
-  assert.equal(git(worktree, 'status', '--porcelain'), status);
-  assert.equal(git(worktree, 'branch', '--show-current').trim(), 'cx');
-});
-
-test('a codex step on gpt-6.1-sol at high effort is launched with its model and effort, and no claude flag', async (t) => {
-  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6.1-sol', effort: 'high' } }] };
-  const { env, work, argvFile } = codexWorld(t, plan);
-  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
-  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
-
-  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 8), ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=high']);
-  assert.equal(argv.includes('--effort'), false);
-  assert.equal(argv.includes('--advisor'), false);
-  const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: build starting \(codex gpt-6\.1-sol · effort high, no check-in, no stall guard\)/u);
-});
-
-test('a fast step on a refused claude runs on codex: the row and the log name the class, the route and the billing', async (t) => {
-  // The plan names a class, not a tool. The default catalog puts claude first, and claude is refused for an hour.
-  const { env, work, argvFile } = codexWorld(t, { ...PLAN, runner: undefined, steps: [{ ...PLAN.steps[0], runner: { model: 'fast' } }] });
-  const now = Date.now();
-  const later = new Date(now + 3 * 3600_000).toISOString();
-  const snapshot = {
-    schema: 'mc-model-capacity',
-    version: 1,
-    providers: {
-      claude: { observed_at: new Date(now).toISOString(), windows: { five_hour: { fraction_used: 0.1, resets_at: later }, seven_day: { fraction_used: 0.1, resets_at: later } }, models: null, refusal_until: new Date(now + 3600_000).toISOString(), failure: null },
-      codex: { observed_at: new Date(now).toISOString(), windows: { primary: { fraction_used: 0.2, resets_at: later }, secondary: null }, models: [{ id: 'gpt-6-luna', efforts: ['high'] }], refusal_until: null, failure: null },
-    },
-  };
-  mkdirSync(join(work, 'runner'), { recursive: true });
-  writeFileSync(join(work, 'runner', 'model-capacity.json'), JSON.stringify(snapshot));
-
-  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
-  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
-
-  const rows = readFileSync(join(work, 'runner', 'log', 'runs.tsv'), 'utf8').trim().split('\n');
-  assert.deepEqual(rows[1].split('\t').slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan']);
-  const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: build starting \(codex gpt-6-luna · effort high, no check-in, no stall guard\) · class fast: known \(codex has 80 % headroom\)/u);
-  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(4, 6), ['-m', 'gpt-6-luna']);
-});
-
-test('an interrupted codex step on gpt-6-luna at medium effort resumes with the same model and effort',async (t) => {
-  const plan = { ...PLAN, steps: [{ ...PLAN.steps[0], runner: { model: 'gpt-6-luna', effort: 'medium' } }] };
-  const { env, work, argvFile } = codexWorld(t, plan);
-  mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
-  writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
-    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: join(work, 'programs', 'mc', 'cx', 'PLAN.json'),
-    steps: [{
-      status: 'ready', branch: 'cx',
-      interrupted: {
-        at: '2026-10-10T08:00:00Z', session_id: '019a0c0d-0000-7000-8000-00000000c0de', tool: 'codex', model: null,
-        log: null, last_activity: '2026-10-10T07:55:00Z', context_tokens: 4000, branch: 'cx', count: 1,
-      },
-    }],
-  }));
-  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
-  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
-
-  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
-  assert.deepEqual(argv.slice(0, 9), ['exec', 'resume', '--json', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=medium', '-c', 'sandbox_mode="danger-full-access"']);
-  assert.equal(argv.includes('--effort'), false);
-  assert.equal(argv.at(-2), '019a0c0d-0000-7000-8000-00000000c0de');
+  assert.ok(argv.at(-1).startsWith(`You are a session on the goal mc/cx. Its directory is \`${join(work, 'programs', 'mc', 'goals', 'cx')}\``), argv.at(-1));
+  assert.ok(argv.at(-1).includes(`your worktree is \`${worktree}\`, on branch \`goal/cx\``));
 });

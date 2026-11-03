@@ -1,8 +1,8 @@
 /**
- * `criteria.js` — the parts PLAN.json (`plan-schema.js`) and GOAL.json
- * (`goals.js`) share: success criteria, each with a check and a `met`, the
- * documents a reader is sent to, and the prose fields as arrays of paragraphs.
- * One definition, so a criterion means the same in both.
+ * `criteria.js` — the parts of a GOAL.json (`goals.js`) a plan's schema
+ * (`plan-schema.js`) shares: success criteria, each with a check and a `met`,
+ * the documents a reader is sent to, and the prose fields as arrays of
+ * paragraphs. One definition, so a criterion means the same in both.
  */
 
 /** The keys a criterion carries. */

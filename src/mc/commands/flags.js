@@ -71,7 +71,7 @@ function key(flag) {
 /**
  * The part of a scan spec a subcommand accepts: `names` from `spec`, each kept
  * in its own kind. For a verb that scans once and then refuses, per
- * subcommand, every flag but its own (`mc project`, `mc goal`): its `ROUTES`
+ * subcommand, every flag but its own (`mc goal`): its `ROUTES`
  * are built from the lists it refuses by.
  */
 export function only(spec, names) {

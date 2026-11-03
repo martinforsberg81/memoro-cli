@@ -1,7 +1,7 @@
 /**
  * `docs/technical/mc-run.md` is the runner written down: it exists so somebody
- * who has never read run.js can say what a round does, what a step is, what
- * the two lanes share and what the runner writes. That only holds while the
+ * who has never read run.js can say what a lane does, what the lanes share
+ * and what the runner writes. That only holds while the
  * numbers in it are the numbers in the code, and a doc that names a default
  * goes stale silently.
  *
@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 
 import { commandUsage } from '../../src/mc/command-help.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
-import { CLAUDE_MODELS, CODEX_MODELS, STEP_STATUSES } from '../../src/mc/plan-schema.js';
+import { CLAUDE_MODELS, CODEX_MODELS } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
@@ -106,23 +106,11 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.doesNotMatch(DOC, /`UPDATE` has no other writer/u);
   });
 
-  it('says where a step that did not land stands — the register, not a held file — and keeps the argument list current', () => {
-    const register = /### The register\n([\s\S]*?)\n## /u.exec(DOC);
-    assert.ok(register, 'the section a reader looks in for where state lives is gone');
-    assert.match(register[1], /`~\/mc\/runner\/projects\//u);
-    assert.match(register[1], /`failed`/u);
-    assert.match(register[1], /`mc step ready`/u);
-    assert.deepEqual([...STEP_STATUSES], ['ready', 'running', 'landing', 'done', 'failed', 'blocked', 'built']);
-    assert.ok(DOC.includes(`--autocompact ${AUTOCOMPACT_TOKENS}`), 'the argument list in the doc no longer shows the window');
-    assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
-  });
-
   it('states the flag defaults the command parses', () => {
     const defaults = parseRunArgs([]);
     assert.equal(defaults.once, false);
     assert.equal(defaults.merge, true);
     assert.equal(defaults.idleSleep, 600);
-    assert.match(DOC, /takes the next step of the next project until STOP/u);
     assert.match(DOC, /600 s by default/u);
     assert.match(DOC, /`--no-merge`\s+leaves the pull requests open/u);
     // The flag is gone and the doc says so, in the same words the verb answers

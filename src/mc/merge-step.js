@@ -23,48 +23,9 @@
  * Pure over what it is handed; the verb and the merger do the reading.
  */
 import { redHandoff } from './merge-red.js';
-import { projectForBranch } from './project-prs.js';
-import { currentIndex, parseStepEnv } from './register.js';
 
 /** The stops that mean "somebody else is measuring; wait": the gate lock and the repository lease. */
 export const WAIT_STOPS = Object.freeze(['busy', 'lease']);
-
-/**
- * The step this pull request is, or null. `entries` is the whole register;
- * `head` is the pull request's branch as GitHub names it.
- */
-export function stepForMerge({ env = {}, head = null, entries = [] } = {}) {
-  const told = parseStepEnv(env.MC_STEP);
-  if (told) {
-    const entry = entries.find((item) => item.project === told.project) || null;
-    return entry && told.index < entry.steps.length ? { project: told.project, index: told.index, entry, from: 'MC_STEP' } : null;
-  }
-  if (!head) return null;
-  for (const entry of entries) {
-    // Built steps all stand on one branch; the one still to land is the one meant.
-    const index = entry.steps.findIndex((step) => step.branch === head && step.status !== 'done' && step.status !== 'built');
-    if (index >= 0) return { project: entry.project, index, entry, from: 'branch' };
-  }
-  const project = projectForBranch(head, entries.map((entry) => entry.project));
-  const entry = project ? entries.find((item) => item.project === project) : null;
-  if (!entry || !numberedRun(head, project)) return null;
-  const index = currentIndex(entry);
-  // A blocked step waits on a person, and only `mc step ready` brings it
-  // back: a fix landed under a branch named after the project
-  // (`photo-analysis-direct-envelope`, #13549) once booked itself as the
-  // blocked close-out and archived the project (2026-10-11).
-  if (index < 0 || entry.steps[index].status === 'blocked') return null;
-  return { project, index, entry, from: 'project' };
-}
-
-/**
- * `<project>` or `<project>-<n>`: the branches the runner names a project's
- * steps (`nextBranch`). Anything else named after a project is somebody's
- * own branch, not a step's.
- */
-function numberedRun(head, project) {
-  return head === project || (head.startsWith(`${project}-`) && /^\d+$/u.test(head.slice(project.length + 1)));
-}
 
 /**
  * What a pull request's body says it left undone: the text under a
