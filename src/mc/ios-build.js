@@ -28,7 +28,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync,
+  existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, normalize } from 'node:path';
@@ -562,7 +562,12 @@ export function atRev(argv, {
   const script = normalize(argv[1]);
   if (script.startsWith('..')) return { argv, cwd: checkout };
   if (git(repoPath, ['cat-file', '-e', `${rev}:${script}`]) === null) return { missing: `${script} is not on ${rev}` };
-  const dir = mkdtempSync(join(tmpdir(), 'mc-ios-script-'));
+  // The real path: on macOS tmpdir() is /var/folders/…, a symlink to
+  // /private/var/folders/…, and Node resolves a module's import.meta.url
+  // through it. memoro's scripts run main() only when import.meta.url equals
+  // pathToFileURL(argv[1]), so an unresolved path made every one of them
+  // exit 0 having printed nothing (mc asc status, 2026-11-03).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-ios-script-')));
   const tops = [...new Set([script.split('/')[0], ...paths.map((path) => normalize(path).split('/')[0])])]
     .filter((top) => top && !top.startsWith('..') && !isAbsolute(top));
   const why = tops.reduce((first, top) => first || exportTree(repoPath, rev, top, dir), null);

@@ -166,6 +166,27 @@ describe('the number from App Store Connect', () => {
     }
   });
 
+  it('runs a script that calls main() only when it is the entry point, as memoro\'s do', () => {
+    const { repo } = makeRepo();
+    writeFileSync(join(repo, 'scripts', 'list.mjs'), [
+      "import { pathToFileURL } from 'node:url';",
+      "if (import.meta.url === pathToFileURL(process.argv[1] || '').href) console.log('main ran');",
+      '',
+    ].join('\n'));
+    sh(repo, 'add', '-A');
+    sh(repo, 'commit', '-qm', 'main guards its entry point');
+    sh(repo, 'update-ref', 'refs/remotes/origin/main', sh(repo, 'rev-parse', 'HEAD'));
+
+    const command = atRev(DECLARATION.list_builds, { repoPath: repo, rev: 'origin/main' });
+    try {
+      const r = runSync(command.argv, { cwd: command.cwd });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(r.stdout.trim(), 'main ran');
+    } finally {
+      rmSync(command.dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a script the rev does not have', async () => {
     const asked = listBuilds({
       repoPath: '/repos/memoro', declaration: DECLARATION, rev: 'origin/main', run: fakeRun(), git: () => null,
