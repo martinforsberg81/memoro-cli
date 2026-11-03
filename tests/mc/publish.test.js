@@ -141,7 +141,7 @@ describe('mc publish', () => {
   describe('the goal a pull request carries (goal-lifecycle)', () => {
     const HOME = '/programs';
     const GDIR = `${HOME}/ios/goals/asc`;
-    const GOAL = goalJson({ status: 'review', repos: ['memoro', 'memoro-cli'], title: 'asc' });
+    const GOAL = goalJson({ stage: 'review', repos: ['memoro', 'memoro-cli'], title: 'asc' });
     /** A goal file model beside the publish fixture. */
     const withGoal = (over = {}) => {
       const f = fixture(over.fixture);
@@ -159,7 +159,7 @@ describe('mc publish', () => {
       const f = withGoal();
       assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
       assert.deepEqual(goalField(f.files[`${GDIR}/GOAL.json`], 'prs'), ['memoro#9']);
-      assert.match(f.files[`${GDIR}/LOG.md`], /· person · review\n\nDone: published memoro#9\n/u);
+      assert.match(f.files[`${GDIR}/LOG.md`], /· person · review · ready\n\nDone: published memoro#9\n/u);
       assert.match(f.out.stdout, /goal ios\/asc carries memoro#9 — done when every pull request it carries has landed\n/u);
       assert.deepEqual(f.out.merged, [['memoro', '9']]);
     });

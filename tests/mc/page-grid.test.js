@@ -31,9 +31,9 @@ function plan(project, { repo = 'memoro-cli', programme = 'mc', status = 'ready'
 }
 
 /** A goal as `programsGoals` reads it: a log of two sessions. */
-function goal(name, { repos = ['memoro-cli'], status = 'open' } = {}) {
-  const entry = (at, next) => ({ at, tool: 'claude-code', model: 'opus', status, done: 'x', comment: null, next });
-  return { programme: 'mc', goal: name, repos, status, after: [], problems: [],
+function goal(name, { repos = ['memoro-cli'], stage = 'build', status = 'ready' } = {}) {
+  const entry = (at, next) => ({ at, tool: 'claude-code', model: 'opus', stage, status, done: 'x', comment: null, next });
+  return { programme: 'mc', goal: name, repos, stage, status, problems: [],
     log: [entry('2026-11-03T10:00Z', 'first'), entry('2026-11-03T11:00Z', 'the next thing to do in this goal')] };
 }
 
@@ -117,7 +117,7 @@ describe('the grid', () => {
       const cells = rows.map((line) => [line.slice(col.kind.x, col.kind.x + col.kind.width).trim(),
         line.slice(col.state.x, col.state.x + col.state.width).trim(),
         line.slice(col.progress.x, col.progress.x + col.progress.width).trim()]);
-      assert.deepEqual(cells, [['project', 'ready', '1/3'], ['goal', 'open', '2 sess'], ['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
+      assert.deepEqual(cells, [['project', 'ready', '1/3'], ['goal', 'build', '2 sess'], ['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
     }
   });
 
@@ -150,7 +150,7 @@ describe('the grid', () => {
     const [group] = data.programmes.programmes;
     const fields = (row) => ({ name: row.name, repo: row.repo, state: row.state, progress: row.progress, prs: row.prs.map((pr) => pr.number) });
     assert.deepEqual(fields(group.projects[0]), { name: 'grid-project', repo: 'memoro-cli', state: 'ready', progress: '1/3', prs: [1101] });
-    assert.deepEqual(fields(group.goals[0]), { name: 'grid-goal', repo: 'memoro-cli', state: 'open', progress: '2 sess', prs: [1102] });
+    assert.deepEqual(fields(group.goals[0]), { name: 'grid-goal', repo: 'memoro-cli', state: 'build', progress: '2 sess', prs: [1102] });
     assert.deepEqual(fields(data.runner.sessions[0]), { name: 'lane-project', repo: 'memoro-cli', state: 'running', progress: '40 min', prs: [1103] });
     const [repo] = data.merges.repos.filter((one) => one.repo === 'memoro-cli');
     assert.deepEqual(fields(repo.waiting[0]), { name: 'merge-branch', repo: 'memoro-cli', state: 'queued', progress: '10 min', prs: [1104] });

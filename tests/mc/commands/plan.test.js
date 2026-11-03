@@ -62,7 +62,7 @@ describe('the plan role', () => {
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
     assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
-    assert.match(told, /Every status is yours to set/u);
+    assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /`blocked_by: plan-review`/u);
     assert.match(told, /not a runner area/u);
     for (const ban of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u]) {

@@ -47,7 +47,8 @@ export async function run(argv, deps = {}) {
     // the goal is shown, and that is the answer to the question asked.
     const goal = goalNamed(names[0], deps.env || process.env);
     if (goal) {
-      const state = goal.held ? `${goal.status}, phase ${goal.phase} — after phase ${goal.phase - 1}` : goal.status;
+      const where = goal.stage ? `${goal.stage} · ${goal.status}` : null;
+      const state = goal.held ? `${where}, phase ${goal.phase} — after phase ${goal.phase - 1}` : where;
       stderr.write(`${goal.goal} is a goal${state ? ` · ${state}` : ''} — mc goal show ${goal.programme}/${goal.goal}\n`);
       return 1;
     }

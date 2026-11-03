@@ -873,8 +873,8 @@ Four answers the merger gives without a person (ruling 37,
   The page's queue row and `mc merge watch` say `waits for <project> step
   <n>`.
 - **A red goes on at once.** A red on a step's pull request goes through
-  `redPatch` to the step's next session (ruling 30); a red on a goal's blocks
-  the goal, and the runner wakes plan for it. There is no mend (removed
+  `redPatch` to the step's next session (ruling 30); a red on a goal's keeps
+  it in `merging` for one plan session, and the next blocks it. There is no mend (removed
   2026-11-02, goal `headless-plan`): an entry an older merger left `mending`
   reads as `queued`.
 - **The page.** MERGES draws one queue per repository, with its counts and
@@ -1067,8 +1067,8 @@ the brief's *Held before merge* is *Failed steps*.
 **`mc run lanes <n>` is the total** — how many headless sessions the runner
 runs at once, across every repository and every kind of session (Martin,
 2026-11-02: *"Vi har enbart mc run lanes x (som blir totalt antal lanes för
-headless)."*). The runner runs three kinds: `plan` — of a blocked goal
-([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*), with no variant —
+headless)."*). The runner runs three kinds: `plan` — of a goal in `finish`, or in `merging` after a red
+([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*), with no variant —
 `build` — of a project's step (variant `project`) or of a goal (variant
 `goal`) — and `review`, of a project's review step or of a goal
 (`session-kind.js`). A lane is bound to
@@ -1115,13 +1115,14 @@ its own process, takes no slot here, and `mc run lanes` does not change it.
 
 `pickWork` (`lane-pick.js`) is asked once per pass, with everything that can
 start now on every repository — a project's next step by `nextFor`, a goal
-that is `open`, in `review`, or blocked and waiting on plan — already without
+in `build · ready`, `review · ready`, `finish · ready`, or `merging · ready` after a red
+([mc-goals.md](mc-goals.md) § *How the runner takes a goal*) — already without
 what another lane holds, and it answers one of them:
 
 1. **Finishing comes before starting.** The project the lane has just run
    goes on: a project holds its lane from its first step to its review, and
    the slot is kept between the two sessions. Then **a review or a plan
-   session before a build** (a plan session unblocks a goal), and **a
+   session before a build** (a plan session finishes a goal), and **a
    project's build before a goal's**.
 2. Within one rank, a step the API cut off goes first (its cache is warm,
    ruling 33), and then **the work that has waited longest**: the oldest
@@ -1628,7 +1629,7 @@ plan request, the next launch uses its API key through the local billing gateway
 This applies to every current MC session path: step, review, goal, plan, helper, and
 interactive sessions. An ordinary interactive `mc plan` still lets Martin
 choose the tool and model; billing follows that choice. A headless plan session
-on a blocked goal runs on the plan role's model and is billed as any other
+on a goal in finish or merging runs on opus at high effort and is billed as any other
 session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 

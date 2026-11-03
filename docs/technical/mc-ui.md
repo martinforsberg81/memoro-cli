@@ -567,8 +567,8 @@ A zero has no colour.
 A project's state is its plan's word, with one change: a `blocked` step whose
 blocker releases by itself — a time, a deploy, another project (ruling 35) — is
 `waiting`, because the runner lets it go. `blocked` is what waits on a decision
-or a workarea, which somebody has to open. A goal's state is its status, and
-`running` while a session is on it. A merge item's is its phase or where it
+or a workarea, which somebody has to open. A goal's state is its stage, and
+its status is the colour (below). A merge item's is its phase or where it
 waits; a lane's is `running` or `idle`.
 
 | state | colour |
@@ -577,6 +577,7 @@ waits; a lane's is `running` or `idle`.
 | `running` | green |
 | `landing` | green |
 | `review` | green |
+| `merging` | green |
 | `queued` | green |
 | `gate` | green |
 | `rebase` | green |
@@ -600,11 +601,15 @@ waits; a lane's is `running` or `idle`.
 A pull request's colour is its own flags' (`prTone`): green while the merger
 has it, red bold when it came back red, yellow bold once a day has passed with
 nothing on it, grey once it has landed (an idle queue's last), bold cyan
-otherwise. A goal's tail leads with `criteria <met>/<all>`, green once every
-one is met, then with what it waits on: `phase <n> — after phase <n-1>` in
-yellow for a goal in a phase its programme has not reached
-([mc-goals.md](mc-goals.md), *Phases*), `waits on plan` or `waits on a person`
-in red for a blocked one.
+otherwise. A goal's state cell is its stage, of `<stage> · <status>`
+([mc-goals.md](mc-goals.md)): `review` and `merging` are green; `build` and
+`finish` are green while a session is on them and grey otherwise; `plan`,
+`done` and `dropped` are grey; any stage of a `blocked` goal is red. A goal's
+tail leads with `criteria <met>/<all>`, green once every one is met, then with
+what it waits on: `phase <n> — after phase <n-1>` in yellow for a goal in a
+phase its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*),
+`blocked · waits on a person` in red for a blocked one. A `ready` goal says
+nothing more of its status.
 
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the

@@ -1636,7 +1636,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
 });
 
 
-describe('a goal\'s pull request (goals.js): done at landing, blocked on red, review again when its head moved', () => {
+describe('a goal\'s pull request (goals.js): done at landing; a red or a moved head stays in merging, the second blocked', () => {
   const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
   const GOAL_JOB = { repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 90, branch: 'goal/g', holder: { name: 'goal:mc/g' }, step: null, goal: GOAL, sha: 'aaa111' };
   /** `setGoal`, recorded: what the merger writes to GOAL.json and LOG.md. */
@@ -1663,24 +1663,31 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
     assert.equal(answer.landed, true);
     assert.equal(writes.length, 1);
     assert.equal(writes[0].dir, GOAL.dir);
-    assert.equal(writes[0].status, 'done');
+    assert.equal(writes[0].stage, 'done');
     assert.equal(writes[0].entry.tool, 'runner');
-    assert.equal(writes[0].entry.status, 'done');
     assert.equal(writes[0].entry.done, 'landed #90 as abc1234def');
     assert.equal(m.rows[0].name, 'goal:mc/g');
   });
 
-  it('red: the goal is blocked with a runner entry saying why, which wakes plan', async () => {
+  it('red: the goal stays in merging, ready for one plan session, with a runner entry saying why; a second red in merging blocks it', async () => {
     const { writes, setGoal } = goalWrites();
     const m = machine([red], { gh: headAt('aaa111'), setGoal });
     const [answer] = await landJob(GOAL_JOB, m.deps);
     assert.equal(answer.landed, false);
-    assert.equal(writes[0].status, 'blocked');
+    assert.deepEqual([writes[0].stage, writes[0].status], ['merging', 'ready']);
     assert.equal(writes[0].entry.done, 'merger answered red on #90');
-    assert.match(writes[0].entry.comment, /^red: 2 tests red: a › b — waits on plan$/u);
+    assert.match(writes[0].entry.comment, /^red: 2 tests red: a › b — one plan session takes it and queues it again$/u);
+
+    const second = goalWrites();
+    const log = [{ at: '2026-10-09T12:00Z', tool: 'runner', model: null, stage: 'merging', status: 'ready', done: 'merger answered red on #90', comment: null, next: null },
+      { at: '2026-10-09T12:30Z', tool: 'claude', model: 'opus', stage: 'merging', status: 'ready', done: 'fixed it', comment: null, next: null }];
+    const again = machine([red], { gh: headAt('aaa111'), setGoal: second.setGoal, goalsOf: () => [{ ...GOAL, stage: 'merging', status: 'ready', prs: [], log, problems: [] }] });
+    await landJob(GOAL_JOB, again.deps);
+    assert.deepEqual([second.writes[0].stage, second.writes[0].status], ['merging', 'blocked']);
+    assert.match(second.writes[0].entry.comment, /— the second in merging: waits on a person$/u);
   });
 
-  it('a head other than the reviewed one is not landed: no round, the goal back in review', async () => {
+  it('a head other than the reviewed one is not landed: no round, and the goal stays in merging — never back to review', async () => {
     const { writes, setGoal } = goalWrites();
     const m = machine([green], { gh: headAt('bbb222'), setGoal });
     const [answer] = await landJob(GOAL_JOB, m.deps);
@@ -1688,8 +1695,9 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
     assert.equal(answer.landed, false);
     assert.equal(answer.moved, true);
     assert.equal(answer.back, undefined);
-    assert.equal(writes[0].status, 'review');
-    assert.match(writes[0].entry.comment, /#90 is at bbb222, not aaa111, the head its review judged — reviewed again/u);
+    assert.deepEqual([writes[0].stage, writes[0].status], ['merging', 'ready']);
+    assert.equal(writes[0].entry.done, 'merger answered moved on #90');
+    assert.match(writes[0].entry.comment, /#90 is at bbb222, not aaa111, the head its review judged — one plan session takes it/u);
   });
 
   it('a push while the round runs is moved too, not back in line', async () => {
@@ -1708,7 +1716,7 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
     const [answer] = await landJob(GOAL_JOB, m.deps);
     assert.equal(answer.moved, true);
     assert.equal(answer.back, undefined);
-    assert.equal(writes[0].status, 'review');
+    assert.equal(writes[0].stage, 'merging');
   });
 
   it('serve: a moved goal job leaves the queue', async () => {
@@ -1731,7 +1739,7 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
 
 describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is told, whoever queued it', () => {
   const DIR = '/programs/ios/goals/asc';
-  const goalAt = (prs, status = 'review') => [{ programme: 'ios', goal: 'asc', dir: DIR, status, prs, problems: [] }];
+  const goalAt = (prs, stage = 'merging') => [{ programme: 'ios', goal: 'asc', dir: DIR, stage, status: 'ready', prs, log: [], problems: [] }];
   const PLAIN_JOB = { repo: 'memoro', repo_path: '/repos/memoro', pr: 14761, branch: 'fix-json', holder: { name: 'person' }, step: null, goal: null, sha: null };
   const record = () => {
     const sets = [];
@@ -1747,7 +1755,7 @@ describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is
     assert.equal(answer.landed, true);
     assert.equal(r.sets.length, 1);
     assert.equal(r.sets[0].dir, DIR);
-    assert.equal(r.sets[0].status, 'done');
+    assert.equal(r.sets[0].stage, 'done');
     assert.equal(r.sets[0].entry.done, 'landed #14761 as abc1234def');
   });
 
@@ -1757,20 +1765,27 @@ describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is
     await landJob(PLAIN_JOB, m.deps);
     assert.equal(r.sets.length, 0);
     assert.equal(r.notes.length, 1);
-    assert.equal(r.notes[0].entry.status, 'review', 'the heading keeps the goal\'s status');
+    assert.deepEqual([r.notes[0].entry.stage, r.notes[0].entry.status], ['merging', 'ready'], 'the heading keeps the goal\'s stage and status');
     assert.match(r.notes[0].entry.done, /^memoro#14761 landed #14761 as abc1234def$/u);
     assert.match(r.notes[0].entry.comment, /carries memoro-cli#1238 too — done when every one has landed or closed/u);
   });
 
-  it('red: the goal is blocked and waits on plan, as its own branch\'s red does', async () => {
+  it('red: the goal in merging stays there for one plan session, as its own branch\'s red does; one in another stage is told and does not move', async () => {
     const r = record();
     const m = machine([red], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }]) });
     await landJob(PLAIN_JOB, m.deps);
-    assert.equal(r.sets[0].status, 'blocked');
+    assert.deepEqual([r.sets[0].stage, r.sets[0].status], ['merging', 'ready']);
     assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+
+    const building = record();
+    const b = machine([red], { gh: openGh, setGoal: building.setGoal, noteGoal: building.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }], 'build') });
+    await landJob(PLAIN_JOB, b.deps);
+    assert.equal(building.sets.length, 0, 'a goal in build is not moved by a red');
+    assert.deepEqual([building.notes[0].entry.stage, building.notes[0].entry.done], ['build', 'merger answered red on #14761']);
+    assert.match(building.notes[0].entry.comment, /the goal is in build, not merging; it stays there$/u);
   });
 
-  it('a goal with a criterion not met is not landed: no round, red with the criterion named, and the goal waits on plan', async () => {
+  it('a goal with a criterion not met is not landed: no round, red with the criterion named, for one plan session', async () => {
     const r = record();
     const criteria = [{ criterion: 'a', check: 'x', met: true }, { criterion: 'b', check: 'y', met: false }];
     const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => [{ ...goalAt([{ repo: 'memoro', pr: 14761 }])[0], success_criteria: criteria }] });
@@ -1779,7 +1794,7 @@ describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is
     assert.equal(answer.landed, false);
     assert.equal(answer.report.stopped_at, 'unmet-criteria');
     assert.match(answer.report.reason, /^criterion 2 is not met — run its check and record it with mc goal criterion met ios\/asc 2$/u);
-    assert.equal(r.sets[0].status, 'blocked');
+    assert.deepEqual([r.sets[0].stage, r.sets[0].status], ['merging', 'ready']);
     assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
     assert.match(r.sets[0].entry.comment, /^unmet-criteria: criterion 2 is not met/u);
 

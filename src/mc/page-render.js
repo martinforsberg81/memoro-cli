@@ -1017,26 +1017,30 @@ function projectLine(c, wide, project) {
 /**
  * One goal, in the same grid and with the same kind of content as a project
  * row (Martin, 2026-11-03): its row number, a mark while a session is on it,
- * `goal` in the kind column, its name, its first repository, its state, how
- * many sessions it has had, its open pull request (`goal/<goal>`). The grey
- * tail after that starts with `criteria <met>/<all>` — green when every one is
- * met — then what the last session said is next (or its comment, when it said
- * nothing next). A goal whose GOAL.json does not parse says its first problem
- * in red there instead.
+ * `goal` in the kind column, its name, its first repository, its stage in the
+ * state column, how many sessions it has had, its open pull request
+ * (`goal/<goal>`). The grey tail after that starts with `criteria <met>/<all>`
+ * — green when every one is met — then what the last session said is next (or
+ * its comment, when it said nothing next). A goal whose GOAL.json does not
+ * parse says its first problem in red there instead.
  *
- * The state is the goal's status, and `running` while a session is on it: the
- * same word in the same colour as everywhere (`STATE_TONE`). A finished goal's
- * tail is its last `Done:`, never a `Next:` that is over. A goal blocked by a
- * red review, a red merge or the runner waits on plan, which the runner wakes,
- * and its tail says so first; any other blocked goal — a person's, a build
- * session's question, one plan left blocked — `waits on a person`. Both are in
- * the colour of what is blocked. A goal in a phase its programme has not
- * reached (`held`) has the waiting colour, and its tail says first which phase
- * it waits on.
+ * The state is the goal's stage. `build` and `finish` are green while a
+ * session is on them and grey otherwise; `review` and `merging` are green — a
+ * review session or the merger moves them by itself — and `plan`, `done` and
+ * `dropped` are grey (`STATE_TONE`). Its status is the rest of `<stage> ·
+ * <status>`: a goal that is `ready` says nothing more, and a `blocked` one, in
+ * any stage, has its stage red and its tail leads with `blocked · waits on a
+ * person`, in the colour of what is blocked. A finished goal's tail is its last
+ * `Done:`, never a `Next:` that is over. A goal in a phase its programme has
+ * not reached (`held`) has the waiting colour, and its tail says first which
+ * phase it waits on.
  */
 function goalLine(c, wide, goal) {
-  const word = goal.state ?? goal.status ?? '—';
-  const finished = goal.status === 'done' || goal.status === 'dropped';
+  const word = goal.stage ?? goal.state ?? '—';
+  const tone = goal.status === 'blocked' ? stateTone('blocked')
+    : goal.running ? ['green']
+    : stateTone(word);
+  const finished = goal.stage === 'done' || goal.stage === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
   const criteria = goal.criteria?.all
@@ -1044,9 +1048,11 @@ function goalLine(c, wide, goal) {
     : null;
   let tail = said ? [{ text: said, styles: ['grey'] }] : [];
   if (goal.problems?.length) tail = [{ text: `GOAL.json: ${goal.problems[0]}`, styles: ['red'] }];
-  else if (goal.plan || goal.person || waits) {
-    const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
-    tail = [{ text: head, styles: stateTone(waits ? 'waiting' : 'blocked') },
+  else if (waits) {
+    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said, styles: ['grey'] } : null];
+  } else if (goal.person) {
+    const head = 'waits on a person';
+    tail = [{ text: 'blocked', styles: stateTone('blocked') }, { text: head, styles: stateTone('blocked') },
       said && one(said) !== head ? { text: said, styles: ['grey'] } : null];
   }
   if (criteria && !goal.problems?.length) tail = [criteria, ...tail];
@@ -1056,7 +1062,7 @@ function goalLine(c, wide, goal) {
     kind: { text: goal.kind || 'goal', styles: kindTone('goal') },
     name: { text: goal.name, styles: goal.running ? ['bold'] : [] },
     repo: { text: goal.repo ?? goal.repos?.[0] ?? '—', styles: ['grey'] },
-    state: { text: word, styles: stateTone(word) },
+    state: { text: word, styles: tone },
     progress: { text: goal.progress ?? '', styles: ['grey'] },
     pr: prCellOf(goal.prs),
     tail,

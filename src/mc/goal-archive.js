@@ -19,7 +19,7 @@ import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ARCHIVE_HOLD_MS } from './project-archive.js';
-import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, listDirsOf, prRef, renumberPhases, statusSince } from './goals.js';
+import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, listDirsOf, prRef, renumberPhases, stageSince } from './goals.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { repoNameOf } from './repos.js';
 
@@ -29,16 +29,16 @@ const HOUR_MS = 60 * 60 * 1000;
  * Whether the runner archives this goal now, and why in one line, as
  * `archiveDue` does for a project: a goal is due once it has been `done` or
  * `dropped` for `holdMs` — exactly that long is due — counted from the log
- * entry that set the status (`statusSince`), not from the file's mtime.
+ * entry that set the stage (`stageSince`), not from the file's mtime.
  */
 export function goalArchiveDue({ goal, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
-  if (!FINISHED.includes(goal.status)) return { due: false, why: `the goal is ${goal.status}` };
-  const at = statusSince(goal);
-  if (!at || Number.isNaN(Date.parse(at))) return { due: false, why: `the log does not say when it was ${goal.status}` };
+  if (!FINISHED.includes(goal.stage)) return { due: false, why: `the goal is in ${goal.stage}` };
+  const at = stageSince(goal);
+  if (!at || Number.isNaN(Date.parse(at))) return { due: false, why: `the log does not say when it was ${goal.stage}` };
   const since = nowMs - Date.parse(at);
   const hours = Math.max(0, Math.floor(since / HOUR_MS));
-  if (since < holdMs) return { due: false, why: `${goal.status} ${hours}h ago — archived after ${Math.round(holdMs / HOUR_MS)}h` };
-  return { due: true, why: `${goal.status} ${hours}h ago` };
+  if (since < holdMs) return { due: false, why: `${goal.stage} ${hours}h ago — archived after ${Math.round(holdMs / HOUR_MS)}h` };
+  return { due: true, why: `${goal.stage} ${hours}h ago` };
 }
 
 /** A directory moved, its new parent made first. Throws when the destination is there. */
@@ -62,7 +62,7 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
   const refuse = (refused) => ({ refused });
   if (goal.problems.length) return refuse(`its GOAL.json does not parse (${goal.problems[0]})`);
   const name = `${goal.programme}/${goal.goal}`;
-  if (!FINISHED.includes(goal.status)) return refuse(`it is ${goal.status}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`);
+  if (!FINISHED.includes(goal.stage)) return refuse(`it is in ${goal.stage}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`);
   const repos = known();
   const bareOf = (repo) => repos.find((path) => repoNameOf(path) === repo) ?? null;
   const branch = `goal/${goal.goal}`;
@@ -77,7 +77,7 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
     try { numbers = open.ok ? JSON.parse(open.stdout || '[]').map((item) => item.number) : []; } catch { numbers = []; }
     if (!open.ok) return refuse(`GitHub could not say whether ${repo} has an open pull request on ${branch}`);
     if (numbers.length) return refuse(`${repo} #${numbers.join(', #')} on ${branch} is open — land or close it first`);
-    if (goal.status === 'dropped' && git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok) {
+    if (goal.stage === 'dropped' && git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok) {
       const unpushed = git(bare, ['rev-list', '--count', branch, '--not', '--remotes']);
       if (!unpushed.ok || Number(unpushed.stdout.trim()) > 0) return refuse(`${repo}'s ${branch} has commits no remote holds — publish them or say so in a pull request first`);
     }
@@ -114,7 +114,7 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
     return refuse(`${goal.dir} could not be moved to ${to} (${error?.message || error}); its worktrees are gone`);
   }
   const logPath = join(home, goal.programme, GOALS_DIR, GOAL_LOG_FILE);
-  appendText(logPath, `${read(logPath) === null ? GOAL_LOG_HEAD : ''}${goalLogRow({ date: stamp, goal: goal.goal, status: goal.status, prs: goal.prs, log: goal.log })}\n`);
+  appendText(logPath, `${read(logPath) === null ? GOAL_LOG_HEAD : ''}${goalLogRow({ date: stamp, goal: goal.goal, status: goal.stage, prs: goal.prs, log: goal.log })}\n`);
   const renumbered = renumberPhases({ home, programme: goal.programme, list, read, write });
   return { to, renumbered };
 }

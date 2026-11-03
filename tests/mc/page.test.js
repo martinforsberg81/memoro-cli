@@ -2736,7 +2736,7 @@ describe('MC', () => {
     // Measured from the commit the runner started on, not from the checkout's
     // HEAD: a checkout pulled by hand is new, and the runner beside it is not.
     assert.ok(asked.includes('rev-list --count abc1234..origin/main'), asked.join(' | '));
-    assert.equal(data.mc.hooks, 'session-start not registered, pre-tool not registered');
+    assert.equal(data.mc.hooks, 'session-start not registered, pre-tool not registered, stop not registered');
     delete data.mc.hooks;
     assert.deepEqual(data.mc, {
       up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,

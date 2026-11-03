@@ -59,7 +59,7 @@ import {
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
-import { goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
+import { FINISHED, goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -1541,7 +1541,7 @@ export function programmesSection({
 
 /**
  * The goals under the programmes home, as PROGRAMMES draws them (`goals.js`):
- * the status, the sessions, the last entry, and whether a live current file
+ * the stage and status, the sessions, the last entry, and whether a live current file
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
@@ -1556,32 +1556,30 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     name: goal.goal,
     programme: goal.programme,
     repos: goal.repos,
+    stage: goal.stage,
     status: goal.status,
     // The grid's fields (page-grid.js), as a project row has them: its kind,
-    // its first repository, its state — `running` while a session is on it,
-    // else its status — how many sessions it has had, and its open pull
-    // requests (`goal/<goal>`, put here by `attachPrs`).
+    // its first repository, its state — its stage, which says where in the
+    // order it is; the status is beside it, and a blocked one leads its tail —
+    // how many sessions it has had, and its open pull requests (`goal/<goal>`,
+    // put here by `attachPrs`).
     kind: 'goal',
     repo: goal.repos?.[0] ?? null,
-    state: running ? 'running' : goal.status,
+    state: goal.stage ?? null,
     progress: `${sessions} sess`,
     prs: [],
     phase: goal.phase ?? null,
-    held: goal.problems.length === 0 && !['done', 'dropped'].includes(goal.status) && !phaseOpen(goal, goals),
+    held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals),
     sessions,
     // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
     criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
     running,
-    // Blocked by a red review, a red merge or the runner: it waits on plan,
-    // which the runner wakes (`waitsOnPlan`). Blocked otherwise — by a person,
-    // a build session's question, or still after a plan session — it waits on
-    // a person (`waitsOnPerson`).
-    plan: waitsOnPlan(goal),
+    // Blocked, in any stage, it waits on a person (`waitsOnPerson`).
     person: waitsOnPerson(goal),
-    // What it waits on the person for: the last session's or person's comment,
-    // past the runner's own entry after a plan session.
-    question: waitsOnPerson(goal) ? (goal.log.findLast((entry) => entry.tool !== 'runner')?.comment ?? null) : null,
+    // What it waits on the person for: the last entry's comment — the
+    // session's question, or the runner's word on why it stopped.
+    question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     problems: goal.problems,
     };
   });

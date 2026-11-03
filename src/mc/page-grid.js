@@ -88,6 +88,8 @@ export const STATE_TONE = Object.freeze({
   running: ['green'],
   landing: ['green'],
   review: ['green'],
+  // A goal whose pull request is in the merger's queue.
+  merging: ['green'],
   queued: ['green'],
   gate: ['green'],
   rebase: ['green'],
