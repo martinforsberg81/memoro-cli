@@ -11,15 +11,11 @@ export const REAL_GIT_FILES = new Set([
   'tests/mc/merger.test.js',
   'tests/mc/repo-merge-live.test.js',
   'tests/mc/push-guard.test.js',
-  // `git archive`, `worktree move`, and worktree removal on disk.
+  // `git archive`, and worktree removal on disk.
   'tests/mc/asc-build-testflight.test.js',
-  'tests/mc/layout-migrate.test.js',
-  'tests/mc/archive-programme.test.js',
   'tests/mc/work-layout.test.js',
   'tests/mc/work-area-add.test.js',
   'tests/mc/close-live.test.js',
-  'tests/mc/repo-status.test.js',
-  'tests/mc/repo-watch.test.js',
   'tests/mc/commands/deploy.test.js',
   // Installs a model of its own, and starts no git.
   'tests/mc/fake-git.test.js',

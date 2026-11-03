@@ -89,6 +89,22 @@ test('amend atomically changes all allowed fields, audits before/after and never
   } finally { f.cleanup(); }
 });
 
+test('amend drops a runner key mc removed from the plan it writes, so a plan sent with it stays amendable', async () => {
+  const f = fixture();
+  try {
+    const plan = f.readPlan();
+    plan.runner = { subagents: 'on' };
+    plan.steps[1].runner = { model: 'haiku', effort: 'high', subagents: 'on' };
+    plan.steps[2].runner = { subagents: 'on' };
+    writeFileSync(f.file, `${JSON.stringify(plan, null, 2)}\n`);
+    assert.equal(await f.call(), 0, f.err.join(''));
+    const next = f.readPlan();
+    assert.deepEqual(next.runner, {});
+    assert.deepEqual(next.steps[1].runner, { model: 'fast', effort: 'high' });
+    assert.equal('runner' in next.steps[2], false);
+  } finally { f.cleanup(); }
+});
+
 test('amend refuses unsafe standing and a step session without touching plan, register or audit', async t => {
   const cases = {
     ready: f => { f.entry().steps[1].status = 'ready'; },

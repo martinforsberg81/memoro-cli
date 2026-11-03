@@ -164,7 +164,7 @@ import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, wri
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, withWorkers } from './roles.js';
+import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
@@ -1137,9 +1137,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls) {
+  function routeClass(cls, { avoid = null } = {}) {
     try {
-      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), avoid });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -2233,21 +2233,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   let lastSettle = -Infinity;
 
   /**
-   * The route a goal's review runs on: the review class's candidate (`mc model
-   * set review`), as `{ ok, route, settings }`, or `{ reason }` when it may not
-   * run now. It never runs on the model of the goal's last build entry — the
-   * heading's `<tool> <model>` — so a goal is not reviewed by its builder: with
-   * no other model, the goal waits.
+   * The route a goal's review runs on: the first review candidate (`mc model`)
+   * that can run on its plan now, as `{ ok, route, settings }`, or `{ reason }`
+   * when it may not run now. A candidate whose model is the goal's last build
+   * entry's — the heading's `<tool> <model>` — is taken only when no other
+   * candidate can run on its plan; a review never waits for want of another
+   * model (`chooseReview`, model-choice.js).
    */
   function reviewRoute(goal) {
-    const route = routeClass(REVIEW_CLASS);
-    if (!route.ok) return { reason: route.reason };
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const built = lastBuildEntry(goal.log);
-    if (built?.model && built.model === settings.model) {
-      return { reason: `the review model is ${settings.tool} ${settings.model}, the model its last build session ran on (${built.at}); set another with mc model set review` };
-    }
-    return { ok: true, route, settings };
+    const route = routeClass(REVIEW_CLASS, { avoid: built?.model ? { tool: built.tool, model: built.model } : null });
+    if (!route.ok) return { reason: route.reason };
+    return { ok: true, route, settings: routedSettings(null, null, { kind: 'goal', candidate: route.candidate }) };
   }
 
   /**
@@ -2484,7 +2481,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree: cwd,
-      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
+      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
     };
     writeJson(currentPath, current);
     const scratch = join(paths.scratch, stem);
@@ -2834,10 +2831,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
-    // Haiku workers (`runner.subagents: on`): the role is told how to use
-    // them through the same include the role files use for a shared passage.
-    const instructions = instructionsFor(launch.id, withWorkers(role, settings.subagents));
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
+    const instructions = instructionsFor(launch.id, role.overlay);
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
 
     // At each launch, use the provider's plan until a window is full or the
     // plan has refused. The gateway wrapper opens the key for API sessions.
@@ -2876,7 +2871,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
       kind: sessionKind(kind).kind, variant: 'project', programme: plan?.programme || null, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), ...(cls ? { class: cls } : {}), billing: picked.billing,
+      effort: settings.effort, advisor: settings.advisor, ...(cls ? { class: cls } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2890,7 +2885,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         source: roleSourceOf(role) || 'canon',
         overlay: role.overlay,
         instructions,
-        workers: settings.subagents,
       }),
     };
     writeJson(currentPath, current);
@@ -2927,7 +2921,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // session grant, never the provider key.
     const launchOnce = async (resume, text) => {
       const { billing } = picked;
-      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
+      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
       const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args: sessionArgs, billing });
       const running = deps.session({
         bin: tool.bin,

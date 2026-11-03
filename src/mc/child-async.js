@@ -22,18 +22,20 @@
  * killed and the result says `ENOBUFS`.
  *
  * A timeout kills with SIGTERM and resolves `signal: 'SIGTERM'`,
- * `error.code: 'ETIMEDOUT'`.
+ * `error.code: 'ETIMEDOUT'`. A child still there `graceMs` after the SIGTERM
+ * (1 s) gets SIGKILL.
  */
 import { spawn } from 'node:child_process';
 
 const MAX_BUFFER = 256 << 20;
+const GRACE_MS = 1000;
 
 /**
  * `tool` with `args`, no shell. A `signal` that aborts stops the child, as it
  * does for `runShell`: a round's ceiling must not leave `npm ci` running.
  */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null } = {}) {
-  return collect(() => spawn(tool, args, { cwd, env: env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal });
+export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS } = {}) {
+  return collect(() => spawn(tool, args, { cwd, env: env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs });
 }
 
 /**
@@ -41,11 +43,11 @@ export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, tim
  * person writes them (`npm ci`, `npm run test:msr:contract`), and splitting
  * those by hand would be a second grammar to get wrong.
  */
-export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal } = {}) {
-  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, group: true });
+export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal, graceMs = GRACE_MS } = {}) {
+  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs, group: true });
 }
 
-function collect(start, { maxBuffer, timeoutMs, signal, group = false }) {
+function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false }) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -79,7 +81,7 @@ function collect(start, { maxBuffer, timeoutMs, signal, group = false }) {
       if (error) return;
       error = Object.assign(new Error(message), { code });
       stop('SIGTERM');
-      escalation = setTimeout(() => stop('SIGKILL'), 1000);
+      escalation = setTimeout(() => stop('SIGKILL'), graceMs);
       escalation.unref?.();
     };
     // Only what fits is kept, as the synchronous spawn keeps it.

@@ -4,6 +4,7 @@
  * so they are tested without a session or a repository.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,6 +74,21 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(text, /mc shot dev/u);
     assert.match(text, /mc publish/u);
     assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL.*MC_STEP.*cwd \/x/u);
+  });
+
+  it('a plan session is told how many proposals wait in its programme, archive not counted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-hook-proposals-'));
+    const dir = join(root, 'programs', 'mc', 'proposals');
+    mkdirSync(join(dir, 'archive'), { recursive: true });
+    const env = { MC_WORK_ROOT: root };
+    const start = () => sessionStartContext({ cwd: join(root, 'programs', 'mc'), inside: true, states: [], env });
+    assert.ok(!/proposals? waits?/u.test(start()), 'none waiting: nothing said');
+    writeFileSync(join(dir, '2026-11-03-mc-a.md'), 'a\n');
+    writeFileSync(join(dir, '2026-11-03-mc-b.md'), 'b\n');
+    writeFileSync(join(dir, 'archive', '2026-11-01-mc-old.md'), 'Utfall: ej aktuellt — x\n');
+    assert.match(start(), /\n2 proposals wait in ~\/mc\/programs\/mc\/proposals\/ — take a stand on each/u);
+    const build = sessionStartContext({ cwd: join(root, 'programs', 'mc', 'goals', 'g'), inside: true, states: [], env });
+    assert.ok(!build.includes('proposals wait'), 'a build session is not told');
   });
 
   it('finds the worktrees of a workarea, and only those mc knows', () => {
@@ -270,7 +286,17 @@ describe('mc hook — Claude in Chrome against a local dev server is turned to m
 });
 
 describe('mc hook — a repository\'s own hooks, for a session that started outside it', () => {
-  function repoWithHooks() {
+  /**
+   * One area per file, its hook scripts run once here. On macOS a freshly
+   * written script pays 0.3-0.9 s at its first exec, and the tests paid it per
+   * test (3.2 s, 2026-11-03). Built while the file loads, outside any test's
+   * time; the tests only read the area.
+   */
+  const shared = buildRepoWithHooks();
+  for (const script of ['block.sh', 'stop.sh']) spawnSync(join(shared.area, 'memoro', '.claude', 'hooks', script), { input: '' });
+  const repoWithHooks = () => shared;
+
+  function buildRepoWithHooks() {
     const area = mkdtempSync(join(tmpdir(), 'mc-hook-repo-'));
     const hooks = join(area, 'memoro', '.claude', 'hooks');
     mkdirSync(hooks, { recursive: true });

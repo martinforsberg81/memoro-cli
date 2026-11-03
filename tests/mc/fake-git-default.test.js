@@ -45,7 +45,9 @@ describe('a test file\'s git is the model', () => {
     `);
     const env = { ...process.env };
     for (const name of ['MC_GIT_CALLS', 'MC_FAKE_GIT_STATE', 'NODE_OPTIONS', 'NODE_TEST_CONTEXT']) delete env[name];
-    const result = spawnSync(process.execPath, ['--import', isolate, '--test', 'reaches.test.js'], { cwd: dir, env, encoding: 'utf8' });
+    // The file run as its own entry, as the runner's child runs it: one node
+    // process, where `--test` would start a runner and then this child.
+    const result = spawnSync(process.execPath, ['--import', isolate, 'reaches.test.js'], { cwd: dir, env, encoding: 'utf8' });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.match(result.stdout + result.stderr, /started git \d+ time/u);
   });

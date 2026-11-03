@@ -3,21 +3,61 @@
  *
  * A throwaway repository with a bare "origin" beside it, a work root of its
  * own, and a PATH holding only the tools under test — so a machine with (or
- * without) gh installed reads the same either way.
+ * without) gh installed reads the same either way, and an `lsof` that sees
+ * nobody standing in it.
  *
  * `gh` is written as a shell script rather than mocked in-process: the view
  * shells out exactly as a user's machine would, and the script records every
  * call so a test can assert that `--offline` made none.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { git, makeTempRepo } from './git-fixture.js';
 
 const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+/**
+ * The one `gh` script every fixture's `bin/gh` links to, written once per
+ * process. It finds its fixture from the path it was run by — `<root>/bin/gh`
+ * — and logs to and answers from that root. One file rather than one per
+ * fixture: macOS checks an executable the first time it runs, and a script
+ * written fresh for each test paid 250–400 ms for that on its first call.
+ */
+let sharedGh = null;
+function ghStub() {
+  if (sharedGh) return sharedGh;
+  const path = join(mkdtempSync(join(tmpdir(), 'mc-test-gh-')), 'gh');
+  writeFileSync(path, [
+    '#!/bin/sh',
+    'bin="${0%/*}"',
+    'root="${bin%/*}"',
+    `printf '%s\\n' "$*" >> "$root/gh-calls.log"`,
+    'if [ "$1" = "pr" ]; then cat "$root/prs.json"; exit 0; fi',
+    'exit 1',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  sharedGh = path;
+  return path;
+}
+
+/**
+ * An `lsof` that sees nobody standing anywhere, beside every fixture's `gh`.
+ * The view asks lsof which tools stand in each worktree (`toolProcesses`); the
+ * machine's own took 150-300 ms a call (2026-11-03), and no process of the
+ * machine stands in a fixture made a moment ago, so the answer is the same.
+ * A test that puts a tool in an area writes its own (`installStandingStub`).
+ * Written and run once while this module loads; a fixture of another file
+ * links it into its own PATH the same way.
+ */
+export const LSOF = join(mkdtempSync(join(tmpdir(), 'mc-test-lsof-')), 'lsof');
+writeFileSync(LSOF, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+spawnSync(LSOF);
 
 /**
  * A repository, one piece of work with a worktree on it, and a PATH.
@@ -37,14 +77,9 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
   const prsPath = join(repo.root, 'prs.json');
   if (gh) {
     writeFileSync(prsPath, JSON.stringify(prs));
-    writeFileSync(join(bin, 'gh'), [
-      '#!/bin/sh',
-      `printf '%s\\n' "$*" >> "${ghLog}"`,
-      `if [ "$1" = "pr" ]; then cat "${prsPath}"; exit 0; fi`,
-      'exit 1',
-    ].join('\n'));
-    chmodSync(join(bin, 'gh'), 0o755);
+    symlinkSync(ghStub(), join(bin, 'gh'));
   }
+  symlinkSync(LSOF, join(bin, 'lsof'));
 
   return {
     ...repo,

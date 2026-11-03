@@ -21,11 +21,58 @@ import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { run as vaultRunRaw } from '../../../src/cli/vault.js';
-import { deriveVaultKeys, encryptSecretPayload } from '../../../src/vault/engine/client-crypto.js';
+import { PBKDF2_ITERATIONS, bytesToBase64, deriveVaultKeys, encryptSecretPayload } from '../../../src/vault/engine/client-crypto.js';
 import { mintCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
 
 const PW = 'this-is-a-long-test-master-password';
+const WRONG_PW = 'wrong-password';
+const NEW_PW = 'a-new-master-password-12345';
+
+/**
+ * The verbs' key derivation, shared across the file: the real
+ * 600k-iteration `deriveVaultKeys`, computed once per (password, salt,
+ * iterations) and then answered from the memo. Each derivation costs
+ * 150 ms on an idle machine and several times that under load, and a
+ * test runs up to five of them; the result is a pure function of its
+ * inputs, so the memo changes nothing a test reads. New salts come from
+ * a fixed source so the memo can be filled before the tests run, all
+ * four derivations in parallel (`warmKeys`).
+ */
+const keys = (() => {
+  const memo = new Map();
+  return {
+    deriveVaultKeys(password, salt, iterations = PBKDF2_ITERATIONS) {
+      const key = `${password}\0${salt}\0${iterations}`;
+      if (!memo.has(key)) memo.set(key, deriveVaultKeys(password, salt, iterations));
+      return memo.get(key);
+    },
+    getRandomValues(bytes) {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + 3) & 0xff;
+      return bytes;
+    },
+  };
+})();
+
+async function warmKeys() {
+  // The salt the mock server hands out at setup; setup derives against
+  // it and against the fixed placeholder salt, change-password against
+  // the fixed salt too.
+  const probe = createMockVaultServer();
+  const { salt: serverSalt } = await probe.memoroFetch('x', '/api/vault/setup', { method: 'POST', body: { authHash: 'probe' } });
+  const fixedSalt = bytesToBase64(keys.getRandomValues(new Uint8Array(32)));
+  await Promise.all([
+    keys.deriveVaultKeys(PW, fixedSalt),
+    keys.deriveVaultKeys(PW, serverSalt),
+    keys.deriveVaultKeys(WRONG_PW, serverSalt),
+    keys.deriveVaultKeys(NEW_PW, fixedSalt),
+  ]);
+}
+
+// Filled once as the file loads, outside any test or hook: the four
+// derivations are the file's one fixed cost, and under load they take
+// near a second together, which no single test should be charged.
+await warmKeys();
 
 /**
  * In-memory keychain stand-in for the §12f cache. Without this, tests
@@ -47,7 +94,7 @@ function makeMemCacheDeps() {
 // in-memory cache.
 let activeCacheDeps = null;
 function vaultRun(argv, opts = {}) {
-  return vaultRunRaw(argv, { cacheDeps: activeCacheDeps, ...opts });
+  return vaultRunRaw(argv, { cacheDeps: activeCacheDeps, keyDeps: keys, ...opts });
 }
 
 // Capture console output per test so we can assert on it without
@@ -67,7 +114,7 @@ function captureConsole() {
 
 async function portalWithCustody(server, portal) {
   const config = server.inspect().config;
-  const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+  const { vaultKey } = await keys.deriveVaultKeys(PW, config.salt, config.iterations);
   const custody = await mintCustodyRoot(vaultKey);
   return {
     ...portal,
@@ -130,7 +177,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
 
     // Bad password
     server.forceLock();
-    process.env.MC_VAULT_PASSPHRASE = 'wrong-password';
+    process.env.MC_VAULT_PASSPHRASE = WRONG_PW;
     cap = captureConsole();
     rc = await vaultRun(['unlock', '--json'], { portal });
     cap.restore();
@@ -737,7 +784,6 @@ describe('mc vault — full lifecycle (in-process)', () => {
     // MC_VAULT_PASSPHRASE returns the same value for all prompts, so
     // we use the promptStub opts hook to script them.
     delete process.env.MC_VAULT_PASSPHRASE;
-    const NEW_PW = 'a-new-master-password-12345';
     const promptStub = (prompt) => {
       if (prompt.toLowerCase().startsWith('current')) return Promise.resolve(PW);
       if (prompt.toLowerCase().startsWith('new')) return Promise.resolve(NEW_PW);
@@ -785,7 +831,6 @@ describe('mc vault — full lifecycle (in-process)', () => {
     server.forceNextWriteConflict();
     cap.restore(); cap = captureConsole();
     delete process.env.MC_VAULT_PASSPHRASE;
-    const NEW_PW = 'another-new-master-password-12345';
     const promptStub = (prompt) => Promise.resolve(
       prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
     );
@@ -820,7 +865,6 @@ describe('mc vault — full lifecycle (in-process)', () => {
     };
     cap.restore(); cap = captureConsole();
     delete process.env.MC_VAULT_PASSPHRASE;
-    const NEW_PW = 'a-third-master-password-67890';
     const promptStub = (prompt) => Promise.resolve(
       prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
     );
@@ -842,8 +886,8 @@ describe('mc vault — full lifecycle (in-process)', () => {
 
     delete process.env.MC_VAULT_PASSPHRASE;
     const promptStub = (prompt) => {
-      if (prompt.toLowerCase().startsWith('current')) return Promise.resolve('wrong-current-password');
-      return Promise.resolve('the-new-password-yo-12345');
+      if (prompt.toLowerCase().startsWith('current')) return Promise.resolve(WRONG_PW);
+      return Promise.resolve(NEW_PW);
     };
     const rc = await vaultRun(['change-password', '--json'], { portal, promptStub });
     cap.restore();
@@ -856,7 +900,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const custodyPortal = await portalWithCustody(server, portal);
     await vaultRun(['set', 'custody-seed', '--no-confirm', '--json'], { portal: custodyPortal });
     const config = server.inspect().config;
-    const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+    const { vaultKey } = await keys.deriveVaultKeys(PW, config.salt, config.iterations);
     const encrypted = await encryptSecretPayload(vaultKey, 'legacy-entry', { value: 'opaque' });
     await server.memoroFetch('x', '/api/vault/secrets', {
       method: 'POST',
@@ -875,7 +919,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const custodyPortal = await portalWithCustody(server, portal);
     await vaultRun(['set', 'custody-seed', '--no-confirm', '--json'], { portal: custodyPortal });
     const config = server.inspect().config;
-    const { vaultKey } = await deriveVaultKeys(PW, config.salt, config.iterations);
+    const { vaultKey } = await keys.deriveVaultKeys(PW, config.salt, config.iterations);
     for (const label of ['legacy-one', 'legacy-two']) {
       const encrypted = await encryptSecretPayload(vaultKey, label, { value: 'opaque' });
       await server.memoroFetch('x', '/api/vault/secrets', {

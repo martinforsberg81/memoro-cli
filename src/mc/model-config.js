@@ -1,6 +1,11 @@
 /**
  * The model catalog (ruling 59): the candidates a fast or a large step may run
- * on, in the order they are preferred, and the one model review always uses.
+ * on, in the order they are preferred, and the ordered candidates a review
+ * runs on (ruling 59 § 2: the first is the preferred one).
+ *
+ * A file whose `review` is one candidate object, as every catalog was before
+ * review became a list, reads as a list of that one candidate; it is written
+ * back as a list the first time `mc model` changes the file.
  *
  * It is a file the person owns — `~/mc/runner/models.json` — and mc writes it
  * only through `mc model`. An absent file reads as the defaults below. A file
@@ -31,6 +36,8 @@ export const MODELS_SCHEMA = 'mc-models';
 export const MODELS_VERSION = 1;
 export const MODELS_FILE = 'models.json';
 export const CLASSES = Object.freeze(['fast', 'large']);
+/** The lists `mc model add` and `remove` change: the two work classes and review. */
+export const LISTS = Object.freeze([...CLASSES, 'review']);
 export const TOOLS = Object.freeze(['claude', 'codex']);
 const DOCUMENT_KEYS = Object.freeze(['schema', 'version', 'fast', 'large', 'review']);
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
@@ -46,11 +53,11 @@ export class ModelConfigError extends Error {
 
 const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort });
 
-/** What an absent catalog reads as. Review is one candidate: a review is never routed. */
+/** What an absent catalog reads as. Review is an ordered list, as fast and large are. */
 export const DEFAULT_CATALOG = Object.freeze({
   fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
   large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  review: candidate('claude', 'opus', 'high'),
+  review: Object.freeze([candidate('claude', 'opus', 'high')]),
 });
 
 export function modelsPath(env = process.env) {
@@ -120,8 +127,8 @@ function documentProblems(value) {
   const problems = Object.keys(value).filter((key) => !DOCUMENT_KEYS.includes(key)).map((key) => `${key}: unknown key`);
   if (value.schema !== MODELS_SCHEMA) problems.push(`schema: must be "${MODELS_SCHEMA}"`);
   if (value.version !== MODELS_VERSION) problems.push(`version: ${MODELS_VERSION} is the only version this mc reads`);
-  for (const cls of CLASSES) {
-    const list = value[cls];
+  for (const cls of LISTS) {
+    const list = cls === 'review' ? reviewList(value.review) : value[cls];
     if (!Array.isArray(list) || list.length === 0) {
       problems.push(`${cls}: a list of at least one candidate`);
       continue;
@@ -131,15 +138,19 @@ function documentProblems(value) {
     });
     problems.push(...duplicateProblems(cls, list));
   }
-  for (const problem of candidateProblems(value.review)) problems.push(`review.${problem}`);
   return problems;
 }
 
 const RECOVERY = 'fix it, or move it aside to read the defaults';
 
+/** A file's `review`: a list as written, or the one candidate object an older file holds, as a list of it. */
+function reviewList(value) {
+  return plain(value) ? [value] : value;
+}
+
 /** The catalog as an object of its own: a copy whose candidates a change may edit. */
 function cloneCatalog({ fast, large, review }) {
-  return { fast: fast.map((value) => ({ ...value })), large: large.map((value) => ({ ...value })), review: { ...review } };
+  return { fast: fast.map((value) => ({ ...value })), large: large.map((value) => ({ ...value })), review: review.map((value) => ({ ...value })) };
 }
 
 /**
@@ -169,12 +180,12 @@ export function readModels(env = process.env) {
     path,
     fast: value.fast.map((item) => candidate(item.tool, item.model, item.effort)),
     large: value.large.map((item) => candidate(item.tool, item.model, item.effort)),
-    review: candidate(value.review.tool, value.review.model, value.review.effort),
+    review: reviewList(value.review).map((item) => candidate(item.tool, item.model, item.effort)),
   };
 }
 
 function classList(catalog, cls) {
-  if (!CLASSES.includes(cls)) throw new ModelConfigError(`"${cls}" is not a class: add and remove take fast or large`);
+  if (!LISTS.includes(cls)) throw new ModelConfigError(`"${cls}" is not a list: add and remove take fast, large or review`);
   return catalog[cls];
 }
 
@@ -189,20 +200,21 @@ export function addCandidate(catalog, cls, value) {
   return catalog;
 }
 
-/** Exactly `tool:model`. The class keeps at least one candidate. */
+/** Exactly `tool:model`. The list keeps at least one candidate. */
 export function removeCandidate(catalog, cls, { tool, model }) {
   const list = classList(catalog, cls);
   const index = list.findIndex((item) => item.tool === tool && item.model === model);
   if (index < 0) throw new ModelConfigError(`${cls} has no ${tool}:${model} to remove — mc model lists what it has`);
   if (list.length === 1) {
-    throw new ModelConfigError(`${tool}:${model} is the only ${cls} candidate, and a class needs one — add its replacement first`);
+    throw new ModelConfigError(`${tool}:${model} is the only ${cls} candidate, and ${cls} needs one — add its replacement first`);
   }
   list.splice(index, 1);
   return catalog;
 }
 
+/** The review list replaced whole by the one candidate. */
 export function setReview(catalog, value) {
-  catalog.review = candidate(value.tool, value.model, value.effort);
+  catalog.review = [candidate(value.tool, value.model, value.effort)];
   return catalog;
 }
 

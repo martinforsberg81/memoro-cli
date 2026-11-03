@@ -48,6 +48,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
 const SOURCE_FILE = /\.(?:js|mjs|cjs)$/u;
+/** This script, as a path in the repository it measures: the same in any root. */
+const SELF = relative(ROOT, fileURLToPath(import.meta.url));
 
 /** Module specifiers, static and dynamic, with a literal path. */
 const IMPORTS = [
@@ -89,49 +91,49 @@ const DIR_TOKEN = /['"`]((?:[A-Za-z0-9_@.-]+\/)*[A-Za-z0-9_@.-]+)(?:\/[^'"`]*)?[
  */
 const DATA_DIRS = ['docs/', 'canon/', 'changelog.d/', '.claude/', '.mc/'];
 
-function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function git(root, args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
 }
 
-function tracked() {
-  return git(['ls-files', '-z']).split('\0').filter(Boolean);
+function tracked(root) {
+  return git(root, ['ls-files', '-z']).split('\0').filter(Boolean);
 }
 
 /** What this branch changes against the base, the same set the gate compares. */
-function changedAgainst(baseRef) {
-  const mergeBase = git(['merge-base', baseRef, 'HEAD']).trim();
-  const committed = git(['diff', '--name-only', '-z', `${mergeBase}...HEAD`]).split('\0');
-  const working = git(['status', '--porcelain', '-z']).split('\0')
+function changedAgainst(root, baseRef) {
+  const mergeBase = git(root, ['merge-base', baseRef, 'HEAD']).trim();
+  const committed = git(root, ['diff', '--name-only', '-z', `${mergeBase}...HEAD`]).split('\0');
+  const working = git(root, ['status', '--porcelain', '-z']).split('\0')
     .filter((entry) => entry.length > 3)
     .map((entry) => entry.slice(3));
   return { mergeBase, paths: [...new Set([...committed, ...working].filter(Boolean))] };
 }
 
 /** A specifier resolved to a repo-relative path, or null when it leaves the repo. */
-function resolveSpecifier(fromFile, specifier) {
+function resolveSpecifier(root, fromFile, specifier) {
   if (!specifier.startsWith('.')) return null;
-  const target = resolve(ROOT, dirname(fromFile), specifier);
-  const rel = relative(ROOT, target);
+  const target = resolve(root, dirname(fromFile), specifier);
+  const rel = relative(root, target);
   if (rel.startsWith('..')) return null;
   for (const candidate of [rel, `${rel}.js`, join(rel, 'index.js')]) {
-    if (existsSync(join(ROOT, candidate))) return candidate;
+    if (existsSync(join(root, candidate))) return candidate;
   }
   return null;
 }
 
-function readOr(path, fallback = '') {
-  try { return readFileSync(join(ROOT, path), 'utf8'); } catch { return fallback; }
+function readOr(root, path, fallback = '') {
+  try { return readFileSync(join(root, path), 'utf8'); } catch { return fallback; }
 }
 
 /** Direct imports of one file, as repo-relative paths. */
-function importsOf(path, cache) {
+function importsOf(root, path, cache) {
   if (cache.has(path)) return cache.get(path);
-  const source = readOr(path);
+  const source = readOr(root, path);
   const found = new Set();
   for (const pattern of IMPORTS) {
     pattern.lastIndex = 0;
     for (const match of source.matchAll(pattern)) {
-      const target = resolveSpecifier(path, match[2]);
+      const target = resolveSpecifier(root, path, match[2]);
       if (target) found.add(target);
     }
   }
@@ -141,12 +143,12 @@ function importsOf(path, cache) {
 }
 
 /** Every source file a test reaches through imports, transitively. */
-function closureOf(entry, cache) {
+function closureOf(root, entry, cache) {
   const seen = new Set();
   const stack = [entry];
   while (stack.length) {
     const path = stack.pop();
-    for (const next of importsOf(path, cache)) {
+    for (const next of importsOf(root, path, cache)) {
       if (seen.has(next)) continue;
       seen.add(next);
       stack.push(next);
@@ -156,11 +158,11 @@ function closureOf(entry, cache) {
 }
 
 /** Tracked files a test names as a literal path, minus the ones it imports. */
-function pinsOf(path, trackedSet, imported) {
-  const source = readOr(path);
+function pinsOf(root, path, trackedSet, imported) {
+  const source = readOr(root, path);
   const pins = new Set();
   for (const token of source.match(PIN_TOKEN) ?? []) {
-    for (const candidate of [token.replace(/^\.\//u, ''), relative(ROOT, resolve(ROOT, dirname(path), token))]) {
+    for (const candidate of [token.replace(/^\.\//u, ''), relative(root, resolve(root, dirname(path), token))]) {
       if (trackedSet.has(candidate) && !imported.has(candidate)) { pins.add(candidate); break; }
     }
   }
@@ -177,8 +179,8 @@ function pinsOf(path, trackedSet, imported) {
  * means, and the answer differs by a factor of fifty. See `opensFile` and
  * `walksTree` in `selectAffected`, where the two are told apart by depth.
  */
-function dirsOf(path, dirSet) {
-  const source = readOr(path);
+function dirsOf(root, path, dirSet) {
+  const source = readOr(root, path);
   const named = new Set();
   for (const [, token] of source.matchAll(DIR_TOKEN)) if (dirSet.has(token)) named.add(token);
   return named;
@@ -194,8 +196,8 @@ function trackedDirs(all) {
   return dirs;
 }
 
-export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = {}) {
-  const all = tracked();
+export function selectAffected({ baseRef = 'origin/main', changedPaths = [], root = ROOT } = {}) {
+  const all = tracked(root);
   const trackedSet = new Set(all);
   const testFiles = all.filter((path) => TEST_FILE.test(path));
   // `--changed-path`, as memoro's `ci.mjs --list` takes it: the paths are named,
@@ -203,7 +205,7 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = 
   // since its last red tree, which no base ref describes.
   const { mergeBase, paths: changed } = changedPaths.length
     ? { mergeBase: null, paths: [...new Set(changedPaths)] }
-    : changedAgainst(baseRef);
+    : changedAgainst(root, baseRef);
   const changedSet = new Set(changed);
   // What a literal may name. `ls-files` no longer lists a path the change
   // deleted, but a module that spells one is still its reader — and that
@@ -226,13 +228,12 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = 
   // is the one file here whose path literals are about paths rather than to
   // them; a second such file would silently narrow a selection, which is the
   // direction that matters.
-  const SELF = relative(ROOT, fileURLToPath(import.meta.url));
   for (const file of all.filter((path) => SOURCE_FILE.test(path) && path !== SELF)) {
-    for (const pin of pinsOf(file, nameable, new Set())) {
+    for (const pin of pinsOf(root, file, nameable, new Set())) {
       if (!namesFile.has(pin)) namesFile.set(pin, new Set());
       namesFile.get(pin).add(file);
     }
-    for (const dir of dirsOf(file, dirSet)) {
+    for (const dir of dirsOf(root, file, dirSet)) {
       if (!namesDir.has(dir)) namesDir.set(dir, new Set());
       namesDir.get(dir).add(file);
     }
@@ -290,7 +291,7 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = 
    * rather than of git's rename/delete bookkeeping, because that is the fact
    * the rule below needs: nothing can read what is not there.
    */
-  const gone = (path) => !trackedSet.has(path) && !existsSync(join(ROOT, path));
+  const gone = (path) => !trackedSet.has(path) && !existsSync(join(root, path));
 
   // Anything the three edges cannot explain. A manifest, a lockfile, a
   // workflow, a config: real changes whose reach is not written down anywhere
@@ -335,10 +336,10 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = 
   for (const test of testFiles) {
     const reasons = [];
     if (changedSet.has(test)) reasons.push('changed-test-file');
-    const imported = closureOf(test, cache);
+    const imported = closureOf(root, test, cache);
     const hitImports = [...imported].filter((path) => changedSet.has(path));
     if (hitImports.length) reasons.push(`imports:${hitImports.slice(0, 3).join(',')}`);
-    const hitPins = [...pinsOf(test, nameable, imported)].filter((path) => changedSet.has(path));
+    const hitPins = [...pinsOf(root, test, nameable, imported)].filter((path) => changedSet.has(path));
     if (hitPins.length) reasons.push(`pins:${hitPins.slice(0, 3).join(',')}`);
     // Data the test never names itself, but something in its closure opens:
     // `canon/roles/brief.md` is opened by `src/mc/commands/brief.js`, so every
@@ -365,21 +366,26 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = 
   };
 }
 
-function main(argv) {
+/**
+ * The command: `argv` without node and the script, the answer on `stdout`.
+ * `root` is the repository it measures, this script's own by default; a test
+ * names its fixture's, and runs it in its own process.
+ */
+export function main(argv, { root = ROOT, stdout = process.stdout } = {}) {
   const baseIndex = argv.indexOf('--base-ref');
   const baseRef = baseIndex >= 0 ? argv[baseIndex + 1] : 'origin/main';
   const changedPaths = argv.flatMap((word, index) => (word === '--changed-path' && argv[index + 1] ? [argv[index + 1].replace(/^\.\//u, '')] : []));
-  const result = selectAffected({ baseRef, changedPaths });
+  const result = selectAffected({ baseRef, changedPaths, root });
   if (argv.includes('--why')) {
-    process.stdout.write(`${result.why.reason === 'full-suite'
+    stdout.write(`${result.why.reason === 'full-suite'
       ? `the whole suite: ${result.why.unexplained.length} changed path(s) this script cannot trace — ${result.why.unexplained.slice(0, 5).join(', ')}`
       : `${result.files.length} of ${result.why.test_files} test files, from ${result.why.changed} changed path(s)`}\n`);
     for (const [file, reasons] of Object.entries(result.why.selected_by ?? {})) {
-      process.stdout.write(`  ${file} — ${reasons.join('; ')}\n`);
+      stdout.write(`  ${file} — ${reasons.join('; ')}\n`);
     }
     return 0;
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  stdout.write(`${JSON.stringify(result)}\n`);
   return 0;
 }
 

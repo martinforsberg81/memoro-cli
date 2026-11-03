@@ -40,10 +40,14 @@ export async function watchRound({
  *
  * `afterRound`, when given, is asked after every round whether to leave: true
  * ends the loop there, with no further round (the code moved, repo-watch-run.js).
+ *
+ * `wake`, when given, is an AbortSignal that cuts the wait between rounds
+ * short: a stop asked for while the loop sleeps is answered at once rather
+ * than at the sleep's next look at `shouldStop`.
  */
 export async function watchLoop({
   intervalMs = DEFAULT_INTERVAL_MS, root = mcHome(), env = process.env,
-  rounds = Infinity, shouldStop = () => false, log = () => {}, afterRound = null,
+  rounds = Infinity, shouldStop = () => false, log = () => {}, afterRound = null, wake = null,
 } = {}) {
   for (let round = 0; round < rounds && !shouldStop(); round += 1) {
     try {
@@ -59,14 +63,18 @@ export async function watchLoop({
     // The next round starts an interval after this one finished, not on a
     // fixed clock: a round that takes longer than the interval must not queue
     // another behind itself.
-    await sleep(intervalMs, shouldStop);
+    await sleep(intervalMs, shouldStop, wake);
   }
 }
 
-async function sleep(ms, shouldStop) {
+async function sleep(ms, shouldStop, wake) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (shouldStop()) return;
-    await new Promise((resolve) => { setTimeout(resolve, Math.max(1, Math.min(200, deadline - Date.now()))); });
+    if (shouldStop() || wake?.aborted) return;
+    await new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); wake?.removeEventListener('abort', done); resolve(); };
+      const timer = setTimeout(done, Math.max(1, Math.min(200, deadline - Date.now())));
+      wake?.addEventListener('abort', done, { once: true });
+    });
   }
 }

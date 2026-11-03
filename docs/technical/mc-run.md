@@ -666,8 +666,7 @@ are `SESSION_DEFAULTS` in `run-plan.js`. They are claude's: a codex plan has
 no row, so a codex step runs on the model it names, and with none named the
 tool picks its own. A class-routed step (ruling 59) takes its
 tool, model and effort from its candidate. `mc project send` gives the review
-step the `review` class, the one review candidate `mc model set review`
-configures, on either tool.
+step the `review` class, whose candidates `mc model` lists, on either tool.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. `codex`
   is the other: the same step, run by `codex exec`. A tool that is not
@@ -751,24 +750,29 @@ A step gets it; the helper and intake turns, which share
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
 
-Every claude launch of mc's, foreground and tmux too, gets the tool allowlist
-`--tools Bash,Read,Edit,Write,Grep,Glob` (`CLAUDE_TOOLS`) and
-`--strict-mcp-config`, and so has those six tools and no other — no `Agent`,
-no `Skill`, no Cron, Web or Task tool, no user-level MCP server — whatever
-any repository's files say. Two reasons. A headless session has no use for a
-subagent: a step is bounded by its plan, the strong model is reached through
-`--advisor`, and a subagent runs on whatever model the repository's
-instruction files name rather than the plan's `runner` choice (over the first
-41 sonnet step sessions, 2026-09-11..12, 19 spawned opus subagents on
-memoro's `CLAUDE.md` instruction — a quarter of the era's cost, invisible in
-`runs.tsv`, and three of them ended their turn waiting for a child that never
-reports back). And every tool definition rides in every request: on claude
-2.1.280 the default set minus `Agent` (the `--disallowedTools Agent` this was
-until 2026-09-25) is 18 687 tokens per request, the six are 13 073, and a
-step session re-reads its context ~90 times. The six include `Grep` and
-`Glob`, which the default set omits — until this flag a step searched with
-`grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
-over 2026-09-15..25, each a screen of file kept in the context.
+Every claude launch of mc's, foreground, tmux and headless, gets the tool
+allowlist `--tools Bash,Read,Edit,Write,Grep,Glob,Agent` (`CLAUDE_TOOLS`) and
+`--strict-mcp-config`: seven tools, including the tool's own general-purpose
+`Agent`, with no `--agents` definitions supplied by mc. No `Skill`, Cron, Web
+or Task tool, and no user-level MCP server. The allowlist keeps tool
+definitions out of every request unless needed, and includes native `Grep`
+and `Glob` rather than making the session search through Bash.
+
+Every Codex launch gets `-c features.multi_agent=true` through its adapter's
+session switches, before the prompt or resumed session id. Native delegation
+is on even if the machine's config disables it. These switches apply to every
+role — goal build, project step, review, merger and plan — and both fresh and
+resumed launches, including headless launches assembled by `headlessArgs`.
+A session may use its own tool's subagents; mc neither starts nor counts them
+(Martin, 2026-11-03). This enables the tool, not a worker mechanism in mc.
+
+mc defines no subagent of its own and starts none (Martin, 2026-11-02). From
+2026-10-11 a plan's `runner.subagents: on` gave a step `Agent` and one
+Haiku `step-worker`, with `canon/roles/_step-workers.md` in its
+instructions; all of it is gone, and the key is refused by `mc project send`
+and dropped by `mc project amend`. A sent plan that still carries it reads as
+before and the key means nothing. `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`
+(below) stays set because the tool's own agents read it.
 
 Next to that body go `canon/roles/all-sessions.md` and the build role —
 `canon/roles/build-session.md`, its `project` part for a project's step and its
@@ -783,11 +787,12 @@ The two argument lists are the only place the tools differ:
 ```
 claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
-        --tools Bash,Read,Edit,Write,Grep,Glob --strict-mcp-config \
+        --tools Bash,Read,Edit,Write,Grep,Glob,Agent --strict-mcp-config \
         --settings <env> --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] [-c model_reasoning_effort=…] \
-        -c project_doc_max_bytes=0 -c instructions=<instructions> <prompt>
+        -c project_doc_max_bytes=0 -c features.multi_agent=true \
+        -c instructions=<instructions> <prompt>
 ```
 
 `--settings <env>` is a JSON object whose `env` sets
@@ -1698,25 +1703,33 @@ is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only the plan's
-review step names it, and it always takes the review candidate: its usage is
-not scored against other models. At its provider's plan limit, review
-keeps its pinned model and uses that provider's API reserve.
+review step and a goal's review take it, and it is not scored by headroom.
+Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. A candidate can run on its plan when its provider has not refused it and
+no window in force is at its limit. A goal's review passes over every
+candidate whose model is its last build entry's while another can run on its
+plan, and takes the first of them on its plan when none can. When no candidate
+can run on its plan, the first that is not that model (or that model, when
+every candidate is it) uses its provider's API reserve, and waits when that API is off: no
+candidate goes to credits while another's plan is free (ruling 59 § 4).
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
-- `mc model [list] [--json]` — the candidates of each class in preference
-  order, and the review candidate, and whether they come from the file or the
-  defaults.
-- `mc model add fast|large <tool>:<model>:<effort>` — appends a candidate.
-- `mc model remove fast|large <tool>:<model>` — removes the candidate with
-  exactly that tool and model.
-- `mc model set review <tool>:<model>:<effort>` — replaces the review candidate.
+- `mc model [list] [--json]` — the candidates of fast, large and review, each
+  a numbered list in preference order, and whether they come from the file or
+  the defaults.
+- `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate.
+- `mc model remove fast|large|review <tool>:<model>` — removes the candidate
+  with exactly that tool and model; a list keeps at least one.
+- `mc model set review <tool>:<model>:<effort>` — replaces the whole review
+  list with that one candidate.
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.1-sol:high`; review, `claude:opus:high`. A file that is there and
-cannot be read is refused, never quietly replaced by the defaults. A catalog
+`codex:gpt-6.1-sol:high`; review, `claude:opus:high` alone. A file whose
+`review` is one candidate object, as files were before review was a list, reads
+as a list of that candidate and is written back as a list the first time `mc
+model` changes it. A file that is there and cannot be read is refused, never quietly replaced by the defaults. A catalog
 edit never rewrites a plan.
 
 **The snapshot** is the runner's, kept apart from the catalog, so an observation

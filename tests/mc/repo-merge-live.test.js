@@ -14,10 +14,12 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
 import { runGate } from '../../src/mc/repo-gate.js';
 import { readLease } from '../../src/mc/repo-lease.js';
@@ -28,20 +30,62 @@ const AREA = { name: 'klient-guard', kind: 'work-area' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
 
 /**
+ * `gh`, as a script: reads a pull request from a file, and performs the squash
+ * as the git commands the forge would run, in the bare origin itself — the
+ * merged tree, one commit on main's tip, and main moved to it only if it is
+ * still where the squash started. One file per process, reached from every
+ * fixture by a symlink: macOS checks a fresh executable on its first run, and
+ * that check cost 250–400 ms per fixture. The fixture is the directory above
+ * the link's own.
+ */
+const STUBS = mkdtempSync(join(tmpdir(), 'mc-merge-live-gh-'));
+const GH = join(STUBS, 'gh');
+writeFileSync(GH, [
+  '#!/bin/sh',
+  'root="$(cd "$(dirname "$0")/.." && pwd)"',
+  'printf \'%s\\n\' "$*" >> "$root/gh-calls.log"',
+  'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then cat "$root/pr.json"; exit 0; fi',
+  'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then',
+  '  bare="$root/origin.git"',
+  '  base="$(git --git-dir="$bare" rev-parse refs/heads/main)" || exit 1',
+  '  tree="$(git --git-dir="$bare" merge-tree --write-tree "$base" refs/heads/feature)" || exit 1',
+  '  commit="$(GIT_AUTHOR_NAME=forge GIT_AUTHOR_EMAIL=forge@example.invalid GIT_COMMITTER_NAME=forge GIT_COMMITTER_EMAIL=forge@example.invalid \\',
+  '    git --git-dir="$bare" commit-tree "$tree" -p "$base" -m "Add the change (#400)")" || exit 1',
+  '  git --git-dir="$bare" update-ref refs/heads/main "$commit" "$base" || exit 1',
+  '  exit 0',
+  'fi',
+  'exit 1',
+].join('\n'));
+chmodSync(GH, 0o755);
+// The first run pays macOS's check, here, from a fixture of its own.
+mkdirSync(join(STUBS, 'warm', 'bin'), { recursive: true });
+symlinkSync(GH, join(STUBS, 'warm', 'bin', 'gh'));
+try { execFileSync(join(STUBS, 'warm', 'bin', 'gh'), ['warm'], { stdio: 'ignore' }); } catch { /* exits 1: an unknown verb */ }
+
+const templates = [STUBS];
+after(() => { for (const dir of templates) rmSync(dir, { recursive: true, force: true }); });
+
+/**
  * A repository with an origin, a main, and a branch with a change on it.
  *
  * `standingRed` puts a test on main that has always failed. It used to be the
  * default here, because the round was differential and a standing red name was
  * the interesting case; since 2026-08-31 it is the case where nothing lands
  * until somebody repairs it, which is asserted below rather than assumed.
+ *
+ * `hangingBranch` adds a test that never settles, and that first touches the
+ * file `$MC_TEST_HANG_FLAG` names, so a test can tell when the round reached it.
+ *
+ * Each variant's history is built once, when the file loads; every test gets
+ * its own copy of it on disk (`repository`).
  */
-function repository({ branchBreaksSuite = false, standingRed = false, hangingBranch = false } = {}) {
+function build({ branchBreaksSuite = false, standingRed = false, hangingBranch = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
+  templates.push(root);
   const repo = join(root, 'repo');
   const bare = join(root, 'origin.git');
-  const mcHome = join(root, 'home');
   mkdirSync(repo, { recursive: true });
-  mkdirSync(mcHome, { recursive: true, mode: 0o700 });
+  mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
 
   git(root, ['init', '-q', '--bare', bare]);
   git(root, ['clone', '-q', bare, repo]);
@@ -49,9 +93,10 @@ function repository({ branchBreaksSuite = false, standingRed = false, hangingBra
   git(repo, ['config', 'user.name', 'mc-test']);
 
   // A repository whose `npm test` is a real node test run, small enough to run
-  // twice per round without the suite being the thing under test.
+  // twice per round without the suite being the thing under test — in one
+  // process, since a process per file is the suite's cost and not the round's.
   writeFileSync(join(repo, 'package.json'), `${JSON.stringify({
-    name: 'gated', version: '1.0.0', type: 'module', scripts: { test: "node --test 'tests/*.test.js'" },
+    name: 'gated', version: '1.0.0', type: 'module', scripts: { test: "node --test --test-isolation=none 'tests/*.test.js'" },
   }, null, 2)}\n`);
   mkdirSync(join(repo, 'tests'), { recursive: true });
   writeFileSync(join(repo, 'tests', 'a.test.js'), [
@@ -71,8 +116,9 @@ function repository({ branchBreaksSuite = false, standingRed = false, hangingBra
   writeFileSync(join(repo, 'tests', 'b.test.js'), [
     "import { test } from 'node:test';",
     "import assert from 'node:assert/strict';",
+    ...(hangingBranch ? ["import { writeFileSync } from 'node:fs';"] : []),
     `test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`,
-    ...(hangingBranch ? ["test('never settles', async () => { await new Promise(() => {}); });"] : []),
+    ...(hangingBranch ? ["test('never settles', async () => { writeFileSync(process.env.MC_TEST_HANG_FLAG, ''); await new Promise(() => {}); });"] : []),
     '',
   ].join('\n'));
   git(repo, ['add', '-A']);
@@ -81,31 +127,34 @@ function repository({ branchBreaksSuite = false, standingRed = false, hangingBra
   const head = git(repo, ['rev-parse', 'HEAD']).trim();
   git(repo, ['checkout', '-q', 'main']);
 
-  // `gh`, as a script: reads a pull request from a file, and performs the
-  // squash as the git commands the forge would run.
-  const bin = join(root, 'bin');
-  mkdirSync(bin, { recursive: true });
   writeFileSync(join(root, 'pr.json'), JSON.stringify({
     number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: head, state: 'OPEN', title: 'the change',
   }));
-  writeFileSync(join(bin, 'gh'), [
-    '#!/bin/sh',
-    `printf '%s\\n' "$*" >> "${root}/gh-calls.log"`,
-    `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then cat "${root}/pr.json"; exit 0; fi`,
-    'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then',
-    `  work="${root}/forge" ; rm -rf "$work"`,
-    `  git clone -q "${bare}" "$work" || exit 1`,
-    '  git -C "$work" config user.email "forge@example.invalid"',
-    '  git -C "$work" config user.name "forge"',
-    '  git -C "$work" merge --squash origin/feature >/dev/null 2>&1 || exit 1',
-    '  git -C "$work" commit -q -m "Add the change (#400)" || exit 1',
-    '  git -C "$work" push -q origin main || exit 1',
-    '  exit 0',
-    'fi',
-    'exit 1',
-  ].join('\n'));
-  chmodSync(join(bin, 'gh'), 0o755);
+  mkdirSync(join(root, 'bin'));
+  symlinkSync(GH, join(root, 'bin', 'gh'));
+  return { root, head };
+}
 
+const TEMPLATES = {
+  plain: build(),
+  branchBreaksSuite: build({ branchBreaksSuite: true }),
+  standingRed: build({ standingRed: true }),
+  hangingBranch: build({ hangingBranch: true }),
+};
+
+/** This test's own copy of a variant: its own origin, checkout, home and forge. */
+function repository(options = {}) {
+  const variant = Object.keys(options).find((key) => options[key]) || 'plain';
+  const { root: from, head } = TEMPLATES[variant];
+  const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
+  cpSync(from, root, { recursive: true, verbatimSymlinks: true });
+  const config = join(root, 'repo', '.git', 'config');
+  writeFileSync(config, readFileSync(config, 'utf8').split(from).join(root));
+  chmodSync(join(root, 'home'), 0o700);
+  const repo = join(root, 'repo');
+  const bare = join(root, 'origin.git');
+  const mcHome = join(root, 'home');
+  const bin = join(root, 'bin');
   return {
     root,
     repo,
@@ -113,15 +162,33 @@ function repository({ branchBreaksSuite = false, standingRed = false, hangingBra
     mcHome,
     head,
     logPath: join(root, 'merge-log.md'),
-    mainAt: () => git(repo, ['ls-remote', bare, 'refs/heads/main']).trim().split(/\s+/u)[0],
-    subjectsOnMain: () => {
-      const clone = join(root, `read-${Math.random().toString(36).slice(2, 8)}`);
-      git(root, ['clone', '-q', bare, clone]);
-      return git(clone, ['log', '--oneline', '-5']).trim().split('\n');
-    },
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    hangFlag: join(root, 'hang-flag'),
+    mainAt: () => git(root, ['--git-dir', bare, 'rev-parse', 'refs/heads/main']).trim(),
+    subjectsOnMain: () => git(root, ['--git-dir', bare, 'log', '--oneline', '-5', 'refs/heads/main']).trim().split('\n'),
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MC_TEST_HANG_FLAG: join(root, 'hang-flag', 'started') },
     lease: () => readLease(repo, { root: mcHome }),
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
+  };
+}
+
+/**
+ * The round's ceiling, fired at the moment its stuck child is reached rather
+ * than waited out (as in repo-gate.test.js): what is pinned is what the round
+ * does when the ceiling comes while that child hangs, and that the ceiling it
+ * armed is the one the repository declares.
+ */
+function ceilingAtTheStuckChild() {
+  const state = { armedMs: null, firedAt: null, fire: null, early: false };
+  const fire = () => { state.firedAt = Date.now(); state.fire(); };
+  return {
+    state,
+    armCeiling: (f, ms) => {
+      state.armedMs = ms;
+      state.fire = f;
+      if (state.early) setImmediate(fire);
+      return () => { state.fire = () => {}; };
+    },
+    reached: () => { if (state.fire) setImmediate(fire); else state.early = true; },
   };
 }
 
@@ -135,10 +202,18 @@ describe('the merge round, for real', () => {
       select_why: 'the fixture selects the hanging branch test', extra_gates: [], merge_log: null,
       round_timeout_ms: 5_000, round_timeout_why: 'short timeout fixture', pr_tests_flags: ['--test-timeout=30000'],
     } }));
+    const ceiling = ceilingAtTheStuckChild();
+    mkdirSync(fx.hangFlag);
+    const watcher = watch(fx.hangFlag, () => { if (existsSync(join(fx.hangFlag, 'started'))) ceiling.reached(); });
     try {
-      const started = Date.now();
-      const report = await runMergeRound({ repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: fx.logPath });
-      assert.ok(Date.now() - started < 15_000, 'the round stops at its 5 s ceiling');
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: fx.logPath,
+        gate: (options) => runGate({ ...options, armCeiling: ceiling.armCeiling }),
+      });
+      assert.equal(ceiling.state.armedMs, 5_000, 'the ceiling armed is the one the repository declares');
+      assert.ok(ceiling.state.firedAt, 'the round ended before its hanging test was reached');
+      const took = Date.now() - ceiling.state.firedAt;
+      assert.ok(took < 3_000, `the round took ${took} ms past its ceiling`);
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
       assert.match(report.reason, /ceiling.*tests\/b\.test\.js/u);
@@ -146,7 +221,7 @@ describe('the merge round, for real', () => {
       assert.deepEqual(report.gate.red_files, ['tests/b.test.js'], 'the gate verdict handed to the round log names the file');
       assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the next job can claim the released lane');
       assert.equal(fx.mainAt(), git(fx.repo, ['rev-parse', 'refs/remotes/origin/main']).trim(), 'a red round does not land');
-    } finally { fx.cleanup(); }
+    } finally { watcher.close(); fx.cleanup(); }
   });
 
   it('gates a green branch and squash-merges it onto main', async () => {

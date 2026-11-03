@@ -31,39 +31,59 @@ import { gateRoot } from '../../src/mc/repo-gate.js';
 import { sharedDepsPath } from '../../src/mc/paths.js';
 import { SHARED_TREE_REPOS } from '../../src/mc/shared-deps.js';
 
-describe('an override that shadows shipped fields is said, not silent (D-0135)', () => {
-  it('names the fields the override dropped, and nothing when there is no override', () => {
-    const root = mkdtempSync(join(tmpdir(), 'mc-shadow-'));
+describe('an operator override changes the fields it states and keeps the rest (D-0135)', () => {
+  it('a partial override drops nothing it did not name', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-override-'));
     try {
       // The measured hole, twice on one repository: the operator's memoro
       // override replaced the whole shipped entry — extra_gates fell out
-      // 2026-08-22, pr_tests_flags fell out 2026-08-24, both in silence.
+      // 2026-08-22, pr_tests_flags fell out 2026-08-24, both in silence. The
+      // same override now changes what it says and nothing else.
       writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({
         memoro: {
-          prepare: 'npm ci',
-          prepare_why: 'measured',
+          prepare: 'npm ci --prefer-offline',
+          prepare_why: 'machine-local',
           extra_gates: [{ name: 'msr contract', command: 'npm run test:msr:contract' }],
-          merge_log: null,
         },
       }));
-      const shadowedResult = declarationFor('/x/memoro', { root });
-      assert.equal(shadowedResult.ok, true);
-      // `select` joined the shipped entry on 2026-08-30 and is the field that
-      // decides whether the round measures the change's reach or the whole
-      // suite — so an override that omits it silently would cost the whole
-      // saving, which is exactly the shape of the two earlier losses.
-      // `suite` joined on 2026-09-02 and is worse to lose quietly: an
-      // override that drops it while keeping `select` does not cost a saving,
-      // it stops every `--full` for that repository.
-      // `derived` joined on 2026-10-03: an override that drops it puts the
-      // stale-snapshot race straight back.
-      // `retry_once` joined on 2026-10-17 (ruling 44 § 5), and
-      // `select_changed_path` on 2026-10-18 (ruling 47): dropped, the round
-      // says so and measures without the delta reuse — nothing else changes.
-      assert.deepEqual(shadowedResult.shadowed, ['round_timeout_ms', 'round_timeout_why', 'select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'main_only', 'retry_once_why']);
-      // The shipped entry alone shadows nothing.
-      const plain = declarationFor('/x/memoro-cli', { root });
-      assert.deepEqual(plain.shadowed, []);
+      const answer = declarationFor('/x/memoro', { root });
+      assert.equal(answer.ok, true, answer.reason);
+      assert.equal(answer.declaration.prepare, 'npm ci --prefer-offline');
+      assert.deepEqual(answer.declaration.extra_gates.map((gate) => gate.name), ['msr contract']);
+      // Every field the old override lost is still the shipped one.
+      const plainRoot = mkdtempSync(join(tmpdir(), 'mc-plain-'));
+      const plain = declarationFor('/x/memoro', { root: plainRoot });
+      rmSync(plainRoot, { recursive: true, force: true });
+      for (const field of ['select', 'suite', 'round_timeout_ms', 'pr_tests_flags', 'retry_once', 'derived']) {
+        assert.ok(plain.declaration[field] != null, `shipped memoro declares ${field}`);
+        assert.deepEqual(answer.declaration[field], plain.declaration[field], field);
+      }
+      assert.equal(answer.sources.prepare, 'override');
+      assert.equal(answer.sources.select, 'shipped');
+      assert.equal('shadowed' in answer, false, 'there is nothing left to warn about');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('null is how an override says a field is not wanted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-override-'));
+    try {
+      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({ memoro: { select: null } }));
+      const answer = declarationFor('/x/memoro', { root });
+      assert.equal(answer.ok, true, answer.reason);
+      assert.equal(answer.declaration.select, null);
+      assert.equal(answer.sources.select, 'override');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('the repository ceiling can be tuned by an override but not dropped', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-override-'));
+    try {
+      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({ memoro: { round_timeout_ms: 600_000, round_timeout_why: 'tuned' } }));
+      assert.equal(declarationFor('/x/memoro', { root }).declaration.round_timeout_ms, 600_000);
+      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({ memoro: { round_timeout_ms: null } }));
+      const dropped = declarationFor('/x/memoro', { root });
+      assert.equal(dropped.ok, false);
+      assert.match(dropped.reason, /round_timeout_ms/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -519,23 +539,24 @@ describe('a repository that declares itself in .mc/test.json', () => {
       assert.deepEqual(answer.declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs', '--no-warnings']);
       assert.equal(answer.declaration.select, SHIPPED['memoro-cli'].select, 'the shipped select fell out of a partial file');
       assert.match(answer.declaration.merge_log, /runner\/log\/merge-memoro-cli\.md$/u);
-      assert.deepEqual(answer.shadowed, []);
       assert.equal(answer.sources.pr_tests_flags, 'repository');
       assert.equal(answer.sources.merge_log, 'shipped');
     } finally { fx.cleanup(); }
   });
 
-  it('an override that drops what the repository declared is named, not silent', () => {
+  it('an override on top of the repository keeps what the repository declared', () => {
     const fx = cli();
     try {
       fx.declare({ select: 'node scripts/affected-tests.js --v2', select_why: 'measured here' });
       fx.override({ 'memoro-cli': { prepare: null, prepare_why: 'local', extra_gates: [], merge_log: null } });
       const answer = fx.ask();
-      assert.equal(answer.ok, true);
-      // The repository's own fields are a layer an override can shadow just as
-      // it shadowed the shipped one twice.
-      assert.ok(answer.shadowed.includes('select'), answer.shadowed.join(', '));
-      assert.ok(answer.shadowed.includes('select_why'), answer.shadowed.join(', '));
+      assert.equal(answer.ok, true, answer.reason);
+      // The repository's own fields are a layer an override used to drop just
+      // as it dropped the shipped one twice; field by field, it cannot.
+      assert.equal(answer.declaration.select, 'node scripts/affected-tests.js --v2');
+      assert.equal(answer.sources.select, 'repository');
+      assert.equal(answer.sources.prepare, 'override');
+      assert.equal(answer.sources.round_timeout_ms, 'shipped');
     } finally { fx.cleanup(); }
   });
 

@@ -10,10 +10,12 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+
+import { main } from '../../scripts/affected-tests.js';
 
 const SCRIPT = new URL('../../scripts/affected-tests.js', import.meta.url).pathname;
 
@@ -33,7 +35,7 @@ function repo({ base = {}, change = {}, remove = [] } = {}) {
   git('config', 'user.name', 'gate');
   // The script lives in the repository it measures, so it is copied in.
   mkdirSync(join(root, 'scripts'), { recursive: true });
-  writeFileSync(join(root, 'scripts/affected-tests.js'), execFileSync('cat', [SCRIPT]));
+  writeFileSync(join(root, 'scripts/affected-tests.js'), readFileSync(SCRIPT));
   for (const [path, body] of Object.entries(base)) write(path, body);
   git('add', '-A');
   git('commit', '-qm', 'base');
@@ -44,9 +46,15 @@ function repo({ base = {}, change = {}, remove = [] } = {}) {
 
   return {
     root,
-    select: () => JSON.parse(execFileSync(process.execPath, [
-      join(root, 'scripts/affected-tests.js'), '--base-ref', 'origin-main',
-    ], { cwd: root, encoding: 'utf8' })),
+    // The command in this process, on the fixture: a node process per test
+    // and git through it took 0.5-4 s a test (2026-11-03). The script run as
+    // a process is the last test below.
+    select: () => {
+      let out = '';
+      assert.equal(main(['--base-ref', 'origin-main'], { root, stdout: { write: (s) => { out += s; } } }), 0);
+      return JSON.parse(out);
+    },
+    run: (argv) => execFileSync(process.execPath, [join(root, 'scripts/affected-tests.js'), ...argv], { cwd: root, encoding: 'utf8' }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -327,6 +335,25 @@ describe('which tests a change reaches', () => {
       const { files, why } = fx.select();
       assert.equal(why.reason, 'affected');
       assert.deepEqual(files, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('run as a script from a temporary directory, it answers for the repository it sits in', () => {
+    // macOS hands out `/var/...` for a directory whose real path is
+    // `/private/var/...`; the script compares the two through realpath, or it
+    // is a silent no-op exactly where this fixture puts it.
+    const fx = repo({
+      base: {
+        'src/a.js': 'export const a = 1;\n',
+        'tests/a.test.js': "import { a } from '../src/a.js';\nexport default a;\n",
+        'tests/b.test.js': "export default 'unrelated';\n",
+      },
+    });
+    try {
+      const { files, why } = JSON.parse(fx.run(['--changed-path', './src/a.js']));
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/a.test.js']);
+      assert.equal(why.merge_base, null, 'named paths, not the diff to a base');
     } finally { fx.cleanup(); }
   });
 });

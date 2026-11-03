@@ -22,7 +22,7 @@
  * merge round in operation is where those are measured (decided 2026-11-01).
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { useGitRunner } from '../../../src/mc/git.js';
 
@@ -338,8 +338,9 @@ export class FakeGit {
     const tree = this.treeOf(repo, index);
     const parent = this.headSha(repo, state);
     if (!allowEmpty && parent && repo.commits.get(parent).tree === tree) this.die('nothing to commit, working tree clean', 1);
-    const sha = sha1(`commit ${tree} ${parent ?? ''} ${message} ${repo.serial++} ${this.now++}`);
-    repo.commits.set(sha, { tree, parents: parent ? [parent] : [], message });
+    const at = this.now++;
+    const sha = sha1(`commit ${tree} ${parent ?? ''} ${message} ${repo.serial++} ${at}`);
+    repo.commits.set(sha, { tree, parents: parent ? [parent] : [], message, at });
     if (state.head.startsWith('refs/')) repo.refs.set(state.head, sha); else state.head = sha;
     return sha;
   }
@@ -499,7 +500,7 @@ export class FakeGit {
     const index = this.indexFor(repo, state, env);
     const nul = flags.z ? '\0' : '\n';
     const paths = flags.rest.filter((p) => p !== '--');
-    const within = (path) => !paths.length || paths.some((p) => path === p || path.startsWith(`${p.replace(/\/$/u, '')}/`) || p === '.');
+    const within = (path) => !paths.length || paths.some((p) => pathspecMatches(p, path));
     if (flags.others || flags.o) {
       const files = this.workingFiles(repo, worktree);
       if (flags.ignored || flags.i) {
@@ -596,7 +597,8 @@ export class FakeGit {
     if (flags['set-upstream-to'] || flags.u) return '';
     if (flags.D || flags.d) { for (const name of flags.rest) repo.refs.delete(`refs/heads/${name}`); return ''; }
     if (!flags.rest.length || flags.list) {
-      const names = [...repo.refs.keys()].filter((ref) => ref.startsWith('refs/heads/')).map((ref) => ref.slice('refs/heads/'.length)).sort();
+      const names = [...repo.refs.keys()].filter((ref) => ref.startsWith('refs/heads/')).map((ref) => ref.slice('refs/heads/'.length))
+        .filter((name) => !flags.rest.length || flags.rest.some((pattern) => globMatches(pattern, name))).sort();
       return names.map((name) => `${state && this.branchName(state) === name ? '* ' : '  '}${name}\n`).join('');
     }
     const [name, start] = flags.rest;
@@ -696,7 +698,7 @@ export class FakeGit {
     const prefix = flags.rest[0] ?? 'refs/';
     const format = flags.format ?? '%(refname)';
     return [...repo.refs.keys()].filter((ref) => ref === prefix || ref.startsWith(`${prefix.replace(/\/$/u, '')}/`)).sort()
-      .map((ref) => `${format.replace('%(refname)', ref).replace('%(objectname)', repo.refs.get(ref)).replace('%(upstream)', ref.startsWith('refs/heads/') && repo.refs.has(`refs/remotes/origin/${ref.slice(11)}`) ? `refs/remotes/origin/${ref.slice(11)}` : '')}\n`).join('');
+      .map((ref) => `${format.replace('%(refname:short)', ref.replace(/^refs\/(heads|tags|remotes)\//u, '')).replace('%(refname)', ref).replace('%(objectname)', repo.refs.get(ref)).replace('%(upstream)', ref.startsWith('refs/heads/') && repo.refs.has(`refs/remotes/origin/${ref.slice(11)}`) ? `refs/remotes/origin/${ref.slice(11)}` : '')}\n`).join('');
   }
 
   cmd_check_ref_format({ argv }) {
@@ -795,7 +797,16 @@ export class FakeGit {
     const format = (flags.format ?? flags.pretty ?? (flags.oneline ? '%h %s' : '%H%n%s')).replace(/^(format:|tformat:)/u, '');
     return shas.map((sha) => {
       const commit = repo.commits.get(sha);
-      return `${format.replace(/%H/gu, sha).replace(/%h/gu, sha.slice(0, 7)).replace(/%s/gu, commit.message.split('\n')[0]).replace(/%B/gu, `${commit.message}\n`).replace(/%T/gu, commit.tree).replace(/%P/gu, commit.parents.join(' ')).replace(/%n/gu, '\n')}\n`;
+      // One commit time stands for both author and committer: the model's clock.
+      const seconds = commit.at ?? this.now;
+      const iso = new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, '+00:00');
+      const fields = {
+        H: sha, h: sha.slice(0, 7), s: commit.message.split('\n')[0], B: `${commit.message}\n`,
+        T: commit.tree, P: commit.parents.join(' '), n: '\n', cI: iso, aI: iso, ct: String(seconds), at: String(seconds),
+      };
+      const line = format.replace(/%(x[0-9a-fA-F]{2}|cI|aI|ct|at|[HhsBTPn])/gu, (_, code) => (
+        code.startsWith('x') ? String.fromCharCode(Number.parseInt(code.slice(1), 16)) : fields[code]));
+      return `${line}\n`;
     }).join('');
   }
 
@@ -944,7 +955,8 @@ export class FakeGit {
     }
     for (const spec of specs) {
       if (flags.delete || flags.d) { remote.refs.delete(`refs/heads/${spec}`); repo.refs.delete(`refs/remotes/${remoteName}/${spec}`); continue; }
-      const [source, destination = source] = spec.split(':');
+      // `HEAD` alone is the branch checked out, pushed under its own name.
+      const [source, destination = source === 'HEAD' && state && this.branchName(state) ? this.branchName(state) : source] = spec.split(':');
       const sha = this.resolveRev(repo, state, source);
       if (!sha) this.die(`error: src refspec ${source} does not match any`);
       const targetRef = destination.startsWith('refs/') ? destination : `refs/heads/${destination}`;
@@ -1045,6 +1057,26 @@ export class FakeGit {
       repo.worktrees.delete(path);
       this.worktreeOwner.delete(path);
       rmSync(path, { recursive: true, force: true });
+      return '';
+    }
+    if (verb === 'move') {
+      // As git does it: into an existing directory under the worktree's own
+      // name, never over something there, never the main worktree; the
+      // directory is renamed whole and its `.git` keeps naming the same record.
+      const [fromArg, toArg] = parse(rest, [], []).rest;
+      const from = real(resolve(dir, fromArg));
+      const state = repo.worktrees.get(from);
+      if (!state) this.die(`fatal: '${fromArg}' is not a working tree`);
+      if (from === real(dirname(repo.gitDir))) this.die(`fatal: '${fromArg}' is a main working tree`);
+      let to = resolve(dir, toArg);
+      if (existsSync(to) && statSync(to).isDirectory()) to = join(to, from.split(sep).pop());
+      if (existsSync(to)) this.die(`fatal: '${to}' already exists`);
+      renameSync(from, to);
+      const moved = real(to);
+      repo.worktrees.delete(from);
+      repo.worktrees.set(moved, state);
+      this.worktreeOwner.delete(from);
+      this.worktreeOwner.set(moved, repo);
       return '';
     }
     if (verb === 'prune') {
@@ -1156,9 +1188,27 @@ export class FakeGit {
   }
 
   cmd_archive() { return this.refuse(['archive'], 'archive is deploy-side'); }
-  cmd_grep({ argv }) { return this.refuse(['grep', ...argv], 'grep'); }
+  /**
+   * `git grep -l -F [--] <text> [-- <pathspec>…]`: the tracked files whose
+   * working copy holds the text, exit 1 when none does. Anything else is refused.
+   */
+  cmd_grep({ dir, gitDir, argv, env }) {
+    const flags = parse(argv, [], ['l', 'F', 'files-with-matches', 'fixed-strings']);
+    if (!(flags.l || flags['files-with-matches']) || !(flags.F || flags['fixed-strings'])) return this.refuse(['grep', ...argv], 'grep without -l -F');
+    const rest = flags.rest[0] === '--' ? flags.rest.slice(1) : flags.rest;
+    const [text, ...after] = rest;
+    if (text === undefined) this.die('fatal: no pattern given');
+    const paths = after.filter((p) => p !== '--');
+    const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
+    const index = this.indexFor(repo, state, env);
+    const hits = [...index.keys()].sort()
+      .filter((path) => !paths.length || paths.some((p) => pathspecMatches(p, path)))
+      .filter((path) => existsSync(join(worktree, path)) && readFileSync(join(worktree, path), 'utf8').includes(text));
+    if (!hits.length) this.die('', 1);
+    return hits.map((path) => `${path}\n`).join('');
+  }
   cmd_ls_tree({ dir, gitDir, argv }) {
-    const flags = parse(argv, [], ['r', 'name-only', 'z', 'full-tree']);
+    const flags = parse(argv, [], ['r', 'd', 'name-only', 'z', 'full-tree']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
     const [rev, ...paths] = flags.rest.filter((arg) => arg !== '--');
@@ -1166,6 +1216,19 @@ export class FakeGit {
     if (!sha) this.die(`fatal: Not a valid object name ${rev}`);
     const tree = repo.trees.get(repo.commits.get(sha)?.tree ?? sha);
     const nul = flags.z ? '\0' : '\n';
+    if (flags.d) {
+      // Trees only, as git names them: `dir` is the directory itself, `dir/`
+      // the directories directly inside it.
+      const dirs = new Set();
+      for (const path of tree.keys()) {
+        for (const p of paths) {
+          if (p.endsWith('/') && path.startsWith(p) && path.slice(p.length).includes('/')) dirs.add(`${p}${path.slice(p.length).split('/')[0]}`);
+          else if (!p.endsWith('/') && path.startsWith(`${p}/`)) dirs.add(p);
+        }
+      }
+      return [...dirs].sort()
+        .map((p) => (flags['name-only'] ? `${p}${nul}` : `040000 tree ${createHash('sha1').update(`tree ${sha} ${p}`).digest('hex')}\t${p}${nul}`)).join('');
+    }
     return [...tree.entries()].filter(([path]) => !paths.length || paths.some((p) => path === p || path.startsWith(`${p.replace(/\/$/u, '')}/`))).sort()
       .map(([path, blob]) => (flags['name-only'] ? `${path}${nul}` : `100644 blob ${blob}\t${path}${nul}`)).join('');
   }
@@ -1232,6 +1295,18 @@ export class FakeGit {
  * else is a positional in `rest`. Unknown flags are kept in `rest` too, so a
  * command can refuse them.
  */
+/** A shell glob (`*`, `?`) as git's wildmatch reads it without `**`: `*` crosses `/`. */
+function globMatches(pattern, text) {
+  const source = [...pattern].map((ch) => (ch === '*' ? '.*' : ch === '?' ? '.' : ch.replace(/[.+^${}()|[\]\\]/u, '\\$&'))).join('');
+  return new RegExp(`^${source}$`, 'su').test(text);
+}
+
+/** Whether a pathspec names a path: itself, a directory above it, `.`, or a glob over it. */
+function pathspecMatches(spec, path) {
+  if (spec === '.' || path === spec || path.startsWith(`${spec.replace(/\/$/u, '')}/`)) return true;
+  return /[*?]/u.test(spec) && globMatches(spec, path);
+}
+
 function parse(argv, valued = {}, boolean = []) {
   const takesValue = new Set(Array.isArray(valued) ? valued : Object.keys(valued).filter((key) => valued[key] === 1));
   const noValue = new Set(Array.isArray(valued) ? [] : Object.keys(valued).filter((key) => valued[key] === 0));

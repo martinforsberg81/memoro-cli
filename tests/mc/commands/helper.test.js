@@ -72,6 +72,7 @@ async function invoke(argv, data = {}, turn = TURN(), over = {}) {
     open: async (options) => { Object.assign(opened, options, { called: true }); return { ok: true, code: 0 }; },
     role: () => ROLE,
     mkdir: (path) => made.push(path),
+    routes: () => [{ name: 'mc', line: 'mc itself' }],
     ...rest,
   });
   return { code, stdout: stdout.text, stderr: stderr.text, seen, turned, opened, made, moved };
@@ -105,7 +106,9 @@ describe('mc helper — the desk', () => {
     assert.equal(result.made.length, 2);
     assert.match(result.made[0], /\/helper$/u);
     assert.match(result.made[1], /\/proposals$/u);
-    assert.match(result.stdout, /tell it what is broken; proposals land in .*\/proposals/u);
+    assert.match(result.stdout, /tell it what is broken; proposals land in .*\/<programme>\/proposals, or .*\/proposals when no programme owns it/u);
+    // The session is given the routing table the intake turn gets.
+    assert.match(result.opened.prompt, /^- mc — mc itself$/mu);
   });
 
   it('takes the tool sugar and a model, like every other session verb', async () => {
@@ -141,12 +144,17 @@ describe('mc helper — the desk', () => {
     assert.match(result.stderr, /the helper role is missing from this install/u);
   });
 
-  it('opens by asking, and carries the date its filenames need', () => {
+  it('opens by asking, carries the date its filenames need, and names both destinations', () => {
     const launch = helperLaunch({
-      proposalsPath: '/work/proposals', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
+      proposalsPath: '/work/proposals', programsPath: '/work/programs', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
+      programmes: [{ name: 'mc', line: 'mc itself' }, { name: 'quiet', line: null }],
     });
     assert.match(launch.prompt, /^Today is 2026-08-30\./u);
-    assert.match(launch.prompt, /`\/work\/proposals` as `2026-08-30-<mc\|memoro>-<slug>\.md`/u);
+    assert.match(launch.prompt, /`2026-08-30-<mc\|memoro>-<slug>\.md`/u);
+    assert.match(launch.prompt, /`\/work\/programs\/<programme>\/proposals\/`/u);
+    assert.match(launch.prompt, /When no programme owns it, it goes in `\/work\/proposals`/u);
+    assert.match(launch.prompt, /^- mc — mc itself$/mu);
+    assert.match(launch.prompt, /^- quiet — \(no description\)$/mu);
     assert.match(launch.prompt, /Open by asking what he has\. Write nothing until you have it\./u);
     assert.equal(launch.model, 'sonnet');
   });
@@ -213,7 +221,7 @@ describe('mc helper --intake', () => {
     assert.match(result.moved[0][1], /\/runner\/log\/intake\/\d{4}-\d{2}-\d{2}\/errors-2026-08-29\.md$/u);
     assert.match(result.stdout, /errors-2026-08-29\.md: 1 proposal, 1 waiting \(\d+s, claude sonnet\)/u);
     assert.match(result.stdout, /2026-08-29-mc-expose-operations\.md/u);
-    assert.match(result.stdout, /read them at the next brief/u);
+    assert.match(result.stdout, /each programme's plan session reads its own — .*\/<programme>\/proposals/u);
   });
 
   /**

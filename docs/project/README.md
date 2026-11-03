@@ -86,6 +86,10 @@ the door.
   `medium`, and a plan session (`mc plan`) on `opus`
   (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *The session*). Each step names its own model (below, ruling 42).
+  `subagents`, here or on a step, was removed on 2026-11-02 (ruling 62):
+  `mc project send` refuses it, and a plan sent with it runs without it.
+  Every session instead has its tool's native delegation switched on — Claude
+  `Agent` and Codex `multi_agent` — without mc starting or counting agents.
 
 ### The steps
 
@@ -126,7 +130,7 @@ carries:
   from the schema when the last reader of them does.
 - `runner` — `model` and `effort`. An ordinary step names a work class,
   `fast` or `large` (ruling 59). At launch mc picks a candidate for the class
-  from the catalog (`mc model list`; changed with `mc model add|remove fast|large`
+  from the catalog (`mc model list`; changed with `mc model add|remove fast|large|review`
   and `mc model set review`) and from the subscription capacity it has seen, on
   included subscriptions only. The candidate's tool, model and effort are the
   session's, and a catalog edit never rewrites a plan. A step written now names a
