@@ -62,6 +62,8 @@ function fixture({ entries = null } = {}) {
 function opening(overrides = {}) {
   const calls = [];
   const options = {
+    // Every launch has an owner (session-owner.js); a desk is the plainest.
+    verb: 'brief',
     tool: 'claude',
     spawn: (bin, args, spawnOptions) => { calls.push({ bin, args, spawnOptions }); return { status: 0 }; },
     ...overrides,
@@ -277,12 +279,12 @@ describe('openInWorkArea and the foreground register', () => {
   it('registers the verb, the area, the tool and the model, and releases when the tool is done', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    const { options } = opening();
+    const { options } = opening({ verb: 'plan' });
     await openInWorkArea({
-      areaRoot, worktree, env, verb: 'plan', areaName: 'mc-ui', model: 'opus', register, ...options,
+      areaRoot, worktree, env, areaName: 'plan/mc', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'mc-ui', programme: null, tool: 'claude', model: 'opus', env, role: null },
+      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
   });
@@ -321,7 +323,7 @@ describe('openInWorkArea and the foreground register', () => {
     const { events, register } = registering();
     const { options } = opening();
     const result = await openInWorkArea({
-      areaRoot, worktree, env, verb: 'work', overlay: 'OVERLAY',
+      areaRoot, worktree, env, overlay: 'OVERLAY',
       roleName: 'worker', roleSource: 'catalogue', register, ...options,
     });
     assert.equal(result.resumed, true);
@@ -340,15 +342,29 @@ describe('openInWorkArea and the foreground register', () => {
     assert.deepEqual(events.map((item) => item.event), ['register', 'release']);
   });
 
-  it('a caller that names no verb registers nothing — the register is opt-in', async () => {
+  // Every session belongs to a programme or a desk: a launch that names
+  // neither is refused before anything is registered or spawned (goal mc/no-work).
+  it('refuses a launch with no owner, and registers and spawns nothing', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    const { options } = opening();
-    await openInWorkArea({ areaRoot, worktree, env, register, ...options });
-    assert.deepEqual(events, [
-      { event: 'register', verb: null, area: null, programme: null, tool: 'claude', model: null, env, role: null },
-      { event: 'release' },
-    ]);
+    for (const owner of [{ verb: null }, { verb: 'work', areaName: 'work/x' }, { verb: 'plan', areaName: 'mc-test' }, { verb: 'project' }]) {
+      const { calls, options } = opening(owner);
+      const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
+      assert.equal(result.ok, false, JSON.stringify(owner));
+      assert.equal(result.reason, 'no owner');
+      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc brief, mc helper\)/u);
+      assert.deepEqual(calls, []);
+    }
+    assert.deepEqual(events, []);
+  });
+
+  it('opens a project of a programme, and registers it with its programme', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { options } = opening({ verb: 'project', programme: 'mc' });
+    const result = await openInWorkArea({ areaRoot, worktree, env, areaName: 'step/ui', register, ...options });
+    assert.equal(result.ok, true);
+    assert.deepEqual([events[0].verb, events[0].area, events[0].programme], ['project', 'step/ui', 'mc']);
   });
 });
 

@@ -9,6 +9,9 @@ So every session belongs to a programme (plan, build, review) or a desk
 
 What took each part's place:
 
+- **A session for nobody.** `openInWorkArea` asks `ownerOf`
+  (`src/mc/session-owner.js`) before anything starts, and a launch with no
+  programme and no desk is refused with what it should belong to.
 - **The verbs.** `mc work …` and `mc worker …` exit 2 with a line that says
   where each kind of session starts (`RETIRED_VERBS`, `src/mc-verbs.js`).
 - **Opening a project from the page.** A project's number opens a session in

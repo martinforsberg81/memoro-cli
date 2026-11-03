@@ -87,6 +87,7 @@ import {
 import { RUNNER_DISK, RUNNER_MEMORY, areaKindOf, mcHome, programsHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
+import { DESKS, ownerOf } from './session-owner.js';
 import { overlayPlans, readEntry, realLock } from './register.js';
 import { gitDirOf } from './repos.js';
 import { readTailEntries } from './conversations.js';
@@ -388,8 +389,8 @@ function lanesOfRunner(sessions = [], setting = {}) {
 
 /* ------------------------------------------------------------- FOREGROUND */
 
-/** The two singleton desks, drawn whether or not anybody is at them. */
-export const DESKS = Object.freeze(['helper', 'brief']);
+/** The two singleton desks (session-owner.js), re-exported for the page's readers. */
+export { DESKS, ownerOf };
 
 /**
  * Who is sitting where — everything running that the runner did not start.
@@ -475,23 +476,6 @@ export function sessionsSection({
     strays,
     count: owned.length,
   };
-}
-
-/**
- * Whose a register entry is: `{ kind: 'desk', name }` for `mc brief` and
- * `mc helper`, `{ kind: 'programme', name }` for a planning session in a
- * programme's directory or a project opened from the page, and null for
- * anything else — which makes it a stray.
- */
-export function ownerOf(item) {
-  if (DESKS.includes(item?.verb)) return { kind: 'desk', name: item.verb };
-  if (item?.verb === 'plan') {
-    const area = areaKindOf(item.area || '');
-    if (area?.kind === 'plan') return { kind: 'programme', name: area.name };
-    return item.programme ? { kind: 'programme', name: item.programme } : null;
-  }
-  if (item?.verb === 'project' && item.programme) return { kind: 'programme', name: item.programme };
-  return null;
 }
 
 /* -------------------------------------------------------------------- NEXT */

@@ -306,6 +306,9 @@ describe('the launch', () => {
       prompt: launch.prompt,
       defaultModel: 'opus',
       defaultModelTool: 'claude',
+      verb: 'plan',
+      programme: 'x',
+      register: () => () => {},
       env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex') },
       spawn: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; },
     });

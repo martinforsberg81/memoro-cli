@@ -30,6 +30,7 @@ import { instructionsFor, roleRecord, textDigest } from './roles.js';
 import { profileArgs } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
+import { OWNERLESS_HINT, ownerOf } from './session-owner.js';
 import { clearStopMark } from './work-stop-marker.js';
 import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
@@ -64,6 +65,9 @@ export async function openInWorkArea({
   spawn = spawnSync,
   register = registerForeground,
 } = {}) {
+  // Every session belongs to a programme or a desk (session-owner.js); one mc
+  // would start for nobody is refused before anything is looked up or spawned.
+  if (!ownerOf({ verb, area: areaName, programme })) return { ok: false, reason: 'no owner', hint: OWNERLESS_HINT };
   const before = listConversations(areaRoot, env);
 
   // A named conversation decides its own tool: asking for one by id and being
