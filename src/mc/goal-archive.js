@@ -55,7 +55,7 @@ export function moveDir(from, to) {
  */
 export function archiveGoal(goal, all, { home, git, gh, known, move = moveDir, appendText, read, now }) {
   const refuse = (refused) => ({ refused });
-  if (goal.problems.length) return refuse(`its GOAL.md does not parse (${goal.problems[0]})`);
+  if (goal.problems.length) return refuse(`its GOAL.json does not parse (${goal.problems[0]})`);
   const name = `${goal.programme}/${goal.goal}`;
   if (!FINISHED.includes(goal.status)) return refuse(`it is ${goal.status}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`);
   const waiting = all.filter((other) => !FINISHED.includes(other.status) && (other.after ?? []).includes(name)).map((other) => `${other.programme}/${other.goal}`);

@@ -13,6 +13,9 @@
 // state. Prose fields are arrays of paragraphs rather than one string, so a
 // diff stays line-oriented for the person reading the PR.
 
+import { plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
+
+export { unmetCriteria };
 
 export const PLAN_SCHEMA = 'mc-plan';
 export const PLAN_VERSION = 1;
@@ -103,9 +106,9 @@ const STEP_KEYS = Object.freeze([
   'kind',
 ]);
 
-/** `met` in the file is written `false` by the verbs and read by nothing; the register holds it. */
-const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
-const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
+// A criterion and a document are `criteria.js`'s, shared with GOAL.json. A
+// plan's `met` in the file is written `false` by the verbs and read by nothing;
+// the register holds it.
 const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'check_in_minutes', 'stall_minutes']);
 /**
  * What a step may say for itself in its own `runner`: which model does the
@@ -177,24 +180,6 @@ export function blockerFieldProblems(blocker, number) {
   return problems;
 }
 
-function plain(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function unknownKeys(value, allowed) {
-  return Object.keys(value).filter((key) => !allowed.includes(key));
-}
-
-function text(value) {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-// Prose is an array of paragraphs. `min` is 1 where the field is the reason the
-// plan exists, and 0 where a plan may honestly have nothing yet to say.
-function prose(value, { min = 1 } = {}) {
-  return Array.isArray(value) && value.length >= min && value.every(text);
-}
-
 function positiveInteger(value) {
   return Number.isInteger(value) && value > 0;
 }
@@ -264,34 +249,6 @@ function classProblem(model, classes) {
   return classes?.length
     ? `${model} is not a class for this step — ${classes.join(' or ')}`
     : `${model} is a work class, which a step names and a plan does not`;
-}
-
-function validateCriteria(list, problems) {
-  if (!Array.isArray(list) || list.length < 1) {
-    problems.push('success_criteria: at least one criterion — a project with none cannot be finished');
-    return;
-  }
-  list.forEach((item, index) => {
-    const at = `success_criteria[${index}]`;
-    if (!plain(item)) { problems.push(`${at}: must be an object`); return; }
-    for (const key of unknownKeys(item, CRITERION_KEYS)) problems.push(`${at}.${key}: unknown key`);
-    if (typeof item.met !== 'boolean') problems.push(`${at}.met: true or false`);
-    if (!text(item.criterion)) problems.push(`${at}.criterion: what must be true`);
-    // The check is the half a criterion is usually missing: "done" is not a
-    // judgement the session makes about its own work.
-    if (!text(item.check)) problems.push(`${at}.check: how it is checked — the assertion, the query, the measurement in the running app`);
-  });
-}
-
-function validateDocuments(list, problems) {
-  if (!Array.isArray(list)) { problems.push('documents: an array, possibly empty'); return; }
-  list.forEach((item, index) => {
-    const at = `documents[${index}]`;
-    if (!plain(item)) { problems.push(`${at}: must be an object`); return; }
-    for (const key of unknownKeys(item, DOCUMENT_KEYS)) problems.push(`${at}.${key}: unknown key`);
-    if (!text(item.label)) problems.push(`${at}.label: what the reader is being sent to`);
-    if (!text(item.path)) problems.push(`${at}.path: a path or URL a checkout can follow`);
-  });
 }
 
 function validateBlocker(step, at, problems, number) {
@@ -512,12 +469,6 @@ export function planState(plan) {
 export function branchFlow(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   return steps[steps.length - 1]?.kind === 'review';
-}
-
-/** The 1-based numbers of the success criteria that are not `met: true`. */
-export function unmetCriteria(plan) {
-  const criteria = Array.isArray(plan?.success_criteria) ? plan.success_criteria : [];
-  return criteria.map((criterion, i) => (criterion?.met === true ? null : i + 1)).filter(Boolean);
 }
 
 /** What an `unmet` plan is waiting for, as one clause: the criteria by number, and what makes them met. */

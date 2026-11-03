@@ -17,6 +17,7 @@ import {
 } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { listingText, programmesListing, run as programs } from '../../src/mc/commands/programs.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 const NOW = new Date('2026-11-02T12:00:00Z');
 
@@ -182,7 +183,7 @@ describe('mc programs', () => {
     try {
       const goal = join(root, 'programs', 'goal-only', 'goals', 'rollout');
       mkdirSync(goal, { recursive: true });
-      writeFileSync(join(goal, 'GOAL.md'), '---\nstatus: open\nrepos: memoro\nclass: fast\ncreated: 2026-11-02T00:00:00Z\n---\n# Rollout\n');
+      writeFileSync(join(goal, 'GOAL.json'), goalJson({ status: 'open', repos: ['memoro'], class: 'fast', created: '2026-11-02T00:00:00Z', title: 'Rollout' }));
       writeFileSync(join(goal, 'LOG.md'), '');
       mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
       writeFileSync(join(root, 'runner', 'foreground', '1.json'), JSON.stringify({ ...SESSION, pid: process.pid }));
