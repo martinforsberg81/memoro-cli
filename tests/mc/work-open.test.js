@@ -199,7 +199,7 @@ describe('openInWorkArea and the launch switches', () => {
 
 describe('openInWorkArea in a role area', () => {
   it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
-    for (const name of ['build-session:goal', 'build-session:project', 'build-session:worker', 'review-session:goal', 'review-session:project', 'plan-session', 'brief', 'helper', 'intake']) {
+    for (const name of ['build-session:goal', 'review-session:goal', 'plan-session', 'brief', 'helper', 'intake']) {
       const role = readCanonRole(name);
       assert.ok(role, name);
       for (const resumed of [false, true]) {

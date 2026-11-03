@@ -15,12 +15,10 @@ import { readFileSync } from 'node:fs';
 import { writeJsonAtomic } from '../atomic-write.js';
 import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
-import { criteriaDoor } from '../merge-boundary.js';
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
-import { bookBuilt, landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
 import { dropPr } from '../page-cache.js';
-import { listEntries, readEntry, realLock, updateStep } from '../register.js';
+import { realLock } from '../runner-lock.js';
 import { WATCH_TIMEOUT_MIN, followMerge } from '../merge-watch.js';
 import { recordRound } from '../repo-round-log.js';
 import { currentHolder } from '../work-identity.js';
@@ -64,59 +62,15 @@ export async function run(argv, deps = {}) {
     if (!docsOnly(files)) return (deps.gate || gate)(opts, { ...deps, stdout, stderr, resolveRepo: async () => repoPath });
     stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, after the tests that read documents\n`);
   }
-  // The door `mc merge` has for the plan's last step (`criteriaDoor`), here
-  // too: a docs-only close-out is the usual last step. A planning session's
-  // pull request is nobody's step, and passes.
-  const root = deps.root || workRoot(deps.env || process.env);
-  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
-  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
-  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, gh: deps.gh, git: deps.git, root, env: deps.env || process.env, entries: listEntries(root, io) });
-  if (door.checked && !door.ok) {
-    for (const problem of door.problems) stderr.write(`mc: ${door.stop || 'unmet-criteria'} — ${problem}\n`);
-    return 1;
-  }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh,
     measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
-  // The body is read for the step's remainder, not kept in the round log.
-  const { body = null } = report;
+  // The body is not kept in the round log.
   delete report.body;
   report.holder = currentHolder();
   recordRound(report, { mode: 'docs' });
-  const booked = report.merged ? bookDocsLanding(report, body, deps) : null;
   if (opts.json) { stdout.write(`${JSON.stringify(report, null, 2)}\n`); return report.ok ? 0 : 1; }
   for (const line of docsMergeLines(report)) stdout.write(`${line}\n`);
-  if (booked) stdout.write(`mc: ${booked}\n`);
   return report.ok ? 0 : 1;
-}
-
-/**
- * A docs-only pull request that is a step's lands here without the merger,
- * so the verb books it as the merger books a green round: the step is
- * `done` with its pull request. Without this the step stayed `running`, the
- * runner found no open pull request on the branch GitHub had deleted, and
- * wrote the step `failed` (msr-core-finish-measure steps 1 and 3, #13772 and
- * #13784, 2026-10-18). The step is found as the gate's door finds it
- * (`stepForMerge`); a planning session's pull request is nobody's step and
- * books nothing. A step already `done` or `blocked` is left as it is, as the
- * merger leaves it. A review's landing books the steps built under it too
- * (`bookBuilt`). Returns the line to print, or null.
- */
-function bookDocsLanding(report, body, deps) {
-  const root = deps.root || workRoot(deps.env || process.env);
-  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
-  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
-  try {
-    const step = stepForMerge({ env: deps.env || process.env, head: report.branch, entries: listEntries(root, io) });
-    if (!step) return null;
-    const standing = readEntry(root, step.project, io)?.steps?.[step.index];
-    if (standing?.status === 'done' || standing?.status === 'blocked') return null;
-    const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
-    updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: report.pr.number, report, now: stamp, body }), now: stamp, ...io });
-    const built = bookBuilt({ root, project: step.project, pr: report.pr.number, report, now: stamp, io, updateStep, readEntry });
-    return `${step.project} step ${step.index + 1} is done${builtSaid(built)}`;
-  } catch (error) {
-    return `the landing is not booked on its step (${error?.message || error}) — mc step done <project> <n> --pr ${report.pr.number}`;
-  }
 }
 
 /**
@@ -127,8 +81,8 @@ function bookDocsLanding(report, body, deps) {
  * `landing` entry within a minute, so this never touches a round itself.
  *
  * Booked as the merger books a landing: the queue entry goes (a `landing` one
- * stays for that watch), the step is `done` with its landing, the page drops
- * the row, and the round log says `admin`.
+ * stays for that watch), the page drops the row, and the round log says
+ * `admin`.
  */
 async function runAdmin(opts, { stdout, stderr, ...deps }) {
   const repoPath = await (deps.resolveRepoPath || resolveRepoPath)(opts.repo);
@@ -171,7 +125,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     sha = after.mergeCommit?.oid || null;
   }
 
-  // The queue, under the register's lock, as the merger writes it. The entry
+  // The queue, under the runner lock, as the merger writes it. The entry
   // is this pull request in this repository; `landing` is the merger's to answer.
   const root = deps.root || workRoot(deps.env || process.env);
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
@@ -190,39 +144,17 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     queue = 'removed';
   });
 
-  // The step, unless the merger has the entry: the entry's own, else the one
-  // the pull request's branch stands on. Done or blocked is left as it is.
-  let booked = null;
-  let built = [];
-  if (queue !== 'landing') {
-    try {
-      const step = entry?.step || stepForMerge({ env: deps.env || process.env, head: view.headRefName, entries: listEntries(root, io) });
-      const standing = step ? readEntry(root, step.project, io)?.steps?.[step.index] : null;
-      if (standing && standing.status !== 'done' && standing.status !== 'blocked') {
-        const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
-        updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report: { merge_commit: sha, merged_into: view.baseRefName }, now: stamp, body: view.body }), now: stamp, ...io });
-        built = bookBuilt({ root, project: step.project, pr: opts.pr, report: { merge_commit: sha, merged_into: view.baseRefName }, now: stamp, io, updateStep, readEntry });
-        booked = step;
-      }
-    } catch (error) {
-      // The merge stands; only its booking failed, and the line says how to book it by hand.
-      stderr.write(`mc: the landing is not booked on its step (${error?.message || error}) — mc step done <project> <n> --pr ${opts.pr}\n`);
-    }
-  }
-
   // The page drops the row at once; a page that cannot be written costs nothing.
   try { dropPr({ root, repo: repoNameOf(repoPath), number: opts.pr }); } catch { /* the page catches up on its own */ }
 
   const now = deps.now ? deps.now() : new Date();
   recordRound({ repo: repoPath, pr: { number: opts.pr }, ok: true, merged: true, merge_commit: sha, stopped_at: null, reason: null, holder: currentHolder(), started_at: now.toISOString() }, { mode: 'admin' });
 
-  const step = booked ? { project: booked.project, index: booked.index } : null;
   if (opts.json) {
-    stdout.write(`${JSON.stringify({ ok: true, merged: true, merge_commit: sha, merged_into: view.baseRefName, step, queue }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ok: true, merged: true, merge_commit: sha, merged_into: view.baseRefName, queue }, null, 2)}\n`);
     return 0;
   }
   stdout.write(`mc: merged #${opts.pr} into ${view.baseRefName} as ${sha7(sha)} (squash, --admin: no gate round)\n`);
-  if (booked) stdout.write(`mc: ${booked.project} step ${booked.index + 1} is done${builtSaid(built)}\n`);
   if (queue === 'landing') stdout.write(`mc: #${opts.pr} is landing in the merger's queue — the merger's round for it stops within a minute and books it\n`);
   return 0;
 }
@@ -235,9 +167,6 @@ function ghJson(answer) {
 
 /** The short commit a line names, or nothing when there is none. */
 const sha7 = (sha) => String(sha || '').slice(0, 7);
-
-/** The clause that says which built steps a review's landing booked done with it, or nothing. */
-const builtSaid = (built) => (built.length ? `; steps ${built.map((index) => index + 1).join(', ')} were built on its branch — done with it` : '');
 
 /** `mc merge watch <repo> <pr> [--timeout <min>] [--json]` — the arguments. */
 export function parseWatchArgs(argv) {

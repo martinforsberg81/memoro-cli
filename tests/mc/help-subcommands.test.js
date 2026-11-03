@@ -46,7 +46,7 @@ describe('help after documented subcommands', () => {
         }
       }
     }
-    for (const command of ['run lanes', 'project criterion add', 'project step edit', 'goal blocked', 'repo watch start', 'shot login prod', 'asc build', 'asc status', 'asc release']) {
+    for (const command of ['run lanes', 'goal criterion add', 'goal blocked', 'repo watch start', 'shot login prod', 'asc build', 'asc status', 'asc release']) {
       assert.ok(seen.has(command), `the walker missed ${command}`);
     }
   });
@@ -78,7 +78,7 @@ describe('help after documented subcommands', () => {
   });
 
   it('the binary prints usage on stdout with exit 0 and no stderr', () => {
-    for (const args of [['run', 'lanes'], ['project', 'criterion', 'met'], ['goal', 'log'], ['vault', 'set'], ['vault', 'recovery']]) {
+    for (const args of [['run', 'lanes'], ['goal', 'criterion', 'met'], ['goal', 'log'], ['vault', 'set'], ['vault', 'recovery']]) {
       const result = runMc([...args, '--help']);
       assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
       assert.match(result.stdout, /usage|USAGE/u);

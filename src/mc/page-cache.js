@@ -1,7 +1,6 @@
 /**
  * The file that makes the page instant: `~/mc/runner/prs.json`, the open PRs
- * as GitHub last gave them. Plans are not cached: they are read from
- * `~/mc/programs/` on every call (`loadPlans`), which is a directory read.
+ * as GitHub last gave them.
  *
  * **prs.json** has no key — an open PR closes without moving any sha — so it
  * is stamped instead, written by `--fresh`, by every runner round
@@ -17,8 +16,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
-import { listPlans } from './brief-collect.js';
-import { programsPlans } from './plan-source.js';
 
 export const PRS_FILE = 'prs.json';
 
@@ -34,19 +31,6 @@ const seconds = (iso, now) => {
   const at = Date.parse(iso);
   return Number.isNaN(at) ? null : Math.max(0, Math.round((now.getTime() - at) / 1000));
 };
-
-/**
- * Every plan of every repository, as `listPlans` gives them: the plans under
- * `~/mc/programs/` (ruling 48). Nothing is cached: `~/mc/programs/` changes
- * without any sha moving, and reading it is a directory read. `sources` says
- * one line a repository, never cached. `ref`, `now`, `git`, `batch`, `read`
- * and `write` are accepted and not used.
- */
-export function loadPlans({ repos, programs = programsPlans } = {}) {
-  const plans = repos.flatMap((repo) => listPlans(repo, { programs }));
-  const sources = repos.map((repo) => ({ repo: repo.name, sha: null, cached: false }));
-  return { plans, sources };
-}
 
 /** The open PRs as they were when `--fresh` last asked, with their age. */
 export function loadPrs({ root, now = new Date(), read = readFileSync } = {}) {

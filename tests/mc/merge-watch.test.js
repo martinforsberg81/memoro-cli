@@ -137,17 +137,11 @@ describe('watch', () => {
     ]);
   });
 
-  it('a job stacked on one still queued waits for it', async () => {
+  it('a parent an older mc wrote on a job holds nothing back: it is queued', async () => {
     const parent = { project: 'merge-watch', index: 0, pr: 834, sha: 'abc' };
     const w = world({ polls: [[job(834), job(835, { parent })]], view: null });
     await watch({ ...w.deps, timeoutMs: 0 });
-    assert.equal(w.lines[0], 'mc: #835 waits for #834 (stacked on it) to land');
-  });
-
-  it('a job whose plan\'s earlier step is not done is queued and says what it waits for', async () => {
-    const w = world({ polls: [[job(835, { step: { project: 'merge-watch', index: 2 } })]], view: null });
-    await watch({ ...w.deps, timeoutMs: 0, ordered: () => false });
-    assert.equal(w.lines[0], 'mc: #835 queued — place 1, next in line, waits for merge-watch step 2');
+    assert.equal(w.lines[0], 'mc: #835 queued — place 2, behind #834');
   });
 
   it('polls every WATCH_POLL_MS', () => {

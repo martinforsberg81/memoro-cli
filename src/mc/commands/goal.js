@@ -11,6 +11,8 @@
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
  *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
  *                                  and every goal that started after others given a phase (`phaseGoals`)
+ *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
+ *                                  (`project-convert.js`); a finished one is refused
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
  *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked]
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too
@@ -52,7 +54,8 @@ import { writeFileAtomic } from '../atomic-write.js';
 import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
-import { addGoalWorktree, addPr, backward, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { convertProject } from '../project-convert.js';
+import { addGoalWorktree, addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -73,6 +76,7 @@ const VERB_FLAGS = {
   'criterion met': [],
   'criterion unmet': [],
   convert: [],
+  'from-project': [],
   log: ['--done', '--comment', '--next', '--stage', '--status'],
   stage: ['--reason', '--sha'],
   status: ['--reason'],
@@ -129,6 +133,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
   if (verb === 'convert') return convert(rest, ctx);
+  if (verb === 'from-project') return fromProject(rest, ctx);
   if (verb === 'log') return logEntry(rest, { stage: flags.stage, status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
   if (verb === 'stage') {
     if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
@@ -282,14 +287,15 @@ function logEntry(args, fields, ctx) {
  * review judged, as `mc merge` queues — with the goal and that sha on the
  * job, so the merger lands that head and no other (`merger.js` `landJob`).
  * `{ text }` said into the entry, or `{ error }`: no sha, no pull request on
- * `goal/<goal>`, or a queue that fails.
+ * the goal's branch, or a queue that fails.
  */
 function queueJudged(target, goal, sha, ctx) {
   if (!sha) return { error: 'which head did the review judge? MC_REVIEW_HEAD is not set — --sha <sha>' };
   const [repoName] = goal.repos;
   const repoPath = ctx.known().find((path) => repoNameOf(path) === repoName);
   if (!repoPath) return { error: `${repoName} is not a repository mc knows` };
-  const branch = `goal/${target.goal}`;
+  // The goal's own branch, or the project branch it took over (`goalBranch`).
+  const branch = goalBranch({ git: ctx.git, dir: target.dir, goal: target.goal, repo: repoName });
   const asked = ctx.gh(repoPath, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number,headRefOid']);
   if (!asked.ok) return { error: `its pull request could not be read (${asked.stderr.trim() || 'gh failed'})` };
   let pr;
@@ -443,6 +449,27 @@ function convert(args, ctx) {
     else stdout.write(`mc: ${answer.name} · ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}, phase ${answer.phase}${answer.after.length ? ` (was after ${answer.after.join(', ')})` : ''}\n`);
   }
   return [...answers, ...phased].some((answer) => answer.problems) ? 1 : 0;
+}
+
+/**
+ * `mc goal from-project <programme>/<project>` — a live project turned into
+ * goals (`convertProject`), each said with its stage and status, its phase,
+ * its branch and the pull request it carries. A finished project, or one converted
+ * already, is refused with exit 1.
+ */
+function fromProject(args, ctx) {
+  const { stdout, stderr, env, home, now, list, read, write, git, known } = ctx;
+  if (args.length !== 1 || !isGoalRef(args[0])) { stderr.write('mc: from-project <programme>/<project>\n'); return 2; }
+  const [programme, project] = args[0].split('/');
+  const answer = convertProject({ home, programme, project, now, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, list, read, write, git, known });
+  if (answer.refused) { stderr.write(`mc: ${args[0]} is not converted — ${answer.refused}\n`); return 1; }
+  for (const goal of answer.made) {
+    const carries = goal.prs.length ? ` · carries ${goal.prs.map(prRef).join(', ')}` : '';
+    stdout.write(`mc: ${goal.name} · ${goal.stage} · ${goal.status} · phase ${goal.phase} · ${goal.branch}${carries}\n`);
+    if (goal.worktree) stderr.write(`mc: ${goal.name}'s worktree is not made — ${goal.worktree}; the goal's files stand\n`);
+  }
+  stdout.write(`mc: ${answer.made.length} goal${answer.made.length === 1 ? '' : 's'} made from ${args[0]}; the project's own files are left as they are\n`);
+  return answer.made.some((goal) => goal.worktree) ? 1 : 0;
 }
 
 /**

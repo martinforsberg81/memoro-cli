@@ -192,9 +192,9 @@ export function workHome(env = process.env) {
 }
 
 /**
- * `~/mc/programs/` — mc's programmes, projects and plans:
- * `programs/<programme>/<project>/PLAN.json` (ruling 48). A plan here shadows a
- * plan of the same name in a repository, and names its repository in `repo`.
+ * `~/mc/programs/` — mc's programmes and their goals:
+ * `programs/<programme>/goals/<goal>/` (ruling 48). A finished project's
+ * directory may still stand beside them; mc no longer reads it.
  */
 export const PROGRAMS_HOME = 'programs';
 
@@ -217,8 +217,8 @@ export const ARCHIVED_PROJECTS = 'projects';
 
 /**
  * `~/mc/archive/projects/<programme>/<project>/` — where the runner moves an
- * archived project's directory, whole: its CLOSEOUT.json, PLAN.json, STATE.json
- * and anything else that was in it. Nothing under it is a live plan.
+ * archived project's directory, whole: its closeout, plan, register and
+ * anything else that was in it. Nothing under it is live.
  */
 export function archivedProjectsHome(env = process.env) {
   return join(workRoot(env), ARCHIVE_HOME, ARCHIVED_PROJECTS);
@@ -244,7 +244,7 @@ export function selfHome(env = process.env) {
 /**
  * `~/mc/runner/layout.json` says which structure the work root has (ruling 51).
  * Absent, unreadable, or anything but `{"schema":"mc-layout","version":2}` is
- * layout 1, today's. `mc layout migrate` writes the file last, so its presence
+ * layout 1. `mc layout migrate` wrote it last, on 2026-10-20, so its presence
  * means the move is done. Read on every call, with no cache: a long-lived
  * runner must see the file the moment it appears.
  */

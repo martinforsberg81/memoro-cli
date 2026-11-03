@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
-import { programsPlans } from '../../src/mc/plan-source.js';
-import { validatePlan } from '../../src/mc/plan-schema.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 
@@ -92,14 +90,11 @@ test('the schema refuses a goal without a criterion, a criterion without a check
   assert.deepEqual(parseGoal(withGoal(GOAL_TEXT, { success_criteria: [] })).success_criteria, []);
 });
 
-test('PLAN.json and GOAL.json check criteria and documents with the same functions', () => {
-  const plan = { schema: 'mc-plan', version: 1, goal: ['g'], contract: ['c'], out_of_scope: ['o'], documents: [], steps: [{ title: 't', status: 'ready', done_when: 'd', instruction: ['i'] }] };
+test('GOAL.json checks its criteria with the shared validator of criteria.js', () => {
   const bad = [{ criterion: 'it works', met: false }];
-  const fromPlan = validatePlan({ ...plan, success_criteria: bad }).problems;
   const fromGoal = validateGoal({ ...JSON.parse(GOAL_TEXT), success_criteria: bad });
   const shared = [];
   criteria.validateCriteria(bad, shared);
-  assert.deepEqual(fromPlan, shared);
   assert.deepEqual(fromGoal, shared);
 });
 
@@ -216,17 +211,6 @@ test('programsGoals lists every goal under every programme, in listing order, wi
   assert.equal(goals[2].status, null);
   assert.equal(goals[2].stage, null);
   assert.equal(goals[2].log.length, 3);
-});
-
-test('programsPlans ignores a goals directory: no PLAN.json sits directly under it, so no goal is a plan', () => {
-  // A plan is `<programme>/<project>/PLAN.json`: the goal is `goals/<goal>`, one level deeper.
-  const { list, read } = model({
-    '/p/mc/proj/PLAN.json': '{"repo":"memoro-cli"}',
-    '/p/mc/goals/plain/GOAL.json': GOAL_TEXT,
-    '/p/mc/goals/plain/memoro-cli/PLAN.json': '{"repo":"memoro-cli"}',
-  });
-  const plans = programsPlans({ home: '/p', list, read });
-  assert.deepEqual(plans.map((plan) => plan.path), ['/p/mc/proj/PLAN.json']);
 });
 
 test('setGoalState rewrites the stage or status and appends the entry with both, in one call; nothing is written for a value unknown or a goal that does not parse', () => {

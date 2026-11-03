@@ -47,15 +47,6 @@ import { expandRoleSkills } from './skills.js';
  * `pm` and `pm-helper` were reserved beside it, for the same reason and for a
  * pair of roles that no longer exist. They are ordinary names again.
  */
-/** The role a `mc worker` area carries: a build, its `worker` part. */
-export const WORKER_ROLE = 'build-session:worker';
-
-/**
- * Area marks written before the roles were one file each: an area marked
- * `worker` before 2026-11-03 carries the worker part of the build role now.
- */
-export const MOVED_MARKS = Object.freeze({ worker: WORKER_ROLE });
-
 export const RESERVED_ROLE_NAMES = Object.freeze(['helper']);
 
 const ROLE_COMMANDS = { helper: 'mc helper' };
@@ -199,14 +190,14 @@ export function sharedRoleText() {
  * A verb's own file, carried by reference rather than copied.
  *
  * `all-sessions.md` is what *every* role session is told. How a verb is used —
- * `mc project` and writing a `PLAN.json`, `mc goal`, `mc step` — is not that:
- * the plan session and the brief write plans and a build session does not, and
- * telling a build session how to write a plan it may never write is worse than
+ * `mc goal` and writing a `GOAL.json` — is not that: the plan session and the
+ * brief write goals and a build session does not, and telling a build session
+ * how to write a goal it may never write is worse than
  * telling it nothing. So each verb is its own file, `<verb>-verb.md` —
  * `listRoles` skips it, `parseRole` refuses it for want of frontmatter — and a
  * role file names it on a line of its own:
  *
- *   @include project-verb.md
+ *   @include goal-verb.md
  *
  * The line is replaced with that file's text at assembly, in `instructionsFor`,
  * which is the one door every launch path goes through. It is deliberately not
@@ -309,9 +300,8 @@ export function areaRole(areaPath, env = process.env) {
   if (!name) return null;
   // The user's catalogue first — it is their rulebook, and a role defined
   // there is the one they meant. Canon is the fallback so a role mc ships
-  // (worker, since the PM went dormant) reaches every conversation in its
-  // area on a machine with no catalogue at all.
-  const role = readRole(name, env) || readCanonRole(MOVED_MARKS[name] || name);
+  // reaches every conversation in its area on a machine with no catalogue.
+  const role = readRole(name, env) || readCanonRole(name);
   return role || { name, missing: true, path: join(rolesDir(env), `${roleRef(name).file}.md`) };
 }
 

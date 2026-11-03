@@ -45,11 +45,11 @@ import { withoutSessionIdentity } from './session-role.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { defaultRepos, listPlans, proposalSystem } from './brief-collect.js';
+import { defaultRepos, proposalSystem } from './brief-collect.js';
+import { FINISHED, programsGoals } from './goals.js';
 import { runAsync as runGitAsync } from './git.js';
 import { intakeArchiveDir, intakeDir, listAllProposals, programmeNames, proposalsDir } from './helper-collect.js';
 import { programsHome } from './paths.js';
-import { programsPlans } from './plan-source.js';
 import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
@@ -99,7 +99,7 @@ export function repoOfFile(file) {
  * works for a file that is not text.
  */
 export function helperPrompt({
-  file, proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], projectLog = null, plans = [], proposals = [], repo = null, now = new Date(),
+  file, proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], projectLog = null, goals = [], proposals = [], repo = null, now = new Date(),
 }) {
   const tagOf = (repo) => (repo === 'memoro-cli' ? 'mc' : 'memoro');
   const date = now.toISOString().slice(0, 10);
@@ -148,11 +148,11 @@ export function helperPrompt({
   );
   if (!programmes.length) out.push('_none_');
   else for (const p of programmes) out.push(`- ${p.name} — ${clip(p.line || NO_DESCRIPTION, 160)}`);
-  out.push('', '----- PLANS ON MAIN -----');
-  if (!plans.length) out.push('_none read_');
+  out.push('', '----- GOALS NOT FINISHED -----');
+  if (!goals.length) out.push('_none read_');
   else {
-    out.push('| repo | programme / project | status | next |', '|---|---|---|---|');
-    for (const p of plans) out.push(`| ${p.repo} | ${p.programme} / ${p.project} | ${p.status || '?'} | ${clip(p.next || '—')} |`);
+    out.push('| programme / goal | stage · status | title | next |', '|---|---|---|---|');
+    for (const g of goals) out.push(`| ${g.programme} / ${g.goal} | ${g.stage ? `${g.stage} · ${g.status}` : '?'} | ${clip(g.title || '—')} | ${clip(g.next || '—')} |`);
   }
   out.push('', '----- PROJECT LOG (closed projects) -----', projectLog || '_none read_');
   out.push('', '----- PROPOSALS ALREADY WAITING -----');
@@ -234,18 +234,20 @@ function realGit(cwd, args) {
 }
 
 /**
- * The ground the turn judges the digest against: the plans under
- * `~/mc/programs/` of the two main checkouts (`listPlans`), and the project log
- * read from each checkout on origin/main. A repository that is not here is
+ * The ground the turn judges the digest against: the goals under
+ * `~/mc/programs/` that are not finished (`programsGoals`), each with its last
+ * entry's next action, and the project log read from each checkout on
+ * origin/main. A repository that is not here is
  * simply absent — the turn is told what it was given, never that a list is
  * complete.
  */
-export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit, programs = programsPlans } = {}) {
+export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit, goals: readGoals = () => programsGoals({ home: programsHome(env) }) } = {}) {
   const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
   await Promise.all(present.map((repo) => git(repo.path, ['fetch', '-q', 'origin'])));
-  const plans = present.flatMap((repo) => listPlans(repo, { programs }).map((r) => ({
-    repo: r.repo, programme: r.programme, project: r.project, path: r.path, status: r.status ?? null, next: r.next ?? null,
-  })));
+  const goals = readGoals().filter((g) => !FINISHED.includes(g.stage)).map((g) => ({
+    programme: g.programme, goal: g.goal, stage: g.stage ?? null, status: g.status ?? null, title: g.title ?? null,
+    next: [...(g.log || [])].reverse().find((entry) => entry.next)?.next ?? null,
+  }));
   const notes = [];
   let projectLog = null;
   for (const repo of present) {
@@ -253,7 +255,7 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
     if (text) projectLog = projectLog ? `${projectLog}\n\n${text}` : text;
   }
   if (!projectLog) notes.push(`no ${PROJECT_LOG} on origin/main in ${present.map((r) => r.name).join(', ') || 'any checkout'}`);
-  return { plans, projectLog, notes };
+  return { goals, projectLog, notes };
 }
 
 /**
@@ -298,7 +300,7 @@ export async function runHelperTurn({
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
     file, proposalsPath: proposals, programsPath: programsHome(env), programmes: (deps.routes || programmeRoutes)(env),
-    projectLog: ground.projectLog, plans: ground.plans,
+    projectLog: ground.projectLog, goals: ground.goals,
     proposals: waitingBefore.map((p) => ({ programme: p.programme, file: p.file })), repo, now,
   });
   const instructions = instructionsFor(launch.id, role.overlay);

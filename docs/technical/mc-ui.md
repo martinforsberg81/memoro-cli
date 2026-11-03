@@ -224,16 +224,14 @@ below is about.
   `prs`. The older aggregate fields remain for status and PR ownership
   readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
-  `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
-  the branch rule; a plan session's, checked out under `~/mc/programs/<programme>/`
-  or called `plan/…`; a workarea's; one checked out somewhere else; or
-  nobody's. The heading counts them all — `8 open · 4 on a step · 1 plan ·
-  1 nobody's` — and the rows are only the ones no other row draws: a
-  project's pull request is a column of its own on the project's row in
-  PROGRAMMES, after the steps — `#N`, or `#N+1` for more than one; one row per
-  project (Martin, 2026-10-09), and a blocked project holding one is never
-  collapsed — and the merger's are in MERGES. A running SESSIONS lane carries its
-  project's or its goal's `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
+  `page-collect.js`; the rule is `prOwner`, `open-prs.js`): a plan session's,
+  checked out under `~/mc/programs/<programme>/` or called `plan/…`; a
+  workarea's; one checked out somewhere else; or nobody's. The heading counts
+  them all — `5 open · 1 plan · 1 nobody's` — and the rows are only the ones no
+  other row draws: a goal's pull request is in the PR column of its row in
+  PROGRAMMES (`goal/<goal>`, or one GOAL.json says carries it), and the
+  merger's are in MERGES. A running SESSIONS lane carries its goal's `#N`.
+  The one nobody holds has the waiting `◆` in yellow;
   any pull request quiet for a day turns its `quiet …` yellow. The open pull
   requests come from `prs.json`, which every runner round now refills for the
   repositories it asked (`mergePrs`, `page-cache.js`) as well as `--fresh`.
@@ -550,16 +548,13 @@ A zero has no colour.
 | kind | colour |
 |---|---|
 | `build` | green |
-| `step` | green |
 | `review` | magenta |
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |
 | `gate` | green |
-| `fix` | green |
 | `wait` | grey |
 | `red` | red |
-| `project` | grey |
 | `goal` | grey |
 | `idle` | grey |
 | any other kind | grey |
@@ -729,19 +724,13 @@ At a terminal the page ends in a prompt:
 
 | | |
 |---|---|
-| a number | opens a session in that project's runner area, as a session of its programme (`project-open.js`) — **PROGRAMMES’ number**, not a listing of its own, and it opens a project whose row is inside a collapsed one just the same. A project the runner has not started has no area yet, and says so; nothing makes one |
-| a name | the same, by the project's name |
-| `a` | draws the page again with nothing collapsed — every blocked project back as its own row, under the number it always had. `a` again puts them away |
+| a goal's number | `mc goal show` for it, and the page again — **PROGRAMMES’ number**, not a listing of its own |
+| `a` | draws the page again with every programme, the dormant ones too. `a` again folds them |
 | `b` | `mc brief` |
 | `p <name>` | `mc plan <name>` |
-| `s <name>` | `mc status <name>` |
 | `q`, empty | quit |
-| a goal's number | `mc goal show` for it, and the page again |
 | a retired verb (`work …`, `worker …`) | the line the shell gives it, and the page again |
 | anything else | said out loud — *nothing here called …* — and the page again |
-
-A project session refuses a workplace a tool already stands in (D-0154), the
-runner's step included.
 
 The prompt reads `/dev/tty` by design, so a subprocess without a terminal
 never reaches it.

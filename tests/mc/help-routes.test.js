@@ -37,7 +37,6 @@ import { parseArgs as parseLog } from '../../src/mc/commands/log.js';
 import { parseArgs as parseRoles } from '../../src/mc/commands/roles.js';
 import { parseArgs as parseDocker } from '../../src/mc/commands/docker.js';
 import { parseArgs as parsePlan } from '../../src/mc/commands/plan.js';
-import { scanStepArgs } from '../../src/mc/commands/step.js';
 import { parsePageArgs } from '../../src/mc/commands/home.js';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../../src');
@@ -70,7 +69,7 @@ function routed(routes, argv) {
       return accepted(argv.slice(width), routes[key]);
     }
   }
-  // A word that begins a longer route is that route's noun, not a name: mc project criterion <what>.
+  // A word that begins a longer route is that route's noun, not a name: mc goal criterion <what>.
   if (argv[0] && Object.keys(routes).some((route) => route.startsWith(`${argv[0]} `))) return `no subcommand ${argv.slice(0, 2).join(' ')}`;
   const key = argv[0] !== undefined && !argv[0].startsWith('-') ? '*' : '';
   if (!Object.hasOwn(routes, key)) return key === '*' ? `no subcommand ${argv[0]}` : 'not without a subcommand';
@@ -98,7 +97,6 @@ const PARSERS = {
   roles: (argv) => errorOf(parseRoles(argv)),
   docker: (argv) => errorOf(parseDocker(argv)),
   plan: (argv) => errorOf(parsePlan(argv)),
-  step: (argv) => { const scanned = scanStepArgs(argv); return errorOf(scanned) ?? scanned.refused; },
   vault: (argv) => (VAULT_VERBS.includes(argv[0]) || argv.length === 0 ? null : `no vault verb ${argv[0]}`),
 };
 
@@ -445,8 +443,8 @@ describe('every name in the help is routed', () => {
       '  mc run start|stop [--force]      the same, through alternatives',
       '  mc goal show <programme>/<goal> --fictional  invented flag',
       '  mc goal frobnicate               invented subcommand',
-      '  mc project criterion vanish <project> <n>',
-      '  mc step done <project> <n> --fictional',
+      '  mc goal criterion vanish <programme>/<goal> <n>',
+      '  mc goal from-project <programme>/<project> --fictional',
       '  mc run --sprint 2                invented runner flag',
       '  mc vault frobnicate              invented vault verb',
       '  mc --fictional                   invented page flag',
@@ -460,13 +458,11 @@ describe('every name in the help is routed', () => {
       '  mc language key frobnicate       key takes set or nothing',
       '  mc model set fictional codex:gpt-6:high   set is for review only',
       '  mc model add fast codex:gpt-6:high --json   --json is for list',
-      '  mc step done x 3 --answer x      --answer goes with ready',
       '  mc shot prod /app --here         --here is for dev',
       '  mc shot close x --all            --all or one id',
       '  mc shot login dev                login is for prod',
       '  mc language run                  run takes a manifest',
       '  mc prs extra                     prs takes no positional',
-      '  mc layout migrate --apply --json   --json is the dry run\'s',
       '  mc deps bump x                   bump takes a repository and what',
       'usage — mc shot <dev|prod> <target>   a PNG\n          [--me]                      dev only: said of the wrong place',
       // A flag one alternative refuses, written after both: walked on each.

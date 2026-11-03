@@ -8,8 +8,7 @@
  * row written to `goals/goal_log.md`; the programme's phases are then
  * renumbered (`renumberPhases`), so when the last goal of the lowest phase
  * leaves, the next phase is phase 1. The runner calls it once a goal has been
- * finished for `ARCHIVE_HOLD_MS`, the hold a project under `~/mc/programs/` has
- * too (`project-archive.js`). A programme is never archived by the runner.
+ * finished for `ARCHIVE_HOLD_MS`. A programme is never archived by the runner.
  *
  * The rules take what they need as arguments: `git`, `gh`, `known`, `move`,
  * `appendText`, `read`, `list`, `write` and `now` come from the caller, as goal.js and run.js
@@ -18,16 +17,17 @@
 import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ARCHIVE_HOLD_MS } from './project-archive.js';
-import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, listDirsOf, prRef, renumberPhases, stageSince } from './goals.js';
+import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalBranch, goalLogRow, listDirsOf, prRef, renumberPhases, stageSince } from './goals.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { repoNameOf } from './repos.js';
+
+/** How long a finished goal stays listed before the runner archives it. */
+export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * Whether the runner archives this goal now, and why in one line, as
- * `archiveDue` does for a project: a goal is due once it has been `done` or
+ * Whether the runner archives this goal now, and why in one line: a goal is due once it has been `done` or
  * `dropped` for `holdMs` — exactly that long is due — counted from the log
  * entry that set the stage (`stageSince`), not from the file's mtime.
  */
@@ -65,7 +65,7 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
   if (!FINISHED.includes(goal.stage)) return refuse(`it is in ${goal.stage}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`);
   const repos = known();
   const bareOf = (repo) => repos.find((path) => repoNameOf(path) === repo) ?? null;
-  const branch = `goal/${goal.goal}`;
+  const branch = goalBranch({ git, dir: goal.dir, goal: goal.goal, repo: goal.repos[0] });
   for (const repo of goal.repos) {
     const path = join(goal.dir, repo);
     const status = git(path, ['status', '--porcelain']);

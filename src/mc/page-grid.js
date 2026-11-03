@@ -115,23 +115,19 @@ export const STATE_TONE = Object.freeze({
 
 /**
  * One colour per kind word. The runner's three session kinds — `plan`,
- * `build`, `review` — and the foreground verbs; the merger's four (`gate` a
- * round, `wait` the queue, `fix` a red a session holds, `red`); and the two
- * kinds of work PROGRAMMES lists, which are bookkeeping. `step` is a project's
- * build under the word it had before.
+ * `build`, `review` — and the foreground verbs; the merger's three (`gate` a
+ * round, `wait` the queue, `red`); and the kind of work PROGRAMMES lists, a
+ * goal, which is bookkeeping.
  */
 export const KIND_TONE = Object.freeze({
   build: ['green'],
-  step: ['green'],
   review: ['magenta'],
   triage: ['blue'],
   brief: ['cyan'],
   plan: ['cyan'],
   gate: ['green'],
-  fix: ['green'],
   wait: ['grey'],
   red: ['red'],
-  project: ['grey'],
   goal: ['grey'],
   idle: ['grey'],
 });

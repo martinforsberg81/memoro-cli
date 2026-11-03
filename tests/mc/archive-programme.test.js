@@ -21,6 +21,7 @@ import {
 } from '../../src/mc/archive-programme.js';
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
+import { renderGoal } from '../../src/mc/goals.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -50,7 +51,7 @@ const EXTRA = {
  * A bare origin and a clone whose main holds `docs/project/gone/`, and with
  * `extra` the files of EXTRA beside it.
  */
-function fixture({ plan = null, extra = false } = {}) {
+function fixture({ goal = null, extra = false } = {}) {
   const programme = 'gone';
   const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
   const origin = join(root, 'origin.git');
@@ -68,14 +69,13 @@ function fixture({ plan = null, extra = false } = {}) {
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'init']);
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
-  // The plan lives under the work root's programs/, never in the repository.
+  // A goal lives under the work root's programs/, never in the repository.
   const env = { MC_WORK_ROOT: join(root, 'work') };
-  if (plan) {
-    mkdirSync(join(root, 'work', 'programs', programme, 'proj'), { recursive: true });
-    writeFileSync(join(root, 'work', 'programs', programme, 'proj', 'PLAN.json'), JSON.stringify({
-      schema: 'mc-plan', version: 1, repo: 'memoro-cli', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
-      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
-      steps: [{ title: 'S1 — one', status: plan, done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
+  if (goal) {
+    mkdirSync(join(root, 'work', 'programs', programme, 'goals', 'g'), { recursive: true });
+    writeFileSync(join(root, 'work', 'programs', programme, 'goals', 'g', 'GOAL.json'), renderGoal({
+      stage: goal, status: 'ready', repos: ['memoro-cli'], class: 'large', title: 'G', goal: ['g'],
+      success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
     }));
   }
   return { root, origin, repo, env, repos: [{ name: 'memoro-cli', path: repo }] };
@@ -120,10 +120,10 @@ function args(fx, deps, extra = {}) {
 }
 
 describe('archiveVerdict', () => {
-  it('refuses while a plan is on main, and says the runner goes first for a done one', () => {
-    const v = archiveVerdict({ programme: 'x', plans: [{ repo: 'memoro', project: 'p', status: 'done' }], homes: [{}] });
+  it('refuses while a goal of the programme is not finished', () => {
+    const v = archiveVerdict({ programme: 'x', goals: [{ goal: 'g', stage: 'build' }], homes: [{}] });
     assert.equal(v.ok, false);
-    assert.match(v.lines[0], /memoro x\/p is still on main \(done\) — mc run archives it first/u);
+    assert.match(v.lines[0], /goal x\/g is build — it is finished or dropped first/u);
   });
 
   it('refuses what release would keep, and anything somebody put in the area', () => {
@@ -233,12 +233,12 @@ describe('archiveProgramme', () => {
     assert.match(a.stdout.out.text, /docs\/project\/gone\/skills\/a\.md kept — named by tests\/x\.test\.js:3/u);
   });
 
-  it('touches nothing while a plan is still on main', async () => {
-    const fx = fixture({ plan: 'ready' });
+  it('touches nothing while a goal of the programme is not finished', async () => {
+    const fx = fixture({ goal: 'build' });
     const { deps, calls } = stubs();
     const a = args(fx, deps);
     assert.equal(await archiveProgramme('gone', a), 1);
-    assert.match(a.stderr.out.text, /memoro-cli gone\/proj is still on main \(ready\)/u);
+    assert.match(a.stderr.out.text, /goal gone\/g is build/u);
     assert.deepEqual(calls.prs, []);
   });
 

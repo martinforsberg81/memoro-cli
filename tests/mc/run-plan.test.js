@@ -2,536 +2,23 @@ import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, STEP_KINDS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
-  builtPreamble, describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
-  inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
-  queueFileText, quotaResetAt, quotaSeen, apiInterruption, creditsResetAt, resumePrompt,
-  COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionSpoke, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
-  tsvHeader, tsvRow, userMessageLine, routedSettings, workClassOf,
+  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, quietPrompt, collectNote,
+  describeSettings, describeWatch, headlessArgs, helperDue,
+  intakeNote, nightlyDue, intakeQueue, landingNote,
+  quotaResetAt, quotaSeen, apiInterruption, creditsResetAt,
+  readSessionOutput, streamRateLimit, streamSummary, sessionResult, sessionSettings,
+  tsvHeader, tsvRow, routedSettings,
 } from '../../src/mc/run-plan.js';
-import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 
-test('assembleQueue: queue.md order first, then plans on main it did not name, sorted', () => {
-  const queue = '# round\nb\n\na\n# tail\n';
-  const plans = [{ project: 'a' }, { project: 'z' }, { project: 'm' }, { project: 'z' }, { project: 'b' }];
-  assert.deepEqual(assembleQueue(queue, plans), ['b', 'a', 'm', 'z']);
-});
-
-/**
- * A queued name with no plan on main is not queued at all — the runner would
- * only have logged a skip line for it, and nobody reads that (Martin,
- * 2026-08-29). `mc status` is where an unplanned workarea shows.
- */
-test('assembleQueue: a name with no plan on main is dropped, not skipped', () => {
-  assert.deepEqual(assembleQueue('ghost\nreal\n', [{ project: 'real' }]), ['real']);
-  assert.deepEqual(assembleQueue('ghost\n', []), []);
-});
-
-/**
- * `~/mc/queue.md` is a strict list (Martin, 2026-08-29: "ett träsk — där ska
- * INTE finnas någonting annat än en lista över vad som ska köras"). The
- * 2026-08-29 file had seven comment lines and twenty names that were already
- * done or had no plan on main.
- */
-test('strictQueue: names of projects that still have a step to run, and nothing else', () => {
-  const text = '# the queue\n\n## Martin first\nalpha\nover\nghost\nalpha\nbeta\n';
-  const plans = [{ project: 'alpha', status: 'ready' }, { project: 'beta', status: 'blocked' }, { project: 'over', status: 'done' }];
-  const { names, dropped } = strictQueue(text, plans);
-  assert.deepEqual(names, ['alpha', 'beta'], 'a plan that is not ready still has a step ahead of it');
-  assert.deepEqual(dropped, [
-    { line: '# the queue', why: 'not a project name' },
-    { line: '## Martin first', why: 'not a project name' },
-    { line: 'over', why: 'the plan is done' },
-    { line: 'ghost', why: 'no plan on main' },
-    { line: 'alpha', why: 'named twice' },
-  ]);
-});
-
-test('strictQueue: a blank line is not a drop worth a log line', () => {
-  assert.deepEqual(strictQueue('\n\n\n', []), { names: [], dropped: [] });
-});
-
-test('queueFileText: one name per line, and an empty file when every name has run', () => {
-  assert.equal(queueFileText(['a', 'b']), 'a\nb\n');
-  assert.equal(queueFileText([]), '');
-  assert.deepEqual(queueFileNames('a\n# no\n\nb\n'), ['a', 'b']);
-});
-
-/* --------------------------------------------------------------- the pick */
-
-/**
- * `nextFor` is what replaced the round on 2026-09-08: a lane takes the first
- * name its repository's order offers that nothing is holding, and picks again
- * when that step is over. What these assert is every way a name is passed
- * over, and that the answer is a *name and a kind* rather than a list.
- */
-const READY = (steps = [{ title: 'One', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null }]) => ({
-  schema: 'mc-plan',
-  version: 1,
-  goal: ['One thing.'],
-  contract: ['Not without Martin.'],
-  out_of_scope: ['The rest.'],
-  success_criteria: [{ met: false, criterion: 'It is done.', check: 'The row.' }],
-  documents: [],
-  steps,
-});
-const planRow = (project, { repo = 'memoro', plan = READY(), status = 'ready' } = {}) => ({
-  repo, programme: 'prog', project, path: `docs/project/prog/${project}/PLAN.json`, legacy: false, plan, problems: [], status,
-});
-const world = (plans, { queueText = '', prs = [] } = {}) => ({ names: assembleQueue(queueText, plans), plans, prs });
-
-test('nextFor: queue.md order first, then alphabetical, one repository at a time', () => {
-  const plans = [planRow('alpha'), planRow('gamma'), planRow('mc-run', { repo: 'memoro-cli' })];
-  const seen = world(plans, { queueText: 'gamma\n' });
-  assert.deepEqual(nextFor({ repo: 'memoro', world: seen }), { name: 'gamma', kind: 'step', repo: 'memoro' });
-  assert.deepEqual(nextFor({ repo: 'memoro-cli', world: seen }), { name: 'mc-run', kind: 'step', repo: 'memoro-cli' });
-  // With no repository named — `mc run --once` — the whole order is one lane's.
-  assert.equal(nextFor({ world: seen }).name, 'gamma');
-});
-
-test('nextFor: a name another lane is holding is passed over, and so is one this pass refused', () => {
-  const seen = world([planRow('alpha'), planRow('beta')]);
-  assert.equal(nextFor({ repo: 'memoro', world: seen, claimed: new Set(['alpha']) }).name, 'beta');
-  assert.equal(nextFor({ repo: 'memoro', world: seen, passed: new Set(['alpha']) }).name, 'beta');
-  assert.equal(nextFor({ repo: 'memoro', world: seen, claimed: new Set(['alpha', 'beta']) }), null);
-});
-
-test('nextFor: a blocked plan, a done plan and one that does not parse are not picked', () => {
-  const blocked = READY([{ title: 'One', status: 'blocked', done_when: 'x', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'prog-1' } }]);
-  const done = READY([{ title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 7, blocked_by: null }]);
-  const plans = [
-    planRow('a-blocked', { plan: blocked, status: 'blocked' }),
-    planRow('b-done', { plan: done, status: 'done' }),
-    { ...planRow('c-broken'), plan: null, problems: ['goal: at least one paragraph'], status: 'invalid' },
-    planRow('d-ready'),
-  ];
-  assert.equal(nextFor({ repo: 'memoro', world: world(plans) }).name, 'd-ready');
-});
-
-/** An open pull request is work in flight: the project is passed over, and the next name is taken. */
-test('nextFor: a project with a pull request open is not picked, and the next name is', () => {
-  const plans = [planRow('alpha'), planRow('beta')];
-  const open = [{ repo: 'memoro', number: 9, headRefName: 'alpha-2', baseRefName: 'main', isDraft: false, title: 'Step' }];
-  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }).name, 'beta');
-});
-
-/**
- * A project's own steps' pull requests hold nothing (ruling 39): a red the
- * merger sent back (`ready`), one in the merger's queue (`landing`) and one
- * parked on a question (`blocked`). A pull request on no step still does.
- */
-const OWN_STEPS = [
-  { title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 1, blocked_by: null },
-  { title: 'Two', status: 'ready', done_when: 'x', instruction: ['do'], pr: 2, blocked_by: null },
-  { title: 'Three', status: 'landing', done_when: 'x', instruction: ['do'], pr: 3, blocked_by: null },
-  { title: 'Four', status: 'blocked', done_when: 'x', instruction: ['do'], pr: 4, blocked_by: { kind: 'decision', name: 'prog-1' } },
-];
-
-test('holdingPrs: a ready, a landing and a blocked step\'s pull requests are the project\'s own', () => {
-  const held = holdingPrs([2, 3, 4, 9].map((number) => ({ number })), { plan: { steps: OWN_STEPS } });
-  assert.deepEqual(held.map((pr) => pr.number), [9]);
-});
-
-test('holdingPrs: a built step\'s pull request is the project\'s own too — every step of a branch-flow plan shares it', () => {
-  const steps = [
-    { title: 'One', status: 'built', done_when: 'x', instruction: ['do'], pr: 7, blocked_by: null },
-    { title: 'Two', status: 'built', done_when: 'x', instruction: ['do'], pr: 7, blocked_by: null },
-    { title: 'Review', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null, kind: 'review' },
-  ];
-  const held = holdingPrs([7, 9].map((number) => ({ number })), { plan: { steps } });
-  assert.deepEqual(held.map((pr) => pr.number), [9]);
-});
-
-test('nextFor: a blocked later step with its pull request open does not hold the red step before it', () => {
-  const plans = [planRow('alpha', { plan: READY(OWN_STEPS) })];
-  const open = [2, 3, 4].map((number) => ({ repo: 'memoro', number, headRefName: `alpha-${number}`, baseRefName: 'main', isDraft: false, title: 'Step' }));
-  assert.equal(inFlight(holdingPrs(open, plans[0])), null);
-  assert.deepEqual(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }), { name: 'alpha', kind: 'step', repo: 'memoro' });
-});
-
-test('chooseKind: a blocked first unfinished step still starts nothing', () => {
-  const steps = [OWN_STEPS[0], OWN_STEPS[3], { ...OWN_STEPS[1], pr: null }];
-  assert.equal(chooseKind({ plan: record({ steps }), openPrs: [] }).reason, 'blocked');
-});
-
-/** The review step is the last step of a branch-flow plan; its session is a session of its own kind. */
-test('chooseKind: a review step is a review session, every other step a step session', () => {
-  const review = { title: 'Review', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null, kind: 'review' };
-  const reviewing = chooseKind({ plan: record({ steps: [review] }) });
-  assert.deepEqual([reviewing.kind, reviewing.index], ['review', 0]);
-  assert.equal(chooseKind({ plan: record({ steps: [{ ...review, kind: undefined }] }) }).kind, 'step');
-  assert.deepEqual([...STEP_KINDS].sort(), ['review', 'step']);
-});
-
 test('SESSION_DEFAULTS: the review session runs on opus at high effort, with no advisor', () => {
   assert.deepEqual(SESSION_DEFAULTS.review, { model: 'opus', effort: 'high', advisor: null });
   const settings = sessionSettings({}, null, { kind: 'review' });
   assert.deepEqual([settings.model, settings.effort, settings.advisor], ['opus', 'high', null]);
-});
-
-/** The page passes its own reading, which has seen a worktree this cannot. */
-test('nextFor: a caller\'s own reading decides, and the order is still the runner\'s', () => {
-  const plans = [planRow('alpha'), planRow('beta')];
-  const state = (name) => ({ runnable: name !== 'alpha', kind: 'step' });
-  assert.equal(nextFor({ repo: 'memoro', world: world(plans), state }).name, 'beta');
-});
-
-/**
- * A plan record as `planOf` builds it: the parsed plan, or the reason there
- * isn't one. `status` used to be a field the runner trusted; it is the state of
- * the first unfinished step now, so a fixture makes that step.
- */
-function record({ status = 'ready', steps } = {}) {
-  const stopped = status === 'blocked';
-  return {
-    path: 'docs/project/p/x/PLAN.json',
-    legacy: false,
-    problems: [],
-    plan: {
-      schema: 'mc-plan',
-      version: 1,
-      goal: ['One thing.'],
-      contract: ['Not without Martin.'],
-      out_of_scope: ['Everything else.'],
-      success_criteria: [{ met: status === 'done', criterion: 'It is done.', check: 'The gate is green.' }],
-      documents: [],
-      steps: steps || [{
-        title: 'The one step',
-        status,
-        done_when: 'the rail draws',
-        instruction: status === 'done' ? [] : ['Do it.'],
-        pr: null,
-        blocked_by: stopped ? { kind: 'decision', name: 'p-1' } : null,
-      }],
-    },
-  };
-}
-
-/**
- * The rule this project exists for, proved without spending a session: an
- * open pull request ends the project's round whatever the plan says. On
- * 2026-09-02T04:33 a 120-minute Opus session rebuilt `action-window` step 4
- * while step 4's work was open as #11241.
- */
-test('inFlight: an open pull request beats a ready plan, and names itself', () => {
-  const open = [{ number: 11241, title: 'Step 4', headRefName: 'action-window' }];
-  const flight = inFlight(open);
-  assert.equal(flight.kind, null);
-  assert.equal(flight.reason, 'in-flight');
-  assert.equal(flight.skip, '#11241 is open (Step 4) — not starting a step');
-  assert.deepEqual(flight.prs, open);
-  assert.equal(inFlight([]), null);
-  assert.equal(inFlight(), null);
-});
-
-test('inFlight: a draft counts as open, and the rest are counted', () => {
-  assert.equal(
-    inFlight([{ number: 9, title: 'Half', isDraft: true }, { number: 10, title: 'Other' }]).skip,
-    '#9 is open (draft: Half) (+1 more) — not starting a step',
-  );
-});
-
-test('chooseKind: an open pull request comes before the plan', () => {
-  const open = [{ number: 11246, title: 'Step 4' }];
-  assert.equal(chooseKind({ plan: record(), openPrs: open }).reason, 'in-flight');
-  assert.equal(chooseKind({ plan: record(), openPrs: [] }).kind, 'step');
-});
-
-/** `<name>` is the first branch, so the next one is 2. */
-test('nextBranch: the smallest number no branch is using', () => {
-  assert.equal(nextBranch('action-window', ['action-window']), 'action-window-2');
-  assert.equal(nextBranch('action-window', ['action-window', 'action-window-2', 'action-window-3']), 'action-window-4');
-  assert.equal(nextBranch('action-window', new Set(['action-window-2'])), 'action-window-3');
-  assert.equal(nextBranch('action-window'), 'action-window-2');
-});
-
-/**
- * A conflicted merge used to be the first answer here, before the plan was
- * looked at: `{ kind: 'reconcile' }`. It is not an answer at all any more —
- * the plan decides what the round does, and a conflict is something the step
- * session is told about (`stepPrompt`'s preamble, and the round in run.js).
- */
-test('chooseKind: a ready first step is the only thing that runs, conflict or not', () => {
-  assert.deepEqual(chooseKind({ plan: null, conflicts: ['x.md'] }), { kind: null, skip: null });
-  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'] }).kind, 'step');
-  const ready = chooseKind({ plan: record() });
-  assert.equal(ready.kind, 'step');
-  assert.equal(ready.index, 0);
-  assert.equal(ready.step.title, 'The one step');
-  assert.equal(chooseKind({ plan: record({ status: 'done' }) }).skip, 'every step is done');
-  assert.equal(chooseKind({ plan: record({ status: 'blocked' }) }).reason, 'blocked');
-});
-
-/**
- * The whole admission test, before a session is spent. `status: ready` in a
- * frontmatter used to be all of it, so a plan missing what the role names could
- * still cost ninety minutes.
- */
-test('chooseKind: a plan that does not parse, and one still written as markdown, are both refused', () => {
-  const broken = record();
-  delete broken.plan.out_of_scope;
-  const refused = chooseKind({ plan: { ...broken, plan: null, problems: ['out_of_scope: at least one entry'] } });
-  assert.equal(refused.kind, null);
-  assert.equal(refused.reason, 'unparseable');
-  assert.match(refused.skip, /out_of_scope/u);
-
-  const legacy = chooseKind({ plan: { path: 'docs/project/p/x/PLAN.md', legacy: true, plan: null, problems: [] } });
-  assert.equal(legacy.reason, 'unmigrated');
-  assert.match(legacy.skip, /migrate it to PLAN\.json/u);
-});
-
-/** Steps are an order: a later ready step does not jump a stopped one. */
-test('chooseKind: the first unfinished step decides, and it is not skipped past', () => {
-  const plan = record({
-    steps: [
-      { title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 1, blocked_by: null },
-      { title: 'Two', status: 'blocked', done_when: 'y', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'p-2' } },
-      { title: 'Three', status: 'ready', done_when: 'z', instruction: ['do'], pr: null, blocked_by: null },
-    ],
-  });
-  const choice = chooseKind({ plan });
-  assert.equal(choice.kind, null);
-  assert.equal(choice.skip, 'step 2 is blocked on decision p-2');
-});
-
-/**
- * The runner runs plans; it does not write them (Martin, 2026-08-29). There
- * used to be a `triage` kind here that started a headless session to invent
- * the plan and land it on main by itself.
- */
-test('chooseKind: no plan does nothing, and says nothing', () => {
-  assert.deepEqual(chooseKind({ plan: null }), { kind: null, skip: null },
-    'a null skip is a skip nobody would read — "Ingen skip-rad: vem ska läsa den!?"');
-});
-
-/**
- * And the runner has nothing to do with decisions: blocked is not
- * ready, and no answered file anywhere changes that. The plan comes back by
- * being set `ready`.
- */
-test('chooseKind: blocked is simply not ready', () => {
-  const waiting = chooseKind({ plan: record({ status: 'blocked' }) });
-  assert.equal(waiting.kind, null);
-  assert.equal(waiting.skip, 'step 1 is blocked on decision p-1');
-  assert.deepEqual(
-    chooseKind({ plan: record({ status: 'blocked' }), answered: ['/d/a-1.md'] }),
-    waiting,
-    'an answered decision file is not a parameter any more',
-  );
-});
-
-
-/** A three-step plan, the middle step the session's. */
-function threeSteps() {
-  const step = {
-    title: 'The hero object', status: 'ready', done_when: 'the object draws in both themes',
-    instruction: ['Draw the hero in the light theme.', 'Then the dark one, from the same tokens.'],
-    comments: ['The tokens moved in #12.'], pr: null, blocked_by: null,
-  };
-  const plan = {
-    schema: 'mc-plan',
-    version: 1,
-    goal: ['The front page has a hero.', 'It draws in both themes.'],
-    contract: ['Tokens only, no literal colours.'],
-    out_of_scope: ['The footer.'],
-    success_criteria: [
-      { met: true, criterion: 'The hero draws.', check: 'page.test.js renders it.' },
-      { met: false, criterion: 'Both themes.', check: 'A screenshot per theme.' },
-    ],
-    documents: [{ label: 'The design', path: '../design.md' }],
-    runner: { model: 'opus' },
-    steps: [
-      { title: 'The tokens', status: 'done', done_when: 'the tokens exist', instruction: ['Write the token file by hand.'], comments: [], pr: 12, blocked_by: null },
-      step,
-      { title: 'The footer link', status: 'ready', done_when: 'the hero links to the footer', instruction: ['Link the footer from the hero.'], comments: [], pr: null, blocked_by: null },
-    ],
-  };
-  return { plan, step };
-}
-
-test('stepPrompt names the step, its done_when, and what the session may edit', () => {
-  const { plan, step } = threeSteps();
-  const p = stepPrompt({
-    name: 'x',
-    repo: 'memoro',
-    planPath: 'docs/project/p/x/PLAN.json',
-    plan,
-    step,
-    index: 1,
-    now: new Date('2026-08-29T00:00:00Z'),
-  });
-  assert.match(p, /`x` workarea of memoro/u);
-  assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u);
-  assert.match(p, /Done when: the object draws in both themes/u);
-  // The criteria's door is in the prompt as well as the role, because it is what
-  // the runner checks on the way back in.
-  assert.match(p, /refuses the pull request until every criterion is met there/u);
-  assert.match(p, /`mc step blocked --on <decision-name> --reason "…"`/u, 'it still says how to stop on a question it cannot answer');
-  // Ruling 21: state is the register's. A prompt that sends it to the file
-  // sends it nowhere (memoro #11723 showed `ready` for six days).
-  assert.doesNotMatch(p, /In the plan file you may edit/u);
-  assert.doesNotMatch(p, /set your step `done`/u);
-  assert.match(p, /`mc step note "…"`/u);
-  assert.match(p, /a pull request that lands is a `done` step/u);
-  // The two shapes the prompt never stated, and the two a session got wrong on
-  // 2026-09-02: `action-window` wrote a `blocked_by` that was not
-  // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
-  // at 12:27. Both are checked on the way back in, so both are said here.
-  assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
-  assert.match(p, /--on-project/u);
-  assert.match(p, /Nothing in the plan file is yours/u);
-  assert.match(p, /Your plan is at `docs\/project\/p\/x\/PLAN\.json`/u);
-  // The runner only ever starts a plan whose first unfinished step is ready, so
-  // a step is never handed an answered decision to apply (Martin, 2026-08-29).
-  assert.doesNotMatch(p, /Decisions answered by Martin/u);
-});
-
-/**
- * The part of the plan the step needs, and not the file: the frozen fields and
- * the criteria in full, the session's own step in full, and every other step
- * as one line. The other steps' instructions are what made the prompt 115k
- * characters for memoro's largest plan (step-cost, step 1).
- */
-test('stepPrompt carries its own step in full and every other step as one line', () => {
-  const { plan, step } = threeSteps();
-  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1 });
-  for (const text of [...plan.goal, ...plan.contract, ...plan.out_of_scope]) assert.ok(p.includes(text), text);
-  assert.match(p, /----- success_criteria -----\nsuccess_criteria\[0\] · met: true\ncriterion: The hero draws\.\ncheck: page\.test\.js renders it\./u);
-  assert.match(p, /success_criteria\[1\] · met: false\ncriterion: Both themes\.\ncheck: A screenshot per theme\./u);
-  assert.match(p, /----- documents -----\n- The design: \.\.\/design\.md/u);
-  assert.match(p, /----- runner -----\n\{"model":"opus"\}/u);
-  assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object\nstatus: ready\ndone_when: the object draws in both themes\ninstruction:\n\nDraw the hero in the light theme\.\n\nThen the dark one, from the same tokens\.\n\ncomments:\n\nThe tokens moved in #12\.\n\npr: null\nblocked_by: null/u);
-  assert.match(p, /----- The other steps -----\nsteps\[0\] · done · The tokens · done when: the tokens exist · PR #12\nsteps\[2\] · ready · The footer link · done when: the hero links to the footer$/u);
-  assert.doesNotMatch(p, /Write the token file by hand/u, "steps[0]'s instruction is not in the prompt");
-  assert.doesNotMatch(p, /Link the footer from the hero/u, "steps[2]'s instruction is not in the prompt");
-  assert.doesNotMatch(p, /"schema"/u, 'the file itself is not in the prompt');
-  // A plan without `runner` has no runner heading.
-  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan: { ...plan, runner: undefined }, step, index: 1 });
-  assert.doesNotMatch(bare, /----- runner -----/u);
-});
-
-/**
- * What `reconcile` used to be told, told to the session that is going to read
- * that code anyway. The body below the preamble is untouched — the step, its
- * `done_when` and the plan's criteria are all still exactly true.
- */
-test('stepPrompt: a conflicted worktree is a preamble, and the step is still the job', () => {
-  const { plan } = threeSteps();
-  const step = { ...plan.steps[1], done_when: 'it draws' };
-  plan.steps[1] = step;
-  const p = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan,
-    step, index: 1, conflicts: ['src/a.js', 'docs/project/p/x/PLAN.json'],
-    now: new Date('2026-09-04T00:00:00Z'),
-  });
-  assert.match(p, /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: src\/a\.js docs\/project\/p\/x\/PLAN\.json\n/u);
-  assert.match(p, /It is the first thing you\ndo and not the job/u);
-  assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u, 'the body is the same body');
-  assert.match(p, /Done when: it draws/u);
-  assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object/u);
-});
-
-test('stepPrompt: a retry from a red round names its red files, its kept failures and the re-run line (ruling 44)', () => {
-  const { plan } = threeSteps();
-  const step = plan.steps[1];
-  const names = ['a (b)', 'c', 'd', 'e', 'f', 'g'];
-  const p = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1,
-    retry: {
-      pr: 41, reason: '6 tests red: a (b), c, d, e, f, …', attempts: 1,
-      red: { files: ['tests/a.test.js', 'tests/b.test.js'], detail: '/home/mc/runner/merge-red/memoro-41.txt', names },
-    },
-  });
-  assert.match(p, /The gate said: 6 tests red: a \(b\), c, d, e, f, …\nRed files: tests\/a\.test\.js tests\/b\.test\.js\n/u);
-  assert.match(p, /^The failures, as the round saw them: \/home\/mc\/runner\/merge-red\/memoro-41\.txt$/mu);
-  assert.match(p, /^Re-run just those: mc gate tests\/a\.test\.js tests\/b\.test\.js --test-name-pattern 'a \\\(b\\\)\|c\|d\|e\|f'$/mu, 'escaped, at most five');
-  const plain = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1, retry: { pr: 41, reason: 'red', attempts: 1 },
-  });
-  assert.doesNotMatch(plain, /Red files:|Re-run just those/u, 'a retry with no red files is as it was');
-});
-
-test('stepPrompt: an interrupted step gets a handover after the retry preamble, and the step is still the job', () => {
-  const { plan } = threeSteps();
-  const step = plan.steps[1];
-  const interrupted = {
-    at: '2026-10-10T07:12:00Z', why: 'cold, 120 000 tokens — fresh',
-    commits: Array.from({ length: 25 }, (_, n) => `c0ffee${n} commit ${n}`),
-    wip: '1234567890abcdef', lastText: 'Now the tests.\nThen the docs.', checkpoint: 'refs/mc/checkpoint/x',
-  };
-  const p = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1,
-    retry: { pr: 41, reason: 'red', attempts: 1 }, interrupted,
-  });
-  assert.ok(p.indexOf('This step came back from the merger') < p.indexOf('An earlier session on this step'), 'retry first, both there');
-  assert.match(p, /run `mc publish` \(it pushes to the same branch/u);
-  assert.match(p, /An earlier session on this step was cut off at 2026-10-10T07:12:00Z \(cold, 120 000 tokens — fresh\)\./u);
-  assert.match(p, /Its commits on this branch \(`git log --oneline origin\/main\.\.HEAD`\):\n {4}c0ffee0 commit 0\n/u);
-  assert.match(p, /c0ffee19 commit 19/u);
-  assert.doesNotMatch(p, /c0ffee20/u, 'at most 20 lines');
-  assert.match(p, /1234567 is a WIP commit the runner made of the files it had not committed; nothing in it has been checked\./u);
-  assert.match(p, /Its last words were:\n> Now the tests\.\n> Then the docs\./u);
-  assert.match(p, /`refs\/mc\/checkpoint\/x` holds the last snapshot/u);
-  assert.match(p, /Read the diff of the branch before writing anything, and do not redo what the commits already did\./u);
-  assert.match(p, /Your step is `steps\[1\]` — 2/u);
-
-  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, interrupted: { at: 'then', commits: [] } });
-  assert.match(bare, /It left no commits on this branch\./u);
-  assert.doesNotMatch(bare, /WIP commit|last words|checkpoint/u);
-  assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 }), /An earlier session/u);
-});
-
-test('stepPrompt: a branch that carries an earlier session\'s commits says so, and the step is still the job', () => {
-  const { plan } = threeSteps();
-  const step = plan.steps[1];
-  const p = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1,
-    earlier: { commits: ['abc1234 m: WIP left by an earlier session of step 2'] },
-  });
-  assert.match(p, /This branch already carries work from an earlier session of this step that is in no pull request:\n- abc1234 m: WIP left by an earlier session of step 2\n/u);
-  assert.match(p, /Read it \(`git diff origin\/main\.\.\.HEAD`\) and build on it — do not start over\./u);
-  assert.match(p, /Your step is `steps\[1\]` — 2/u);
-  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 });
-  assert.doesNotMatch(bare, /do not start over|already carries work/u);
-  assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, earlier: { commits: [] } }), /already carries work/u);
-});
-
-test('builtPreamble: a step on the project\'s branch is told what is built there, and the retry suppresses it (built)', () => {
-  assert.deepEqual(builtPreamble(null), []);
-  assert.deepEqual(builtPreamble({ through: 1, pr: 9, branch: 'p' }), [
-    'Your branch, p, is the project\'s: steps 1–2 are built on it, in #9, which does not land until the project\'s review step.',
-    'Their work is yours to build on and to keep. origin/main is merged in.',
-    'First run bare `mc gate` — the test files this branch changed. A red there, from an earlier step or from main, is yours to fix before your own work.',
-    'Then do your step, commit, and `mc publish`: it pushes and records the step built; nothing is queued, and your session is over.',
-    '',
-  ]);
-  const { plan } = threeSteps();
-  const step = plan.steps[2];
-  const built = { through: 1, pr: 9, branch: 'p' };
-  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 2, built });
-  assert.match(p, /^Your branch, p, is the project's: steps 1–2 are built on it/u);
-  assert.match(p, /Your step is `steps\[2\]` — 3/u);
-  const retried = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 2, built, retry: { pr: 9, reason: 'red', attempts: 1 } });
-  assert.doesNotMatch(retried, /is the project's: steps/u);
-});
-
-test('stepPrompt: an answer without a pull request says so; with one, the answer goes on from it', () => {
-  const { plan } = threeSteps();
-  const step = plan.steps[1];
-  const none = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, answered: { name: 'x', answer: 'Yes.', pr: null } });
-  assert.match(none, /The answer: Yes\./u);
-  assert.match(none, /Nothing of the earlier session's work is in a pull request/u);
-  assert.doesNotMatch(none, /still open|No new pull request/u);
-  const kept = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, answered: { name: 'x', answer: 'Yes.', pr: 9 } });
-  assert.match(kept, /The answer: Yes\.\n#9 is still open, on this branch, with the earlier session's work\./u);
-  assert.match(kept, /`mc merge memoro 9` would\)\. No new pull request\./u);
-  assert.doesNotMatch(kept, /Nothing of the earlier session/u);
 });
 
 test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
@@ -597,7 +84,7 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
 });
 
 test('headlessArgs: every role including plan has native delegation, fresh and resumed, stream and single-turn', () => {
-  for (const name of ['build-session:goal', 'build-session:project', 'build-session:worker', 'review-session:goal', 'review-session:project', 'plan-session', 'brief', 'helper', 'intake']) {
+  for (const name of ['build-session:goal', 'review-session:goal', 'plan-session', 'brief', 'helper', 'intake']) {
     const role = readCanonRole(name);
     assert.ok(role, name);
     for (const resume of [null, 'sid']) {
@@ -619,15 +106,6 @@ test('headlessArgs: every role including plan has native delegation, fresh and r
   }
 });
 
-test('workClassOf: a step names a class as its model, and nothing else is one', () => {
-  assert.equal(workClassOf({ runner: { model: 'fast' } }), 'fast');
-  assert.equal(workClassOf({ runner: { model: 'large' } }), 'large');
-  assert.equal(workClassOf({ kind: 'review', runner: { model: 'review' } }), 'review');
-  assert.equal(workClassOf({ runner: { model: 'opus' } }), null);
-  assert.equal(workClassOf({ runner: {} }), null);
-  assert.equal(workClassOf(null), null);
-});
-
 test('routedSettings: the candidate\'s tool, model and effort; the plan\'s own model and effort set aside; a step\'s explicit effort kept', () => {
   const planRunner = { tool: 'claude', model: 'opus', effort: 'low', check_in_minutes: 30, stall_minutes: 15 };
   const codex = routedSettings(planRunner, { model: 'fast' }, { candidate: { tool: 'codex', model: 'gpt-6-luna', effort: 'high' } });
@@ -637,32 +115,9 @@ test('routedSettings: the candidate\'s tool, model and effort; the plan\'s own m
   assert.deepEqual([pinned.tool, pinned.model, pinned.effort], ['claude', 'opus', 'xhigh']);
 });
 
-test('recoveryFor: a class-routed step is resumed only on the model it ran on; a concrete one is decided as before', () => {
-  const interrupted = { session_id: 'sid-1', tool: 'claude', model: 'haiku', last_activity: '2026-08-29T09:59:00Z', context_tokens: 1000 };
-  const now = new Date('2026-08-29T10:00:00Z');
-  assert.equal(recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now, modelNow: 'haiku' }).mode, 'resume');
-  const other = recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now, modelNow: 'sonnet' });
-  assert.equal(other.mode, 'fresh');
-  assert.match(other.why, /the model is sonnet now, the session ran on haiku — fresh/u);
-  assert.equal(recoveryFor({ interrupted, toolNow: 'claude', ttlMs: 3600_000, now }).mode, 'resume');
-});
-
 test('sessionSettings: a sent plan\'s removed runner key changes nothing', () => {
   assert.deepEqual(sessionSettings({ subagents: 'on' }, { subagents: 'on' }), sessionSettings({}));
   assert.equal(describeSettings('claude', sessionSettings({}, { subagents: 'on' })), 'claude opus · effort medium');
-});
-
-test('sessionStanding and sessionSpoke read past a subagent\'s events', () => {
-  const sid = 'c1a2b3c4-dead-4bee-8000-000000000002';
-  const lines = [
-    { type: 'system', subtype: 'init', session_id: sid },
-    { type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Asking a worker.' }], usage: { input_tokens: 1, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 } } },
-    { type: 'assistant', session_id: sid, parent_tool_use_id: 'toolu_1', message: { id: 'w1', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'Worker here.' }], usage: { input_tokens: 900, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } },
-  ];
-  const stdout = `${lines.map((e) => JSON.stringify(e)).join('\n')}\n`;
-  assert.deepEqual(sessionStanding({ toolId: 'claude', stdout }), { session_id: sid, context_tokens: 5001, last_text: 'Asking a worker.' });
-  const workerOnly = `${JSON.stringify(lines[2])}\n`;
-  assert.equal(sessionSpoke({ toolId: 'claude', stdout: workerOnly }), false);
 });
 
 test('readSessionOutput: claude json usage fields, dashes when absent', () => {
@@ -670,35 +125,6 @@ test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
   assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
-});
-
-test('sessionStanding: a claude stream cut mid-line gives its session, last context and last words', () => {
-  const sid = 'c1a2b3c4-dead-4bee-8000-000000000001';
-  const lines = [
-    { type: 'system', subtype: 'init', session_id: sid },
-    { type: 'assistant', session_id: sid, message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Reading.' }], usage: { input_tokens: 1, cache_read_input_tokens: 10, cache_creation_input_tokens: 100 } } },
-    // One message, printed one event per content block.
-    { type: 'assistant', session_id: sid, message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Part one.' }], usage: { input_tokens: 2, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300 } } },
-    { type: 'assistant', session_id: sid, message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Part two.' }], usage: { input_tokens: 2, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300 } } },
-    { type: 'assistant', session_id: sid, message: { id: 'm3', model: 'claude-opus-5-5', content: [{ type: 'tool_use', name: 'Bash' }], usage: { input_tokens: 3, cache_read_input_tokens: 4000, cache_creation_input_tokens: 0 } } },
-    { type: 'assistant', session_id: sid, message: { id: 's1', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }], usage: { input_tokens: 0 } } },
-  ];
-  const stdout = `${lines.map((e) => JSON.stringify(e)).join('\n')}\n{"type":"assistant","message":{"id":"m4","content":[{"type":"text","text":"cut`;
-  assert.deepEqual(sessionStanding({ toolId: 'claude', stdout }), { session_id: sid, context_tokens: 4003, last_text: 'Part one.\nPart two.' });
-  const long = JSON.stringify({ type: 'assistant', message: { id: 'x', model: 'm', content: [{ type: 'text', text: `a${'b'.repeat(5000)}` }] } });
-  assert.equal(sessionStanding({ toolId: 'claude', stdout: `${long}\n` }).last_text.length, 3000, 'capped from the end');
-  assert.deepEqual(sessionStanding({ toolId: 'claude', stdout: '' }), { session_id: null, context_tokens: null, last_text: null });
-});
-
-test('sessionStanding: a codex stream cut mid-line gives its thread, last input tokens and last agent message', () => {
-  const stdout = [
-    { type: 'thread.started', thread_id: '019a-thread' },
-    { type: 'item.completed', item: { type: 'agent_message', text: 'Planning.' } },
-    { type: 'item.completed', item: { type: 'command_execution', command: 'ls' } },
-    { type: 'turn.completed', usage: { input_tokens: 4000, cached_input_tokens: 3000, output_tokens: 100 } },
-  ].map((e) => JSON.stringify(e)).join('\n') + '\n{"type":"turn.completed","usage":{"input_tokens":9';
-  assert.deepEqual(sessionStanding({ toolId: 'codex', stdout }), { session_id: '019a-thread', context_tokens: 4000, last_text: 'Planning.' });
-  assert.equal(INTERRUPT_LIMIT, 3);
 });
 
 test('streamSummary: a stream mc merge ended before its result still gives turns, usage, model and session', () => {
@@ -841,16 +267,6 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: [init, rate('rejected'), rate('allowed_warning')].join('\n'), exitCode: 143 }).quota, false);
     assert.equal(streamRateLimit('garbage'), null);
   });
-});
-
-test('checkInPrompt: names the minutes, the count and a blocker the project can carry', () => {
-  const text = checkInPrompt({ project: 'step-cost', minutes: 60, count: 1 });
-  assert.match(text, /running for 60 minutes \(this is check-in number 1\)/u);
-  assert.match(text, /say so in one line and go on/u);
-  assert.match(text, /`mc step blocked --on step-cost-check-in --reason "…"`/u);
-  assert.match(text, /Do not start anything new/u);
-  assert.match('step-cost-check-in', NAME_RE, 'the blocker name must pass the plan schema');
-  assert.equal(userMessageLine('hi'), '{"type":"user","message":{"role":"user","content":"hi"}}\n');
 });
 
 test('quietPrompt: names the silence, each background task, and what follows no answer', () => {
@@ -1129,47 +545,6 @@ test('intakeQueue is oldest first by the date in the name, with dateless names l
   assert.deepEqual(intakeQueue(['.hidden']), [], 'a dotfile is not an inbox item');
 });
 
-/* --------------------------------------------------------------- landing */
-
-const pr = (number, headRefName, baseRefName = 'main') => ({ number, headRefName, baseRefName });
-
-
-
-
-
-
-
-/* ------------------------------------------------------------------ repair */
-
-/**
- * A pull request the runner would not land gets one repair session before it
- * becomes a person's. `inFlight` refuses the project either way; the
- * difference is that a repair is somebody doing something about it, and the
- * second round says who is expected to act.
- */
-const heldEntry = (over = {}) => ({
-  project: 'm', repo: 'memoro', pr: 9, branch: 'm', reason: 'two tests red',
-  note: 'open,gate-red', since: '2026-09-03T10:00:00Z', repairs: 0, ...over,
-});
-const openPr = (number, head) => ({ number, headRefName: head, baseRefName: 'main' });
-
-
-
-
-
-
-test('stepOfPr: the step that names the pull request, and the deliverable one before it does', () => {
-  const { plan } = record({
-    steps: [
-      { title: 'one', status: 'done', done_when: 'a', instruction: [], pr: 501, blocked_by: null },
-      { title: 'two', status: 'done', done_when: 'b', instruction: [], pr: 502, blocked_by: null },
-      { title: 'three', status: 'ready', done_when: 'c', instruction: ['do'], pr: null, blocked_by: null },
-    ],
-  });
-  assert.equal(stepOfPr(plan, 502), 1, 'the step whose session already wrote its own pr');
-  assert.equal(stepOfPr(plan, 503), 2, 'before that edit has landed, the step the runner would hand out');
-});
-
 /**
  * Which refusals block a step on `main` and which the lane waits out — the
  * distinction ruling 17 turns on, held as a list rather than as a habit.
@@ -1180,26 +555,6 @@ test('stepOfPr: the step that names the pull request, and the deliverable one be
  * quota, a pull request somebody is still working on — and there the lane
  * waits and asks the same question again.
  */
-test('WORKAREA_BLOCKS: the persistent refusals, under names a plan can carry', () => {
-  assert.deepEqual(Object.keys(WORKAREA_BLOCKS).sort(),
-    ['branch', 'branch-foreign', 'dirty', 'role-missing', 'sync', 'tool-missing', 'worktree']);
-  // Every key is a word the runner already refuses in, so the two lists cannot
-  // drift into naming different things.
-  const refusals = RUN_REFUSALS.map((item) => item.reason);
-  for (const reason of Object.keys(WORKAREA_BLOCKS)) assert.ok(refusals.includes(reason), `${reason} is a refusal`);
-  // And every name is a name by the schema's own rule — a blocker name that is
-  // not one is a plan nothing can look up (plan-schema.js).
-  for (const name of WORKAREA_BLOCK_NAMES) assert.match(name, NAME_RE);
-  // The transient ones, named here so that adding one to the map is a test
-  // failure rather than a project parked on a bad network.
-  for (const reason of ['stop', 'prs-unknown', 'in-flight']) {
-    assert.equal(WORKAREA_BLOCKS[reason], undefined, `${reason} is about this moment, not about the project`);
-  }
-});
-
-// `lanes` and its `--total` form are parsed and printed in
-// tests/mc/commands/run-lanes.test.js, beside the verb they belong to.
-
 test('landingNote: a merge that did not land on main is not recorded as merged', () => {
   assert.equal(landingNote({ merged: true, merged_into: 'main', default_branch: 'main' }), 'merged');
   assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', default_branch: 'main', off_default: true }), 'off-main');
@@ -1319,50 +674,6 @@ test('headlessArgs: a resumed claude session is -p --resume <id>, the rest uncha
   assert.deepEqual(resumed, ['-p', '--resume', 'sid', ...fresh.slice(1)]);
 });
 
-test('resumePrompt: names what the API said and says the workarea is untouched', () => {
-  const text = resumePrompt({ said: 'Not logged in · Please run /login' });
-  assert.match(text, /"Not logged in · Please run \/login"/u);
-  assert.match(text, /exactly as you left them/u);
-  assert.match(text, /Do not start it over/u);
-});
-
-test('recoveryFor: resume while warm or small, fresh otherwise', () => {
-  const now = new Date('2026-10-10T12:00:00Z');
-  const ttlMs = 60 * 60_000;
-  const record = (over = {}) => ({ session_id: 'sid', tool: 'claude', last_activity: '2026-10-10T11:48:00Z', context_tokens: 120_000, ...over });
-  const cases = [
-    ['warm', record(), 'claude', { mode: 'resume', why: 'warm, 12 min since last request' }],
-    ['cold small', record({ last_activity: '2026-10-10T10:00:00Z', context_tokens: 41_000 }), 'claude', { mode: 'resume', why: 'cold, 41 000 tokens' }],
-    ['cold large', record({ last_activity: '2026-10-10T10:00:00Z' }), 'claude', { mode: 'fresh', why: 'cold, 120 000 tokens — fresh' }],
-    ['cold, size unknown', record({ last_activity: null, context_tokens: null }), 'claude', { mode: 'resume', why: 'cold, context size unknown' }],
-    ['inside the margin is cold', record({ last_activity: '2026-10-10T11:04:00Z' }), 'claude', { mode: 'fresh', why: 'cold, 120 000 tokens — fresh' }],
-    ['no id', record({ session_id: null }), 'claude', { mode: 'fresh', why: 'no session id — fresh' }],
-    ['tool changed', record(), 'codex', { mode: 'fresh', why: 'the tool is codex now, the session ran on claude — fresh' }],
-    ['resume failed', record({ resume_failed: true }), 'claude', { mode: 'fresh', why: 'the last resume did not start — fresh' }],
-  ];
-  for (const [label, interrupted, toolNow, want] of cases) {
-    assert.deepEqual(recoveryFor({ interrupted, toolNow, ttlMs, now }), want, label);
-  }
-  assert.equal(WARM_MARGIN_MS, 5 * 60_000);
-  assert.equal(COLD_RESUME_MAX_TOKENS, 75_000);
-  assert.equal(recoveryFor({ interrupted: record({ context_tokens: 75_000, last_activity: null }), toolNow: 'claude', ttlMs, now }).mode, 'resume', 'at the limit is resumed');
-});
-
-test('recoveryFor: a resume across billings is never warm', () => {
-  const now = new Date('2026-10-10T12:00:00Z');
-  const ttlMs = 60 * 60_000;
-  const record = (over = {}) => ({ session_id: 'sid', tool: 'claude', last_activity: '2026-10-10T11:59:00Z', billing: 'plan', ...over });
-  assert.deepEqual(recoveryFor({ interrupted: record({ context_tokens: 41_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'credits' }),
-    { mode: 'resume', why: 'billing changed plan→credits, cold, 41 000 tokens' });
-  assert.deepEqual(recoveryFor({ interrupted: record({ context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'credits' }),
-    { mode: 'fresh', why: 'billing changed plan→credits, cold, 120 000 tokens — fresh' });
-  assert.deepEqual(recoveryFor({ interrupted: record({ billing: 'credits', context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'plan' }),
-    { mode: 'fresh', why: 'billing changed credits→plan, cold, 120 000 tokens — fresh' });
-  assert.deepEqual(recoveryFor({ interrupted: record({ billing: undefined, context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'plan' }),
-    { mode: 'resume', why: 'warm, 1 min since last request' }, 'a record with no billing ran on plan');
-  assert.equal(recoveryFor({ interrupted: record({ context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now }).mode, 'resume', 'no billingNow is today');
-});
-
 test('headlessArgs: a codex resume is `exec resume` with the sandbox through -c and the id before the prompt', () => {
   const args = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'go on', profileArgs, resume: 'thread-1' });
   assert.deepEqual(args.slice(0, 6), ['exec', 'resume', '--json', '-m', 'o3', '-c']);
@@ -1371,7 +682,6 @@ test('headlessArgs: a codex resume is `exec resume` with the sandbox through -c 
   assert.deepEqual(args.slice(-2), ['thread-1', 'go on']);
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
   assert.deepEqual(claude.slice(0, 3), ['-p', '--resume', 'sid']);
-  assert.match(restartPrompt({ at: '2026-10-10T11:48:00Z', why: 'warm, 12 min since last request' }), /cut off at 2026-10-10T11:48:00Z .*\n.*exactly as you left them/u);
 });
 
 test('headlessArgs: every launch carries the session switches, new and resumed, with the role TTL', () => {

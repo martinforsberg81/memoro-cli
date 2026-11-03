@@ -1,7 +1,6 @@
 /**
- * `brief-collect.js` — the shared readers of plans, runs and proposals, on
- * fixtures: the proposal listing, PLAN.md frontmatter parsing, the plans under
- * `~/mc/programs/`, and the runs.tsv rows.
+ * `brief-collect.js` — the shared readers of runs and proposals, on
+ * fixtures: the proposal listing and the runs.tsv rows.
  */
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -9,10 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import {
-  listArchived, listPlans, listProposals, parsePlanFrontmatter, planFields, runsFor, showBatch,
-} from '../../src/mc/brief-collect.js';
-import { programsArchived } from '../../src/mc/plan-source.js';
+import { listProposals, runsFor } from '../../src/mc/brief-collect.js';
 
 const RUNS = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -41,104 +37,6 @@ describe('proposals', () => {
   });
 });
 
-
-describe('PLAN.md frontmatter', () => {
-  it('reads a quoted next and a folded one', () => {
-    assert.deepEqual(parsePlanFrontmatter('---\nstatus: ready\nnext: "Step 1 — do it"\nbudget: 150k\n---\n# x'),
-      { status: 'ready', next: 'Step 1 — do it' });
-    assert.deepEqual(parsePlanFrontmatter('---\nstatus: blocked\nnext: >-\n  Add a watchdog —\n  done when tested.\nneeds: []\n---\n'),
-      { status: 'blocked', next: 'Add a watchdog — done when tested.' });
-    assert.deepEqual(parsePlanFrontmatter('no frontmatter'), { status: null, next: null });
-  });
-
-  it('keeps every field for the page about one project', () => {
-    assert.deepEqual(planFields('---\nstatus: ready\nnext: "Step 1 — do it"\nbudget: 150k\nneeds: []\n---\n# x'),
-      { status: 'ready', next: 'Step 1 — do it', budget: '150k', needs: '[]' });
-    assert.deepEqual(planFields('no frontmatter'), {});
-  });
-});
-
-describe('the plans under ~/mc/programs/', () => {
-  // A plan that parses, with one step ready. Its top-level `repo` is what makes it a programs plan.
-  const PROGRAM_TEXT = JSON.stringify({
-    schema: 'mc-plan', version: 1, repo: 'memoro-cli', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
-    success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
-    steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
-  });
-  const program = (project, repo) => ({
-    path: `/w/programs/mc/${project}/PLAN.json`, programme: 'mc', project, file: 'PLAN.json', text: PROGRAM_TEXT, repo,
-  });
-
-  it('lists the programs plans of this repository, with their absolute paths, and leaves out another repository\'s', () => {
-    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, {
-      programs: () => [program('mc-x', 'memoro-cli'), program('mc-z', 'memoro'), program('mc-y', 'memoro-cli')],
-    });
-    assert.deepEqual(plans.map((p) => [p.project, p.path, p.repo, p.legacy]), [
-      ['mc-x', '/w/programs/mc/mc-x/PLAN.json', 'memoro-cli', false], ['mc-y', '/w/programs/mc/mc-y/PLAN.json', 'memoro-cli', false],
-    ]);
-    assert.match(plans[0].next, /done when one/u, 'the plan is read');
-  });
-
-  it('asks no git, and takes the old options without reading them', () => {
-    const git = () => { throw new Error('listPlans asked git'); };
-    const batch = () => { throw new Error('listPlans asked for a batch'); };
-    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch: showBatch(git), programs: () => [program('mc-x', 'memoro-cli')] });
-    assert.deepEqual(plans.map((p) => p.project), ['mc-x']);
-    assert.deepEqual(listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch, programs: () => [] }), []);
-  });
-
-  it('says a plan that does not parse is invalid, with the reason', () => {
-    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { programs: () => [{ ...program('mc-x', 'memoro-cli'), text: '{' }] });
-    assert.equal(plans[0].status, 'invalid');
-    assert.equal(plans[0].plan, null);
-  });
-});
-
-describe('archived projects', () => {
-  it('lists the closeout records on a ref, and not the markdown or what is nested under closeout/', () => {
-    const git = (cwd, args) => {
-      if (args[0] === 'ls-tree') return [
-        'docs/project/README.md',
-        'docs/project/mc/closeout/a.json',
-        'docs/project/mc/closeout/a.md',
-        'docs/project/mc/b/PLAN.json',
-        'docs/project/mc/closeout/notes/c.json',
-      ].join('\n');
-      return null;
-    };
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git, archived: () => [] }), ['a']);
-  });
-
-  it('is empty when the ref cannot be read and nothing is archived under ~/mc/programs/', () => {
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived: () => [] }), []);
-  });
-
-  it('adds the programs-archived projects of this repository, closeout names first, each name once', () => {
-    const git = (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/closeout/a.json' : null);
-    const archived = () => [
-      { path: '/w/programs/mc/a/PLAN.json', programme: 'mc', project: 'a', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/a/CLOSEOUT.json' },
-      { path: '/w/programs/mc/b/PLAN.json', programme: 'mc', project: 'b', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/b/CLOSEOUT.json' },
-      { path: '/w/programs/ops/c/PLAN.json', programme: 'ops', project: 'c', repo: 'memoro', closeoutPath: '/w/programs/ops/c/CLOSEOUT.json' },
-    ];
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git, archived }), ['a', 'b']);
-  });
-
-  it('returns the programs-archived names when the ref cannot be read', () => {
-    const archived = () => [
-      { path: '/w/programs/mc/b/PLAN.json', programme: 'mc', project: 'b', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/b/CLOSEOUT.json' },
-    ];
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived }), ['b']);
-  });
-
-  it('names a project that is only under the archive home', () => {
-    const files = { '/a/mc/moved/PLAN.json': '{"repo":"memoro-cli"}', '/a/mc/moved/CLOSEOUT.json': '{}' };
-    const dirs = { '/a': ['mc'], '/a/mc': ['moved'] };
-    const archived = () => programsArchived({
-      home: '/nowhere', archivedHome: '/a', list: (path) => dirs[path] ?? [], read: (path) => files[path] ?? null,
-    });
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived }), ['moved']);
-  });
-});
 
 describe('runner log', () => {
   it('keeps the last rows of one project', () => {

@@ -38,8 +38,8 @@ How you judge:
   fingerprint tables are context, not a to-do list.
 - **Volume is not severity.** Two thousand version-drift warnings are a client
   behind a deploy; one queue error that loses a message is worse.
-- **Duplicating live work is noise.** If a plan already owns this, propose a
-  step for it, or nothing. The project log says what was abandoned and why.
+- **Duplicating live work is noise.** If a goal already owns this, propose
+  what it lacks, or nothing. The goal's log says what was abandoned and why.
 - **Zero proposals is a good answer.** A quiet day should cost Martin nothing
   to read. Say so, and write nothing.
 - **Three is a lot.** You are proposing what he reads next, not filing

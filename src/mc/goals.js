@@ -11,9 +11,7 @@
  * that does not parse is reported with its problems, never skipped.
  *
  * The readers take `list` and `read` as arguments, so the tests use a file
- * model; `programsPlans` in `plan-source.js` works the same way. It skips a
- * programme's `goals/` directory on its own: no `PLAN.json` sits directly
- * under it.
+ * model.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -140,7 +138,7 @@ export function parsePrRef(text) {
 /**
  * What is wrong with a GOAL.json's value, field by field — everything, not the
  * first thing. `success_criteria` takes at least one criterion, each with a
- * `check`, as PLAN.json's does (`criteria.js`); `draft` lets a goal that has no
+ * `check` (`criteria.js`); `draft` lets a goal that has no
  * criterion yet through — `mc goal new`'s skeleton, filled by `mc goal
  * criterion add` — and nothing else. A goal with none is not started by the
  * runner (`nextGoal`) and cannot go to review.
@@ -563,6 +561,18 @@ export function addGoalWorktree({ git, bare, path, goal }) {
     ? ['worktree', 'add', '-q', path, branch]
     : ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
   return { ...added, branch, existed };
+}
+
+/**
+ * The branch a goal's worktree of `repo` is on: `goal/<goal>`, as `mc goal
+ * new` makes it, or the branch it took over from a project (`mc goal
+ * from-project`), whose pull request is already open on it. Read from the
+ * worktree; `goal/<goal>` when it cannot say.
+ */
+export function goalBranch({ git, dir, goal, repo }) {
+  const head = git(join(dir, repo), ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const name = head.ok ? head.stdout.trim() : '';
+  return /^[\w./-]+$/u.test(name) && name !== 'HEAD' ? name : `goal/${goal}`;
 }
 
 /**

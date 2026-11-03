@@ -131,8 +131,7 @@ function install(extra, { stdout, stderr, deps }) {
 }
 
 /**
- * `mc hook install` on one settings file, as a function (`mc layout migrate
- * --apply` runs it too): `{ code, line, failed }`, `failed` when the file
+ * `mc hook install` on one settings file, as a function: `{ code, line, failed }`, `failed` when the file
  * could not be read as JSON and nothing was written.
  */
 export function installSettings(path, { check = false, readFile = (file) => readFileSync(file, 'utf8'), writeJson = writeJsonAtomic } = {}) {

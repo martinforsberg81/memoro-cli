@@ -8,7 +8,6 @@
 
 /** Every verb the dispatcher routes, and the module that answers it. */
 export const VERB_MODULES = {
-  status: './cli/status.js',
   tidy: './mc/commands/tidy.js',
   layout: './mc/commands/layout.js',
   repos: './mc/commands/repos.js',
@@ -35,8 +34,6 @@ export const VERB_MODULES = {
   skills: './mc/commands/skills.js',
   model: './mc/commands/model.js',
   log: './mc/commands/log.js',
-  step: './mc/commands/step.js',
-  project: './mc/commands/project.js',
   goal: './mc/commands/goal.js',
   programs: './mc/commands/programs.js',
 };
@@ -46,10 +43,25 @@ export const VERB_MODULES = {
  * to a programme (plan, build, review) or a desk (brief, helper), and there is
  * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
  */
-export const RETIRED_VERBS = Object.freeze(['work', 'worker']);
+export const RETIRED_VERBS = Object.freeze(['work', 'worker', 'project', 'step']);
+
+/**
+ * The verbs of projects, which went on 2026-11-03 (goal mc/projects-to-goals):
+ * a project's steps are goals ordered with `after` now, and a live project is
+ * turned into them once by `mc goal from-project`.
+ */
+const PROJECT_VERBS = new Set(['project', 'step']);
 
 /** What a retired verb says, whatever follows it: where each kind of session starts now. */
 export function retiredLines(verb) {
+  if (PROJECT_VERBS.has(verb)) {
+    return [
+      `mc: mc ${verb} is gone — projects are goals now`,
+      '    mc goal from-project <programme>/<project>   a live project\'s steps not done, turned into goals once',
+      '    mc goal list [<programme>]                   every goal',
+      '    mc goal --help                               the goal verbs',
+    ];
+  }
   return [
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',
@@ -77,7 +89,7 @@ const READER_GONE = new Set(['EPIPE', 'ENOTCONN']);
 
 /**
  * A reader that goes away early is the caller's choice, not a fault in the
- * verb: `mc project discard x | grep -q 'would remove'` and `mc … | head -1`
+ * verb: `mc tidy | grep -q 'would remove'` and `mc … | head -1`
  * both close the pipe while the verb is still writing. Node raises that as an
  * `error` event with nothing listening, and the stack trace lands on stderr.
  * So the first EPIPE is noted and dropped, and so are the writes that follow
@@ -137,6 +149,9 @@ export async function routeV1Command(args, { stderr = process.stderr, run = runM
     return run('./mc/commands/home.js', args);
   }
   if (command === 'list') return moved('mc list', stderr);
+  // `mc status <name>` answered about one project, and went with projects on
+  // 2026-11-03 (goal mc/projects-to-goals): one goal is `mc goal show`.
+  if (command === 'status') return moved('mc status', stderr);
   // The surface, and nothing beside it. `mc doctor` and `mc migrate` went on
   // 2026-09-03: both answer questions about the V1 session store — session
   // homes, generation journals, the pre-V1 move — and that store is what
@@ -155,7 +170,8 @@ export async function routeV1Command(args, { stderr = process.stderr, run = runM
 function moved(verb, stderr) {
   stderr.write(`mc: ${verb} is now mc — one page, and it is what mc prints\n`);
   stderr.write('    mc                  the page, and at a terminal a way in\n');
-  stderr.write('    mc status <name>    one project\n');
+  stderr.write('    mc --json           the same page, as one object\n');
+  stderr.write('    mc goal show <programme>/<goal>   one goal\n');
   return 2;
 }
 

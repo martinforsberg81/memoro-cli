@@ -3,10 +3,9 @@
  *
  * The round itself is `tests/mc/repo-merge.test.js` and the merger that runs
  * it is `tests/mc/merger.test.js`; this drives the verb, whose whole job for
- * one pull request is now three things: refuse an unmet criterion at the door,
- * make the step `landing` and queue the job, and see that a merger is
+ * one pull request is now two things: queue the job, and see that a merger is
  * running. It returns at once — nothing here waits, so nothing here needs a
- * clock. `criteriaDoor`'s own rules are `tests/mc/merge-boundary.test.js`'s.
+ * clock.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,9 +16,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
-import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { roundLogPath } from '../../src/mc/repo-round-log.js';
-import { registerPath } from '../../src/mc/register.js';
 
 let root = null;
 let home = null;
@@ -27,30 +24,12 @@ let priorHome = null;
 
 const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(mergesPath(root), 'utf8') : null);
 
-const PLAN_PATH = 'docs/project/mc/merge-queue/PLAN.json';
-
-/** A register entry for the project the fixture pull request belongs to. */
-function register(stepOver = {}, belowOver = {}) {
-  mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
-  const entry = {
-    project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
-    steps: [
-      { status: 'done', pr: 600, branch: 'merge-queue', comments: [], attempts: 0, ...belowOver },
-      { status: 'running', pr: null, branch: 'merge-queue-2', comments: [], attempts: 0, session: { pid: 4242, started: '2026-09-12T10:00:00Z' }, ...stepOver },
-    ],
-  };
-  writeFileSync(registerPath(root, 'merge-queue'), JSON.stringify(entry));
-  return entry;
-}
-
-const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue'), 'utf8'));
-
 /**
  * Everything `gate` would otherwise reach the machine through: `gh` answers
  * the pull request's branch, the door is open unless told otherwise, and the
  * merger is started by a fake that counts.
  */
-function deps({ env = {}, head = null, door = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
+function deps({ env = {}, head = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
   const out = { out: '', err: '' };
   const starts = [];
   let ranRound = false;
@@ -67,7 +46,6 @@ function deps({ env = {}, head = null, door = null, merger = { pid: 777, started
       now: () => new Date('2026-09-06T18:00:00Z'),
       env: { MC_WORK_ROOT: root, ...env },
       gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head, mergeable }) } : { status: 1, stdout: '' }),
-      criteriaDoor: async () => door || { checked: false },
       lock: (_root, fn) => fn(),
       git,
       cwd,
@@ -105,7 +83,7 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.equal(job.pr, 671);
     assert.equal(job.branch, 'some-branch');
     assert.equal(job.state, 'queued');
-    assert.equal(job.step, null, 'a branch that is nobody\'s step');
+    assert.equal('step' in job, false, 'a job carries no step');
     assert.equal(job.since, '2026-09-06T18:00:00Z');
     assert.ok(job.holder?.name, 'who asked is kept for the round\'s lease');
     assert.equal(d.starts.length, 1);
@@ -123,11 +101,10 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
   });
 
   it('several at once are queued one by one, in the order given, each with its own place', async () => {
-    const d = deps({ env: { MC_STEP: 'merge-queue:1' } });
+    const d = deps();
     assert.equal(await gate({ repo: 'memoro-cli', pr: 673, prs: [673, 671, 672] }, d.io), 0);
     assert.equal(d.ranRound(), false, 'no batch round: each is the merger\'s');
     assert.deepEqual(queue().map((job) => job.pr), [673, 671, 672]);
-    assert.ok(queue().every((job) => job.step === null), 'MC_STEP names one step, not three');
     assert.match(d.out.out, /^mc: #673 is queued for the merger — it is next$/mu);
     assert.match(d.out.out, /^mc: #672 is queued for the merger — 2 ahead of it$/mu);
   });
@@ -168,89 +145,7 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     const d = deps();
     assert.equal(await gate({ repo: 'memoro-cli', pr: 671, json: true }, d.io), 0);
     const said = JSON.parse(d.out.out);
-    assert.deepEqual(said, { queued: true, repo: 'memoro-cli', pr: 671, place: 0, merger_pid: 777, step: null });
-  });
-});
-
-describe('an unmet criterion stops mc merge at the door', () => {
-  fresh('mc-merge-door');
-
-  it('the last step with an unmet criterion is refused at the door and nothing is queued', async () => {
-    register();
-    const d = deps({
-      env: { MC_STEP: 'merge-queue:1' },
-      door: { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met — run its check and record it with mc project criterion met <project> 1, or add a step that does'] },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
-    assert.equal(code, 1);
-    assert.match(d.out.err, /^mc: unmet-criteria — step 2 is the plan's last/mu);
-    assert.deepEqual(queue(), []);
-    assert.equal(d.starts.length, 0);
-    assert.equal(entryNow().steps[1].status, 'running', 'the session that called measures, still on the step');
-  });
-});
-
-describe('mc merge makes the step landing', () => {
-  fresh('mc-merge-step');
-
-  it('MC_STEP: the step is landing with its pull request, the job names it, the other step is untouched', async () => {
-    register();
-    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    const after = entryNow();
-    assert.equal(after.steps[1].status, 'landing');
-    assert.equal(after.steps[1].pr, 671);
-    assert.equal(after.steps[1].session, null, 'the session\'s part is over');
-    assert.equal(after.steps[0].status, 'done');
-    assert.deepEqual(queue()[0].step, { project: 'merge-queue', index: 1 });
-    assert.match(d.out.out, /^mc: merge-queue step 2 is landing — green makes it done; red sends it back to the step's next session\. Your work is over: end the session now — no gate, no watch, no summary$/mu);
-  });
-
-  it('the step is found from the branch when MC_STEP is not set — a person typing mc merge on a project branch', async () => {
-    register();
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, deps({ head: 'merge-queue-2' }).io), 0);
-    assert.equal(entryNow().steps[1].status, 'landing');
-    assert.deepEqual(queue()[0].step, { project: 'merge-queue', index: 1 });
-  });
-
-  it('a pull request that is nobody\'s step is queued and the register is left alone', async () => {
-    register();
-    const d = deps({ head: 'unrelated-feature' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.equal(entryNow().steps[1].status, 'running');
-    assert.equal(queue()[0].step, null);
-    assert.doesNotMatch(d.out.out, /landing —/u);
-  });
-
-  it('a branch named after a project but no step\'s is queued, books no step, and says so', async () => {
-    register();
-    const d = deps({ head: 'merge-queue-direct-fix' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.equal(entryNow().steps[1].status, 'running');
-    assert.equal(queue()[0].step, null);
-    assert.match(d.out.out, /merge-queue-direct-fix is named after a project but is none of its steps' branches — landing it marks no step done/u);
-  });
-
-  it('a step stacked on one still landing: the job names that one', async () => {
-    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } }, { status: 'landing' });
-    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.deepEqual(queue()[0].parent, { project: 'merge-queue', index: 0, pr: 600, sha: 'deadbeef' });
-    assert.match(d.out.out, /^mc: it lands after #600 \(step 1\), which it is built on$/mu);
-  });
-
-  it('a step stacked on one that has since landed: no parent is named', async () => {
-    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
-    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.equal(queue()[0].parent, null);
-  });
-
-  it('remainderOf reads a `## Remainder` and nothing else', () => {
-    assert.equal(remainderOf('## Remainder\n\n`smart-search.js` — 16 sites.\n\n## Verified\n\nnpm test'), '`smart-search.js` — 16 sites.');
-    assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
-    assert.equal(remainderOf('no such heading'), null);
-    assert.equal(remainderOf('## Remainder\nOne thing.\n\n<!-- mc:described abc1234 -->'), 'One thing.');
+    assert.deepEqual(said, { queued: true, repo: 'memoro-cli', pr: 671, place: 0, merger_pid: 777 });
   });
 });
 
@@ -300,78 +195,6 @@ describe('the door refuses what cannot land as asked (ruling 43)', () => {
     assert.equal(d.out.err, '');
     assert.equal(queue().length, 1);
     assert.match(d.out.out, /^mc: #671 is queued for the merger — it is next$/mu);
-  });
-});
-
-describe('a docs landing of the review books the built steps (branch flow)', () => {
-  fresh('mc-merge-docs-built');
-
-  // The register of a branch flow: steps 0 and 1 built on `merge-queue`, the review (2) running on it.
-  function flow() {
-    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
-    writeFileSync(registerPath(root, 'merge-queue'), JSON.stringify({
-      project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
-      steps: [
-        { status: 'built', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, built: { sha: 'aaa1111', at: '2026-10-25T10:00:00Z' } },
-        { status: 'built', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, built: { sha: 'bbb2222', at: '2026-10-25T10:05:00Z' } },
-        { status: 'running', pr: 671, branch: 'merge-queue', comments: [], attempts: 0, session: { pid: 4242, started: '2026-10-25T10:10:00Z' } },
-      ],
-    }));
-  }
-
-  it('the review\'s docs landing is booked done, and the built steps under it with the same landing', async () => {
-    flow();
-    const out = { out: '', err: '' };
-    const code = await run(['memoro-cli', '671', '--docs'], {
-      stdout: { write: (text) => { out.out += text; } },
-      stderr: { write: (text) => { out.err += text; } },
-      root,
-      env: { MC_WORK_ROOT: root },
-      resolveRepoPath: async () => '/repos/memoro-cli',
-      criteriaDoor: async () => ({ checked: false }),
-      runDocsMerge: async () => ({
-        ok: true, merged: true, merge_commit: 'abcdef1234567890', merged_into: 'main', branch: 'merge-queue',
-        pr: { number: 671, base: 'main' }, files: ['docs/project/mc/merge-queue/notes.md'], body: null, measured: null,
-      }),
-      lock: (_root, fn) => fn(),
-      now: () => new Date('2026-10-25T12:00:00Z'),
-    });
-    assert.equal(code, 0);
-    const steps = JSON.parse(readFileSync(registerPath(root, 'merge-queue'), 'utf8')).steps;
-    assert.deepEqual(steps.map((step) => step.status), ['done', 'done', 'done']);
-    assert.deepEqual(steps.map((step) => step.landed.sha), ['abcdef1234567890', 'abcdef1234567890', 'abcdef1234567890']);
-    assert.match(out.out, /^mc: merge-queue step 3 is done; steps 1, 2 were built on its branch — done with it$/mu);
-  });
-});
-
-describe('stepForMerge', () => {
-  const entries = [
-    { project: 'mc-cut', steps: [{ status: 'done', branch: 'mc-cut' }, { status: 'running', branch: 'mc-cut-2' }] },
-    { project: 'mc', steps: [{ status: 'ready', branch: null }] },
-  ];
-  it('MC_STEP wins, then the branch a step stands on, then the project the branch is named after', () => {
-    assert.equal(stepForMerge({ env: { MC_STEP: 'mc:0' }, head: 'mc-cut-2', entries }).project, 'mc');
-    assert.equal(stepForMerge({ env: {}, head: 'mc-cut-2', entries }).index, 1);
-    assert.equal(stepForMerge({ env: {}, head: 'mc-cut-2', entries }).from, 'branch');
-    const named = stepForMerge({ env: {}, head: 'mc-cut-9', entries });
-    assert.equal(named.project, 'mc-cut');
-    assert.equal(named.from, 'project');
-    assert.equal(named.index, 1, 'the running step, not the done one');
-    assert.equal(stepForMerge({ env: {}, head: 'plan/mc', entries }), null);
-    assert.equal(stepForMerge({ env: { MC_STEP: 'ghost:0' }, head: 'x', entries }), null, 'a project the register does not have');
-  });
-
-  it('a branch merely named after a project is no step of it, and a blocked step is never taken by name (#13549)', () => {
-    const blocked = [{ project: 'photo-analysis', steps: [{ status: 'done', branch: 'photo-analysis' }, { status: 'blocked', branch: 'photo-analysis-6' }] }];
-    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-direct-envelope', entries: blocked }), null);
-    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-7', entries: blocked }), null, 'numbered, but the step it would be is blocked');
-    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-6', entries: blocked }).index, 1, 'the step\'s own branch still finds it');
-    assert.equal(stepForMerge({ env: {}, head: 'mc-cut-fix', entries }), null);
-  });
-
-  it('a built step is not the one to land: on a branch-flow plan the step still running on the branch is', () => {
-    const flow = [{ project: 'flow', steps: [{ status: 'built', branch: 'x' }, { status: 'built', branch: 'x' }, { status: 'running', branch: 'x' }] }];
-    assert.equal(stepForMerge({ env: {}, head: 'x', entries: flow }).index, 2);
   });
 });
 
@@ -478,85 +301,51 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
     };
   }
 
-  it('an open pull request: squashed, pinned to its head, the entry gone, the step done with its landing', async () => {
-    register();
+  it('an open pull request: squashed, pinned to its head, the entry gone', async () => {
     writeQueue([queued(), queued({ pr: 672, since: '2026-10-24T11:05:00Z' })]);
     const d = adminRun();
     assert.equal(await d.run(), 0);
     assert.deepEqual(d.merges(), [['pr', 'merge', '671', '--squash', '--admin', '--subject', 'Fix the thing (#671)', '--match-head-commit', HEAD]]);
     assert.deepEqual(queue().map((entry) => entry.pr), [672], 'only this pull request leaves the queue');
-    const step = entryNow().steps[1];
-    assert.equal(step.status, 'done');
-    assert.equal(step.pr, 671);
-    assert.equal(step.landed.sha, MERGE_SHA);
-    assert.equal(entryNow().steps[0].status, 'done', 'the step below is untouched');
-    assert.equal(d.out.out, 'mc: merged #671 into main as abcdef1 (squash, --admin: no gate round)\nmc: merge-queue step 2 is done\n');
+    assert.equal(d.out.out, 'mc: merged #671 into main as abcdef1 (squash, --admin: no gate round)\n');
     assert.equal(d.out.err, '');
   });
 
-  it('built steps under the review: an admin landing books them done with its landing', async () => {
-    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
-    writeFileSync(registerPath(root, 'merge-queue'), JSON.stringify({
-      project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
-      steps: [
-        { status: 'built', pr: 671, branch: 'merge-queue-2', comments: [], attempts: 0, built: { sha: 'aaa1111', at: '2026-10-25T10:00:00Z' } },
-        { status: 'built', pr: 671, branch: 'merge-queue-2', comments: [], attempts: 0, built: { sha: 'bbb2222', at: '2026-10-25T10:05:00Z' } },
-        { status: 'running', pr: null, branch: 'merge-queue-2', comments: [], attempts: 0 },
-      ],
-    }));
-    writeQueue([queued({ step: { project: 'merge-queue', index: 2 } })]);
-    const d = adminRun();
-    assert.equal(await d.run(), 0);
-    const steps = entryNow().steps;
-    assert.deepEqual(steps.map((step) => step.status), ['done', 'done', 'done']);
-    assert.deepEqual(steps.map((step) => step.landed.sha), [MERGE_SHA, MERGE_SHA, MERGE_SHA]);
-    assert.match(d.out.out, /^mc: merge-queue step 3 is done; steps 1, 2 were built on its branch — done with it$/mu);
-  });
-
-  it('a landing entry is left as the merger has it, and its step untouched: the merger\'s watch books it', async () => {
-    register();
+  it('a landing entry is left as the merger has it: the merger\'s watch books it', async () => {
     writeQueue([queued({ state: 'landing' })]);
     const d = adminRun();
     assert.equal(await d.run(), 0);
     assert.equal(d.merges().length, 1);
     assert.equal(queue()[0].state, 'landing');
-    assert.equal(entryNow().steps[1].status, 'running');
     assert.match(d.out.out, /^mc: #671 is landing in the merger's queue — the merger's round for it stops within a minute and books it$/mu);
   });
 
-  it('a pull request already merged is booked without a merge call, its step found from its branch', async () => {
-    register();
+  it('a pull request already merged is booked without a merge call', async () => {
     const d = adminRun({ views: [ok({ ...OPEN, ...MERGED })] });
     assert.equal(await d.run(), 0);
     assert.equal(d.merges().length, 0);
-    assert.equal(entryNow().steps[1].status, 'done');
-    assert.equal(entryNow().steps[1].landed.sha, MERGE_SHA);
     assert.equal(d.out.err, 'mc: #671 was already merged as abcdef1 — booking it\n');
   });
 
-  it('--json says what landed, where, and what was booked', async () => {
-    register();
+  it('--json says what landed, where, and what became of its queue entry', async () => {
     const d = adminRun();
     assert.equal(await d.run(['memoro-cli', '671', '--admin', '--json']), 0);
     assert.deepEqual(JSON.parse(d.out.out), {
-      ok: true, merged: true, merge_commit: MERGE_SHA, merged_into: 'main', step: { project: 'merge-queue', index: 1 }, queue: 'none',
+      ok: true, merged: true, merge_commit: MERGE_SHA, merged_into: 'main', queue: 'none',
     });
   });
 
   it('a closed pull request exits 1 and changes nothing', async () => {
-    register();
     writeQueue([queued()]);
     const before = readFileSync(mergesPath(root), 'utf8');
     const d = adminRun({ views: [ok({ ...OPEN, state: 'CLOSED' })] });
     assert.equal(await d.run(), 1);
     assert.equal(d.merges().length, 0);
     assert.equal(readFileSync(mergesPath(root), 'utf8'), before);
-    assert.equal(entryNow().steps[1].status, 'running');
     assert.equal(d.out.err, 'mc: #671 is closed, not merged — nothing to land\n');
   });
 
-  it('a gh pr merge that fails leaves the queue and the register unchanged, and says the last line of its error', async () => {
-    register();
+  it('a gh pr merge that fails leaves the queue unchanged, and says the last line of its error', async () => {
     writeQueue([queued()]);
     const before = readFileSync(mergesPath(root), 'utf8');
     const d = adminRun({
@@ -566,12 +355,10 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
     assert.equal(await d.run(), 1);
     assert.equal(d.merges().length, 1);
     assert.equal(readFileSync(mergesPath(root), 'utf8'), before);
-    assert.equal(entryNow().steps[1].status, 'running');
     assert.equal(d.out.err, 'mc: NOT merged — GraphQL: Head branch was modified\n');
   });
 
   it('a pull request gh cannot read exits 1 and nothing is merged', async () => {
-    register();
     const d = adminRun({ views: [{ status: 1, stdout: '', stderr: 'no such pull request' }] });
     assert.equal(await d.run(), 1);
     assert.equal(d.merges().length, 0);

@@ -13,7 +13,7 @@
  * TestFlight upload is one, and so is a `seed` row — a build made before the
  * verb existed, recorded by hand with `mc asc build --shipped <build> <sha>`.
  *
- * Every write is under the register's lock (`realLock`, register.js): a build
+ * Every write is under the runner lock (`realLock`, runner-lock.js): a build
  * runs in its own process, and its row is completed while the asking terminal
  * or another `mc asc build` may be writing.
  */
@@ -24,7 +24,7 @@ import { writeFileAtomic } from './atomic-write.js';
 import { parseDeploys as parseRows, tsvRow } from './deploys.js';
 import { processAlive } from './lease-owner.js';
 import { workRoot } from './paths.js';
-import { realLock } from './register.js';
+import { realLock } from './runner-lock.js';
 
 /** The columns. Append, never insert — as in `DEPLOYS_HEADER`. */
 export const IOS_BUILDS_HEADER = [

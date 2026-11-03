@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  intakeSection, mcSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
+  intakeSection, mcSection, mergesSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { CLEAR_ALL, frameWrites, topOffScreen } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
@@ -19,14 +19,12 @@ function emptyPage(ageSeconds) {
   return {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
-    next: nextSection({ plans: [] }),
     merges: mergesSection({}),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
-    programmes: programmesSection({ areas: [], plans: [] }),
+    programmes: programmesSection({}),
     mc: mcSection({ process: { alive: true, up_seconds: ageSeconds }, now: NOW }),
     caches: {
       fresh: false,
-      plans: [],
       prs: { fetched: '2026-08-29T10:00:00Z', age_seconds: ageSeconds, count: 1 },
     },
     notes: [],
@@ -128,7 +126,7 @@ describe('the difference between two frames', () => {
 });
 
 /**
- * A project's status changed in a row that has scrolled off the top. The
+ * A goal's status changed in a row that has scrolled off the top. The
  * differ leaves that row alone, correctly, and so it stood there wrong until a
  * key was pressed (Martin, 2026-09-19). The way out is the whole page again,
  * which `page-live.js` prints from an empty terminal.

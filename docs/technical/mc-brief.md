@@ -126,7 +126,7 @@ the old `<work root>/plan/` and `~/mc/gate/` are invisible too; with the worktre
 `~/mc/brief/unblock/memoro-cli`, `areasWithCheckout` listed 80 areas and
 neither `brief` nor `unblock` was among them. And the branch is not `<project>`
 or `<project>-…`, which is the shape `projectForBranch`
-(`src/mc/project-prs.js`) claims for a project: against the 46 project names on
+(`src/mc/project-prs.js`, gone with projects on 2026-11-03) claimed for a project: against the 46 project names on
 main, `brief/unblock-2026-09-05` returned `null` where `brief-blocked-steps-4`
 returned `brief-blocked-steps`. A branch of the claimed shape would read as
 that project's own work in flight and keep it out of every pick. (The runner's

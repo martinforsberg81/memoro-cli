@@ -237,25 +237,18 @@ stays.
 
 | Root | What lives there | What tidy may remove |
 |---|---|---|
-| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no project that is not done (I) |
-| `~/mc/step/<project>/` | a step area the runner made | nothing (S) |
+| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no goal that is not finished (I) |
+| `~/mc/step/<name>/` | a step area left from the retired project steps | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
-| `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
-| `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
+| `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
-In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I), and the registers sit beside their plans ([mc-layout.md](mc-layout.md)).
+In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
-**P — an archived project.** A register entry under `runner/projects/` whose
-repository's origin/main has its row in `project_log.md`, no plan directory,
-and its closeout (`docs/project/<programme>/closeout/<project>.json`; for a project under `~/mc/programs/`, its `CLOSEOUT.json` beside its plan, which is then no plan directory), and
-which has no area on this machine — neither `step/<project>` nor a legacy
-`~/mc/<project>`. Its session logs (`<project>-<stamp>.{jsonl,json,json.err}`,
-gzipped or not), `log/closed/<project>/`, its scratch directories, the
-transcripts of its step area, and last its register file, so a run cut short
-finds the project again. Names are matched exactly: `ui-faults` never takes
-`ui-faults-2`'s files. A repository git cannot answer for stops every purge
-that run.
+Rule P — an archived project's register, session logs, closed logs,
+scratch and step-area transcripts — went with projects on 2026-11-03 (goal
+`mc/projects-to-goals`, rules version 7): mc reads no register any more, so a
+project's leftovers are a person's to remove.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
@@ -272,10 +265,9 @@ content on main (or its tip a merged pull request's head). Removed with
 for all of them; an lsof that fails keeps every one.
 
 **I — a planning area's own checkouts** (`memoro/`, `memoro-cli/`, made by
-`ensurePlanArea`) go while their programme has no project that is not done.
-A project is not done when it has a draft (`DRAFT.json`), or a sent plan with no
-`CLOSEOUT.json` beside it whose register entry is not done: a step not `done`, or
-a criterion not met. A register that cannot be read counts as not done. The
+`ensurePlanArea`) go while their programme has no goal that is not finished:
+every `goals/<goal>/GOAL.json` of the programme says `done` or `dropped`. A
+GOAL.json that cannot be read or parsed counts as not finished. The
 checkout is judged by the release verdict as X judges it, but no process may
 stand anywhere in the programme's directory, since a planning session stands
 there and not in the checkout. Removed the same way as X, and `mc plan
@@ -294,15 +286,13 @@ list says `person: true`: `mc tidy` sets it unless `MC_HEADLESS=1`, and the
 runner's daily apply never does, so there each one is kept with *only a
 person's mc tidy --apply removes one*. The apply hands each checkout back with
 `git worktree remove` without `--force` and `branch -D`, then removes the
-directory; a checkout git refuses keeps the whole area. **S — step areas**
-of a project the register knows are the runner's, closed by `closeWorkareas`
-when the project is done. **U — a step area no project explains** (no
-register entry by its name) is never closed by the runner, so tidy judges it
-as W judges a workarea, with the same `person` rule and the kind
-`orphan-step-area`; one left directly under `~/mc` is only listed. A register
-that could not be read explains every step area.
+directory; a checkout git refuses keeps the whole area. **U — a step area
+left from the retired project steps.** Nothing closes one any more, so tidy
+judges every one under the step root as W judges a workarea, with the same
+`person` rule and the kind `orphan-step-area`; one left directly under `~/mc`
+is only listed.
 
-**L — loose transcripts and leftovers.** What P and G leave, by T1–T5, first
+**L — loose transcripts and leftovers.** What G leaves, by T1–T5, first
 match wins: no cwd, kept; touched within `--days`, kept; its cwd gone,
 removed; its cwd in an area, removed unless it is that area's latest; outside
 the work root, kept. A `<uuid>/` with no transcript beside it and nothing
@@ -420,9 +410,7 @@ squash-merge case (branch ahead, plan done, last run merged → closable), the
 dirty case, the missing-plan case and the live-session refusal.
 `tests/mc/run.test.js` drives the chore pass against fake git, gh and tmux —
 the archive PR, the hold-off while one is open, the intake files, the queue
-rewrite. `tests/mc/close-live.test.js` runs the same against real git repositories
-and a real work root, which is where `git worktree remove` is the call whose
-behaviour a fake would only assert back at itself.
+rewrite.
 `tests/mc/brief-collect.test.js` covers the two sections that raise the
 intake files, including the absent-versus-empty answer.
 `tests/mc/tidy.test.js` runs `mc tidy` over a temp home with git faked: each

@@ -11,8 +11,8 @@
  * processer hängande eller väntande på detta."*).
  *
  * An entry is a job, not a process: what to land (`repo`, `repo_path`,
- * `pr`), who asked (`holder`), the step it is (`step`, or null for a pull
- * request that is nobody's step), and where it stands (`state`: `queued`,
+ * `pr`), who asked (`holder`), the goal it is (`goal`, or null for a pull
+ * request that is nobody's goal), and where it stands (`state`: `queued`,
  * `landing` while the merger has it, or `red` once it answered red). A red
  * entry is not work: it stays so the page draws it red while the queue goes
  * on (Martin, 2026-10-10: *"en misslyckad merge pr bör ligga kvar som en rad
@@ -50,21 +50,12 @@ const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(
 
 /** One entry, whatever a hand-edited file or an older mc left behind. */
 function normalise(entry) {
-  const step = plain(entry.step) && typeof entry.step.project === 'string' && Number.isInteger(entry.step.index)
-    ? { project: entry.step.project, index: entry.step.index }
-    : null;
   return {
     repo: entry.repo ?? null,
     repo_path: entry.repo_path ?? null,
     pr: Number(entry.pr),
     branch: entry.branch ?? null,
     holder: plain(entry.holder) ? { ...entry.holder } : (typeof entry.holder === 'string' ? { name: entry.holder } : null),
-    step,
-    // The job this one is built on (ruling 30, A): `{ project, index, pr,
-    // sha }`. It is not taken until that one has landed; see `nextJob`.
-    parent: plain(entry.parent) && Number.isFinite(Number(entry.parent.pr)) && typeof entry.parent.sha === 'string'
-      ? { project: entry.parent.project ?? null, index: entry.parent.index ?? null, pr: Number(entry.parent.pr), sha: entry.parent.sha }
-      : null,
     // A goal's pull request (goals.js), queued by its green review: the goal
     // whose status the answer sets, and the head the review judged. Only that
     // head lands; one that has moved sends the goal back to review.
@@ -107,7 +98,7 @@ export function parseQueue(text) {
  * door found and asked once more — keeps `since`: how long it has been
  * waiting is a fact about the pull request, not about the last call.
  * An entry the merger is landing right now is left as it is: the round in
- * flight is measuring the branch as it was, and the answer is the step's.
+ * flight is measuring the branch as it was, and the answer is the round's.
  */
 export function enqueue(entries, entry) {
   const next = normalise(entry);
@@ -168,49 +159,14 @@ export function queueOrder(entries) {
 
 /**
  * The job the merger takes next: one already `landing` (its merger died
- * under it), else the oldest `queued` that may go. A job built on another
- * (`parent`) may go once that one has landed — it is not in the queue and
- * `landed(parent)` says so. One whose parent is still queued waits behind
- * it; one whose parent came back red waits until that one is queued again
- * and lands. A job for step n of a plan goes only once every earlier step is
- * `done` (`ordered`, merger.js `stepsBeforeDone`), parent or none — and that
- * holds for a `landing` one too. An entry `held` names (another live merger's)
- * is not taken. Null when there is nothing the merger may take.
+ * under it), else the oldest `queued`. An entry `held` names (another live
+ * merger's) is not taken. Null when there is nothing the merger may take.
  */
-export function nextJob(entries, { landed = () => true, ordered = () => true, now = null, held = () => false } = {}) {
+export function nextJob(entries, { now = null, held = () => false } = {}) {
   const line = queueOrder(inLine(entries).filter(takeable).filter(due(now)).filter((entry) => !held(entry)));
-  const mayGo = mayGoIn(entries, landed, ordered);
-  return line.find((entry) => entry.state === 'landing' && ordered(entry))
-    || line.find(mayGo)
+  return line.find((entry) => entry.state === 'landing')
+    || line.find((entry) => entry.state === 'queued')
     || null;
-}
-
-const parentFree = (entries, landed) => (entry) => !entry.parent
-  || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
-
-const mayGoIn = (entries, landed, ordered) => {
-  const free = parentFree(entries, landed);
-  return (entry) => free(entry) && ordered(entry);
-};
-
-/**
- * Whether every earlier step of a job's plan is `done`, from `stepsOf(project)`
- * — the steps as the register has them, or null when it cannot be read, which
- * is taken as done (the rule `parentLanded` has). A job with no step, or for a
- * plan's first step, has nothing before it (Martin, 2026-10-10: *"step n+1 ska
- * inte kunna bli mergad om inte step n i ett projekt blivit mergad"*).
- */
-export function stepsDone(stepsOf) {
-  return (job) => {
-    if (!job?.step || !(job.step.index > 0)) return true;
-    const steps = stepsOf(job.step.project);
-    if (!Array.isArray(steps)) return true;
-    for (let index = 0; index < job.step.index; index += 1) {
-      // A built step counts: the review's own landing is what makes it done, and the review waits for it.
-      if (steps[index]?.status !== 'done' && steps[index]?.status !== 'built') return false;
-    }
-    return true;
-  };
 }
 
 /**
@@ -235,53 +191,25 @@ export const MERGE_BATCH_MAX = 1;
  *
  * With a `lane`, only the jobs whose repository's gate lane (`laneOf`) is that
  * one: the merger runs one loop per lane (ruling 34), and each takes its own.
- * A job's parent is in its own repository, so in its own lane. Entries `held`
- * names (another live merger's) are not taken, a `landing` one included.
+ * Entries `held` names (another live merger's) are not taken, a `landing`
+ * one included.
  */
 export function nextBatch(entries, {
-  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = (entry) => entry.repo, now = null,
+  max = MERGE_BATCH_MAX, lane = null, laneOf = (entry) => entry.repo, now = null,
   held = () => false,
 } = {}) {
   const mine = lane ? entries.filter((entry) => laneOf(entry) === lane) : entries;
   const line = queueOrder(inLine(mine).filter(takeable).filter(due(now)).filter((entry) => !held(entry)));
-  // A resumed member whose earlier step is no longer `done` is not landed:
-  // the merger puts it back in line (`heldLanding`).
-  const landing = line.filter((entry) => entry.state === 'landing' && ordered(entry));
+  const landing = line.filter((entry) => entry.state === 'landing');
   if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
-  const first = nextJob(mine, { landed, ordered, now, held });
+  const first = nextJob(mine, { now, held });
   if (!first) return [];
-  const mayGo = mayGoIn(mine, landed, ordered);
   const batch = [first];
   for (const entry of line) {
     if (batch.length >= max) break;
-    if (entry !== first && entry.repo === first.repo && entry.state === 'queued' && mayGo(entry)) batch.push(entry);
+    if (entry !== first && entry.repo === first.repo && entry.state === 'queued') batch.push(entry);
   }
   return batch;
-}
-
-/**
- * Jobs in line that may not go yet, for the page and `mc merge watch`:
- * `{ entry, parent, step }`. `parent` is the number of the pull request it is
- * built on while that one has not landed; `step` is `{ project, number }` of
- * the step just before its own while the earlier steps are not all `done`.
- * Either may be null, never both.
- */
-export function waitingOn(entries, { landed = () => true, ordered = () => true } = {}) {
-  const free = parentFree(entries, landed);
-  return inLine(entries).filter((entry) => entry.state === 'queued').flatMap((entry) => {
-    const parent = free(entry) ? null : entry.parent.pr;
-    const step = ordered(entry) ? null : { project: entry.step.project, number: entry.step.index };
-    return parent == null && !step ? [] : [{ entry, parent, step }];
-  });
-}
-
-/**
- * `landing` entries a restarted merger may not resume — an earlier step of
- * their plan is no longer `done` — to be put back in line with `markQueued`.
- * Not those another live merger holds (`held`, see `heldBy`): they are its.
- */
-export function heldLanding(entries, { ordered = () => true, held = () => false } = {}) {
-  return inLine(entries).filter((entry) => entry.state === 'landing' && !ordered(entry) && !held(entry));
 }
 
 /** The entry back in line, as `queued`, its place (`since`) kept. */

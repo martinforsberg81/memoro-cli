@@ -33,13 +33,12 @@ import {
   roleFileText,
   selectParts,
   sharedRoleText,
-  WORKER_ROLE,
 } from '../../src/mc/roles.js';
 import { PLAN_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
-import { BUILD_ROLES, PROJECT_REVIEW_ROLE } from '../../src/mc/run-plan.js';
+import { BUILD_ROLES } from '../../src/mc/run-plan.js';
 
 /** Every way a session is started on a canon role, by the role name it runs. */
-const STARTS = [PLAN_ROLE, BUILD_ROLES.goal, BUILD_ROLES.project, WORKER_ROLE, REVIEW_ROLE, PROJECT_REVIEW_ROLE];
+const STARTS = [PLAN_ROLE, BUILD_ROLES.goal, REVIEW_ROLE];
 import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
 import { canonSkillsDir } from '../../src/mc/skills.js';
 
@@ -88,17 +87,17 @@ describe('role files', () => {
   });
 
   it('the canon build role runs on 5m and plan on an hour', () => {
-    assert.equal(readCanonRole('build-session:project').cache, '5m');
+    assert.equal(readCanonRole(BUILD_ROLES.goal).cache, '5m');
     assert.equal(readCanonRole('plan-session').cache, '1h');
   });
 
   it('the canon review role parses, runs on opus and five minutes, and is the review\'s own words', () => {
-    const role = readCanonRole('review-session:project');
-    assert.equal(role.name, 'review-session:project');
+    const role = readCanonRole(REVIEW_ROLE);
+    assert.equal(role.name, REVIEW_ROLE);
     assert.equal(role.model, 'opus');
     assert.equal(role.singleton, false);
     assert.equal(role.cache, '5m');
-    assert.match(role.overlay, /You are a plan's review step: headless, one runner area/u);
+    assert.match(role.overlay, /You review one goal: headless, nobody watching/u);
   });
 
   it('a CRLF checkout is still a role', () => {
@@ -235,9 +234,9 @@ describe('the text every role session shares', () => {
 
   // 2026-10-10: a step session ran `kill` on the merger's test process,
   // taking it for its own hung test. The rule is the `processes` skill now,
-  // and the step session is pointed at it.
-  it('points a step session at the rule to know a process before signalling it', () => {
-    const told = instructionsFor('claude-code', readCanonRole('build-session:project').overlay);
+  // and the build session is pointed at it.
+  it('points a build session at the rule to know a process before signalling it', () => {
+    const told = instructionsFor('claude-code', readCanonRole(BUILD_ROLES.goal).overlay);
     assert.match(told, /Skill `mc-processes`/u);
     assert.match(readFileSync(join(canonSkillsDir(), 'processes', 'SKILL.md'), 'utf8'), /know what it is before you signal it/u);
   });
@@ -253,7 +252,7 @@ describe('the text every role session shares', () => {
   // own body — folding the shared text in ahead of it would make a missing
   // role file look present.
   it('stays out of a role\'s own overlay', () => {
-    assert.doesNotMatch(readCanonRole('build-session:project').overlay, TURN_COST);
+    assert.doesNotMatch(readCanonRole(BUILD_ROLES.goal).overlay, TURN_COST);
   });
 });
 
@@ -261,25 +260,17 @@ describe('the text every role session shares', () => {
  * The verb files, each written once (Martin, 2026-11-03: a role says what the
  * session is for, a verb file how the verb is used).
  *
- * `all-sessions.md` is the text *every* role session is told; how `mc project`,
- * `mc goal` and `mc step` are used is not that. The plan session and the brief
- * write plans and a build session does not, and telling a build session how to
- * write a plan it may never write is worse than telling it nothing. So each
- * verb is its own file, and a role names it on a line of its own.
+ * `all-sessions.md` is the text *every* role session is told; how `mc goal` is
+ * used is not that. The plan session and the brief write goals and a build
+ * session does not, and telling a build session how to write a goal it may
+ * never write is worse than telling it nothing. So each verb is its own file,
+ * and a role names it on a line of its own.
  */
 describe('the verb files', () => {
-  const VERBS = ['goal-verb.md', 'project-verb.md', 'step-verb.md'];
+  const VERBS = ['goal-verb.md'];
   // Sentences that define each file, from different parts of it.
   const DEFINING = {
-    'project-verb.md': [
-      /A plan is instructions for a headless session that has read nothing else/u,
-      /`mc project send` is the validation/u,
-      /Proposals consumed:/u,
-      /Never put work in the runner to get a review between steps/u,
-      /## Driving work in this session/u,
-    ],
-    'step-verb.md': [/a plan comes back by its\s+first unfinished step being `ready`/u],
-    'goal-verb.md': [/a plan session finishes it to `merging`/u],
+    'goal-verb.md': [/a plan session finishes it to `merging`/u, /\*\*Written by verbs\.\*\*/u],
   };
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 
@@ -291,10 +282,8 @@ describe('the verb files', () => {
       for (const sentence of sentences) assert.deepEqual(carriers(sentence), [file], `${sentence} is not in exactly ${file}`);
     }
     for (const file of ['plan-session.md', 'brief.md']) {
-      assert.match(read(file), /^@include project-verb\.md$/mu, `${file} does not include project-verb.md`);
-      assert.match(read(file), /^@include step-verb\.md$/mu, `${file} does not include step-verb.md`);
+      assert.match(read(file), /^@include goal-verb\.md$/mu, `${file} does not include goal-verb.md`);
     }
-    assert.match(read('plan-session.md'), /^@include goal-verb\.md$/mu);
   });
 
   // It is not a role, for the same reason `all-sessions.md` is not.
@@ -303,7 +292,7 @@ describe('the verb files', () => {
       assert.equal(parseRole(read(file)), null, file);
       assert.equal(isPassageFile(file), true, file);
     }
-    const { env } = catalogue({ 'worker.md': WORKER_MD, 'project-verb.md': read('project-verb.md') });
+    const { env } = catalogue({ 'worker.md': WORKER_MD, 'goal-verb.md': read('goal-verb.md') });
     assert.deepEqual(listRoles(env).map((role) => role.name), ['worker']);
   });
 
@@ -315,7 +304,7 @@ describe('the verb files', () => {
       assert.match(overlay, /@include/u, `${name} should carry the marker in its own words`);
       const told = instructionsFor('claude-code', overlay);
       assert.doesNotMatch(told, /@include/u, `${name} was told an unexpanded marker`);
-      for (const sentence of [...DEFINING['project-verb.md'], ...DEFINING['step-verb.md']]) assert.match(told, sentence, name);
+      for (const sentence of DEFINING['goal-verb.md']) assert.match(told, sentence, name);
     }
   });
 
@@ -324,7 +313,7 @@ describe('the verb files', () => {
     // Only a verb file, so a role cannot include a role.
     assert.equal(expandRoleIncludes('@include build-session.md'), '@include build-session.md');
     // A line of its own, not a mention inside a sentence.
-    assert.equal(expandRoleIncludes('see @include project-verb.md there'), 'see @include project-verb.md there');
+    assert.equal(expandRoleIncludes('see @include goal-verb.md there'), 'see @include goal-verb.md there');
   });
 });
 
@@ -342,7 +331,7 @@ describe('every canon role has a body', () => {
 
   it('and the files that are not roles are the shared text and the verb files', () => {
     const passages = files.filter((file) => isPassageFile(file));
-    assert.deepEqual(passages, [SHARED_ROLE_FILE, 'goal-verb.md', 'project-verb.md', 'step-verb.md']);
+    assert.deepEqual(passages, [SHARED_ROLE_FILE, 'goal-verb.md']);
     for (const file of passages) assert.equal(parseRole(readFileSync(join(canonRolesDir(), file), 'utf8')), null);
   });
 
@@ -390,7 +379,7 @@ describe('the role catalogue', () => {
   // and the passages verb files, with `plan-session-roles` (2026-11-03).
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'brief.md', 'build-session.md', 'goal-verb.md', 'helper.md', 'intake.md', 'plan-session.md', 'project-verb.md', 'review-session.md', 'step-verb.md',
+      'all-sessions.md', 'brief.md', 'build-session.md', 'goal-verb.md', 'helper.md', 'intake.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });
@@ -418,13 +407,14 @@ describe('a role\'s parts', () => {
     assert.equal(readCanonRole('plan-session:goal'), null);
   });
 
-  it('an area marked worker before the roles were merged carries the build role\'s worker part', () => {
+  it('an area still marked worker carries no canon role: mc worker and its part are gone', () => {
     const area = mkdtempSync(join(tmpdir(), 'mc-area-'));
     markAreaRole(area, 'worker');
     const role = areaRole(area, { MC_ROLES_DIR: '/nowhere/at/all' });
-    assert.equal(role.name, WORKER_ROLE);
-    assert.match(role.overlay, /You are a worker on one project/u);
-    assert.equal(roleFileText(WORKER_ROLE), 'canon/roles/build-session.md (part worker)');
+    assert.equal(role.missing, true);
+    assert.equal(readCanonRole('build-session:worker'), null);
+    assert.equal(readCanonRole('build-session:project'), null);
+    assert.equal(roleFileText(BUILD_ROLES.goal), 'canon/roles/build-session.md (part goal)');
   });
 });
 
@@ -438,8 +428,6 @@ describe('the build role', () => {
   const WHEN_ENDS = /When the session ends/u;
   const OWN = {
     'build-session:goal': /You are a build session on one goal/u,
-    'build-session:project': /You are a build session on one step of a project/u,
-    'build-session:worker': /You are a worker on one project/u,
   };
   const told = (ref) => instructionsFor('claude-code', readCanonRole(ref).overlay);
 
@@ -450,13 +438,12 @@ describe('the build role', () => {
     }
   });
 
-  it('every headless build is told what every build shares; the worker is not', () => {
-    for (const ref of [BUILD_ROLES.goal, BUILD_ROLES.project]) {
+  it('a headless build is told what every build shares', () => {
+    for (const ref of [BUILD_ROLES.goal]) {
       assert.match(told(ref), ONE_BRANCH, ref);
       assert.match(told(ref), WHEN_ENDS, ref);
       assert.match(told(ref), /a finished part that reads well as a first pass is not a\s+reason to stop/u, ref);
     }
-    assert.doesNotMatch(told(WORKER_ROLE), ONE_BRANCH);
   });
 
   it('write what every build shares once', () => {
@@ -477,15 +464,11 @@ describe('the build role', () => {
 });
 
 describe('the review role', () => {
-  it('a goal review and a project review are each told their own part', () => {
+  it('a goal review is told its own part, and has no project part left', () => {
     const goal = instructionsFor('claude-code', readCanonRole(REVIEW_ROLE).overlay);
-    const project = instructionsFor('claude-code', readCanonRole(PROJECT_REVIEW_ROLE).overlay);
     assert.match(goal, /You review one goal/u);
-    assert.doesNotMatch(goal, /You are a plan's review step/u);
-    assert.match(project, /You are a plan's review step/u);
-    assert.doesNotMatch(project, /You review one goal/u);
-    // The project review writes tests and resolves conflicts; the goal review never builds.
-    assert.match(project, /Skill `mc-writing-tests`/u);
+    assert.equal(readCanonRole('review-session:project'), null);
+    // The goal review never builds.
     assert.doesNotMatch(goal, /Skill `mc-writing-tests`/u);
   });
 });

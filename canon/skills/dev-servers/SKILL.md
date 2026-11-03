@@ -15,7 +15,7 @@ and mc admits at most four app servers on the machine (`mc dev admit`).
 - A wait for a slot is a queue, served in order (a gate round first after two
   minutes); the waiting line says your place. Who holds the servers and who
   waits: `mc dev status`.
-- What runs where: `mc dev list`, `mc prs`, `mc status <name>`.
+- What runs where: `mc dev list`, `mc prs`, `mc goal show <programme>/<goal>`.
 - One browser at a time.
 - Stopping one: skill `mc-processes`.
 - Start one only when the work asks for something seen or measured.

@@ -22,7 +22,6 @@ export function withoutSessionIdentity(env) {
 export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {}) {
   if (env.MC_ROLE) return { role: env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
   if (env.MC_GOAL) return { role: BUILD_ROLES.goal, programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
-  if (env.MC_STEP) return { role: BUILD_ROLES.project, programme: env.MC_PROGRAMME || null, source: 'MC_STEP' };
 
   const path = relative(resolve(workRoot(env)), resolve(cwd));
   const parts = path.split(sep);
@@ -34,16 +33,15 @@ export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {})
   }
   // Layout 1 remains readable while machines move to programs/.
   if (first === 'plan' && second) return found(PLAN_ROLE, second);
-  if ((first === 'step' && second) || (first === 'runner' && second === 'step' && third)) return found(BUILD_ROLES.project);
   if (['brief', 'helper', 'intake'].includes(first)) return found(first);
   return found(null);
 }
 
 export function sessionRoleLine(identity, { cwd = process.cwd(), env = process.env } = {}) {
   const { role, programme } = identity;
-  if (!role) return `mc — session role unknown: checked MC_ROLE, MC_GOAL, MC_STEP and cwd ${cwd} against ${workRoot(env)}.`;
+  if (!role) return `mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd ${cwd} against ${workRoot(env)}.`;
   const name = programme ? ` for programme \`${programme}\`` : '';
-  if (role === PLAN_ROLE) return `You are the plan session${name}. \`mc plan\` is the person's command that opens a session like this one; you never run it. Plans change through \`mc project …\`.`;
+  if (role === PLAN_ROLE) return `You are the plan session${name}. \`mc plan\` is the person's command that opens a session like this one; you never run it. Goals change through \`mc goal …\`.`;
   return `You are the ${roleLabel(role)}${name}.`;
 }
 
@@ -63,7 +61,7 @@ export function planSessionRefusal(context = {}) {
   const identity = sessionIdentity(context);
   const agent = ['CLAUDECODE', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_CI'].find((key) => env[key]);
   if (!identity.role && !agent) return null;
-  return `${sessionRoleLine(identity, context)} mc plan is a person's command, not a session's: you are already in ${identity.role ? `a ${roleLabel(identity.role)}` : `a coding-agent session (${agent})`}. Use mc project new, mc project step add or mc project send to change plans; do not open another plan session.`;
+  return `${sessionRoleLine(identity, context)} mc plan is a person's command, not a session's: you are already in ${identity.role ? `a ${roleLabel(identity.role)}` : `a coding-agent session (${agent})`}. Use mc goal new, mc goal set or mc goal criterion add to change goals; do not open another plan session.`;
 }
 
 /** Build a fresh launch identity, preserving non-identity environment. */

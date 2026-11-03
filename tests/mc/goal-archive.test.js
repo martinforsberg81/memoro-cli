@@ -6,8 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ARCHIVE_HOLD_MS } from '../../src/mc/project-archive.js';
-import { archiveGoal, goalArchiveDue } from '../../src/mc/goal-archive.js';
+import { ARCHIVE_HOLD_MS, archiveGoal, goalArchiveDue } from '../../src/mc/goal-archive.js';
 
 const DIR = '/w/programs/mc/goals/g';
 const NOW = Date.parse('2026-09-01T10:00:00Z');
