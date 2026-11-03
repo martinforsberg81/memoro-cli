@@ -22,7 +22,7 @@ const TEST_SCRIPT = 'node --test --import ./tests/_isolate-home.mjs \'tests/**/*
  * log and exit code then, and is no longer alive. `changed` is what the branch
  * changes against origin/main, `tests` the files that exist.
  */
-function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [], changed = [], lane = 'heavy', log = null } = {}) {
+function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [], changed = [], lane = 'heavy', log = null, result = null } = {}) {
   const files = new Map();
   const alive = new Set(live);
   const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false };
@@ -72,6 +72,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
       if (out.ticks >= finishAfter) {
         files.set(LOG, output);
         files.set(EXIT, `${code}\n`);
+        if (result) files.set(`${LOG}.request.json.result`, JSON.stringify(result));
         alive.clear();
       }
     },
@@ -385,4 +386,32 @@ it('a crash after a receipt result but before the exit marker is still a red com
   assert.equal(await run(['--wait'], h.deps), 1);
   assert.match(h.out.stdout, /ended without an exit code/u);
   assert.doesNotMatch(h.out.stdout, /GREEN/u);
+});
+
+describe('mc gate reaches the repository ceiling', () => {
+  // What the worker writes when its round reached the ceiling: stopped, not failed.
+  const CEILING = {
+    ok: false, code: 1, stopped_at: 'timeout', reason: 'repository gate ceiling reached after 900 s; unfinished: tests/b.test.js; slowest finished: tests/a.test.js (3 s)',
+    red_files: ['tests/b.test.js'], slowest_files: [{ file: 'tests/a.test.js', seconds: 3 }],
+  };
+  // The worker's own lines for an interrupted run: they are the stop, not its cause.
+  const INTERRUPTED = 'Error: tests interrupted\nError: gate interrupted\nRED — gate round reached its 900 s ceiling; unfinished: tests/b.test.js\n';
+
+  it('the text verdict names the unfinished file and the slowest finished ones, and not the interruption', async () => {
+    const { out, deps } = harness({ tests: ['a.test.js'], finishAfter: 1, code: 1, output: INTERRUPTED, result: CEILING });
+    assert.equal(await run(['a.test.js'], deps), 1);
+    assert.match(out.stdout, /^RED — /mu);
+    assert.match(out.stdout, /repository gate ceiling reached after 900 s; unfinished: tests\/b\.test\.js; slowest finished: tests\/a\.test\.js \(3 s\)/u);
+    assert.doesNotMatch(out.stdout, /tests interrupted|gate interrupted/u);
+  });
+
+  it('--json carries the stop, the unfinished files and the slowest finished ones', async () => {
+    const json = harness({ tests: ['a.test.js'], finishAfter: 1, code: 1, output: INTERRUPTED, result: CEILING });
+    assert.equal(await run(['a.test.js', '--json'], json.deps), 1);
+    const parsed = JSON.parse(json.out.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.stopped_at, 'timeout');
+    assert.deepEqual(parsed.red_files, ['tests/b.test.js']);
+    assert.deepEqual(parsed.slowest_files, [{ file: 'tests/a.test.js', seconds: 3 }]);
+  });
 });

@@ -1,3 +1,3 @@
 section: Fixed
 
-- **Bound gate rounds by repository.** A stuck suite used to hold a merge lane indefinitely; rounds now stop red at the declared hard ceiling, name the selected/slowest test files, and release the lane for the next job. The page also treats a live merger PID stored on a queued job as live when `merger.json` is missing.
+- **Bound gate rounds by repository.** A stuck suite used to hold a merge lane indefinitely. A round now stops red at its repository's hard ceiling (15 min for memoro-cli, measured): every child is stopped and every await is cut at the ceiling, the verdict names the unfinished test files and, apart, the slowest finished ones, and the lane is released for the next job. A test over its own time limit is `too slow — rebuild` and is not run again. `mc gate` and `mc publish` report the same verdict. The page also treats a live merger PID stored on a queued job as live when `merger.json` is missing.

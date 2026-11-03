@@ -83,14 +83,22 @@ seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
 **Every gate round has a repository ceiling.** `round_timeout_ms` and its
-`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 5
-minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01). The
-deadline bounds the complete round, not just a single test process. At the
-ceiling mc kills the active process group, returns a red verdict naming the
-selected test files and the slowest known files, and releases the lane so the
-next queued job can start. `mc gate` and the gate a session reaches through
-`mc publish` use this same repository ceiling; a caller's wait budget cannot
-extend it.
+`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 15
+minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
+247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
+ordinary-load rounds red). The deadline bounds the complete round, from the
+moment the lane is held: the preparation, git, selection, the suite, the
+command gates and the retry, and no await in the round waits past it even when
+a child ignores its signal. At the ceiling mc stops the active process group,
+returns a red verdict, and releases the lane so the next queued job can start.
+The verdict and the merge log name two groups of files, kept apart: the
+**unfinished** files (a test file whose top-level test started and did not
+end, or a selected file that never started) are the red, the ones to rebuild;
+the **slowest finished** files are for the reader. A whole-suite round names
+only the files it started, since its selection is not known to mc. A test that
+exceeds its own time limit is `too slow — rebuild` and is not run again. `mc
+gate` and the gate a session reaches through `mc publish` use this same
+repository ceiling; a caller's wait budget cannot extend it.
 
 ## The door
 

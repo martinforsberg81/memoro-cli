@@ -199,6 +199,30 @@ it('a repository gate ceiling aborts a hanging test and reports its file red', a
   assert.match(output, /reached its 1 s ceiling.*tests\/hangs\.test\.js/u);
 });
 
+it('a ceiling names the file that did not finish, and the slowest file that did, apart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-session-ceiling-'));
+  let output = '';
+  try {
+    const result = await runSessionGate({ cwd: '/work', files: ['tests/done.test.js', 'tests/hangs.test.js'], round_timeout_ms: 200, gate: { root: dir, repo: 'work' } }, {
+      write: (text) => { output += text; },
+      // What node's reporter writes while the run is going: one file finished, one test that never ended.
+      tests: ({ times, signal }) => new Promise((resolve) => {
+        const path = join(dir, 'times.jsonl');
+        writeFileSync(path, [
+          { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 2000 },
+          { file: '/work/tests/hangs.test.js', started: true },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+        times.track(path);
+        signal.addEventListener('abort', () => resolve({ code: null, tap: '', aborted: true }), { once: true });
+      }),
+    });
+    assert.equal(result.stopped_at, 'timeout');
+    assert.deepEqual(result.red_files, ['tests/hangs.test.js']);
+    assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 2 }]);
+    assert.match(output, /RED — gate round reached its 1 s ceiling; unfinished: tests\/hangs\.test\.js; slowest finished: tests\/done\.test\.js \(2 s\)/u);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 it('test-name filters reach node as flags, before the test paths', async () => {
   let args;
   await runSessionGate({ cwd: '/work', files: ['a.test.js'], pattern: 'one|two', flags: ['--import', './loader.mjs'] }, {

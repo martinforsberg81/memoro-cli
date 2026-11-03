@@ -406,7 +406,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
         deps_notes: [],
         retry_once: { files: [], gates: [] },
         retry_once_why: null,
-        round_timeout_ms: 300_000,
+        round_timeout_ms: 900_000,
         round_timeout_why: SHIPPED['memoro-cli'].round_timeout_why,
       });
       // And every field is attributed to the file it came from.

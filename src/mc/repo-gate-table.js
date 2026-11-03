@@ -160,8 +160,13 @@ export const SHIPPED = Object.freeze({
     // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
     // here is costly enough to leave to the merge round.
     session_whole: true,
-    round_timeout_ms: 300_000,
-    round_timeout_why: 'measured 2026-11-01: the whole suite took 128 s in a session gate; 5 min leaves more than twice that measured runtime while bounding a stuck round',
+    // Measured: the whole suite took 128 s in a session gate on 2026-11-01, and
+    // on 2026-11-03 it took 247 s and 273 s with the machine quiet and 568 s
+    // under load (merge and session rounds, LOG.md). A 5 min ceiling turned
+    // those rounds red under ordinary load, so the ceiling is 15 min: well
+    // above the slowest measured round, and still a bound on a stuck one.
+    round_timeout_ms: 900_000,
+    round_timeout_why: 'measured 2026-11-01 (128 s in a session gate) and 2026-11-03 (247 s and 273 s quiet, 568 s under load): 15 min is above the slowest measured round and bounds a stuck one',
   }),
   memoro: Object.freeze({
     round_timeout_ms: 900_000,

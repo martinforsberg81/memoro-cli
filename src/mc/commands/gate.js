@@ -248,13 +248,21 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   let result = null;
   try { result = JSON.parse(readText(io, `${lock.request}.result`)); } catch { /* an older gate or interrupted worker */ }
   if (result?.files) lock.command.files = result.files;
-  if (result?.red_tests?.length) summary.failures = result.red_tests.slice(0, 5).flatMap((test) => [
+  // A gate that reached the repository's ceiling was stopped, not failed: its
+  // verdict names what did not finish and the slowest files that did, and the
+  // worker's own "interrupted" lines are its stop, not its cause.
+  const ceiling = result?.stopped_at === 'timeout';
+  if (ceiling) {
+    summary.failures = [result.reason || 'the gate reached its repository ceiling'];
+    summary.more = 0;
+  } else if (result?.red_tests?.length) summary.failures = result.red_tests.slice(0, 5).flatMap((test) => [
     `✖ ${test.name}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
   ]);
   const deferred = result?.deferred?.length || 0;
   const left = deferred ? `\n${deferred} costly test files left to the merge round, which runs them all — this green does not cover them` : '';
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+    const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
+    stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
     stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}${left}\n`);
   }
