@@ -1510,7 +1510,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const all = goals();
     const now = deps.now();
     for (const goal of all) {
-      if (goal.problems.length || !FINISHED.includes(goal.status)) continue;
+      if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
       const result = archiveGoal(goal, {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
@@ -1518,7 +1518,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       });
       if (result.refused) { refuseGoalOnce(goal, result.refused); continue; }
-      say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
   }
@@ -1527,7 +1527,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function refuseGoalOnce(goal, why) {
     const comment = `not archived — ${why}`;
     if (goal.log.findLast((entry) => entry.tool === 'runner' && entry.comment?.startsWith('not archived'))?.comment === comment) return;
-    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status: goal.status, done: null, comment, next: null };
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, stage: goal.stage, status: goal.status, done: null, comment, next: null };
     appendEntry({ dir: goal.dir, entry, read: deps.read, write: deps.write });
     say(`${goalName(goal)}: ${comment}`);
   }
