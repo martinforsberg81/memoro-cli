@@ -923,9 +923,11 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
       readMerger: () => null,
       takeGateLock: () => { takes += 1; order.push('take'); return takes === 1 ? { ok: false, running: { pid: 9 } } : { ok: true, took: true }; },
       releaseGateLock: () => { order.push('release'); return true; },
+      // A poll apart, on a fake clock: the real one waited GATE_POLL_MS (5 s).
+      sleep: async () => { order.push('sleep'); },
       spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
     });
-    assert.deepEqual(order, ['take', 'take', 'build', 'release']);
+    assert.deepEqual(order, ['take', 'sleep', 'take', 'build', 'release'], 'a poll apart, not a busy loop');
   });
 
   it('^C stops the watching and not the deploy', async () => {

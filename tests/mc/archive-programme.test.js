@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -37,17 +37,50 @@ const LOG = [
   '',
 ].join('\n');
 
-/** A bare origin and a clone whose main holds `docs/project/<programme>/`. */
-function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
+/** A bare origin and a clone whose main holds `docs/project/gone/`, and `extra` beside it. */
+function history(extra = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
   const origin = join(root, 'origin.git');
   const repo = join(root, 'memoro-cli');
   git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
   git(root, ['clone', '-q', origin, repo]);
   for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(repo, ['config', k, v]);
-  mkdirSync(join(repo, 'docs', 'project', programme), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', programme, 'README.md'), '# programme\n');
+  mkdirSync(join(repo, 'docs', 'project', 'gone'), { recursive: true });
+  writeFileSync(join(repo, 'docs', 'project', 'gone', 'README.md'), '# programme\n');
   writeFileSync(join(repo, 'docs', 'project', 'project_log.md'), LOG);
+  for (const [path, text] of Object.entries(extra)) {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+  git(repo, ['push', '-q', 'origin', 'HEAD:main']);
+  return root;
+}
+
+const EXTRA = {
+  'docs/project/gone/skills/a.md': '# a skill a test reads\n',
+  'docs/project/gone/skills/b.md': '# a skill nothing reads\n',
+  'tests/x.test.js': "import { readFileSync } from 'node:fs';\n\nreadFileSync('docs/project/gone/skills/a.md', 'utf8');\n",
+};
+
+// Each history is built once per file, with real git, and copied per test:
+// building it took nine git processes a test (2026-11-03).
+const HISTORIES = { plain: history(), extra: history(EXTRA) };
+
+/**
+ * A copy of one of the histories: a bare origin and a clone whose main holds
+ * `docs/project/gone/`. The clone's origin is the copy's own bare.
+ */
+function fixture({ plan = null, extra = false } = {}) {
+  const programme = 'gone';
+  const from = HISTORIES[extra ? 'extra' : 'plain'];
+  const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
+  cpSync(from, root, { recursive: true });
+  const origin = join(root, 'origin.git');
+  const repo = join(root, 'memoro-cli');
+  const config = join(repo, '.git', 'config');
+  writeFileSync(config, readFileSync(config, 'utf8').split(join(from, 'origin.git')).join(origin));
   // The plan lives under the work root's programs/, never in the repository.
   const env = { MC_WORK_ROOT: join(root, 'work') };
   if (plan) {
@@ -58,13 +91,6 @@ function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
       steps: [{ title: 'S1 — one', status: plan, done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
     }));
   }
-  for (const [path, text] of Object.entries(extra)) {
-    mkdirSync(join(repo, path, '..'), { recursive: true });
-    writeFileSync(join(repo, path), text);
-  }
-  git(repo, ['add', '-A']);
-  git(repo, ['commit', '-q', '-m', 'init']);
-  git(repo, ['push', '-q', 'origin', 'HEAD:main']);
   return { root, origin, repo, env, repos: [{ name: 'memoro-cli', path: repo }] };
 }
 
@@ -207,13 +233,7 @@ describe('archiveProgramme', () => {
   });
 
   it('keeps a file a test reads, removes the rest, and names it in the PR body', async () => {
-    const fx = fixture({
-      extra: {
-        'docs/project/gone/skills/a.md': '# a skill a test reads\n',
-        'docs/project/gone/skills/b.md': '# a skill nothing reads\n',
-        'tests/x.test.js': "import { readFileSync } from 'node:fs';\n\nreadFileSync('docs/project/gone/skills/a.md', 'utf8');\n",
-      },
-    });
+    const fx = fixture({ extra: true });
     const { deps, calls } = stubs();
     const a = args(fx, deps);
     assert.equal(await archiveProgramme('gone', a), 0);
