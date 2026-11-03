@@ -20,6 +20,7 @@ import { git } from './_helpers/git-fixture.js';
 import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
 import { board as workModel } from './_helpers/board.js';
 import { runMcCli } from './_helpers/mc-cli.js';
+import { runVerb } from './_helpers/mc-verb.js';
 import { leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { writeSnapshot } from '../../src/mc/repo-snapshot.js';
 
@@ -35,11 +36,11 @@ function lease(fx) {
 }
 
 describe('the repository lease', () => {
-  it('is taken by the work area that asks, and says what for', () => {
+  it('is taken by the work area that asks, and says what for', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const claimed = runMcCli(['repo', 'claim', 'repo', 'merge round #338'], fx.env, inArea(fx, 'alpha'));
+      const claimed = await runVerb(['repo', 'claim', 'repo', 'merge round #338'], fx.env, inArea(fx, 'alpha'));
       assert.equal(claimed.status, 0, claimed.stderr);
       assert.match(claimed.stdout, /alpha holds .*merge round #338/u);
 
@@ -49,13 +50,13 @@ describe('the repository lease', () => {
       assert.equal(held.holder_kind, 'work-area');
       assert.equal(held.errand, 'merge round #338');
 
-      const who = json(runMcCli(['repo', 'who', 'repo', '--json'], fx.env, inArea(fx, 'alpha')));
+      const who = json(await runVerb(['repo', 'who', 'repo', '--json'], fx.env, inArea(fx, 'alpha')));
       assert.equal(who.holder, 'alpha');
       assert.equal(who.errand, 'merge round #338');
     } finally { fx.cleanup(); }
   });
 
-  it('lives under mc\'s home and never inside the repository', () => {
+  it('lives under mc\'s home and never inside the repository', async () => {
     const fx = fixture({ name: 'repo-lease' });
     const worktree = addArea(fx, 'alpha', 'alpha');
     try {
@@ -65,6 +66,8 @@ describe('the repository lease', () => {
         head: git(fx.dir, 'rev-parse HEAD'),
         dirty: git(fx.dir, 'status --porcelain'),
       };
+      // The binary, as a process: what it leaves under mc's home includes the
+      // record `src/mc-cli.js` writes, which no in-process call makes.
       runMcCli(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha'));
 
       assert.ok(existsSync(leasePath(fx.dir, fx.mcHome)));
@@ -81,12 +84,12 @@ describe('the repository lease', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('refuses a second holder, names the first, and leaves the lease alone', () => {
+  it('refuses a second holder, names the first, and leaves the lease alone', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
-      const refused = runMcCli(['repo', 'claim', 'repo', 'another round'], fx.env, inArea(fx, 'beta'));
+      await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      const refused = await runVerb(['repo', 'claim', 'repo', 'another round'], fx.env, inArea(fx, 'beta'));
       assert.equal(refused.status, 1);
       assert.match(refused.stderr, /held by alpha/u);
       assert.match(refused.stderr, /merge round/u);
@@ -102,28 +105,31 @@ describe('the repository lease', () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      // A minute apart on a fake clock: the real one waited 1.1 s for the
+      // lease's second-resolution stamp to move.
+      const start = Date.parse('2026-11-03T12:00:00Z');
+      await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, { ...inArea(fx, 'alpha'), now: () => start });
       const first = lease(fx).since;
-      await new Promise((resolve) => { setTimeout(resolve, 1100); });
-      const again = runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      assert.equal(first, '2026-11-03T12:00:00.000Z');
+      const again = await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, { ...inArea(fx, 'alpha'), now: () => start + 60_000 });
       assert.equal(again.status, 0);
       assert.match(again.stdout, /you already hold/u);
       assert.equal(lease(fx).since, first);
     } finally { fx.cleanup(); }
   });
 
-  it('is given back by its holder, and taken from it only with --force', () => {
+  it('is given back by its holder, and taken from it only with --force', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
 
-      const refused = runMcCli(['repo', 'release', 'repo'], fx.env, inArea(fx, 'beta'));
+      const refused = await runVerb(['repo', 'release', 'repo'], fx.env, inArea(fx, 'beta'));
       assert.equal(refused.status, 1);
       assert.match(refused.stderr, /held by alpha, not by you \(beta\)/u);
       assert.equal(lease(fx).held, true);
 
-      const forced = runMcCli(['repo', 'release', 'repo', '--force'], fx.env, inArea(fx, 'beta'));
+      const forced = await runVerb(['repo', 'release', 'repo', '--force'], fx.env, inArea(fx, 'beta'));
       assert.equal(forced.status, 0, forced.stderr);
       assert.match(forced.stdout, /took the lease .* from alpha — logged/u);
       assert.equal(lease(fx).held, false);
@@ -135,42 +141,42 @@ describe('the repository lease', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('its holder gives it back without ceremony, and a free one is not an error', () => {
+  it('its holder gives it back without ceremony, and a free one is not an error', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
-      const released = runMcCli(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
+      await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      const released = await runVerb(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
       assert.equal(released.status, 0, released.stderr);
       assert.equal(lease(fx).held, false);
 
-      const again = runMcCli(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
+      const again = await runVerb(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
       assert.equal(again.status, 0);
       assert.match(again.stdout, /already free/u);
-      assert.match(runMcCli(['repo', 'who', 'repo'], fx.env, inArea(fx, 'alpha')).stdout, /free/u);
+      assert.match((await runVerb(['repo', 'who', 'repo'], fx.env, inArea(fx, 'alpha'))).stdout, /free/u);
     } finally { fx.cleanup(); }
   });
 
-  it('shows up in the view, held or free', () => {
+  it('shows up in the view, held or free', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const free = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const free = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(free.repos[0].lease.held, false);
-      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /lease\s+free/u);
+      assert.match((await runVerb(['repo', 'status', '--offline'], fx.env)).stdout, /lease\s+free/u);
 
-      runMcCli(['repo', 'claim', 'repo', 'merge round #338'], fx.env, inArea(fx, 'alpha'));
-      const held = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      await runVerb(['repo', 'claim', 'repo', 'merge round #338'], fx.env, inArea(fx, 'alpha'));
+      const held = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(held.repos[0].lease.held, true);
       assert.equal(held.repos[0].lease.holder, 'alpha');
-      const page = runMcCli(['repo', 'status', '--offline'], fx.env).stdout;
+      const page = (await runVerb(['repo', 'status', '--offline'], fx.env)).stdout;
       assert.match(page, /lease\s+alpha/u);
       assert.match(page, /merge round #338/u);
       assert.match(page, /held for/u);
     } finally { fx.cleanup(); }
   });
 
-  it('is read live even when the rest of the page comes from a snapshot', () => {
+  it('is read live even when the rest of the page comes from a snapshot', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -189,8 +195,8 @@ describe('the repository lease', () => {
         }],
       }, { intervalMs: 60_000, root: fx.mcHome });
 
-      runMcCli(['repo', 'claim', 'repo', 'a round that just started'], fx.env, inArea(fx, 'alpha'));
-      const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      await runVerb(['repo', 'claim', 'repo', 'a round that just started'], fx.env, inArea(fx, 'alpha'));
+      const view = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(view.mode, 'snapshot');
       assert.equal(view.repos[0].lease.held, true, 'the snapshot served a lease from before the claim');
       assert.equal(view.repos[0].lease.holder, 'alpha');
@@ -202,7 +208,7 @@ describe('the repository lease', () => {
     addArea(fx, 'alpha', 'alpha');
     try {
       const before = await workModel(fx.env);
-      runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
+      await runVerb(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
 
       // The work model says exactly what it said, and says nothing about
       // leases on an area.
@@ -213,25 +219,25 @@ describe('the repository lease', () => {
       assert.equal(JSON.stringify(after.areas).includes('"lease"'), false);
 
       // And the ordinary work verbs go on working on a held repository.
-      const added = runMcCli(['work', 'add', 'beta', fx.dir, 'beta-branch'], fx.env);
+      const added = await runVerb(['work', 'add', 'beta', fx.dir, 'beta-branch'], fx.env);
       assert.equal(added.status, 0, added.stderr);
       assert.equal(lease(fx).holder, 'alpha');
     } finally { fx.cleanup(); }
   });
 
-  it('asks for what it needs: a repository, and what the round is for', () => {
+  it('asks for what it needs: a repository, and what the round is for', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const noErrand = runMcCli(['repo', 'claim', 'repo'], fx.env, inArea(fx, 'alpha'));
+      const noErrand = await runVerb(['repo', 'claim', 'repo'], fx.env, inArea(fx, 'alpha'));
       assert.equal(noErrand.status, 2);
       assert.match(noErrand.stderr, /what for\?/u);
 
-      const noRepo = runMcCli(['repo', 'who'], fx.env, inArea(fx, 'alpha'));
+      const noRepo = await runVerb(['repo', 'who'], fx.env, inArea(fx, 'alpha'));
       assert.equal(noRepo.status, 2);
       assert.match(noRepo.stderr, /which repository\?/u);
 
-      const nowhere = runMcCli(['repo', 'who', 'not-a-repo'], fx.env, inArea(fx, 'alpha'));
+      const nowhere = await runVerb(['repo', 'who', 'not-a-repo'], fx.env, inArea(fx, 'alpha'));
       assert.equal(nowhere.status, 1);
       assert.match(nowhere.stderr, /no repository called "not-a-repo"/u);
     } finally { fx.cleanup(); }

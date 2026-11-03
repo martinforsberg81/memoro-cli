@@ -11,13 +11,15 @@
  * the same two pins `runMcCli` sets. Tests in one file run one after another,
  * so no other test sees the overlay; a test that runs concurrently with
  * another must not use this. `deps` goes to the verb's `run` beside the two
- * streams: the seams a verb takes (a clock, a sleep).
+ * streams: the seams a verb takes (a clock, a sleep); `deps.cwd` is where
+ * the call stands (`process.chdir`, put back afterwards), for a verb that
+ * reads who asks from where they are.
  */
 import { VERB_MODULES } from '../../../src/mc-verbs.js';
 
 const PINNED = { MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1' };
 
-export async function runVerb([name, ...argv], env = {}, deps = {}) {
+export async function runVerb([name, ...argv], env = {}, { cwd = null, ...deps } = {}) {
   const module = await import(new URL(VERB_MODULES[name].replace('./', '../../../src/'), import.meta.url));
   const overlay = { ...PINNED, ...env };
   const saved = {};
@@ -27,6 +29,8 @@ export async function runVerb([name, ...argv], env = {}, deps = {}) {
   }
   const out = [];
   const err = [];
+  const was = process.cwd();
+  if (cwd) process.chdir(cwd);
   try {
     const status = await module.run(argv, {
       ...deps,
@@ -35,6 +39,7 @@ export async function runVerb([name, ...argv], env = {}, deps = {}) {
     });
     return { status: status ?? 0, stdout: out.join(''), stderr: err.join('') };
   } finally {
+    if (cwd) process.chdir(was);
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
