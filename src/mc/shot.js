@@ -412,23 +412,24 @@ export function parseResult(stdout, { status = 0 } = {}) {
 }
 
 /**
- * A capture asked to act and answered by a script that does not say it did as
- * much: the picture is of the page without the actions. Plain clicks alone are
- * answered in `clicked`, one entry per click, as they always were; any other
- * kind is answered in `acted`, one entry per action. A script that names the
- * step that `failed` answered: `reportLines` says it. The sentence, or null
- * when nothing was asked or everything was answered.
+ * A capture asked to act and answered by a script that does not acknowledge
+ * every action. `acted` answers every kind, one entry per action; `clicked` is
+ * accepted only for an all-click request from an older script. A script that
+ * names the step that `failed` answered: `reportLines` says it. The sentence,
+ * or null when nothing was asked or everything was answered.
  */
-export function actionGap(request, result) {
+export function actionGap(request, result, { worktree = '<unknown worktree>', script = '<unknown script>' } = {}) {
   const asked = Array.isArray(request?.actions) ? request.actions : [];
   if (!asked.length) return null;
   if (result?.failed && typeof result.failed === 'object') return null;
-  if (asked.every((action) => action.kind === 'click')) {
-    if (Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
-    return `the picture at ${result?.file} was taken without the clicks — this memoro's capture script does not answer clicked, so --click is not supported yet (memoro's scripts/shot/shot.mjs has to honour request.click)`;
-  }
   if (Array.isArray(result?.acted) && result.acted.length === asked.length) return null;
-  return `the picture at ${result?.file} was taken without the actions — this memoro's capture script does not answer acted, so --context-click, --long-press and --fill are not supported yet (memoro's scripts/shot/shot.mjs has to honour request.actions)`;
+  if (asked.every((action) => action.kind === 'click')
+    && Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
+
+  if (result?.acted === undefined && result?.clicked === undefined) {
+    return `the picture at ${result?.file} has no action receipt — this installed mc does not understand the result from ${script} in ${worktree}; check compatibility before retrying`;
+  }
+  return `the picture at ${result?.file} does not acknowledge every requested action`;
 }
 
 export const ERROR_LINES = 20;
@@ -456,8 +457,8 @@ export function errorLines(result) {
  * What came back besides the picture, in the order it prints after the path,
  * the URL and the measure line: the errors the page, its requests, the server
  * or a dialog raised; each `--eval`'s value (`eval <n>`, counted from 1) or
- * what it threw; and the step that failed, with what was visible instead.
- * `failed` is true when a step failed — the shot then exits 1.
+ * what it threw; and the step that failed, with what was visible instead. A
+ * thrown eval or failed step makes `failed` true — the shot then exits 1.
  */
 export function reportLines(result) {
   const lines = errorLines(result);
@@ -479,7 +480,8 @@ export function reportLines(result) {
     lines.push(`failed  step ${failed.step} (${failed.kind}${what ? ` ${what}` : ''}): ${oneLine(failed.error, ERROR_TEXT)}`);
     if (failed.here) lines.push(`  here: ${oneLine(failed.here, ERROR_TEXT)}`);
   }
-  return { lines, failed: Boolean(failed) };
+  const evalFailed = evaluated.some((entry) => entry && Object.hasOwn(entry, 'error'));
+  return { lines, failed: Boolean(failed) || evalFailed };
 }
 
 /**

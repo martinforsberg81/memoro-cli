@@ -284,6 +284,7 @@ export async function run(argv, deps = {}) {
   if (!ran.ok) { stderr.write(`mc: ${scrub(ran.error)}\n`); return 1; }
   return answer(ran.result, {
     request, served, who, json: flags.json, open: flags.open, scrub, stdout, stderr, deps,
+    worktree, script: declared.argv.join(' '),
   });
 }
 
@@ -298,7 +299,7 @@ export async function run(argv, deps = {}) {
  */
 export function answer(result, {
   request, served = null, who = null, json = false, open = false, picture = true,
-  scrub = (text) => String(text), stdout, stderr, deps = {},
+  scrub = (text) => String(text), stdout, stderr, deps = {}, worktree = '<unknown worktree>', script = '<unknown script>',
 }) {
   if (!result.ok) {
     stderr.write(`mc: ${scrub(result.error || result.code || 'the capture failed')}\n`);
@@ -312,7 +313,7 @@ export function answer(result, {
     return 1;
   }
   // A picture asked with actions is one only if the script says it did them.
-  const gap = actionGap(request, result);
+  const gap = actionGap(request, result, { worktree, script });
   if (gap) { stderr.write(`mc: ${scrub(gap)}\n`); return 1; }
   // A gated target's verdict: the picture is taken either way, and a gate
   // that did not hold makes the exit 1.

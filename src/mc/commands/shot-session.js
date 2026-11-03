@@ -91,7 +91,10 @@ export async function keep({
   if (!ran.result.ok) {
     ran.kill?.();
     removeSession({ id, socket, log }, env);
-    return answer(ran.result, { request, served, who: fields.account, scrub, stdout, stderr, deps });
+    return answer(ran.result, {
+      request, served, who: fields.account, scrub, stdout, stderr, deps,
+      worktree, script: declared.argv.join(' '),
+    });
   }
   if (existsSync(socket)) chmodSync(socket, 0o600);
   const started = now().toISOString();
@@ -100,6 +103,7 @@ export async function keep({
   });
   const code = answer(flags.json ? { ...ran.result, kept: id } : ran.result, {
     request, served, who: fields.account, json: flags.json, open: flags.open, scrub, stdout, stderr, deps,
+    worktree, script: declared.argv.join(' '),
   });
   if (!flags.json) stdout.write(`mc: kept as ${id} — mc shot next ${id} [--click …] [--eval …] …; mc shot close ${id}\n`);
   return code;
@@ -203,6 +207,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   });
   const code = answer(result, {
     request: { actions }, served, who: session.account, json: flags.json, open: flags.open, picture: !flags['no-shot'], stdout, stderr, deps,
+    worktree: session.worktree, script: shot.declaration.argv.join(' '),
   });
   if (rebased) {
     stdout.write(`mc: the tree was edited, so the server restarted — the page was opened again at ${rebasedPath(result)}; what it held in memory is gone\n`);
