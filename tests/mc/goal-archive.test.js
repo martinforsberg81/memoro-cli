@@ -15,7 +15,7 @@ const ok = (stdout = '') => ({ ok: true, stdout, stderr: '' });
 
 /** A goal as `programsGoals` gives it, with the fields `archiveGoal` reads. */
 function goal(extra = {}) {
-  return { programme: 'mc', goal: 'g', dir: DIR, status: 'done', repos: ['memoro'], prs: [], log: [], problems: [], phase: 1, ...extra };
+  return { programme: 'mc', goal: 'g', dir: DIR, stage: 'done', status: 'ready', repos: ['memoro'], prs: [], log: [], problems: [], phase: 1, ...extra };
 }
 
 /**
@@ -37,9 +37,9 @@ function ctxOf({ git = () => ok(), gh = () => ok('[]'), move, now = new Date(NOW
   return { ctx, calls };
 }
 
-test('a goal is due once it has been done or dropped for the hold, counted from the entry that set the status', () => {
+test('a goal is due once it has been done or dropped for the hold, counted from the entry that set the stage', () => {
   assert.equal(ARCHIVE_HOLD_MS, 24 * 60 * 60 * 1000);
-  const done = (at, status = 'done') => goal({ status, log: [{ at, status, tool: 'claude', done: 'x' }] });
+  const done = (at, stage = 'done') => goal({ stage, log: [{ at, stage, status: 'ready', tool: 'claude', done: 'x' }] });
   assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T11:00Z'), nowMs: NOW }), { due: false, why: 'done 23h ago — archived after 24h' });
   assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T10:00Z'), nowMs: NOW }), { due: true, why: 'done 24h ago' });
   assert.equal(goalArchiveDue({ goal: done('2026-08-31T10:00Z'), nowMs: NOW - 60_000 }).due, false, 'a minute short is not due');
@@ -48,9 +48,9 @@ test('a goal is due once it has been done or dropped for the hold, counted from 
 });
 
 test('a goal is not due when it is not finished, or the log does not say when it was finished', () => {
-  const open = goal({ status: 'open', log: [{ at: '2026-08-01T10:00Z', status: 'open' }] });
-  assert.deepEqual(goalArchiveDue({ goal: open, nowMs: NOW }), { due: false, why: 'the goal is open' });
-  const handSet = goal({ status: 'done', log: [{ at: '2026-08-01T10:00Z', status: 'open' }] });
+  const open = goal({ stage: 'build', log: [{ at: '2026-08-01T10:00Z', stage: 'build', status: 'ready' }] });
+  assert.deepEqual(goalArchiveDue({ goal: open, nowMs: NOW }), { due: false, why: 'the goal is in build' });
+  const handSet = goal({ stage: 'done', log: [{ at: '2026-08-01T10:00Z', stage: 'build', status: 'ready' }] });
   assert.deepEqual(goalArchiveDue({ goal: handSet, nowMs: NOW }), { due: false, why: 'the log does not say when it was done' });
 });
 
@@ -71,8 +71,8 @@ test('archiveGoal refuses, and touches nothing, for each reason mc goal archive 
     { what: 'uncommitted changes in the worktree', goal: goal(), ctx: { git: (cwd, args) => (args[0] === 'status' ? ok(' M a.js') : ok()) }, pattern: /memoro's worktree has uncommitted changes/u },
     { what: 'a pull request the goal carries, open', goal: goal({ prs: [{ repo: 'memoro', pr: 9 }] }), ctx: { gh: (cwd, args) => (args[1] === 'view' ? ok('{"state":"OPEN"}') : ok('[]')) }, pattern: /memoro#9 is open/u },
     { what: 'a repository mc does not know', goal: goal({ repos: ['elsewhere'] }), ctx: {}, pattern: /elsewhere is not a repository mc knows/u },
-    { what: 'a goal not finished', goal: goal({ status: 'open' }), ctx: {}, pattern: /it is open; only a done or dropped goal/u },
-    { what: 'a dropped branch with commits no remote holds', goal: goal({ status: 'dropped' }), ctx: { git: (cwd, args) => (args[0] === 'rev-list' ? ok('2') : ok()) }, pattern: /commits no remote holds/u },
+    { what: 'a goal not finished', goal: goal({ stage: 'build' }), ctx: {}, pattern: /it is in build; only a done or dropped goal/u },
+    { what: 'a dropped branch with commits no remote holds', goal: goal({ stage: 'dropped' }), ctx: { git: (cwd, args) => (args[0] === 'rev-list' ? ok('2') : ok()) }, pattern: /commits no remote holds/u },
   ];
   for (const { what, goal: subject, ctx: options, pattern } of cases) {
     const { ctx, calls } = ctxOf(options);

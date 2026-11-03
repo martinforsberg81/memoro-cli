@@ -6,7 +6,7 @@
  * of work, out of everything that could start now:
  *
  * - a `review` session — a project's review step, or a goal in review;
- * - a `plan` session — a goal blocked on plan (goals.js `planDue`);
+ * - a `plan` session — a goal in finish, or in merging after a red (goals.js `goalSession`);
  * - a `build` session — a project's step (variant `project`) or a goal
  *   (variant `goal`).
  *

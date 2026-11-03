@@ -8,7 +8,8 @@
 export const GOAL_BASE = Object.freeze({
   schema: 'mc-goal',
   version: 1,
-  status: 'open',
+  stage: 'build',
+  status: 'ready',
   phase: 1,
   repos: ['memoro-cli'],
   class: 'large',

@@ -20,7 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
-import { PLAN_ROLE } from './goals.js';
+import { PLAN_ROLE, REVIEW_ROLE } from './goals.js';
 import { run as runGit } from './git.js';
 import { sessionIdentity, sessionRoleLine } from './session-role.js';
 import { defaultRepos, gitDirOf } from './repos.js';
@@ -517,18 +517,48 @@ export function inMcTerritory(cwd, deps = {}) {
 }
 
 /*
- * The two entries `mc hook install` writes into `~/.claude/settings.json`, and
+ * The three entries `mc hook install` writes into `~/.claude/settings.json`, and
  * the ones `--check` and the page compare the file against. `|| true`: a hook
  * must never stand between a session and its work. `Read` is in the matcher so
  * the repositories' Read hooks (memoro's block-sqlite-state.sh) answer through
  * `mc hook pre-tool`. `Edit` and `MultiEdit` are in it so the plan-file refusal
  * sees them, and the Claude in Chrome tools so a dev-server flow is turned to
- * `mc shot next`.
+ * `mc shot next`. `Stop` is how a goal's review cannot end before it has
+ * decided (`reviewStopDecision`); in any other session it says nothing.
  */
 export const MC_HOOKS = Object.freeze([
   Object.freeze({ event: 'SessionStart', which: 'session-start', matcher: null, command: 'mc hook session-start 2>/dev/null || true' }),
   Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*', command: 'mc hook pre-tool 2>/dev/null || true' }),
+  Object.freeze({ event: 'Stop', which: 'stop', matcher: null, command: 'mc hook stop 2>/dev/null || true' }),
 ]);
+
+/**
+ * Why a goal's review session may not end yet, or null (`mc hook stop`). Only
+ * a session with MC_ROLE `review-session:goal` and MC_GOAL is held: it ends
+ * once the goal has left `review` — `mc goal stage merging` or `finish` —
+ * and it has written one proposal, a `.md` in its programme's `proposals/`
+ * written since the session began (MC_SESSION_STARTED, which the runner
+ * sets). Each thing missing is named. A goal that does not read, or a
+ * session with no start, is not held: a hook that cannot tell lets go.
+ */
+export function reviewStopDecision({ env = process.env, home, read = (path) => readFileSync(path, 'utf8'), list = readdirSync, mtimeMs = (path) => statSync(path).mtimeMs } = {}) {
+  if (env.MC_ROLE !== REVIEW_ROLE || !env.MC_GOAL) return null;
+  const [programme, goal] = String(env.MC_GOAL).split('/');
+  if (!programme || !goal) return null;
+  let stage;
+  try { stage = JSON.parse(read(join(home, programme, 'goals', goal, 'GOAL.json'))).stage; } catch { return null; }
+  const started = Date.parse(env.MC_SESSION_STARTED ?? '');
+  const missing = [];
+  if (stage === 'review') missing.push('the goal is still in review — mc goal stage merging (OK to land: it queues the head you judged) or write REVIEW.md in the goal\'s directory and mc goal stage finish (not OK)');
+  if (Number.isFinite(started)) {
+    const dir = join(home, programme, 'proposals');
+    let names = [];
+    try { names = list(dir).filter((name) => name.endsWith('.md')); } catch { names = []; }
+    const written = names.some((name) => { try { return mtimeMs(join(dir, name)) >= started; } catch { return false; } });
+    if (!written) missing.push(`no proposal written — one file in ${dir}/ (the proposals skill's form) with what this review noticed beyond the goal`);
+  }
+  return missing.length ? { reason: missing.join('; ') } : null;
+}
 
 /** Claude Code's user settings file. */
 export function claudeSettingsPath(home = homedir()) {

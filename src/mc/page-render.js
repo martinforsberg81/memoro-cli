@@ -1114,30 +1114,31 @@ function projectLine(c, wide, project) {
 
 /**
  * One goal, in a project row's columns (Martin, 2026-11-01): its row number, a
- * mark while a session is on it, `g · <name>`, its first repository, its state,
- * how many sessions it has had, and `criteria <met>/<all>` — green when every
+ * mark while a session is on it, `g · <name>`, its first repository, where
+ * it is — `<stage> · <status>`, over the status and steps columns — how many
+ * sessions it has had, and `criteria <met>/<all>` — green when every
  * one is met. The grey tail after that is what the last
  * session said is next (or its comment, when it said nothing next). A goal whose
  * GOAL.json does not parse says its first problem in red there instead.
  *
- * `open` is green while a session is on it and grey otherwise, `review` is
- * green — a review session or the merger moves it by itself — `blocked` is the
- * blocked colour, and `done` and `dropped` are grey: the project rows' colours
- * for the same words. A finished goal's tail is its last `Done:`, never a
- * `Next:` that is over. A goal blocked by a red review, a red merge or the runner waits on
- * plan, which the runner wakes, and its tail says so first; any other blocked
- * goal — a person's, a build session's question, one plan left blocked —
- * `waits on a person`. Both are in the colour of what waits on a person. A goal
+ * `build` and `finish` are green while a session is on them and grey
+ * otherwise, `review` and `merging` are green — a review session or the
+ * merger moves them by itself — `plan`, `done` and `dropped` are grey, and
+ * any stage `· blocked` is the blocked colour. A finished goal's tail is its
+ * last `Done:`, never a `Next:` that is over. A blocked goal waits on a
+ * person, and its tail says so first, in the colour of what waits on a person. A goal
  * in a phase its programme has not reached (`held`) has the projects' waiting
  * colour, and its tail says first which phase it waits on.
  */
 function goalLine(c, wide, goal) {
   const column = projectColumns(wide);
   const mark = goal.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  const word = goal.status ?? '—';
-  const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
-    : goal.status === 'review' ? ['green']
-    : (goal.status === 'blocked' ? statusTone(goal.status) : ['grey']);
+  const word = goal.stage ? `${goal.stage} · ${goal.status}` : '—';
+  const tone = goal.status === 'blocked' ? statusTone('blocked')
+    : goal.stage === 'build' || goal.stage === 'finish' ? (goal.running ? ['green'] : ['grey'])
+    : goal.stage === 'review' || goal.stage === 'merging' ? ['green']
+    : ['grey'];
+  const stateWidth = column.status + 1 + column.steps;
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
     : '';
@@ -1148,18 +1149,18 @@ function goalLine(c, wide, goal) {
   const left = `  ${c(String(goal.number).padStart(3), 'grey')} ${mark} `
     + `${goal.running ? c(name, 'bold') : name} `
     + repo
-    + `${c(pad(clip(word, column.status), column.status), ...tone)} `
-    + c(pad(sessionsWords, column.steps + 1 + PR_CELL), 'grey')
+    + `${c(pad(clip(word, stateWidth), stateWidth), ...tone)} `
+    + c(pad(sessionsWords, PR_CELL), 'grey')
     + (goal.criteria ? `${c(`criteria ${goal.criteria.met}/${goal.criteria.all}`, goal.criteria.all && goal.criteria.met === goal.criteria.all ? 'green' : 'grey')} ` : '');
   const room = wide - width(left);
   if (room <= 0) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.json: ${goal.problems[0]}`), room), 'red')}`;
   // A finished goal has no next action: its tail is what was done last.
-  const finished = goal.status === 'done' || goal.status === 'dropped';
+  const finished = goal.stage === 'done' || goal.stage === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
-  if (goal.plan || goal.person || waits) {
-    const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
+  if (goal.person || waits) {
+    const head = waits ?? 'waits on a person';
     const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
     return `${left}${c(clip(head, room), ...statusTone(waits ? 'waiting' : 'blocked'))}${tail ? c(tail, 'grey') : ''}`;
   }
