@@ -12,10 +12,65 @@
  * GOAL.md converted is removed; `goals/.archive/` is never read.
  *
  * This is the one place in mc that reads GOAL.md (`docs/technical/mc-goals.md`).
+ *
+ * `phaseGoals` is the second conversion, from goals that started after other
+ * goals (`after`, and the status they waited in) to phases, and from the one
+ * `status` a goal had before stages to its `stage` and `status`
+ * (`stageOfLegacy`): the one place in mc that still reads `after` or an old status.
  */
 import { join } from 'node:path';
 
-import { GOAL_FILE, GOALS_DIR, listDirsOf, readTextOrNull, renderGoal } from './goals.js';
+import { appendEntry, FINISHED, GOAL_FILE, GOALS_DIR, isPhase, LEGACY_AFTER, LEGACY_STATUSES, LOG_FILE, listDirsOf, logStamp, parseLog, readTextOrNull, renderGoal, renumberPhases, validateGoal } from './goals.js';
+
+/** The status a goal waited in while its `after` had not landed, before phases. */
+const LEGACY_STATUS = 'waiting';
+
+/** The first line of an entry's `Done:`. */
+const doneLine = (entry) => String(entry?.done ?? '').split('\n')[0];
+
+/**
+ * The stage a goal `blocked` before stages was blocked in, from its log, last
+ * entry first: a red review's verdict is `finish`; the merger's red or a
+ * green the runner queued is `merging`; the runner's word on a review (no
+ * verdict, no pull request, a moved head) or an entry in `review` is
+ * `review`; anything else — a build session's question, three sessions
+ * without a word, an entry in `open` — is `build`. The runner's entry after
+ * a plan session (`plan session ended …`) says nothing of where, and a
+ * person's block is read past to what came before it.
+ */
+function blockedStage(log) {
+  for (const entry of [...log].reverse()) {
+    const done = doneLine(entry);
+    const runner = entry.tool === 'runner';
+    if (runner && done.startsWith('plan session ended')) continue;
+    if (/^red\b.*\b[0-9a-f]{7,40}\b/u.test(done)) return 'finish';
+    if (runner && (/^merger answered red/u.test(done) || /^queued #\d+/u.test(done))) return 'merging';
+    if (runner && /review left no verdict|^in review, but|^green on/u.test(String(entry.comment ?? ''))) return 'review';
+    if (entry.status === 'review') return 'review';
+    if (entry.status === 'open' || entry.status === LEGACY_STATUS) return 'build';
+    if (entry.tool === 'person') continue;
+    return 'build';
+  }
+  return 'build';
+}
+
+/**
+ * A goal's `{ stage, status }` from the one status it had before stages
+ * (`LEGACY_STATUSES`) and its log: `open` (and `waiting`) is `build ·
+ * ready`; `review` is `review · ready`, or `merging · ready` when the
+ * runner's last word on it queued it for the merger; `blocked` is the stage
+ * its log says it was blocked in (`blockedStage`) · `blocked`; `done` and
+ * `dropped` are as they are.
+ */
+export function stageOfLegacy(status, log = []) {
+  if (FINISHED.includes(status)) return { stage: status, status: 'ready' };
+  if (status === 'review') {
+    const last = log.findLast((entry) => entry.tool !== 'person');
+    return { stage: last?.tool === 'runner' && /^queued #\d+/u.test(doneLine(last)) ? 'merging' : 'review', status: 'ready' };
+  }
+  if (status === 'blocked') return { stage: blockedStage(log), status: 'blocked' };
+  return { stage: 'build', status: 'ready' };
+}
 
 /** The file a goal was written in before GOAL.json. */
 export const LEGACY_GOAL_FILE = 'GOAL.md';
@@ -75,7 +130,7 @@ export function goalFromMarkdown(text) {
     else (sections.length ? sections.at(-1).lines : lead).push(line);
   }
   const met = fields.status === 'review' || fields.status === 'done';
-  const goal = { status: fields.status, repos: list(fields.repos), class: fields.class, created: fields.created || null, after: list(fields.after), prs: list(fields.prs),
+  const goal = { ...(LEGACY_STATUSES.includes(fields.status) ? stageOfLegacy(fields.status) : { status: fields.status }), repos: list(fields.repos), class: fields.class, created: fields.created || null, prs: list(fields.prs),
     title: title || 'untitled', goal: paragraphs(lead), contract: [], out_of_scope: [], success_criteria: [], documents: [] };
   for (const section of sections) {
     const key = section.name.toLowerCase();
@@ -119,5 +174,75 @@ export function convertGoals({ home, programme = null, list = listDirsOf, read =
       answers.push({ name: ref, converted: true, criteria: converted.goal.success_criteria.length });
     }
   }
+  return answers;
+}
+
+/**
+ * Every goal of `programme` (every programme when null) that still names an
+ * `after`, or has no `stage` (`stageOfLegacy` gives it one from its old
+ * status and log), or is in the status it waited in, given a phase by the depth of its
+ * chain: a goal whose `after` has all landed — done, dropped, or no goal any
+ * more — keeps its phase (1 when it has none); a goal after one that has not
+ * is one phase past the latest of those. `after` is removed, and a waiting goal
+ * is `build · ready`. Each goal whose phase or stage changes gets a log entry from
+ * `tool`; the programmes touched are renumbered (`renumberPhases`). A pass with
+ * nothing to convert writes nothing. Returns `[{ name, phase, stage, status, after, from }]`
+ * for every goal written, or `{ name, problems }` for one that would not
+ * validate, left as it is. Goals of other programmes are read to see whether
+ * an `after` landed.
+ */
+export function phaseGoals({ home, programme = null, list = listDirsOf, read = readTextOrNull, write, now = new Date(), tool = 'person' }) {
+  const raw = new Map();
+  for (const one of list(home)) {
+    for (const name of list(join(home, one, GOALS_DIR))) {
+      const dir = join(home, one, GOALS_DIR, name);
+      const text = read(join(dir, GOAL_FILE));
+      if (text === null) continue;
+      let value;
+      try { value = JSON.parse(text); } catch { continue; }
+      if (value && typeof value === 'object' && !Array.isArray(value)) raw.set(`${one}/${name}`, { programme: one, dir, value });
+    }
+  }
+  const legacy = (value) => Object.hasOwn(value, LEGACY_AFTER) || value.stage === undefined;
+  const depth = new Map();
+  const phaseOf = (ref, seen = new Set()) => {
+    if (depth.has(ref)) return depth.get(ref);
+    const own = raw.get(ref).value;
+    let phase = isPhase(own.phase) ? own.phase : 1;
+    seen.add(ref);
+    for (const other of Array.isArray(own[LEGACY_AFTER]) ? own[LEGACY_AFTER] : []) {
+      const target = raw.get(other);
+      // Landed, let go or gone holds nothing back; a ring is cut where it closes.
+      if (!target || FINISHED.includes(target.value.stage ?? target.value.status) || seen.has(other)) continue;
+      phase = Math.max(phase, phaseOf(other, seen) + 1);
+    }
+    seen.delete(ref);
+    depth.set(ref, phase);
+    return phase;
+  };
+  const answers = [];
+  const touched = new Set();
+  for (const [ref, { programme: one, dir, value }] of raw) {
+    if ((programme && one !== programme) || !legacy(value)) continue;
+    const after = Array.isArray(value[LEGACY_AFTER]) ? value[LEGACY_AFTER] : [];
+    const phase = phaseOf(ref);
+    const staged = value.stage === undefined ? stageOfLegacy(value.status, parseLog(read(join(dir, LOG_FILE)) ?? '')) : { stage: value.stage, status: value.status };
+    const { [LEGACY_AFTER]: _after, stage: _stage, status: _status, ...rest } = value;
+    const next = { ...rest, ...staged, phase };
+    const problems = validateGoal(next, { draft: true });
+    if (problems.length) { answers.push({ name: ref, problems }); continue; }
+    write(join(dir, GOAL_FILE), renderGoal(next));
+    const restaged = value.stage === undefined;
+    if (restaged || phase !== (isPhase(value.phase) ? value.phase : 1)) {
+      const said = [
+        ...(restaged ? [`${staged.stage} · ${staged.status}, from ${value.status}`] : []),
+        after.length ? `phase ${phase}, from after ${after.join(', ')}` : `phase ${phase}`,
+      ];
+      appendEntry({ dir, entry: { at: logStamp(now), tool, model: null, ...staged, done: said.join('; '), comment: null, next: null }, read, write });
+    }
+    touched.add(one);
+    answers.push({ name: ref, phase, ...staged, after, from: restaged ? value.status : null });
+  }
+  for (const one of touched) renumberPhases({ home, programme: one, list, read, write });
   return answers;
 }

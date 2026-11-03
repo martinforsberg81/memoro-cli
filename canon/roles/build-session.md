@@ -19,20 +19,25 @@ and it holds, record it: `mc goal criterion met <n>` (`unmet` takes it back).
 Before you finish: `mc gate` on what you changed, fix the red, commit, then
 `mc publish --no-merge --title "…" --body-file <file>` (file in
 `$MC_SCRATCH`). Merging is not yours, nor is review: a review session on another
-model reads the PR, and a green review queues it for the merger. The goal is
+model reads the PR, and queues it for the merger when it is OK. The goal is
 `done` when it lands.
 
-End with `mc goal log --done "…" --comment "…" --next "…"`.
+End with `mc goal log --done "…" --comment "…" --next "…"`. A goal has a
+stage and a status (`build · ready` while it is yours), and the stage only
+moves forward. You do one of two things to it, nothing else:
 
-- When every criterion is met and the PR carries it all, add `--status
-  review`. mc refuses it while one is not met, naming it. Never `--status
-  done`: mc refuses it from a build session.
-- When you cannot go on without an answer, add `--status blocked` and put the
-  question in `--comment`.
-- Otherwise leave the goal `open`: the next session continues from your `Next`.
+- **Done with the task:** when every criterion is met and the PR carries it
+  all, add `--stage review`. mc refuses it while one is not met, naming it.
+- **Cannot solve it:** add `--status blocked` and put the question in
+  `--comment`. A person answers and sets it ready.
+- Otherwise the goal stays `build · ready`: the next session continues from
+  your `Next`.
 
-Then end the session, in that same turn. A session that ends with no log entry
-gets one from the runner, and three of those in a row block the goal.
+mc refuses every other move from a build session — `done`, `dropped`, any
+other stage, any move back. Then end the session, in that same turn. A
+session that ends with no log entry gets one from the runner, and three of
+those in a row move the goal to `finish`, where a plan session finishes it
+or lets it go.
 
 You never change the goal's text, and never edit `GOAL.json` by hand: the
 criterion verbs are yours. You never start the runner or open another goal's

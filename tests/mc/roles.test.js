@@ -270,7 +270,7 @@ describe('the verb files', () => {
   const VERBS = ['goal-verb.md'];
   // Sentences that define each file, from different parts of it.
   const DEFINING = {
-    'goal-verb.md': [/A plan session\s+sets any status/u, /\*\*Written by verbs\.\*\*/u],
+    'goal-verb.md': [/a plan session finishes it to `merging`/u, /\*\*Written by verbs\.\*\*/u],
   };
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 

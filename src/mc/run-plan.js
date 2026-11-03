@@ -312,25 +312,30 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
 }
 
 /**
- * What a plan session woken by a blocked goal is told: the goal, why it is
- * blocked (its last log entry), and where its worktree is — which it may take
- * over and finish. The rest is `canon/roles/plan-session.md`'s.
+ * What a headless plan session on a goal is told: the goal, the stage it
+ * takes it in — `finish` (a review found it not OK, or the build could not
+ * end it) or `merging` (the merger answered red, or its head moved) — the
+ * runner's last word on it, and where its worktree is, which it works in
+ * itself. The rest is `canon/roles/plan-session.md`'s.
  */
-export function goalPlanPrompt({ name, dir, worktree, branch, why = null, brief = null }) {
+export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', why = null, brief = null }) {
   const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
+  const task = stage === 'merging'
+    ? 'it is in merging and the merger did not land it: take the red in its worktree, publish, and queue it again'
+    : 'it is in finish: read its REVIEW.md, when there is one, and LOG.md, fix it in its worktree, publish, and move it to merging';
   return withBrief([
-    `The goal ${name} is blocked${reason ? `: ${reason}` : ''}. You are the plan session the runner woke for it, headless.`,
+    `The goal ${name} is yours to finish, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
   ].join('\n'), brief);
 }
 
-/** What the runner writes to a running plan session on a blocked goal every `check_in_minutes` (ruling 18). */
+/** `checkInPrompt` for a headless plan session on a goal. */
 export function goalPlanCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
-    'If you are still judging the goal, say so in one line and go on.',
+    'If you are still finishing the goal, say so in one line and go on.',
     '',
-    'If you cannot decide, end now: `mc goal log --status blocked --comment "<the question for Martin>"`, and stop.',
+    'If you cannot finish it, end now: `mc goal blocked --reason "<the question for Martin>"` (or drop it), and stop.',
   ].join('\n');
 }
 

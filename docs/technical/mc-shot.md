@@ -30,7 +30,7 @@ mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full
         [--long-press <css>[@ms]]… [--fill <css>=<text>]… [--eval <js>|--eval-file <path>]…
         [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
         [--account <name>] [--onboarding]
-        [--me] [--here] [--keep] [--out <file.png>] [--open] [--json]
+        [--me] [--here] [--main] [--keep] [--out <file.png>] [--open] [--json]
 mc shot next [<id>] [step flags]
 mc shot close [<id>|--all]
 mc shot sessions
@@ -49,6 +49,8 @@ mc shot logout prod
   together. `--full` takes the whole scrolled page.
 - **`--me`** works only on `prod`. **`--here`** works only on `dev`, and gives a
   server for the worktree you stand in, as `mc test dev --here` does.
+  **`--main`** works only on `dev`: the shared checkout's server, from any
+  worktree — how the app is *now*, on main. `--here` and `--main` are refused together.
   `login` and `logout` work only with `prod`. Each refusal is one line and
   exits 2.
 - **The output** is the file path, alone on the first stdout line, so
@@ -358,6 +360,21 @@ The worktree is the one you stand in when it is a memoro worktree (it has
 (`sharedWorktree`). `--here` still names the one you stand in explicitly.
 Until 2026-10-15 the shared checkout was the default everywhere, so a session
 on its own branch photographed `main` unless it remembered `--here`.
+
+`--main` is the other question: how the app looks *now*, on main, from any
+worktree. It serves the shared checkout's server — `mc shot dev --main <target>`
+— which `mc test dev` already uses by default. Without it, a worktree's own
+change is what you see. The shared checkout's server is mc's standing one: it is
+never stopped as a stale holder, it does not count against `MC_DEV_MAX_SERVERS`,
+and when mc finds it gone the next request starts it again (`mc dev status`
+marks it `(main)`). When mc has not used it for `MC_DEV_MAIN_IDLE_SECONDS` (60)
+and the checkout's HEAD has moved past what it was built from, the next request
+fast-forwards the checkout to `origin/main` — only when it is clean and on
+`main`; nothing else in mc fast-forwards `~/mc/self/memoro` — and restarts the
+server before serving. A server that a kept browser stepped on in the last 60 s,
+or that mc used within the idle window, is not restarted: it is served as it is,
+and the answer says what it serves against the checkout. A kept browser restarted
+after that is rebased, as a dev session is after an edit.
 
 The dev server is `ensureAppServer`'s, and it is started over when its tree
 moved (`builtFromMoved`) **or when a file git reports as changed or new was

@@ -66,7 +66,8 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageWords } from './goals.js';
+import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
@@ -829,18 +830,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * written into its LOG.md once, as a runner entry, not at every pass.
    */
   function archiveGoalsDue() {
+    convertAfter();
     const all = goals();
     const now = deps.now();
     for (const goal of all) {
-      if (goal.problems.length || !FINISHED.includes(goal.status)) continue;
+      if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
-      const result = archiveGoal(goal, all, {
+      const result = archiveGoal(goal, {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
-        appendText: (path, text) => deps.append(path, text), read: deps.read, now,
+        appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       });
-      if (result.refused) refuseGoalOnce(goal, result.refused);
-      else say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+      if (result.refused) { refuseGoalOnce(goal, result.refused); continue; }
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
+      for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
   }
 
@@ -848,7 +851,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function refuseGoalOnce(goal, why) {
     const comment = `not archived — ${why}`;
     if (goal.log.findLast((entry) => entry.tool === 'runner' && entry.comment?.startsWith('not archived'))?.comment === comment) return;
-    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status: goal.status, done: null, comment, next: null };
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, stage: goal.stage, status: goal.status, done: null, comment, next: null };
     appendEntry({ dir: goal.dir, entry, read: deps.read, write: deps.write });
     say(`${goalName(goal)}: ${comment}`);
   }
@@ -1219,23 +1222,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The goals a lane could start now, as `pickWork` candidates: open, or due a
-   * review (`reviewDue`: not while its pull request is in the merger's line),
-   * parsing, on one of `repos` (its first repository),
+   * The goals a lane could start now, as `pickWork` candidates: those the
+   * runner starts a session on (`goalSession`: `build · ready`, `review ·
+   * ready`, `finish · ready`, and `merging · ready` after a red while its pull
+   * request is out of the merger's line), on one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
    * not stand in front of every other goal; why is said once, when it changes.
-   * A goal waits from its last log entry. The goals' `after` is settled first
-   * (`releaseWaiting`), so a goal whose last `after` goal has landed is a
-   * candidate in the same pick.
+   * A goal waits from its last log entry. A goal in a phase after the one its
+   * programme is in is no candidate (`phaseOpen`): it keeps its stage and is
+   * picked once every goal in a lower phase is done or dropped, the goals of
+   * one phase side by side. A goal still written with `after` is given its
+   * phase first (`convertAfter`).
    */
   function goalWork({ repos: names, passed }) {
     settleLanded();
-    releaseWaiting();
+    convertAfter();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
     const may = (goal) => {
-      if (goal.status !== 'review') return true;
+      if (goal.stage !== 'review') return true;
       const why = reviewRoute(goal).reason ?? null;
       const name = goalName(goal);
       if (why && reviewWaits.get(name) !== why) say(`${name}: its review waits — ${why}`);
@@ -1243,22 +1249,24 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return !why;
     };
     const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    return goals()
-      .filter((goal) => (goal.status === 'open' || reviewDue(goal, merging) || planDue(goal)) && goal.problems.length === 0
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal))
-      .map((goal) => ({
-        name: goalName(goal), repo: goal.repos[0], kind: goalKind(goal), variant: goalKind(goal) === 'plan' ? null : 'goal',
-        since: goal.log.at(-1)?.at ?? '', resumed: false, goal,
-      }));
+    const all = goals();
+    return all
+      .filter((goal) => goalSession(goal, merging) !== null
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
+      .map((goal) => {
+        const kind = goalSession(goal, merging);
+        return { name: goalName(goal), repo: goal.repos[0], kind, variant: kind === 'plan' ? null : 'goal', since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
+      });
   }
 
   /**
-   * The session a goal gets: `review` in review, `plan` when it is blocked and
-   * waits on plan (`planDue`), else `build`.
+   * The session a goal gets, by its stage (`goalSession`): `review` in
+   * review, `plan` in finish or merging, else `build`. Only a candidate of
+   * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
-    if (goal.status === 'review') return 'review';
-    return goal.status === 'blocked' ? 'plan' : 'build';
+    if (goal.stage === 'review') return 'review';
+    return goal.stage === 'finish' || goal.stage === 'merging' ? 'plan' : 'build';
   }
 
   /**
@@ -1334,21 +1342,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The status changes goals' `after` asks for (`waitingMoves`), made: a
-   * waiting goal whose `after` has all landed goes open with an entry naming
-   * what landed, and its branches with no commits of their own are remade from
-   * `origin/main` as it is now; one whose `after` goal is gone goes blocked
-   * for plan; an open goal with an `after` not landed goes waiting. Nothing
-   * else is written, so a pass with nothing to move writes nothing.
+   * Goals written before phases, with `after`, given their phase by the depth
+   * of that chain, and goals written before stages given theirs from their
+   * status and log (`phaseGoals`, as `mc goal convert` does), each
+   * with a runner entry. A pass with nothing to convert writes nothing.
    */
-  function releaseWaiting() {
-    for (const move of waitingMoves(goals())) {
-      const { goal } = move;
-      const name = goalName(goal);
-      goalStatus(goal, name, move.status, { done: move.done, comment: move.comment });
-      if (move.status !== 'open') continue;
-      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
-    }
+  function convertAfter() {
+    const answers = phaseGoals({ home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, now: deps.now(), tool: 'runner' });
+    for (const answer of answers) say(answer.problems ? `goal:${answer.name}: not converted — ${answer.problems.join('; ')}` : `goal:${answer.name}: phase ${answer.phase}, ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}`);
   }
 
   /**
@@ -1356,8 +1357,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * set `done` — however each landed: the merger, `mc merge --docs`, `--admin`,
    * or on GitHub by hand. The merger sets done itself when the pull request it
    * lands is the goal's last; this pass is for the rest, and asks GitHub at
-   * most every `SETTLE_EVERY_MS`, only for goals that are not finished or
-   * waiting and carry pull requests. A pull request GitHub cannot say about
+   * most every `SETTLE_EVERY_MS`, only for goals that are not finished and
+   * carry pull requests. A pull request GitHub cannot say about
    * leaves the goal as it is.
    */
   function settleLanded() {
@@ -1365,7 +1366,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
     for (const goal of goals()) {
-      if (goal.problems.length || FINISHED.includes(goal.status) || goal.status === 'waiting' || !goal.prs?.length) continue;
+      if (goal.problems.length || FINISHED.includes(goal.stage) || !goal.prs?.length) continue;
       const stateOf = ({ repo: repoName, pr }) => {
         const repo = repos.find((item) => item.name === repoName);
         if (!repo) return null;
@@ -1375,61 +1376,67 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       };
       const settled = prsLanded(goal.prs, stateOf);
       if (!settled.done) continue;
-      goalStatus(goal, goalName(goal), 'done', {
+      goalState(goal, goalName(goal), { stage: 'done' }, {
         done: `landed ${settled.landed.join(', ')}`,
         comment: settled.closed.length ? `closed without landing: ${settled.closed.join(', ')}` : null,
       });
     }
   }
 
-  /** A runner entry with a status change, said. */
-  function goalStatus(goal, name, status, fields) {
-    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status, done: null, comment: null, next: null, ...fields };
-    const set = setStatus({ dir: goal.dir, status, entry, read: deps.read, write: deps.write });
-    say(set.problems ? `${name}: could not be set ${status} (${set.problems.join('; ')})` : `${name}: ${status} — ${fields.done ?? fields.comment}`);
+  /** A runner entry with a stage or status change (`{ stage, status }`), said. */
+  function goalState(goal, name, change, fields) {
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, done: null, comment: null, next: null, ...fields };
+    const set = setGoalState({ dir: goal.dir, ...change, entry, read: deps.read, write: deps.write });
+    const words = [change.stage, change.status].filter(Boolean).join(' · ');
+    say(set.problems ? `${name}: could not be set ${words} (${set.problems.join('; ')})` : `${name}: ${stageWords(set.goal)} — ${fields.done ?? fields.comment}`);
+  }
+
+  /** The goal as GOAL.json has it now, after a session: `{ stage, status }`, the record's when it does not parse. */
+  function stateNow(goal) {
+    const parsed = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '');
+    return parsed.problems ? { stage: goal.stage, status: goal.status } : { stage: parsed.stage, status: parsed.status };
   }
 
   /**
-   * What a review session's verdict leads to (`canon/roles/review-session.md`).
-   * Red, or no verdict: `blocked`, and nothing goes back to a build session
-   * until plan sets the goal open. Green: queued for the merger as `mc merge`
-   * queues — but only the head it judged. A branch that has moved since is not
-   * green, and the goal stays in `review` for another review.
+   * After a review session. The review decides (`canon/roles/review-session.md`):
+   * its verb moved the goal to `merging`, queued at the head it judged, or to
+   * `finish`; the runner reads neither its words nor any file. A review that
+   * ended with the goal still in `review` died (a crash, a limit): the goal
+   * stays `review · ready` with the runner's entry, and the next review runs;
+   * a second that dies in the same `review` sets `review · blocked`.
    */
-  function settleReview(goal, name, { repo, pr, branch, before }) {
+  function afterReview(goal, name) {
+    const now = stateNow(goal);
+    if (now.stage !== 'review') { say(`${name}: the review moved it to ${now.stage}`); return; }
+    if (now.status !== 'ready') return;
     const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
-    const status = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '').status ?? goal.status;
-    const found = log.slice(before).findLast((entry) => entry.tool !== 'runner' && verdictOf(entry));
-    const verdict = found ? verdictOf(found) : null;
-    if (!verdict) {
-      goalStatus(goal, name, 'blocked', { comment: 'the review left no verdict (`green <sha>` or `red <sha>` in Done) — waits on plan' });
+    if (reviewDiedBefore(log)) {
+      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — waits on a person` });
       return;
     }
-    if (verdict.verdict === 'red') {
-      if (status !== 'blocked') goalStatus(goal, name, 'blocked', { comment: `red review of ${verdict.sha} — waits on plan` });
+    goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again` });
+  }
+
+  /**
+   * After a headless plan session on `finish` or on a red in `merging`. In
+   * `finish` it publishes and moves the goal to `merging`, drops it, or sets
+   * it blocked; one that ends with the goal still `finish · ready` sets it
+   * `finish · blocked`, so no second one starts. In `merging` it takes the
+   * red and queues the pull request again: one in the merger's line gets the
+   * runner's entry (the red is taken, so it wakes no session again); one not
+   * in line sets `merging · blocked`.
+   */
+  function afterPlan(goal, name, { stage }) {
+    const now = stateNow(goal);
+    if (now.stage !== stage || now.status !== 'ready') { say(`${name}: plan left it ${now.stage} · ${now.status}`); return; }
+    if (stage === 'finish') {
+      goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — waits on a person' });
       return;
     }
-    if (status !== 'review') { say(`${name}: green, but the goal is ${status} now — nothing is queued`); return; }
-    const standing = goalPr(repo, branch);
-    if (!standing || standing.error || standing.number !== pr) {
-      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} ${standing?.error ? `could not be read (${standing.error})` : 'is no longer the open pull request'} — not queued` });
-      return;
-    }
-    if (!standing.head || !standing.head.startsWith(verdict.sha)) {
-      goalStatus(goal, name, 'review', { comment: `green on ${verdict.sha}, but #${pr} is at ${String(standing.head).slice(0, 12)} now — not queued; the new head is reviewed again` });
-      return;
-    }
-    try {
-      const queued = deps.queueMerge({
-        root, repo: repo.name, repoPath: repo.path, pr, branch, holder: { name },
-        goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, sha: standing.head,
-        now: deps.now(), lock,
-      });
-      goalStatus(goal, name, 'review', { done: queuedText(pr, standing.head) });
-      if (queued?.place) say(`${name}: ${queued.place} ahead of #${pr}`);
-    } catch (error) {
-      goalStatus(goal, name, 'blocked', { comment: `green on ${verdict.sha}, but #${pr} could not be queued for the merger (${error?.message || error})` });
-    }
+    const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
+    const queued = (goal.prs ?? []).some((item) => merging.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
+    if (queued) goalState(goal, name, {}, { done: 'plan session took the red; the pull request is in the merger\'s line again' });
+    else goalState(goal, name, { status: 'blocked' }, { comment: 'the plan session on the red ended with nothing in the merger\'s line — waits on a person' });
   }
 
   /**
@@ -1451,22 +1458,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The runner's own log entry, for a session that left none: status unchanged.
-   * Three of them in a row block the goal, which is the only guard there is
-   * against a session that fails the same way for ever (the loop that ran 2 803
-   * times); there is no attempt counter, only the log.
+   * The runner's own log entry, for a build session that left none: stage
+   * and status unchanged. Three of them in a row in `build` move the goal to
+   * `finish · ready`, for a plan session to finish or let go — the guard
+   * against a session that fails the same way for ever (the loop that ran
+   * 2 803 times); there is no attempt counter, only the log.
    */
   function goalWithoutWord(goal, name, comment) {
     const { dir } = goal;
-    const entry = (status, text) => ({ at: logStamp(deps.now()), tool: 'runner', model: null, status, done: null, comment: text, next: null });
-    const status = parseGoal(deps.read(join(dir, GOAL_FILE)) ?? '').status ?? goal.status;
-    appendEntry({ dir, entry: entry(status, comment), read: deps.read, write: deps.write });
+    const now = stateNow(goal);
+    appendEntry({ dir, entry: { at: logStamp(deps.now()), tool: 'runner', model: null, ...now, done: null, comment, next: null }, read: deps.read, write: deps.write });
     say(`${name}: ${comment}`);
-    const last = parseLog(deps.read(join(dir, LOG_FILE)) ?? '').slice(-3);
-    if ((status !== 'open' && status !== 'review') || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
-    const text = 'three sessions ended without a word — see the logs under runner/log';
-    const blocked = setStatus({ dir, status: 'blocked', entry: entry('blocked', text), read: deps.read, write: deps.write });
-    say(blocked.problems ? `${name}: could not be blocked (${blocked.problems.join('; ')})` : `${name}: blocked — ${text}`);
+    const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').slice(-3);
+    if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
+    goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a plan session finishes it' });
   }
 
   /**
@@ -1474,7 +1479,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * billing, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word. A goal in `review` gets a review
    * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
-   * with its pull request and head, and `settleReview` after it.
+   * with its pull request and head (MC_REVIEW_HEAD, which its `mc goal stage
+   * merging` queues), and `afterReview` after it. A goal in `finish`, or in
+   * `merging` after a red, gets a headless plan session and `afterPlan`.
    *
    * A session cut off by the API is not resumed: it ends, its goal is picked
    * again, and the next session reads `LOG.md` and the branch. The worktree
@@ -1505,6 +1512,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+    // A goal's branch is made when it can start: one made at `mc goal new` in a
+    // later phase is remade from origin/main before its first build, if unbuilt.
+    if (kind === 'build' && !lastBuildEntry(goal.log)) {
+      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
+    }
     const branch = goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
     const repo = repos.find((item) => item.name === repoName);
     let pr = null;
@@ -1512,7 +1524,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
       if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
       if (!pr) {
-        goalStatus(goal, name, 'blocked', { comment: `in review, but ${branch} has no open pull request — waits on plan` });
+        goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
         return 'skipped:no-pr';
       }
     }
@@ -1533,7 +1545,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const prompt = review
       ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
       : planning
-      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, why: goal.log.at(-1), brief })
+      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, why: goal.log.at(-1), brief })
       : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
@@ -1581,6 +1593,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
           // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
           MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
+          // A review queues the head it judged (`mc goal stage merging`); the Stop hook reads when it began.
+          ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
           ...scratchEnv,
         },
@@ -1598,29 +1612,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const provider = launch.id === 'codex' ? 'codex' : 'claude';
     if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
     const spoke = parseLog(deps.read(logPath) ?? '').length > entriesBefore;
-    if (planning) settlePlan(goal, name, { spoke });
-    else if (!spoke) goalWithoutWord(goal, name, `${review ? 'review' : 'session'} ended without a log entry (exit ${result.status}, ${seconds} s)`);
-    else if (review) settleReview(goal, name, { repo, pr: pr.number, branch, before: entriesBefore });
+    if (planning) afterPlan(goal, name, { stage: goal.stage });
+    else if (review) afterReview(goal, name);
+    else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
     const note = spoke ? read.note : `${read.note},no-log`;
     logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
     return 'ran';
   }
 
-  /**
-   * After a plan session: a goal it left `blocked` gets the runner's
-   * `planHeldText` entry, so it waits on a person and wakes no plan session
-   * again (`waitsOnPlan`) — whether the session wrote its own entry or none.
-   * A goal it set `open` goes to its next build session as any open goal does;
-   * that one going red again wakes plan again, with the whole log to read.
-   */
-  function settlePlan(goal, name, { spoke }) {
-    const status = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '').status ?? goal.status;
-    if (status !== 'blocked') { say(`${name}: plan left it ${status}`); return; }
-    const text = planHeldText(spoke);
-    appendEntry({ dir: goal.dir, entry: { at: logStamp(deps.now()), tool: 'runner', model: null, status: 'blocked', done: text, comment: null, next: null }, read: deps.read, write: deps.write });
-    say(`${name}: ${text}`);
-  }
 
   /** `github.json`: the repositories whose last ask failed, by name. Absent is none. */
   function readGithub() {

@@ -1149,10 +1149,11 @@ and `mc merge watch` read it as `waits for <project> step <n>`.
 round. On a project's pull request the step goes through `redPatch` to its
 next session (ruling 30), which reads the reason and the red round's file
 (below) in its retry preamble and fixes it on the same pull request. On a
-goal's pull request the goal is set `blocked` with the runner's `merger
-answered red on #<pr>` entry (`tellGoal`), and the runner wakes a plan session
-for it ([`mc-goals.md`](mc-goals.md) § *A blocked goal wakes plan*).
-A pull request is a goal's when the job carries the goal (its green review
+goal's pull request the goal stays in `merging` with the runner's `merger
+answered red on #<pr>` entry (`tellGoal`): the first red in `merging` is
+`merging · ready`, and the runner starts one plan session for it; the next is
+`merging · blocked` ([`mc-goals.md`](mc-goals.md) § *Finish and a red merge: a plan session*).
+A pull request is a goal's when the job carries the goal (its review's `mc goal stage merging`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal
 `done` only when the goal carries no other pull request; otherwise the landing

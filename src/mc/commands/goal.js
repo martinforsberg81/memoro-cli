@@ -1,41 +1,48 @@
 /**
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
- *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--after <p>/<g>[,<p>/<g>]]
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--phase <n>] [--stage plan|build]
  *                                  GOAL.json (a skeleton), LOG.md and a worktree per repository on goal/<goal>,
- *                                  from origin/main; with --after it is `waiting` until those goals have landed
+ *                                  from origin/main; in phase <n> (1 by default), at most one past the last;
+ *                                  in stage plan (by default) or build
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
- *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json
+ *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
+ *                                  and every goal that started after others given a phase (`phaseGoals`)
  *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
  *                                  (`project-convert.js`); a finished one is refused
- *   mc goal after <programme>/<goal> [<p>/<g>…]   the goals it starts after, replaced; none given clears them
- *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--status open|review|blocked|done]
- *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
- *   mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
- *                                  going open, a worktree whose branch has no commits of its own is remade from origin/main
+ *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
+ *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked]
+ *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too
+ *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"] [--sha <sha>]   mc goal log --stage <stage> --comment <reason>;
+ *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
+ *                                  from a review, merging queues the pull request at the head it judged
+ *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
+ *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
  *   mc goal archive <programme>/<goal>… | <programme>   a done or dropped goal to goals/.archive/, its
  *                                  worktrees and branch gone, one row in goals/goal_log.md; the runner
  *                                  does the same 24 hours after a goal is done or dropped
  *   mc goal show <programme>/<goal>      the goal as text (`renderGoalText`), the last three entries, each worktree's state
- *   mc goal list [<programme>]           every goal, one line each
+ *   mc goal list [<programme>]           every goal, one line each, under its programme's phases
  *
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's. GOAL.json is written by these verbs only, each write
  * validated (`updateGoal`); nobody edits it by hand.
- * A session never sets `done`: the merger does when the pull request lands, and
- * a person may by hand. A review session never sets `open`: plan does. Nobody
- * sets `waiting` by `--status`: a goal waits by its `after`, and the runner
- * lets it go when that has landed. A session other than plan does not set
- * `review` while a criterion is not met (`unmetGoalWords`).
+ * A goal's stage only moves forward (`goals.js` `STAGES`); only a person moves
+ * it back (`refusedMove`). A build session moves `build` to `review` — not
+ * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
+ * review session moves `review` to `merging` or `finish`; a plan session any
+ * stage forward.
  *
- * `after` is a verb of its own, not a flag on `log` or a status verb: it
- * changes GOAL.json's `after`, where those change the status, and
- * the status follows from it — waiting while anything named has not landed.
+ * A goal's phase is not its stage: a goal in a later phase keeps the stage
+ * it has, and the runner does not pick it until every goal of the programme in
+ * a lower phase is done or dropped (`phaseOpen`). The phases are renumbered
+ * when a goal is archived or moved (`renumberPhases`), so they run 1, 2, …
+ * with no holes.
  */
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, unlinkSync } from 'node:fs';
@@ -46,9 +53,11 @@ import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
-import { convertGoals } from '../goal-convert.js';
+import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addGoalWorktree, addPr, afterCycle, afterOf, criteriaWords, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, PLAN_ROLE, REVIEW_ROLE, sessions, unmetGoalWords, updateGoal, waitsOnPerson, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, addPr, backward, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { queueMerge } from '../merger.js';
+import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -56,11 +65,11 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--after', '--done', '--comment', '--next', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--sha', '--done', '--comment', '--next', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
-  new: ['--repo', '--class', '--title', '--after'],
-  after: [],
+  new: ['--repo', '--class', '--title', '--phase', '--stage'],
+  phase: [],
   set: ['--text'],
   'document add': ['--label', '--path'],
   'criterion add': ['--criterion', '--check'],
@@ -68,14 +77,17 @@ const VERB_FLAGS = {
   'criterion unmet': [],
   convert: [],
   'from-project': [],
-  log: ['--done', '--comment', '--next', '--status'],
+  log: ['--done', '--comment', '--next', '--stage', '--status'],
+  stage: ['--reason', '--sha'],
   status: ['--reason'],
   pr: [],
   archive: [],
   show: [],
   list: [],
 };
-const STATUS_VERBS = ['open', 'review', 'blocked', 'done', 'drop'];
+/** The verbs that set one field: `blocked` and `ready` the status, `done` and `drop` the final stage. */
+const STATUS_VERBS = ['blocked', 'ready', 'done', 'drop'];
+const STATUS_VERB_FIELDS = { blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
 /** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
 export const ROUTES = Object.fromEntries([
   ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
@@ -107,6 +119,7 @@ export async function run(argv, deps = {}) {
     git: deps.git || gitIn,
     known: deps.known || (() => knownRepositories(env)),
     gh: deps.gh || ghIn,
+    queue: deps.queue || ((options) => queueMerge({ root: workRoot(env), env, ...options })),
     move: deps.move || moveDir,
     appendText: deps.appendText || appendText,
     remove: deps.remove || unlinkSync,
@@ -114,16 +127,21 @@ export async function run(argv, deps = {}) {
   const { flags } = scanned;
 
   if (verb === 'new') return newGoal(rest, flags, ctx);
-  if (verb === 'after') return setAfter(rest, ctx);
+  if (verb === 'phase') return setPhase(rest, ctx);
   if (verb === 'set') return setField(rest, flags, ctx);
   if (verb === 'document add') return addDocument(rest, flags, ctx);
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
-  if (verb === 'log') return logEntry(rest, { status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
+  if (verb === 'log') return logEntry(rest, { stage: flags.stage, status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
+  if (verb === 'stage') {
+    if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
+    const stage = rest.pop();
+    return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null, sha: flags.sha }, ctx);
+  }
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
-  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { status: verb === 'drop' ? 'dropped' : verb, done: null, comment: flags.reason, next: null }, ctx);
+  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
   if (verb === 'pr') return carryPrs(rest, ctx);
   if (verb === 'archive') return archiveGoals(rest, ctx);
   if (verb === 'show') return showGoal(rest, ctx);
@@ -135,7 +153,8 @@ export async function run(argv, deps = {}) {
  * directory under the programmes home, the goal must not exist, and every
  * repository named must be one mc knows. Each repository is fetched first, so
  * a fetch that fails leaves nothing behind; then GOAL.json — a skeleton with
- * the title and no criterion, which the runner starts no session on — and
+ * the title and no criterion, which the runner starts no session on, in phase
+ * `--phase` (1 by default; at most one past the programme's last) — and
  * LOG.md are written, and a worktree of each repository on `goal/<goal>`,
  * from origin/main, or on that branch as it is when it already exists.
  */
@@ -158,8 +177,10 @@ function newGoal(args, flags, ctx) {
   const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
-  const after = afterNamed(flags.after === null ? [] : flags.after.split(','), `${programme}/${goal}`, ctx);
-  if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
+  const stage = flags.stage ?? 'plan';
+  if (stage !== 'plan' && stage !== 'build') { stderr.write(`mc: --stage is plan or build for a new goal, not ${stage}\n`); return 2; }
+  const phase = flags.phase === null ? 1 : Number(flags.phase);
+  if (!Number.isInteger(phase) || phase < 1) { stderr.write(`mc: --phase is a whole number from 1, not ${flags.phase}\n`); return 2; }
 
   const known = ctx.known();
   const unknown = repos.filter((repo) => !known.some((path) => repoNameOf(path) === repo));
@@ -170,6 +191,8 @@ function newGoal(args, flags, ctx) {
   if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
   const dir = goalDirIn(home, programme, goal);
   if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal)) { stderr.write(`mc: ${programme}/${goal} exists — ${dir}\n`); return 1; }
+  const holed = phaseHole(phase, programme, null, ctx);
+  if (holed) { stderr.write(`mc: ${holed}\n`); return 2; }
 
   const bares = repos.map((repo) => ({ repo, bare: known.find((path) => repoNameOf(path) === repo) }));
   for (const { repo, bare } of bares) {
@@ -178,11 +201,9 @@ function newGoal(args, flags, ctx) {
   }
 
   const created = stampSeconds(now);
-  const status = after.pending.length ? 'waiting' : 'open';
-  const comment = after.pending.length ? `waits on ${after.pending.join(', ')}` : null;
-  ctx.write(join(dir, GOAL_FILE), renderGoal({ status, repos, class: flags.class, created, after: after.names, title: flags.title.trim(), success_criteria: [] }));
-  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: 'person', model: null, status, done: 'created', comment, next: null }));
-  stdout.write(`mc: ${programme}/${goal}${comment ? ` · waiting — ${comment}` : ''} — ${dir}\n`);
+  ctx.write(join(dir, GOAL_FILE), renderGoal({ stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
+  stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
 
   for (const { repo, bare } of bares) {
     const path = join(dir, repo);
@@ -198,31 +219,29 @@ function newGoal(args, flags, ctx) {
 }
 
 /**
- * `mc goal log` and `mc goal open|review|blocked|done` — appends one entry to the
- * goal's LOG.md, tagged with MC_TOOL and MC_MODEL (`person` when neither is
- * set). With a status GOAL.json's status is set too. A goal whose GOAL.json
- * does not parse is refused, and so is `review` from a session other than plan
- * while a criterion is not met.
+ * `mc goal log`, `mc goal stage` and `mc goal blocked|ready|done|drop` —
+ * appends one entry to the goal's LOG.md, tagged with MC_TOOL and MC_MODEL
+ * (`person` when neither is set), with the stage and status the goal then
+ * has. With a stage or status GOAL.json's is set too; an unknown one is
+ * refused naming the field. A goal whose GOAL.json does not parse is refused,
+ * and so is a move the caller may not make (`refusedMove`): a session's
+ * backward one, `review` while a criterion is not met, a review's `finish`
+ * without REVIEW.md. A person's backward move is made and logged. A review's
+ * `merging` queues the goal's pull request for the merger at the head it
+ * judged (`queueJudged`) before anything is written; a queue that fails
+ * writes nothing.
  */
 function logEntry(args, fields, ctx) {
   const { stdout, stderr, env, read, write } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
-  if (fields.status !== null && !STATUSES.includes(fields.status)) {
-    stderr.write(`mc: --status is ${STATUSES.join(', ')}, not ${fields.status}\n`);
+  if (fields.stage !== null && !STAGES.includes(fields.stage)) { stderr.write(`mc: stage is ${STAGES.join(', ')}, not ${fields.stage}\n`); return 2; }
+  if (fields.status !== null && !STATUSES.includes(fields.status)) { stderr.write(`mc: status is ${STATUSES.join(', ')}, not ${fields.status}\n`); return 2; }
+  if ([fields.done, fields.comment, fields.next, fields.stage, fields.status].every((value) => value === null || value === undefined)) {
+    stderr.write('mc: log needs --done, --comment, --next, --stage or --status\n');
     return 2;
   }
-  if ([fields.done, fields.comment, fields.next, fields.status].every((value) => value === null)) {
-    stderr.write('mc: log needs --done, --comment, --next or --status\n');
-    return 2;
-  }
-  if (fields.status === 'waiting') {
-    stderr.write(`mc: a goal waits by its after, not by --status — mc goal after ${target.name} <programme>/<goal>…\n`);
-    return 2;
-  }
-  const refused = refusedStatus(fields.status, env);
-  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const text = read(join(target.dir, GOAL_FILE));
   if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
   const goal = parseGoal(text);
@@ -230,36 +249,63 @@ function logEntry(args, fields, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  // Refused whatever the goal says now: an open goal whose after has not landed is opened by nobody.
-  if (fields.status === 'open') {
-    const { pending, gone } = afterOf(goal, programsGoals({ home: ctx.home, list: ctx.list, read }));
-    if (pending.length || gone.length) {
-      const why = [pending.length ? `waits on ${pending.join(', ')}, not landed` : null, gone.length ? `${gone.join(', ')} gone without landing` : null].filter(Boolean).join('; ');
-      stderr.write(`mc: ${target.name} is not opened — it ${why}; the runner opens it when they land, or mc goal after ${target.name} changes what it waits on\n`);
-      return 1;
-    }
-  }
-  if (fields.status === 'review' && sessionNotPlan(env)) {
+  const refused = refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env, reviewWritten: read(join(target.dir, REVIEW_FILE)) !== null, dir: target.dir });
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  if (fields.stage === 'review' && goal.stage !== 'review' && sessionNotPlan(env)) {
     const unmet = unmetGoalWords(goal, target.name);
-    if (unmet) { stderr.write(`mc: ${target.name} is not set review — ${unmet}\n`); return 1; }
+    if (unmet) { stderr.write(`mc: ${target.name} is not moved to review — ${unmet}\n`); return 1; }
   }
-  const status = fields.status ?? goal.status;
-  const entry = {
-    at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
-    done: fields.done, comment: fields.comment, next: fields.next,
-  };
-  if (fields.status !== null) {
-    const outcome = setStatus({ dir: target.dir, status, entry, read, write });
+  const moves = fields.stage !== null && fields.stage !== goal.stage;
+  let done = fields.done;
+  if (moves && fields.stage === 'merging' && env.MC_ROLE === REVIEW_ROLE && isSession(env)) {
+    const queued = queueJudged(target, goal, fields.sha ?? env.MC_REVIEW_HEAD ?? null, ctx);
+    if (queued.error) { stderr.write(`mc: ${target.name} is not moved to merging — ${queued.error}\n`); return 1; }
+    done = [done, queued.text].filter(Boolean).join('; ');
+  }
+  const back = moves && backward(goal.stage, fields.stage);
+  const comment = back ? [fields.comment, `moved back from ${goal.stage} to ${fields.stage} by a person`].filter(Boolean).join(' — ') : fields.comment;
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, done, comment, next: fields.next };
+  let now = goal;
+  if (fields.stage !== null || fields.status !== null) {
+    const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? undefined, entry, read, write });
     if (outcome.problems) {
       for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
       return 1;
     }
+    now = outcome.goal;
   } else {
-    appendEntry({ dir: target.dir, entry, read, write });
+    appendEntry({ dir: target.dir, entry: { ...entry, stage: goal.stage, status: goal.status }, read, write });
   }
-  stdout.write(`mc: ${target.name} · ${status}\n`);
-  if (status === 'open' && goal.status !== 'open') remakeBranches(target, goal, ctx);
+  stdout.write(`mc: ${target.name} · ${stageWords(now)}${back ? ` — moved back from ${goal.stage}` : ''}\n`);
+  if (done && done !== fields.done) stdout.write(`mc: ${done}\n`);
+  if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
+}
+
+/**
+ * The goal's open pull request queued for the merger at `sha`, the head its
+ * review judged, as `mc merge` queues — with the goal and that sha on the
+ * job, so the merger lands that head and no other (`merger.js` `landJob`).
+ * `{ text }` said into the entry, or `{ error }`: no sha, no pull request on
+ * `goal/<goal>`, or a queue that fails.
+ */
+function queueJudged(target, goal, sha, ctx) {
+  if (!sha) return { error: 'which head did the review judge? MC_REVIEW_HEAD is not set — --sha <sha>' };
+  const [repoName] = goal.repos;
+  const repoPath = ctx.known().find((path) => repoNameOf(path) === repoName);
+  if (!repoPath) return { error: `${repoName} is not a repository mc knows` };
+  const branch = `goal/${target.goal}`;
+  const asked = ctx.gh(repoPath, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number,headRefOid']);
+  if (!asked.ok) return { error: `its pull request could not be read (${asked.stderr.trim() || 'gh failed'})` };
+  let pr;
+  try { [pr] = JSON.parse(asked.stdout || '[]'); } catch (error) { return { error: `gh answered what is not JSON (${error.message})` }; }
+  if (!pr) return { error: `${branch} has no open pull request` };
+  try {
+    ctx.queue({ repo: repoName, repoPath, pr: pr.number, branch, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, sha, now: ctx.now });
+  } catch (error) {
+    return { error: `#${pr.number} could not be queued (${error?.message || error})` };
+  }
+  return { text: `queued #${pr.number} at ${sha} for the merger` };
 }
 
 /** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */
@@ -268,71 +314,45 @@ function remakeBranches(target, goal, { stdout, git }) {
 }
 
 /**
- * The goals `names` gives as an `after` for `self`, checked against the goals
- * there are: `{ names, pending }` — each `<programme>/<goal>` once, and those
- * of them not landed — or `{ error }` for a name that is not a goal, the goal
- * itself, or a ring of goals waiting on each other.
+ * Why `phase` would leave a hole in `programme`'s phases, or null: a phase is
+ * at most one past the highest of the programme's other goals (`self` left
+ * out, a goal being moved), so phases run 1, 2, … with nothing between.
  */
-function afterNamed(names, self, ctx) {
-  const given = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
-  const malformed = given.filter((name) => !isGoalRef(name));
-  if (malformed.length) return { error: `after ${malformed.join(', ')} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
-  if (given.includes(self)) return { error: `${self} cannot wait on itself` };
-  const goals = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read });
-  const { pending, gone } = afterOf({ after: given }, goals);
-  if (gone.length) return { error: `after ${gone.join(', ')} is not a goal — mc goal list names them` };
-  const ring = afterCycle(self, given, goals);
-  if (ring) return { error: `${ring} waits on ${self} already — goals that wait on each other never start` };
-  return { names: given, pending };
+function phaseHole(phase, programme, self, ctx) {
+  const others = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read })
+    .filter((goal) => goal.programme === programme && goal.goal !== self && goal.problems.length === 0);
+  const highest = others.reduce((most, goal) => Math.max(most, goal.phase), 0);
+  return phase > highest + 1 ? `phase ${phase} would leave a hole — ${programme}'s phases run to ${highest}, so ${highest + 1} is the highest a goal may take` : null;
 }
 
 /**
- * `mc goal after <programme>/<goal> [<p>/<g>…]` — replaces the goals it
- * starts after; none given clears them. A goal that is open, blocked or
- * waiting is `waiting` after it while any of them has not landed, and one
- * that was waiting is `open` when none is left, its branches remade as `mc
- * goal open` does. A goal in review or done does not wait, and is refused.
- * The change is logged as a person's (or session's) entry.
+ * `mc goal phase [<programme>/<goal>] <n>` — the goal moved to phase `n`, at
+ * most one past the highest of its programme's other goals (`phaseHole`).
+ * The programme's phases are then renumbered (`renumberPhases`), so a phase
+ * the move left empty closes up. Logged as a person's (or session's) entry.
  */
-function setAfter(args, ctx) {
-  const { stdout, stderr, env, read, write } = ctx;
-  if (args.length < 1) { stderr.write(usage()); return 2; }
-  const [named, ...names] = args;
-  if (!isGoalRef(named)) { stderr.write(`mc: ${named} is not <programme>/<goal> — lower-case letters, digits and hyphens\n`); return 2; }
-  // `none` is the word the help gives for clearing: it names no goal, so it may stand alone only.
-  const tokens = names.flatMap((name) => name.split(',')).map((name) => name.trim()).filter(Boolean);
-  if (tokens.includes('none') && tokens.length > 1) { stderr.write(`mc: none clears after and names no goal — give none alone, or the goals it starts after\n`); return 2; }
+function setPhase(args, ctx) {
+  const { stdout, stderr, env, home, list, read, write } = ctx;
+  if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
+  const [named, given] = args.length === 2 ? args : [undefined, args[0]];
+  const phase = Number(given);
+  if (!Number.isInteger(phase) || phase < 1) { stderr.write(`mc: ${given} is not a phase — 1, 2, …\n`); return 2; }
   const target = goalNamed(named, ctx);
-  const text = read(join(target.dir, GOAL_FILE));
-  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
-  const goal = parseGoal(text);
-  if (goal.problems) {
-    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
-    return 1;
-  }
-  if (goal.status === 'review' || FINISHED.includes(goal.status)) {
-    stderr.write(`mc: ${target.name} is ${goal.status} — a goal in ${goal.status} waits on nothing\n`);
-    return 1;
-  }
-  const after = afterNamed(tokens.includes('none') ? [] : tokens, target.name, ctx);
-  if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
-  const status = after.pending.length ? 'waiting' : (goal.status === 'waiting' ? 'open' : goal.status);
-  const entry = {
-    at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status,
-    done: after.names.length ? `after ${after.names.join(', ')}` : 'after cleared',
-    comment: after.pending.length ? `waits on ${after.pending.join(', ')}` : null, next: null,
-  };
-  const outcome = setStatus({ dir: target.dir, status, after: after.names, entry, read, write });
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  if (read(join(target.dir, GOAL_FILE)) === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const holed = phaseHole(phase, target.programme, target.goal, ctx);
+  if (holed) { stderr.write(`mc: ${holed}\n`); return 2; }
+  const outcome = updateGoal({ dir: target.dir, change: (goal) => ({ ...goal, phase }), read, write });
   if (outcome.problems) {
     for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  // A blocked goal stays blocked: a person or plan blocked it, and only they open it.
-  const hint = status === 'blocked' && after.names.length && !after.pending.length
-    ? ` — ${after.names.join(', ')} landed; it stays blocked, mc goal open ${target.name} opens it`
-    : '';
-  stdout.write(`mc: ${target.name} · ${status}${entry.comment ? ` — ${entry.comment}` : ''}${hint}\n`);
-  if (status === 'open' && goal.status !== 'open') remakeBranches(target, goal, ctx);
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: outcome.goal.stage, status: outcome.goal.status, done: `phase ${phase}`, comment: null, next: null };
+  appendEntry({ dir: target.dir, entry, read, write });
+  const moved = renumberPhases({ home, programme: target.programme, list, read, write });
+  const own = moved.find((move) => move.goal.goal === target.goal);
+  stdout.write(`mc: ${target.name} · phase ${own ? own.to : phase}\n`);
+  for (const move of moved.filter((item) => item !== own)) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
   return 0;
 }
 
@@ -407,21 +427,27 @@ function changeGoal(named, ctx, change, said) {
 /**
  * `mc goal convert [<programme>]` — every goal of the programme (of every
  * programme when none is named) still written in markdown turned into
- * GOAL.json, and the markdown removed (`goal-convert.js`). Exit 1 when one
- * could not be.
+ * GOAL.json, and the markdown removed (`goal-convert.js`); then every goal
+ * that started after others given its phase by the depth of that chain
+ * (`phaseGoals`). Exit 1 when one could not be.
  */
 function convert(args, ctx) {
-  const { stdout, stderr, home, list, read, write, remove } = ctx;
+  const { stdout, stderr, env, home, list, read, write, remove } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const [programme = null] = args;
   if (programme !== null && !NAME_RE.test(programme)) { stderr.write(`mc: ${programme} is not a programme name\n`); return 2; }
   const answers = convertGoals({ home, programme, list, read, write, remove });
-  if (!answers.length) { stdout.write('mc: nothing to convert\n'); return 0; }
+  const phased = phaseGoals({ home, programme, list, read, write, now: ctx.now, tool: env.MC_TOOL || 'person' });
+  if (!answers.length && !phased.length) { stdout.write('mc: nothing to convert\n'); return 0; }
   for (const answer of answers) {
     if (answer.problems) stderr.write(`mc: ${answer.name} is not converted — ${answer.problems.join('; ')}\n`);
     else stdout.write(`mc: ${answer.name} · converted, ${answer.criteria} criteria\n`);
   }
-  return answers.some((answer) => answer.problems) ? 1 : 0;
+  for (const answer of phased) {
+    if (answer.problems) stderr.write(`mc: ${answer.name} is not given a phase — ${answer.problems.join('; ')}\n`);
+    else stdout.write(`mc: ${answer.name} · ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}, phase ${answer.phase}${answer.after.length ? ` (was after ${answer.after.join(', ')})` : ''}\n`);
+  }
+  return [...answers, ...phased].some((answer) => answer.problems) ? 1 : 0;
 }
 
 /**
@@ -464,7 +490,7 @@ function showGoal(args, ctx) {
     for (const problem of goal.problems) stderr.write(`  ${problem}\n`);
     return 1;
   }
-  stdout.write(`${target.name} · ${goal.status} · ${goal.repos.join(', ')} · ${goal.class} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.after.length ? ` · after ${goal.after.join(', ')}` : ''}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
+  stdout.write(`${target.name} · ${stageWords(goal)} · phase ${goal.phase} · ${goal.repos.join(', ')} · ${goal.class} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
   stdout.write(`\n${renderGoalText(goal)}`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
@@ -487,13 +513,14 @@ function showGoal(args, ctx) {
 }
 
 /**
- * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
- * status · criteria <met>/<all> · n sessions · the last entry's Next`. An open
- * goal with no criterion reads `open, no criteria — not started`. A goal blocked by a red review,
- * a red merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`), any
- * other blocked one `blocked, waits on a person`; a waiting one,
- * `waiting on <programme>/<goal>, …` — what in its `after` has not landed. A goal that does not parse is
- * listed with its first problems, not skipped.
+ * `mc goal list [<programme>]` — each programme's goals under a line per
+ * phase: `<programme> · phase <n> · in progress` for the phase the programme
+ * is in (`currentPhase`), `… · done` for one before it, `… · after phase <m>`
+ * for one after it. Under it, one line per goal: `programme/goal · repos ·
+ * stage · status · criteria <met>/<all> · n sessions · the last entry's Next`. A
+ * goal in build with no criterion reads `build · ready, no criteria — not started`; a
+ * blocked one `<stage> · blocked, waits on a person`. Goals that do not parse
+ * have no phase; they are listed last, with their first problems, not skipped.
  */
 function listGoals(args, ctx) {
   const { stdout, stderr, home, list, read } = ctx;
@@ -506,22 +533,29 @@ function listGoals(args, ctx) {
   const all = programsGoals({ home, list, read });
   const goals = all.filter((goal) => programme === undefined || goal.programme === programme);
   if (goals.length === 0) { stdout.write('mc: no goals\n'); return 0; }
-  for (const goal of goals) {
-    const name = `${goal.programme}/${goal.goal}`;
-    if (goal.problems.length) {
-      stdout.write(`${name} · does not parse — ${goal.problems.join('; ')}\n`);
-      continue;
+  for (const one of [...new Set(goals.map((goal) => goal.programme))]) {
+    const own = goals.filter((goal) => goal.programme === one);
+    const current = currentPhase(all, one);
+    const phases = [...new Set(own.filter((goal) => !goal.problems.length).map((goal) => goal.phase))].sort((a, b) => a - b);
+    for (const phase of phases) {
+      const state = current === null || phase < current ? 'done' : phase === current ? 'in progress' : `after phase ${phase - 1}`;
+      stdout.write(`${one} · phase ${phase} · ${state}\n`);
+      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal)}\n`);
     }
-    // A finished goal has no next action, whatever its last entry said.
-    const next = FINISHED.includes(goal.status) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
-    const { pending } = afterOf(goal, all);
-    const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan`
-      : waitsOnPerson(goal) ? `${goal.status}, waits on a person`
-      : goal.status === 'open' && noCriteria(goal) ? 'open, no criteria — not started'
-      : (goal.status === 'waiting' && pending.length ? `waiting on ${pending.join(', ')}` : goal.status);
-    stdout.write(`${name} · ${goal.repos.join(',')} · ${status} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}\n`);
+    for (const goal of own.filter((item) => item.problems.length)) stdout.write(`  ${goal.programme}/${goal.goal} · does not parse — ${goal.problems.join('; ')}\n`);
   }
   return 0;
+}
+
+/** One goal's line in `mc goal list`. */
+function goalLine(goal) {
+  const name = `${goal.programme}/${goal.goal}`;
+  // A finished goal has no next action, whatever its last entry said.
+  const next = FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
+  const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
+    : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
+    : stageWords(goal);
+  return `${name} · ${goal.repos.join(',')} · ${status} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
 }
 
 /**
@@ -548,7 +582,7 @@ function carryPrs(args, ctx) {
     return 1;
   }
   for (const { pr } of parsed) {
-    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status: goal.status, done: `carries ${prRef(pr)}`, comment: null, next: null };
+    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: goal.stage, status: goal.status, done: `carries ${prRef(pr)}`, comment: null, next: null };
     const added = addPr({ dir: target.dir, repo: pr.repo, pr: pr.pr, entry, read, write });
     if (added.problems) { for (const problem of added.problems) stderr.write(`mc: ${target.name}: ${problem}\n`); return 1; }
     stdout.write(`mc: ${target.name} carries ${prRef(pr)}${added.added ? '' : ' already'}\n`);
@@ -569,7 +603,7 @@ function archiveGoals(args, ctx) {
   const all = programsGoals({ home, list, read });
   let names;
   if (args.length === 1 && NAME_RE.test(args[0])) {
-    names = all.filter((goal) => goal.programme === args[0] && FINISHED.includes(goal.status)).map((goal) => `${goal.programme}/${goal.goal}`);
+    names = all.filter((goal) => goal.programme === args[0] && FINISHED.includes(goal.stage)).map((goal) => `${goal.programme}/${goal.goal}`);
     if (!names.length) { stdout.write(`mc: ${args[0]} has no done or dropped goal\n`); return 0; }
   } else {
     const bad = args.filter((name) => !isGoalRef(name));
@@ -579,13 +613,14 @@ function archiveGoals(args, ctx) {
   let refused = 0;
   for (const name of names) {
     const goal = all.find((item) => `${item.programme}/${item.goal}` === name);
-    const result = goal ? archiveGoal(goal, all, ctx) : { refused: 'no such goal — mc goal list names them' };
+    const result = goal ? archiveGoal(goal, ctx) : { refused: 'no such goal — mc goal list names them' };
     if (result.refused) {
       refused += 1;
       stderr.write(`mc: ${name} is not archived — ${result.refused}\n`);
       continue;
     }
     stdout.write(`mc: ${name} · archived — ${result.to}\n`);
+    for (const move of result.renumbered) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
   }
   return refused ? 1 : 0;
 }
@@ -617,25 +652,44 @@ function goalNamed(arg, { env, home }) {
 }
 
 /**
- * Why this caller may not set `status`, or null. A session is a caller with
- * MC_GOAL set and an MC_TOOL that is not `person`. A plan session sets every
- * status: it drives the programme toward its aim, and may finish a goal itself
- * (`canon/roles/plan-session.md`). Any other session never sets `done`, the
- * merger does when the goal's pull request lands, nor `dropped`. A review
- * session never sets `open`: a red review waits on plan.
+ * Why this caller may not move the goal from stage `from` to `to` (null: no
+ * move) or set `status` (null: none), or null when it may. A session is a
+ * caller with MC_GOAL set and an MC_TOOL that is not `person`; anyone else is
+ * a person, who may make any move, backward too (logged by `logEntry`). No
+ * session moves a stage backward. A plan session makes any forward move: it
+ * writes goals, finishes them and drops them (`canon/roles/plan-session.md`).
+ * A review session moves a goal in `review` to `merging` (OK) or `finish`
+ * (not OK, REVIEW.md written first), and sets no status. A build session
+ * moves `build` to `review` or sets `blocked`, nothing else.
  */
-export function refusedStatus(status, env) {
-  const session = Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
-  if (!session || env.MC_ROLE === PLAN_ROLE) return null;
-  if (status === 'done') return 'a session does not set done — end in review; the merger sets done when the pull request lands';
-  if (status === 'dropped') return 'only plan or a person drops a goal — end blocked with the question';
-  if (status === 'open' && env.MC_ROLE === REVIEW_ROLE) return 'a review does not set open — red is blocked, and plan sets the goal open again';
+export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
+  if (!isSession(env)) return null;
+  const moves = to !== null && to !== from;
+  if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
+  if (env.MC_ROLE === PLAN_ROLE) return null;
+  if (env.MC_ROLE === REVIEW_ROLE) {
+    if (status !== null) return 'a review sets no status — it ends with mc goal stage merging (OK to land) or finish (not OK, with REVIEW.md)';
+    if (!moves) return null;
+    if (from !== 'review') return `a review moves only a goal in review, and this one is ${from}`;
+    if (to !== 'merging' && to !== 'finish') return `a review ends in merging or finish, not ${to}`;
+    if (to === 'finish' && !reviewWritten) return `a review sends a goal to finish with ${REVIEW_FILE} — write ${dir}/${REVIEW_FILE} first: the head judged, what is wrong and where`;
+    return null;
+  }
+  if (to === 'done') return 'a session does not set done — move it to review; the merger sets done when the pull request lands';
+  if (to === 'dropped') return 'only plan or a person drops a goal — set it blocked with the question';
+  if (moves && !(from === 'build' && to === 'review')) return `a build session moves a goal only from build to review, not ${from} → ${to}`;
+  if (status === 'ready') return 'a build session does not set a goal ready — a person does';
   return null;
+}
+
+/** Whether the caller is a session: MC_GOAL set, MC_TOOL not `person`. */
+function isSession(env) {
+  return Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
 }
 
 /** Whether the caller is a session (MC_GOAL set, MC_TOOL not `person`) that is not plan's. */
 function sessionNotPlan(env) {
-  return Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person' && env.MC_ROLE !== PLAN_ROLE;
+  return isSession(env) && env.MC_ROLE !== PLAN_ROLE;
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */

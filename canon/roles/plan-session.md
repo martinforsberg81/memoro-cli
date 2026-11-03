@@ -56,36 +56,42 @@ Read `~/mc/programs/<programme>/proposals/archive/` to judge whether one is a
 duplicate of something already taken or declined. Nothing wakes you for a
 proposal: they wait until Martin opens `mc plan`.
 
-## Headless, on a blocked goal
+## Headless, on a goal in finish or merging
 
-The runner starts you when a goal is blocked by a red review, a red merge, or
-three sessions in a row that left no word. The prompt names the goal;
-`MC_GOAL` is set, so `mc goal log` writes to it.
+The runner starts you on a goal in `finish · ready` — a review found it not
+OK and wrote REVIEW.md, or three build sessions in a row left no word, or its
+review found no pull request — and on a goal in `merging · ready` after the
+merger answered red or its head moved past the one judged. The prompt names
+the goal and its stage; `MC_GOAL` is set, so `mc goal` writes to it.
 
-Read the goal (the prompt gives it, as `mc goal show` renders it), the whole
-of LOG.md, the pull request and its comments (`gh pr view <n> --comments`),
-the programme's README, and the code in the goal's worktree. Judge why it is blocked and what moves the aim most cheaply,
-then do it. For example:
+Read the goal (the prompt gives it, as `mc goal show` renders it), REVIEW.md
+in the goal's directory when there is one, the whole of LOG.md, the
+programme's README, and the code in the goal's worktree. Then finish it
+yourself — the goal passes each stage once, so nothing goes back to a build
+session or a second review:
 
-- **Finish it yourself.** In the goal's worktree, on its branch: fix what the
-  review or the merger named, `mc gate`, commit, `mc publish --no-merge`, and
-  `mc goal log --status review`. A review session on another model reads it.
-  A mechanical fix of a red (main merged in, a conflict, a page over its
-  length) that leaves what a review judged unchanged gets no review:
-  `mc publish`, which queues it, then `mc goal log --status review`.
-- **Reopen.** Revise the goal with `mc goal set` and `mc goal criterion add`
-  if the brief was what was wrong, then `mc goal log --status open --next "…"`:
-  the next build session starts from your `Next`, so say what it does differently.
-- **Replace or drop.** When this goal was the wrong one: close its pull
-  request, write the right goal with `mc goal new`, and drop this one.
+- **In finish.** In the goal's worktree, on its branch: fix what REVIEW.md or
+  the log names, `mc gate`, commit, `mc publish` (which queues it for the
+  merger), then `mc goal stage merging`. It is not reviewed again.
+- **In merging, after a red.** Take the red in the worktree — main merged in,
+  a conflict, the test the merger named — `mc gate`, commit, `mc publish`,
+  which queues it again. The runner sees it in the merger's line; one not in
+  the line when you end is `merging · blocked`. The next red in merging is
+  `merging · blocked` by itself.
+- **Drop it.** When this goal was the wrong one: close its pull request, write
+  the right goal with `mc goal new … --stage plan|build`, and `mc goal drop
+  --reason "…"` this one.
 - **Ask Martin.** When only he can decide, or the work needs one of his acts:
-  `mc goal log --status blocked --comment "<the one question, with your
-  recommendation>"`.
+  `mc goal blocked --reason "<the one question, with your recommendation>"`.
 
-Every status is yours to set. A goal you leave blocked waits for Martin, and
-the runner does not wake you on it again; one that goes red again wakes you
-again, with the whole log to read. End the session in the turn you write the
-entry.
+You move a stage forward only; mc refuses a session's move back. A goal you
+leave in `finish · ready` is set `finish · blocked` by the runner and waits
+for Martin. End the session in the turn you set the stage.
+
+A plan session a person opens writes goals: `mc goal new … --stage plan`
+while the brief is being written — nothing happens to a goal in `plan` — and
+`mc goal stage <p>/<g> build` once it is ready to be built, or `--stage
+build` at once.
 
 @include goal-verb.md
 

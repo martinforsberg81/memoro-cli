@@ -184,8 +184,8 @@ function carryGoal({ goal, repo, number, env, now, read, write, stdout, stderr, 
   const ref = prRef({ repo, pr: number });
   const out = json ? stderr : stdout;
   try {
-    const status = parseGoal(read(join(goal.dir, GOAL_FILE)) ?? '').status ?? 'open';
-    const entry = { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status, done: `published ${ref}`, comment: null, next: null };
+    const parsed = parseGoal(read(join(goal.dir, GOAL_FILE)) ?? '');
+    const entry = { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: parsed.stage ?? null, status: parsed.status ?? 'ready', done: `published ${ref}`, comment: null, next: null };
     const added = addPr({ dir: goal.dir, repo, pr: number, entry, read, write });
     if (added.problems) { stderr.write(`mc: ${ref} is not written into ${goal.name} — ${added.problems.join('; ')}\n`); return; }
     out.write(`goal ${goal.name} carries ${ref}${added.added ? '' : ' already'} — done when every pull request it carries has landed\n`);

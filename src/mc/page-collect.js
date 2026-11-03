@@ -53,7 +53,7 @@ import {
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
-import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
+import { FINISHED, goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -68,6 +68,7 @@ import { BUILD_LANE, runningRound } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { readRounds } from './repo-round-log.js';
+import { duration } from './page-grid.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
@@ -249,6 +250,13 @@ export function runnerSection({
     // Every session has an owner, and a lane's is a programme: the one its
     // lane file names, else its goal's (`<programme>/<goal>`) (goal mc/no-work).
     session.owner = { kind: 'programme', name: session.programme || session.goal?.split('/')[0] || null };
+    // The grid's fields (page-grid.js), under the names every section uses:
+    // a goal's session is named `mc/<goal>` as its goal row is, a lane with a
+    // session in it is `running`, and its progress is its clock.
+    if (session.goal) session.name = session.goal;
+    session.state = 'running';
+    session.progress = session.elapsed_seconds == null ? null : duration(session.elapsed_seconds);
+    session.prs = session.prs || [];
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
@@ -350,7 +358,9 @@ function lanesOfRunner(sessions = [], setting = {}) {
     || String(a.name).localeCompare(String(b.name)));
   return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
     const session = running[index] || null;
-    return { number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, session };
+    return {
+      number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, state: session ? 'running' : 'idle', session,
+    };
   });
 }
 
@@ -445,6 +455,12 @@ export function sessionsSection({
   };
 }
 
+/** A pull request's number, or null when there is none to draw: `#0` and `#NaN` are not pull requests. */
+function prNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
 /**
  * MERGES — one queue per repository, including idle queues. `repos[]` is
  * the page/JSON contract; aggregate fields remain for status/PR readers.
@@ -534,11 +550,32 @@ export function mergesSection({
     ...all.map((item) => item.repo), ...landings.map((item) => item.repo)].filter(Boolean))];
   const repoQueues = names.map((repo) => {
     const own = (items) => items.filter((item) => item.repo === repo);
-    const active = own(landings).filter(isLandingRound).map((item) => ({
-      ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: mergePhase(item.phase),
-    }));
-    const waiting = own(queuedItems);
-    const red = own(reds);
+    // Every item carries the grid's fields (page-grid.js) under the names every
+    // section uses: what it is (`kind`), its branch (`name`), its `state`, how
+    // long it has been in it (`progress`) and its pull request. An item with no
+    // pull request number — a goal's job, a red with nothing recorded — has no
+    // PR cell, never `#0` or `#NaN`.
+    const gridded = (item, kind, state, seconds, flags) => ({
+      ...item,
+      kind,
+      name: item.name ?? item.branch ?? null,
+      state,
+      progress: seconds == null ? null : ageWords(seconds),
+      prs: prNumber(item.pr) ? [{ number: prNumber(item.pr), repo, ...flags }] : [],
+    });
+    const active = own(landings).filter(isLandingRound).map((item) => {
+      const phase = mergePhase(item.phase);
+      return gridded({ ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: phase },
+        'gate', phase === 'landing' ? 'landing' : phase, item.age_seconds ?? null, { merging: 'landing' });
+    });
+    // Queued behind another pull request, it waits on other work; else the
+    // merger has it — unless there is no merger to have it, and then the queue
+    // is `stopped`.
+    const queuedOwn = own(queuedItems);
+    const stopped = !mergerAlive && !active.length && Boolean(queuedOwn.length);
+    const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : item.waits_for ? 'waiting' : 'queued',
+      item.wait_seconds, stopped ? {} : { merging: 'queued' }));
+    const red = own(reds).map((item) => gridded(item, 'red', 'red', item.age_seconds, { merge_red: item.reason || 'red' }));
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
       && round.phase !== 'start' && round.merged?.length)
       .flatMap((round) => {
@@ -549,13 +586,21 @@ export function mergesSection({
     const last = landed[0] ? { ...landed[0], age_seconds: ageOf(landed[0].at) } : null;
     const day = new Set(landed.filter((item) => ageOf(item.at) <= DAY_MS / 1000).map((item) => item.pr)).size;
     const pause = pauses[repo] || null;
-    const stopped = !mergerAlive && !active.length && Boolean(waiting.length);
     return {
       repo,
       state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'
         : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
       pause, merger_stopped: stopped, landing: active[0] || null, landings: active,
       waiting, reds: red, day_count: day, last,
+      // The repository's own grid row, drawn while its queue is empty: the
+      // repository by name — under 90 columns the repo column is not drawn —
+      // how long ago it last landed, and that pull request.
+      kind: 'idle',
+      name: repo,
+      progress: last ? ageWords(last.age_seconds) : null,
+      prs: [...active, ...red, ...waiting].length
+        ? [...active, ...red, ...waiting].flatMap((item) => item.prs)
+        : (prNumber(last?.pr) ? [{ number: prNumber(last.pr), repo, merged: true }] : []),
     };
   });
   return {
@@ -697,7 +742,13 @@ export function prsSection({
  * pull request is its branch's, `goal/<goal>`. Same objects as `prs.items`,
  * not copies.
  */
-export function attachPrs({ runner, pulls }) {
+export function attachPrs({ programmes, runner, pulls }) {
+  const goalPrs = (name, repos) => pulls.items.filter((item) => item.branch === `goal/${name}`
+    && (!repos?.length || repos.includes(item.repo)));
+  for (const group of programmes?.programmes || []) {
+    for (const goal of group.goals || []) goal.prs = goalPrs(goal.name, goal.repos);
+  }
+  // A goal's session's pull request is its branch's, `goal/<goal>`.
   for (const session of runner?.sessions || []) {
     session.prs = session.goal
       ? pulls.items.filter((item) => item.branch === `goal/${session.goal.split('/').pop()}`
@@ -923,6 +974,7 @@ export function programmesSection({
   planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [],
   strays = [], sessionStrays = [],
 } = {}) {
+
   const goalList = goalRows.map((goal) => ({ ...goal }))
     .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
   let number = 0;
@@ -979,37 +1031,48 @@ export function programmesSection({
 
 /**
  * The goals under the programmes home, as PROGRAMMES draws them (`goals.js`):
- * the status, the sessions, the last entry, and whether a live current file
+ * the stage and status, the sessions, the last entry, and whether a live current file
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
- * `after` is the goals it starts after; `waiting_on` those of them that have
- * not landed, which is what a `waiting` goal waits on.
+ * `phase` is its phase; `held` whether a lower phase of its programme is
+ * still to finish (`phaseOpen`), so the runner does not pick it yet.
  */
 export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
-  return goals.map((goal) => ({
+  return goals.map((goal) => {
+    const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
+    const sessions = goalSessions(goal.log);
+    return {
     name: goal.goal,
     programme: goal.programme,
     repos: goal.repos,
+    stage: goal.stage,
     status: goal.status,
-    after: goal.after ?? [],
-    waiting_on: afterOf(goal, goals).pending,
-    sessions: goalSessions(goal.log),
+    // The grid's fields (page-grid.js), as a project row has them: its kind,
+    // its first repository, its state — its stage, which says where in the
+    // order it is; the status is beside it, and a blocked one leads its tail —
+    // how many sessions it has had, and its open pull requests (`goal/<goal>`,
+    // put here by `attachPrs`).
+    kind: 'goal',
+    repo: goal.repos?.[0] ?? null,
+    state: goal.stage ?? null,
+    progress: `${sessions} sess`,
+    prs: [],
+    phase: goal.phase ?? null,
+    held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals),
+    sessions,
     // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
     criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
-    running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
-    // Blocked by a red review, a red merge or the runner: it waits on plan,
-    // which the runner wakes (`waitsOnPlan`). Blocked otherwise — by a person,
-    // a build session's question, or still after a plan session — it waits on
-    // a person (`waitsOnPerson`).
-    plan: waitsOnPlan(goal),
+    running,
+    // Blocked, in any stage, it waits on a person (`waitsOnPerson`).
     person: waitsOnPerson(goal),
-    // What it waits on the person for: the last session's or person's comment,
-    // past the runner's own entry after a plan session.
-    question: waitsOnPerson(goal) ? (goal.log.findLast((entry) => entry.tool !== 'runner')?.comment ?? null) : null,
+    // What it waits on the person for: the last entry's comment — the
+    // session's question, or the runner's word on why it stopped.
+    question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     problems: goal.problems,
-  }));
+    };
+  });
 }
 
 /* ----------------------------------------------------------------- readers */
@@ -1318,7 +1381,7 @@ export async function collectPage({
   const pulls = prsSection({
     prs: prs.prs, worktrees, root, merges: mergesNow, fetched: prs.fetched, ageSeconds: prs.age_seconds, now,
   });
-  attachPrs({ runner, pulls });
+  attachPrs({ programmes, runner, pulls });
 
   return {
     runner,

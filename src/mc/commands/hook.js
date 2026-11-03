@@ -6,13 +6,15 @@
  *   mc hook pre-tool        run the PreToolUse hooks of every worktree the session
  *                           did not start in, then turn a shell command that has
  *                           an mc verb to the verb
+ *   mc hook stop            a goal's review session refused its end while the goal is
+ *                           in review or no proposal is written (`reviewStopDecision`)
  *   mc hook install [--check]
  *                           write mc's two entries into ~/.claude/settings.json,
  *                           changing no other entry; --check only says whether
  *                           they are there (exit 1 when not); without --check
  *                           it syncs mc's skills too (`../skills.js`)
  *
- * The first two read the hook's JSON on stdin and write at most one JSON object
+ * The first three read the hook's JSON on stdin and write at most one JSON object
  * on stdout, in the shape Claude Code's hooks read (`hookSpecificOutput`). Both
  * exit 0 whatever happens: a hook that fails must never stop the session, so a
  * parse error, a missing git or a directory outside mc's ground is silence.
@@ -26,14 +28,14 @@ import { writeJsonAtomic } from '../atomic-write.js';
 import { listServers } from '../dev-servers.js';
 import {
   MC_HOOKS, claudeSettingsPath, hookDrift, hookRegistration, inMcTerritory, installHooks, pathInKnownRepo, preToolDecision,
-  repoHookDecision, sessionStartContext, worktreeState, worktreesAt,
+  repoHookDecision, reviewStopDecision, sessionStartContext, worktreeState, worktreesAt,
 } from '../hooks.js';
 import { programsHome } from '../paths.js';
 import { syncSkills } from '../skills.js';
 import { commandUsage } from '../command-help.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { 'session-start': {}, 'pre-tool': {}, install: { booleans: ['--check'] } };
+export const ROUTES = { 'session-start': {}, 'pre-tool': {}, stop: {}, install: { booleans: ['--check'] } };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -41,7 +43,7 @@ export async function run(argv, deps = {}) {
   const [which, ...extra] = argv;
   if (which === 'install') return install(extra, { stdout, stderr, deps });
   if (!Object.hasOwn(ROUTES, which) || extra.length) {
-    stderr.write(`mc: mc hook takes session-start or pre-tool\n${usage()}`);
+    stderr.write(`mc: mc hook takes session-start, pre-tool or stop\n${usage()}`);
     return 2;
   }
   let input = {};
@@ -67,6 +69,13 @@ export async function run(argv, deps = {}) {
       if (context) {
         stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })}\n`);
       }
+      return 0;
+    }
+    if (which === 'stop') {
+      // A goal's review ends only once it has decided and written its proposal.
+      const env = deps.env || process.env;
+      const held = (deps.reviewStopDecision || reviewStopDecision)({ env, home: programsHome(env) });
+      if (held) stdout.write(`${JSON.stringify({ decision: 'block', reason: `mc: this review cannot end yet — ${held.reason}` })}\n`);
       return 0;
     }
     if (!(deps.inMcTerritory || inMcTerritory)(cwd, deps)) return 0;

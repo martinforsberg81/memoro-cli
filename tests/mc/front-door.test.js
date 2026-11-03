@@ -171,7 +171,8 @@ describe('bare mc', () => {
       const page = JSON.parse(result.stdout);
       assert.deepEqual(page.runner.sessions.map((session) => [session.name, session.owner]), [
         ['alpha', { kind: 'programme', name: 'mc' }],
-        ['goal:msr/fast-path', { kind: 'programme', name: 'msr' }],
+        // A goal's session is named `<programme>/<goal>`, as its goal row is.
+        ['msr/fast-path', { kind: 'programme', name: 'msr' }],
       ]);
       assert.deepEqual(page.sessions.desks.brief.owner, { kind: 'desk', name: 'brief' });
       const all = [...page.runner.sessions, ...Object.values(page.sessions.desks).filter(Boolean),
