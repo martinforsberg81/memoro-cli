@@ -21,7 +21,7 @@
 import { createWorkArea, inspectWorkArea } from '../work-area.js';
 import { workRoot } from '../paths.js';
 import {
-  markAreaRole, areaRoleName, canonRolesDir, readCanonRole, reservedRoleHint, reservedRoleName,
+  markAreaRole, areaRoleName, canonRolesDir, MOVED_MARKS, readCanonRole, WORKER_ROLE, reservedRoleHint, reservedRoleName,
 } from '../roles.js';
 import { openArea } from './work.js';
 import { scanArgs } from './flags.js';
@@ -54,7 +54,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: open it with mc work ${opts.name}, or pick a new name\n`);
     return 1;
   }
-  if (existingRole && existingRole !== 'worker') {
+  if (existingRole && (MOVED_MARKS[existingRole] || existingRole) !== WORKER_ROLE) {
     stderr.write(`mc: ${opts.name} carries the role "${existingRole}", not worker\n`);
     return 1;
   }
@@ -65,21 +65,21 @@ export async function run(argv, deps = {}) {
   // over a mislaid file helps nobody. What must not happen is *creating* a
   // role area that delivers no role.
   //
-  // It comes from `canon/roles/worker.md` in the package, the way `mc plan`
+  // It comes from `canon/roles/build-session.md` (its `worker` part) in the package, the way `mc plan`
   // and `mc brief` read theirs. It used to come from the user's catalogue,
   // and that made the one role mc still launches depend on a directory mc
   // does not ship: a fresh machine got the area and none of the role. The
   // catalogue still wins where it defines `worker` — `areaRole` reads it
   // first — but it is no longer required for one to exist.
   if (!area.exists) {
-    const role = readCanonRole('worker');
+    const role = readCanonRole(WORKER_ROLE);
     if (!role || !role.overlay) {
-      stderr.write(`mc: the worker role is missing from this install — expected ${canonRolesDir()}/worker.md with an overlay body\n`);
+      stderr.write(`mc: the worker role is missing from this install — expected ${canonRolesDir()}/build-session.md with a worker part\n`);
       stderr.write('mc: a worker area without its overlay would be an ordinary area wearing the name\n');
       return 1;
     }
     const path = createWorkArea(opts.name);
-    markAreaRole(path, 'worker');
+    markAreaRole(path, WORKER_ROLE);
     stdout.write(`mc: ${path} — a worker area (role from ${role.path})\n`);
     stdout.write(`mc: add a repository with  mc work add ${opts.name} <repo>\n`);
   }

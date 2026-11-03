@@ -526,7 +526,7 @@ function ghIn(cwd, args) {
  */
 function goalNamed(arg, { env, home }) {
   const given = arg ?? env.MC_GOAL;
-  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a build-goal session' };
+  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
   const parts = given.split('/');
   if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
     return { error: `${given} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
@@ -537,18 +537,18 @@ function goalNamed(arg, { env, home }) {
 
 /**
  * Why this caller may not set `status`, or null. A session is a caller with
- * MC_GOAL set and an MC_TOOL that is not `person`. It never sets `done`: the
- * merger does when the goal's pull request lands. A review session never sets
- * `open`: a red review waits on plan, and plan sets it open again. A plan
- * session never sets `review`: it hands a goal to a build session or a person.
+ * MC_GOAL set and an MC_TOOL that is not `person`. A plan session sets every
+ * status: it drives the programme toward its aim, and may finish a goal itself
+ * (`canon/roles/plan-session.md`). Any other session never sets `done`, the
+ * merger does when the goal's pull request lands, nor `dropped`. A review
+ * session never sets `open`: a red review waits on plan.
  */
 export function refusedStatus(status, env) {
   const session = Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
-  if (!session) return null;
+  if (!session || env.MC_ROLE === PLAN_ROLE) return null;
   if (status === 'done') return 'a session does not set done — end in review; the merger sets done when the pull request lands';
-  if (status === 'dropped' && env.MC_ROLE !== PLAN_ROLE) return 'only plan or a person drops a goal — end blocked with the question';
+  if (status === 'dropped') return 'only plan or a person drops a goal — end blocked with the question';
   if (status === 'open' && env.MC_ROLE === REVIEW_ROLE) return 'a review does not set open — red is blocked, and plan sets the goal open again';
-  if (status === 'review' && env.MC_ROLE === PLAN_ROLE) return 'plan does not set review — it sets the goal open for a build session, or leaves it blocked';
   return null;
 }
 

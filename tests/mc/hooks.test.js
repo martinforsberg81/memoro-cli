@@ -480,13 +480,13 @@ describe('SessionStart names the session before anything else', () => {
   it('names plan, step, goal and unknown directories even without a repository', async () => {
     for (const [cwd, extra, expected] of [
       ['/mc/programs/mc', {}, /^You are the plan session for programme `mc`.*you never run it.*mc project/u],
-      ['/mc/runner/step/p/memoro', {}, /^You are the build-project session\./u],
-      ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the build-goal session for programme `mc`\./u],
+      ['/mc/runner/step/p/memoro', {}, /^You are the build session \(project\)\./u],
+      ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the build session \(goal\) for programme `mc`\./u],
       ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL, MC_STEP and cwd \/elsewhere against \/mc\./u],
-      ['/mc/programs/mc', { MC_ROLE: 'review', MC_PROGRAMME: 'mc' }, /^You are the review session for programme `mc`\./u],
+      ['/mc/programs/mc', { MC_ROLE: 'review-session:project', MC_PROGRAMME: 'mc' }, /^You are the review session \(project\) for programme `mc`\./u],
       ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the brief session\./u],
       ['/elsewhere', { MC_ROLE: 'helper' }, /^You are the helper session\./u],
-      ['/elsewhere', { MC_ROLE: 'goal-review' }, /^You are the goal-review session\./u],
+      ['/elsewhere', { MC_ROLE: 'review-session:goal' }, /^You are the review session \(goal\)\./u],
     ]) {
       const stdout = { text: '', write(text) { this.text += text; } };
       await run(['session-start'], {

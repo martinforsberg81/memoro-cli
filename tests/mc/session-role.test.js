@@ -8,18 +8,18 @@ const identity = (cwd, extra = {}) => sessionIdentity({ cwd, env: { ...env, ...e
 
 describe('session identity', () => {
   it('prefers the launched role to the directory, and supports older goal and step launches', () => {
-    assert.deepEqual(identity('/mc/programs/mc/memoro-cli', { MC_ROLE: 'review', MC_PROGRAMME: 'other', MC_STEP: 'p:0' }),
-      { role: 'review', programme: 'other', source: 'MC_ROLE' });
-    assert.equal(identity('/mc/programs/mc', { MC_GOAL: 'other/g' }).role, 'build-goal');
+    assert.deepEqual(identity('/mc/programs/mc/memoro-cli', { MC_ROLE: 'review-session:project', MC_PROGRAMME: 'other', MC_STEP: 'p:0' }),
+      { role: 'review-session:project', programme: 'other', source: 'MC_ROLE' });
+    assert.equal(identity('/mc/programs/mc', { MC_GOAL: 'other/g' }).role, 'build-session:goal');
     assert.equal(identity('/mc/programs/mc', { MC_GOAL: 'other/g' }).programme, 'other');
-    assert.equal(identity('/mc/programs/mc', { MC_STEP: 'p:0' }).role, 'build-project');
+    assert.equal(identity('/mc/programs/mc', { MC_STEP: 'p:0' }).role, 'build-session:project');
   });
 
   it('recognises both layouts without mistaking a goal for its programme planner', () => {
     for (const [cwd, role, programme = null] of [
-      ['/mc/programs/mc', 'plan', 'mc'], ['/mc/programs/mc/memoro-cli/src', 'plan', 'mc'],
-      ['/mc/plan/old/memoro', 'plan', 'old'], ['/mc/programs/mc/goals/g/memoro-cli', 'build-goal', 'mc'],
-      ['/mc/runner/step/p/memoro', 'build-project'], ['/mc/step/p', 'build-project'],
+      ['/mc/programs/mc', 'plan-session', 'mc'], ['/mc/programs/mc/memoro-cli/src', 'plan-session', 'mc'],
+      ['/mc/plan/old/memoro', 'plan-session', 'old'], ['/mc/programs/mc/goals/g/memoro-cli', 'build-session:goal', 'mc'],
+      ['/mc/runner/step/p/memoro', 'build-session:project'], ['/mc/step/p', 'build-session:project'],
       ['/mc/runner/mend/memoro-1', null], ['/mc/brief', 'brief'],
       ['/mc/helper', 'helper'], ['/mc/intake', 'intake'],
       ['/elsewhere', null], ['/mc-other/programs/mc', null], ['/mc/programs/mc/goals', null],
