@@ -1698,11 +1698,12 @@ is decided locally, before a tool is launched, from the catalog
 account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only the plan's
 review step and a goal's review take it, and it is not scored by headroom.
-Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on. A candidate can run on its plan when its provider has not refused it and
+Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. A candidate can run on its plan when its provider has not refused it and
 no window in force is at its limit. A goal's review passes over every
-candidate whose model is its last build entry's; with none left it waits and
-says so once. When no candidate it may run on can run on its plan, the first
-of them uses its provider's API reserve, and waits when that API is off: no
+candidate whose model is its last build entry's while another can run on its
+plan, and takes the first of them on its plan when none can. When no candidate
+can run on its plan, the first that is not that model (or that model, when
+every candidate is it) uses its provider's API reserve, and waits when that API is off: no
 candidate goes to credits while another's plan is free (ruling 59 § 4).
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is

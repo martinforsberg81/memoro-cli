@@ -2260,14 +2260,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The route a goal's review runs on: the first review candidate (`mc model`)
    * that can run on its plan now, as `{ ok, route, settings }`, or `{ reason }`
-   * when it may not run now. It never runs on the model of the goal's last
-   * build entry — the heading's `<tool> <model>` — so a goal is not reviewed by
-   * its builder: it takes the next candidate, and with none other, it waits.
+   * when it may not run now. A candidate whose model is the goal's last build
+   * entry's — the heading's `<tool> <model>` — is taken only when no other
+   * candidate can run on its plan; a review never waits for want of another
+   * model (`chooseReview`, model-choice.js).
    */
   function reviewRoute(goal) {
     const built = lastBuildEntry(goal.log);
     const route = routeClass(REVIEW_CLASS, { avoid: built?.model ? { tool: built.tool, model: built.model } : null });
-    if (route.avoided) return { reason: `${route.reason} (${built.at}); add another with mc model add review` };
     if (!route.ok) return { reason: route.reason };
     return { ok: true, route, settings: routedSettings(null, null, { kind: 'goal', candidate: route.candidate }) };
   }

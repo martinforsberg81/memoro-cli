@@ -6124,24 +6124,40 @@ test('a goal in review gets a review session: the goal-review role, the review m
   assert.equal(call.prompt.includes('\n'), false);
 });
 
-test('a review never runs on the model of the goal\'s last build entry: the goal waits, and an open goal behind it runs', async () => {
+test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
   const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
-  const f = reviewFixture({ log: sameModel, goals: { other: { log: goalLog('2026-08-28T10:00Z') } } });
-  f.answer = logsItself(f, 'other');
-  const runner = createRunner({ deps: f.deps });
-  const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.name, 'goal:prog/other', 'the waiting review does not stand in front');
-  assert.equal(f.calls.sessions.length, 1);
-  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
-  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — every review candidate is claude opus, the model its last build session ran on \(2026-08-20T10:00Z\); add another with mc model add review/u.test(line)));
-  assert.equal(goalStatusOf(f), 'review', 'it waits; it is not reviewed by its builder');
+  const f = reviewFixture({ log: sameModel });
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', DEFAULT_CATALOG.review[0].model]);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
+  assert.ok(f.log.some((line) => /review starting .*preferred \(review candidate 1 — claude opus built it, and no other candidate can run on its plan\)/u.test(line)));
+});
 
-  // A review's own entry is no build entry: the one before it is what counts.
-  const reviewed = `${sameModel}\n## 2026-08-21T10:00Z · codex gpt-6.1-sol · review\n\nGjort: green ${HEAD}\n`;
-  const g = reviewFixture({ log: reviewed });
-  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(g.calls.sessions.length, 0);
+test('a review\'s own entry is no build entry: the build entry before it is the model passed over', async () => {
+  // Built on codex sol, then reviewed on claude opus: sol is still the builder,
+  // so the next review passes sol (candidate 1) for opus (candidate 2).
+  const reviewed = `${builtBy('codex gpt-6.1-sol', '2026-08-20T10:00Z')}\n## 2026-08-21T10:00Z · claude opus · review\n\nGjort: green ${HEAD}\n`;
+  const f = reviewList(reviewFixture({ log: reviewed }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
+});
+
+test('a goal built on the second review candidate is reviewed on it when the first one\'s plan is spent and its API is off', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude opus') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', 'opus']);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
 });
 
 const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' };

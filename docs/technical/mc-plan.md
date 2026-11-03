@@ -224,7 +224,7 @@ codex CLI to decide, not mc.
 **Review.** The review step runs on the review candidates Martin configures
 with `mc model add|remove review` and `mc model set review` (Claude Opus at
 high effort alone at launch), on either tool, and does not inherit the
-implementation steps' provider; `mc project step add` refuses `review`. Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on.
+implementation steps' provider; `mc project step add` refuses `review`. Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can.
 A project's review step has no build entry to pass over.
 
 **Checks the review cannot reach.** The merge door refuses the review step
