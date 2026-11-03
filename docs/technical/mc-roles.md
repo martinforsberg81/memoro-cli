@@ -69,7 +69,7 @@ session is for; a verb file says how a verb is used).
 | `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
 | | | `build-session:project` | `mc run`, one step of a `PLAN.json` (with its `workers` part when the plan says `subagents: on`) |
-| | | `build-session:worker` | `mc worker`, and every conversation in that area after |
+| | | `build-session:worker` | an area that already carries the worker mark (`mc worker` went on 2026-11-03) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | | | `review-session:project` | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
 | `brief` | opus | `brief` | `mc brief`, a foreground session in `~/mc/brief/` |
@@ -173,7 +173,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in a work area — `mc work`, `mc brief`, `mc helper`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc brief`, `mc helper`, `mc plan`, a project opened from the page |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runStep`) | a runner session: a step |
 | `helper-turn.js:258` | the intake turn, one file, headless |

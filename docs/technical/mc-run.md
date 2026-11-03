@@ -46,8 +46,7 @@ mc run --update             new code, new process at once; the old one finishes
 The same three are answers at the `mc` page's prompt — `start`,
 `stop [--force]`, `update [--force]`, with or without `run` / `mc run` in front
 — so the switch needs no second terminal; the verb's answer is printed under
-the page and the page is drawn again. A bare `stop` is the runner's;
-`stop <name>` is still `mc work stop <name>`.
+the page and the page is drawn again. Only a bare `stop` is the runner's.
 
 **One reading first, in any order.** Every verb starts from where the runner
 stands (`runnerState`): *none*, *running*, *stopping* (STOP written, a runner
@@ -1331,9 +1330,10 @@ thing it writes into a repository: a blocked step (below).
 Three more files sit beside them, and are the runner's questions for Martin
 rather than records of what it did — the brief session is their only reader,
 sent to each file by its role. `undocumented-closures.md` is appended when a
-project is archived with `doc: none`; `unplanned-workareas.md` and
-`unreadable-plans.md` are rewritten whole every chore pass, so a folder that got
-a plan and a plan somebody fixed each leave their list by themselves.
+project is archived with `doc: none`; `unreadable-plans.md` is rewritten whole
+every chore pass, so a plan somebody fixed leaves the list by itself. A folder
+no project explains is counted in one `runner.log` line and listed by
+`mc tidy`; its table went on 2026-11-03.
 `unreadable-plans.md` (`plan-intake.js`) is the newest of the three and exists
 for the same reason as the other two: the runner can hand out no step from a
 plan the schema refuses, and what its author meant to say is not mc's to guess.
@@ -1639,7 +1639,7 @@ The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
 wrapper process. The coding tool receives an expiring, request-limited loopback
 grant, and requests only the chosen model through the provider-specific route.
-An interactive session (`mc plan`, `mc work`) is the exception: its grant names
+An interactive session (`mc plan`, a project opened from the page) is the exception: its grant names
 no model, because `/model` inside the session changes it, and a grant on the
 launch model refused every request after the switch.
 The runner never reads or places the key in a session's environment or argv.

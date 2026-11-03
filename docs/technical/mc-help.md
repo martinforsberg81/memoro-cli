@@ -15,7 +15,7 @@ not asking the person a confirmation question (`src/mc/tidy.js`, `runTidy` /
 `applyTidy`).
 
 `src/mc-verbs.js` already answered help anywhere after an ordinary verb. Before
-this change, probes of both `mc work add --help` and `mc run lanes --help`
+this change, probes of both `mc project step add --help` and `mc run lanes --help`
 returned 0, not the 2 reported in the goal's starting brief. The exception
 found by reading the code was the vault capability: only its first argument
 was checked for help. It now uses the same `wantsHelp`, and `src/bin-mc.js`
@@ -89,10 +89,9 @@ The same scan found 101 session occurrences of the removed programme verb,
   lists abandoned rounds. Zero in both measurements. `src/mc/commands/log.js`
   implements it; `src/mc/helper-cli-collect.js` recommends it in digest output
   but does not execute it. Keep documented; troubleshooting can be infrequent.
-- **`mc worker`**: creates/opens a workarea marked with the worker role so its
-  conversations inherit that overlay and default model. Zero in both
-  measurements. Its dispatcher entry, handler, comments and help were found,
-  not a programmatic caller. Retained for Martin to judge.
+- **`mc worker`**: created/opened a workarea marked with the worker role. Zero
+  in both measurements. Retired on 2026-11-03 with the workarea verb
+  ([`mc-work.md`](mc-work.md)).
 - **`mc hook` is not unused** despite zero in these Bash/terminal samples.
   `src/mc/hooks.js`'s `MC_HOOKS` registers `session-start` and `pre-tool` as
   coding-agent hooks; those are callers outside ordinary Bash tool input.
@@ -252,7 +251,7 @@ usage names anywhere, prose included, must be read by the verb its clause is
 about (`mc test dev --here --url` inside hook's text is mc test's) on at least
 one of its forms; `node --test` and npm's `--package-lock-only` are named as
 other programs' flags. Negative controls that must fail: the three guessed
-verbs, `mc dev archive`, `mc work add <name> <repo> --testflight`,
+verbs, `mc dev archive`, `mc project new <name> --testflight`,
 `mc run start --force` (and `start|stop [--force]`), `--fictional` on a shot
 continuation line and a log one, an invented goal, hook and language
 subcommand, `mc project criterion vanish`, an invented vault verb and page
@@ -299,7 +298,7 @@ negative controls.
 
 What it found, now fixed: `mc vault` revoke-device, change-password and
 destroy-forgotten were routed but missing from the vault row and the matrix;
-`mc work list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
+the workarea verb's `list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
 `mc repo push-check` were routed but absent from IN FULL (the last two also
 from `mc repo --help`). WHAT IS NOT HERE listed dev and deps among removed
 verbs; it now says today's verbs only share the name. The matrix gains
