@@ -242,7 +242,9 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
    goals that parse and are `open` or due a review and
    that are not held, on any repository (a lane serves them all), the one whose last
    entry is oldest. A goal in `review` is due a review unless its last entry is
-   the runner's `queued` one: then it waits for the merger. A review that
+   the runner's `queued` one, or one of its pull requests is in the merger's
+   line (a plan session that fixed a red mechanically queued it with
+   `mc publish`): then it waits for the merger. A review that
    cannot run now (step 3) is left out of the pick, so it does not stand in
    front of every other goal; why is said once in `runner.log`. No entry
    means oldest of all; a tie goes to the first listed. Held means a current

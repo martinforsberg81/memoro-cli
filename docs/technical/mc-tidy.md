@@ -375,8 +375,9 @@ nothing else. With `--apply` it starts the runtime through `ensure`, under a
 lease for its own pid, and releases the lease when it is done, so the
 runner's idle stop stops it again ([`mc-docker.md`](mc-docker.md)). Martin
 asked for both on 2026-10-19. On 2026-10-10 OrbStack held 21 images (17 GB)
-on an 8 GB machine whose disk was 98 % full. `mc deploy`'s prune after a
-container rollout keeps a week of images. This keeps three days.
+on an 8 GB machine whose disk was 98 % full. `mc deploy` no longer prunes
+after a container rollout; memoro's `scripts/container-image.mjs --build`
+prunes on the machine that builds. This keeps three days.
 
 The build cache is never pruned. It was, from 2026-10-19 to 2026-10-25, with
 the same three days, and OrbStack's builder was capped at 4 GB besides. With
