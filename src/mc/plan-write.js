@@ -52,7 +52,7 @@ export const STEP_MODEL_WORDS = 'fast or large';
  * The review step `mc project send` adds, last, to every plan it sends (the
  * branch flow): it measures every success criterion by its check, holds the
  * branch to the goal, and lands the whole project as one pull request. Its
- * instruction names canon/roles/review.md, which is where the role is read.
+ * instruction names canon/roles/review-session.md, which is where the role is read.
  * Its model is the `review` class (ruling 59): one configured model, chosen by
  * mc, with no provider's name and no effort of its own, on either tool.
  * `mc project step add` writes the same fields for a step it adds, and no others.
@@ -62,7 +62,7 @@ export const REVIEW_STEP = Object.freeze({
   kind: 'review',
   status: 'ready',
   done_when: 'Every success criterion is met in the register, measured by its check, and the branch does what the goal says within the contract and out of scope.',
-  instruction: Object.freeze(['canon/roles/review.md is this step\'s instruction: measure every criterion, hold the diff to the goal, close the gaps, land the project as one pull request.']),
+  instruction: Object.freeze(['canon/roles/review-session.md is this step\'s instruction: measure every criterion, hold the diff to the goal, close the gaps, land the project as one pull request.']),
   runner: Object.freeze({ model: REVIEW_CLASS }),
 });
 

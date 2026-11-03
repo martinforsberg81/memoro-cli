@@ -299,7 +299,7 @@ project used to.
    met is `unmet`: the runner says so once in `runner.log`
    (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
+   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan. The same chore archives a goal under `~/mc/programs/<programme>/goals/` that has been `done` or `dropped` for 24 hours (`archiveGoalsDue`, `goal-archive.js`), by the road `mc goal archive` takes.
 5. **Close** the workareas whose project is finished — whose archive landed
    in 4, or whose plan an earlier archive already took away, which
    `CLOSEOUT.json` or `project_log.md` is what still knows.
@@ -657,7 +657,7 @@ time — a step that names only its effort keeps the plan's model. `tool`,
 
 A `review` is a plan's step whose `kind` is `review`: the session that
 measures the success criteria and lands the project, with the role
-`canon/roles/review.md`. The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
+`canon/roles/review-session.md` (its `project` part). The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
 (2026-09-25): opus 5.5, still at `medium`, and no advisor. From 2026-09-11 a
 step was `sonnet` at `medium` with `opus` as advisor, because opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
@@ -771,9 +771,10 @@ step session re-reads its context ~90 times. The six include `Grep` and
 `grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
 over 2026-09-15..25, each a screen of file kept in the context.
 
-Next to that body go `canon/roles/_common.md` and the build role —
-`canon/roles/build-project.md` for a project's step, `build-goal.md` for a
-goal, both including `_build.md` — assembled by `instructionsFor` and passed through the
+Next to that body go `canon/roles/all-sessions.md` and the build role —
+`canon/roles/build-session.md`, its `project` part for a project's step and its
+`goal` part for a goal, both with the part every headless build shares —
+assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
 them. How that is found and joined, for every session and not only this one, is
 [`mc-roles.md`](mc-roles.md).
@@ -821,7 +822,7 @@ rather than a detached job polled in two-minute `sleep` loops.
 `MC_STEP` (`<project>:<index>`), `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA` (the
 worktree) — and, for every kind of session the runner starts, `MC_SCRATCH`: an
 existing directory `~/mc/runner/scratch/<project>-<stamp>/`, outside the
-worktree, named like the session's log. `canon/roles/_common.md` tells the
+worktree, named like the session's log. `canon/roles/all-sessions.md` tells the
 session to put probes and measuring scripts there, because an untracked file in
 the worktree is a dirty worktree and a session that dies leaves it (a
 `*.tmp.mjs` held `mail-window-overlay-integrity` for 31 rounds, 2026-09-04). The
@@ -1030,7 +1031,7 @@ merge*, above), one pull request per step.
   is not told it; its branch did not move.
 - **The review session.** A step of `kind: review` runs as kind `review`
   (`chooseKind` and `SESSION_DEFAULTS` in `run-plan.js`): its role is
-  `canon/roles/review.md`, its model and effort are the review's defaults (*The
+  `canon/roles/review-session.md` (`review-session:project`), its model and effort are the review's defaults (*The
   session*, above), and its landing is the only one the project makes. A
   criterion `met: false` still refuses it at the door (`criteriaDoor`), so the
   review measures and closes before it can land.

@@ -141,6 +141,7 @@ import {
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
 import { archiveDue, archivePrograms } from './project-archive.js';
+import { archiveGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
@@ -163,7 +164,7 @@ import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, wri
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
+import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
 import { attachRepoDepsAsync } from './work-deps.js';
@@ -182,6 +183,9 @@ import {
 export const SETTLE_EVERY_MS = 5 * 60_000;
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/** The model a headless plan session runs on, at high effort (Martin, 2026-11-03). */
+export const HEADLESS_PLAN_MODEL = 'opus';
 
 /**
  * A session's scratch directory is kept this long after it was last touched.
@@ -1493,6 +1497,39 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return { archived };
   }
 
+  /**
+   * The finished goals (`done` or `dropped`) that have been finished for 24
+   * hours (`goalArchiveDue`, on the same hold as a project), archived as `mc goal
+   * archive` archives one (`archiveGoal`): the worktrees and the branch go
+   * through git, the directory moves to `goals/.archive/`, a row goes to
+   * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
+   * written into its LOG.md once, as a runner entry, not at every pass.
+   */
+  function archiveGoalsDue() {
+    const all = goals();
+    const now = deps.now();
+    for (const goal of all) {
+      if (goal.problems.length || !FINISHED.includes(goal.status)) continue;
+      if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
+      const result = archiveGoal(goal, all, {
+        home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
+        move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
+        appendText: (path, text) => deps.append(path, text), read: deps.read, now,
+      });
+      if (result.refused) refuseGoalOnce(goal, result.refused);
+      else say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+    }
+  }
+
+  /** `archiveGoal`'s refusal of a finished goal, written into its LOG.md unless the log already says the same last. */
+  function refuseGoalOnce(goal, why) {
+    const comment = `not archived — ${why}`;
+    if (goal.log.findLast((entry) => entry.tool === 'runner' && entry.comment?.startsWith('not archived'))?.comment === comment) return;
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status: goal.status, done: null, comment, next: null };
+    appendEntry({ dir: goal.dir, entry, read: deps.read, write: deps.write });
+    say(`${goalName(goal)}: ${comment}`);
+  }
+
   /* ------------------------------------------------------------- blocking */
 
   /**
@@ -2177,14 +2214,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The route a plan session runs on: the plan role's model (ruling 6, `fable`)
-   * on claude, pinned as a review is, at high effort. The billing is the
-   * session's as for any other (`billingFor`).
+   * The route a headless plan session runs on: opus on claude at high effort,
+   * pinned as a review is. Until 2026-11-03 it was the plan role's model
+   * (ruling 6, `fable`); Martin moved the headless plan to opus high that day.
+   * The role's model still chooses for a plan session a person opens with
+   * `mc plan`. The billing is the session's as for any other (`billingFor`).
    */
-  function planRoute(role) {
+  function planRoute() {
     return {
-      ok: true, class: 'plan', candidate: { tool: 'claude', model: role.model || 'fable', effort: 'high' },
-      basis: 'pinned', headroom: null, why: 'a plan session runs on the planning model (ruling 6)',
+      ok: true, class: 'plan', candidate: { tool: 'claude', model: HEADLESS_PLAN_MODEL, effort: 'high' },
+      basis: 'pinned', headroom: null, why: 'a headless plan session runs on opus at high effort (2026-11-03)',
     };
   }
 
@@ -2306,7 +2345,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * What a review session's verdict leads to (`canon/roles/goal-review.md`).
+   * What a review session's verdict leads to (`canon/roles/review-session.md`).
    * Red, or no verdict: `blocked`, and nothing goes back to a build session
    * until plan sets the goal open. Green: queued for the merger as `mc merge`
    * queues — but only the head it judged. A branch that has moved since is not
@@ -2389,7 +2428,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * One goal session: the lane and total caps, the class routing and the billing
    * of a step, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word, as `runStep` does. A goal in `review` gets a review
-   * session instead: the goal-review role, on the review model (`reviewRoute`),
+   * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head, and `settleReview` after it.
    *
    * It is not `runStep`, because nearly all of that is the plan and the register
@@ -2410,16 +2449,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const planning = kind === 'plan';
     const roleName = review ? REVIEW_ROLE : planning ? PLAN_ROLE : BUILD_ROLES.goal;
     const role = deps.role(roleName);
-    if (!role?.overlay) { say(`${name}: canon/roles/${roleName}.md is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routed = review ? reviewRoute(goal) : { route: planning ? planRoute(role) : routeClass(goal.class) };
+    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const routed = review ? reviewRoute(goal) : { route: planning ? planRoute() : routeClass(goal.class) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    // A plan session stands in the programme's directory, beside the goal and
-    // never in its worktree: it writes no code there (`canon/roles/plan.md`).
+    // A plan session stands in the programme's directory, beside the goal; it
+    // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
     const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
@@ -2492,6 +2531,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+          MC_HEADLESS: '1',
           MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
           // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
           MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
@@ -2742,8 +2783,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = roleOfKind(kind);
     const role = deps.role(roleName);
     if (!role?.overlay) {
-      abandonMerge(`canon/roles/${roleName}.md is missing`);
-      return block(REFUSAL['role-missing'], `canon/roles/${roleName}.md is missing on this machine`);
+      abandonMerge(`${roleFileText(roleName)} is missing`);
+      return block(REFUSAL['role-missing'], `${roleFileText(roleName)} is missing on this machine`);
     }
     // A step that names a work class is routed here, before a tool is launched,
     // from the local catalog and capacity snapshot alone (ruling 59). The
@@ -2818,7 +2859,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
-    const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
+    const instructions = instructionsFor(launch.id, withWorkers(role, settings.subagents));
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
 
     // At each launch, use the provider's plan until a window is full or the
@@ -2862,8 +2903,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
-      // names the role, but a name is not a revision: `mc roles check step`
-      // compares this digest with what `canon/roles/step.md` assembles to now,
+      // names the role, but a name is not a revision: `mc roles check
+      // build-session:project` compares this digest with what
+      // `canon/roles/build-session.md` assembles to now,
       // and an hour-long session started before an edit lands is exactly the
       // case nobody could see (#659's goal).
       role: roleRecord({
@@ -2922,6 +2964,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+          MC_HEADLESS: '1',
           MC_ROLE: roleName,
           ...(plan?.programme ? { MC_PROGRAMME: plan.programme } : {}),
           ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
@@ -3620,6 +3664,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A programme project done for 24 hours is archived by the runner as well (ruling 48).
     const programmes = await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans)));
     closeWorkareas(plans, programmes.flatMap((a) => a.archived), archivedProjects());
+    // A goal finished for 24 hours is archived the same pass (the same hold, `goal-archive.js`); a programme never is.
+    archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
     sweepScratch();

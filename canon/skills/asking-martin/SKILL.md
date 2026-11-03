@@ -13,7 +13,8 @@ question is unclear or reading would settle it: then read.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.
-- What is his to do stays his: `mc deploy`, `mc language`, production data,
-  remote migrations, credentials, and any verb a skill calls the person's
-  (`--admin`: skill `mc-publish-and-merge`). Say what it would do; run it when
-  he says go.
+- A headless session cannot do `mc deploy`, `--admin`, production data or
+  credentials: the hook refuses them (`MC_HEADLESS=1`). Work that needs one
+  waits, and your entry says what it waits on. With Martin at the terminal,
+  an act that changes what is deployed or what users see is said in one line
+  before it runs.

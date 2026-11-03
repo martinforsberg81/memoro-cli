@@ -202,8 +202,8 @@ arrays and are run without a shell.
 
 ## Admission
 
-At most two app servers run on this machine at once, and none starts while
-memory is already short. Measured 12–26 Sep 2026 on an 8 GB M1: 141 of 571
+At most four app servers run on this machine at once (two until 2026-11-03),
+and none starts while memory is already short. Measured 12–26 Sep 2026 on an 8 GB M1: 141 of 571
 memoro dev-server starts died unexpectedly, and on 2026-09-26 seven registered
 servers sat beside 6.8–8.2 GB of swap. The decision is mc's and is made in one
 place:
@@ -220,13 +220,15 @@ of:
 { "ok": true }
 { "ok": false, "reason": "cap" | "memory",
   "holders": [{ "instance_id", "service", "worktree_path", "started_at", "url" }],
-  "free_percent": 31, "cap": 2 }
+  "free_percent": 31, "cap": 4 }
 ```
 
 What counts is live registered servers whose `resource_class` is not
 `light` — **`light` means "does not count"** — except those whose
 `worktree_path` *and* `service` are the asker's: a restart replaces itself. The
-cap is `MC_DEV_MAX_SERVERS`, default 2. Memory is asked first:
+cap is `MC_DEV_MAX_SERVERS`, default 4. It was 2 until 2026-11-03: from 31 Oct
+to 3 Nov 72 starts waited for a slot (median ~200 s) and 26 were refused after
+fifteen minutes, every one on the cap and none on memory (36–41 % free). Memory is asked first:
 `sysctl -n kern.memorystatus_level` (percentage free, macOS) below
 `MC_DEV_MIN_FREE_PERCENT`, default 15, refuses with reason `memory`, and where
 the sysctl is missing the memory check is skipped (`free_percent: null`).
@@ -243,7 +245,7 @@ knows it has already been admitted. A profile whose `resource_class` is `light`
 does not ask, since it would not count once running.
 
 `mc test dev` and `mc shot dev` (through `ensureAppServer`) also make room: a
-holder mc has not used for `MC_DEV_HOLDER_STALE_MINUTES` (default 30) is
+holder mc has not used for `MC_DEV_HOLDER_STALE_MINUTES` (default 5; 30 until 2026-11-03) is
 stopped through its own `control.stop` command, oldest use first, each tried
 once, and logged as `dev-server-stopped` with `reason: 'stale-holder'` (or
 `dev-server-evict-failed`). Use is mc's, not the server's traffic: every reuse

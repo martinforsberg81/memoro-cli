@@ -318,13 +318,60 @@ function chromeToLocal(tool, args) {
 }
 
 /**
+ * What a headless session may not do: Martin's acts, which happen only with
+ * him at the terminal. This is the one place mc forbids an act by who runs
+ * it; canon's skills say how and what breaks, never who may (canon-text test).
+ * `MC_HEADLESS=1` is set by the runner and the intake turn on every session
+ * they start; an interactive session never carries it. No escape: the rules
+ * above turn a raw command to an mc verb, these are a boundary.
+ */
+export const HEADLESS_RULES = [
+  {
+    id: 'headless-deploy',
+    test: /(^|[;&|(]\s*|\s)mc\s+deploy\b(?![^\n;&|]*--dry-run)/u,
+    reason: 'mc deploy',
+  },
+  {
+    id: 'headless-admin',
+    test: /(^|[;&|(]\s*|\s)(mc\s+merge|gh\s+pr\s+merge)\b[^\n;&|]*--admin\b/u,
+    reason: '--admin (a landing past the gate)',
+  },
+  {
+    id: 'headless-production-data',
+    test: /\bCLAUDE_ALLOW_PROD_WRANGLER\s*=/u,
+    reason: 'production data (CLAUDE_ALLOW_PROD_WRANGLER)',
+  },
+  {
+    id: 'headless-credentials',
+    test: /(^|[;&|(]\s*|\s)mc\s+test\s+token\s+--(set|rm)\b/u,
+    reason: 'credentials (mc test token)',
+  },
+];
+
+/** Whether the session was started by the runner or the intake turn, with nobody at the terminal. */
+export function headlessSession(env = process.env) {
+  return env?.MC_HEADLESS === '1';
+}
+
+/**
  * The PreToolUse answer for one tool call: `null` to let it run, or the reason
  * it is turned to an mc verb. `inRepo` says whether a written file lands inside
  * a known repository, where a Playwright script is the repository's own code.
+ * `env` is the session's (the hook passes its own); without one, not headless.
  */
-export function preToolDecision(input, { inRepo = () => false, programs = programsHome() } = {}) {
+export function preToolDecision(input, { inRepo = () => false, programs = programsHome(), env = {} } = {}) {
   const tool = input?.tool_name;
   const args = input?.tool_input || {};
+  if (tool === 'Bash' && headlessSession(env)) {
+    const command = String(args.command || '');
+    const rule = HEADLESS_RULES.find((entry) => entry.test.test(command));
+    if (rule) {
+      return {
+        id: rule.id,
+        reason: `${rule.reason} is Martin's act and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Leave the work waiting on it, and say in your log entry or step note what it waits on.`,
+      };
+    }
+  }
   if (typeof tool === 'string' && tool.startsWith(CHROME)) {
     if (JSON.stringify(args).includes(ALLOW_MARK) || !chromeToLocal(tool, args)) return null;
     return { id: 'chrome-dev', reason: CHROME_REASON };

@@ -525,16 +525,16 @@ const ready = plan();
 /**
  * What the lane records about the text its session is running on. `kind` has
  * always named the role; this names the revision — the digest is over the
- * assembled instructions, `_common.md` and the overlay joined the
+ * assembled instructions, `all-sessions.md` and the overlay joined the
  * way `instructionsFor` joins them, and `text_digest` is over the role's own
- * body alone. `mc roles check step` holds both against the files on disk, so a
+ * body alone. `mc roles check build-session:project` holds both against the files on disk, so a
  * role edited during an hour-long session is something a person can see.
  */
 const stepRole = {
-  name: 'build-project',
+  name: 'build-session:project',
   source: 'canon',
-  digest: textDigest(`${sharedRoleText()}\n\n---\n\nROLE build-project`),
-  text_digest: textDigest('ROLE build-project'),
+  digest: textDigest(`${sharedRoleText()}\n\n---\n\nROLE build-session:project`),
+  text_digest: textDigest('ROLE build-session:project'),
 };
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });
 
@@ -791,7 +791,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   // take.
   assert.equal(
     call.args[call.args.indexOf('--append-system-prompt') + 1],
-    `${sharedRoleText()}\n\n---\n\nROLE build-project`,
+    `${sharedRoleText()}\n\n---\n\nROLE build-session:project`,
   );
   assert.deepEqual(f.calls.rounds, [], 'the session landed it through mc merge itself; the runner lands nothing of a step\'s');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
@@ -1149,7 +1149,7 @@ test('a conflicting merge of origin/main goes to the step session, with the file
   const call = f.calls.sessions[0];
   assert.match(call.prompt, /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: docs\/project\/project_log\.md src\/a\.js/u);
   assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "The one step"/u, 'and the step is still the job');
-  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE build-project$/u);
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE build-session:project$/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tbuild-project\t/u);
   assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'), 'the merge is the session\'s to finish, not aborted under it');
 });
@@ -1813,7 +1813,7 @@ test('a review step launches as the review kind, on the review role', async () =
   const f = fixture({ plans: { memoro: { m: review } }, session: okSession() });
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
-  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE review$/u);
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE review-session:project$/u);
   assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "Review"/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tm\treview-project\t/u);
 });
@@ -2047,7 +2047,7 @@ test('a review class step runs on the catalog\'s review model whatever the usage
   const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.99, codex: 0.1 }) });
   await createRunner({ deps: f.deps }).pass();
   const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'review');
+  assert.equal(call.env.MC_ROLE, 'review-session:project');
   assert.equal(call.env.MC_PROGRAMME, 'prog');
   assert.equal(call.bin, '/bin/claude');
   const at = call.args.indexOf('--model');
@@ -4624,7 +4624,7 @@ const BLOCKS = [
     reason: 'role-missing',
     what: 'a role file that is not on this machine',
     make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), roles: false, session: okSession() }),
-    detail: /canon\/roles\/build-project\.md is missing on this machine/u,
+    detail: /canon\/roles\/build-session\.md \(part project\) is missing on this machine/u,
   },
   {
     block: 'tool-missing',
@@ -5036,7 +5036,7 @@ test('register: a step is running with its pid, then done with its pull request 
   assert.equal(seen.session.pid, 31337, 'with the pid onSpawn handed over');
   assert.equal(seen.branch, 'alpha');
   const [call] = f.calls.sessions;
-  assert.deepEqual(call.env, { MC_ROLE: 'build-project', MC_PROGRAMME: 'prog', MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, and where its scratch is');
+  assert.deepEqual(call.env, { MC_HEADLESS: '1', MC_ROLE: 'build-session:project', MC_PROGRAMME: 'prog', MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/step/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, where its scratch is, and that it is headless');
   const after = registerOf(f, 'alpha').steps[0];
   assert.equal(after.status, 'done');
   assert.equal(after.pr, 77);
@@ -5716,7 +5716,8 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   const [call] = f.calls.sessions;
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(call.cwd, `${GOALS}/older/memoro`);
-  assert.equal(call.env.MC_ROLE, 'build-goal');
+  assert.equal(call.env.MC_ROLE, 'build-session:goal');
+  assert.equal(call.env.MC_HEADLESS, '1', 'a goal session is headless: the hook refuses Martin\'s acts');
   assert.equal(call.env.MC_PROGRAMME, 'prog');
   assert.equal(call.env.MC_GOAL, 'prog/older');
   assert.equal(call.env.MC_REPO, 'memoro');
@@ -5729,7 +5730,7 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   assert.match(call.prompt, /`\/w\/programs\/prog\/goals\/older`/u);
   assert.match(call.prompt, /`goal\/older`/u);
   assert.equal(call.prompt.includes('\n'), false, 'the prompt is one paragraph');
-  assert.match(call.args.join('\n'), /ROLE build-goal/u);
+  assert.match(call.args.join('\n'), /ROLE build-session:goal/u);
 
   // Its current file stood for as long as the session did, and is gone.
   const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
@@ -5816,10 +5817,47 @@ test('a goal session that writes no log entry gets a runner entry, and three in 
   // Blocked by the runner, it wakes one plan session; that one says nothing
   // either, so the runner's entry leaves it to a person, and nothing starts.
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan-session');
   assert.equal(entries().at(-1).done, planHeldText(false));
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(runRows(f.files).length, 4);
+});
+
+/* ------------------------------------------------------- archive a finished goal */
+
+/** A goal's one entry, made by a session, with the status it set. */
+const finishedLog = (at, status) => `## ${at} · claude opus · ${status}\n\nGjort: arbete\n`;
+const ARCHIVE_NOW = '2026-09-01T10:00:00Z';
+
+test('the chores archive a goal done or dropped for 24 hours, and leave one finished 23 hours to the hold', async () => {
+  const f = goalFixture({
+    late: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
+    early: { status: 'done', log: finishedLog('2026-08-31T11:00Z', 'done') },
+    'dropped-one': { status: 'dropped', log: finishedLog('2026-08-30T09:00Z', 'dropped') },
+  }, { now: ARCHIVE_NOW });
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(f.files[`${GOALS}/late/GOAL.md`], undefined, 'the goal left the goals');
+  assert.match(f.files['/w/programs/prog/goals/.archive/late/GOAL.md'], /^status: done$/mu, 'in goals/.archive/');
+  assert.equal(f.files[`${GOALS}/late/memoro`], undefined, 'its worktree is gone with it');
+  assert.ok(f.calls.git.some((call) => call[0] === '/home/memoro' && call.slice(1).join(' ') === `worktree remove ${GOALS}/late/memoro`), 'removed through git');
+  assert.ok(f.calls.git.some((call) => call[0] === '/home/memoro' && call.slice(1).join(' ') === 'branch -D goal/late'), 'its branch is deleted through git');
+  assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| late \| done \|/mu, 'one row in goal_log.md');
+  assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| dropped-one \| dropped \|/mu, 'a dropped goal the same');
+  assert.match(f.files[`${GOALS}/early/GOAL.md`], /^status: done$/mu, 'done 23 hours: it stays');
+  assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
+});
+
+test('a goal the archive refuses stays, and the refusal is written into its log once, not at every pass', async () => {
+  const f = goalFixture({ held: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') } }, { now: ARCHIVE_NOW, dirty: ['held'] });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.match(f.files[`${GOALS}/held/GOAL.md`], /^status: done$/mu, 'it stays where it is');
+  assert.equal(f.files['/w/programs/prog/goals/goal_log.md'], undefined, 'nothing is archived');
+  const runnerLines = parseLog(f.files[`${GOALS}/held/LOG.md`]).filter((entry) => entry.tool === 'runner');
+  assert.equal(runnerLines.length, 1, 'said once, though two passes ran');
+  assert.deepEqual([runnerLines[0].status, runnerLines[0].done], ['done', null]);
+  assert.match(runnerLines[0].comment, /^not archived — memoro's worktree has uncommitted changes \(/u);
 });
 
 /* ------------------------------------------------------- plan on a blocked goal */
@@ -5842,15 +5880,17 @@ test('a goal blocked by a red merge starts one plan session: the plan role, the 
   assert.equal(r.name, 'goal:prog/stuck');
   const [call] = f.calls.sessions;
   assert.equal(f.calls.sessions.length, 1);
-  assert.equal(call.env.MC_ROLE, 'plan');
+  assert.equal(call.env.MC_ROLE, 'plan-session');
+  assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
-  assert.equal(call.env.MC_MODEL, 'fable', 'ruling 6: plan runs on fable');
+  assert.equal(call.env.MC_MODEL, 'opus', 'a headless plan runs on opus high (2026-11-03), not the role\'s fable');
   assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
   assert.equal('MC_WORKAREA' in call.env, false);
   assert.equal('MC_REPO' in call.env, false);
-  assert.match(call.args.join('\n'), /ROLE plan/u);
+  assert.match(call.args.join('\n'), /ROLE plan-session/u);
   assert.match(call.prompt, /blocked: merger answered red on #31/u);
-  assert.match(call.prompt, /never write in it/u);
+  assert.match(call.prompt, /its worktree is `\/w\/programs\/prog\/goals\/stuck\/memoro`/u);
+  assert.doesNotMatch(call.prompt, /never write in it/u, 'a plan session may take the goal over');
 
   const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
   assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'plan', null]);
@@ -5873,7 +5913,7 @@ test('a plan session that sets the goal open hands it to a build session, and a 
   assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude', 'no runner entry after an open');
   f.answer = logsItself(f, 'stuck');
   await runner.pass({ repo: 'memoro' });
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'build-goal');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'build-session:goal');
 
   // Red again: blocked by the runner, plan is woken with the whole log.
   const dir = `${GOALS}/stuck`;
@@ -5881,7 +5921,7 @@ test('a plan session that sets the goal open hands it to a build session, and a 
   f.files[`${dir}/GOAL.md`] = f.files[`${dir}/GOAL.md`].replace('status: open', 'status: blocked');
   f.answer = plans(f, 'stuck', 'blocked');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan-session');
 });
 
 test('a goal blocked by a person, by a build session\'s question, or still blocked after plan starts nothing', async () => {
@@ -5948,7 +5988,7 @@ test('a waiting goal whose after-goal is gone without landing goes blocked for p
   const [entry] = parseLog(f.files[`${GOALS}/orphan/LOG.md`]);
   assert.deepEqual([entry.tool, entry.status], ['runner', 'blocked']);
   assert.match(entry.comment, /^prog\/discarded is gone without landing — waits on plan/u);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['plan']);
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['plan-session']);
 });
 
 test('a goal whose every pull request (prs) has landed or closed is set done by the runner, at most every five minutes', async () => {
@@ -6066,10 +6106,10 @@ test('a goal in review gets a review session: the goal-review role, the review m
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
   const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'goal-review');
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
   assert.equal(call.env.MC_GOAL, 'prog/judged');
   assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review.model);
-  assert.match(call.args.join('\n'), /ROLE goal-review/u);
+  assert.match(call.args.join('\n'), /ROLE review-session:goal/u);
   assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
   assert.equal(call.prompt.includes('\n'), false);
 });
@@ -6083,7 +6123,7 @@ test('a review never runs on the model of the goal\'s last build entry: the goal
   const r = await runner.pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/other', 'the waiting review does not stand in front');
   assert.equal(f.calls.sessions.length, 1);
-  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'build-goal');
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
   assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — the review model is claude opus, the model its last build session ran on/u.test(line)));
   assert.equal(goalStatusOf(f), 'review', 'it waits; it is not reviewed by its builder');
 
@@ -6105,7 +6145,7 @@ test('a red review leaves the goal blocked with its entry, wakes plan, and no bu
 
   f.answer = plans(f, 'judged', 'blocked');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan-session');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 2);
 
@@ -6121,7 +6161,7 @@ test('a red review leaves the goal blocked with its entry, wakes plan, and no bu
   g.files[`${GOALS}/judged/GOAL.md`] = g.files[`${GOALS}/judged/GOAL.md`].replace('status: blocked', 'status: open');
   g.answer = logsItself(g, 'judged');
   await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
-  assert.equal(g.calls.sessions.at(-1).env.MC_ROLE, 'build-goal');
+  assert.equal(g.calls.sessions.at(-1).env.MC_ROLE, 'build-session:goal');
 });
 
 test('a green review queues the head it judged for the merger, and the goal then waits for the merger', async () => {

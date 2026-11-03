@@ -158,7 +158,7 @@ describe('help names the caller, not only the operation', () => {
     assert.match(result.stdout, /Person: mc plan, mc brief, mc helper open interactive sessions/u);
     assert.match(result.stdout, /mc run start\|stop controls the headless runner/u);
     assert.match(result.stdout, /Session: mc project new \/ step add \/ send/u);
-    const plan = runMc(['plan', '--help'], { env: { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' } });
+    const plan = runMc(['plan', '--help'], { env: { MC_ROLE: 'plan-session', MC_PROGRAMME: 'mc' } });
     assert.equal(plan.status, 0, plan.stderr);
     assert.match(plan.stdout, /Person only: opens or resumes an interactive plan session/u);
     assert.match(plan.stdout, /Never run inside a session/u);

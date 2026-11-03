@@ -26,7 +26,7 @@ const DEFINING = {
   'merge-conflicts': 'Never chain `git commit` after `git merge`',
   git: 'The stack is shared, and push/pop has destroyed parallel work.',
   proposals: 'What you found that is not your job is a proposal',
-  processes: 'Never signal a process you did not start in this session',
+  processes: 'know what it is before you signal it',
   'scratch-and-probes': 'Files that are not the change — probes, output, a PR body, a script — go in',
   'measure-the-app': 'Prove which tree is served before you measure.',
   'dev-servers': 'Dev servers start only through mc',
@@ -73,8 +73,8 @@ describe('one home per rule in canon/', () => {
 
   // Rules the review on 9fcf6d0 found stated twice: each has one home, and elsewhere a pointer.
   const RULES = {
-    'publish-and-merge': [/--admin[^.]*person's verb/u, /pushes, opens the PR and queues it/u, /queues\s+nothing/u],
-    processes: [/not yours to stop/u, /Never signal a process/u],
+    'publish-and-merge': [/admin override and no gate round/u, /pushes, opens the PR and queues it/u, /queues\s+nothing/u],
+    processes: [/not yours to stop/u, /know what it is before you signal it/u],
     'writing-a-plan': [/mc project step add <project>/u],
     'writing-tests': [/pinned number is a summary/u, /scan reads what git tracks/u],
   };
@@ -87,6 +87,28 @@ describe('one home per rule in canon/', () => {
     });
   }
 
+  // Martin 2026-11-03, after a plan session with full freedom left a branch
+  // because a skill said branches were mc's: a skill says how a task is done
+  // and what breaks, never who may do it. Who may is the role's; the one hard
+  // boundary (a headless session's) is code, HEADLESS_RULES in src/mc/hooks.js.
+  it('no skill says who may act: no permission language in canon/skills', () => {
+    const PERMISSION = [
+      /\bthe person's\b/iu, /\ba person's\b/iu, /\bMartin's (verb|act|word|call)/iu,
+      /\bon (his|their|Martin's) word\b/iu, /\bstays? (his|theirs|Martin's)\b/iu,
+      /\byour role's to say\b/iu, /\b(branch|worktree)[^.]* are mc's\b/iu, /\bnot yours\b/iu,
+      /\bonly (Martin|the person|a person) (may|can|does)\b/iu,
+    ];
+    const found = [];
+    for (const path of skillFiles()) {
+      const text = flat(body(read(path)));
+      for (const re of PERMISSION) {
+        const hit = text.match(re);
+        if (hit) found.push(`${rel(path)}: "${hit[0]}"`);
+      }
+    }
+    assert.deepEqual(found, []);
+  });
+
   it('a skill is a page at most', () => {
     for (const path of skillFiles()) {
       assert.ok(read(path).split('\n').length <= 60, `${rel(path)} is longer than a page`);
@@ -95,7 +117,8 @@ describe('one home per rule in canon/', () => {
 });
 
 describe('every role names the skills it needs', () => {
-  const ROLES = ['brief', 'build-goal', 'build-project', 'goal-review', 'helper', 'intake', 'plan', 'review', 'worker'];
+  const BUILDS = ['build-session:goal', 'build-session:project', 'build-session:worker'];
+  const ROLES = ['brief', ...BUILDS, 'review-session:goal', 'review-session:project', 'helper', 'intake', 'plan-session'];
   const named = (overlay) => [...overlay.matchAll(/^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu)].map((m) => m[1]);
 
   it('names only skills canon ships, and every skill is named by some role', () => {
@@ -121,14 +144,14 @@ describe('every role names the skills it needs', () => {
   });
 
   it('every role that changes code names publish-and-merge, git and scratch-and-probes', () => {
-    for (const role of ['brief', 'build-goal', 'build-project', 'plan', 'review', 'worker']) {
+    for (const role of ['brief', ...BUILDS, 'plan-session', 'review-session:project']) {
       const skills = named(readCanonRole(role).overlay);
       for (const skill of ['publish-and-merge', 'git', 'scratch-and-probes']) assert.ok(skills.includes(skill), `${role} does not name ${skill}`);
     }
   });
 
   it('reaches the session as a pointer to the installed skill, not as its text', () => {
-    const told = instructionsFor('claude-code', readCanonRole('build-project').overlay);
+    const told = instructionsFor('claude-code', readCanonRole('build-session:project').overlay);
     assert.match(told, /Skill `mc-processes` \(/u);
     assert.doesNotMatch(told, /^@skill /mu);
     assert.doesNotMatch(told, phrase(DEFINING.processes));

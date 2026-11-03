@@ -69,6 +69,28 @@ export function programmeRow({ programme, date, pointer }) {
 }
 
 /**
+ * `isGone` for `relinkRemoved`: 'blob' for a file the archive of `dir`
+ * removed, 'tree' for a directory inside `dir` it emptied, null for anything
+ * else. `before` and `after` are the tracked files under `dir` either side of
+ * the `git rm`. Only `dir` and what is under it can go: memoro's archives of
+ * legal-readiness, surface-window-styling and language-voice (2026-10-29 to
+ * 11-03) pointed README's `[docs/](docs/)` at a permalink, because `docs`
+ * held a removed file and no file under `dir` was left.
+ */
+export function removedKind(dir, before, after) {
+  const root = dir.replace(/\/+$/u, '');
+  const left = new Set(after);
+  const gone = before.filter((file) => !left.has(file));
+  const goneSet = new Set(gone);
+  const under = (files, path) => files.some((file) => file.startsWith(`${path}/`));
+  const inside = (path) => path === root || path.startsWith(`${root}/`);
+  return (path) => {
+    if (goneSet.has(path)) return 'blob';
+    return inside(path) && under(gone, path) && !under(after, path) ? 'tree' : null;
+  };
+}
+
+/**
  * Whether the programme may be archived, from facts gathered elsewhere:
  * `{ ok: true }` or `{ ok: false, lines }`, each line one reason. `area` is
  * the programme's directory as the lines name it; it is passed in, never
@@ -229,10 +251,8 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
     // GitHub, at the commit this archive was cut from.
     const linkSlug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
     if (linkSlug && cutFrom) {
-      const after = new Set(lines(gitOut(worktree, ['ls-files', '--', dir])));
-      const gone = new Set(before.filter((file) => !after.has(file)));
-      const under = (files, path) => [...files].some((file) => file.startsWith(`${path}/`));
-      const isGone = (path) => (gone.has(path) ? 'blob' : (under(gone, path) && !under(after, path) ? 'tree' : null));
+      const after = lines(gitOut(worktree, ['ls-files', '--', dir]));
+      const isGone = removedKind(dir, before, after);
       let relinked = 0;
       for (const file of lines(gitOut(worktree, ['ls-files', '--', '*.md']))) {
         const { text, count } = relinkRemoved(read(file), file, { isGone, slug: linkSlug, sha: cutFrom });

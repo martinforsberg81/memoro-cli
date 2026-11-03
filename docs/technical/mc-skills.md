@@ -31,7 +31,7 @@ that belongs to one programme goes in that programme's skill.
 | `scratch-and-probes` | `$MC_SCRATCH`, and `MC_HOME`/`MC_WORK_ROOT` for a probe of mc's own code |
 | `measure-the-app` | `mc shot`, measuring, proving which tree is served |
 | `dev-servers` | servers only through mc, at most two |
-| `asking-martin` | a question answerable in a word; what to tell him; what stays his |
+| `asking-martin` | a question answerable in a word; what to tell him; what a headless session leaves waiting |
 | `memory` | what a memory may hold; a rule about how to work goes in `canon/` |
 
 Each rule has one home: `tests/mc/canon-text.test.js` asserts a defining
