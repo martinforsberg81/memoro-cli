@@ -75,9 +75,20 @@ if (!process.env.MC_HOME) {
 const testFile = /\.test\.[cm]?js$/u.test(process.argv[1] || '') ? relative(process.cwd(), process.argv[1]) : null;
 if (testFile) process.env.MC_GIT_TEST = testFile;
 if (!process.env.MC_GIT_CALLS) {
-  const realGit = (process.env.PATH || '').split(delimiter).map((dir) => dir && join(dir, 'git')).find((candidate) => {
+  const runnable = (candidate) => {
     try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }
-  });
+  };
+  const found = (process.env.PATH || '').split(delimiter).map((dir) => dir && join(dir, 'git')).find(runnable);
+  // macOS's /usr/bin/git is a shim that asks xcrun which git to run, on every
+  // call: 49 ms a call against 15 ms for the toolchain's own (2026-11-03, load
+  // 50), and every real-git test pays it per process. The toolchain's git is
+  // the one the shim would have run (`directGitDir` in src/mc/repo-gate.js
+  // does the same for a gate round's suite).
+  const toolchain = found === '/usr/bin/git' && process.platform === 'darwin'
+    ? [process.env.DEVELOPER_DIR, '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer']
+      .filter(Boolean).map((root) => join(root, 'usr/bin/git')).find(runnable)
+    : null;
+  const realGit = toolchain || found;
   if (realGit) {
     const bin = join(tmpRoot, 'bin');
     const log = join(tmpRoot, 'git-calls.tsv');
