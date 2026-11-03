@@ -17,6 +17,7 @@ const OLD = {
   hooks: {
     PreToolUse: [FOREIGN, { matcher: 'Bash|Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
     SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+    Stop: [{ hooks: [{ type: 'command', command: 'mc hook stop 2>/dev/null || true' }] }],
   },
 };
 

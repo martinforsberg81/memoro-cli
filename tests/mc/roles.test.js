@@ -279,7 +279,7 @@ describe('the verb files', () => {
       /## Driving work in this session/u,
     ],
     'step-verb.md': [/a plan comes back by its\s+first unfinished step being `ready`/u],
-    'goal-verb.md': [/A plan session\s+sets any status/u],
+    'goal-verb.md': [/a plan session finishes it to `merging`/u],
   };
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 
