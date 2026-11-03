@@ -780,7 +780,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: machine slept 26 min — stall guard re-armed/u);
   assert.deepEqual(call.args.slice(-5), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   // Ruling 18's second addendum: a step is opus at medium effort, no advisor.
-  assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob', '--strict-mcp-config']);
+  assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config']);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: build starting \(claude opus · effort medium, check-in every 60 min, killed after 20 min silent\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
   assert.match(call.prompt, /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);

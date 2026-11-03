@@ -1029,22 +1029,12 @@ export function goalCheckInPrompt({ minutes, count }) {
  * step-cost's contract leaves them as they were.
  *
  * Every claude launch gets the `CLAUDE_TOOLS` allowlist and
- * `--strict-mcp-config`. The allowlist replaced `--disallowedTools Agent`
- * on 2026-09-25: a headless session has no use for a subagent — the step is
- * bounded by its plan, the strong model is reached through `--advisor`, and a
- * subagent runs on whatever model the repository's instruction files name,
- * outside the plan's `runner` choice (measured 2026-09-12 over the first 41
- * sonnet step sessions: 19 spawned opus Agent sessions on memoro's `CLAUDE.md`
- * instruction, a quarter of the era's cost) — and it has no use for Skill,
- * Workflow, Cron, Web or Task tools either. Tool definitions ride in every
- * request: claude 2.1.280 measured 18 687 tokens/request with the default
- * set minus Agent, 13 073 with these six, on a context that is re-read ~90
- * times per step session. The six include `Grep` and `Glob`, which the
- * default set omits — until this flag a step searched with `grep` through
- * Bash (2 866 such calls against 466 native reads, 2026-09-15..25).
- * `--strict-mcp-config` keeps a user-level MCP server, with its own tool
- * definitions, out of the lane. Whatever any repository's files say, the
- * session has these tools and no others.
+ * `--strict-mcp-config`, including the tool's own Agent without mc-defined
+ * agents. The same adapter session switches enable native Codex delegation,
+ * for every role and for fresh and resumed sessions. Tool definitions ride in
+ * every request, so Claude's allowlist stays narrow; `Grep` and `Glob` keep
+ * searches in native tools rather than Bash. `--strict-mcp-config` keeps
+ * user-level MCP servers and their tool definitions out of the lane.
  */
 export { CLAUDE_TOOLS };
 

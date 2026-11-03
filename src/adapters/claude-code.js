@@ -161,15 +161,16 @@ export function sessionArgs({ cache = '1h' } = {}) {
   })];
 }
 
-/** The six tools every session mc launches has. */
-export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
+/** The seven tools every session mc launches has, including native delegation. */
+export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob,Agent';
 
 /**
  * The tools of every session mc launches, whatever its role: the allowlist and
- * no user-level MCP server. Tool definitions ride in every request (measured on
- * claude 2.1.316: 21 491 tokens on the first request with the default set,
- * 7 659 with this). `--tools` takes several values, so `--strict-mcp-config`
- * stays behind it: a prompt after the allowlist would be read as a tool.
+ * no user-level MCP server. Agent is the tool's own general-purpose agent;
+ * mc supplies no agent definitions. Tool definitions ride in every request,
+ * so the allowlist stays narrow. `--tools` takes several values, so
+ * `--strict-mcp-config` stays behind it: a prompt after the allowlist would
+ * be read as a tool.
  */
 export function toolArgs() {
   return ['--tools', CLAUDE_TOOLS, '--strict-mcp-config'];

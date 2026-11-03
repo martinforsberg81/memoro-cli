@@ -12,6 +12,7 @@ import {
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
+import { instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -543,10 +544,9 @@ test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex 
   const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs, autocompact: null, stream: false });
   assert.equal(helper.includes('--autocompact'), false);
   assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--output-format', 'json']);
-  // No launch of the runner's has a tool outside the allowlist — no Agent, no
-  // Skill, no MCP server — whatever the repository's instruction files say;
-  // the helper included. Grep and Glob are in it: the default set omits them.
-  assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob');
+  // Every launch includes native Agent, but no Skill or MCP server, including
+  // the helper. Grep and Glob are in it: the default set omits them.
+  assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob,Agent');
   assert.deepEqual(helper.slice(helper.indexOf('--tools'), helper.indexOf('--tools') + 3), ['--tools', CLAUDE_TOOLS, '--strict-mcp-config']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="INSTRUCTIONS"', 'do it']);
@@ -596,13 +596,27 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
   assert.equal(unnamed.some((arg) => arg.startsWith('model_reasoning_effort')), false, 'no effort named, no override');
 });
 
-test('headlessArgs: a claude step gets the six tools and no agents of mc\'s, new or resumed', async () => {
-  const adapter = await import('../../src/adapters/claude-code.js');
-  const fresh = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'do it', profileArgs });
-  assert.equal(fresh[fresh.indexOf('--tools') + 1], 'Bash,Read,Edit,Write,Grep,Glob');
-  assert.equal(fresh.includes('--agents'), false);
-  const resumed = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
-  assert.equal(resumed.includes('--agents'), false);
+test('headlessArgs: every role including plan has native delegation, fresh and resumed, stream and single-turn', () => {
+  for (const name of ['build-goal', 'build-project', 'review', 'goal-review', 'mend', 'plan']) {
+    const role = readCanonRole(name);
+    assert.ok(role, name);
+    for (const resume of [null, 'sid']) {
+      for (const stream of [true, false]) {
+        const base = { cache: role.cache, prompt: 'do it', profileArgs, resume, stream };
+        const claude = headlessArgs({ ...base, toolId: 'claude-code', adapter: claudeAdapter, model: 'opus', instructions: instructionsFor('claude-code', role.overlay) });
+        assert.deepEqual(claude.slice(claude.indexOf('--tools'), claude.indexOf('--tools') + 3), [
+          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+        ], name);
+        assert.equal(claude.includes('--agents'), false, name);
+
+        const codex = headlessArgs({ ...base, toolId: 'codex', adapter: codexAdapter, model: 'gpt-6.1-sol', instructions: instructionsFor('codex', role.overlay) });
+        const at = codex.indexOf('features.multi_agent=true');
+        assert.ok(at > 0, name);
+        assert.equal(codex[at - 1], '-c', name);
+        assert.ok(at < codex.indexOf(resume || 'do it'), name);
+      }
+    }
+  }
 });
 
 test('workClassOf: a step names a class as its model, and nothing else is one', () => {

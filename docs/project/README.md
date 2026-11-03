@@ -88,6 +88,8 @@ the door.
   § *The session*). Each step names its own model (below, ruling 42).
   `subagents`, here or on a step, was removed on 2026-11-02 (ruling 62):
   `mc project send` refuses it, and a plan sent with it runs without it.
+  Every session instead has its tool's native delegation switched on — Claude
+  `Agent` and Codex `multi_agent` — without mc starting or counting agents.
 
 ### The steps
 
