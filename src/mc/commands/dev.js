@@ -63,7 +63,7 @@ import { resolve } from 'node:path';
 
 import { devServersRoot } from '../paths.js';
 import {
-  admit, agoText, DEFAULT_MAX_SERVERS, freeMemoryPercent, holdersOf, listServers, minFreePercentOf, processCwd, refusalText,
+  admit, agoText, DEFAULT_MAX_SERVERS, freeMemoryPercent, holdersOf, isMainServer, listServers, minFreePercentOf, processCwd, refusalText,
   registerManifest, stopServer, strayCwd, unregisterManifest, waitingLine,
 } from '../dev-servers.js';
 import { devQueuePath, queueOrder, readQueue, ticketView } from '../dev-queue.js';
@@ -71,7 +71,7 @@ import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-re
 import { open as openSurface, surfaces } from '../dev-open.js';
 import { log } from '../logger.js';
 import { parseSafeArea, THEMES } from '../shot.js';
-import { callerWorktree } from '../test-environment.js';
+import { callerWorktree, mainCheckout } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
@@ -143,7 +143,10 @@ function status(opts, { stdout, root, deps }) {
   const env = deps.env || process.env;
   const at = (deps.now || Date.now)();
   const { servers } = listServers({ root });
-  const app = holdersOf(servers);
+  // The main server is listed, marked, and counts for none of the cap.
+  const main = deps.main !== undefined ? deps.main : mainCheckout(env);
+  const app = holdersOf(servers).map((server) => ({ ...server, main: isMainServer(server, main) }));
+  const counted = holdersOf(servers, { main }).length;
   const queue = queueOrder(readQueue({ file: deps.queueFile || devQueuePath(root) }), at).map((ticket) => ticketView(ticket, at));
   const cap = Number(env.MC_DEV_MAX_SERVERS) || DEFAULT_MAX_SERVERS;
   const free = (deps.freeMemory || freeMemoryPercent)();
@@ -156,10 +159,10 @@ function status(opts, { stdout, root, deps }) {
     return 0;
   }
   const memory = freePercent === null ? 'free memory unknown' : `${freePercent}% memory free (floor ${floor}%)`;
-  stdout.write(`mc: ${app.length} of ${cap} app servers · ${memory}\n`);
+  stdout.write(`mc: ${counted} of ${cap} app servers · ${memory}\n`);
   for (const server of app) {
     const used = Date.parse(server.last_used_at ?? '');
-    stdout.write(`  ${server.instance_id}  ${server.service}  ${server.worktree_path}  ${Number.isFinite(used) ? `used ${agoText(used, at)}` : 'never used by mc'}\n`);
+    stdout.write(`  ${server.instance_id}  ${server.service}  ${server.worktree_path}  ${Number.isFinite(used) ? `used ${agoText(used, at)}` : 'never used by mc'}${server.main ? '  (main)' : ''}\n`);
   }
   if (!queue.length) {
     stdout.write('mc: nobody is waiting\n');
@@ -189,6 +192,7 @@ async function askAdmission(opts, { stdout, root, deps }) {
     env,
     root,
     ...(deps.queueFile ? { queueFile: deps.queueFile } : {}),
+    main: deps.main !== undefined ? deps.main : mainCheckout(env),
     sleep: deps.sleep,
     now: deps.now,
     freeMemory: deps.freeMemory,

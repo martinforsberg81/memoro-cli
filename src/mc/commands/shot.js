@@ -8,7 +8,7 @@
  *           [--click <selector>]… [--context-click <css>]… [--long-press <css>[@ms]]…
  *           [--fill <css>=<text>]… [--eval <js> | --eval-file <path>]…
  *           [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
- *           [--account <name>] [--onboarding] [--me] [--here]
+ *           [--account <name>] [--onboarding] [--me] [--here] [--main]
  *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot <dev|prod> <target> --keep [shot flags]
@@ -64,7 +64,7 @@ const PLACES = ['dev', 'prod'];
 export const ROUTES = {
   '*': {
     check: (scanned) => refuseShot(scanned)?.error ?? null,
-    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding', '--keep'],
+    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
@@ -85,6 +85,8 @@ function refuseShot({ flags, positional }) {
   if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
   if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
   if (flags.here && where === 'prod') return { error: '--here is for dev — production has one app, not one per worktree' };
+  if (flags.main && flags.here) return { error: '--main and --here name two trees — give one' };
+  if (flags.main && where === 'prod') return { error: '--main is for dev — production has one app, not one per worktree' };
   if ((flags.account || flags.onboarding) && where === 'prod') {
     return { error: '--account and --onboarding are for dev — production signs in as the test account or as you' };
   }
@@ -151,7 +153,7 @@ export async function run(argv, deps = {}) {
 
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
-  const chosen = shotWorktree({ cwd, env, here: flags.here, deps });
+  const chosen = shotWorktree({ cwd, env, here: flags.here, main: flags.main, deps });
   if (!chosen.worktree) { stderr.write(`mc: ${chosen.error}\n`); return 1; }
   const { worktree } = chosen;
   const shot = readShotDeclaration(worktree);

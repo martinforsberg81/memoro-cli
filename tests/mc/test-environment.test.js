@@ -24,8 +24,9 @@ import { registerManifest } from '../../src/mc/dev-servers.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
   accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
-  NO_SHARED_WORKTREE, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
+  NO_SHARED_WORKTREE, followMain, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
+import { shotWorktree } from '../../src/mc/shot.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -850,6 +851,135 @@ describe('bringing one up', () => {
     assert.equal(spawned, 0);
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('main: the shared checkout\'s server stays up and follows main', () => {
+  const NOW = Date.parse('2026-11-03T10:00:00Z');
+  const ago = (seconds) => new Date(NOW - seconds * 1000).toISOString();
+  const STOP = { control: { stop: { argv: ['node', 'stop.mjs', '--stop'] } } };
+
+  /** A checkout on main at `head`, with origin/main at `origin`, answering the reads a fast-forward makes. */
+  function checkout({ head = 'aaaaaaaaaa1111', origin = 'bbbbbbbbbb2222', branch = 'main', dirty = '' } = {}) {
+    const state = { head, merges: 0 };
+    state.git = (args) => {
+      const [verb, ...rest] = args;
+      if (verb === 'branch') return { status: 0, stdout: `${branch}\n` };
+      if (verb === 'status') return { status: 0, stdout: dirty };
+      if (verb === 'fetch') return { status: 0, stdout: '' };
+      if (verb === 'rev-parse') return { status: 0, stdout: `${rest[0] === 'origin/main' ? origin : state.head}\n` };
+      if (verb === 'merge') {
+        state.merges += 1;
+        state.head = origin;
+        return { status: 0, stdout: '' };
+      }
+      return { status: 1, stdout: '' };
+    };
+    return state;
+  }
+
+  /**
+   * The shared checkout's server, built from the first commit and last used
+   * `usedSecondsAgo` ago, ensured the way `mc shot dev` ensures it. A kept browser
+   * that stepped `session.usedSecondsAgo` ago holds it when one is given.
+   */
+  async function ensureMain(git, { usedSecondsAgo = 600, session = null } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const sessions = mkdtempSync(join(tmpdir(), 'mc-test-env-sessions-'));
+    registerServer(root, worktree, {
+      port: 8900,
+      extra: { ...STOP, built_from: { commit: 'aaaaaaaaaa1111' }, last_used_at: ago(usedSecondsAgo) },
+    });
+    if (session) {
+      writeFileSync(join(sessions, 's1.json'), JSON.stringify({
+        id: 's1', server_id: 'dev-8900', last_used: ago(session.usedSecondsAgo),
+      }));
+    }
+    const stopped = [];
+    const spawned = [];
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      main: { worktree, service: 'memoro-worker' },
+      sessionsDir: sessions,
+      admitWaitSeconds: 0,
+      now: () => NOW,
+      processCwd: () => null,
+      freeMemory: () => null,
+      git: git.git,
+      stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
+      sleep: async () => {},
+      spawn: (command, args) => {
+        spawned.push([command, ...args]);
+        registerServer(root, worktree, { port: 8901, extra: { built_from: { commit: git.head } } });
+        return { unref() {} };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+    const cleanup = () => { for (const path of [root, worktree, sessions]) rmSync(path, { recursive: true, force: true }); };
+    return {
+      ensured, stopped, spawned, git, cleanup,
+    };
+  }
+
+  it('main: an idle main server whose checkout moved is fast-forwarded, then restarted before it serves', async () => {
+    const git = checkout();
+    const run = await ensureMain(git, { usedSecondsAgo: 600 });
+    try {
+      assert.equal(run.ensured.ok, true, run.ensured.error);
+      assert.equal(git.merges, 1, 'the checkout was fast-forwarded to origin/main');
+      assert.deepEqual(run.stopped, ['dev-8900'], 'the server it was started from was asked to leave');
+      assert.equal(run.spawned.length, 1, 'and a fresh one serves');
+      assert.deepEqual(run.ensured.restartedFrom, { was: 'aaaaaaaaaa', now: 'bbbbbbbbbb' });
+      assert.deepEqual(run.ensured.followed, { from: 'aaaaaaaaaa', to: 'bbbbbbbbbb' });
+    } finally { run.cleanup(); }
+  });
+
+  it('main: a busy main server is served as it is — not restarted, and the checkout is not moved under it', async () => {
+    const git = checkout();
+    const run = await ensureMain(git, { usedSecondsAgo: 30 });
+    try {
+      assert.equal(run.ensured.ok, true, run.ensured.error);
+      assert.equal(run.ensured.started, false);
+      assert.equal(run.ensured.held.reason, 'busy');
+      assert.deepEqual([run.stopped, run.spawned, git.merges], [[], [], 0]);
+    } finally { run.cleanup(); }
+  });
+
+  it('main: a kept browser that stepped in the last 60 s holds the restart off; one that stepped before does not', async () => {
+    const held = await ensureMain(checkout(), { usedSecondsAgo: 600, session: { usedSecondsAgo: 30 } });
+    try {
+      assert.equal(held.ensured.held?.reason, 'kept');
+      assert.deepEqual([held.stopped, held.spawned, held.git.merges], [[], [], 0]);
+    } finally { held.cleanup(); }
+    const free = await ensureMain(checkout(), { usedSecondsAgo: 600, session: { usedSecondsAgo: 90 } });
+    try {
+      assert.equal(free.ensured.ok, true, free.ensured.error);
+      assert.deepEqual(free.stopped, ['dev-8900']);
+      assert.equal(free.ensured.server.instance_id, 'dev-8901', 'the browser gets the new server by a rebase on its next step');
+    } finally { free.cleanup(); }
+  });
+
+  it('main: a dirty or off-main shared checkout is never fast-forwarded', () => {
+    const dirty = checkout({ dirty: ' M src/app.js\n' });
+    assert.equal(followMain('/co', { git: dirty.git }).moved, false);
+    const off = checkout({ branch: 'feature/x' });
+    assert.equal(followMain('/co', { git: off.git }).moved, false);
+    assert.deepEqual([dirty.merges, off.merges], [0, 0], 'and no merge was asked for');
+    const clean = checkout();
+    assert.deepEqual(followMain('/co', { git: clean.git }), { moved: true, from: 'aaaaaaaaaa', to: 'bbbbbbbbbb' });
+  });
+
+  it('main: --main serves the shared checkout from inside a worktree; without it, the tree you stand in', () => {
+    const fx = makeRepoLayout({ bare: ['memoro'], self: ['memoro'] });
+    try {
+      const shared = join(fx.home, 'self', 'memoro');
+      const standing = join(fx.home, 'work', 'memoro-feature');
+      const deps = { callerWorktree: () => standing, existsSync: () => true };
+      assert.deepEqual(shotWorktree({ cwd: standing, env: fx.env, main: true, deps }), { worktree: shared });
+      assert.deepEqual(shotWorktree({ cwd: standing, env: fx.env, deps }), { worktree: standing });
+    } finally { fx.cleanup(); }
   });
 });
 

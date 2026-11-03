@@ -33,7 +33,8 @@ import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import {
-  admit, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer, waitingLine,
+  admit, isMainServer, KEPT_HOLD_SECONDS, keptHolds, lastUsedAt, listServers, mainIdleSecondsOf, processCwd, refusalText,
+  stopServer, strayCwd, touchServer, waitingLine,
 } from './dev-servers.js';
 import { log } from './logger.js';
 import { pidAlive } from './status-collect.js';
@@ -134,6 +135,56 @@ export const NO_SHARED_WORKTREE = 'no memoro checkout to serve — ~/mc/self/mem
  */
 export function sharedWorktree(env = process.env) {
   return defaultRepos(env).find((repo) => repo.name === 'memoro')?.checkout || null;
+}
+
+/**
+ * The shared checkout as mc's main server: `{ worktree, service }`, where the
+ * service is the app service its own declaration names (null when it names none,
+ * and the path alone then says what is main). Null when there is no checkout.
+ */
+export function mainCheckout(env = process.env) {
+  const worktree = sharedWorktree(env);
+  if (!worktree) return null;
+  const read = readDeclaration(worktree);
+  return { worktree, service: read.ok ? serviceFor(read.declaration, 'app') : null };
+}
+
+/**
+ * Fast-forward the shared checkout to origin/main when it is on main and clean,
+ * and say why not otherwise: `{ moved: true, from, to }` or `{ moved: false, why }`.
+ *
+ * Nothing else in mc fast-forwards `~/mc/self/memoro`. Deploy and language
+ * fast-forward their own checkouts under mc's home, and `repo-merge` pulls mc's
+ * installation, so a main server would serve the tree it was first started on for
+ * ever. Only ever a fast-forward, never over local work. A fetch that fails
+ * (offline) leaves origin/main where it last was.
+ */
+export function followMain(worktree, deps = {}) {
+  const git = deps.git || ((args) => runGit(worktree, args));
+  const branch = String(git(['branch', '--show-current']).stdout || '').trim();
+  if (branch !== 'main') return { moved: false, why: `on ${branch || 'no branch'}, not main` };
+  const dirty = git(['status', '--porcelain']);
+  if (dirty.status !== 0) return { moved: false, why: 'git status failed' };
+  if (String(dirty.stdout || '').trim()) return { moved: false, why: 'uncommitted changes' };
+  git(['fetch', '--quiet', 'origin', 'main']);
+  const before = String(git(['rev-parse', 'HEAD']).stdout || '').trim();
+  const target = String(git(['rev-parse', 'origin/main']).stdout || '').trim();
+  if (!before || !target) return { moved: false, why: 'no origin/main to follow' };
+  if (before === target) return { moved: false, why: 'already at origin/main' };
+  if (git(['merge', '--ff-only', 'origin/main']).status !== 0) return { moved: false, why: 'not a fast-forward' };
+  return { moved: true, from: before.slice(0, 10), to: target.slice(0, 10) };
+}
+
+/**
+ * Why the main server may not be restarted now, or null when it may be: a kept
+ * browser stepped on it within KEPT_HOLD_SECONDS, or mc used it within
+ * `idleMs`. A held server is served as it is, and the answer says so.
+ */
+export function mainHold(server, { now, idleMs, dir } = {}) {
+  if (keptHolds(server, { now, dir })) return 'kept';
+  const used = lastUsedAt(server);
+  if (used !== null && now - used < idleMs) return 'busy';
+  return null;
 }
 
 /**
@@ -353,6 +404,25 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     });
     return { ok: false, error: `${running.instance_id} is registered for ${worktree} but its process runs in ${stray.cwd} — not reused; mc dev stop ${running.instance_id}, then run this again` };
   }
+  // The shared checkout's main server is mc's standing one. It is not restarted while a kept browser
+  // stepped on it recently or mc used it within MC_DEV_MAIN_IDLE_SECONDS: it is served as it is, said so.
+  // Otherwise, when idle, it is fast-forwarded to origin/main (clean and on main only), and the stale
+  // check below restarts it if its HEAD has moved.
+  const env = deps.env || process.env;
+  const main = deps.main !== undefined ? deps.main : mainCheckout(env);
+  const isMain = isMainServer({ worktree_path: worktree, service }, main);
+  const idleMs = mainIdleSecondsOf(env) * 1000;
+  if (isMain && running) {
+    const hold = mainHold(running, { now: now(), idleMs, dir: deps.sessionsDir });
+    if (hold) {
+      (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
+      return {
+        ok: true, server: running, started: false, held: { reason: hold, stale: builtFromMoved(running, worktree, deps), idle_seconds: idleMs / 1000 },
+      };
+    }
+  }
+  const follow = isMain ? followMain(worktree, deps) : null;
+  const followed = follow?.moved ? { from: follow.from, to: follow.to } : null;
   let restartedFrom = null;
   let replacedHung = null;
   if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
@@ -373,7 +443,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
     if (!stale) {
       (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
-      return { ok: true, server: running, started: false };
+      return { ok: true, server: running, started: false, followed };
     }
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
@@ -411,6 +481,8 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       now,
       onWaiting: deps.onWaiting,
       ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
+      main,
+      sessionsDir: deps.sessionsDir,
     });
     if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   }
@@ -462,7 +534,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       (deps.touchServer || touchServer)(server.instance_id, root ? { root } : {});
       return {
-        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung,
+        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
@@ -512,6 +584,8 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!json) {
+    if (ensured.followed) stdout.write(`mc: fast-forwarded the shared checkout ${ensured.followed.from} → ${ensured.followed.to} (origin/main)\n`);
+    if (ensured.held) stdout.write(`${heldLine(ensured)}\n`);
     if (ensured.replacedHung) {
       stdout.write(`mc: ${ensured.replacedHung} was alive but not answering — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else if (ensured.restartedFrom) {
@@ -525,6 +599,15 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     }
   }
   return { ok: true, server, baseUrl };
+}
+
+/** The line a held main server says: why it was not restarted, and what it serves against the checkout. */
+function heldLine({ server, held }) {
+  const why = held.reason === 'kept'
+    ? `a kept browser stepped on it in the last ${KEPT_HOLD_SECONDS} s`
+    : `it was used in the last ${Math.round(held.idle_seconds)} s`;
+  const behind = held.stale ? ` — it serves ${held.stale.was}, the checkout is at ${held.stale.now}, and it follows main once idle` : '';
+  return `mc: ${server.instance_id} is served as it is, not restarted: ${why}${behind}`;
 }
 
 function seconds(ms) {

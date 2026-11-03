@@ -300,6 +300,25 @@ measure server kept it busy for two hours on 2026-10-19, so its own idle clock
 never ran out while three shots waited fifteen minutes each behind it.
 `mc dev admit` never stops anything.
 
+### The main server
+
+The shared checkout's app server (`~/mc/self/memoro`, the one `mc shot dev --main`
+and `mc test dev` use by default) is mc's standing server. It is never stopped as
+a stale holder; it counts against `MC_DEV_MAX_SERVERS` for no one, and a request
+for it is not capped; it still asks the free-memory floor first when it starts.
+`mc dev status` marks it `(main)`.
+
+It follows main. When mc has not used it for `MC_DEV_MAIN_IDLE_SECONDS` (60), the
+next request fast-forwards the shared checkout to `origin/main` — only when it is
+clean and on `main`, and otherwise says why and serves what it has — and then
+restarts the server before serving, if its `built_from.commit` is no longer the
+checkout's HEAD. Nothing else in mc fast-forwards that checkout (deploy and
+language fast-forward their own checkouts under mc's home), so this is the only
+thing that moves it. A busy main server is never restarted: a use within the idle
+window, or a kept `mc shot dev --keep` browser that stepped on it within
+`KEPT_HOLD_SECONDS` (60), serves it as it is. A kept browser restarted after that
+is rebased by its next step, as after an edit.
+
 ## When mc stops a server
 
 mc stops a registered server only by running the manifest's own

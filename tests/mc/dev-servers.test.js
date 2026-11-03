@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  admission, admit, checkManifest, freeMemoryPercent, listServers, processCwd, registerManifest, serversUnder,
+  admission, admit, checkManifest, freeMemoryPercent, holdersOf, keptHolds, listServers, processCwd, registerManifest, serversUnder,
   stopServersUnder, strayCwd, touchServer, unregisterManifest, waitingLine, DEFAULT_MAX_SERVERS, DEFAULT_HOLDER_STALE_MINUTES,
 } from '../../src/mc/dev-servers.js';
 import {
@@ -575,6 +575,97 @@ describe('admit — waiting for a slot', () => {
     const other = capture();
     assert.equal(await run(['list', '--wait', '5'], { stdout: capture(), stderr: other }), 2);
     assert.match(other.text(), /belong to mc dev admit/u);
+  });
+});
+
+describe('main: the main server is not evicted or counted, and a kept browser holds its server', () => {
+  const MAIN = { worktree: '/w/main', service: 'memoro-measure' };
+  const STOP = { control: { stop: { argv: ['node', 'dev.mjs', '--stop'] } } };
+  const at = Date.parse('2026-10-19T12:00:00Z');
+  const live = (id, worktree) => ({
+    instance_id: id, service: 'memoro-measure', worktree_path: worktree, started_at: '2026-10-19T07:00:00.000Z',
+    url: 'http://127.0.0.1:8921', resource_class: 'standard', live: true,
+  });
+  function register(root, worktree, id, overrides = {}) {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure', ...overrides })));
+  }
+  const askOpts = (root, extra = {}) => ({
+    service: 'memoro-measure',
+    worktree: '/w/third',
+    waitSeconds: 0,
+    env: { MC_DEV_MAX_SERVERS: '1', MC_DEV_HOLDER_STALE_MINUTES: '30' },
+    root,
+    evict: true,
+    main: MAIN,
+    now: () => at,
+    sleep: async () => {},
+    freeMemory: () => 50,
+    logEvent: () => {},
+    ...extra,
+  });
+
+  it('main: a main server is not counted against the cap, so it never refuses a worktree', () => {
+    const servers = [live('main-a', '/w/main')];
+    const ask = (main) => admission({
+      servers, service: 'memoro-measure', worktree: '/w/third', cap: 1, minFreePercent: 15, freePercent: 40, main,
+    });
+    assert.deepEqual(ask(MAIN), { ok: true });
+    assert.equal(ask(null).reason, 'cap', 'named as nothing, the same server counts');
+    assert.deepEqual(holdersOf(servers, { service: 'memoro-measure', worktree: '/w/third', main: MAIN }), []);
+  });
+
+  it('main: a main server is never stopped as a stale holder, however long it goes unused', async () => {
+    const root = scratch();
+    register(root, '/w/main', 'main-a', STOP);
+    touchServer('main-a', { root, now: () => new Date('2026-10-19T04:00:00Z') });
+    const stopped = [];
+    const verdict = await admit(askOpts(root, {
+      stop: (server) => { stopped.push(server.instance_id); return { ok: true }; },
+    }));
+    assert.deepEqual(verdict, { ok: true }, 'not counted, so the one slot is free');
+    assert.deepEqual(stopped, []);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('main: among the holders only a worktree server is stopped to make room; the main one stays', async () => {
+    const root = scratch();
+    register(root, '/w/main', 'main-a', STOP);
+    register(root, '/w/b', 'measure-b', STOP);
+    touchServer('main-a', { root, now: () => new Date('2026-10-19T04:00:00Z') });
+    touchServer('measure-b', { root, now: () => new Date('2026-10-19T04:30:00Z') });
+    const stopped = [];
+    const verdict = await admit(askOpts(root, {
+      stop: (server) => {
+        stopped.push(server.instance_id);
+        rmSync(join(root, `${server.instance_id}.json`));
+        return { ok: true };
+      },
+    }));
+    assert.deepEqual(verdict, { ok: true });
+    assert.deepEqual(stopped, ['measure-b'], 'the main server is the oldest use and still is not stopped');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('main: a server a kept browser stepped on in the last 60 s is not stopped, however stale its use', async () => {
+    const root = scratch();
+    const sessions = scratch();
+    register(root, '/w/b', 'measure-b', STOP);
+    touchServer('measure-b', { root, now: () => new Date('2026-10-19T04:00:00Z') });
+    writeFileSync(join(sessions, 's1.json'), JSON.stringify({
+      id: 's1', server_id: 'measure-b', last_used: '2026-10-19T11:59:30.000Z',
+    }));
+    assert.equal(keptHolds({ instance_id: 'measure-b' }, { now: at, dir: sessions }), true, 'stepped 30 s ago');
+    const stopped = [];
+    const verdict = await admit(askOpts(root, {
+      main: null,
+      sessionsDir: sessions,
+      stop: (server) => { stopped.push(server.instance_id); return { ok: true }; },
+    }));
+    assert.equal(verdict.ok, false);
+    assert.deepEqual(stopped, [], 'the holder stays, and the request is refused');
+    rmSync(root, { recursive: true, force: true });
+    rmSync(sessions, { recursive: true, force: true });
   });
 });
 

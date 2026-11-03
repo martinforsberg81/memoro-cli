@@ -41,7 +41,7 @@ import {
   devQueuePath, joinQueue, leaveQueue, placeOf, queueOrder, readQueue, ticketView,
 } from './dev-queue.js';
 import { log } from './logger.js';
-import { devServersRoot } from './paths.js';
+import { devServersRoot, shotSessionsDir } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
 /** The only schema this mc understands. A manifest saying anything else is refused. */
@@ -305,6 +305,64 @@ export const DEFAULT_MIN_FREE_PERCENT = 15;
  */
 export const DEFAULT_HOLDER_STALE_MINUTES = 5;
 
+/**
+ * The shared checkout's main server is mc's standing one (`mainCheckout`). It is
+ * followed to main once mc has not used it for this long (`MC_DEV_MAIN_IDLE_SECONDS`):
+ * an idle one is fast-forwarded and restarted, a busy one is served as it is.
+ */
+export const DEFAULT_MAIN_IDLE_SECONDS = 60;
+
+/**
+ * A kept browser (`mc shot dev --keep`) that stepped this recently holds its
+ * server: nothing stops or restarts that server under it. A restart after that
+ * is a rebase, which the browser gets as a dev session does after an edit.
+ */
+export const KEPT_HOLD_SECONDS = 60;
+
+/** `MC_DEV_MAIN_IDLE_SECONDS`, or the default. */
+export function mainIdleSecondsOf(env = process.env) {
+  return Number(env.MC_DEV_MAIN_IDLE_SECONDS) || DEFAULT_MAIN_IDLE_SECONDS;
+}
+
+/**
+ * Is `server` the shared checkout's main server? `main` is `{ worktree, service }`
+ * (`mainCheckout`), or null for none. Matched by path, and by service too when the
+ * checkout names one.
+ */
+export function isMainServer(server, main) {
+  if (!main?.worktree || !server?.worktree_path) return false;
+  if (resolve(server.worktree_path) !== resolve(main.worktree)) return false;
+  return !main.service || server.service === main.service;
+}
+
+/**
+ * When a kept browser last stepped on this server, in epoch ms, or null. The
+ * browser writes `server_id` and `last_used` into its session file on every step
+ * (`shot-session.js`); a file that does not parse is nobody's.
+ */
+export function keptStepAt(server, { dir = shotSessionsDir() } = {}) {
+  let names = [];
+  try {
+    names = readdirSync(dir).filter((name) => /^s\d+\.json$/u.test(name));
+  } catch {
+    return null;
+  }
+  let latest = null;
+  for (const name of names) {
+    const session = readJson(join(dir, name));
+    if (session?.server_id !== server.instance_id) continue;
+    const at = Date.parse(session.last_used ?? '');
+    if (Number.isFinite(at) && (latest === null || at > latest)) latest = at;
+  }
+  return latest;
+}
+
+/** Did a kept browser step on this server within KEPT_HOLD_SECONDS of `now`? */
+export function keptHolds(server, { now = Date.now(), dir } = {}) {
+  const at = keptStepAt(server, { dir });
+  return at !== null && now - at < KEPT_HOLD_SECONDS * 1000;
+}
+
 /** When mc last used a server: `last_used_at`, else when it was registered or started. */
 export function lastUsedAt(server) {
   for (const key of ['last_used_at', 'registered_at', 'started_at']) {
@@ -335,13 +393,15 @@ const ADMIT_SAY_MS = 60_000;
  * first, in `evictable`: those mc last used before `staleBefore` (an epoch ms;
  * null names none) and that declare a stop command. Never the asker's own.
  */
-export function admission({ servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null }) {
-  const holders = holdersOf(servers, { service, worktree });
+export function admission({
+  servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null, main = null, capped = true,
+}) {
+  const holders = holdersOf(servers, { service, worktree, main });
   const free = Number.isFinite(freePercent) ? freePercent : null;
   if (free !== null && free < minFreePercent) {
     return { ok: false, reason: 'memory', holders, free_percent: free, cap };
   }
-  if (holders.length >= cap) {
+  if (capped && holders.length >= cap) {
     const evictable = Number.isFinite(staleBefore)
       ? (servers || [])
         .filter((server) => holders.some((holder) => holder.instance_id === server.instance_id))
@@ -365,9 +425,9 @@ function isOwn(server, { service, worktree }) {
  * `light`, and not the asker's own. `last_used_at` is mc's last use of each
  * (`lastUsedAt`), so a waiter can see which holder is idle.
  */
-export function holdersOf(servers, { service, worktree } = {}) {
+export function holdersOf(servers, { service, worktree, main = null } = {}) {
   return (servers || [])
-    .filter((server) => server.live !== false && server.resource_class !== 'light' && !isOwn(server, { service, worktree }))
+    .filter((server) => server.live !== false && server.resource_class !== 'light' && !isOwn(server, { service, worktree }) && !isMainServer(server, main))
     .map((server) => {
       const used = lastUsedAt(server);
       return {
@@ -419,6 +479,7 @@ export function freeMemoryPercent(run = spawnSync) {
 export async function admit({
   service, worktree, waitSeconds = 0, env = process.env, root, queueFile, sleep, now, onWaiting,
   freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer, pid = process.pid,
+  main = null, sessionsDir = null,
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
@@ -429,6 +490,10 @@ export async function admit({
   const waits = deadline > startedAt;
   const staleMs = (Number(env.MC_DEV_HOLDER_STALE_MINUTES) || DEFAULT_HOLDER_STALE_MINUTES) * 60_000;
   const file = queueFile || devQueuePath(root || devServersRoot());
+  // The session files a kept browser writes: the hold it puts on its server (`keptHolds`).
+  const keptDir = sessionsDir || shotSessionsDir(env);
+  // The main server counts for nothing, and a request for it is not capped either.
+  const mainRequest = isMainServer({ worktree_path: worktree, service }, main);
   const tried = new Set();
   let said = null;
   let ticket = null;
@@ -460,8 +525,10 @@ export async function admit({
       const head = !standing || standing.place === 1;
       const asked = admission({
         servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(), staleBefore: evict && head ? clock() - staleMs : null,
+        main, capped: !mainRequest,
       });
-      const victim = (asked.evictable || []).find((id) => !tried.has(id));
+      // A holder a kept browser stepped on within the last minute is not stopped under it.
+      const victim = (asked.evictable || []).find((id) => !tried.has(id) && !keptHolds({ instance_id: id }, { now: clock(), dir: keptDir }));
       if (victim) {
         tried.add(victim);
         const server = servers.find((item) => item.instance_id === victim);
@@ -493,7 +560,7 @@ export async function admit({
       // A yes that is not this request's turn is a wait behind the queue.
       const verdict = {
         ...(asked.ok
-          ? { ok: false, reason: 'queue', holders: holdersOf(servers, { service, worktree }), free_percent: freeOrNull(freeMemory()), cap }
+          ? { ok: false, reason: 'queue', holders: holdersOf(servers, { service, worktree, main }), free_percent: freeOrNull(freeMemory()), cap }
           : asked),
         ...(standing ? { place: standing.place, queue: standing.order.map((item) => ticketView(item, clock())) } : {}),
       };
