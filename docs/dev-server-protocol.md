@@ -305,7 +305,8 @@ never ran out while three shots waited fifteen minutes each behind it.
 The shared checkout's app server (`~/mc/self/memoro`, the one `mc shot dev --main`
 and `mc test dev` use by default) is mc's standing server. It is never stopped as
 a stale holder; it counts against `MC_DEV_MAX_SERVERS` for no one, and a request
-for it is not capped; it still asks the free-memory floor first when it starts.
+for it is neither capped nor queued behind the waiters for a capped slot; it still
+asks the free-memory floor first when it starts.
 `mc dev status` marks it `(main)`.
 
 It follows main. When mc has not used it for `MC_DEV_MAIN_IDLE_SECONDS` (60), the

@@ -502,9 +502,12 @@ export async function admit({
     for (;;) {
       const { servers } = listServers(root ? { root } : {});
       const own = servers.some((server) => server.live !== false && isOwn(server, { service, worktree }));
-      // Where this request stands: null when it is not queued at all.
+      // Where this request stands: null when it is not queued at all. The queue
+      // orders the capped slots, and the main server takes none, so a request
+      // for it is not queued either: "how is it now" never waits behind worktree
+      // servers for a slot it does not use. The memory floor still applies.
       let standing = null;
-      if (!own) {
+      if (!own && !mainRequest) {
         if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt });
         let tickets = readQueue({ file });
         if (ticket && !tickets.some((item) => item.id === ticket.id)) {

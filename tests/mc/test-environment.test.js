@@ -961,14 +961,21 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
     } finally { free.cleanup(); }
   });
 
-  it('main: a dirty or off-main shared checkout is never fast-forwarded', () => {
+  it('main: a dirty or off-main shared checkout is never fast-forwarded', async () => {
     const dirty = checkout({ dirty: ' M src/app.js\n' });
-    assert.equal(followMain('/co', { git: dirty.git }).moved, false);
+    assert.deepEqual(followMain('/co', { git: dirty.git }), { moved: false, refused: true, why: 'uncommitted changes' });
     const off = checkout({ branch: 'feature/x' });
-    assert.equal(followMain('/co', { git: off.git }).moved, false);
+    assert.deepEqual(followMain('/co', { git: off.git }), { moved: false, refused: true, why: 'on feature/x, not main' });
     assert.deepEqual([dirty.merges, off.merges], [0, 0], 'and no merge was asked for');
     const clean = checkout();
     assert.deepEqual(followMain('/co', { git: clean.git }), { moved: true, from: 'aaaaaaaaaa', to: 'bbbbbbbbbb' });
+    // Ensured, an idle main server on a dirty checkout is not moved, and the answer says why.
+    const run = await ensureMain(checkout({ dirty: ' M src/app.js\n' }), { usedSecondsAgo: 600 });
+    try {
+      assert.equal(run.ensured.ok, true, run.ensured.error);
+      assert.equal(run.ensured.unfollowed, 'uncommitted changes');
+      assert.equal(run.git.merges, 0);
+    } finally { run.cleanup(); }
   });
 
   it('main: --main serves the shared checkout from inside a worktree; without it, the tree you stand in', () => {

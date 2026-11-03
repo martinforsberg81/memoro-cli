@@ -151,7 +151,8 @@ export function mainCheckout(env = process.env) {
 
 /**
  * Fast-forward the shared checkout to origin/main when it is on main and clean,
- * and say why not otherwise: `{ moved: true, from, to }` or `{ moved: false, why }`.
+ * and say why not otherwise: `{ moved: true, from, to }` or `{ moved: false, why }`,
+ * with `refused` when the checkout itself holds it back (off main, dirty, diverged).
  *
  * Nothing else in mc fast-forwards `~/mc/self/memoro`. Deploy and language
  * fast-forward their own checkouts under mc's home, and `repo-merge` pulls mc's
@@ -162,16 +163,16 @@ export function mainCheckout(env = process.env) {
 export function followMain(worktree, deps = {}) {
   const git = deps.git || ((args) => runGit(worktree, args));
   const branch = String(git(['branch', '--show-current']).stdout || '').trim();
-  if (branch !== 'main') return { moved: false, why: `on ${branch || 'no branch'}, not main` };
+  if (branch !== 'main') return { moved: false, refused: true, why: `on ${branch || 'no branch'}, not main` };
   const dirty = git(['status', '--porcelain']);
   if (dirty.status !== 0) return { moved: false, why: 'git status failed' };
-  if (String(dirty.stdout || '').trim()) return { moved: false, why: 'uncommitted changes' };
+  if (String(dirty.stdout || '').trim()) return { moved: false, refused: true, why: 'uncommitted changes' };
   git(['fetch', '--quiet', 'origin', 'main']);
   const before = String(git(['rev-parse', 'HEAD']).stdout || '').trim();
   const target = String(git(['rev-parse', 'origin/main']).stdout || '').trim();
   if (!before || !target) return { moved: false, why: 'no origin/main to follow' };
   if (before === target) return { moved: false, why: 'already at origin/main' };
-  if (git(['merge', '--ff-only', 'origin/main']).status !== 0) return { moved: false, why: 'not a fast-forward' };
+  if (git(['merge', '--ff-only', 'origin/main']).status !== 0) return { moved: false, refused: true, why: 'not a fast-forward' };
   return { moved: true, from: before.slice(0, 10), to: target.slice(0, 10) };
 }
 
@@ -423,6 +424,8 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   }
   const follow = isMain ? followMain(worktree, deps) : null;
   const followed = follow?.moved ? { from: follow.from, to: follow.to } : null;
+  // Held back by the checkout itself: said, so a stale "how is it now" is not taken for main.
+  const unfollowed = follow?.refused ? follow.why : null;
   let restartedFrom = null;
   let replacedHung = null;
   if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
@@ -443,7 +446,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
     if (!stale) {
       (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
-      return { ok: true, server: running, started: false, followed };
+      return { ok: true, server: running, started: false, followed, unfollowed };
     }
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
@@ -534,7 +537,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       (deps.touchServer || touchServer)(server.instance_id, root ? { root } : {});
       return {
-        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed,
+        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
@@ -585,6 +588,7 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!json) {
     if (ensured.followed) stdout.write(`mc: fast-forwarded the shared checkout ${ensured.followed.from} → ${ensured.followed.to} (origin/main)\n`);
+    if (ensured.unfollowed) stdout.write(`mc: the shared checkout was not fast-forwarded — ${ensured.unfollowed}; serving what it holds\n`);
     if (ensured.held) stdout.write(`${heldLine(ensured)}\n`);
     if (ensured.replacedHung) {
       stdout.write(`mc: ${ensured.replacedHung} was alive but not answering — started a fresh one, ${baseUrl} (${server.instance_id})\n`);

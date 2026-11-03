@@ -647,6 +647,27 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('main: a request for the main server is not queued behind waiters for the cap; the memory floor still refuses it', async () => {
+    const base = scratch();
+    const root = join(base, 'dev-servers');
+    register(root, '/w/b', 'measure-b');
+    const queue = devQueuePath(root);
+    const ahead = {
+      id: 'ahead', pid: LIVE_PID, worktree_path: '/w/c', service: 'memoro-measure', holder: 'step:ahead', gate: false,
+      joined_at: new Date(at - 5 * 60_000).toISOString(),
+    };
+    writeFileSync(queue, JSON.stringify({ schema_version: 1, tickets: [ahead] }));
+    const opts = askOpts(root, {
+      worktree: '/w/main', waitSeconds: 900, sleep: async () => { throw new Error('must not wait'); },
+    });
+    assert.deepEqual(await admit(opts), { ok: true }, 'admitted at once, though the cap is full and one waits');
+    assert.deepEqual(JSON.parse(readFileSync(queue, 'utf8')).tickets.map((item) => item.id), ['ahead'], 'no ticket taken');
+    const short = await admit({ ...opts, waitSeconds: 0, freeMemory: () => 5 });
+    assert.equal(short.reason, 'memory');
+    assert.equal(short.place, undefined, 'not in the queue');
+    rmSync(base, { recursive: true, force: true });
+  });
+
   it('main: a server a kept browser stepped on in the last 60 s is not stopped, however stale its use', async () => {
     const root = scratch();
     const sessions = scratch();
