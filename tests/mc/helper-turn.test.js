@@ -13,8 +13,12 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { proposalSystem } from '../../src/mc/brief-collect.js';
-import { intakeArchiveDir, intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
-import { drainIntake, helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
+import {
+  intakeArchiveDir, intakeDir, listAllProposals, programmeProposalsArchiveDir, programmeProposalsDir, proposalsDir,
+} from '../../src/mc/helper-collect.js';
+import {
+  describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
+} from '../../src/mc/helper-turn.js';
 import { sharedRoleText } from '../../src/mc/roles.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
@@ -406,6 +410,78 @@ describe('draining the inbox', () => {
     const out = await drain(e, {});
     assert.deepEqual(out.done, []);
     assert.equal(out.left, 0);
+  });
+});
+
+describe('proposals per programme', () => {
+  const programme = (e, name, readme) => {
+    mkdirSync(join(e.MC_WORK_ROOT, 'programs', name), { recursive: true });
+    if (readme !== undefined) writeFileSync(join(e.MC_WORK_ROOT, 'programs', name, 'README.md'), readme);
+  };
+
+  it('lists the root and every programme\'s proposals/, and no archive', () => {
+    const e = env();
+    programme(e, 'mc');
+    programme(e, 'memoro');
+    mkdirSync(programmeProposalsArchiveDir('mc', e), { recursive: true });
+    mkdirSync(proposalsDir(e), { recursive: true });
+    writeFileSync(join(proposalsDir(e), '2026-08-27-mc-orphan.md'), 'x\n');
+    writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-28-mc-own.md'), 'x\n');
+    writeFileSync(join(programmeProposalsArchiveDir('mc', e), '2026-08-01-mc-declined.md'), 'Utfall: ej aktuellt — no\n');
+    assert.equal(programmeProposalsArchiveDir('mc', e), join(e.MC_WORK_ROOT, 'programs', 'mc', 'proposals', 'archive'));
+    assert.deepEqual(listAllProposals(e).map((p) => [p.programme, p.file]), [
+      [null, '2026-08-27-mc-orphan.md'],
+      ['mc', '2026-08-28-mc-own.md'],
+    ]);
+  });
+
+  it('gives the turn the programmes, one line each, and both destinations', () => {
+    const e = env();
+    programme(e, 'mc', '# mc\n\nmc itself: the runner, the verbs and the page.\n\nMore.\n');
+    programme(e, 'quiet');
+    const routes = programmeRoutes(e);
+    assert.deepEqual(routes, [
+      { name: 'mc', line: 'mc itself: the runner, the verbs and the page.' },
+      { name: 'quiet', line: '(no description)' },
+    ]);
+    const prompt = helperPrompt({ file: FILE, now: NOW, programmes: routes, programsPath: '/w/programs', proposalsPath: '/w/proposals' });
+    assert.match(prompt, /----- PROGRAMMES -----\n- mc — mc itself: the runner, the verbs and the page\.\n- quiet — \(no description\)\n/u);
+    assert.ok(prompt.includes('`/w/programs/<programme>/proposals/`'), 'the owning programme\'s proposals/');
+    assert.match(prompt, /it goes in `\/w\/proposals` — a valid answer for a proposal no programme owns, not a failure/u);
+    assert.ok(!/archive/u.test(prompt), 'no archive is named or read');
+  });
+
+  it('groups the proposals already waiting by programme', () => {
+    const prompt = helperPrompt({
+      file: FILE, now: NOW, proposalsPath: '/w/proposals',
+      proposals: [{ programme: 'mc', file: 'b.md' }, { programme: null, file: 'a.md' }, { programme: 'mc', file: 'c.md' }],
+    });
+    assert.match(prompt, /PROPOSALS ALREADY WAITING -----\nno programme \(`\/w\/proposals`\):\n- a\.md\nprogramme mc:\n- b\.md\n- c\.md$/u);
+  });
+
+  it('finds a proposal the turn wrote in a programme and says which programme it went to', async () => {
+    const e = env();
+    programme(e, 'mc', 'mc itself.\n');
+    mkdirSync(programmeProposalsDir('mc', e), { recursive: true });
+    writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-28-mc-older.md'), 'x\n');
+    const seen = {};
+    const result = await runHelperTurn({
+      env: e, now: NOW, file: FILE,
+      deps: {
+        role: () => ROLE, launch: () => LAUNCH, ground: GROUND,
+        session: async (call) => {
+          Object.assign(seen, call);
+          writeFileSync(join(programmeProposalsDir('mc', e), '2026-08-29-mc-routed.md'), PROPOSAL);
+          return { status: 0, stdout: CLAUDE_JSON, stderr: '', timedOut: false };
+        },
+      },
+    });
+    assert.match(seen.args[1], /- mc — mc itself\./u);
+    assert.match(seen.args[1], /programme mc:\n- 2026-08-28-mc-older\.md/u);
+    assert.deepEqual(result.wrote.map((p) => [p.programme, p.file]), [['mc', '2026-08-29-mc-routed.md']]);
+    assert.equal(result.waiting.length, 2);
+    assert.equal(describeTurn(result), '1 proposal to programme mc, 2 waiting');
+    assert.equal(describeTurn({ wrote: [{ programme: null, file: '2026-08-29-mc-x.md' }], waiting: [1] }), '1 proposal to no programme (~/mc/proposals), 1 waiting');
   });
 });
 

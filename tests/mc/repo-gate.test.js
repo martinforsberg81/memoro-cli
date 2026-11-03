@@ -1812,6 +1812,13 @@ describe('a repository that selects by diff', () => {
         assert.equal(notes(), 1, 'a proposal younger than seven days names it');
 
         rmSync(join(work, 'proposals'), { recursive: true, force: true });
+        const owned = join(work, 'programs', 'memoro', 'proposals');
+        mkdirSync(owned, { recursive: true });
+        writeFileSync(join(owned, '2026-10-18-memoro-snapshots.md'), `${scanner} is red on main\n`);
+        await fx.report({ env, tests });
+        assert.equal(notes(), 1, 'a proposal in a programme\'s proposals/ names it');
+
+        rmSync(owned, { recursive: true, force: true });
         await fx.report({ env, tests });
         assert.equal(notes(), 2, 'older than seven days, and nothing else names it: a new note');
       } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
