@@ -348,12 +348,9 @@ function readRepoDeclaration(repoPath) {
 /** Which of the three files each field of a declaration came from. */
 function layerSources({ shipped, own, override }) {
   const sources = {};
-  if (override) {
-    for (const field of Object.keys(override)) sources[field] = 'override';
-    return sources;
-  }
   for (const field of Object.keys(shipped || {})) sources[field] = 'shipped';
   for (const field of Object.keys(own || {})) sources[field] = 'repository';
+  for (const field of Object.keys(override || {})) sources[field] = 'override';
   return sources;
 }
 
@@ -371,13 +368,16 @@ function layerSources({ shipped, own, override }) {
  * operator's file stays the last word — it is how a machine-local fact gets in
  * without a release at all.
  *
- * The two upper layers merge differently on purpose. The repository's file is
- * merged **field by field**: it is written by a repository about itself, and
- * it cannot know facts that are not its own — where its merges are logged is
- * one, and a whole-entry replacement would make a file that says `select` drop
- * `merge_log` in silence, which is the hole D-0135 already cost this table
- * twice. The operator's file keeps replacing the entry whole, as it always
- * has, and the fields it drops are still named in `shadowed`.
+ * Both upper layers merge **field by field**, the same way. A layer states
+ * the fields it changes and keeps the rest of what is below it; `null` is how
+ * it says a field is not wanted. The operator's file used to replace the whole
+ * entry instead, and that is D-0135: an override written to change one fact
+ * dropped every field it did not repeat — `extra_gates` on 2026-08-22,
+ * `pr_tests_flags` on 2026-08-24, both in silence. A warning naming the
+ * dropped fields ("DECLARATION SHADOWED") followed; by 2026-11 it would have
+ * named fourteen, almost everything the shipped entry gained since August.
+ * The rule that cannot drop a field in silence is the one that has no hole to
+ * warn about (2026-11-03).
  */
 export function declarationFor(repoPath, { root = mcHome(), env = process.env } = {}) {
   const name = basenameOf(repoPath);
@@ -396,10 +396,10 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
   const shipped = SHIPPED[name];
   const overrides = readOverrides(root);
   const overridden = overrides[name];
-  // The repository's layer on top of the shipped one, then the operator's
-  // whole entry if there is one.
-  const base = own.entry ? { ...(shipped || {}), ...own.entry } : shipped;
-  const declared = overridden || base;
+  // The repository's layer on top of the shipped one, then the operator's on
+  // top of both — each field by field.
+  const layers = [shipped, own.entry, overridden].filter(Boolean);
+  const declared = layers.length ? Object.assign({}, ...layers) : undefined;
 
   // A repository file can declare a repository mc ships nothing for — and
   // then it has to state its preparation, like any other declaration. Saying
@@ -444,6 +444,9 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
     }
+    // A repository-wide ceiling is safety policy, not an optional selector
+    // field: a layer above can tune it, and one that says `null` is a stop,
+    // never a round without a ceiling.
     if (declared.round_timeout_ms !== undefined
       && (!(Number.isInteger(declared.round_timeout_ms) && declared.round_timeout_ms > 0)
         || typeof declared.round_timeout_why !== 'string' || !declared.round_timeout_why.trim())) {
@@ -462,30 +465,11 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + 'true or false — true says its `select` command takes `--changed-path <path>` (repeatable) in place of its diff.',
       };
     }
-    // Which fields of the layers below it this override silently dropped, if
-    // it is one. A shallow table means an override states every field it
-    // wants — a rule this table's own operator wrote into the memoro entry
-    // after extra_gates fell out (D-0135) — but a rule people must remember is
-    // a hole (pr_tests_flags fell out the same way, 2026-08-24), so the
-    // dropped fields are named to whoever reads the declaration. A repository
-    // that has written its own file is one more layer that can be dropped
-    // that way, so it is counted here too.
-    const shadowed = overridden && base
-      ? Object.keys(base).filter((field) => overridden[field] === undefined
-        && base[field] != null && (!Array.isArray(base[field]) || base[field].length > 0))
-      : [];
     return {
       ok: true,
       name,
-      // A repository-wide ceiling is safety policy, not an optional test
-      // selector field. An operator override can tune it, but cannot drop it.
-      declaration: normalise({
-        ...declared,
-        round_timeout_ms: declared.round_timeout_ms ?? shipped?.round_timeout_ms,
-        round_timeout_why: declared.round_timeout_why ?? shipped?.round_timeout_why,
-      }, env),
+      declaration: normalise(declared, env),
       source: 'declared',
-      shadowed,
       // Which of the three files each field came from. A reader who disagrees
       // with a declaration has to know which one to edit, and "it is declared"
       // does not say that once there are three places it could be declared in.
