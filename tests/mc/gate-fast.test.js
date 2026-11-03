@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 
 import { changedAgainst, declaredTestFlags, docsOnly } from '../../src/mc/gate-fast.js';
 import { tryGit } from '../../src/mc/git.js';
+import { main as selector } from '../../scripts/affected-tests.js';
 
 describe('changedAgainst, on a real repository', () => {
   function repo() {
@@ -63,7 +64,13 @@ describe('the selector answers --changed-path (scripts/affected-tests.js)', () =
       write('src/a.js', 'export const a = 2;\n');
       write('src/b.js', 'export const b = 2;\n');
       git('commit', '-qam', 'both');
-      const run = (...args) => JSON.parse(execFileSync(process.execPath, ['scripts/affected-tests.js', '--base-ref', 'origin-main', ...args], { cwd: fx, encoding: 'utf8' }));
+      // The command in this process, on the fixture (two node processes took
+      // 2 s, 2026-11-03); affected-tests.test.js runs it as a script.
+      const run = (...args) => {
+        let out = '';
+        assert.equal(selector(['--base-ref', 'origin-main', ...args], { root: fx, stdout: { write: (text) => { out += text; } } }), 0);
+        return JSON.parse(out);
+      };
       assert.deepEqual(run().files, ['tests/a.test.js', 'tests/b.test.js']);
       assert.deepEqual(run('--changed-path', 'src/b.js').files, ['tests/b.test.js']);
     } finally { rmSync(fx, { recursive: true, force: true }); }

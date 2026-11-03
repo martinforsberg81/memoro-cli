@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -91,12 +91,9 @@ test('returns unknown instead of guessing among local-only branches', (t) => {
 });
 
 test('returns ambiguous for conflicting remote HEADs and accepts explicit repository metadata', (t) => {
-  const repo = makeClonedRepo({ defaultBranch: 'main' });
-  const backup = makeBareRemote({ root: repo.root, name: 'backup.git', defaultBranch: 'trunk' });
+  // The clone has a second remote, backup, fetched, whose HEAD names trunk.
+  const repo = makeClonedRepo({ defaultBranch: 'main', backup: 'trunk' });
   t.after(repo.cleanup);
-  git(repo.dir, ['remote', 'add', 'backup', backup]);
-  git(repo.dir, ['fetch', 'backup']);
-  git(repo.dir, ['symbolic-ref', 'refs/remotes/backup/HEAD', 'refs/remotes/backup/trunk']);
 
   const ambiguous = resolveDefaultBranch(repo.dir);
   assert.equal(ambiguous.ok, false);
@@ -113,30 +110,68 @@ test('returns ambiguous for conflicting remote HEADs and accepts explicit reposi
 });
 
 test('counts against a custom resolved default branch and preserves unknown', (t) => {
-  const repo = makeClonedRepo({ defaultBranch: 'trunk', remote: 'upstream' });
+  // sess/work carries one commit trunk lacks; trunk is checked out.
+  const repo = makeClonedRepo({ defaultBranch: 'trunk', remote: 'upstream', work: 'sess/work' });
   t.after(repo.cleanup);
-  git(repo.dir, ['checkout', '-q', '-b', 'sess/work']);
-  writeFileSync(join(repo.dir, 'work.txt'), 'work\n');
-  git(repo.dir, ['add', 'work.txt']);
-  git(repo.dir, ['commit', '-q', '-m', 'Work']);
-  git(repo.dir, ['checkout', '-q', 'trunk']);
 
   assert.equal(commitsAhead(repo.dir, 'sess/work'), 1);
   assert.equal(commitsAhead(repo.dir, 'does-not-exist'), null);
 });
 
-function makeClonedRepo({ defaultBranch, remote = 'origin' }) {
+/**
+ * A clone of a bare remote whose default branch is `defaultBranch`, its
+ * remote named `remote`; with `backup`, a second bare beside it at
+ * `<root>/backup.git` whose default branch is that, added to the clone as the
+ * remote `backup`, fetched, with `refs/remotes/backup/HEAD` naming it; with
+ * `work`, a branch of that name carrying one commit the default branch lacks,
+ * while the default branch stays checked out. Each shape is built once per
+ * file, with real git, and copied per test: building one, or setting it up
+ * in the test, took five or six git processes a test (2026-11-03).
+ */
+const templates = new Map();
+function makeClonedRepo({ defaultBranch, remote = 'origin', backup = null, work = null }) {
+  const key = JSON.stringify([defaultBranch, remote, backup, work]);
+  if (!templates.has(key)) templates.set(key, buildClonedRepo({ defaultBranch, remote, backup, work }));
+  const template = templates.get(key);
   const root = mkdtempSync(join(tmpdir(), 'mc-default-branch-'));
-  const bare = makeBareRemote({ root, name: 'remote.git', defaultBranch });
+  cpSync(template, root, { recursive: true });
   const dir = join(root, 'clone');
-  git(root, ['clone', '-q', bare, dir]);
-  if (remote !== 'origin') git(dir, ['remote', 'rename', 'origin', remote]);
+  const config = join(dir, '.git', 'config');
+  writeFileSync(config, readFileSync(config, 'utf8').split(template).join(root));
   return {
     root,
     dir,
     cleanup() { rmSync(root, { recursive: true, force: true }); },
   };
 }
+
+function buildClonedRepo({ defaultBranch, remote, backup, work }) {
+  const root = mkdtempSync(join(tmpdir(), 'mc-default-branch-template-'));
+  const bare = makeBareRemote({ root, name: 'remote.git', defaultBranch });
+  const dir = join(root, 'clone');
+  git(root, ['clone', '-q', bare, dir]);
+  if (remote !== 'origin') git(dir, ['remote', 'rename', 'origin', remote]);
+  if (backup) {
+    git(dir, ['remote', 'add', 'backup', makeBareRemote({ root, name: 'backup.git', defaultBranch: backup })]);
+    git(dir, ['fetch', '-q', 'backup']);
+    git(dir, ['symbolic-ref', 'refs/remotes/backup/HEAD', `refs/remotes/backup/${backup}`]);
+  }
+  if (work) {
+    git(dir, ['checkout', '-q', '-b', work]);
+    writeFileSync(join(dir, 'work.txt'), 'work\n');
+    git(dir, ['add', 'work.txt']);
+    git(dir, ['commit', '-q', '-m', 'Work']);
+    git(dir, ['checkout', '-q', defaultBranch]);
+  }
+  return root;
+}
+
+// Built while the file loads, outside any test's time.
+for (const shape of [
+  { defaultBranch: 'main' }, { defaultBranch: 'master' }, { defaultBranch: 'trunk', remote: 'upstream' },
+  { defaultBranch: 'develop' }, { defaultBranch: 'stable' }, { defaultBranch: 'main', backup: 'trunk' },
+  { defaultBranch: 'trunk', remote: 'upstream', work: 'sess/work' },
+]) makeClonedRepo(shape).cleanup();
 
 function makeBareRemote({ root, name, defaultBranch }) {
   const source = join(root, `${name}-source`);

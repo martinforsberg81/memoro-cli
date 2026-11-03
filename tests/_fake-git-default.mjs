@@ -14,6 +14,7 @@ import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { promisify } from 'node:util';
 
 import { FakeGit } from './mc/_helpers/fake-git.js';
 
@@ -45,7 +46,14 @@ function failure(result, args) {
   return error;
 }
 
+/** The model this process answers git from, or null when it keeps real git. */
+let installed = null;
+export function fakeGitModel() {
+  return installed;
+}
+
 export function installFakeGitDefault(model = new FakeGit()) {
+  installed = model;
   const answer = (args, options = {}) => {
     const result = model.runner(options.cwd || process.cwd(), args, { env: options.env, input: options.input, encoding: 'utf8' });
     return { pid: 0, output: [null, result.stdout, result.stderr], ...result };
@@ -139,6 +147,18 @@ export function installFakeGitDefault(model = new FakeGit()) {
     });
     return child;
   };
+  // `promisify(execFile)` resolves `{ stdout, stderr }` through node's custom
+  // promisified form, and rejects with both on the error; a patch without one
+  // would resolve the bare stdout string instead.
+  for (const name of ['execFile', 'exec']) {
+    const patched = childProcess[name];
+    patched[promisify.custom] = (...args) => new Promise((resolve, reject) => {
+      patched(...args, (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { stdout, stderr }));
+        else resolve({ stdout, stderr });
+      });
+    });
+  }
   syncBuiltinESMExports();
   return model.install();
 }

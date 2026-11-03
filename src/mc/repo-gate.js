@@ -165,6 +165,14 @@ export async function runGate({
   // Stops the round from outside: step 2 of round-abort, the merger's watch.
   signal = null,
   clock = () => Date.now(),
+  // How the round's ceiling is armed: `(fire, ms) => cancel`, a timer of `ms`
+  // by default. A test hands in one it fires itself, at the moment its stuck
+  // child is reached, rather than waiting the ceiling out.
+  armCeiling = (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -431,13 +439,12 @@ export async function runGate({
   // The files the run was asked for, once the selection has said which (none
   // for a whole-suite round, which names no files until its output does).
   let deadlineFiles = [];
-  const timeout = setTimeout(() => {
+  const cancelCeiling = armCeiling(() => {
     timedOut = true;
     // Read before the abort: the runs' files are gone once their processes close.
     ceilingRuns = runProgress(tracked);
     deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
   }, roundTimeoutMs);
-  timeout.unref?.();
 
   // The round's verdict once its ceiling has come: red, and named. The files
   // that did not finish are the red — the ones to rebuild. The slowest files
@@ -1276,7 +1283,7 @@ export async function runGate({
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
   } finally {
-    clearTimeout(timeout);
+    cancelCeiling();
     for (const signal of caught) process.off(signal, onSignal);
     // The raw git: the ceiling may have come, and the clean-up must still run.
     await clearWorkspace({ git: askGitRaw, repoPath, workspace });
@@ -1432,9 +1439,10 @@ async function measure({ suite, git, cwd, command, say, is }) {
  * and reports a verdict is a gate that lies about what it checked.
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
+ * `run` is how the command runs, `shell` (a child) unless a test hands one in.
  */
-export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [] }) {
-  const run = await shell(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
+export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [], run: runCommand = shell }) {
+  const run = await runCommand(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
   }
@@ -1531,9 +1539,10 @@ export const DELTA_PATHS_MAX = 4000;
  *    the green at all. Both empty means nothing needs running.
  *
  * The delta's reach is asked of the repository's own selector, the declared
- * `select` with ` --changed-path <p>` per path, read like `selectFiles`.
+ * `select` with ` --changed-path <p>` per path, read like `selectFiles`, and
+ * run by `run` as there.
  */
-export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null }) {
+export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null, run: runCommand = shell }) {
   if (!headSha || !baseCommit) return { kind: 'none' };
   const tree = await git(['rev-parse', `${headSha}^{tree}`], { cwd });
   const headTree = tree?.status === 0 ? trim(tree.stdout) : null;
@@ -1573,7 +1582,7 @@ export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit
 
   const asked = `${command}${paths.map((path) => ` --changed-path ${shellQuote(path)}`).join('')}`;
   let run = null;
-  try { run = await shell(asked, { cwd, env }); } catch (error) {
+  try { run = await runCommand(asked, { cwd, env }); } catch (error) {
     return { kind: 'fallback', reason: `the selector could not be run for the delta (${error.message})` };
   }
   if (run?.status !== 0) {

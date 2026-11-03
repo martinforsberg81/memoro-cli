@@ -8,6 +8,8 @@ import { captureWorktree, findPublicationReceipt, gateReceipt, persistGateReceip
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { selectorCommand, runSessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, realTests, selectFiles } from '../../src/mc/repo-gate.js';
+import { runShell } from '../../src/mc/child-async.js';
+import { main as selectorMain } from '../../scripts/affected-tests.js';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
 const git = (cwd, ...args) => {
@@ -395,6 +397,44 @@ it('strict cache lookup reads durable full receipts and never accepts a legacy o
   assert.equal(findGreenForHead({ ...args, headTree: fx.receipt.tree }), null);
 });
 
+/**
+ * The words of a command line as `sh` would split it, for the single quotes
+ * `selectorCommand` and `deltaFromGreen` write.
+ */
+function words(line) {
+  const out = [];
+  let word = null;
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (quoted) { if (char === "'") quoted = false; else word += char; continue; }
+    if (char === "'") { quoted = true; word ??= ''; continue; }
+    if (char === '\\') { i += 1; word = (word ?? '') + (line[i] ?? ''); continue; }
+    if (/\s/u.test(char)) { if (word !== null) out.push(word); word = null; continue; }
+    word = (word ?? '') + char;
+  }
+  if (word !== null) out.push(word);
+  return out;
+}
+
+/**
+ * The repository's selector run in this process, on the fixture it stands in;
+ * any other command line through the shell. Nine selector processes, each
+ * starting git through the model's own node, took 5.9 s (2026-11-03).
+ * affected-tests.test.js runs the script as a process.
+ */
+const SELECTOR = 'node scripts/affected-tests.js';
+const inProcess = async (command, options) => {
+  if (!command.startsWith(`${SELECTOR} `)) return runShell(command, options);
+  let stdout = '';
+  try {
+    const status = selectorMain(words(command).slice(2), { root: options.cwd, stdout: { write: (text) => { stdout += text; } } });
+    return { status, signal: null, stdout, stderr: '', error: null };
+  } catch (error) {
+    return { status: 1, signal: null, stdout, stderr: error.message, error: null };
+  }
+};
+
 it('real repository delta selection follows transitive dependencies, not just changed-file overlap', async (t) => {
   for (const mainPath of ['src/unrelated.js', 'src/shared.js', 'package.json']) {
     const fx = fixture(t);
@@ -417,7 +457,7 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const configuration = gateConfiguration({ select: command });
     const req = { ...fx.request(), files: null, select: selectorCommand(command, { base }),
       measurement: { ...fx.request().measurement, base, configuration } };
-    const result = await runSessionGate(req, { ...quiet, tests: async () => ({ code: 0, tap: GREEN }) });
+    const result = await runSessionGate(req, { ...quiet, select: (options) => selectFiles({ ...options, run: inProcess }), tests: async () => ({ code: 0, tap: GREEN }) });
     const receipt = receiptOf(result);
     assert.deepEqual(receipt.coverage.files, ['a.test.js']);
     git(fx.cwd, 'add', '.');
@@ -430,10 +470,10 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const baseCommit = git(fx.cwd, 'rev-parse', 'HEAD');
     git(fx.cwd, 'switch', '-q', 'feature');
     git(fx.cwd, 'merge', '--no-edit', '-q', 'main');
-    const selection = await selectFiles({ cwd: fx.cwd, command: selectorCommand(command, { base: baseCommit }), env: process.env, say: () => {} });
+    const selection = await selectFiles({ cwd: fx.cwd, command: selectorCommand(command, { base: baseCommit }), env: process.env, say: () => {}, run: inProcess });
     const evidence = { repository: receipt.repository, run: receipt.run, sessionRun: 'session-one', goalRevision: 3, configuration };
     const args = { git: (args, { cwd }) => spawnSync('git', args, { cwd, encoding: 'utf8' }), cwd: fx.cwd,
-      root: req.gate.root, repo: 'repo', headSha, baseCommit, command, env: process.env, selection, evidence };
+      root: req.gate.root, repo: 'repo', headSha, baseCommit, command, env: process.env, selection, evidence, run: inProcess };
     const delta = await deltaFromGreen(args);
     assert.equal(delta.kind, 'reuse');
     assert.deepEqual(delta.paths, [mainPath]);

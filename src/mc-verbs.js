@@ -93,3 +93,50 @@ export async function runModule(path, argv, { stdout = process.stdout } = {}) {
   }
   return (await module.run(argv)) ?? 0;
 }
+
+/**
+ * The binary's own routing: the page, the verbs that moved, and the verbs in
+ * `VERB_MODULES`; `null` for anything it declines, which `mc-cli.js` hands to
+ * the capability dispatcher. Here rather than there for the reason the table
+ * is: a test can call it without running a command line.
+ */
+export async function routeV1Command(args, { stderr = process.stderr, run = runModule } = {}) {
+  const command = args[0];
+  // `mc sessions …` went with the session verbs (2026-08-30). What a person
+  // means by it now is a work area, and `mc work` is where that lives.
+  if (command === 'sessions') return moved('mc sessions', stderr);
+  // Bare `mc` is the page: the runner, the queue, the decisions, the intake
+  // and every workarea, and at a terminal the way in underneath it. It was
+  // the V1 sessions table until 2026-08-29 (decision mc-3) — the front door
+  // of the whole system, saying nothing true about it.
+  if (args.length === 0) return run('./mc/commands/home.js', []);
+  // The page's own flags, and only those: anything else that starts with a
+  // dash keeps falling through to the capability dispatcher, which is where
+  // it was answered before.
+  const pageFlags = new Set(['--json', '--fresh', '--offline']);
+  if (pageFlags.has(command)
+    && args.every((arg) => pageFlags.has(arg) || /^\d+$/u.test(arg))) {
+    return run('./mc/commands/home.js', args);
+  }
+  if (command === 'list') return moved('mc list', stderr);
+  // The surface, and nothing beside it. `mc doctor` and `mc migrate` went on
+  // 2026-09-03: both answer questions about the V1 session store — session
+  // homes, generation journals, the pre-V1 move — and that store is what
+  // `mc-cut` is removing. A verb that reports on machinery nobody runs is a
+  // second product's front door left standing in this one's hallway.
+  return Object.hasOwn(VERB_MODULES, command)
+    ? run(VERB_MODULES[command], args.slice(1))
+    : null;
+}
+
+/**
+ * A verb that has become part of `mc` itself. It says where it went rather
+ * than printing a second list beside the first one — a wrong answer given
+ * confidently is worse than none, and silence is worse than both.
+ */
+function moved(verb, stderr) {
+  stderr.write(`mc: ${verb} is now mc — one page, and it is what mc prints\n`);
+  stderr.write('    mc                  the page, and at a terminal a way in\n');
+  stderr.write('    mc status <name>    one project\n');
+  return 2;
+}

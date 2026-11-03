@@ -18,9 +18,14 @@ import { git } from './_helpers/git-fixture.js';
 import {
   addArea, addedPaths, fixture, json, moveOriginMain, snapshot,
 } from './_helpers/repo-fixture.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
+// Loaded with the file, not inside the first test that asks: its imports are
+// most of a first call's time.
+import '../../src/mc/commands/repo.js';
 import { board as workModel } from './_helpers/board.js';
 import { recordNightlyRun } from '../../src/mc/nightly-history.js';
+
+await preloadVerbs('repo');
 
 describe('mc repo status — the view', () => {
   it('groups the work model\'s own worktree inspection by repository', async () => {
@@ -29,7 +34,7 @@ describe('mc repo status — the view', () => {
     writeFileSync(join(worktree, 'scratch.txt'), 'work in progress\n');
     try {
       const board = await workModel(fx.env);
-      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
 
       assert.equal(view.repos.length, 1);
       assert.equal(view.repos[0].path, fx.dir);
@@ -43,7 +48,7 @@ describe('mc repo status — the view', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('counts how far behind main each open pull request is', () => {
+  it('counts how far behind main each open pull request is', async () => {
     const fx = fixture({ gh: true });
     try {
       const worktree = addArea(fx, 'alpha', 'alpha');
@@ -65,7 +70,7 @@ describe('mc repo status — the view', () => {
         updatedAt: '2026-08-14T10:00:00Z',
       }]));
 
-      const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--json'], fx.env));
       const [pr] = view.repos[0].pull_requests.items;
       assert.equal(pr.number, 7);
       assert.equal(pr.branch, 'alpha');
@@ -74,11 +79,11 @@ describe('mc repo status — the view', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('degrades the pull-request section when gh is missing, and shows the rest', () => {
+  it('degrades the pull-request section when gh is missing, and shows the rest', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
-      const result = runMcCli(['repo', 'status', '--json'], fx.env);
+      const result = await runVerb(['repo', 'status', '--json'], fx.env);
       const view = json(result);
       const repo = view.repos[0];
       assert.match(repo.pull_requests.degraded, /gh is not installed/u);
@@ -89,27 +94,27 @@ describe('mc repo status — the view', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('--offline neither fetches nor asks GitHub, and says so', () => {
+  it('--offline neither fetches nor asks GitHub, and says so', async () => {
     const fx = fixture({ gh: true });
     addArea(fx, 'alpha', 'alpha');
     try {
       const before = git(fx.dir, 'rev-parse origin/main');
       const moved = moveOriginMain(fx);
 
-      const offline = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const offline = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(offline.repos[0].main.id, before);
       assert.match(offline.repos[0].main.degraded, /offline/u);
       assert.match(offline.repos[0].pull_requests.degraded, /offline/u);
       assert.equal(existsSync(fx.ghLog), false, 'gh was called under --offline');
 
-      const online = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const online = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(online.repos[0].main.id, moved);
       assert.equal(online.repos[0].main.degraded, null);
       assert.ok(readFileSync(fx.ghLog, 'utf8').includes('pr list'));
     } finally { fx.cleanup(); }
   });
 
-  it('reads: it changes no repository, no worktree and nothing under mc\'s home', () => {
+  it('reads: it changes no repository, no worktree and nothing under mc\'s home', async () => {
     const fx = fixture({ gh: true });
     const worktree = addArea(fx, 'alpha', 'alpha');
     try {
@@ -126,22 +131,21 @@ describe('mc repo status — the view', () => {
       });
       const before = state();
       const homeBefore = snapshot(fx.mcHome);
-      assert.equal(runMcCli(['repo', 'status', '--json'], fx.env).status, 0);
-      assert.equal(runMcCli(['repo', 'status', '--offline'], fx.env).status, 0);
+      assert.equal((await runVerb(['repo', 'status', '--json'], fx.env)).status, 0);
+      assert.equal((await runVerb(['repo', 'status', '--offline'], fx.env)).status, 0);
 
       // Every commit, branch and file exactly where it was — and no STATE
       // written under mc's home or the work root.
       assert.deepEqual(state(), before);
-      // The log is the one exception, and it is named rather than filtered
-      // out of sight: a read-only command records that it ran, and records
-      // nothing else. Asserting the exact set is what keeps this test worth
-      // running — "nothing changed except the thing we stopped looking at" is
-      // not an invariant (2026-08-30).
-      assert.deepEqual(addedPaths(homeBefore, snapshot(fx.mcHome)), ['logs/mc.log']);
+      // Asserted as the exact set, not filtered: "nothing changed except the
+      // thing we stopped looking at" is not an invariant (2026-08-30). The
+      // verb runs in this process, so not even the binary's own start and end
+      // lines in logs/mc.log appear — those are tests/mc/commands/log.test.js's.
+      assert.deepEqual(addedPaths(homeBefore, snapshot(fx.mcHome)), []);
     } finally { fx.cleanup(); }
   });
 
-  it('reports the installation when mc runs straight from a checkout', () => {
+  it('reports the installation when mc runs straight from a checkout', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -152,33 +156,33 @@ describe('mc repo status — the view', () => {
       chmodSync(entry, 0o755);
       symlinkSync(entry, join(fx.bin, 'mc'));
 
-      const inStep = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const inStep = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(inStep.repos[0].deploy.source, entry);
       assert.equal(inStep.repos[0].deploy.in_step, true);
       assert.equal(inStep.repos[0].deploy.behind_main, 0);
 
       moveOriginMain(fx);
-      const behind = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const behind = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(behind.repos[0].deploy.in_step, false);
       assert.equal(behind.repos[0].deploy.behind_main, 1);
     } finally { fx.cleanup(); }
   });
 
-  it('a name that matches nothing is an error, not an empty page', () => {
+  it('a name that matches nothing is an error, not an empty page', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
-      const result = runMcCli(['repo', 'status', 'not-a-repo', '--offline'], fx.env);
+      const result = await runVerb(['repo', 'status', 'not-a-repo', '--offline'], fx.env);
       assert.equal(result.status, 1);
       assert.match(result.stderr, /no repository called "not-a-repo"/u);
     } finally { fx.cleanup(); }
   });
 
-  it('one repository by name, out of the ones mc can see', () => {
+  it('one repository by name, out of the ones mc can see', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
-      const view = json(runMcCli(['repo', 'status', 'repo', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', 'repo', '--offline', '--json'], fx.env));
       assert.equal(view.repos.length, 1);
       assert.equal(view.repos[0].name, 'repo');
       assert.deepEqual(view.unknown, []);
@@ -200,7 +204,7 @@ describe('mc repo status — red, and since when', () => {
     reason: null, red, tests: 2445,
   }, { root: fx.mcHome });
 
-  it('names a test red in two runs with the first run that saw it, on the page and in --json', () => {
+  it('names a test red in two runs with the first run that saw it, on the page and in --json', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -210,27 +214,27 @@ describe('mc repo status — red, and since when', () => {
       run(fx, '2026-09-01T03:00:00.000Z', ['data-bus event names'], 'a'.repeat(40));
       run(fx, '2026-09-02T03:00:00.000Z', ['data-bus event names'], 'b'.repeat(40));
 
-      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       const { nightly } = view.repos[0];
       assert.equal(nightly.runs, 3);
       assert.equal(nightly.measured.commit, 'b'.repeat(40));
       assert.equal(nightly.red[0].name, 'data-bus event names');
       assert.equal(nightly.red[0].since, '2026-09-01T03:00:00.000Z');
 
-      const page = runMcCli(['repo', 'status', '--offline'], fx.env);
+      const page = await runVerb(['repo', 'status', '--offline'], fx.env);
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+bbbbbbb/u);
       assert.match(page.stdout, /red since .* \(2 runs\)\s+data-bus event names/u);
     } finally { fx.cleanup(); }
   });
 
-  it('a repository nobody has measured says so rather than nothing', () => {
+  it('a repository nobody has measured says so rather than nothing', async () => {
     const fx = fixture();
     addArea(fx, 'alpha', 'alpha');
     try {
-      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.deepEqual(view.repos[0].nightly, { runs: 0, last: null, measured: null, red: [] });
-      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /full run\s+never — the runner's chore takes it when it is due/u);
+      assert.match((await runVerb(['repo', 'status', '--offline'], fx.env)).stdout, /full run\s+never — the runner's chore takes it when it is due/u);
     } finally { fx.cleanup(); }
   });
 });

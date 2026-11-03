@@ -83,7 +83,9 @@ export async function run(argv, deps = {}) {
     return home.run(opts.json ? ['--json'] : [], deps);
   }
 
-  if (opts.verb === 'open') return openArea(opts.name, opts, { stdout, stderr });
+  // `sleep` is the trust dialog's wait between looks at the pane; a test hands
+  // in one that does not wait.
+  if (opts.verb === 'open') return openArea(opts.name, opts, { stdout, stderr, sleep: deps.sleep });
   return runVerb(opts, { stdout, stderr });
 }
 
@@ -541,7 +543,7 @@ export async function openArea(name, opts, deps) {
       if (started.hint) stderr.write(`mc: ${started.hint}\n`);
       return 1;
     }
-    const trust = clearTrustDialog(started.target);
+    const trust = clearTrustDialog(started.target, { sleep: deps.sleep });
     stdout.write(`mc: ${name} is running in the background as ${started.target}\n`);
     if (trust.answered) stdout.write('mc: answered Claude\'s folder-trust question for it\n');
     if (resuming) stdout.write(`mc: resumed ${resuming.id.slice(0, 8)}\n`);

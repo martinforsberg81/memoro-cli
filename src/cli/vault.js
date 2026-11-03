@@ -660,9 +660,9 @@ async function cmdSetup(argv, opts = {}) {
 
   // Step 1: Generate a placeholder salt + auth hash for the setup POST.
   const placeholderSaltBytes = new Uint8Array(32);
-  globalThis.crypto.getRandomValues(placeholderSaltBytes);
+  keyDeps(opts).getRandomValues(placeholderSaltBytes);
   const placeholderSaltB64 = bytesToBase64(placeholderSaltBytes);
-  const { authHash: placeholderAuthHash } = await deriveVaultKeys(password, placeholderSaltB64);
+  const { authHash: placeholderAuthHash } = await keyDeps(opts).deriveVaultKeys(password, placeholderSaltB64);
   const setupRes = await VaultApi.setupVault(portal, { authHash: placeholderAuthHash });
   if (!setupRes?.ok) {
     emit(flags.json, { ok: false, error: setupRes?.error || 'setup failed' });
@@ -674,7 +674,7 @@ async function cmdSetup(argv, opts = {}) {
   // that updates auth_hash + salt atomically). This matches the
   // browser flow.
   const serverSalt = setupRes.salt;
-  const { authHash: realAuthHash } = await deriveVaultKeys(password, serverSalt);
+  const { authHash: realAuthHash } = await keyDeps(opts).deriveVaultKeys(password, serverSalt);
 
   // Sanity: the auth hash derived against the server's salt must be
   // different from the placeholder (since the salts differ); but in
@@ -727,7 +727,7 @@ async function cmdUnlock(argv, opts = {}) {
   // Capture vaultKeyBytes too — phase 2 caches the raw key bytes in
   // the OS keychain so subsequent mc commands (and `mc new` / `mc
   // resume` materialisation) don't re-derive PBKDF2.
-  const { authHash, vaultKeyBytes } = await deriveVaultKeys(password, config.salt, config.iterations);
+  const { authHash, vaultKeyBytes } = await keyDeps(opts).deriveVaultKeys(password, config.salt, config.iterations);
   const priorDevice = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
   const deviceId = priorDevice?.deviceId || globalThis.crypto.randomUUID();
   const res = await VaultApi.unlockVault(portal, {
@@ -1238,7 +1238,7 @@ async function cmdChangePassword(argv, opts = {}) {
   // Derive current auth hash with the existing salt, unlock, then
   // submit the change-password call. The server requires unlocked
   // state to accept the change.
-  const { authHash: currentAuthHash, vaultKey } = await deriveVaultKeys(oldPassword, config.salt, config.iterations);
+  const { authHash: currentAuthHash, vaultKey } = await keyDeps(opts).deriveVaultKeys(oldPassword, config.salt, config.iterations);
 
   const unlock = await VaultApi.unlockVault(portal, { authHash: currentAuthHash });
   if (!unlock?.ok) {
@@ -1270,10 +1270,10 @@ async function cmdChangePassword(argv, opts = {}) {
   // is a narrow window but documented in the error message.
 
   const newSaltBytes = new Uint8Array(32);
-  globalThis.crypto.getRandomValues(newSaltBytes);
+  keyDeps(opts).getRandomValues(newSaltBytes);
   const newSaltB64 = bytesToBase64(newSaltBytes);
   const { authHash: newAuthHash, vaultKey: newVaultKey, vaultKeyBytes: newVaultKeyBytes } =
-    await deriveVaultKeys(newPassword, newSaltB64, config.iterations);
+    await keyDeps(opts).deriveVaultKeys(newPassword, newSaltB64, config.iterations);
 
   // Step 2 + 3: pull, decrypt + re-encrypt to an in-memory staging list.
   const listRes = await VaultApi.listSecrets(portal);
@@ -1518,7 +1518,7 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
 
   // 2. Cache miss → prompt + derive + cache.
   const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, vaultKeyBytes, authHash } = await deriveVaultKeys(
+  const { vaultKey, vaultKeyBytes, authHash } = await keyDeps(opts).deriveVaultKeys(
     password, config.salt, config.iterations,
   );
   const unlock = await VaultApi.unlockVault(portal, { authHash });
@@ -1644,10 +1644,10 @@ async function cmdRecovery(argv, opts = {}) {
   // The recovery code is a second master password to the KDF: same split,
   // its own salt. Its auth-hash half is the server-side verifier.
   const code = generateRecoveryCode();
-  const saltBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const saltBytes = keyDeps(opts).getRandomValues(new Uint8Array(32));
   const recoverySalt = bytesToBase64(saltBytes);
   const { vaultKey: ruk, authHash: recoveryAuthHash } =
-    await deriveVaultKeys(code, recoverySalt, config.iterations);
+    await keyDeps(opts).deriveVaultKeys(code, recoverySalt, config.iterations);
   const { wrapped, iv } = await wrapCustodyRootBytes(ruk, crkBytes, CRK_RECOVERY_AAD);
   crkBytes.fill(0);
 
@@ -1698,7 +1698,7 @@ async function cmdRecover(argv, opts = {}) {
 
   // Derive the recovery pair; unwrap the CRK with the code-derived key.
   const { vaultKey: ruk, authHash: recoveryAuthHash } =
-    await deriveVaultKeys(code, status.vault.recovery_salt, config.iterations);
+    await keyDeps(opts).deriveVaultKeys(code, status.vault.recovery_salt, config.iterations);
   let crkBytes;
   try {
     crkBytes = await unwrapCustodyRootBytes(
@@ -1709,10 +1709,10 @@ async function cmdRecover(argv, opts = {}) {
     return 1;
   }
 
-  const saltBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const saltBytes = keyDeps(opts).getRandomValues(new Uint8Array(32));
   const newSalt = bytesToBase64(saltBytes);
   const { authHash: newAuthHash, vaultKeyBytes: newVaultKeyBytes } =
-    await deriveVaultKeys(newPassword, newSalt, config.iterations);
+    await keyDeps(opts).deriveVaultKeys(newPassword, newSalt, config.iterations);
   const { wrapped, iv } = await wrapCustodyRootBytes(await importVaultKey(newVaultKeyBytes), crkBytes);
   crkBytes.fill(0);
 
@@ -1947,6 +1947,21 @@ function bytesToBase64(bytes) {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);
+}
+
+/**
+ * The key derivation and the random source of new salts, from
+ * `opts.keyDeps` when a test passes one. Tests pass the real
+ * `deriveVaultKeys` behind a memo (same password, salt and iterations —
+ * the same 600k-iteration result, computed once) and a fixed salt source
+ * so the memo can be filled before the tests run. Production passes
+ * neither.
+ */
+function keyDeps(opts = {}) {
+  return {
+    deriveVaultKeys: opts.keyDeps?.deriveVaultKeys || deriveVaultKeys,
+    getRandomValues: opts.keyDeps?.getRandomValues || ((bytes) => globalThis.crypto.getRandomValues(bytes)),
+  };
 }
 
 /**
