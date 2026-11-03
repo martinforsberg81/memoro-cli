@@ -151,8 +151,8 @@ The launch sets `MC_ROLE=plan-session` and `MC_PROGRAMME=<programme>` on both a 
 conversation and a resume. A SessionStart hook names the role in its first
 line, including a session Martin opens by hand in that programme directory.
 The role and the hook both say never to run `mc plan` from inside the session.
-The runner also starts a headless plan session on a blocked goal, with the
-same role ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*).
+The runner also starts a headless plan session on a goal in `finish`, or in
+`merging` after a red, with the same role ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*).
 
 Behind the prompt are `canon/roles/all-sessions.md` and `canon/roles/plan-session.md`, assembled by `instructionsFor` the way every other role
 session's instructions are ([`mc-roles.md`](mc-roles.md)). The role file was

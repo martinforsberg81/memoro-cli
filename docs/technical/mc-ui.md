@@ -497,8 +497,10 @@ or a workarea, which somebody has to open.
 
 A goal's row (`g · <goal>`) uses the same words' colours: a goal in a phase
 its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*) leads its
-tail with `phase <n> — after phase <n-1>` in yellow; `blocked` is red; `review` is green; `open` is green
-while a session is on it and grey otherwise; `done` is grey.
+tail with `phase <n> — after phase <n-1>` in yellow. Its state is `<stage> ·
+<status>`: any stage `· blocked` is red; `review` and `merging` are green;
+`build` and `finish` are green while a session is on them and grey otherwise;
+`plan`, `done` and `dropped` are grey.
 
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the

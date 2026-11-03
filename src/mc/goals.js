@@ -6,8 +6,8 @@
  *   ~/mc/programs/<programme>/goals/<goal>/<repo>/     a worktree on goal/<goal>, from origin/main
  *
  * mc keeps nothing else for a goal. GOAL.json is written only by verbs (`mc
- * goal new`, `set`, `document add`, `criterion add|met|unmet`, the status
- * verbs), each write validated: an invalid GOAL.json is never written. One
+ * goal new`, `set`, `document add`, `criterion add|met|unmet`, `stage`, the
+ * status verbs), each write validated: an invalid GOAL.json is never written. One
  * that does not parse is reported with its problems, never skipped.
  *
  * The readers take `list` and `read` as arguments, so the tests use a file
@@ -568,7 +568,7 @@ export function addGoalWorktree({ git, bare, path, goal }) {
 /**
  * A goal's branch is made when the goal can start. A goal in a later phase got
  * its branch at `mc goal new`, before the phases ahead of it landed; when its
- * first build session starts, or it goes `open` by a verb, each worktree whose
+ * first build session starts, or it goes to `build` by a verb, each worktree whose
  * branch has no commits of its own — nothing past
  * `origin/main` — is moved to `origin/main` as it is now, which is that branch
  * made again. A branch with commits is never moved, nor one under uncommitted

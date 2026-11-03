@@ -66,7 +66,7 @@ session is for; a verb file says how a verb is used).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
+| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merging after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
 | | | `build-session:project` | `mc run`, one step of a `PLAN.json` |
 | | | `build-session:worker` | an area that already carries the worker mark (`mc worker` went on 2026-11-03) |

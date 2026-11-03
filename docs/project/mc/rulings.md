@@ -29,7 +29,7 @@ red merge or the runner wakes one headless plan session on the planning model
 Martin — and a goal plan left blocked wakes nothing again. The mend
 (`src/mc/mend.js`, `canon/roles/mend.md`, `mc publish --branch`) is removed:
 a red on a project's pull request goes to the step's next session (ruling 30).
-See [mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*
+See [mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*
 and [mc-merge.md](../../technical/mc-merge.md) § *The async round, SIGTERM and
 where a red goes*. This amends rulings 40, 42, 43, 44, 51 and 52 where they
 name the mend.
@@ -1312,7 +1312,7 @@ lanes skip for disk. Carried by `retention`
 
 `ruling · 2026-10-12` · raised by Martin in the mc planning session
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 > "Jag tror att cache ttl kan vara 5 min i step-sessionerna … men plan- och
 > work-sessioner får 1h. Det ska inte vara beroende av credit eller plan." …
@@ -1367,7 +1367,7 @@ parallel calls. Carried by `parallel-reads`
 `ruling · 2026-10-13` · raised by Martin in the brief session, after the
 week-focus-rows trial
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 > "Kostnadsbesparingen är så pass stor att vi behöver gå vidare med detta. […]
 > Vi behöver uppdatera sessionResult och instruktionen till plan-sessionen. Vi
@@ -1405,7 +1405,7 @@ Mend stays on Opus (Martin, 2026-10-13, at the trial). Carried by
 
 `ruling · 2026-10-16` · raised by Martin in the brief session
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 > "Vi behöver utveckla mc publish. […] mc publish doesn't update the
 > description of a PR that already exists. […] Tänk igenom ytterligare luckor
@@ -1457,7 +1457,7 @@ merge`; it is rewritten in memoro once this has landed. Carried by
 
 `ruling · 2026-10-16` · raised by Martin in the brief session
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 > "Vi behöver också se över mc test igen. […] Jag upplever att vi kör för
 > mycket test, och vi håller inte kvar i felet utan samma test måste göras om
@@ -1732,7 +1732,7 @@ Carried by `step-area-never-dirty` (4) and the docs project of ruling 48 (1–3)
 `ruling · 2026-10-20` · raised in the `mc` programme session while planning
 project B of ruling 48
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 Ruling 48's structure put a project's step worktrees inside its directory.
 Read against the code, that cannot hold: mc removes an area by removing its
@@ -1768,7 +1768,7 @@ Replaces § Structure of `mc-project.md`. Carried by project B.
 
 `ruling · 2026-10-24` · raised by Martin
 
-**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *A blocked goal wakes plan*).
+**Amended 2026-11-02** (goal `headless-plan`): the mend this ruling names is removed — a red on a step's pull request goes to the step's next session (ruling 30), a red on a goal's blocks it and wakes plan ([mc-goals.md](../../technical/mc-goals.md) § *Finish and a red merge: a plan session*).
 
 > "Sessionerna tar extremt mycket tid och resurser när de är klara med sitt
 > arbete, de kör `mc gate --wait` sedan `mc publish` och `mc merge`. Allting
