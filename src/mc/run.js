@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -2436,7 +2436,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
-    const branch = `goal/${goal.goal}`;
+    const branch = goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
     const repo = repos.find((item) => item.name === repoName);
     let pr = null;
     if (review) {

@@ -17,7 +17,7 @@ import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ARCHIVE_HOLD_MS } from './project-archive.js';
-import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, prRef, statusSince } from './goals.js';
+import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalBranch, goalLogRow, prRef, statusSince } from './goals.js';
 import { repoNameOf } from './repos.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -62,7 +62,7 @@ export function archiveGoal(goal, all, { home, git, gh, known, move = moveDir, a
   if (waiting.length) return refuse(`${waiting.join(', ')} start${waiting.length === 1 ? 's' : ''} after it — mc goal after changes that first`);
   const repos = known();
   const bareOf = (repo) => repos.find((path) => repoNameOf(path) === repo) ?? null;
-  const branch = `goal/${goal.goal}`;
+  const branch = goalBranch({ git, dir: goal.dir, goal: goal.goal, repo: goal.repos[0] });
   for (const repo of goal.repos) {
     const path = join(goal.dir, repo);
     const status = git(path, ['status', '--porcelain']);

@@ -546,6 +546,18 @@ export function addGoalWorktree({ git, bare, path, goal }) {
 }
 
 /**
+ * The branch a goal's worktree of `repo` is on: `goal/<goal>`, as `mc goal
+ * new` makes it, or the branch it took over from a project (`mc goal
+ * from-project`), whose pull request is already open on it. Read from the
+ * worktree; `goal/<goal>` when it cannot say.
+ */
+export function goalBranch({ git, dir, goal, repo }) {
+  const head = git(join(dir, repo), ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const name = head.ok ? head.stdout.trim() : '';
+  return /^[\w./-]+$/u.test(name) && name !== 'HEAD' ? name : `goal/${goal}`;
+}
+
+/**
  * A goal's branch is made when the goal can start. A goal that waited got its
  * branch at `mc goal new`, before what it waits for landed; when it goes
  * `open`, each worktree whose branch has no commits of its own — nothing past

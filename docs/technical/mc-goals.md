@@ -166,6 +166,8 @@ Fifteen verbs; the status verbs are five words.
 - **`convert [<p>]`** — turns every goal of the programme (of every programme
   when none is named) still written as GOAL.md into GOAL.json (*Converting a
   GOAL.md*).
+- **`from-project <p>/<project>`** — turns a live project into goals, once
+  (*From a project*).
 - **`after <p>/<g> [<p>/<g>…]`** — replaces the goal's `after`; none given
   clears it. A name that is not a goal, the goal itself, or a ring (a goal
   that already waits, through its own `after`, on this one) is refused, and so
@@ -264,6 +266,44 @@ A GOAL.md whose front matter does not read, or one beside a GOAL.json, is
 left as it is and named on stderr (exit 1). The plan session in `mc` runs the
 conversion for every programme once, then rewrites the checks and translates
 the Swedish prose by hand.
+
+## From a project
+
+Until 2026-11-03 mc had a second unit of work, the project: a `PLAN.json` of
+steps under `~/mc/programs/<programme>/<project>/`, with its state in a
+`STATE.json` beside it. A goal carries everything a plan did; a plan's steps
+are goals ordered with `after`. `mc goal from-project <programme>/<project>`
+(`src/mc/project-convert.js`, the one reader of PLAN.json and STATE.json left)
+turns a live project into goals:
+
+- one goal per step not `done` (STATE.json's status laid over the plan's),
+  named `<project>-<n>` after the step's number, each `after` the one before.
+  A step blocked on another project waits on that project's last goal, which
+  must be converted first; on a finished project it waits on nothing;
+- the step's `title` is the goal's title, its `instruction` the goal, its
+  `done_when` a criterion — the title, checked by `done_when`. The project's
+  contract, out of scope and documents go to every goal, its success criteria
+  to the last, `met` as STATE.json held them. `class` is the step's work class,
+  or the plan's, or `large`;
+- a `built` or `landing` step with a pull request is a goal in `review`
+  carrying it, its criterion met; a `blocked` step is a `blocked` goal whose
+  first LOG.md entry says the blocker; any other is `open`, or `waiting` on the
+  goal before it;
+- a step with a branch of its own in STATE.json has its goal's worktree on
+  that branch — the local one, or a local branch of that name from origin's —
+  so its pull request stays the goal's; any other goal's worktree is
+  `goal/<name>` from `origin/main`. The runner's review and `mc goal archive`
+  read a goal's branch from its worktree (`goalBranch`);
+- a branch-flow project — its last step `kind: review` — is one goal, named
+  after the project, on the project's branch: the project's goal and every
+  remaining step's instruction as its text, every remaining step's criterion,
+  in `review` with the pull request when every step before the review is built.
+
+A project with every step done, or archived (a `CLOSEOUT.json` beside its
+plan), is refused and left as it is on disk; nothing else in mc reads it. So
+is a project whose goals already exist, and one whose branch is checked out in
+another worktree — with nothing written. The answer names each goal made with
+its status, branch, `after` and pull request.
 
 ## Waiting on another goal
 

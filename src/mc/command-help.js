@@ -99,6 +99,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal criterion met [<programme>/<goal>] <n>   record that criterion <n> holds, after running its check\n",
     "        mc goal criterion unmet [<programme>/<goal>] <n>   take that back\n",
     "        mc goal convert [<programme>]   every goal still in markdown, outside goals/.archive/, turned into GOAL.json\n",
+    "        mc goal from-project <programme>/<project>   a live project's steps not done turned into goals, once: <project>-<n> each after the one before, or one goal on the project's branch for a branch-flow project; a finished project is refused\n",
     "        mc goal after <programme>/<goal> [<p>/<g>...]   the goals it starts after, replaced (none clears them); waiting while one has not landed, and the runner opens it when all have\n",
     "        mc goal log [<programme>/<goal>] [--done \"…\"] [--comment \"…\"] [--next \"…\"] [--status open|review|blocked|done]   append a session's entry to LOG.md; the goal is MC_GOAL's when none is named\n",
     "        mc goal open|review|blocked|done [<programme>/<goal>] [--reason \"…\"]   set the goal's status, and log the reason;\n",
