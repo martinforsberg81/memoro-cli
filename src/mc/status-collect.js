@@ -316,6 +316,9 @@ export function nowBlock({
       variant: named ? named.variant : (goal ? 'goal' : null),
       // `mc/<goal>` for a session on a goal, null for a project's.
       goal,
+      // The programme the lane file names (run.js writes it); the page falls
+      // back to the goal's name or the project's plan for a file from before.
+      programme: current.programme || null,
       repo: current.repo || null,
       lane,
       tool: current.tool || null,

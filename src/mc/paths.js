@@ -84,14 +84,14 @@ export function workAreaPath(name, env = process.env) {
  *
  * The tables used to live in `~/mc/intake/`, which was the wrong room for a
  * reason that only showed once the inbox was asked to drain: `mc run` rewrites
- * `unplanned-workareas.md` and `unreadable-plans.md` whole every round, so a
+ * `unreadable-plans.md` whole every round, so a
  * turn that read one and filed it away would find it back next round, and the
  * round after, forever. They are not material somebody dropped in an inbox —
  * they are the runner's own output about its own rounds, and they belong beside
  * the rest of it.
  *
  * The names live here, with the rest of the work root's shape, for the same
- * reason `PLAN_HOME` and `WORK_DEPS` do: the runner writes them and
+ * reason `PLAN_HOME` and `SHARED_DEPS` do: the runner writes them and
  * the brief role names them for the session to read, and two copies of one word is how the two
  * drift apart.
  */
@@ -99,8 +99,6 @@ export const RUNNER_HOME = 'runner';
 
 /** Appended when a project is archived whose `project_log.md` row says `doc: none`. */
 export const UNDOCUMENTED_CLOSURES = 'undocumented-closures.md';
-/** Rewritten every round: the folders under `~/mc` no project on main explains. */
-export const UNPLANNED_WORKAREAS = 'unplanned-workareas.md';
 /** Rewritten every round: the plans on `origin/main` the schema refuses. */
 export const UNREADABLE_PLANS = 'unreadable-plans.md';
 
@@ -178,8 +176,9 @@ export function stepHome(env = process.env) {
 }
 
 /**
- * `~/mc/work/` — the areas `mc work` makes, one per name. Ruling 39: the path
- * says what an area is.
+ * `~/mc/work/` — what is left of the workareas, retired on 2026-11-03 (goal
+ * mc/no-work). Nothing makes one any more; `mc tidy` lists each (rule W).
+ * Ruling 39: the path says what an area is.
  */
 export const WORK_HOME = 'work';
 
@@ -307,7 +306,7 @@ export function areaKindOf(areaName) {
     return second ? { kind: second.startsWith('deps-') ? 'deps' : 'step', name: second, area: `${first}/${second}` } : null;
   }
   if (first === WORK_HOME) {
-    return second ? { kind: 'work', name: second, area: `${first}/${second}` } : null;
+    return second ? { kind: 'retired', name: second, area: `${first}/${second}` } : null;
   }
   if (STATE_HOMES.has(first) || first.startsWith('.')) return null;
   return { kind: 'legacy', name: first, area: first };
@@ -340,13 +339,13 @@ export function stepAreaName(project, {
 }
 
 /**
- * The area a name typed at `mc work` opens: `{ name, runner }`, where `name`
- * is the area's path relative to the work root.
+ * The area a name without its kind stands for — a lease holder's, a tmux
+ * session's: `{ name, runner }`, where `name` is the area's path relative to
+ * the work root.
  *
- * `work/<name>` when it exists. Else the runner's area for a project of that
- * name, when there is one (`stepAreaName`) — `mc work <project>` is how a
- * person looks into a runner area, and `runner: true` is what lets the verbs
- * say so and `release`/`discard` refuse. Else `work/<name>`, to be created.
+ * `work/<name>` when it exists (a retired workarea). Else the runner's area
+ * for a project of that name, when there is one (`stepAreaName`), with
+ * `runner: true`. Else `work/<name>`, which does not exist.
  */
 export function workAreaName(name, {
   root = workRoot(),
@@ -417,7 +416,7 @@ export function mcHomeExists() {
  * instead of 41.
  *
  * The name lives here, with the rest of the work root's shape, for the same
- * reason `PLAN_HOME` does: `work-deps.js` builds the tree and the tests assert
+ * reason `PLAN_HOME` does: `shared-deps.js` builds the tree and the tests assert
  * where it is, and two copies of one word is how the two drift apart.
  *
  * It is not a work area and cannot be mistaken for one: both listings that
@@ -425,16 +424,16 @@ export function mcHomeExists() {
  * name a directory under the work root only when it holds a checkout of a
  * repository mc knows, and this one holds none.
  */
-export const WORK_DEPS = 'node_modules';
+export const SHARED_DEPS = 'node_modules';
 
-export function workDepsPath(env = process.env) {
-  return join(workRoot(env), WORK_DEPS);
+export function sharedDepsPath(env = process.env) {
+  return join(workRoot(env), SHARED_DEPS);
 }
 
 /**
  * `~/mc/gate` — where the merge gate builds its throwaway worktrees.
  *
- * A sibling of `WORK_DEPS`, and that is the whole reason it is here rather
+ * A sibling of `SHARED_DEPS`, and that is the whole reason it is here rather
  * than under `mcHome()` where it used to be. The gate's candidate is a
  * checkout with no `node_modules` in it, and it must resolve whatever the
  * manifest declares for exactly the reason a workarea must: a test file that
@@ -469,10 +468,10 @@ export function workGateCachePath(env = process.env) {
 }
 
 /** What `npm ci` in the work root reads: a copy of the repository's two files. */
-export function workDepsManifestPath(env = process.env) {
+export function sharedDepsManifestPath(env = process.env) {
   return join(workRoot(env), 'package.json');
 }
 
-export function workDepsLockPath(env = process.env) {
+export function sharedDepsLockPath(env = process.env) {
   return join(workRoot(env), 'package-lock.json');
 }

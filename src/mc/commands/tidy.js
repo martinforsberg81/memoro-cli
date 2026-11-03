@@ -12,8 +12,10 @@
  *                            if it is down, which nothing else here does
  *
  * Without `--docker` the Docker half runs too, but only on a runtime that is
- * already up. `mc work tidy` is this command. The runner runs it once a day
- * and after a lane skipped for disk.
+ * already up. The runner runs it once a day and after a lane skipped for
+ * disk; what it applies then is never a retired workarea (rule W, tidy.js),
+ * which only a person's `mc tidy --apply` removes — a headless session
+ * (`MC_HEADLESS=1`) is not one.
  */
 import { describeSize } from '../conversations.js';
 import { tidyDocker } from '../docker.js';
@@ -58,11 +60,11 @@ export function withDays(opts, days) {
 }
 
 /**
- * The one entry `mc tidy` and `mc work tidy` share: run, then print. Exit 1
+ * Run, then print. Exit 1
  * when an apply kept something on re-check or a Docker prune failed.
  * `docker` is `tidyDocker`; `--docker` runs nothing else.
  */
-export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyDocker } = {}) {
+export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyDocker, env = process.env } = {}) {
   const prune = docker || tidyDocker;
   if (opts.docker) {
     const answer = await prune({ apply: opts.apply, start: opts.apply ? { pid: process.pid, run: 'mc tidy --docker' } : null });
@@ -73,7 +75,7 @@ export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyD
     }
     return dockerFailed(answer) ? 1 : 0;
   }
-  const { list, listPath, outcome } = (tidy || runTidy)({ apply: opts.apply, days: opts.days });
+  const { list, listPath, outcome } = (tidy || runTidy)({ apply: opts.apply, days: opts.days, person: env.MC_HEADLESS !== '1' });
   const answer = await prune({ apply: opts.apply });
   const code = outcome?.kept || dockerFailed(answer) ? 1 : 0;
   if (opts.json) {

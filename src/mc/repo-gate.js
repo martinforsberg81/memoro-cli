@@ -67,7 +67,7 @@ import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
-import { ensureWorkDeps } from './work-deps.js';
+import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
@@ -99,7 +99,7 @@ function abortReason(signal) { return String(signal?.reason?.message || signal?.
  * tree is — so the candidate ran the same five-files-short suite every
  * workarea used to, and paid an `npm ci` of its own to stop doing it. The work
  * root is where mc keeps the one tree (`paths.js`, `WORK_GATE` beside
- * `WORK_DEPS`), and a candidate two directories under it resolves that tree by
+ * `SHARED_DEPS`), and a candidate two directories under it resolves that tree by
  * node's own parent walk.
  */
 export function gateRoot(env = process.env) {
@@ -635,7 +635,7 @@ export async function runGate({
 
     // The tree the candidate resolves through, made to match the candidate.
     //
-    // This is `mc work add`'s own mechanism (`work-deps.js`), called on the
+    // This is the workareas' own mechanism (`shared-deps.js`), called on the
     // repository being measured — one `node_modules` at the work root, two
     // directories above the candidate, for the workareas and the gate
     // together. A candidate whose lockfile is the one that tree holds
@@ -654,7 +654,7 @@ export async function runGate({
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = await untilCeiling(ensureWorkDeps({
+    const deps = await untilCeiling(ensureSharedDeps({
       repo: headDir, repoName: repoNameOf(repoPath), env, install: (cwd) => npmCiAsync(cwd, childSignal()), ownTree: headDir,
     }));
     if (deps.state === 'installed-own') say(`the candidate's own dependency tree was installed — ${deps.why}`);
@@ -2486,8 +2486,8 @@ function shell(command, options) {
 export const commandShell = runShellAsync;
 
 /**
- * `npm ci` for the candidate's own dependency tree (`work-deps.js`),
- * without holding the event loop for up to ten minutes. `ensureWorkDeps`
+ * `npm ci` for the candidate's own dependency tree (`shared-deps.js`),
+ * without holding the event loop for up to ten minutes. `ensureSharedDeps`
  * reads a throw as the install failing, with npm's stderr as the reason.
  */
 async function npmCiAsync(cwd, signal = null) {

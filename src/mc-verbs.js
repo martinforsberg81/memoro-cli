@@ -9,7 +9,6 @@
 /** Every verb the dispatcher routes, and the module that answers it. */
 export const VERB_MODULES = {
   status: './cli/status.js',
-  work: './mc/commands/work.js',
   tidy: './mc/commands/tidy.js',
   layout: './mc/commands/layout.js',
   repos: './mc/commands/repos.js',
@@ -28,7 +27,6 @@ export const VERB_MODULES = {
   language: './mc/commands/language.js',
   deps: './mc/commands/deps.js',
   prs: './mc/commands/prs.js',
-  worker: './mc/commands/worker.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
   plan: './mc/commands/plan.js',
@@ -42,6 +40,24 @@ export const VERB_MODULES = {
   goal: './mc/commands/goal.js',
   programs: './mc/commands/programs.js',
 };
+
+/**
+ * The verbs that went on 2026-11-03 (goal mc/no-work): every session belongs
+ * to a programme (plan, build, review) or a desk (brief, helper), and there is
+ * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
+ */
+export const RETIRED_VERBS = Object.freeze(['work', 'worker']);
+
+/** What a retired verb says, whatever follows it: where each kind of session starts now. */
+export function retiredLines(verb) {
+  return [
+    `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
+    '    mc                    the page; a project\'s number opens its runner area',
+    '    mc plan <programme>   plan a programme',
+    '    mc brief · mc helper  the two desks',
+    '    mc tidy               what is left under ~/mc/work/, and whether it can go',
+  ];
+}
 
 /**
  * `--help` or `-h` as a whole word, anywhere after the verb, asks for the
@@ -102,9 +118,11 @@ export async function runModule(path, argv, { stdout = process.stdout } = {}) {
  */
 export async function routeV1Command(args, { stderr = process.stderr, run = runModule } = {}) {
   const command = args[0];
-  // `mc sessions …` went with the session verbs (2026-08-30). What a person
-  // means by it now is a work area, and `mc work` is where that lives.
+  // `mc sessions …` went with the session verbs (2026-08-30).
   if (command === 'sessions') return moved('mc sessions', stderr);
+  // The workarea verbs went on 2026-11-03: every session belongs to a
+  // programme or a desk, and there is no third kind (`RETIRED_VERBS`).
+  if (RETIRED_VERBS.includes(command)) return retired(command, stderr);
   // Bare `mc` is the page: the runner, the queue, the decisions, the intake
   // and every workarea, and at a terminal the way in underneath it. It was
   // the V1 sessions table until 2026-08-29 (decision mc-3) — the front door
@@ -138,5 +156,11 @@ function moved(verb, stderr) {
   stderr.write(`mc: ${verb} is now mc — one page, and it is what mc prints\n`);
   stderr.write('    mc                  the page, and at a terminal a way in\n');
   stderr.write('    mc status <name>    one project\n');
+  return 2;
+}
+
+/** A retired verb, whatever follows it: `retiredLines` says where things went. */
+function retired(verb, stderr) {
+  for (const line of retiredLines(verb)) stderr.write(`${line}\n`);
   return 2;
 }

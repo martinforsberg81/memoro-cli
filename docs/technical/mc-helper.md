@@ -54,8 +54,9 @@ less than it had.
 
 ### What left it, and why it was never an inbox item
 
-`mc run` writes three tables about its own work — `undocumented-closures.md`,
-`unplanned-workareas.md` and `unreadable-plans.md`. They sat in `~/mc/intake/`
+`mc run` writes two tables about its own work — `undocumented-closures.md`
+and `unreadable-plans.md` (a third, of the areas no project explains, went on
+2026-11-03; `mc tidy` lists those). They sat in `~/mc/intake/`
 until 2026-09-05 and now live in `~/mc/runner/`, beside
 `runner.json` and `log/`. `RUNNER_HOME` and the three filenames are in
 `src/mc/paths.js`, with `runnerTablePath` for the runner that writes them and

@@ -239,7 +239,7 @@ function pick(repos, names) {
 /**
  * Turn what the user typed into one of the repositories mc knows.
  *
- * The same rule as `mc work add`: a name is looked up against the clones on
+ * The same rule as `resolveRepository` (work-area.js): a name is looked up against the clones on
  * this machine rather than resolved against the current directory first. A
  * path still wins when it is one, and standing inside a repository and typing
  * nothing means that one.

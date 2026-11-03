@@ -19,7 +19,7 @@
  *    docs-only PR landed through `mc merge --docs`, as the runner's archive
  *    PR is.
  * 2. **the planning session** — the planning directory released the way
- *    `mc work release` releases any area: each worktree handed back, its
+ *    `releaseWorkArea` releases any area: each worktree handed back, its
  *    branch deleted, the conversations and the directory gone with them. In
  *    layout 2 the directory is the programme's own — its projects and
  *    documents — so it is moved whole to `~/mc/archive/programs/` instead
@@ -168,7 +168,9 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     // what release keeps is the only thing left to refuse.
     const beside = isProgrammeArea(areaName, env);
     if (released.kept.length || (!beside && (released.held_by.length || existsSync(areaPath)))) {
-      stderr.write(`mc: ${tilde(areaPath)}/ is still there — mc work release ${areaName} says why\n`);
+      stderr.write(`mc: ${tilde(areaPath)}/ is still there\n`);
+      for (const item of released.kept) stderr.write(`mc:   kept ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
+      if (released.held_by?.length) stderr.write(`mc:   it still holds ${released.held_by.join(', ')}\n`);
       return 1;
     }
     if (beside) {

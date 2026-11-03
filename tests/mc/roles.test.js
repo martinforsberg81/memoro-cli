@@ -98,7 +98,7 @@ describe('role files', () => {
     assert.equal(role.model, 'opus');
     assert.equal(role.singleton, false);
     assert.equal(role.cache, '5m');
-    assert.match(role.overlay, /You are a plan's review step: headless, one workarea/u);
+    assert.match(role.overlay, /You are a plan's review step: headless, one runner area/u);
   });
 
   it('a CRLF checkout is still a role', () => {

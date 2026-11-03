@@ -261,7 +261,7 @@ export const BASH_RULES = [
   {
     // A whole-tree install in a checkout: memoro's are attached to its
     // per-lockfile cache (`npm run deps:ensure`) and memoro-cli's resolve
-    // the one tree above the workareas (work-deps.js). Adding a package
+    // the one tree above the workareas (shared-deps.js). Adding a package
     // (`npm install <pkg>`) and a lockfile-only install pass.
     id: 'npm-install',
     test: /(^|[;&|(]\s*|\s)npm\s+(ci|clean-install|install|i)(?![\w:-])(?![^\n;&|]*--package-lock-only)(\s+--?[\w-]+(=\S+)?)*\s*(\d?>|[;&|)]|$)/u,

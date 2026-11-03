@@ -1374,11 +1374,12 @@ test('a workarea with no plan is not in the queue, and gets no step and no skip 
   assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper' && r.kind !== 'nightly'), []);
   const log = f.files['/w/runner/log/runner.log'] || '';
   assert.doesNotMatch(log, /fresh: /u, 'no skip line — nobody reads it');
-  // The two lines it does get are the two places somebody looks: the queue
-  // says why the name left it, and the workarea is written for `mc brief`.
+  // The queue says why the name left it, and the area is counted for
+  // `mc tidy` to list; no table is written for it any more.
   assert.match(log, /queue: dropped "fresh" — no plan on main/u);
   assert.equal(f.files['/w/queue.md'], '', 'the queue empties itself');
-  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
+  assert.match(log, /close: 1 area\(s\) with no project on main — mc tidy lists them/u);
+  assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
@@ -2528,7 +2529,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', step: 1, kind: 'build', variant: 'project', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, billing: 'plan', check_in_minutes: 60, check_ins: 0,
+    name: 'alpha', step: 1, kind: 'build', variant: 'project', programme: 'prog', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, billing: 'plan', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/step/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z', args: [], takeover: true });
@@ -2560,7 +2561,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', step: 1, kind: 'build', variant: 'project', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, billing: 'plan', check_in_minutes: null, check_ins: 0,
+    name: 'cx', step: 1, kind: 'build', variant: 'project', programme: 'prog', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, billing: 'plan', check_in_minutes: null, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/step/cx/memoro-cli',
     // The same text whichever tool it is handed to: `instructionsFor` assembles
     // one body and only the flag that carries it differs (portrait.js).
@@ -3607,8 +3608,8 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
   assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
-  // ...and it is not also filed as a folder nobody can explain.
-  assert.doesNotMatch(f.files['/w/runner/unplanned-workareas.md'], /\| gone \|/u);
+  // ...and it is not also counted as a folder nobody can explain.
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /with no project on main/u);
 });
 
 /**
@@ -3717,7 +3718,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
 });
 
-test('a workarea no project explains is never removed, and is written to intake with whether its branch landed', async () => {
+test('a workarea no project explains is never removed, and is left for mc tidy to list', async () => {
   const f = fixture({
     areas: {
       'msr-track-1': { repo: 'memoro' },
@@ -3729,26 +3730,8 @@ test('a workarea no project explains is never removed, and is written to intake 
   });
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
-  const intake = f.files['/w/runner/unplanned-workareas.md'];
-  assert.match(intake, /# Workareas with no project on main/u);
-  assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
-  assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no project on main/u);
-});
-
-test('the branch is asked of the worktree, not guessed from the folder name', async () => {
-  // The sixteen workareas from before the plan world were made by hand and
-  // need not be named after their branch: msr-track-1 sits on
-  // `msr-track1-skin`. Guessing left the one column that says whether
-  // anything would be lost reading `unknown` for most of the file.
-  const f = fixture({
-    areas: { 'msr-track-1': { repo: 'memoro' } },
-    heads: { 'msr-track-1': 'msr-track1-skin' },
-    landed: ['msr-track1-skin'],
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
+  assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 area\(s\) with no project on main — mc tidy lists them/u);
 });
 
 test('a live workarea is never closed, however done its plan is', async () => {

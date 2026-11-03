@@ -271,7 +271,7 @@ export async function bump({
     return 1;
   }
   if (!dirty.length) {
-    out.write(`npm changed nothing — nothing to commit; mc work discard ${areaName} --apply removes ${tilde(area)}\n`);
+    out.write(`npm changed nothing — nothing to commit; ${tilde(area)} (${areaName}) holds no change\n`);
     return done(0);
   }
 
@@ -299,7 +299,7 @@ export async function bump({
   result.merged = code === 0;
   if (code !== 0) {
     say(`#${number} did not land — the pull request stays open and ${tilde(area)} stays; `
-      + `mc merge ${repo} ${number} again after a fix, and mc work tidy removes the area once it has landed or closed`);
+      + `mc merge ${repo} ${number} again after a fix`);
   }
   return done(code);
 }

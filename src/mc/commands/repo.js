@@ -728,7 +728,7 @@ export function gateLines(report) {
  * The lease verbs take one repository, named the way the view names them.
  *
  * Cheap first: the names in the last snapshot, then a path or a clone beside
- * the home directory — the same rule as `mc work add`. Only a name none of
+ * the home directory — the same rule as `resolveRepository`. Only a name none of
  * those know costs a full count, because a claim should not wait on an
  * inspection of every checkout on the machine to find out where a name lives.
  */

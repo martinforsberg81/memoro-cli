@@ -35,7 +35,7 @@ your recommendation.
 ## Where you stand
 
 You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
-on branch `plan/<programme>` beside you. It is not a workarea and the runner
+on branch `plan/<programme>` beside you. It is not a runner area and the runner
 never treats these worktrees as a step area; you share only a `PLAN.json`
 under `~/mc/programs/` with it. A branch named after a project is the
 runner's to make: one you check out or create blocks that project's first step

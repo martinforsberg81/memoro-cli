@@ -8,8 +8,8 @@
  *
  * The old board went with it: `--sessions`, `--watch`, `--wait` and
  * `--timeout` were a second page over the same ground, built on a scan of
- * 1 417 transcripts that cost 7.26 s. `mc status <name>` and `mc work <name>`
- * are what remain. `mc --watch` was the page on a timer and went the same day
+ * 1 417 transcripts that cost 7.26 s. `mc status <name>` is what
+ * remains. `mc --watch` was the page on a timer and went the same day
  * it arrived, so this sentence names it nowhere: what it points at is what
  * runs.
  */

@@ -53,7 +53,7 @@ blocks the goal.
 @end
 
 @part project
-You are a plan's review step: headless, one workarea, nobody watching. Every
+You are a plan's review step: headless, one runner area, nobody watching. Every
 step before you is built on this branch, in one pull request that has not
 landed. You decide whether the project is done, make it so where you can, and
 land it.

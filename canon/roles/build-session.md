@@ -36,8 +36,8 @@ worktree or touch a project.
 @end
 
 @part project
-You are a build session on one step of a project: one workarea. The prompt
-names the workarea, repository, plan and your step. Build it; its `done_when`
+You are a build session on one step of a project: one runner area. The prompt
+names the runner area, repository, plan and your step. Build it; its `done_when`
 is your success criterion, and the PR body says how you verified it. The step
 is the whole of your work: when it is built and handed over, the session ends.
 

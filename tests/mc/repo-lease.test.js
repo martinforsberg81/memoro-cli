@@ -24,7 +24,7 @@ import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { writeSnapshot } from '../../src/mc/repo-snapshot.js';
 
-await preloadVerbs('repo', 'work');
+await preloadVerbs('repo');
 
 /** A shell standing in one of the work areas — that is who holds a lease. */
 function inArea(fx, name) {
@@ -219,10 +219,6 @@ describe('the repository lease', () => {
       // Not a text search — the fixture's own path has "lease" in it. The
       // area's shape is what must be free of the word.
       assert.equal(JSON.stringify(after.areas).includes('"lease"'), false);
-
-      // And the ordinary work verbs go on working on a held repository.
-      const added = await runVerb(['work', 'add', 'beta', fx.dir, 'beta-branch'], fx.env);
-      assert.equal(added.status, 0, added.stderr);
       assert.equal(lease(fx).holder, 'alpha');
     } finally { fx.cleanup(); }
   });

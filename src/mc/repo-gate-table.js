@@ -29,7 +29,7 @@
  * Two things can be *proved* rather than declared, and both carve-outs are
  * narrow on purpose. A repository with nothing to install has nothing that
  * could be missing. And a repository whose tree mc itself keeps above the
- * candidate — `work-deps.js`, one `node_modules` at the work root that the
+ * candidate — `shared-deps.js`, one `node_modules` at the work root that the
  * gate's worktree and every workarea resolve through — has nothing for the
  * *round* to install: `prepare` says what the round must run, not whether the
  * suite has dependencies. The second one is only safe because it is not taken
@@ -106,7 +106,7 @@ export const SHIPPED = Object.freeze({
   'memoro-cli': Object.freeze({
     // Nothing for the *round* to run, because the tree is the environment's.
     // The candidate stands under the work root (`paths.js`: `WORK_GATE` beside
-    // `WORK_DEPS`), so node's own parent walk finds `~/mc/node_modules` two
+    // `SHARED_DEPS`), so node's own parent walk finds `~/mc/node_modules` two
     // directories above it, the same tree every workarea resolves. The `npm
     // ci` this entry carried from 2026-09-02 was true and was a second copy of
     // a tree the candidate could already see.
@@ -122,7 +122,7 @@ export const SHIPPED = Object.freeze({
     // one does not. The field says what the round must run; the measurement
     // says whether the suite can run at all.
     prepare: null,
-    prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (work-deps.js) and '
+    prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (shared-deps.js) and '
       + 'builds the candidate at <work root>/gate/<repo>/candidate, so the three declared packages '
       + 'resolve by node\'s parent walk with no node_modules inside the checkout. Measured 2026-09-03 '
       + 'on the gate round for #570: the whole suite in such a candidate is 143 files, 1538 tests, '
