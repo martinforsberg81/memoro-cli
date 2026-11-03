@@ -3,8 +3,12 @@ import { relative, resolve, sep } from 'node:path';
 
 import { workRoot } from './paths.js';
 
-/** Identity belongs to the child, never to the session that started mc. */
-export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT'];
+/**
+ * Identity belongs to the child, never to the session that started mc.
+ * MC_HEADLESS is the runner's and the intake turn's mark on a session nobody
+ * watches; an interactive session opened from inside one must not inherit it.
+ */
+export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS'];
 
 export function withoutSessionIdentity(env) {
   const next = { ...env };

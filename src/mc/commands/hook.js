@@ -75,6 +75,7 @@ export async function run(argv, deps = {}) {
     const decision = borrowed || preToolDecision(input, {
       inRepo: (path) => (deps.pathInKnownRepo || pathInKnownRepo)(path, deps),
       programs: programsHome(deps.env || process.env),
+      env: deps.env || process.env,
     });
     if (decision) {
       stdout.write(`${JSON.stringify({

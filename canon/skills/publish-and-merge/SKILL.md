@@ -4,9 +4,8 @@ description: How a change in an mc repository (memoro, memoro-cli) is tested and
 ---
 # Publish and merge
 
-What the three verbs do today. Who may land a pull request is your role's to
-say, or the person's; a session a person opened by hand lands only on their
-word. The verbs replace `node --test`, `npm test`, `npm run ci`,
+What the three verbs do today, and what goes wrong without them. The verbs
+replace `node --test`, `npm test`, `npm run ci`,
 `git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
@@ -49,8 +48,11 @@ in it and say why in the reply.
   not atomic: a red lands a prefix and stops.
 - Do not poll: no loop, no `sleep`, no `mc merge watch` unless asked. One
   `gh pr view --json …` snapshot is the state; an empty check list is normal.
-- When it stops a green pull request for a reason that is not the PR's (main
-  moved, a lease, the base could not be re-checked): look once
-  (`mc repo who <repo>`), report, stop. `--admin` lands past the gate; it is
-  the person's verb, run only on their word. Never `gh pr merge`, never
-  `--delete-branch`.
+- A red's files are in `~/mc/runner/merge-red/<repo>-<pr>.txt`; rerun them
+  with `mc gate` before fixing. A round that hit its ceiling left the
+  unfinished files unmeasured, not green. Stopped for a reason not the PR's
+  (main moved, a lease): `mc repo who <repo>`, then queue it again.
+- `--admin` squashes with GitHub's admin override and no gate round: for a
+  change the round cannot measure, after you measured what it reaches; the
+  PR says what ran. The hook refuses it headless. `gh pr merge` skips mc's
+  books (the landed line, the installation pull).

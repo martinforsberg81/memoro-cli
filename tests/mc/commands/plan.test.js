@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  ensurePlanArea, openPlanAreas, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
+  BRANCH_LINE, ensurePlanArea, openPlanAreas, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
@@ -195,14 +195,18 @@ describe('the picker', () => {
   });
 });
 
-const BRANCH_RULE = 'A plan\'s pull request goes from a branch named `plan/<project>`, never `<project>`: that name is the runner\'s.';
+const BRANCH_RULE = BRANCH_LINE;
 
 describe('the prompt', () => {
   it('names the programme and where it stands — and waits for Martin', () => {
     const launch = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
-    assert.match(launch.prompt, /planning session for the `msr-core` programme/u);
+    assert.match(launch.prompt, /plan session for the `msr-core` programme/u);
+    // Martin 2026-11-03: the aim and the freedom, not a list of what is the runner's.
+    assert.match(launch.prompt, /aim is in `~\/mc\/plan\/msr-core\/README\.md`; read it first/u);
+    assert.match(launch.prompt, /full freedom toward that aim/u);
+    assert.ok(!/\bonly through\b|\bnever `<project>`|the runner's\./u.test(launch.prompt), launch.prompt);
     assert.match(launch.prompt, /~\/mc\/plan\/msr-core\//u);
     assert.match(launch.prompt, /`memoro\/` and `memoro-cli\/`/u);
     assert.match(launch.prompt, /branch `plan\/msr-core`/u);

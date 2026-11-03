@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile, TOOLBOX,
+  ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile, TOOLBOX,
   readClaudeSettings, repoHookDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
@@ -497,5 +497,44 @@ describe('SessionStart names the session before anything else', () => {
       const text = JSON.parse(stdout.text).hookSpecificOutput.additionalContext;
       assert.match(text.split('\n')[0], expected, cwd);
     }
+  });
+});
+
+// Martin 2026-11-03: a plan session has full freedom; the one boundary is a
+// headless session's, and it is code rather than a sentence in a skill.
+describe('a headless session is refused Martin\'s acts, and only it', () => {
+  const headless = { env: { MC_HEADLESS: '1' } };
+  const REFUSED = {
+    'mc deploy': 'headless-deploy',
+    'cd ~/mc && mc deploy --yes': 'headless-deploy',
+    'mc merge memoro 14721 --admin': 'headless-admin',
+    'gh pr merge 12 --squash --admin': 'headless-admin',
+    'CLAUDE_ALLOW_PROD_WRANGLER=1 npx wrangler d1 execute memoro --remote': 'headless-production-data',
+    'mc test token --set': 'headless-credentials',
+  };
+  for (const [command, id] of Object.entries(REFUSED)) {
+    it(`refuses ${command} headless, with no escape`, () => {
+      assert.equal(preToolDecision(bash(command), headless)?.id, id);
+      assert.equal(preToolDecision(bash(`${command} # ${ALLOW_MARK}`), headless)?.id, id);
+      assert.match(preToolDecision(bash(command), headless).reason, /only in an interactive session/u);
+    });
+  }
+
+  it('lets the same commands through with Martin at the terminal', () => {
+    for (const command of Object.keys(REFUSED)) {
+      const decision = preToolDecision(bash(command), { env: {} });
+      assert.ok(!decision || !decision.id.startsWith('headless-'), command);
+    }
+  });
+
+  it('lets a headless session do the rest of its work', () => {
+    for (const command of ['mc deploy --dry-run', 'mc merge memoro 14721', 'mc publish --no-merge', 'git branch -D probe/x', 'mc test token']) {
+      const decision = preToolDecision(bash(command), headless);
+      assert.ok(!decision || !decision.id.startsWith('headless-'), command);
+    }
+  });
+
+  it('names one rule per act', () => {
+    assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials']);
   });
 });

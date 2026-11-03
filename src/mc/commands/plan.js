@@ -389,17 +389,26 @@ export function programmeLabel(row) {
  * and pasting it here as well would tell a planning session the same rules
  * twice. The `shared` parameter is gone with it.
  */
+/**
+ * What a branch named after a project does: the runner cannot make that
+ * project's workarea and blocks its first step as `branch-foreign`. Said as
+ * the consequence, not a ban (Martin, 2026-11-03: a plan session has full
+ * freedom; text says what breaks, never who may).
+ */
+export const BRANCH_LINE = 'A branch named `<project>` blocks that project\'s first step as `branch-foreign` (the runner makes it); name yours `plan/<project>`.';
+
 export function planLaunch({ programme, repos = [], role, env = process.env }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
   const layoutTwo = layoutVersion({ root: workRoot(env) }) === 2;
   const lines = [
-    `You are the planning session for the \`${programme}\` programme.`,
+    `You are the plan session for the \`${programme}\` programme. Its aim is in \`~/mc/${planArea(programme, env)}/README.md\`; read it first.`,
+    'With Martin at the terminal you have full freedom toward that aim: investigate, plan, build and land the work yourself.',
     '',
     `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,
-    `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
-    '`mc run` does can reach it.',
-    ...(layoutTwo ? ['Your programme\'s projects are the directories beside them, each with its PLAN.json and STATE.json: read them, and change them only through `mc project` and `mc step`.'] : []),
-    'A plan\'s pull request goes from a branch named `plan/<project>`, never `<project>`: that name is the runner\'s.',
+    `worktree on branch \`plan/${programme}\`. This is not a workarea: the runner`,
+    'never works in it.',
+    ...(layoutTwo ? ['Your programme\'s projects are the directories beside them, each with its PLAN.json and STATE.json: `mc project` and `mc step` write them.'] : []),
+    BRANCH_LINE,
     '',
     'Martin is at the terminal. Wait for him.',
   ];

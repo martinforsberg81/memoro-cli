@@ -2492,6 +2492,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+          MC_HEADLESS: '1',
           MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
           // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
           MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
@@ -2922,6 +2924,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+          MC_HEADLESS: '1',
           MC_ROLE: roleName,
           ...(plan?.programme ? { MC_PROGRAMME: plan.programme } : {}),
           ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
