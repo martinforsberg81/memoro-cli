@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1202,11 +1202,12 @@ describe('the spawn itself', () => {
   // terminal for twenty minutes — which no faked spawn could ever show.
   it('echoes the script to the terminal and captures it at the same time', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-spawn-'));
-    const line = '\\n\\u001b[36m▸ wrangler deploy\\u001b[0m\\n';
+    // The script is the shell's printf, not a second node: npm's own start
+    // is the cost this test cannot leave out.
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
       name: 'not-really-memoro',
       private: true,
-      scripts: { deploy: `node -e "process.stdout.write('${line}'); process.exit(3)"` },
+      scripts: { deploy: "printf '\\n\\033[36m▸ wrangler deploy\\033[0m\\n'; exit 3" },
     }));
     let captured = '';
     const { out, stdout, stderr } = io();
@@ -1285,7 +1286,15 @@ describe('what the script said', () => {
 describe('a deploy that was stopped', () => {
   // A real repository: what counts as a stamp is read from git's own diff,
   // and a stub could only agree with the regex it was written against.
+  // Built once per file and copied per test (three git processes a test).
+  const STAMPED = buildStampedRepo();
   function stampedRepo() {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-stamps-'));
+    cpSync(STAMPED, dir, { recursive: true });
+    return dir;
+  }
+
+  function buildStampedRepo() {
     const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-stamps-'));
     const g = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
     g('init', '-q');
@@ -1362,12 +1371,15 @@ describe('a deploy that was stopped', () => {
     // A script that does what deploy.mjs does on a signal: say so, then exit
     // 130. Were mc to die with the signal, nothing would read that summary.
     const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-signal-'));
-    writeFileSync(join(dir, 'script.js'), [
-      "process.on('SIGTERM', () => { console.log('✗ Deploy failed'); console.log('Production unchanged'); process.exit(130); });",
-      "console.log('ready'); setInterval(() => {}, 1000);",
+    // A shell script rather than a second node, which npm's start already costs.
+    writeFileSync(join(dir, 'script.sh'), [
+      "trap 'echo \"✗ Deploy failed\"; echo \"Production unchanged\"; exit 130' TERM",
+      'echo ready',
+      'while :; do sleep 0.05; done',
+      '',
     ].join('\n'));
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
-      name: 'not-really-memoro', private: true, scripts: { deploy: 'node script.js' },
+      name: 'not-really-memoro', private: true, scripts: { deploy: 'sh script.sh' },
     }));
     const signals = new EventEmitter();
     let captured = '';
