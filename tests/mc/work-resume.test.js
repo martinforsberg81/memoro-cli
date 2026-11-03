@@ -18,12 +18,13 @@
  * this whole area has been spent removing.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
+import { LSOF } from './_helpers/repo-fixture.js';
 import { installTmuxStub } from './_helpers/tmux-stub.js';
 import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { parseArgs } from '../../src/mc/commands/work.js';
@@ -62,6 +63,9 @@ function cliFixture() {
   mkdirSync(join(workRoot, 'alpha'), { recursive: true });
   mkdirSync(mcHome, { recursive: true, mode: 0o700 });
   const tmux = installTmuxStub(root, {});
+  // Nobody stands in an area made a moment ago: the machine's own lsof, asked
+  // before the area opens (`toolProcesses`), was 0.4 s of a case (2026-11-03).
+  symlinkSync(LSOF, join(tmux.bin, 'lsof'));
   return {
     root,
     tmux,

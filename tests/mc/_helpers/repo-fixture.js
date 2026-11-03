@@ -52,9 +52,10 @@ function ghStub() {
  * machine's own took 150-300 ms a call (2026-11-03), and no process of the
  * machine stands in a fixture made a moment ago, so the answer is the same.
  * A test that puts a tool in an area writes its own (`installStandingStub`).
- * Written and run once while this module loads.
+ * Written and run once while this module loads; a fixture of another file
+ * links it into its own PATH the same way.
  */
-const LSOF = join(mkdtempSync(join(tmpdir(), 'mc-test-lsof-')), 'lsof');
+export const LSOF = join(mkdtempSync(join(tmpdir(), 'mc-test-lsof-')), 'lsof');
 writeFileSync(LSOF, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 spawnSync(LSOF);
 
