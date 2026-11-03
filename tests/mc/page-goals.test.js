@@ -1,7 +1,9 @@
 /**
  * Goals on the page (Martin, 2026-11-01): drawn under their programme after the
- * project rows, in the project rows' columns, numbered after the projects, and
- * counted in the programme's heading only when there are any.
+ * project rows, in the page's one grid with the same kind of content as a
+ * project row — `goal` in the kind column, never a `g ·` before the name —
+ * numbered after the projects, and counted in the programme's heading only
+ * when there are any (goal mc/page-columns).
  *
  * The rows come from `programmesSection` with `goalRows` — the shape `goalsOf`
  * gives — so the page is the real builder and the fixture is the real shape.
@@ -40,6 +42,21 @@ const PLANS = [
   { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', next: 'c' },
 ];
 
+/**
+ * A goal row as `goalsOf` gives it: the grid's fields — `kind`, `repo`,
+ * `state`, `progress`, `prs` — beside the goal's own.
+ */
+function goalRow(goal) {
+  return {
+    kind: 'goal',
+    repo: goal.repos?.[0] ?? null,
+    state: goal.running ? 'running' : goal.status,
+    progress: `${goal.sessions} sess`,
+    prs: [],
+    ...goal,
+  };
+}
+
 /** Two goals under `mc`: one a session is on, one blocked on Martin. */
 const GOALS = [
   {
@@ -50,10 +67,13 @@ const GOALS = [
     name: 'cleanup', programme: 'mc', repos: ['memoro-cli'], status: 'blocked', sessions: 1,
     last: { next: null, comment: 'waits on Martin' }, running: false, problems: [],
   },
-];
+].map(goalRow);
 
 /** A line without its colour codes, for finding it by its words. */
 const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
+
+/** The goal row named `name`, found by its kind and its name. */
+const goalLineOf = (lines, name) => lines.find((line) => new RegExp(` goal +${name} `, 'u').test(plain(line)));
 
 /** The PROGRAMMES section's lines, from its heading to the end of the page. */
 function programmesOf(lines) {
@@ -70,12 +90,12 @@ describe('goal rows on the page', () => {
 
     // Projects are numbered first, in programme then name order; the goals take
     // the numbers after them, in name order — docx-editor is 1, and the mc goals 4 and 5.
-    assert.ok(at(/^ +1 · docx-editor /u) >= 0, 'docx-editor is row 1');
+    assert.ok(at(/^ +1 · project +docx-editor /u) >= 0, 'docx-editor is row 1');
     const mcHeading = at(/^ {2}mc\s/u);
-    const mcRun = at(/^ +2 · mc-run /u);
-    const mcUi = at(/^ +3 · mc-ui /u);
-    const cleanup = at(/^ +4 · g · cleanup\s+memoro-cli\s+blocked\s+1 session\s+waits on Martin$/u);
-    const rollout = at(/^ +5 ● g · rollout\s+memoro-cli\s+open\s+3 sessions\s+the second repository$/u);
+    const mcRun = at(/^ +2 · project +mc-run /u);
+    const mcUi = at(/^ +3 · project +mc-ui /u);
+    const cleanup = at(/^ +4 · goal +cleanup\s+memoro-cli\s+blocked\s+1 sess\s+waits on Martin$/u);
+    const rollout = at(/^ +5 ● goal +rollout\s+memoro-cli\s+running\s+3 sess\s+the second repository$/u);
     assert.ok(mcHeading < mcRun && mcRun < mcUi, 'the projects are under their programme\'s heading');
     assert.ok(mcUi < cleanup, 'the goals come after the project rows of their programme');
     assert.equal(rollout, cleanup + 1, 'rollout is drawn after cleanup, in name order');
@@ -84,10 +104,12 @@ describe('goal rows on the page', () => {
   it('the state words keep the project rows\' colours', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: GOALS, now: NOW }) });
     const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
-    const rollout = painted.find((line) => line.includes('g · rollout'));
-    const cleanup = painted.find((line) => line.includes('g · cleanup'));
-    // green for `open` while a session is on it, red for `blocked`
-    assert.match(rollout, /\u001b\[[0-9;]*32m\s*open/u);
+    const rollout = goalLineOf(painted, 'rollout');
+    const cleanup = goalLineOf(painted, 'cleanup');
+    // green for `running` while a session is on it, red for `blocked`
+    assert.match(rollout, /\u001b\[[0-9;]*32m\s*running/u);
+    assert.doesNotMatch(plain(rollout), /g · /u, 'no `g ·` before the name');
+    assert.match(plain(rollout), /^ +5 ● goal {4}rollout/u, '`goal` in the kind column');
     assert.match(cleanup, /\u001b\[[0-9;]*31m\s*blocked/u);
   });
 
@@ -96,10 +118,10 @@ describe('goal rows on the page', () => {
       { name: 'landed', programme: 'mc', repos: ['memoro-cli'], status: 'done', sessions: 2, last: { done: 'landed #1235 as 60e9f82', next: 'Merge #1235', comment: null }, running: false, problems: [] },
       { name: 'letgo', programme: 'mc', repos: ['memoro-cli'], status: 'dropped', sessions: 0, last: { done: null, next: 'build it', comment: 'wrong goal' }, running: false, problems: [] },
     ];
-    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: finished, now: NOW }) });
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: finished.map(goalRow), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW })).map(plain);
-    const landed = lines.find((line) => line.includes('g · landed'));
-    const letgo = lines.find((line) => line.includes('g · letgo'));
+    const landed = goalLineOf(lines, 'landed');
+    const letgo = goalLineOf(lines, 'letgo');
     assert.match(landed, /landed #1235 as 60e9f82$/u);
     assert.doesNotMatch(landed, /Merge #1235/u);
     assert.match(letgo, /dropped .*wrong goal$/u);
@@ -110,9 +132,9 @@ describe('goal rows on the page', () => {
       name: 'broken', programme: 'mc', repos: [], status: null, sessions: 0, last: null, running: false,
       problems: ['repos names no repository'],
     }];
-    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: broken, now: NOW }) });
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: broken.map(goalRow), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
-    const row = lines.find((line) => line.includes('g · broken'));
+    const row = goalLineOf(lines, 'broken');
     assert.ok(row, 'the broken goal is drawn');
     // The problem is drawn in full where it fits; a longer one is cut to the width.
     assert.match(plain(row), /GOAL\.md: repos names no repository$/u);
@@ -191,7 +213,7 @@ describe('a goal in review, and one waiting on plan', () => {
     const [row] = goalsOf({ goals: [{ programme: 'mc', goal: 'stuck', repos: ['memoro-cli'], status: 'blocked', log: [asked, held], problems: [] }] });
     assert.deepEqual([row.plan, row.person], [false, true]);
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: [row], now: NOW }) });
-    const line = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true })).find((one) => plain(one).includes('g · stuck'));
+    const line = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true })).find((one) => / goal +stuck /u.test(plain(one)));
     assert.equal(row.question, 'split the goal in two?');
     assert.match(plain(line), /blocked .*waits on a person · split the goal in two\?/u);
     assert.match(line, /\u001b\[31mwaits on a person/u);
@@ -202,10 +224,10 @@ describe('a goal in review, and one waiting on plan', () => {
       { name: 'judged', programme: 'mc', repos: ['memoro-cli'], status: 'review', sessions: 2, last: { next: null, comment: null }, running: false, plan: false, problems: [] },
       { name: 'redone', programme: 'mc', repos: ['memoro-cli'], status: 'blocked', sessions: 2, last: { next: null, comment: 'criterion 2 not met' }, running: false, plan: true, problems: [] },
     ];
-    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW }) });
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: rows.map(goalRow), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 140, now: NOW, colour: true }));
-    const review = lines.find((line) => plain(line).includes('g · judged'));
-    const waiting = lines.find((line) => plain(line).includes('g · redone'));
+    const review = goalLineOf(lines, 'judged');
+    const waiting = goalLineOf(lines, 'redone');
     assert.match(review, /\u001b\[32mreview/u, 'review is green');
     assert.match(plain(waiting), /blocked .*waits on plan · criterion 2 not met/u);
     assert.match(waiting, /\u001b\[31mwaits on plan/u, 'waits on plan is red');
@@ -238,7 +260,7 @@ describe('a waiting goal', () => {
   it('the page draws waiting in the projects\' waiting colour, and what it waits on first', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: goalsOf({ goals }), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
-    const row = lines.find((line) => plain(line).includes('g · headless-plan'));
+    const row = goalLineOf(lines, 'headless-plan');
     assert.match(plain(row), /waiting .*waits on mc\/runner-sessions$/u, 'a comment saying the same is not said twice');
     assert.match(row, /\u001b\[33mwaiting/u, 'waiting is yellow');
     assert.match(row, /\u001b\[33mwaits on mc\/runner-sessions/u, 'what it waits on is yellow');
