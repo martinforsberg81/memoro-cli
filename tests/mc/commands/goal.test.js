@@ -438,6 +438,16 @@ test('mc goal after replaces after: waiting while one has not landed, open again
   assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
 });
 
+test('mc goal after … none clears what a goal waits on, as the help says; none beside a goal name is refused', async () => {
+  const f = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/first'), ...goalAt('first', 'open') } });
+  assert.equal(await run(['after', 'mc/plain', 'none'], f.deps), 0, f.err());
+  assert.deepEqual(goalOf(f, 'plain').after, [], 'none clears it');
+  assert.equal(goalOf(f, 'plain').status, 'open', 'waiting with nothing left is open');
+  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
+  assert.equal(await run(['after', 'mc/plain', 'none', 'mc/first'], f.deps), 2);
+  assert.match(f.err(), /none clears after and names no goal/u);
+});
+
 test('mc goal after refuses a name that is not a goal, a ring, and a goal in review or done', async () => {
   const f = fixture({ files: { ...goalAt('plain', 'open'), ...goalAt('first', 'waiting', 'mc/plain'), ...goalAt('judged', 'review'), ...goalAt('landed', 'done') } });
   const before = { ...f.store };

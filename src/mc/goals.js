@@ -303,6 +303,19 @@ export function waitsOnPlan(goal) {
   return last?.tool === 'runner' && last.status === 'blocked' && !planHeld(last);
 }
 
+/**
+ * When a goal took its current status, as the `at` of the log entry that set
+ * it: the first of the entries at the end of the log that carry that status (a
+ * session's entries after it keep the status, so the run begins where it was
+ * set). Null when the log holds no such entry, as a status set by hand in the
+ * front matter has none.
+ */
+export function statusSince(goal) {
+  let at = null;
+  for (let i = goal.log.length - 1; i >= 0 && goal.log[i].status === goal.status; i -= 1) at = goal.log[i].at;
+  return at;
+}
+
 /** Whether a blocked goal waits on a person: blocked, and not on plan (`waitsOnPlan`). */
 export function waitsOnPerson(goal) {
   return goal.status === 'blocked' && !waitsOnPlan(goal);

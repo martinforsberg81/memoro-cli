@@ -12,7 +12,8 @@
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
  *   mc goal archive <programme>/<goal>… | <programme>   a done or dropped goal to goals/.archive/, its
- *                                  worktrees and branch gone, one row in goals/goal_log.md
+ *                                  worktrees and branch gone, one row in goals/goal_log.md; the runner
+ *                                  does the same 24 hours after a goal is done or dropped
  *   mc goal show <programme>/<goal>      the front matter, the body, the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each
  *
@@ -28,14 +29,15 @@
  * the status follows from it — waiting while anything named has not landed.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
+import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
-import { addGoalWorktree, addPr, afterCycle, afterOf, archiveDirIn, FINISHED, goalDirIn, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, goalLogRow, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, parsePrRef, programsGoals, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, PLAN_ROLE, REVIEW_ROLE, sessions, waitsOnPerson, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, addPr, afterCycle, afterOf, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, parsePrRef, programsGoals, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, PLAN_ROLE, REVIEW_ROLE, sessions, waitsOnPerson, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -265,6 +267,9 @@ function setAfter(args, ctx) {
   if (args.length < 1) { stderr.write(usage()); return 2; }
   const [named, ...names] = args;
   if (!isGoalRef(named)) { stderr.write(`mc: ${named} is not <programme>/<goal> — lower-case letters, digits and hyphens\n`); return 2; }
+  // `none` is the word the help gives for clearing: it names no goal, so it may stand alone only.
+  const tokens = names.flatMap((name) => name.split(',')).map((name) => name.trim()).filter(Boolean);
+  if (tokens.includes('none') && tokens.length > 1) { stderr.write(`mc: none clears after and names no goal — give none alone, or the goals it starts after\n`); return 2; }
   const target = goalNamed(named, ctx);
   const text = read(join(target.dir, GOAL_FILE));
   if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
@@ -277,7 +282,7 @@ function setAfter(args, ctx) {
     stderr.write(`mc: ${target.name} is ${goal.status} — a goal in ${goal.status} waits on nothing\n`);
     return 1;
   }
-  const after = afterNamed(names.flatMap((name) => name.split(',')), target.name, ctx);
+  const after = afterNamed(tokens.includes('none') ? [] : tokens, target.name, ctx);
   if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
   const status = after.pending.length ? 'waiting' : (goal.status === 'waiting' ? 'open' : goal.status);
   const entry = {
@@ -410,14 +415,10 @@ function carryPrs(args, ctx) {
 
 /**
  * `mc goal archive <programme>/<goal>…` or `mc goal archive <programme>` (its
- * every done or dropped goal) — a finished goal leaves the list. Refused, with
- * why, for a goal that is not done or dropped; that an unfinished goal names in
- * `after`; whose worktree has uncommitted changes; that has an open pull
- * request (its `prs`, or on `goal/<goal>`); or, dropped, whose branch has
- * commits no remote holds. Otherwise each worktree is removed and the branch
- * `goal/<goal>` deleted, through git (`git worktree remove`, never by hand), the
- * directory moves to `goals/.archive/<goal>/`, and a row goes into
- * `goals/goal_log.md`. Each goal is answered on its own; exit 1 if any refused.
+ * every done or dropped goal) — a finished goal leaves the list, by
+ * `archiveGoal` (goal-archive.js), which the runner also calls once a goal has
+ * been finished for 24 hours. Each goal is answered on its own, and its refusal
+ * is said with why; exit 1 if any refused.
  */
 function archiveGoals(args, ctx) {
   const { stdout, stderr, home, list, read } = ctx;
@@ -434,79 +435,16 @@ function archiveGoals(args, ctx) {
   }
   let refused = 0;
   for (const name of names) {
-    const why = archiveOne(name, all, ctx);
-    if (why) { refused += 1; stderr.write(`mc: ${name} is not archived — ${why}\n`); }
+    const goal = all.find((item) => `${item.programme}/${item.goal}` === name);
+    const result = goal ? archiveGoal(goal, all, ctx) : { refused: 'no such goal — mc goal list names them' };
+    if (result.refused) {
+      refused += 1;
+      stderr.write(`mc: ${name} is not archived — ${result.refused}\n`);
+      continue;
+    }
+    stdout.write(`mc: ${name} · archived — ${result.to}\n`);
   }
   return refused ? 1 : 0;
-}
-
-/** One goal archived (`archiveGoals`): null when it was, else why not. */
-function archiveOne(name, all, ctx) {
-  const { stdout, home, git, gh, known, move, appendText, now } = ctx;
-  const goal = all.find((item) => `${item.programme}/${item.goal}` === name);
-  if (!goal) return 'no such goal — mc goal list names them';
-  if (goal.problems.length) return `its GOAL.md does not parse (${goal.problems[0]})`;
-  if (!FINISHED.includes(goal.status)) return `it is ${goal.status}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`;
-  const waiting = all.filter((other) => !FINISHED.includes(other.status) && (other.after ?? []).includes(name)).map((other) => `${other.programme}/${other.goal}`);
-  if (waiting.length) return `${waiting.join(', ')} start${waiting.length === 1 ? 's' : ''} after it — mc goal after changes that first`;
-  const repos = known();
-  const bareOf = (repo) => repos.find((path) => repoNameOf(path) === repo) ?? null;
-  const branch = `goal/${goal.goal}`;
-  for (const repo of goal.repos) {
-    const path = join(goal.dir, repo);
-    const status = git(path, ['status', '--porcelain']);
-    if (status.ok && status.stdout.trim()) return `${repo}'s worktree has uncommitted changes (${path})`;
-    const bare = bareOf(repo);
-    if (!bare) continue;
-    const open = gh(bare, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number']);
-    let numbers = [];
-    try { numbers = open.ok ? JSON.parse(open.stdout || '[]').map((item) => item.number) : []; } catch { numbers = []; }
-    if (!open.ok) return `GitHub could not say whether ${repo} has an open pull request on ${branch}`;
-    if (numbers.length) return `${repo} #${numbers.join(', #')} on ${branch} is open — land or close it first`;
-    if (goal.status === 'dropped' && git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok) {
-      const unpushed = git(bare, ['rev-list', '--count', branch, '--not', '--remotes']);
-      if (!unpushed.ok || Number(unpushed.stdout.trim()) > 0) return `${repo}'s ${branch} has commits no remote holds — publish them or say so in a pull request first`;
-    }
-  }
-  for (const item of goal.prs ?? []) {
-    const bare = bareOf(item.repo);
-    if (!bare) return `${prRef(item)} is in a repository mc does not know`;
-    const view = gh(bare, ['pr', 'view', String(item.pr), '--json', 'state']);
-    let state = null;
-    try { state = view.ok ? JSON.parse(view.stdout || 'null')?.state ?? null : null; } catch { state = null; }
-    if (state === null) return `GitHub could not say where ${prRef(item)} stands`;
-    if (state === 'OPEN') return `${prRef(item)} is open — land or close it first`;
-  }
-  for (const repo of goal.repos) {
-    const path = join(goal.dir, repo);
-    const bare = bareOf(repo);
-    if (!bare) continue;
-    if (git(path, ['rev-parse', '--is-inside-work-tree']).ok) {
-      const removed = git(bare, ['worktree', 'remove', path]);
-      if (!removed.ok) return `${repo}'s worktree could not be removed (${removed.stderr.trim() || 'git failed'})`;
-    }
-    git(bare, ['worktree', 'prune']);
-    if (git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok) {
-      const deleted = git(bare, ['branch', '-D', branch]);
-      if (!deleted.ok) return `${repo}'s ${branch} could not be deleted (${deleted.stderr.trim() || 'git failed'}); its worktree is gone`;
-    }
-  }
-  const archive = archiveDirIn(home, goal.programme);
-  const stamp = now.toISOString().slice(0, 10);
-  let to = join(archive, goal.goal);
-  if (ctx.read(join(to, GOAL_FILE)) !== null) to = join(archive, `${goal.goal}-${now.toISOString().replace(/[-:]/gu, '').slice(0, 13)}`);
-  move(goal.dir, to);
-  const logPath = join(home, goal.programme, GOALS_DIR, GOAL_LOG_FILE);
-  appendText(logPath, `${ctx.read(logPath) === null ? GOAL_LOG_HEAD : ''}${goalLogRow({ date: stamp, goal: goal.goal, status: goal.status, prs: goal.prs, log: goal.log })}\n`);
-  stdout.write(`mc: ${name} · archived — ${to}\n`);
-  return null;
-}
-
-/** A directory moved, its new parent made first. */
-function moveDir(from, to) {
-  mkdirSync(join(to, '..'), { recursive: true });
-  if (existsSync(to)) throw new Error(`${to} exists`);
-  renameSync(from, to);
 }
 
 /** Text appended to a file, made when it is not there. */
