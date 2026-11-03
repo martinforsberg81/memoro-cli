@@ -354,3 +354,17 @@ test('goalLogRow: one table row, its pipes escaped, the last Gjort', async () =>
   const log = [{ done: 'first' }, { done: 'a | b\nc' }, { done: null }];
   assert.equal(goalLogRow({ date: '2026-11-03', goal: 'g', status: 'done', prs: [{ repo: 'memoro', pr: 1 }], log }), '| 2026-11-03 | g | done | memoro#1 | a \\| b c |');
 });
+
+test('statusSince is the entry that set the current status, not a later entry that kept it', async () => {
+  const { statusSince } = await import('../../src/mc/goals.js');
+  const log = [
+    { at: '2026-11-01T10:00Z', status: 'review' },
+    { at: '2026-11-02T10:00Z', status: 'done' },
+    { at: '2026-11-03T10:00Z', status: 'done' },
+    { at: '2026-11-03T11:00Z', status: 'done' },
+  ];
+  assert.equal(statusSince({ status: 'done', log }), '2026-11-02T10:00Z');
+  assert.equal(statusSince({ status: 'dropped', log }), null, 'a status the log does not hold');
+  assert.equal(statusSince({ status: 'done', log: [] }), null);
+  assert.equal(statusSince({ status: 'review', log }), null, 'the last entry is another status: none began it');
+});

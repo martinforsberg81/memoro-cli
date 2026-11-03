@@ -141,6 +141,7 @@ import {
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
 import { archiveDue, archivePrograms } from './project-archive.js';
+import { archiveGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
@@ -1491,6 +1492,39 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps, docsMerge: deps.docsMerge, now: deps.now, say,
     });
     return { archived };
+  }
+
+  /**
+   * The finished goals (`done` or `dropped`) that have been finished for 24
+   * hours (`goalArchiveDue`, on the same hold as a project), archived as `mc goal
+   * archive` archives one (`archiveGoal`): the worktrees and the branch go
+   * through git, the directory moves to `goals/.archive/`, a row goes to
+   * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
+   * written into its LOG.md once, as a runner entry, not at every pass.
+   */
+  function archiveGoalsDue() {
+    const all = goals();
+    const now = deps.now();
+    for (const goal of all) {
+      if (goal.problems.length || !FINISHED.includes(goal.status)) continue;
+      if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
+      const result = archiveGoal(goal, all, {
+        home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
+        move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
+        appendText: (path, text) => deps.append(path, text), read: deps.read, now,
+      });
+      if (result.refused) refuseGoalOnce(goal, result.refused);
+      else say(`${goalName(goal)}: ${goal.status} — archived to ${result.to}`);
+    }
+  }
+
+  /** `archiveGoal`'s refusal of a finished goal, written into its LOG.md unless the log already says the same last. */
+  function refuseGoalOnce(goal, why) {
+    const comment = `not archived — ${why}`;
+    if (goal.log.findLast((entry) => entry.tool === 'runner' && entry.comment?.startsWith('not archived'))?.comment === comment) return;
+    const entry = { at: logStamp(deps.now()), tool: 'runner', model: null, status: goal.status, done: null, comment, next: null };
+    appendEntry({ dir: goal.dir, entry, read: deps.read, write: deps.write });
+    say(`${goalName(goal)}: ${comment}`);
   }
 
   /* ------------------------------------------------------------- blocking */
@@ -3625,6 +3659,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A programme project done for 24 hours is archived by the runner as well (ruling 48).
     const programmes = await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans)));
     closeWorkareas(plans, programmes.flatMap((a) => a.archived), archivedProjects());
+    // A goal finished for 24 hours is archived the same pass (the same hold, `goal-archive.js`); a programme never is.
+    archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
     sweepScratch();

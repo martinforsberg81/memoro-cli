@@ -5823,6 +5823,43 @@ test('a goal session that writes no log entry gets a runner entry, and three in 
   assert.equal(runRows(f.files).length, 4);
 });
 
+/* ------------------------------------------------------- archive a finished goal */
+
+/** A goal's one entry, made by a session, with the status it set. */
+const finishedLog = (at, status) => `## ${at} · claude opus · ${status}\n\nGjort: arbete\n`;
+const ARCHIVE_NOW = '2026-09-01T10:00:00Z';
+
+test('the chores archive a goal done or dropped for 24 hours, and leave one finished 23 hours to the hold', async () => {
+  const f = goalFixture({
+    late: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
+    early: { status: 'done', log: finishedLog('2026-08-31T11:00Z', 'done') },
+    'dropped-one': { status: 'dropped', log: finishedLog('2026-08-30T09:00Z', 'dropped') },
+  }, { now: ARCHIVE_NOW });
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(f.files[`${GOALS}/late/GOAL.md`], undefined, 'the goal left the goals');
+  assert.match(f.files['/w/programs/prog/goals/.archive/late/GOAL.md'], /^status: done$/mu, 'in goals/.archive/');
+  assert.equal(f.files[`${GOALS}/late/memoro`], undefined, 'its worktree is gone with it');
+  assert.ok(f.calls.git.some((call) => call[0] === '/home/memoro' && call.slice(1).join(' ') === `worktree remove ${GOALS}/late/memoro`), 'removed through git');
+  assert.ok(f.calls.git.some((call) => call[0] === '/home/memoro' && call.slice(1).join(' ') === 'branch -D goal/late'), 'its branch is deleted through git');
+  assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| late \| done \|/mu, 'one row in goal_log.md');
+  assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| dropped-one \| dropped \|/mu, 'a dropped goal the same');
+  assert.match(f.files[`${GOALS}/early/GOAL.md`], /^status: done$/mu, 'done 23 hours: it stays');
+  assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
+});
+
+test('a goal the archive refuses stays, and the refusal is written into its log once, not at every pass', async () => {
+  const f = goalFixture({ held: { status: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') } }, { now: ARCHIVE_NOW, dirty: ['held'] });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.match(f.files[`${GOALS}/held/GOAL.md`], /^status: done$/mu, 'it stays where it is');
+  assert.equal(f.files['/w/programs/prog/goals/goal_log.md'], undefined, 'nothing is archived');
+  const runnerLines = parseLog(f.files[`${GOALS}/held/LOG.md`]).filter((entry) => entry.tool === 'runner');
+  assert.equal(runnerLines.length, 1, 'said once, though two passes ran');
+  assert.deepEqual([runnerLines[0].status, runnerLines[0].done], ['done', null]);
+  assert.match(runnerLines[0].comment, /^not archived — memoro's worktree has uncommitted changes \(/u);
+});
+
 /* ------------------------------------------------------- plan on a blocked goal */
 
 /** A plan session that writes its entry with `status`, as `mc goal log --status` does. */
