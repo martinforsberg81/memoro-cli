@@ -151,7 +151,7 @@ export async function openInWorkArea({
   // step, whose tool is 'claude' or 'codex', and one page should not call the
   // same tool two things.
   const release = register({
-    verb, area: areaName, tool: launch.shortName || toolId, model: chosenModel || null, env,
+    verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
     // A resumed conversation is handed no instructions at all — its own
     // history holds them — so it records the role and no digests rather than
     // a digest of today's file, which would be a claim nobody checked.

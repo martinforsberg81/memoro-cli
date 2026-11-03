@@ -4,18 +4,18 @@
  * One surface that lists, and no more (decision mc-3, sharpened 2026-08-29:
  * `--watch` went — a page redrawn on a timer is not a live page, and the
  * real one comes later; that later is `page-live.js`). Bare `mc` used to
- * print the V1 sessions table; `mc status`, `mc list` and bare `mc work` each
- * printed a list of their own. They are one page now, and it is the one a
- * person lands on.
+ * print the V1 sessions table; `mc status`, `mc list` and the workarea verb
+ * each printed a list of their own. They are one page now, and it is the one
+ * a person lands on.
  *
  * What it prints is `page-collect.js`'s five sections drawn by
  * `page-render.js`. What it does after printing depends only on where it is
  * printing to:
  *
- *   - a terminal      the page, then the menu `mc work` used to carry — a
- *                     number or a name opens that project's workarea, making
- *                     one if it has none, and the numbers are the ones in
- *                     PROJECTS above the prompt. The page stays true while
+ *   - a terminal      the page, then a menu — a project's number or name
+ *                     opens a session in that project's runner area, which
+ *                     belongs to its programme (`project-open.js`), and the
+ *                     numbers are the ones in PROGRAMMES above the prompt. The page stays true while
  *                     the menu waits: every 30 seconds the rows that changed
  *                     are rewritten where they stand
  *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever, and
@@ -43,9 +43,8 @@ import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { childEnv, mcCheckout } from '../run-control.js';
-import { inspectWorkArea } from '../work-area.js';
-import { workAreaName } from '../paths.js';
-import { openArea, parseArgs, runVerb, startSomething } from './work.js';
+import { openProject } from '../project-open.js';
+import { RETIRED_VERBS, retiredLines } from '../../mc-verbs.js';
 
 const USAGE = [
   'usage — mc                       the page, and at a terminal a way in',
@@ -139,7 +138,7 @@ export async function run(argv, deps = {}) {
   if (!live) return 0;
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
-    stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
+    stdout, stderr, page, reader, open: deps.openProject, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -260,7 +259,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  open it   ·   n  start something new   ·   a  every project   ·   b  brief',
+  '  <n>  open it   ·   a  every project   ·   b  brief',
   '  p  plan a programme   ·   s <name>  that project   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
@@ -272,8 +271,7 @@ const KEYS = [
  * the STEPS section shows what the order did without a second terminal
  * (asked for 2026-10-10).
  *
- * `stop <name>` is still `mc work stop <name>`: only a bare `stop` is the
- * runner's. A bare `run` is not offered — a foreground runner inside the
+ * Only a bare `stop` is the runner's. A bare `run` is not offered — a foreground runner inside the
  * page would hold the menu for the rest of the day.
  */
 export function runnerOrder(answer) {
@@ -299,12 +297,9 @@ async function showGoalVerb(argv, io) {
  * menu has none of its own. A project's number opens the project, and a goal's
  * number shows it (`mc goal show`). A number opens its project whether or not a
  * row was drawn for it: a programme's blocked projects are one
- * collapsed row, and `a` is what draws them all again. Everything a number cannot say is a letter,
- * and anything else is read as a `mc work` command, because a prompt invites
- * one and the verbs are the same verbs. `mc work discard x`, `discard x`,
- * `discard x --apply` — the leading `mc` and `work` are stripped and the rest
- * is read exactly as it would have been from the shell. Anything else is said
- * out loud rather than swallowed, and the page is drawn again with whatever
+ * collapsed row, and `a` is what draws them all again. Everything a number cannot say is a letter.
+ * A project's name opens it as its number does. Anything else is said out
+ * loud rather than swallowed, and the page is drawn again with whatever
  * changed.
  *
  * The reading is a `reader` rather than a call, because at a terminal it is
@@ -314,7 +309,7 @@ async function showGoalVerb(argv, io) {
  * back — and the reader owns everything from the prompt onwards.
  */
 export async function menu(first, {
-  stdout, stderr, page, reader, open = openArea, expand = () => {},
+  stdout, stderr, page, reader, open = openProject, expand = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -331,24 +326,17 @@ export async function menu(first, {
   // is set on the caller's closure and the page is simply asked for again.
   let all = false;
   for (;;) {
-    // Everything PROGRAMMES numbered, in the order it numbered it: every
-    // project of every programme, then the workareas no project explains,
-    // which are under their own heading but not out of reach. Opening a
-    // project that has no workarea yet is what creates one — `openArea` has
-    // always done that, and it is why a project can be a row before a folder
-    // is.
-    const areas = [
-      ...data.programmes.programmes.flatMap((group) => group.projects),
-      ...(data.programmes.unplanned?.shown || []),
-    ];
-    // A goal is reached by its number only: a typed name is a project's or a
-    // workarea's, and a goal's name may be one of those too.
+    // Every project PROGRAMMES numbered. Opening one opens its runner area,
+    // as a session of its programme (`project-open.js`); a project the runner
+    // has not started yet has no area, and says so.
+    const projects = data.programmes.programmes.flatMap((group) => group.projects);
+    // A goal is reached by its number only: a typed name is a project's, and
+    // a goal's name may be one of those too.
     const goals = data.programmes.programmes.flatMap((group) => group.goals || []);
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
 
-    if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });
     // The page again with nothing collapsed — every blocked project back as its
     // own row, under the number it always had. `a` again puts them away.
     if (answer === 'a' || answer === 'all') {
@@ -406,12 +394,12 @@ export async function menu(first, {
 
     // By the number printed beside the row, not by position: the two lists
     // are numbered through, and the page is the listing.
-    const byNumber = areas.find((area) => area.number === Number(answer));
-    const byName = areas.find((area) => area.name === answer);
-    if (byNumber || byName) return open((byNumber || byName).name, {}, { stdout, stderr });
+    const byNumber = projects.find((project) => project.number === Number(answer));
+    const byName = projects.find((project) => project.name === answer);
+    const project = byNumber || byName;
+    if (project) return open(project.name, { programme: project.programme || null, stdout, stderr });
 
-    const outcome = await typed(answer, areas, { stdout, stderr, open });
-    if (outcome !== null) return outcome;
+    typed(answer, { stderr });
     data = await redraw();
   }
 
@@ -430,38 +418,17 @@ export async function menu(first, {
 }
 
 /**
- * A line typed at the menu. Returns an exit code to leave on, or null to draw
- * the page again.
+ * A line typed at the menu that is none of the above: said out loud, and the
+ * page is drawn again. A retired verb (`RETIRED_VERBS`) gets the line the
+ * shell gives it (`retiredLines`).
  */
-export async function typed(answer, areas, { stdout, stderr, open = openArea }) {
+export function typed(answer, { stderr }) {
   const words = answer.split(/\s+/u).filter(Boolean);
   if (words[0] === 'mc') words.shift();
-  if (words[0] === 'work') words.shift();
-  if (words.length === 0) return null;
-
-  const sub = parseArgs(words);
-  if (sub.error) {
-    stderr.write(`\nmc: ${sub.error}\n`);
-    return null;
+  if (words.length === 0) return;
+  if (RETIRED_VERBS.includes(words[0])) {
+    stderr.write(`\n${retiredLines(words[0]).join('\n')}\n`);
+    return;
   }
-  // A bare word that names nothing is a typo far more often than it is a new
-  // piece of work, and the page is right there to compare it against. From
-  // the shell the same word still starts something, because there the name is
-  // the whole statement of intent.
-  //
-  // Asked of the disk rather than of the page's rows: PROJECTS draws projects
-  // and the folders that hold a checkout, and an area made with no repository
-  // — `mc work` offers exactly that — would otherwise be unreachable by the
-  // only name it has.
-  if (sub.verb === 'open' && words.length === 1
-    && !areas.some((area) => area.name === sub.name)
-    && !inspectWorkArea(workAreaName(sub.name).name, undefined, { conversations: false, git: false }).exists) {
-    stderr.write(`\nmc: nothing here called "${sub.name}" — n starts one\n`);
-    return null;
-  }
-  if (sub.verb === 'open') return open(sub.name, sub, { stdout, stderr });
-  if (sub.verb === 'list') return null;
-  stdout.write('\n');
-  await runVerb(sub, { stdout, stderr });
-  return null;
+  stderr.write(`\nmc: nothing here called "${words.join(' ')}" — a project's number or name opens it\n`);
 }

@@ -1,11 +1,8 @@
 /**
- * One root per kind of area (ruling 39): `mc work <name>` lives under
- * `~/mc/work/`, the runner's areas under `~/mc/step/`, and whatever else
- * stands directly under `~/mc` is a stray the page shows and nobody touches.
- *
- * A name typed at `mc work` that exists only as a runner area opens that area
- * and says so; release and discard refuse it, because a runner area closes
- * with its project.
+ * One root per kind of area (ruling 39): the runner's areas under `~/mc/step/`,
+ * what is left of the retired workareas under `~/mc/work/` (`mc tidy` lists
+ * them), and whatever else stands directly under `~/mc` is a stray the page
+ * shows and nobody touches.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -22,51 +19,12 @@ process.env.PATH = '/usr/bin:/bin';
 mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
 mkdirSync(join(mc, 'step', 'retention', 'memoro-cli', '.git'), { recursive: true });
 
-const { openArea, runVerb } = await import('../../src/mc/commands/work.js');
-const { workAreaName } = await import('../../src/mc/paths.js');
 const {
   discardWorkArea, inspectWorkArea, listStepAreas, listStrays, listWorkAreas, releaseWorkArea,
 } = await import('../../src/mc/work-area.js');
 const { registerPath } = await import('../../src/mc/register.js');
 
-function sink() {
-  const out = { text: '', write(chunk) { out.text += chunk; } };
-  return out;
-}
-
-describe('mc work resolves a name to work/ first, then the runner', () => {
-  it('a new name is work/<name>, to be created', () => {
-    assert.deepEqual(workAreaName('fresh', { root: mc }), { name: 'work/fresh', runner: false });
-  });
-
-  it('a name that exists only as step/<project> opens that area, and says so', async () => {
-    const stdout = sink();
-    const stderr = sink();
-    let asked = null;
-    const occupants = (paths) => { asked = paths; return []; };
-    await openArea('retention', { pick: 'new' }, { stdout, stderr, occupants });
-    assert.match(stderr.text, /opening the runner's area for retention — .*mc\/step\/retention/u);
-    assert.equal(asked[0], join(mc, 'step', 'retention'));
-    assert.equal(existsSync(join(mc, 'work', 'retention')), false);
-  });
-
-  it('release and discard refuse a runner area, with exit 2', async () => {
-    for (const verb of ['release', 'discard']) {
-      const stderr = sink();
-      const code = await runVerb({ verb, name: 'retention' }, { stdout: sink(), stderr });
-      assert.equal(code, 2, verb);
-      assert.match(stderr.text, /retention is a runner area — it closes with its project/u);
-    }
-    assert.ok(existsSync(join(mc, 'step', 'retention', 'memoro-cli', '.git')));
-  });
-
-  it('work/<name> wins over a runner area of the same name', () => {
-    mkdirSync(join(mc, 'work', 'retention'), { recursive: true });
-    try {
-      assert.deepEqual(workAreaName('retention', { root: mc }), { name: 'work/retention', runner: false });
-    } finally { rmSync(join(mc, 'work', 'retention'), { recursive: true, force: true }); }
-  });
-
+describe('the areas left under work/', () => {
   it('listWorkAreas enumerates work/ and nothing else', () => {
     mkdirSync(join(mc, 'work', 'alpha'), { recursive: true });
     mkdirSync(join(mc, 'legacy-area'), { recursive: true });

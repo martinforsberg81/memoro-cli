@@ -9,7 +9,6 @@
 /** Every verb the dispatcher routes, and the module that answers it. */
 export const VERB_MODULES = {
   status: './cli/status.js',
-  work: './mc/commands/work.js',
   tidy: './mc/commands/tidy.js',
   layout: './mc/commands/layout.js',
   repos: './mc/commands/repos.js',
@@ -28,7 +27,6 @@ export const VERB_MODULES = {
   language: './mc/commands/language.js',
   deps: './mc/commands/deps.js',
   prs: './mc/commands/prs.js',
-  worker: './mc/commands/worker.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
   plan: './mc/commands/plan.js',
@@ -42,6 +40,24 @@ export const VERB_MODULES = {
   goal: './mc/commands/goal.js',
   programs: './mc/commands/programs.js',
 };
+
+/**
+ * The verbs that went on 2026-11-03 (goal mc/no-work): every session belongs
+ * to a programme (plan, build, review) or a desk (brief, helper), and there is
+ * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
+ */
+export const RETIRED_VERBS = Object.freeze(['work', 'worker']);
+
+/** What a retired verb says, whatever follows it: where each kind of session starts now. */
+export function retiredLines(verb) {
+  return [
+    `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
+    '    mc                    the page; a project\'s number opens its runner area',
+    '    mc plan <programme>   plan a programme',
+    '    mc brief · mc helper  the two desks',
+    '    mc tidy               what is left under ~/mc/work/, and whether it can go',
+  ];
+}
 
 /**
  * `--help` or `-h` as a whole word, anywhere after the verb, asks for the

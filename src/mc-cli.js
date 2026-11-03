@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { VERB_MODULES, runModule } from './mc-verbs.js';
+import { RETIRED_VERBS, VERB_MODULES, retiredLines, runModule } from './mc-verbs.js';
 import { forbidCredentialPrompts } from './mc/no-prompts.js';
 
 forbidCredentialPrompts();
@@ -91,9 +91,11 @@ async function holderName() {
 
 async function routeV1Command(args) {
   const command = args[0];
-  // `mc sessions …` went with the session verbs (2026-08-30). What a person
-  // means by it now is a work area, and `mc work` is where that lives.
+  // `mc sessions …` went with the session verbs (2026-08-30).
   if (command === 'sessions') return moved('mc sessions');
+  // The workarea verbs went on 2026-11-03: every session belongs to a
+  // programme or a desk, and there is no third kind (`RETIRED_VERBS`).
+  if (RETIRED_VERBS.includes(command)) return retired(command);
   // Bare `mc` is the page: the runner, the queue, the decisions, the intake
   // and every workarea, and at a terminal the way in underneath it. It was
   // the V1 sessions table until 2026-08-29 (decision mc-3) — the front door
@@ -127,5 +129,11 @@ function moved(verb) {
   console.error(`mc: ${verb} is now mc — one page, and it is what mc prints`);
   console.error('    mc                  the page, and at a terminal a way in');
   console.error('    mc status <name>    one project');
+  return 2;
+}
+
+/** A retired verb, whatever follows it: `retiredLines` says where things went. */
+function retired(verb) {
+  for (const line of retiredLines(verb)) console.error(line);
   return 2;
 }

@@ -15,10 +15,9 @@
  * same lesson one layer up).
  *
  * A workarea **no project explains at all** — no plan on main, and no row in
- * the project log — is never removed by a machine. It is listed: on the page
- * under its own heading, and in `~/mc/runner/unplanned-workareas.md` for
- * `mc brief` to raise, with whether its branch's content is already on main,
- * which is the one thing that says whether anything would be lost.
+ * the project log — is never removed by the runner. `mc tidy` lists it, with
+ * whether its branches have landed and whether anything in it is uncommitted,
+ * and removes it only on `--apply` (tidy.js, rule W).
  *
  * Everything here is a function of text and small objects; the git half is
  * run.js, and `closeArea` takes its git and disk as doors, so these rules and
@@ -96,38 +95,6 @@ export function closable({
       ? `plan done, worktree clean, ${last}`
       : `project archived in an earlier round, worktree clean, ${last}`,
   };
-}
-
-/* ---------------------------------- intake: the workareas no project explains */
-
-export const UNPLANNED_HEADER = [
-  '# Workareas with no project on main',
-  '',
-  'Written by `mc run` at the end of every round: the folders with no plan on',
-  'main *and* no row in `project_log.md` — the runner has never archived a',
-  'project by this name, so nothing here explains them. Nothing here is removed by',
-  'a machine either: such a folder is work somebody started, and only Martin can',
-  'say whether it is finished. `branch` is asked of content, not of commit counts:',
-  '`landed` means main already has everything this branch holds.',
-  '',
-  '| name | repo | uncommitted | last commit | branch |',
-  '|---|---|---|---|---|',
-  '',
-].join('\n');
-
-const cell = (value) => String(value ?? '-').replace(/\s+/gu, ' ').replace(/\|/gu, '\\|').trim() || '-';
-
-export function unplannedRow({ name, repo, uncommitted, lastCommit, branch }) {
-  return `| ${[name, repo, uncommitted, lastCommit, branch].map(cell).join(' | ')} |`;
-}
-
-/**
- * The whole file, rewritten every round rather than appended to: it is a
- * picture of what is there now, and a workarea that got its plan should
- * leave the list by itself.
- */
-export function unplannedFile(rows) {
-  return rows.length ? `${UNPLANNED_HEADER}${rows.join('\n')}\n` : UNPLANNED_HEADER;
 }
 
 /* ---------------------------------------------------- taking one area down */

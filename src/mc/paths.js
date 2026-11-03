@@ -84,7 +84,7 @@ export function workAreaPath(name, env = process.env) {
  *
  * The tables used to live in `~/mc/intake/`, which was the wrong room for a
  * reason that only showed once the inbox was asked to drain: `mc run` rewrites
- * `unplanned-workareas.md` and `unreadable-plans.md` whole every round, so a
+ * `unreadable-plans.md` whole every round, so a
  * turn that read one and filed it away would find it back next round, and the
  * round after, forever. They are not material somebody dropped in an inbox —
  * they are the runner's own output about its own rounds, and they belong beside
@@ -99,8 +99,6 @@ export const RUNNER_HOME = 'runner';
 
 /** Appended when a project is archived whose `project_log.md` row says `doc: none`. */
 export const UNDOCUMENTED_CLOSURES = 'undocumented-closures.md';
-/** Rewritten every round: the folders under `~/mc` no project on main explains. */
-export const UNPLANNED_WORKAREAS = 'unplanned-workareas.md';
 /** Rewritten every round: the plans on `origin/main` the schema refuses. */
 export const UNREADABLE_PLANS = 'unreadable-plans.md';
 

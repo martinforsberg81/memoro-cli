@@ -15,7 +15,6 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/tidy.js';
-import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
@@ -23,7 +22,6 @@ import {
   LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy, sessionLogRe,
   staleGateCacheEntry, tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
-import * as workTidy from '../../src/mc/work-tidy.js';
 
 setLogPath(join(mkdtempSync(join(tmpdir(), 'mc-tidy-log-')), 'mc.log'));
 
@@ -102,8 +100,8 @@ describe('tidyPlan — loose transcripts (L), first match wins', () => {
 });
 
 describe('--days', () => {
-  it('mc tidy and mc work tidy take the same: 14 by default, a whole number, at least 1, and no name', () => {
-    for (const [parse, head] of [[parseTidyArgs, []], [parseArgs, ['tidy']]]) {
+  it('mc tidy takes 14 by default, a whole number, at least 1, and no name', () => {
+    for (const [parse, head] of [[parseTidyArgs, []]]) {
       assert.equal(parse([...head]).days, 14);
       assert.equal(parse([...head, '--days', '3']).days, 3);
       assert.ok(parse([...head, '--days', '0']).error);
@@ -115,10 +113,6 @@ describe('--days', () => {
   });
   it('register.log is not a session log, so tidy keeps it', () => {
     assert.equal(sessionLogRe('register').test('register.log'), false);
-  });
-  it('work-tidy.js is tidy.js', () => {
-    assert.equal(workTidy.runTidy, runTidy);
-    assert.equal(workTidy.tidyPlan, tidyPlan);
   });
 });
 
