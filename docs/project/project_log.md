@@ -170,3 +170,4 @@ existed?
 | 2026-11-01 | mc | goals-awake-clock | delivered | Review the project against its goal | [docs/technical/mc-session-control.md](../technical/mc-session-control.md) | [#1188](https://github.com/martinforsberg81/memoro-cli/pull/1188) |
 | 2026-11-02 | mc | goals-runner-wiring | delivered | Review the project against its goal | none | [#1190](https://github.com/martinforsberg81/memoro-cli/pull/1190) |
 | 2026-11-02 | mc | goals-plain | delivered | Review the project against its goal | [docs/technical/mc-goals.md](../technical/mc-goals.md) | [#1217](https://github.com/martinforsberg81/memoro-cli/pull/1217) |
+| 2026-11-03 | mc | dev-queue | delivered | Review the project against its goal | [docs/technical/mc-shot.md](../technical/mc-shot.md) | none |
