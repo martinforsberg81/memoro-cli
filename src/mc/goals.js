@@ -1,13 +1,14 @@
 /**
- * `goals.js` — a goal: two text files and a worktree under its programme.
+ * `goals.js` — a goal: two files and a worktree under its programme.
  *
- *   ~/mc/programs/<programme>/goals/<goal>/GOAL.md     the brief: front matter, then markdown
+ *   ~/mc/programs/<programme>/goals/<goal>/GOAL.json   the brief, as data (`validateGoal`)
  *   ~/mc/programs/<programme>/goals/<goal>/LOG.md      one heading per session, newest last
  *   ~/mc/programs/<programme>/goals/<goal>/<repo>/     a worktree on goal/<goal>, from origin/main
  *
- * mc keeps nothing else for a goal. Only the front matter's `status` is ever
- * written by a verb, and the Markdown body is never rewritten here. A
- * `GOAL.md` that does not parse is reported with its problems, never skipped.
+ * mc keeps nothing else for a goal. GOAL.json is written only by verbs (`mc
+ * goal new`, `set`, `document add`, `criterion add|met|unmet`, the status
+ * verbs), each write validated: an invalid GOAL.json is never written. One
+ * that does not parse is reported with its problems, never skipped.
  *
  * The readers take `list` and `read` as arguments, so the tests use a file
  * model; `programsPlans` in `plan-source.js` works the same way. It skips a
@@ -20,9 +21,12 @@ import { join, relative, sep } from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
 import { samePr } from './merge-queue.js';
 import { programsHome } from './paths.js';
+import { criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
 
-export const GOAL_FILE = 'GOAL.md';
+export const GOAL_FILE = 'GOAL.json';
+export const GOAL_SCHEMA = 'mc-goal';
+export const GOAL_VERSION = 1;
 export const LOG_FILE = 'LOG.md';
 /** The directory under a programme that holds its goals. */
 export const GOALS_DIR = 'goals';
@@ -49,11 +53,22 @@ export const REVIEW_ROLE = 'review-session:goal';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
 export const CLASSES = ['fast', 'large'];
 
-/** The labelled lines a log entry may carry, and the field each one names. */
-const LABEL_FIELD = { Gjort: 'done', Kommentar: 'comment', 'Nästa': 'next' };
-const LABEL = /^(Gjort|Kommentar|Nästa): ?(.*)$/u;
+/**
+ * The labelled lines a log entry may carry, and the field each one names. An
+ * entry is written `Done:`, `Comment:` and `Next:`; the Swedish labels logs
+ * were written with before 2026-11-03 are still read, so no log is rewritten.
+ */
+const LABEL_FIELD = { Done: 'done', Comment: 'comment', Next: 'next', Gjort: 'done', Kommentar: 'comment', 'Nästa': 'next' };
+const LABEL = /^(Done|Comment|Next|Gjort|Kommentar|Nästa): ?(.*)$/u;
 const HEADING = /^## (\S+) · (\S+)(?: (\S+))? · (\S+)$/u;
-const FRONT = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/u;
+
+/** GOAL.json's keys, in the order it is written. */
+export const GOAL_KEYS = Object.freeze([
+  'schema', 'version', 'status', 'repos', 'class', 'created', 'after', 'prs',
+  'title', 'goal', 'contract', 'out_of_scope', 'success_criteria', 'documents',
+]);
+/** The prose fields `mc goal set` writes, by the word it takes for each. */
+export const PROSE_FIELDS = Object.freeze({ goal: 'goal', contract: 'contract', 'out-of-scope': 'out_of_scope' });
 
 /** The goals home of one programme: `<programsHome>/<programme>/goals`. */
 export function goalsHome(programme, env = process.env) {
@@ -90,50 +105,125 @@ export function parsePrRef(text) {
 }
 
 /**
- * A GOAL.md, as `{ status, repos, class, created, after, prs, title, body }`, or
- * `{ problems }` when it does not parse. `body` is everything after the front
- * matter, untouched; `title` is its first `# ` line, or null. `repos` is the
- * comma-separated list in order, the first being where a session starts.
- * `after` is the goals this one starts after, as `<programme>/<goal>`, none
- * when the line is absent.
+ * What is wrong with a GOAL.json's value, field by field — everything, not the
+ * first thing. `success_criteria` takes at least one criterion, each with a
+ * `check`, as PLAN.json's does (`criteria.js`); `draft` lets a goal that has no
+ * criterion yet through — `mc goal new`'s skeleton, filled by `mc goal
+ * criterion add` — and nothing else. A goal with none is not started by the
+ * runner (`nextGoal`) and cannot go to review.
  */
-export function parseGoal(text) {
-  const match = String(text ?? '').match(FRONT);
-  if (!match) return { problems: ['GOAL.md has no front matter between --- lines'] };
-  const fields = {};
-  for (const line of match[1].split('\n')) {
-    const field = line.match(/^([a-z]+):\s*(.*)$/u);
-    if (field) fields[field[1]] = field[2].trim();
-  }
-  const body = text.slice(match[0].length);
-  const repos = (fields.repos ?? '').split(',').map((repo) => repo.trim()).filter(Boolean);
+export function validateGoal(value, { draft = false } = {}) {
+  if (!plain(value)) return ['GOAL.json must be a JSON object'];
   const problems = [];
-  if (!STATUSES.includes(fields.status)) problems.push(`status is ${STATUSES.join(', ')}, not ${fields.status ?? 'missing'}`);
-  if (!CLASSES.includes(fields.class)) problems.push(`class is ${CLASSES.join(' or ')}, not ${fields.class ?? 'missing'}`);
-  if (repos.length === 0) problems.push('repos names no repository');
-  for (const repo of repos) if (!NAME_RE.test(repo)) problems.push(`repo ${repo} is not a repository name — lower-case letters, digits and hyphens`);
-  const after = [...new Set((fields.after ?? '').split(',').map((name) => name.trim()).filter(Boolean))];
-  for (const name of after) if (!isGoalRef(name)) problems.push(`after ${name} is not <programme>/<goal>`);
-  // The pull requests that carry the goal's work (`mc publish`, `mc goal pr`):
-  // the goal is done when every one has landed or closed and one has landed.
-  const prs = [];
-  for (const text of (fields.prs ?? '').split(',').map((item) => item.trim()).filter(Boolean)) {
-    const ref = parsePrRef(text);
-    if (!ref) problems.push(`prs ${text} is not <repo>#<number>`);
-    else if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
+  for (const key of unknownKeys(value, GOAL_KEYS)) problems.push(`${key}: unknown key`);
+  if (value.schema !== GOAL_SCHEMA) problems.push(`schema: must be "${GOAL_SCHEMA}"`);
+  if (value.version !== GOAL_VERSION) problems.push(`version: must be ${GOAL_VERSION}`);
+  if (!STATUSES.includes(value.status)) problems.push(`status: one of ${STATUSES.join(', ')}, not ${value.status ?? 'missing'}`);
+  if (!CLASSES.includes(value.class)) problems.push(`class: ${CLASSES.join(' or ')}, not ${value.class ?? 'missing'}`);
+  if (!Array.isArray(value.repos) || value.repos.length === 0) problems.push('repos: at least one repository, the first being where a session starts');
+  else for (const repo of value.repos) if (typeof repo !== 'string' || !NAME_RE.test(repo)) problems.push(`repos: ${repo} is not a repository name — lower-case letters, digits and hyphens`);
+  if (value.created !== undefined && value.created !== null && !(typeof value.created === 'string' && Number.isFinite(Date.parse(value.created)))) problems.push('created: an ISO instant, or null');
+  if (value.after !== undefined && !Array.isArray(value.after)) problems.push('after: an array of <programme>/<goal>, possibly empty');
+  else for (const name of value.after ?? []) if (!isGoalRef(name)) problems.push(`after: ${name} is not <programme>/<goal>`);
+  if (value.prs !== undefined && !Array.isArray(value.prs)) problems.push('prs: an array of <repo>#<number>, possibly empty');
+  else for (const ref of value.prs ?? []) if (!parsePrRef(ref)) problems.push(`prs: ${ref} is not <repo>#<number>`);
+  if (!text(value.title)) problems.push('title: what the goal is, in one line');
+  for (const key of ['goal', 'contract', 'out_of_scope']) {
+    if (value[key] !== undefined && !prose(value[key], { min: 0 })) problems.push(`${key}: an array of paragraphs, possibly empty`);
   }
-  if (problems.length) return { problems };
-  const title = body.match(/^# (.+)$/mu)?.[1].trim() ?? null;
-  return { status: fields.status, repos, class: fields.class, created: fields.created || null, after, prs, title, body };
+  validateCriteria(value.success_criteria, problems, { min: draft ? 0 : 1, what: 'a goal' });
+  if (value.documents !== undefined) validateDocuments(value.documents, problems);
+  return problems;
 }
 
-/** GOAL.md's text for a goal of the shape `parseGoal` gives. The body is written as it is; no `after` or `prs`, no line. */
-export function renderGoal({ status, repos, class: cls, created, after = [], prs = [], body }) {
-  const front = [`status: ${status}`, `repos: ${repos.join(', ')}`, `class: ${cls}`];
-  if (created) front.push(`created: ${created}`);
-  if (after.length) front.push(`after: ${after.join(', ')}`);
-  if (prs.length) front.push(`prs: ${prs.map(prRef).join(', ')}`);
-  return `---\n${front.join('\n')}\n---\n${body}`;
+/**
+ * A GOAL.json, as `{ status, repos, class, created, after, prs, title, goal,
+ * contract, out_of_scope, success_criteria, documents }`, or `{ problems }`
+ * when it does not parse or validate (`validateGoal`, as a draft: a goal with
+ * no criterion yet parses). `repos` is in order, the first being where a
+ * session starts; `after` is the goals this one starts after, as
+ * `<programme>/<goal>`; `prs` is `[{ repo, pr }]`, each once.
+ */
+export function parseGoal(text) {
+  let value;
+  try {
+    value = JSON.parse(String(text ?? ''));
+  } catch (error) {
+    return { problems: [`GOAL.json is not JSON: ${error.message}`] };
+  }
+  const problems = validateGoal(value, { draft: true });
+  if (problems.length) return { problems };
+  const prs = [];
+  for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
+  return {
+    status: value.status, repos: [...value.repos], class: value.class, created: value.created ?? null,
+    after: [...new Set(value.after ?? [])], prs, title: value.title.trim(),
+    goal: value.goal ?? [], contract: value.contract ?? [], out_of_scope: value.out_of_scope ?? [],
+    success_criteria: value.success_criteria, documents: value.documents ?? [],
+  };
+}
+
+/**
+ * GOAL.json's text for a goal of the shape `parseGoal` gives: every key, in
+ * `GOAL_KEYS`' order. Throws when the goal would not validate, so no caller
+ * writes an invalid GOAL.json.
+ */
+export function renderGoal(goal) {
+  const value = {
+    schema: GOAL_SCHEMA, version: GOAL_VERSION, status: goal.status, repos: goal.repos, class: goal.class,
+    created: goal.created ?? null, after: goal.after ?? [], prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
+    title: goal.title, goal: goal.goal ?? [], contract: goal.contract ?? [], out_of_scope: goal.out_of_scope ?? [],
+    success_criteria: goal.success_criteria ?? [], documents: goal.documents ?? [],
+  };
+  const problems = validateGoal(value, { draft: true });
+  if (problems.length) throw new Error(`GOAL.json would not validate: ${problems.join('; ')}`);
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * A goal as text, the way `mc goal show` prints it and a session is briefed
+ * with it: the title, the goal, contract and out of scope as paragraphs, the
+ * documents, and each criterion numbered with ✓ or ✗ and its check.
+ */
+export function renderGoalText(goal) {
+  const lines = [`# ${goal.title}`];
+  const section = (heading, paragraphs) => {
+    lines.push('', heading);
+    if (!paragraphs.length) { lines.push('  none yet'); return; }
+    paragraphs.forEach((paragraph, i) => { if (i) lines.push(''); lines.push(...paragraph.split('\n').map((line) => `  ${line}`)); });
+  };
+  section('GOAL', goal.goal ?? []);
+  section('CONTRACT', goal.contract ?? []);
+  section('OUT OF SCOPE', goal.out_of_scope ?? []);
+  section('DOCUMENTS', (goal.documents ?? []).map((doc) => `${doc.label} — ${doc.path}`));
+  const criteria = goal.success_criteria ?? [];
+  const { met, all } = criteriaCount(goal);
+  lines.push('', `CRITERIA ${met}/${all}`);
+  if (!criteria.length) lines.push('  none yet — mc goal criterion add <programme>/<goal> --criterion "…" --check "…"');
+  criteria.forEach((item, i) => {
+    lines.push(`  ${i + 1} ${item.met ? '✓' : '✗'} ${item.criterion}`);
+    lines.push(`      check: ${item.check}`);
+  });
+  return `${lines.join('\n')}\n`;
+}
+
+/** `criteria <met>/<all>`: how a goal's criteria stand, as `mc goal list` and the page say it. */
+export function criteriaWords(goal) {
+  const { met, all } = criteriaCount(goal);
+  return `criteria ${met}/${all}`;
+}
+
+/**
+ * Why a goal may not go to review, or null: it has no criterion, or one is not
+ * met — named by number, with the verb that records it.
+ */
+export function unmetGoalWords(goal, name = '<programme>/<goal>') {
+  if (!(goal.success_criteria ?? []).length) return `${name} has no criterion — mc goal criterion add ${name} --criterion "…" --check "…"`;
+  const unmet = unmetCriteria(goal);
+  if (!unmet.length) return null;
+  return unmet.length === 1
+    ? `criterion ${unmet[0]} is not met — run its check and record it with mc goal criterion met ${name} ${unmet[0]}`
+    : `criteria ${unmet.join(', ')} are not met — run their checks and record each with mc goal criterion met ${name} <n>`;
 }
 
 /**
@@ -177,9 +267,9 @@ export function parseLog(text) {
 export function renderEntry(entry) {
   const who = [entry.tool, entry.model].filter(Boolean).join(' ');
   const lines = [`## ${entry.at} · ${who} · ${entry.status}`, ''];
-  if (entry.done) lines.push(`Gjort: ${entry.done}`);
-  if (entry.comment) lines.push(`Kommentar: ${entry.comment}`);
-  if (entry.next) lines.push(`Nästa: ${entry.next}`);
+  if (entry.done) lines.push(`Done: ${entry.done}`);
+  if (entry.comment) lines.push(`Comment: ${entry.comment}`);
+  if (entry.next) lines.push(`Next: ${entry.next}`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -196,9 +286,11 @@ export function sessions(log) {
 
 /**
  * Every goal under every programme, in listing order, each as
- * `{ programme, goal, dir, status, repos, class, created, after, prs, title, log, problems }`.
- * A goal whose GOAL.md does not parse is listed with `problems` and no status.
- * A directory without a GOAL.md is not a goal and is skipped.
+ * `{ programme, goal, dir, status, repos, class, created, after, prs, title,
+ * goal_text, contract, out_of_scope, success_criteria, documents, log, problems }`
+ * — `goal_text` is GOAL.json's `goal`, which `goal` (the name) would shadow.
+ * A goal whose GOAL.json does not parse is listed with `problems` and no status.
+ * A directory without a GOAL.json is not a goal and is skipped.
  */
 export function programsGoals({ home = programsHome(), list = listDirsOf, read = readTextOrNull } = {}) {
   const goals = [];
@@ -212,17 +304,23 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
       const parsed = parseGoal(text);
       const base = { programme, goal, dir, log };
       if (parsed.problems) {
-        goals.push({ ...base, status: null, repos: [], class: null, created: null, after: [], prs: [], title: null, problems: parsed.problems });
+        goals.push({ ...base, status: null, repos: [], class: null, created: null, after: [], prs: [], title: null, goal_text: [], contract: [], out_of_scope: [], success_criteria: [], documents: [], problems: parsed.problems });
       } else {
-        goals.push({ ...base, status: parsed.status, repos: parsed.repos, class: parsed.class, created: parsed.created, after: parsed.after, prs: parsed.prs, title: parsed.title, problems: [] });
+        const { goal: goalText, ...rest } = parsed;
+        goals.push({ ...base, ...rest, goal_text: goalText, problems: [] });
       }
     }
   }
   return goals;
 }
 
+/** A goal record of `programsGoals` as the shape `parseGoal` gives, for `renderGoalText`. */
+export function goalOfRecord(record) {
+  return { ...record, goal: record.goal_text ?? [] };
+}
+
 /**
- * A review's verdict, from its entry's `Gjort:` line — `green <sha>` or
+ * A review's verdict, from its entry's `Done:` line — `green <sha>` or
  * `red <sha>`, the head the review read — as `{ verdict, sha }`, or null for an
  * entry that is no verdict.
  */
@@ -232,7 +330,7 @@ export function verdictOf(entry) {
   return match ? { verdict: match[1], sha: match[2] } : null;
 }
 
-/** The runner's entry for a green review it queued: `Gjort: queued #<pr> at <sha> for the merger`. */
+/** The runner's entry for a green review it queued: `Done: queued #<pr> at <sha> for the merger`. */
 export function queuedText(pr, sha) {
   return `queued #${pr} at ${sha} for the merger`;
 }
@@ -266,19 +364,19 @@ export function reviewDue(goal, inLine = []) {
   return !(goal.prs ?? []).some((item) => inLine.some((entry) => samePr(entry, item)));
 }
 
-/** The runner's entry for a red merge (`merger.js`): `Gjort: merger answered red on #<pr>`. */
+/** The runner's entry for a red merge (`merger.js`): `Done: merger answered red on #<pr>`. */
 export function redMergeText(pr) {
   return `merger answered red on #${pr}`;
 }
 
-/** The runner's entry for a goal whose `after` goal is gone without landing: its `Kommentar:`. */
+/** The runner's entry for a goal whose `after` goal is gone without landing: its `Comment:`. */
 export function afterGoneText(names) {
   return `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} gone without landing — waits on plan to change after`;
 }
 
 /**
  * The runner's entry after a plan session that left the goal `blocked`: its
- * `Gjort:`. A goal whose last entry is this one waits on a person, and wakes no
+ * `Done:`. A goal whose last entry is this one waits on a person, and wakes no
  * plan session again (`waitsOnPlan`).
  */
 export function planHeldText(spoke) {
@@ -337,7 +435,7 @@ export function planDue(goal) {
 /**
  * Where a goal's `after` stands, against `goals` (`programsGoals`' answer):
  * `{ landed, pending, gone }`, each a list of `<programme>/<goal>`. Landed is
- * `done`; gone is no goal there any more — its directory or GOAL.md removed,
+ * `done`; gone is no goal there any more — its directory or GOAL.json removed,
  * which is how a goal is discarded or archived — or one `dropped`, which never
  * lands; pending is everything else, a `blocked` or unparsable one included:
  * it may still land.
@@ -419,9 +517,14 @@ export function goalName({ programme, goal }) {
  */
 export function nextGoal(goals, { repos = [], held = new Set(), may = () => true, inLine = [] } = {}) {
   const lastAt = (goal) => goal.log.at(-1)?.at ?? '';
-  const eligible = goals.filter((goal) => (goal.status === 'open' || reviewDue(goal, inLine)) && goal.problems.length === 0
+  const eligible = goals.filter((goal) => ((goal.status === 'open' && !noCriteria(goal)) || reviewDue(goal, inLine)) && goal.problems.length === 0
     && repos.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal));
   return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
+}
+
+/** Whether a goal has no criterion yet: `mc goal new`'s skeleton, which no session is started on. */
+export function noCriteria(goal) {
+  return Array.isArray(goal.success_criteria) && goal.success_criteria.length === 0;
 }
 
 /**
@@ -510,9 +613,9 @@ export function goalOfPath(cwd, home) {
 }
 
 /**
- * The goal's front matter with `repo`'s pull request `pr` added to `prs`, and
+ * The goal's GOAL.json with `repo`'s pull request `pr` added to `prs`, and
  * `entry` appended to its log; nothing written when it is already there.
- * Returns `{ added, goal }`, or `{ problems }` when GOAL.md does not parse.
+ * Returns `{ added, goal }`, or `{ problems }` when GOAL.json does not parse.
  */
 export function addPr({ dir, repo, pr, entry, read = readTextOrNull, write = writeFileAtomic }) {
   const path = join(dir, GOAL_FILE);
@@ -532,7 +635,7 @@ export function archiveDirIn(home, programme) {
 
 /**
  * The row `mc goal archive` appends to `goals/goal_log.md`: date, goal,
- * status, pull requests, and the last `Gjort:` the log has. A `|` in the text
+ * status, pull requests, and the last `Done:` the log has. A `|` in the text
  * is escaped so the row stays one table row.
  */
 export function goalLogRow({ date, goal, status, prs, log }) {
@@ -556,9 +659,9 @@ export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFi
 }
 
 /**
- * Sets the goal's status in its GOAL.md front matter — and its `after`, when
- * one is given — and appends `entry` to its LOG.md: the two writes that make a
- * status change. Nothing is written when the GOAL.md does not parse, or the
+ * Sets the goal's status in its GOAL.json — and its `after`, when one is
+ * given — and appends `entry` to its LOG.md: the two writes that make a
+ * status change. Nothing is written when the GOAL.json does not parse, or the
  * status is not one of `STATUSES`; it returns `{ problems }` then, and
  * `{ goal }` with the goal as it now is otherwise.
  */
@@ -571,6 +674,26 @@ export function setStatus({ dir, status, after = null, entry, read = readTextOrN
   write(path, renderGoal(goal));
   appendEntry({ dir, entry, read, write });
   return { goal };
+}
+
+/**
+ * Changes a goal's GOAL.json by `change(goal)`, which returns the goal as it
+ * is to be, or `{ problems }` to refuse. The result is validated before it is
+ * written, so an invalid GOAL.json is never written. Returns `{ goal }` or
+ * `{ problems }`.
+ */
+export function updateGoal({ dir, change, read = readTextOrNull, write = writeFileAtomic }) {
+  const path = join(dir, GOAL_FILE);
+  const text = read(path);
+  if (text === null) return { problems: [`${dir} has no ${GOAL_FILE}`] };
+  const parsed = parseGoal(text);
+  if (parsed.problems) return { problems: parsed.problems };
+  const next = change(parsed);
+  if (next?.problems) return { problems: next.problems };
+  let rendered;
+  try { rendered = renderGoal(next); } catch (error) { return { problems: [error.message] }; }
+  write(path, rendered);
+  return { goal: parseGoal(rendered) };
 }
 
 /** A file's text, or null when it cannot be read. */

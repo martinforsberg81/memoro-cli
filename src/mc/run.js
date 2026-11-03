@@ -121,7 +121,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { branchFlow, deliverableStep, REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, prsLanded, goalName, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalOfRecord, prsLanded, goalName, renderGoalText, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, planDue, planHeldText, reviewDue, parseLog, programsGoals, queuedText, remakeUnbuiltBranches, REVIEW_ROLE, setStatus, verdictOf, waitingMoves } from './goals.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -2359,7 +2359,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const found = log.slice(before).findLast((entry) => entry.tool !== 'runner' && verdictOf(entry));
     const verdict = found ? verdictOf(found) : null;
     if (!verdict) {
-      goalStatus(goal, name, 'blocked', { comment: 'the review left no verdict (`green <sha>` or `red <sha>` in Gjort) — waits on plan' });
+      goalStatus(goal, name, 'blocked', { comment: 'the review left no verdict (`green <sha>` or `red <sha>` in Done) — waits on plan' });
       return;
     }
     if (verdict.verdict === 'red') {
@@ -2487,11 +2487,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return 'skipped:no-capacity';
     }
 
+    // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
+    const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
     const prompt = review
-      ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head })
+      ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
       : planning
-      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, why: goal.log.at(-1) })
-      : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch });
+      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, why: goal.log.at(-1), brief })
+      : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
     const ts = stamp().replace(/[-:]/gu, '');

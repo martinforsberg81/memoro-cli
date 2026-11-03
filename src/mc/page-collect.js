@@ -59,6 +59,7 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
+import { criteriaCount } from './criteria.js';
 import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -1537,6 +1538,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     after: goal.after ?? [],
     waiting_on: afterOf(goal, goals).pending,
     sessions: goalSessions(goal.log),
+    // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
+    criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
     // Blocked by a red review, a red merge or the runner: it waits on plan,
