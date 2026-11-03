@@ -99,6 +99,64 @@ async function shot(argv, fx, { behaviour, env = {}, ...deps } = {}) {
   return { code, stdout: stdout.text, stderr: stderr.text };
 }
 
+it('receipt: acted answers every action kind and clicked remains valid for all-click requests', async () => {
+  const fx = fixture();
+  const runWith = (actions, receipt) => shot(
+    ['dev', 'home', ...actions.flatMap(({ flag, value }) => [flag, value])],
+    fx,
+    { runCapture: ({ request }) => ({ ok: true, result: { ok: true, file: '/tmp/receipt.png', url: 'http://x/app/', ...receipt(request) } }) },
+  );
+  const acted = await runWith([{ flag: '--click', value: '.save' }], (request) => ({ acted: request.actions }));
+  assert.equal(acted.code, 0, acted.stderr);
+  assert.equal(acted.stdout.split('\n')[0], '/tmp/receipt.png');
+
+  const clicked = await runWith([{ flag: '--click', value: '.save' }], () => ({ clicked: ['.save'] }));
+  assert.equal(clicked.code, 0, clicked.stderr);
+
+  const mixed = await runWith([
+    { flag: '--click', value: '.save' }, { flag: '--fill', value: 'input[name=title]=Bank' },
+  ], (request) => ({ acted: request.actions }));
+  assert.equal(mixed.code, 0, mixed.stderr);
+});
+
+it('receipt: incomplete answers are refused, but failed steps are not unsupported', async () => {
+  const fx = fixture();
+  const runResult = (result) => shot(['dev', 'home', '--click', '.a', '--click', '.b'], fx, {
+    runCapture: () => ({ ok: true, result: { ok: true, file: '/tmp/receipt.png', url: 'http://x/app/', ...result } }),
+  });
+  const partial = await runResult({ acted: [{}] });
+  assert.equal(partial.code, 1);
+  assert.match(partial.stderr, /does not acknowledge every requested action/u);
+  assert.doesNotMatch(partial.stderr, /not supported|does not understand/u);
+
+  const failed = await runResult({ failed: { step: 1, kind: 'click', selector: '.a', error: 'no target' } });
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /^failed {2}step 1 \(click \.a\): no target$/mu);
+  assert.doesNotMatch(failed.stderr, /not supported|does not understand/u);
+});
+
+it('receipt: no receipt names the installed mc and capture script as unsupported', async () => {
+  const fx = fixture();
+  const result = await shot(['dev', 'home', '--click', '.a'], fx, {
+    runCapture: () => ({ ok: true, result: { ok: true, file: '/tmp/receipt.png', url: 'http://x/app/' } }),
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /this installed mc does not understand the result from .*node fake-shot\.mjs in .*\/memoro/u);
+  assert.equal(result.stdout, '');
+});
+
+it('receipt: a thrown eval keeps its line and exits 1', async () => {
+  const fx = fixture();
+  const result = await shot(['dev', 'home', '--eval', 'throw new Error("bad")'], fx, {
+    runCapture: ({ request }) => ({ ok: true, result: {
+      ok: true, file: '/tmp/receipt.png', url: 'http://x/app/', acted: request.actions,
+      evaluated: [{ error: 'Error: bad' }],
+    } }),
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^eval 1  threw: Error: bad$/mu);
+});
+
 const sideOf = (fx) => JSON.parse(readFileSync(fx.side, 'utf8'));
 
 describe('mc shot — the surface', () => {
@@ -256,13 +314,13 @@ describe('mc shot — the pieces', () => {
   it('actionGap is silent when acted has the same length, names the picture when it is missing, and keeps the clicked rule for clicks', () => {
     const mixed = { actions: [{ kind: 'click', selector: '.tab' }, { kind: 'fill', selector: 'input', text: 'hi' }] };
     assert.equal(actionGap(mixed, { file: '/o.png', acted: mixed.actions }), null);
-    assert.match(actionGap(mixed, { file: '/o.png', clicked: ['.tab'] }), /^the picture at \/o\.png was taken without the actions — .*--context-click, --long-press and --fill/u);
-    assert.match(actionGap(mixed, { file: '/o.png', acted: [{}] }), /without the actions/u, 'one answer short');
+    assert.match(actionGap(mixed, { file: '/o.png', clicked: ['.tab'] }), /does not acknowledge every requested action/u);
+    assert.match(actionGap(mixed, { file: '/o.png', acted: [{}] }), /does not acknowledge every requested action/u, 'one answer short');
     const clicks = { actions: [{ kind: 'click', selector: '.tab' }, { kind: 'click', selector: 'text=Save' }] };
     assert.equal(actionGap(clicks, { file: '/o.png', clicked: ['.tab', 'text=Save'] }), null);
     assert.equal(actionGap({ actions: null }, { file: '/o.png' }), null, 'nothing asked, nothing to say');
-    assert.match(actionGap(clicks, { file: '/o.png' }), /^the picture at \/o\.png was taken without the clicks/u);
-    assert.match(actionGap(clicks, { file: '/o.png', clicked: ['.tab'] }), /without the clicks/u, 'one answer short');
+    assert.match(actionGap(clicks, { file: '/o.png' }), /has no action receipt/u);
+    assert.match(actionGap(clicks, { file: '/o.png', clicked: ['.tab'] }), /does not acknowledge every requested action/u, 'one answer short');
   });
 });
 
@@ -398,12 +456,11 @@ describe('mc shot — the run', () => {
     assert.equal(result.stdout.split('\n')[0], request.out);
   });
 
-  it('a script that does not say it clicked is refused, and no path is printed', async () => {
+  it('an acted response answers click actions even without clicked', async () => {
     const fx = fixture();
     const result = await shot(['dev', 'home', '--click', '.tab'], fx, { behaviour: 'no-clicked' });
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /mc: the picture at .* was taken without the clicks/u);
-    assert.equal(result.stdout, '');
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.split('\n')[0], sideOf(fx).request.out);
   });
 
   it('without --click nothing is asked of the script, so a script that answers no clicks still captures', async () => {
@@ -428,7 +485,7 @@ describe('mc shot — the run', () => {
     assert.equal(result.stdout.split('\n')[0], request.out);
     const old = await shot(['dev', 'home', '--context-click', '.chip'], fx, { behaviour: 'no-acted' });
     assert.equal(old.code, 1);
-    assert.match(old.stderr, /mc: the picture at .* was taken without the actions/u);
+    assert.match(old.stderr, /mc: the picture at .* has no action receipt/u);
     assert.equal(old.stdout, '');
     const bad = await shot(['dev', 'home', '--fill', 'input'], fx);
     assert.equal(bad.code, 2);
@@ -532,7 +589,7 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
 
   it('actionGap: a failed step is no gap, and an older script that answers no acted still is one', () => {
     const asked = { actions: [{ kind: 'eval', script: '1' }, { kind: 'press', key: 'Enter' }] };
-    assert.match(actionGap(asked, { file: '/o.png' }), /taken without the actions/u);
+    assert.match(actionGap(asked, { file: '/o.png' }), /has no action receipt/u);
     assert.equal(actionGap(asked, { file: '/o.png', acted: [{}], failed: { step: 2, kind: 'press', key: 'Enter', error: 'x' } }), null);
     assert.equal(actionGap({ actions: [{ kind: 'click', selector: '.a' }] }, { file: '/o.png', failed: { step: 1, kind: 'click', selector: '.a', error: 'x' } }), null);
   });
@@ -561,7 +618,7 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
     assert.equal(JSON.parse(json.stdout).errors.length, 25);
   });
 
-  it('prints eval lines: the value, what it threw, and a long value cut at 4000', async () => {
+  it('prints eval lines, exits 1 when one threw, and cuts a long value at 4000', async () => {
     const fx = fixture();
     const long = 'y'.repeat(5000);
     const result = await shot(['dev', 'home', '--eval', '1', '--eval', '2', '--eval', '3'], fx, captured({
@@ -570,7 +627,7 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
       evaluated: [{ value: { z: 10, chain: ['a', 'b'] } }, { error: 'ReferenceError: q is not defined' }, { value: long }],
       warnings: ['w'],
     }));
-    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.code, 1, result.stderr);
     const lines = result.stdout.trimEnd().split('\n');
     assert.deepEqual(lines.slice(2, 5), ['error  dialog  alert: hi', 'eval 1  {"z":10,"chain":["a","b"]}', 'eval 2  threw: ReferenceError: q is not defined']);
     assert.equal(lines[5], `eval 3  ${JSON.stringify(long).slice(0, 4000)}… (5002 bytes; --json has it whole)`);

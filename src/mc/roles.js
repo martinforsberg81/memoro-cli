@@ -47,6 +47,15 @@ import { expandRoleSkills } from './skills.js';
  * `pm` and `pm-helper` were reserved beside it, for the same reason and for a
  * pair of roles that no longer exist. They are ordinary names again.
  */
+/** The role a `mc worker` area carries: a build, its `worker` part. */
+export const WORKER_ROLE = 'build-session:worker';
+
+/**
+ * Area marks written before the roles were one file each: an area marked
+ * `worker` before 2026-11-03 carries the worker part of the build role now.
+ */
+export const MOVED_MARKS = Object.freeze({ worker: WORKER_ROLE });
+
 export const RESERVED_ROLE_NAMES = Object.freeze(['helper']);
 
 const ROLE_COMMANDS = { helper: 'mc helper' };
@@ -70,16 +79,17 @@ export function rolesDir(env = process.env) {
  * Every role defined in the catalogue, by file. A directory that does not
  * exist is an empty catalogue, not an error — roles are optional equipment.
  *
- * A leading underscore means "not a role": `_common.md` is the text every role
- * session is told (see `sharedRoleText`), and a catalogue directory holding a
- * copy of it must not grow a role named `_common` out of it.
+ * A passage is not a role: `all-sessions.md` is the text every role session is
+ * told (see `sharedRoleText`) and `<verb>-verb.md` is how one verb is used (see
+ * `expandRoleIncludes`), and a catalogue directory holding a copy of either
+ * must not grow a role out of it. A leading underscore still means the same.
  */
 export function listRoles(env = process.env) {
   const dir = rolesDir(env);
   let names = [];
   try {
     names = readdirSync(dir)
-      .filter((name) => name.endsWith('.md') && !name.startsWith('_'))
+      .filter((name) => name.endsWith('.md') && !isPassageFile(name))
       .sort();
   } catch { return []; }
   const roles = [];
@@ -99,47 +109,104 @@ export function canonRolesDir() {
   return join(canonRoot(), 'roles');
 }
 
-export function readCanonRole(name) {
-  const path = join(canonRolesDir(), `${name}.md`);
-  const role = parseRole(readFile(path), name);
+export function readCanonRole(ref) {
+  const { file, part } = roleRef(ref);
+  const path = join(canonRolesDir(), `${file}.md`);
+  const role = parseRole(readFile(path), file, part);
   return role ? { ...role, path } : null;
+}
+
+/**
+ * A role reference: the role file, and the part of it one kind of start runs.
+ *
+ * Three roles — plan, build and review — are one file each, and two of them
+ * are started more than one way: a build on a goal, on a project's step or as
+ * a worker; a review of a goal or of a project. Each start is given the role's
+ * shared words and its own part, and no other start's. The part is named after
+ * a colon, `build-session:goal`, and that whole string is the role's name
+ * wherever one is kept: `MC_ROLE`, a register's role record, `mc roles check`.
+ */
+export function roleRef(ref) {
+  const [file, part = null] = String(ref ?? '').split(':');
+  return { file, part: part || null };
+}
+
+/** The file a role reference reads, for a message: `canon/roles/build-session.md (part goal)`. */
+export function roleFileText(ref) {
+  const { file, part } = roleRef(ref);
+  return `canon/roles/${file}.md${part ? ` (part ${part})` : ''}`;
+}
+
+/** Whether a file in a roles directory is a passage rather than a role. */
+export function isPassageFile(name) {
+  return name.startsWith('_') || name === SHARED_ROLE_FILE || ROLE_PASSAGE.test(name);
+}
+
+/**
+ * A role file's parts. A line `@part <name> [<name>…]` opens a part, `@end`
+ * closes it; text outside every part is the role's shared words. A start that
+ * names a part keeps the shared words and every part that lists its name, in
+ * file order, and drops the rest. Several names on one `@part` line are a
+ * passage two starts share — every build, goal or project, but not a worker.
+ */
+const PART_OPEN = /^@part((?:[ \t]+[a-z0-9-]+)+)[ \t]*$/u;
+const PART_CLOSE = /^@end[ \t]*$/u;
+
+export function partNames(body) {
+  const names = new Set();
+  for (const line of String(body ?? '').split('\n')) {
+    const open = PART_OPEN.exec(line);
+    if (open) for (const name of open[1].trim().split(/[ \t]+/u)) names.add(name);
+  }
+  return [...names];
+}
+
+export function selectParts(body, wanted = []) {
+  if (typeof body !== 'string') return body;
+  const kept = [];
+  let current = null;
+  for (const line of body.split('\n')) {
+    const open = PART_OPEN.exec(line);
+    if (open) { current = open[1].trim().split(/[ \t]+/u); continue; }
+    if (current && PART_CLOSE.test(line)) { current = null; continue; }
+    if (!current || current.some((name) => wanted.includes(name))) kept.push(line);
+  }
+  return kept.join('\n').replace(/\n{3,}/gu, '\n\n').trim() || null;
 }
 
 /**
  * The one file whose text every role session is told, whichever role it is.
  *
- * It lives in `canon/roles/` beside the roles themselves, under a name no role
- * can have: `listRoles` makes a role out of every `*.md` in a catalogue
- * directory, so a `common.md` copied into a user's catalogue would be listed
- * and shown as a role named `common`. The underscore is the convention that
- * says otherwise, and `listRoles` skips it.
+ * It lives in `canon/roles/` beside the roles themselves. `listRoles` makes a
+ * role out of every `*.md` in a catalogue directory, so it skips this name
+ * (`isPassageFile`), and `parseRole` refuses the file for want of frontmatter.
  *
  * It is read here, at assembly, and deliberately not folded into
  * `readCanonRole`'s `overlay`. `run.js` tests `role.overlay` to decide whether
  * a role file is installed at all, and a shared preamble folded in ahead of
- * that check would make a missing `step.md` look present — a ninety-minute
+ * that check would make a missing `build-session.md` look present — a ninety-minute
  * session launched with no instructions for what it is doing. `mc roles show`
  * and `tests/mc/roles-decisions.test.js` read `overlay` as the role's own
  * words for the same reason.
  */
-export const SHARED_ROLE_FILE = '_common.md';
+export const SHARED_ROLE_FILE = 'all-sessions.md';
 
 export function sharedRoleText() {
   return readFile(join(canonRolesDir(), SHARED_ROLE_FILE))?.trim() || null;
 }
 
 /**
- * A passage two roles share, carried by reference rather than copied.
+ * A verb's own file, carried by reference rather than copied.
  *
- * `_common.md` is what *every* role session is told. The rules for writing a
- * `PLAN.json` are not that: two roles write plans (the planning session, and
- * the brief since 2026-09-06) and six do not, and telling a `step` session how
- * to write a plan it may never write is worse than telling it nothing. So a
- * shared passage is its own file under the same underscore convention —
+ * `all-sessions.md` is what *every* role session is told. How a verb is used —
+ * `mc project` and writing a `PLAN.json`, `mc goal`, `mc step` — is not that:
+ * the plan session and the brief write plans and a build session does not, and
+ * telling a build session how to write a plan it may never write is worse than
+ * telling it nothing. So each verb is its own file, `<verb>-verb.md` —
  * `listRoles` skips it, `parseRole` refuses it for want of frontmatter — and a
  * role file names it on a line of its own:
  *
- *   @include _plan-writing.md
+ *   @include project-verb.md
  *
  * The line is replaced with that file's text at assembly, in `instructionsFor`,
  * which is the one door every launch path goes through. It is deliberately not
@@ -147,8 +214,9 @@ export function sharedRoleText() {
  * to decide whether a role file is installed at all, and that has to stay the
  * role's *own* words (see `SHARED_ROLE_FILE`).
  *
- * Only an underscored name in `canon/roles/` can be included — a role cannot
- * include a role, so there is no recursion to bound. A name that is not there
+ * Only a `-verb.md` name in `canon/roles/` can be included — a role cannot
+ * include a role, and a verb file includes nothing, so there is no recursion
+ * to bound. A name that is not there
  * is left standing in the text rather than silently dropped: a visible
  * `@include` line in a session's instructions is a broken install somebody can
  * see, and a rule that quietly vanished is not.
@@ -157,7 +225,8 @@ export function sharedRoleText() {
  * own, and the line becomes a pointer to the installed `mc-<name>` skill — not
  * its text (see `expandRoleSkills` in `skills.js`). An unknown name stands.
  */
-const ROLE_INCLUDE = /^@include[ \t]+(_[A-Za-z0-9._-]+\.md)[ \t]*$/gmu;
+const ROLE_INCLUDE = /^@include[ \t]+([a-z0-9-]+-verb\.md)[ \t]*$/gmu;
+const ROLE_PASSAGE = /^[a-z0-9-]+-verb\.md$/u;
 
 export function expandRoleIncludes(text, { tool = 'claude', env = process.env } = {}) {
   if (typeof text !== 'string') return text;
@@ -168,17 +237,24 @@ export function expandRoleIncludes(text, { tool = 'claude', env = process.env } 
   return expandRoleSkills(included, { tool, env });
 }
 
-export function readRole(name, env = process.env) {
-  const path = join(rolesDir(env), `${name}.md`);
-  const role = parseRole(readFile(path), name);
+export function readRole(ref, env = process.env) {
+  const { file, part } = roleRef(ref);
+  const path = join(rolesDir(env), `${file}.md`);
+  const role = parseRole(readFile(path), file, part);
   return role ? { ...role, path } : null;
 }
 
 /**
  * Frontmatter plus body. The keys mc understands are read; anything else in
  * the frontmatter is the rulebook's business and is left alone.
+ *
+ * `part` selects one start's part of a role with parts (`selectParts`), and
+ * the name becomes `<name>:<part>`. A part the file does not have is no role:
+ * a start would otherwise run on the shared words alone. Without a part, the
+ * overlay is the shared words only and `parts` lists what there is to choose.
+ * `body` keeps the whole text.
  */
-export function parseRole(text, fallbackName = null) {
+export function parseRole(text, fallbackName = null, part = null) {
   if (typeof text !== 'string' || !text.trim()) return null;
   // A rulebook checkout with CRLF endings is still a rulebook.
   const normalised = text.replace(/\r\n/gu, '\n');
@@ -189,9 +265,16 @@ export function parseRole(text, fallbackName = null) {
     const pair = /^([A-Za-z-]+):\s*(.*)$/u.exec(line.trim());
     if (pair) fields[pair[1].toLowerCase()] = pair[2].trim();
   }
-  const overlay = match[2].trim() || null;
+  const body = match[2].trim() || null;
+  const parts = partNames(body);
+  if (part && !parts.includes(part)) return null;
+  const overlay = parts.length ? selectParts(body, part ? [part] : []) : body;
+  const name = fields.name || fallbackName;
   return {
-    name: fields.name || fallbackName,
+    name: part ? `${name}:${part}` : name,
+    part,
+    parts,
+    body,
     model: fields.model || null,
     singleton: fields.singleton === 'true',
     tools: fields.tools ? fields.tools.split(',').map((t) => t.trim()).filter(Boolean) : [],
@@ -228,15 +311,15 @@ export function areaRole(areaPath, env = process.env) {
   // there is the one they meant. Canon is the fallback so a role mc ships
   // (worker, since the PM went dormant) reaches every conversation in its
   // area on a machine with no catalogue at all.
-  const role = readRole(name, env) || readCanonRole(name);
-  return role || { name, missing: true, path: join(rolesDir(env), `${name}.md`) };
+  const role = readRole(name, env) || readCanonRole(MOVED_MARKS[name] || name);
+  return role || { name, missing: true, path: join(rolesDir(env), `${roleRef(name).file}.md`) };
 }
 
 /**
  * What a new conversation is told: the text every role session shares, then
  * this role's own overlay — separated so each still reads as itself. Nothing
  * comes before them: the Coding Profile that once did was removed by ruling 24,
- * and the one rule in it nothing else said is a sentence in `_common.md`.
+ * and the one rule in it nothing else said is a sentence in `all-sessions.md`.
  *
  * This is the single door. Four paths launch a session with instructions —
  * `work-open.js` twice (a conversation in a work area, and the argv a handoff
@@ -296,11 +379,11 @@ export function roleSourceOf(role) {
  * things that can change under it.
  *
  * Two digests, because they answer two questions. `digest` is over the
- * assembled instructions — `_common.md` and the overlay, joined the way
+ * assembled instructions — `all-sessions.md` and the overlay, joined the way
  * `instructionsFor` joins them — and is the honest answer to *is this session
  * running what a launch would produce now*. `text_digest` is over the role's
  * own body alone, expanded, and is the answer to *is this session running the
- * role file on disk today*. An edit to `_common.md` moves the first and not the
+ * role file on disk today*. An edit to `all-sessions.md` moves the first and not the
  * second. Both are in the repository now: the Coding Profile, the one input
  * that could move a digest from outside it, was removed by ruling 24.
  *

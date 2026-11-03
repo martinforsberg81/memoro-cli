@@ -165,7 +165,7 @@ below is about.
   `failed`, `timed out`. `plan` is drawn once there has been one; an outcome
   with no sessions is not drawn; `red`, `blocked` and `failed` are red and
   `timed out` yellow. `other` is what the runner logged that is not one of its session
-  kinds — merge rounds, mends, the helper's turns. The list-price cost gives
+  kinds — merge rounds, the helper's turns, and mend rows from before 2026-11-02. The list-price cost gives
   way first on a narrow terminal, its basis and then itself. `mc --json`
   carries `runner.sessions` (one per lane file: `kind`, `variant`, `goal`,
   `name`, `step`, `steps`, `repo`, `model`, the clock), `runner.lanes` (each
@@ -186,9 +186,9 @@ below is about.
   first at 80 columns. A landing carries its phase in words (`gate`, `rebase`,
   `landing`), elapsed clock and age in the queue. Waiting numbers follow in
   landing order, with grey words instead of unexplained marks: `awaits
-  <project> step <n>`, `mended`, `after #N`. Long lists become `… N more`.
-  Reds, mends and fixes stay on their repository's row. Normal work, including
-  mending and fixing, is plain terminal text; clocks, reasons and the fixing
+  <project> step <n>`, `after #N`. Long lists become `… N more`.
+  Reds and fixes stay on their repository's row. Normal work, including
+  fixing, is plain terminal text; clocks, reasons and the fixing
   session's last sentence are grey. A PR the merger answered red is red.
   Fixing still means a live runner lane holds the red's project and step; its
   last sentence is read from the last 64 KiB of `<session.log>.jsonl` with
@@ -199,7 +199,7 @@ below is about.
   rows also say `last #N · 2 h ago`, in grey, or `no landing recorded`.
   `mc --json` carries the drawing's exact input as `merges.repos[]`: `repo`,
   `state`, `pause`, `merger_stopped`, `landing`, `landings`, `waiting`, `reds`,
-  `mending`, `fixing`, `day_count`, `last`. The older aggregate fields remain
+  `fixing`, `day_count`, `last`. The older aggregate fields remain
   for status and PR ownership readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
   `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
@@ -268,12 +268,13 @@ was pressed (Martin, 2026-09-19: *"status per projekt uppdateras inte
 alltid"*). Each frame now carries a **key** (`pageKey`, `home.js`): every
 project's status, steps, in-flight mark and open PR — and none of the clocks
 beside them. When the key differs from the last frame's **and** the top of
-the page is off the screen (`topOffScreen`), the page is printed again whole
-(`reprintWhole`, `page-frame.js`): what is left of the old page on screen is
-erased, the new one scrolls exactly as a first print does, and scrolling up
-finds the new page first. It costs scrollback, which is why a planning
-session getting a minute older never triggers it, and a page that fits the
-screen is diffed as it always was.
+the page is off the screen (`topOffScreen`, `page-frame.js`), the page is
+printed again whole (`draw`, `page-live.js`): the screen and the scrollback
+are cleared, and the new page scrolls exactly as a first print does, so
+scrolling up finds the new page and no old copy above it. It costs whatever
+was in the scrollback, which is why a planning session getting a minute older
+never triggers it, and a page that fits the screen is diffed as it always
+was.
 
 Two rules the sections keep:
 
@@ -530,8 +531,8 @@ person set it to.
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
 | WORK | the workareas no project explains: their numbers, the file | grey |
-| MERGES | repository, landing PR and phase, waiting PRs, mending and fixing | plain |
-| MERGES | clocks, queue counts, waiting explanations, mend/fix detail, idle and last landing | grey |
+| MERGES | repository, landing PR and phase, waiting PRs, fixing | plain |
+| MERGES | clocks, queue counts, waiting explanations, fix detail, idle and last landing | grey |
 | MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
 | MERGES | `paused` with reason; `merger stopped`; a PR answered red | red |
 | SESSIONS | a lane's project's or goal's open pull request, after the clock | bold cyan |
@@ -639,8 +640,10 @@ The page under that prompt keeps telling the truth. **Every 30 seconds the
 rows that changed are rewritten where they stand, and nothing else on the
 screen is written to at all** — not the scrollback above, not the two key
 lines, not the prompt, not the cursor in whatever the person is half-way
-through typing. The page is not reprinted and the screen is not cleared:
-that was `--watch`, and it is why `--watch` went.
+through typing. An ordinary frame does not reprint the page or clear the
+screen: that was `--watch`, and it is why `--watch` went. The few frames that
+cannot be written in place are printed whole from an empty terminal — see
+[*Growth*](#what-is-written-and-what-is-not) below.
 
 Two modules, and the split is the same one `page-render.js` already keeps:
 
@@ -671,7 +674,7 @@ each decided rather than fallen into:
 | unchanged | **no bytes at all** — not a redraw of identical text. A terminal that receives nothing is the only way to be sure nothing flickered |
 | a row changed | one move up to that row, `CSI 2K`, the row, one move back. Rows that did not change are not touched |
 | fewer rows than before | the surplus rows are **cleared where they stand** and the page keeps its footprint |
-| more rows than before | the page is **reprinted**: `CSI 0J` from its first reachable row, then the frame as ordinary lines |
+| more rows than before | the page is **printed again whole**: `CLEAR_ALL` (`CSI H`, `CSI 2J`, `CSI 3J`), then the frame as ordinary lines |
 
 The whole write of an ordinary frame is `\x1b7`, the writes, `\x1b8`, in one
 `stdout.write` so nothing can interleave with it. The prompt row is not
@@ -688,15 +691,25 @@ reprints.
 **Growth is the case that can damage the scrollback**, so it is the one
 written down at length. A frame with more rows than the last has grown past
 the footprint it was printed in, and everything below its last row belongs
-to the caller, so no in-place write can be right. The reprint lets the
-terminal scroll at the bottom exactly as the first print of the page
-scrolled it, which is what puts a line into the scrollback once and intact.
-`CSI L` (insert line) was rejected for the opposite reason: it shifts the
-region down without scrolling anything into the scrollback, and silently
-drops the bottom row of the screen. The cost is paid by the loop rather than
-hidden — after a growth frame everything below the page has been erased, so
-`page-live.js` prints the key lines, the prompt and the half-typed answer
-again itself.
+to the caller, so no in-place write can be right. It is printed whole, and so
+are the two other frames that cannot be diffed — one drawn for a terminal
+that has since been resized, and one whose key moved while the top of the
+page is off the screen. Every whole print starts from an empty terminal:
+`CLEAR_ALL` — cursor home, erase the screen, erase the scrollback — then the
+page's lines each ended by a newline, exactly as the first print wrote them,
+then the key lines, the prompt and the half-typed answer, which
+`page-live.js` prints again itself because the clear took them. `a`, `f` and
+the page drawn again after a verb (`show`) clear the same way. The terminal
+scrolls at the bottom as the first print scrolled it, so the tab only ever
+holds the current page plus whatever scrolled off since the last whole print.
+Before 2026-11 a whole print erased from the page's first reachable row
+(`CSI 0J`) and printed under the old copy, and since the page is taller than
+most screens every one of them left another page in the scrollback — after a
+few hours an endless scroll of old pages. The price of the clear is stated:
+the first whole print also clears whatever was in the terminal before `mc`
+started. `CSI L` (insert line) was rejected for the opposite reason: it
+shifts the region down without scrolling anything into the scrollback, and
+silently drops the bottom row of the screen.
 
 ### How the page finds itself
 
@@ -748,18 +761,16 @@ all**. That is what makes a page taller than the terminal safe: the page is
 scrolled off the top is history. History is not rewritten and not scrolled
 back to.
 
-**The footprint is taken from the print, never from the page's length.** The
-first print ends with a newline, so the cursor comes to rest one row below the
-last row and the footprint is the number of lines. A growth frame *joins* its
-lines instead, so the cursor rests **on** the last row — one row higher — and
-on a page taller than the screen it also printed fewer rows than the page has
-lines. `page-frame.js` exports `reprintPlan` for exactly this: the reprint and
-the loop that has to know where it ended up read the same arithmetic rather
-than each deriving it. Counting `next.length + tailRows` again after a growth
-frame is one row out, and one row out is a page that lies: `CSI 2K` clears the
-neighbour of every row it meant to rewrite and the row that changed keeps its
-old text. Measured at 45 rows × 120 columns on a 97-line page, 2026-09-06 —
-eleven `sql-readiness` rows reached the screen as four.
+**The footprint is what the print left, and every print leaves the same.** The
+first print and every whole print end each line with a newline, so the cursor
+comes to rest one row below the last row and the footprint is the number of
+lines. It was not always one number: a growth frame used to *join* its lines,
+leaving the cursor **on** the last row — one row higher — and counting
+`next.length + tailRows` after it was one row out. One row out is a page that
+lies: `CSI 2K` clears the neighbour of every row it meant to rewrite and the
+row that changed keeps its old text. Measured at 45 rows × 120 columns on a
+97-line page, 2026-09-06 — eleven `sql-readiness` rows reached the screen as
+four. `tests/mc/page-live.test.js` holds that shape in `@xterm/headless`.
 
 **Narrower than 60 columns, the page is not live.** `columnsFor` clamps to a
 floor of 60, so below that every row is wider than the screen and wraps, and
@@ -771,7 +782,7 @@ the not-live path is not one that nothing exercises.
 
 **A resize does not redraw at once.** `process.stdout`'s `resize` marks the
 frame invalid rather than the page — the widths were computed for the old
-columns — and the next refresh reprints the page whole instead of diffing
+columns — and the next refresh prints the page whole, from an empty terminal, instead of diffing
 against lines that no longer describe the screen. For up to 30 seconds a
 resized terminal therefore shows the page that was drawn for the old width.
 

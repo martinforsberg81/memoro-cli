@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import {
   goalsOf, intakeSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
+import { planHeldText } from '../../src/mc/goals.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
 
@@ -90,6 +91,20 @@ describe('goal rows on the page', () => {
     assert.match(cleanup, /\u001b\[[0-9;]*31m\s*blocked/u);
   });
 
+  it('a done or dropped goal\'s tail is its last Gjort, never a Nästa that is over', () => {
+    const finished = [
+      { name: 'landed', programme: 'mc', repos: ['memoro-cli'], status: 'done', sessions: 2, last: { done: 'landed #1235 as 60e9f82', next: 'Merge #1235', comment: null }, running: false, problems: [] },
+      { name: 'letgo', programme: 'mc', repos: ['memoro-cli'], status: 'dropped', sessions: 0, last: { done: null, next: 'build it', comment: 'wrong goal' }, running: false, problems: [] },
+    ];
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: finished, now: NOW }) });
+    const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW })).map(plain);
+    const landed = lines.find((line) => line.includes('g · landed'));
+    const letgo = lines.find((line) => line.includes('g · letgo'));
+    assert.match(landed, /landed #1235 as 60e9f82$/u);
+    assert.doesNotMatch(landed, /Merge #1235/u);
+    assert.match(letgo, /dropped .*wrong goal$/u);
+  });
+
   it('a goal that does not parse is drawn with its problem', () => {
     const broken = [{
       name: 'broken', programme: 'mc', repos: [], status: null, sessions: 0, last: null, running: false,
@@ -166,6 +181,20 @@ describe('a goal in review, and one waiting on plan', () => {
     });
     assert.equal(byReview.plan, true);
     assert.equal(byQuestion.plan, false);
+    assert.equal(byReview.person, false);
+    assert.equal(byQuestion.person, true, 'a question waits on a person');
+  });
+
+  it('a goal plan left blocked is drawn as waiting on a person', () => {
+    const held = { at: '2026-11-01T12:00Z', tool: 'runner', model: null, status: 'blocked', done: planHeldText(true), comment: null, next: null };
+    const asked = { at: '2026-11-01T11:59Z', tool: 'claude', model: 'fable', status: 'blocked', done: null, comment: 'split the goal in two?', next: null };
+    const [row] = goalsOf({ goals: [{ programme: 'mc', goal: 'stuck', repos: ['memoro-cli'], status: 'blocked', log: [asked, held], problems: [] }] });
+    assert.deepEqual([row.plan, row.person], [false, true]);
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: [row], now: NOW }) });
+    const line = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true })).find((one) => plain(one).includes('g · stuck'));
+    assert.equal(row.question, 'split the goal in two?');
+    assert.match(plain(line), /blocked .*waits on a person · split the goal in two\?/u);
+    assert.match(line, /\u001b\[31mwaits on a person/u);
   });
 
   it('the page draws review green, and a goal waiting on plan in the colour of what waits on a person', () => {

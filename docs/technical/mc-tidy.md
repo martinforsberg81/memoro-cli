@@ -107,7 +107,7 @@ one, stays beside it as `closeout/<project>.md`. It holds:
   `reason` and `comments`, with `sessions`, `seconds` and `cost_usd` summed
   over the sessions whose `pr` is the step's;
 - `sessions`: every runs.tsv row of the project that is not the merger's
-  (`merge`, `mend`), with `cost_usd` the `total_cost_usd` of the session's own
+  (`merge`, and `mend` rows from before 2026-11-02), with `cost_usd` the `total_cost_usd` of the session's own
   result file under `runner/log/` (plain or `.json.gz`), or `null` — runs.tsv
   has no cost column, and a cost is never estimated;
 - `totals`: sessions, seconds, land seconds, tokens, the known cost with

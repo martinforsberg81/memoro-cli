@@ -45,35 +45,37 @@
  *     close the gap, but it would also pull the menu and the prompt up a row
  *     and drop whatever is at the bottom of the screen — rows this page does
  *     not own. A blank row it printed is the page's to blank.
- *   - **More rows than before** — decided deliberately, because this is the
- *     case that can damage the scrollback. The page has grown past the
- *     footprint it was printed in, and there is nothing below its last row
- *     but rows belonging to the caller, so there is no in-place write that
- *     can be right. The writes are therefore a reprint: up to the page's
- *     first reachable row, `CSI 0J` to erase from there to the end of the
- *     screen, then the frame printed as ordinary lines. The terminal scrolls
- *     at the bottom exactly as the first print of the page scrolled it, which
- *     is what puts a line in the scrollback once and correctly — as opposed
- *     to inserting lines (`CSI L`), which does not scroll into the scrollback
- *     at all and silently discards the bottom line of the screen. The cost is
- *     stated rather than hidden: after a growth frame the cursor is at the end
- *     of the last page row, everything below it has been erased, and the
- *     caller reprints its own rows and recomputes `above`. `reprintPlan` is
- *     that recomputation, exported rather than described, because a caller
- *     that derives it a second time derives it differently — see below.
+ *   - **More rows than before** — not this function's case, and decided
+ *     deliberately, because it is the case that used to fill the scrollback.
+ *     The page has grown past the footprint it was printed in and there is
+ *     nothing below its last row but rows belonging to the caller, so there
+ *     is no in-place write that can be right. The caller prints the page
+ *     again whole, from an empty terminal: `CLEAR_ALL` — cursor home, erase
+ *     the screen, erase the scrollback — then the lines, exactly as the first
+ *     print wrote them. Rows of `next` past the end of `previous` are not
+ *     written here.
  *
  * **A page taller than the terminal.** The page is 87 lines at the current
  * `~/mc`, and rows that have scrolled off the top cannot be addressed —
  * moving up past the top row of the screen stops there, so a write meant for
  * an invisible row would land on a visible one and corrupt it. `rows` (the
  * terminal's height) bounds how far up the writes will reach; a changed row
- * further up than that is left alone. What has scrolled off is history, and
- * history is not rewritten and not scrolled back to.
+ * further up than that is left alone by the diff. When the change up there
+ * matters, the caller asks `topOffScreen` and prints the page again whole —
+ * the same reprint as growth: the screen and the scrollback are cleared first,
+ * so the terminal only ever holds the current page plus whatever scrolled off
+ * since the last whole reprint, never a stack of old pages. The first whole
+ * reprint also clears what was in the terminal before `mc` started.
  */
+
+/**
+ * Cursor home, erase the screen, erase the scrollback: what every whole
+ * reprint of the page starts with, so the tab holds one copy of it.
+ */
+export const CLEAR_ALL = '\x1b[H\x1b[2J\x1b[3J';
 
 const CSI = '\x1b[';
 const CLEAR_LINE = `${CSI}2K`;
-const ERASE_BELOW = `${CSI}0J`;
 
 const up = (n) => (n > 0 ? `${CSI}${n}A` : '');
 const down = (n) => (n > 0 ? `${CSI}${n}B` : '');
@@ -98,8 +100,6 @@ export function frameWrites(previous, next, { above = 0, rows = Infinity, anchor
   const before = previous || [];
   const after = next || [];
   const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
-
-  if (after.length > before.length) return reprint(after, { above, rows, anchor });
 
   const writes = [];
   // Where the cursor is, in rows below the row it started on. Unused when the
@@ -126,36 +126,6 @@ export function frameWrites(previous, next, { above = 0, rows = Infinity, anchor
 }
 
 /**
- * What a reprint of `next` would do, for the caller that has to know where the
- * page ended up. Same arguments as `frameWrites`, describing the page as it
- * stands *before* the reprint.
- *
- * `skip` is how many of the page's first lines are not printed again: they are
- * above the top of the screen, which is history and stays there. `printed` is
- * how many rows the reprint therefore draws.
- *
- * `below` is the one a caller cannot get from the page's length, and the
- * reason this is exported rather than left inside: the lines are *joined*, not
- * terminated, so the cursor comes to rest on the last row of the page rather
- * than on the row under it — one row higher than the first print of the same
- * page leaves it. `below` is where the cursor ends up, counted in rows below
- * the page's first line (that line may itself have scrolled off; the count is
- * still the one the arithmetic needs). A caller that recomputes `above` as
- * `next.length + tail` after a growth frame is one row out, `CSI 2K` clears
- * the neighbour of every row it meant to rewrite, and the row that changed
- * keeps its old text. Measured at 45×120 on a 97-line page, 2026-09-06.
- */
-export function reprintPlan(next, { above = 0, rows = Infinity, anchor = null } = {}) {
-  const after = next || [];
-  const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
-  // The page's first row is `anchor - above`, or `reach` rows above the cursor
-  // at the furthest, and what would be above the top of the screen is dropped.
-  const skip = anchor ? Math.max(0, 1 - (anchor - above)) : Math.max(0, above - reach);
-  const printed = Math.max(0, after.length - skip);
-  return { skip, printed, below: skip + Math.max(0, printed - 1) };
-}
-
-/**
  * Has the top of the page scrolled off the screen? Then some of its rows cannot
  * be written to, and a change in one of them will never be drawn by
  * `frameWrites` — it skips them, by design.
@@ -163,34 +133,4 @@ export function reprintPlan(next, { above = 0, rows = Infinity, anchor = null } 
 export function topOffScreen({ above = 0, rows = Infinity, anchor = null } = {}) {
   if (anchor) return anchor - above < 1;
   return Number.isFinite(rows) && above > Math.max(0, rows - 1);
-}
-
-/**
- * The whole page again, from the highest row that can still be reached — every
- * line of it, including the ones whose old copies have scrolled into history.
- *
- * `frameWrites` leaves a row alone once it is above the top of the screen, and
- * on a page taller than the terminal that is where PROGRAMMES is: a project
- * went from `running` to `ready` and its row stood there saying `running` until
- * somebody pressed a key (Martin, 2026-09-19: "status per projekt uppdateras
- * inte alltid"). History cannot be rewritten, so what changed up there is
- * printed again down here: the part of the old page still on screen is erased,
- * the new page is printed whole and scrolls exactly as a first print does, and
- * scrolling up finds the new page first and what is left of the old one above
- * it. The caller decides when that is worth it — it costs scrollback — and
- * afterwards the cursor is on the page's last row: `next.length - 1` below its
- * first.
- */
-export function reprintWhole(next, { above = 0, rows = Infinity, anchor = null } = {}) {
-  const after = next || [];
-  const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
-  if (anchor) return `${CSI}${Math.max(1, anchor - above)};1H${ERASE_BELOW}${after.join('\n')}`;
-  return `\r${up(Math.min(above, reach))}${ERASE_BELOW}${after.join('\n')}`;
-}
-
-/** A frame that has outgrown its footprint: erase from the top of what can be reached, print it again. */
-function reprint(after, { above, rows, anchor }) {
-  const { skip } = reprintPlan(after, { above, rows, anchor });
-  if (anchor) return `${CSI}${Math.max(1, anchor - above)};1H${ERASE_BELOW}${after.slice(skip).join('\n')}`;
-  return `\r${up(above - skip)}${ERASE_BELOW}${after.slice(skip).join('\n')}`;
 }

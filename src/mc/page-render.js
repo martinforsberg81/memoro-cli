@@ -840,12 +840,11 @@ function mergeQueueLabel(repo, compact = false, stopped = false) {
   const counts = [
     repo.landings.length ? `${repo.landings.length} landing` : '',
     repo.waiting.length ? `${repo.waiting.length} waiting` : '',
-    repo.mending.length ? `${repo.mending.length} mending` : '',
     repo.fixing.length ? `${repo.fixing.length} fixing` : '',
     repo.reds.length ? `${repo.reds.length} red` : '',
   ].filter(Boolean);
   const count = compact && counts.length
-    ? `${repo.landings.length + repo.waiting.length + repo.mending.length + repo.fixing.length + repo.reds.length}`
+    ? `${repo.landings.length + repo.waiting.length + repo.fixing.length + repo.reds.length}`
     : counts.join(', ') || 'idle';
   return [
     { text: `${repo.repo} ${count}`, styles: ['grey'] },
@@ -864,11 +863,10 @@ function mergeRepoLine(c, wide, repo) {
         item.queue_age_seconds != null ? `queued ${ageWords(item.queue_age_seconds)}` : ''].filter(Boolean).join(' · '),
     });
   }
-  for (const [items, label] of [[repo.mending, 'mending'], [repo.fixing, 'fixing'], [repo.reds, 'red']]) {
+  for (const [items, label] of [[repo.fixing, 'fixing'], [repo.reds, 'red']]) {
     for (const item of items) chunks.push({
       text: `#${item.pr} ${label}`, styles: label === 'red' ? ['red'] : [],
-      detail: [label === 'mending' && item.waiting ? 'waiting for session'
-        : item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
+      detail: [item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
       one(item.said || item.reason)].filter(Boolean).join(' · '),
     });
   }
@@ -876,7 +874,7 @@ function mergeRepoLine(c, wide, repo) {
     chunks.push({
       text: `#${item.pr}`, styles: [],
       detail: [item.waits_for ? `awaits ${item.waits_for}` : 'waiting',
-        item.mended ? 'mended' : '', item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
+        item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
     });
   }
   const head = `    ${pad(repo.repo, 11)} `;
@@ -1171,9 +1169,12 @@ function projectLine(c, wide, project) {
  *
  * `open` is green while a session is on it and grey otherwise, `review` is
  * green — a review session or the merger moves it by itself — `blocked` is the
- * blocked colour, and `done` is grey: the project rows' colours for the same
- * words. A goal blocked by a red review or a red merge waits on plan, and its
- * tail says so first, in the colour of what waits on a person. A `waiting`
+ * blocked colour, and `done` and `dropped` are grey: the project rows' colours
+ * for the same words. A finished goal's tail is its last `Gjort:`, never a
+ * `Nästa:` that is over. A goal blocked by a red review, a red merge or the runner waits on
+ * plan, which the runner wakes, and its tail says so first; any other blocked
+ * goal — a person's, a build session's question, one plan left blocked —
+ * `waits on a person`. Both are in the colour of what waits on a person. A `waiting`
  * goal is yellow, the projects' waiting colour — the runner lets it go when
  * its `after` has landed — and its tail says first what it waits on.
  */
@@ -1199,10 +1200,12 @@ function goalLine(c, wide, goal) {
   const room = wide - width(left);
   if (room <= 0) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
-  const said = goal.last?.next ?? goal.last?.comment ?? null;
+  // A finished goal has no next action: its tail is what was done last.
+  const finished = goal.status === 'done' || goal.status === 'dropped';
+  const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
-  if (goal.plan || waits) {
-    const head = waits ?? 'waits on plan';
+  if (goal.plan || goal.person || waits) {
+    const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
     const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
     return `${left}${c(clip(head, room), ...statusTone(waits ? 'waiting' : 'blocked'))}${tail ? c(tail, 'grey') : ''}`;
   }

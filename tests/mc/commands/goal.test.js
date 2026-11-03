@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { run, usage } from '../../../src/mc/commands/goal.js';
-import { parseGoal, parseLog } from '../../../src/mc/goals.js';
+import { refusedStatus, run, usage } from '../../../src/mc/commands/goal.js';
+import { parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STATUSES } from '../../../src/mc/goals.js';
+import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 
 const HOME = '/work/programs';
@@ -207,7 +208,7 @@ test('mc goal log --status rewrites the status in the front matter and logs the 
 
   const bad = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--status', 'started', '--comment', 'x'], bad.deps), 2);
-  assert.match(bad.err(), /--status is open, review, blocked, done, waiting, not started/u);
+  assert.match(bad.err(), /--status is open, review, blocked, done, waiting, dropped, not started/u);
 });
 
 test('mc goal open, review, blocked and done set the status and log the reason', async () => {
@@ -272,7 +273,7 @@ test('a goal session ends in review and may not set done; a person may', async (
 });
 
 test('a review session may not set a goal open again', async () => {
-  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'goal-review' } });
+  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE } });
   assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'open'], f.deps), 2);
   assert.match(f.err(), /a review does not set open/u);
   assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'blocked'], f.deps), 0, f.err());
@@ -310,7 +311,7 @@ test('mc goal show refuses a goal that does not parse, and says why', async () =
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.md`]: '---\nstatus: maybe\nrepos: memoro\nclass: fast\n---\n' }) });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 1);
   assert.match(f.err(), /mc\/plain does not parse:/u);
-  assert.match(f.err(), /status is open, review, blocked, done, waiting, not maybe/u);
+  assert.match(f.err(), /status is open, review, blocked, done, waiting, dropped, not maybe/u);
 });
 
 test('mc goal list prints one line a goal: its name, repositories, status, sessions and what is next', async () => {
@@ -346,8 +347,20 @@ test('mc goal list shows review, and a goal blocked by a red review or a red mer
     'mc/a · memoro-cli · review · 1 sessions · —',
     'mc/b · memoro-cli · blocked, waits on plan · 1 sessions · —',
     'mc/c · memoro-cli · blocked, waits on plan · 0 sessions · —',
-    'mc/d · memoro-cli · blocked · 1 sessions · —',
+    'mc/d · memoro-cli · blocked, waits on a person · 1 sessions · —',
   ]);
+});
+
+test('a plan session may set every status; a build or review session never done or dropped', () => {
+  const plan = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE };
+  for (const status of STATUSES) assert.equal(refusedStatus(status, plan), null, status);
+  const build = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal };
+  assert.match(refusedStatus('done', build), /does not set done/u);
+  assert.match(refusedStatus('dropped', build), /only plan or a person drops/u);
+  assert.equal(refusedStatus('review', build), null);
+  const review = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE };
+  assert.match(refusedStatus('done', review), /does not set done/u);
+  assert.match(refusedStatus('open', review), /a review does not set open/u);
 });
 
 test('mc goal list <programme> lists that programme alone, and says when it has no goals', async () => {
@@ -428,6 +441,16 @@ test('mc goal after replaces after: waiting while one has not landed, open again
   assert.deepEqual(goalOf(f, 'plain').after, [], 'none given clears it');
   assert.doesNotMatch(f.store[`${DIR}/GOAL.md`], /^after:/mu);
   assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
+});
+
+test('mc goal after … none clears what a goal waits on, as the help says; none beside a goal name is refused', async () => {
+  const f = fixture({ files: { ...goalAt('plain', 'waiting', 'mc/first'), ...goalAt('first', 'open') } });
+  assert.equal(await run(['after', 'mc/plain', 'none'], f.deps), 0, f.err());
+  assert.deepEqual(goalOf(f, 'plain').after, [], 'none clears it');
+  assert.equal(goalOf(f, 'plain').status, 'open', 'waiting with nothing left is open');
+  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).done, 'after cleared');
+  assert.equal(await run(['after', 'mc/plain', 'none', 'mc/first'], f.deps), 2);
+  assert.match(f.err(), /none clears after and names no goal/u);
 });
 
 test('mc goal after refuses a name that is not a goal, a ring, and a goal in review or done', async () => {

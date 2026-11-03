@@ -5,9 +5,16 @@
  *   mc publish                         last commit's subject and body as the PR's
  *   mc publish --title "…" --body "…"  named instead
  *   mc publish --body-file <path>      the body from a file
- *   mc publish --branch <name>         a detached HEAD (a mend's worktree) to that branch
  *   mc publish --json                  the snapshot as one object, and nothing queued
  *   mc publish --no-merge              push and open it, and queue nothing
+ *   mc publish --goal <p>/<g>          the pull request carries that goal
+ *
+ * A pull request carries a goal (`prs` in its GOAL.md, goals.js) when one is
+ * named: `--goal`, else MC_GOAL, else the goal whose worktree this is, else
+ * the goal of a `goal/<goal>` branch. The merger and the runner set the goal
+ * `done` once every pull request it carries has landed (Martin, 2026-11-03:
+ * *"När ett goal steg landas så måste status uppdateras automatiskt till
+ * 'done'"*).
  *
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
  * (`publish.js` has each rule): refuse on main, refuse a dirty tree, refuse
@@ -20,18 +27,19 @@
  * does, in the same call (Martin, 2026-10-24: every turn a session spends
  * after its work is done is a turn for nothing). A session's publish was
  * always followed by that `mc merge`, one model turn later, to read one line.
- * Not with `--no-merge`, not with `--json` (a script decides), and not for a
- * detached HEAD published with `--branch`: that is a mend's, and the merger
- * that started the mend measures it again. Nor when GitHub does not yet hold
+ * Not with `--no-merge`, not with `--json` (a script decides). Nor when GitHub does not yet hold
  * the head that was pushed — `mc merge` would refuse it at the door. In a
  * branch flow a step before the review is booked built instead, and queues
  * nothing (`bookBuilt`).
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
+import { addPr, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
+import { writeFileAtomic } from '../atomic-write.js';
+import { programsHome } from '../paths.js';
 import { projectPlan } from '../merge-boundary.js';
 import { builtPatch } from '../merge-step.js';
 import { branchFlow } from '../plan-schema.js';
@@ -47,7 +55,7 @@ import { commandUsage } from '../command-help.js';
 export const ROUTES = {
   '': {
     booleans: ['--json', '--no-merge'],
-    strictValues: ['--title', '--body', '--body-file', '--base', '--branch'],
+    strictValues: ['--title', '--body', '--body-file', '--base', '--goal'],
     check: ({ positional }) => (positional.length ? `mc publish takes no positional (${positional.join(' ')})` : null),
   },
 };
@@ -66,10 +74,9 @@ export async function run(argv, deps = {}) {
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
   const current = git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (flags.branch && current !== 'HEAD' && current !== flags.branch) { stderr.write(`mc: --branch ${flags.branch}, but this worktree is on ${current} — drop --branch\n`); return 2; }
-  if (flags.branch && git(['check-ref-format', '--branch', flags.branch]) === null) { stderr.write(`mc: --branch ${flags.branch} is not a branch name\n`); return 2; }
-  const branch = flags.branch || current;
-  const detached = current === 'HEAD';
+  // A detached HEAD is `HEAD`, which `refusal` refuses: a pull request is
+  // opened from a branch checked out.
+  const branch = current;
   const localHead = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
   const remoteLine = git(['ls-remote', '--heads', 'origin', branch]) || '';
@@ -77,12 +84,15 @@ export async function run(argv, deps = {}) {
   const remoteIsAncestor = remoteHead ? git(['merge-base', '--is-ancestor', remoteHead, 'HEAD']) !== null : true;
   const why = refusal({ branch, dirty, remoteHead, localHead, remoteIsAncestor });
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
+  const env = deps.env || process.env;
+  const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
+  if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
 
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
-    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch, { detached });
-    if (!push.ok) { stderr.write(`mc: ${detached ? 'git push' : 'git push -u'} origin ${branch} failed:\n${push.text}\n`); return 1; }
+    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch);
+    if (!push.ok) { stderr.write(`mc: git push -u origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
   const listed = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
   let open = null;
@@ -139,13 +149,14 @@ export async function run(argv, deps = {}) {
   let pr = null;
   try { pr = JSON.parse(viewed.stdout || 'null'); } catch { pr = null; }
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
+  if (goal) carryGoal({ goal, repo, number: pr.number, env, now: deps.now ? deps.now() : new Date(), read: deps.readGoal || readTextOrNull, write: deps.writeGoal || writeFileAtomic, stdout, stderr, json: flags.json });
   if (flags.json) {
     stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
   }
   const head = String(pr.headRefOid || '');
   const held = head.startsWith(localHead) || localHead.startsWith(head);
-  const queue = !flags['no-merge'] && !detached && held;
+  const queue = !flags['no-merge'] && held;
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
   if (!queue) return 0;
   const built = bookBuilt({ branch, number: pr.number, localHead, deps, stdout, stderr });
@@ -177,6 +188,45 @@ function bookBuilt({ branch, number, localHead, deps, stdout, stderr }) {
   }
   stdout.write(`mc: built — step ${told.index + 1} stands on ${branch} at ${localHead.slice(0, 7)} in #${number}; the next step continues on this branch. Your work is over.\n`);
   return 0;
+}
+
+/**
+ * The goal this publication carries, as `{ name, dir }`, null for none, or
+ * `{ error }` for a `--goal` that is no goal: `--goal`, else MC_GOAL, else the
+ * goal whose worktree `cwd` is in, else the one goal named as the `goal/<g>`
+ * branch is. Only `--goal` must exist; a goal found any other way that is not
+ * there is none.
+ */
+export function goalOfPublish({ given, env, cwd, branch, home, read = readTextOrNull, list }) {
+  const exists = (programme, goal) => read(join(goalDirIn(home, programme, goal), GOAL_FILE)) !== null;
+  const named = given || env.MC_GOAL || null;
+  if (named) {
+    if (!isGoalRef(named)) return given ? { error: `--goal ${named} is not <programme>/<goal>` } : null;
+    const [programme, goal] = named.split('/');
+    if (!exists(programme, goal)) return given ? { error: `--goal ${named} is not a goal — mc goal list names them` } : null;
+    return { name: named, dir: goalDirIn(home, programme, goal) };
+  }
+  const here = goalOfPath(cwd, home);
+  if (here && exists(here.programme, here.goal)) return { name: `${here.programme}/${here.goal}`, dir: goalDirIn(home, here.programme, here.goal) };
+  const fromBranch = /^goal\/([a-z0-9][a-z0-9-]*)$/u.exec(branch || '')?.[1];
+  if (!fromBranch) return null;
+  const found = programsGoals({ home, read, ...(list ? { list } : {}) }).filter((item) => item.goal === fromBranch);
+  return found.length === 1 ? { name: `${found[0].programme}/${found[0].goal}`, dir: found[0].dir } : null;
+}
+
+/** The pull request written into the goal's `prs`, with an entry; said in one line (on stderr under --json). */
+function carryGoal({ goal, repo, number, env, now, read, write, stdout, stderr, json }) {
+  const ref = prRef({ repo, pr: number });
+  const out = json ? stderr : stdout;
+  try {
+    const status = parseGoal(read(join(goal.dir, GOAL_FILE)) ?? '').status ?? 'open';
+    const entry = { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status, done: `published ${ref}`, comment: null, next: null };
+    const added = addPr({ dir: goal.dir, repo, pr: number, entry, read, write });
+    if (added.problems) { stderr.write(`mc: ${ref} is not written into ${goal.name} — ${added.problems.join('; ')}\n`); return; }
+    out.write(`goal ${goal.name} carries ${ref}${added.added ? '' : ' already'} — done when every pull request it carries has landed\n`);
+  } catch (error) {
+    stderr.write(`mc: ${ref} is not written into ${goal.name} (${error?.message || error}) — mc goal pr ${goal.name} ${ref}\n`);
+  }
 }
 
 /** The base a new pull request aims at: what origin calls its default branch, else main. */
@@ -215,13 +265,12 @@ export function repoName(url, root) {
 }
 
 /**
- * Non-force `git push -u`, or for a detached HEAD `git push origin
- * HEAD:refs/heads/<branch>`. GitHub has refused a thin pack with `Internal
+ * Non-force `git push -u`. GitHub has refused a thin pack with `Internal
  * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
  * so that rejection — and only that one — is pushed once more without it.
  */
-export function pushBranch(cwd, branch, { spawn = spawnGit, stderr = process.stderr, detached = false } = {}) {
-  const target = detached ? ['origin', `HEAD:refs/heads/${branch}`] : ['-u', 'origin', branch];
+export function pushBranch(cwd, branch, { spawn = spawnGit, stderr = process.stderr } = {}) {
+  const target = ['-u', 'origin', branch];
   const push = (extra) => spawn('git', ['push', ...extra, ...target], { cwd, encoding: 'utf8', timeout: 120_000 });
   let r = push([]);
   if (r.status !== 0 && /Internal Server Error/u.test(r.stderr || '')) {

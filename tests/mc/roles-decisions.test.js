@@ -25,12 +25,12 @@ import { canonSkillsDir } from '../../src/mc/skills.js';
  * Every role that writes a question down for Martin to find. `brief` answers
  * them.
  *
- * `plan` is not one, and has a body of its own since #656. It is the session
+ * `plan-session` is not one, and has a body of its own since #656. It is the session
  * Martin is sitting in front of: a question does not have to become anything
  * to reach him, it can be asked — so its overlay says read first and ask the
  * one thing, rather than holding it to the shape a written proposal takes.
  */
-const AUTHORS = ['worker', 'build-project'];
+const AUTHORS = ['build-session:worker', 'build-session:project'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
@@ -54,7 +54,7 @@ const skillText = (name) => readFileSync(join(canonSkillsDir(), name, 'SKILL.md'
 
 /**
  * The shape used to be written out in each of these role files, then once in
- * `canon/roles/_common.md`; it is the `asking-martin` skill now. What matters
+ * the shared role text; it is the `asking-martin` skill now. What matters
  * is that a session of this role is pointed at it, and that the skill says it.
  */
 describe('the decision shape every role writes', () => {
@@ -89,8 +89,8 @@ describe('the decision shape every role writes', () => {
    * else for it to live now that mc keeps no decision file.
    */
   // The sessions that unblock a step — the brief and the planning session —
-  // carry it, through `_session-work.md`; a step session never answers.
-  for (const name of ['brief', 'plan']) {
+  // carry it, through `step-verb.md`; a step session never answers.
+  for (const name of ['brief', 'plan-session']) {
     it(`${name} writes the answer into the plan, and nothing else carries it`, () => {
       const told = toldTo(name);
       assert.match(told, phrase('the answer is written into the plan'));
@@ -104,8 +104,8 @@ describe('the decision shape every role writes', () => {
    * The boundary the runner checks on the way back in. It is in the overlay as
    * well, so a session is told before it is caught.
    */
-  it('build-project is told the plan file is not its to edit, that criteria are met through mc project, that state goes through mc step, and that it is checked', () => {
-    const { overlay } = readCanonRole('build-project');
+  it('a project build is told the plan file is not its to edit, that criteria are met through mc project, that state goes through mc step, and that it is checked', () => {
+    const { overlay } = readCanonRole('build-session:project');
     assert.match(overlay, phrase('You never change the plan file'));
     assert.match(overlay, phrase('written by `mc step`'));
     assert.match(overlay, phrase('`mc step note "…"`'));
@@ -125,8 +125,9 @@ describe('the decision shape every role writes', () => {
  * them names them.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const CANON_ROLES = ['brief', 'build-goal', 'build-project', 'helper', 'intake', 'plan', 'worker'];
-  const PUBLISHERS = ['brief', 'build-goal', 'build-project', 'plan', 'worker'];
+  const BUILDS = ['build-session:goal', 'build-session:project', 'build-session:worker'];
+  const CANON_ROLES = ['brief', ...BUILDS, 'helper', 'intake', 'plan-session'];
+  const PUBLISHERS = ['brief', ...BUILDS, 'plan-session'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
 
   for (const name of CANON_ROLES) {

@@ -1,5 +1,5 @@
 /**
- * `mc build ios --testflight`: the number from App Store Connect, the
+ * `mc asc build --testflight`: the number from App Store Connect, the
  * question, the builder's order from archive to upload, the IPA read back,
  * the number asked again, the delivery id, the pruning, and the attach
  * command printed and never run. Every external command is injected — a fake
@@ -15,7 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { run } from '../../src/mc/commands/build.js';
+import { run } from '../../src/mc/commands/asc.js';
 import {
   archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, reasonLine, runSync,
   secretsEnv,
@@ -95,7 +95,7 @@ function fakeRun({ asc = { code: 0, stdout: ASC, stderr: '' }, identities = ['Ap
 }
 
 async function testflight({
-  argv = ['ios', '--testflight', '--no-upload'], runFake = fakeRun(), answer = null, isInteractive = true,
+  argv = ['build', '--testflight', '--no-upload'], runFake = fakeRun(), answer = null, isInteractive = true,
 } = {}) {
   const { repo, head } = makeRepo();
   const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-tf-work-')) };
@@ -161,6 +161,27 @@ describe('the number from App Store Connect', () => {
       assert.equal(out.said, 'helper on main');
       assert.equal(out.pkg, 'installed');
       assert.equal(realpathSync(out.cwd), realpathSync(join(repo, 'scripts')));
+    } finally {
+      rmSync(command.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs a script that calls main() only when it is the entry point, as memoro\'s do', () => {
+    const { repo } = makeRepo();
+    writeFileSync(join(repo, 'scripts', 'list.mjs'), [
+      "import { pathToFileURL } from 'node:url';",
+      "if (import.meta.url === pathToFileURL(process.argv[1] || '').href) console.log('main ran');",
+      '',
+    ].join('\n'));
+    sh(repo, 'add', '-A');
+    sh(repo, 'commit', '-qm', 'main guards its entry point');
+    sh(repo, 'update-ref', 'refs/remotes/origin/main', sh(repo, 'rev-parse', 'HEAD'));
+
+    const command = atRev(DECLARATION.list_builds, { repoPath: repo, rev: 'origin/main' });
+    try {
+      const r = runSync(command.argv, { cwd: command.cwd });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(r.stdout.trim(), 'main ran');
     } finally {
       rmSync(command.dir, { recursive: true, force: true });
     }
@@ -237,7 +258,7 @@ describe('the number from App Store Connect', () => {
 
 describe('the question', () => {
   it('a no records a refused row and builds nothing', async () => {
-    const t = await testflight({ argv: ['ios', '--testflight'], answer: 'n' });
+    const t = await testflight({ argv: ['build', '--testflight'], answer: 'n' });
     assert.equal(t.code, 1);
     assert.deepEqual(t.asked, [
       `upload memoro me (build ${NEXT}) from ${t.head.slice(0, 7)} — production runs ${t.head.slice(0, 7)} — to TestFlight after it is built and verified? [y/N]`,
@@ -251,36 +272,36 @@ describe('the question', () => {
   });
 
   it('a yes goes into the job', async () => {
-    const t = await testflight({ argv: ['ios', '--testflight'], answer: 'y' });
+    const t = await testflight({ argv: ['build', '--testflight'], answer: 'y' });
     assert.equal(t.started[0].upload, true);
     assert.equal(t.started[0].kind, 'testflight');
     assert.equal(readIosBuilds(t.env)[0].outcome, 'failed', 'the fake builder did not start');
   });
 
   it('is refused without a terminal unless --yes or --no-upload', async () => {
-    const t = await testflight({ argv: ['ios', '--testflight'], isInteractive: false });
+    const t = await testflight({ argv: ['build', '--testflight'], isInteractive: false });
     assert.equal(t.code, 2);
-    assert.equal(t.err, 'mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload\n');
+    assert.equal(t.err, 'mc: mc asc build --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload\n');
     assert.deepEqual(t.runFake.calls, []);
     assert.deepEqual(readIosBuilds(t.env), []);
   });
 
   it('--yes uploads without asking, even without a terminal', async () => {
-    const t = await testflight({ argv: ['ios', '--testflight', '--yes'], isInteractive: false });
+    const t = await testflight({ argv: ['build', '--testflight', '--yes'], isInteractive: false });
     assert.deepEqual(t.asked, []);
     assert.equal(t.started[0].upload, true);
     assert.equal(t.started[0].kind, 'testflight');
   });
 
   it('--yes and --no-upload together are a bad argument', async () => {
-    const t = await testflight({ argv: ['ios', '--testflight', '--yes', '--no-upload'] });
+    const t = await testflight({ argv: ['build', '--testflight', '--yes', '--no-upload'] });
     assert.equal(t.code, 2);
     assert.deepEqual(t.started, []);
     assert.deepEqual(t.runFake.calls, []);
   });
 
   it('--yes without --testflight is a bad argument', async () => {
-    const t = await testflight({ argv: ['ios', '--yes'] });
+    const t = await testflight({ argv: ['build', '--yes'] });
     assert.equal(t.code, 2);
     assert.deepEqual(t.started, []);
   });

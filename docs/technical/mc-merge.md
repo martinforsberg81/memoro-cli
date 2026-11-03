@@ -82,6 +82,24 @@ were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
 seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
+**Every gate round has a repository ceiling.** `round_timeout_ms` and its
+`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 15
+minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
+247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
+ordinary-load rounds red). The deadline bounds the complete round, from the
+moment the lane is held: the preparation, git, selection, the suite, the
+command gates and the retry, and no await in the round waits past it even when
+a child ignores its signal. At the ceiling mc stops the active process group,
+returns a red verdict, and releases the lane so the next queued job can start.
+The verdict and the merge log name two groups of files, kept apart: the
+**unfinished** files (a test file whose top-level test started and did not
+end, or a selected file that never started) are the red, the ones to rebuild;
+the **slowest finished** files are for the reader. A whole-suite round names
+only the files it started, since its selection is not known to mc. A test that
+exceeds its own time limit is `too slow — rebuild` and is not run again. `mc
+gate` and the gate a session reaches through `mc publish` use this same
+repository ceiling; a caller's wait budget cannot extend it.
+
 ## The door
 
 Before the wait and before the gate, the door refuses a pull request GitHub
@@ -283,7 +301,7 @@ merge and the booking together, and the merger's watch does the rest.
 A role is not the last word a session hears, which is what step 2 of this
 project cost a session to learn. All three now end with the merge:
 
-- `canon/roles/plan.md` — *when the PR is open, land it yourself*;
+- `canon/roles/plan.md` (now `plan-session.md` and `project-verb.md`) — *when the PR is open, land it yourself*;
 - `planLaunch()` in [`src/mc/commands/plan.js`](../../src/mc/commands/plan.js) —
   `mc plan` builds its own first prompt, and that prompt used to end with "open
   a PR … and stop", which is the most recent instruction a session reads and
@@ -614,7 +632,7 @@ was sequentially: every gate runs and is judged and is reported in
 `selected-gate` with every failure named; a suite that could not be measured
 is the suite's stop, with the gates that ran listed; and a half that throws is
 waited out with the other and then thrown, so nothing turns green because one
-half threw. A round red in its tests names its failed gates in the same reason, and the mend prompt lists each with its last output, because the mend gets one try (memoro #14169, 2026-10-24). Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
+half threw. A round red in its tests names its failed gates in the same reason, so the session it goes to fixes them in one go (memoro #14169, 2026-10-24). Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
 2026-10-11 07:19 UTC): within a round the two together took 320 s mean where
 suite plus gates add up to 546 s, so the overlap saves 226 s a round — but
 beside the suite the gates are slower, 161 s at the median against 36 s when
@@ -772,8 +790,8 @@ broke it, which is what memoro #13337 was told on 2026-10-10 after a session's
 and `report.killed_files` lists the killed ones; they are never counted green.
 The merger (`landJob`) runs a round that stopped `file-killed` once more,
 saying `<files> was killed from outside the round — measuring again`. A second
-`file-killed` is answered red with that reason. It is not a mend stop: there is
-nothing in the change to mend.
+`file-killed` is answered red with that reason: there is nothing in the change
+to fix.
 
 **A red that passes alone is measured again** (`red-under-load`). When the
 base probe finds every red file green on the base, `runGate` runs the same
@@ -805,7 +823,7 @@ with its reason and `red under load in two rounds running`, as before. Until
 2026-10-19 the second one was answered red at once, the step went back to
 `ready`, and the runner started a session to fix the pull request that found
 nothing to fix (note-steps #13897 paid two). It is never counted green, and it
-is not a mend stop. Its failures are kept under
+is not the change's red. Its failures are kept under
 `runner/merge-red/<repo>-<pr>-<stop>-<time>.txt` (`loadRedPath`), which a
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
@@ -815,6 +833,9 @@ landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 --test-force-exit` unless the repository declares its own `--test-timeout`; a
 test that runs past ten minutes is a red named `test timed out after 600000ms`,
 not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
+A per-test timeout is not run again by `retry_once`: the verdict says
+`too slow — rebuild` with the test name and timeout duration, so a timed-out
+test is rebuilt by a session rather than consuming another round.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
@@ -829,7 +850,7 @@ merged main in. A batch that stops this way falls back to single rounds
 red. The archive's `appendRow` is the other half: given a log that already has
 a row for that programme and project, it returns the text unchanged.
 
-**A plan file in the tree is red.** Once the candidate is built, the round lists the candidate's `docs/project` (`lsTreeArgs('HEAD')`, `plansInTree`, `plan-source.js`) and, when one holds a `PLAN.json` or a legacy `PLAN.md`, stops with `stopped_at: 'plan-in-repo'` — a red, the change's to fix — and the reason `<path> is a plan file — plans live under ~/mc/programs/ (mc project new); delete it from the branch and push`. Since ruling 48 no repository holds a plan, so this refuses the branch that brings one back. It sits in `FALLBACK_STOPS` and `MEND_STOPS` beside `project-log`.
+**A plan file in the tree is red.** Once the candidate is built, the round lists the candidate's `docs/project` (`lsTreeArgs('HEAD')`, `plansInTree`, `plan-source.js`) and, when one holds a `PLAN.json` or a legacy `PLAN.md`, stops with `stopped_at: 'plan-in-repo'` — a red, the change's to fix — and the reason `<path> is a plan file — plans live under ~/mc/programs/ (mc project new); delete it from the branch and push`. Since ruling 48 no repository holds a plan, so this refuses the branch that brings one back. It sits in `FALLBACK_STOPS` beside `project-log`.
 
 `gateLines` in [`src/mc/commands/repo.js`](../../src/mc/commands/repo.js) builds
 them; [`tests/mc/commands/gate-verdict.test.js`](../../tests/mc/commands/gate-verdict.test.js)
@@ -923,7 +944,7 @@ While a round runs, the merger asks GitHub about its pull request every minute
 and the round is stopped through its `AbortSignal` when the answer says so: a
 pull request merged on GitHub is answered landed (`already_merged`), one
 closed is answered closed, and one given a new push goes back in line at its
-own place, with no attempt counted and no mend. A command gate running at that
+own place, with no attempt counted. A command gate running at that
 moment is waited out, not killed. A batch round is not watched, since
 `MERGE_BATCH_MAX` is 1. On 2026-10-24 memoro #14169's round ran 13 minutes
 after its pull request had been merged on GitHub; the minute of asking is what
@@ -954,9 +975,8 @@ one first; the round itself says whether it had already merged.
 
 On new code the merger hands over at once: it releases `merger.json` and starts
 its successor as soon as it sees the new checkout, finishes only the jobs it
-holds, and the successor skips the `landing` and `mending` entries whose
-`merger` pid is alive — a `mending` entry whose merger is gone goes back in
-line on the successor's next pass. Measured 2026-10-17 → 24: 76 handovers
+holds, and the successor skips the `landing` entries whose
+`merger` pid is alive. Measured 2026-10-17 → 24: 76 handovers
 stalled the queue 643 minutes in all, when the merger left only after its
 rounds in flight.
 
@@ -1035,7 +1055,7 @@ of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
 session from its workarea and ran that branch's code, with batches and
 without lanes.
 
-## The async round, SIGTERM and the mend
+## The async round, SIGTERM and where a red goes
 
 **Nothing the merger starts holds its event loop** (ruling 37). Every child
 of the gate and the merge round — git, gh, `npm ci`, the derived commands, the
@@ -1088,12 +1108,10 @@ A job answered before the round — merged, closed, or a restack refused — is
 written to `merges.json` the moment it is answered (`landJob` tells `serve`'s
 `writeAnswer` through `onAnswer`, after the register is written and outside
 any lock), so the page and `mc merge watch` never draw it as landing while
-the others' round runs; a restack red that gets its mend starts it then, as
-soon as the mend line is free. On 2026-10-10 #13400 (closed) and #13397 (a
-restack conflict) read `landing` for the whole 9-minute round of #13375 and
-#13405, and #13397's mend waited 100 s for that round to end after the mend
-before it had. The block after the round writes only what `onAnswer` did not:
-a round that threw.
+the others' round runs. On 2026-10-10 #13400 (closed) and #13397 (a restack
+conflict) read `landing` for the whole 9-minute round of #13375 and #13405.
+The block after the round writes only what `onAnswer` did not: a round that
+threw.
 
 **A plan's steps land in order.** A job for step n goes only once every
 earlier step of its plan is `done` in the register (`stepsDone` in
@@ -1103,30 +1121,28 @@ merger would resume while an earlier step is no longer `done` is put back in
 line (`heldLanding`). `waitingOn` says what each held job waits for; the page
 and `mc merge watch` read it as `waits for <project> step <n>`.
 
-**The mend** (ruling 37, amending rulings 21 and 30 in one point: one mend,
-then red). A red the change itself caused — `stopped_at` in `MEND_STOPS`, on a
-job with a branch and no `mended` — is not answered red at once. The entry
-becomes `mending` (`{ pid, started, reason, stopped_at }`), the step stays
-`landing`, the lane goes on with its next job, and a session of role `mend`
-([`canon/roles/mend.md`](../../canon/roles/mend.md)) starts in a worktree of
-its own on the branch (`runMend` in [`src/mc/mend.js`](../../src/mc/mend.js),
-under the work root, never the step's workarea). The prompt carries the
-round's reason, its red files or conflicted paths, the step's title and
-`done_when`, and the job's last lines of `merger.log`. When the session ends:
+**Where a red goes.** A red answer is red at once, whatever stopped the
+round. On a project's pull request the step goes through `redPatch` to its
+next session (ruling 30), which reads the reason and the red round's file
+(below) in its retry preamble and fixes it on the same pull request. On a
+goal's pull request the goal is set `blocked` with the runner's `merger
+answered red on #<pr>` entry (`tellGoal`), and the runner wakes a plan session
+for it ([`mc-goals.md`](mc-goals.md) § *A blocked goal wakes plan*).
+A pull request is a goal's when the job carries the goal (its green review
+queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
+`mc publish` queued is answered in its goal as well. Landed, it sets the goal
+`done` only when the goal carries no other pull request; otherwise the landing
+is an entry and the runner sets `done` once the rest has landed
+([`mc-goals.md`](mc-goals.md) § *Done when its work has landed*).
 
-| the branch on origin | the entry | the step |
-| --- | --- | --- |
-| moved past the head the round measured | `queued`, its old `since`, `mended: { at, outcome: 'pushed' }` — measured by a full round like any other job | still `landing` |
-| did not move, the session failed or timed out | `red` with `<reason> — the mend pushed nothing: <its last line>` (or `timed out`, `failed`) | through `redPatch`, as any red |
-
-A job that comes back red after its mend is red at once, and so is a red
-outside `MEND_STOPS` or one that is main's own (every red file red on the base
-too). The mend never merges, never runs `gh pr merge`, never force-pushes,
-never touches `main` and edits no `PLAN.json`; whatever it pushes is measured
-by the same round. One runs.tsv row of kind `mend` per mend. A `mending` entry
-a merger finds at start belonged to a mend that died with the merger before
-it: it goes back in line unmended. A SIGTERM drops the mends waiting (their
-entries stay `mending`) and waits for the one running.
+Until 2026-11-02 a red the change itself caused got one *mend* first: a
+headless session of its own on the branch, while the entry stood `mending`
+(ruling 37). The goal `headless-plan` removed it (Martin, 2026-11-02: a red
+goes to the session that has the whole picture): `src/mc/mend.js`,
+`canon/roles/mend.md`, the merger's mend line and `mc publish --branch` are
+gone. A `mending` entry an older merger left in `merges.json` reads as
+`queued`, and the next round measures the branch as it stands. `mend` rows in
+`runs.tsv` are from before.
 
 **The merger leaves for new code.** On 2026-10-18 a merger served 5 h 22 min
 on 3b51ff90 while seven mc pull requests landed, because it read its commit
@@ -1135,9 +1151,8 @@ once and left only on an empty queue. Since then `serve` in
 each batch. A HEAD past the commit it started on releases `merger.json` and
 calls `handover` at once, between rounds: `merger-run.js` starts its successor
 through `startMerger` while jobs remain in line (`succeed`), and this merger
-takes nothing more. The rounds and mends it holds finish — a mend not started
-yet is dropped and its entry stays `mending`, a running one is waited for — and
-the successor takes every other job in both lanes. A SIGTERM starts none; it
+takes nothing more. The rounds it holds finish, and the successor takes every
+other job in both lanes. A SIGTERM starts none; it
 finishes what it holds, as before. The runner's `sweepLanding` and the next
 `mc merge` still start one when none lives. `mc merge watch` adds
 `merger on <commit> · main <commit>` to its line while the merger's commit
@@ -1153,16 +1168,13 @@ gate cuts these blocks out of the suite's TAP and out of the selected files'
 TAP (`redTests` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js)) after the
 killed and cancelled files are taken out of the red. The path is on the report
 as `red_detail`, and it goes into the round's `gate-rounds.jsonl` line with
-`red_files`. Two readers get it. The step's next session gets it through the
-register's `red` and the retry preamble. The mend gets it through its prompt.
-Both are given the same three lines: `Red files: …`, `The failures, as the round
-saw them: <path>`, and `Re-run just those: mc gate <files> --test-name-pattern
-'<names>'` (at most five names, regex-escaped). The mend is told to run
-`mc gate <red files>` until they are green, and never the whole suite (ruling
-52). Until then every mend was told `red files:` with nothing after
-it. A merge round keeps the gate's verdict under `gate`, and the mend read only
-the top of the report. Now `runMergeRound` lifts `red_files` and `main_red` up
-to the top when the gate stops.
+`red_files`. The step's next session gets it through the register's `red` and
+the retry preamble, as three lines: `Red files: …`, `The failures, as the
+round saw them: <path>`, and `Re-run just those: mc gate <files>
+--test-name-pattern '<names>'` (at most five names, regex-escaped) — never the
+whole suite (ruling 52). A merge round keeps the gate's verdict under `gate`;
+`runMergeRound` lifts `red_files` and `main_red` up to the top when the gate
+stops, so a reader of the report's top finds them.
 
 **Previous red first** (ruling 44 § 2). When a pull request's last
 `gate-rounds.jsonl` line ended `red` with `red_files`, the next single round
@@ -1171,21 +1183,6 @@ runs those files alone on the prepared candidate in a timed phase
 main-red probe as for any red, and all green says `previous red files green —
 measuring the selection` and goes on as before (`previousRedFiles` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)); a batch skips it.
-
-The three numbers are constants with their reasons beside them, not settings:
-
-- **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,
-  `extra-gate`, `derived-outside`, `project-log`, `plan-in-repo`: where the fault is in the
-  change. `fetch`, `pr`, `killed`, `threw`, `busy`, `drift` and the deploy
-  wait are the machine's, and a session on the branch cannot fix them.
-- **`MEND_AT_ONCE`** = 1 — an 8 GB M1 already runs a memoro suite of seven
-  lanes; a second session with its own suite beside it makes the round's own
-  timings lie. Further mends wait in memory, in answer order (`mendLine`).
-- **`MEND_MINUTES`** = 120 — a ceiling for a hung session, not a budget. At
-  20 the #13409 mend (2026-10-10) was cut off mid re-record of the SQL
-  baselines and the step went red as before: the cut cost the session and
-  bought nothing. Build sessions have no wall clock (ruling 18); a mend's
-  output is buffered, so it cannot be judged stalled as they are.
 
 ## The full run nobody asks for
 

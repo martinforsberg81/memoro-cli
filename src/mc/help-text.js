@@ -22,7 +22,7 @@ PLAN AND FOLLOW
 
 RUN AND LAND
   mc run                          The headless runner
-  mc run start|stop               Person: start or stop the runner
+  mc run start|stop               Start or stop the runner
   mc run lanes [<n>]              Headless sessions at once, in total
   mc run --billing                Plan usage and next billing
   mc gate [<test files…>]          Affected tests and gates, or a focused rerun
@@ -35,7 +35,8 @@ SEE AND SHIP
   mc shot dev | prod <target>     A PNG of the running app; prints its path
   mc dev list                     Which dev server runs in which worktree
   mc deploy [--dry-run]            memoro's main to production, after a question
-  mc build ios                    Does memoro need a new iOS binary?
+  mc asc build                    Does memoro need a new iOS binary?
+  mc asc status [<version>]       An iOS version's state, build and storefronts
 
 WORKSPACES
   mc work <name>                  Open that workarea
@@ -49,8 +50,9 @@ WHO USES THE VERBS
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc project new / step add / send writes plans; mc step records
            progress; mc gate, mc shot and mc publish do the work.
-  Person's acts: mc deploy, mc language writes, runner controls and session
-                 open/stop/replace verbs. Read-only views serve both.
+  Headless sessions (MC_HEADLESS=1, set by the runner) are refused mc deploy,
+                 merge --admin, production data and credentials; with
+                 Martin at the terminal nothing is refused.
 
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
@@ -88,7 +90,7 @@ ${commandReference('shot')}
 
 ${commandReference('deploy')}
 
-${commandReference('build')}
+${commandReference('asc')}
 
 ${commandReference('work')}
 

@@ -265,10 +265,10 @@ describe('collectProject', () => {
   });
 
   /**
-   * A batch member after the round's first lands with it, and a red getting
-   * its one mend is being mended — the same two facts the page draws.
+   * A batch member after the round's first lands with it — the fact the page
+   * draws. An entry an older merger left `mending` is in the queue.
    */
-  it('says a batch member lands in the same round, and a mend is being mended', async () => {
+  it('says a batch member lands in the same round, and an old mending entry is in the queue', async () => {
     const root = workRoot();
     const started = '2026-10-10T17:47:00Z';
     writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([
@@ -289,7 +289,7 @@ describe('collectProject', () => {
     assert.deepEqual(data.queued.map((entry) => entry.pr), [501, 502]);
     const text = renderProject(data);
     assert.match(text, /^ {2}#501 lands in the same round as #500$/mu);
-    assert.match(text, /^ {2}#502 is being mended after conflicts with origin\/main: card-views\.js \(since 10-10 17:50Z\)$/mu);
+    assert.match(text, /^ {2}#502 is in the merge queue \(since 10-10 17:02Z\)$/mu);
   });
 
   /**

@@ -21,6 +21,8 @@ const ESC = '\x1b';
 const SAVE = '\x1b7';
 const RESTORE = '\x1b8';
 const DSR = '\x1b[6n';
+/** Cursor home, erase the screen, erase the scrollback. */
+const CLEAR = '\x1b[H\x1b[2J\x1b[3J';
 const BY_COUNT = 'mc: drawing by count — the terminal did not say where the page is';
 const KEYS = '  <n>  open it\n  q  quit';
 const TAIL = `\n${KEYS}\n\n`;
@@ -103,7 +105,7 @@ describe('the live page under the prompt', () => {
    * A reader with the clock, the keyboard and the page all handed in. `pages`
    * is what each successive collect answers.
    */
-  function live(pages, { columns = 100, rows = 40, reports = null } = {}) {
+  function live(pages, { columns = 100, rows = 40, reports = null, key = null } = {}) {
     const stdout = screen({ columns, rows });
     const input = keyboard();
     // A terminal that answers `CSI 6n` with `reports` as the cursor's row —
@@ -133,6 +135,7 @@ describe('the live page under the prompt', () => {
       stdout,
       lines: frame('2 h'),
       page,
+      key,
       intervalMs: 30_000,
       input: () => input,
       setTimer: (fn, ms) => time.set(fn, ms),
@@ -263,10 +266,10 @@ describe('the live page under the prompt', () => {
     await it_.time.advance(31_000);
 
     const writes = it_.stdout.since(mark);
-    // A frame past its footprint is a reprint that erases everything below the
-    // page, so the rows below it are the caller's to put back — all of them.
-    assert.ok(writes.includes(`${ESC}[0J`), 'erased from the page down');
-    assert.ok(writes.includes(`${grown.join('\n')}${TAIL}> 12`), JSON.stringify(writes.slice(-80)));
+    // A frame past its footprint is a whole reprint from an empty terminal,
+    // so the rows below it are the caller's to put back — all of them.
+    assert.ok(writes.startsWith(CLEAR), 'from an empty terminal');
+    assert.ok(writes.includes(`${grown.join('\n')}\n${TAIL}> 12`), JSON.stringify(writes.slice(-80)));
     assert.ok(!writes.includes(SAVE), 'nothing to come back to: the screen below the page is gone');
     // The reprint scrolled the screen, so the row everything was drawn
     // against is asked for again rather than carried over.
@@ -284,7 +287,7 @@ describe('the live page under the prompt', () => {
     await it_.time.advance(31_000);
     const shrunk = it_.stdout.since(mark);
     assert.ok(shrunk.includes(`${ESC}[2K`), 'the surplus rows are cleared where they stand');
-    assert.ok(!shrunk.includes(`${ESC}[0J`), 'and the menu below them is not moved or erased');
+    assert.ok(!shrunk.includes(`${ESC}[2J`), 'and the menu below them is not moved or erased');
 
     // Back to three rows is not growth: the footprint never shrank, so those
     // two rows are written in place rather than the page being reprinted.
@@ -292,7 +295,7 @@ describe('the live page under the prompt', () => {
     await it_.time.advance(31_000);
     const back = it_.stdout.since(mark);
     assert.ok(back.includes('PROGRAMMES') && back.includes('cached 2 h'));
-    assert.ok(!back.includes(`${ESC}[0J`), 'a page back inside its own footprint is not a reprint');
+    assert.ok(!back.includes(`${ESC}[2J`), 'a page back inside its own footprint is not a reprint');
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
@@ -346,8 +349,8 @@ describe('the live page under the prompt', () => {
     // but the widths they were drawn for are gone, so the page is printed
     // again rather than diffed against lines that no longer describe the
     // screen.
-    assert.ok(writes.includes(`${ESC}[0J`), JSON.stringify(writes));
-    assert.ok(writes.includes(`${frame('2 h').join('\n')}${TAIL}> `));
+    assert.ok(writes.includes(CLEAR), JSON.stringify(writes));
+    assert.ok(writes.includes(`${frame('2 h').join('\n')}\n${TAIL}> `));
     assert.ok(writes.endsWith(DSR), 'and again after the reprint, which scrolled it');
 
     it_.input.type('q\r');
@@ -417,6 +420,118 @@ describe('the live page under the prompt', () => {
     assert.equal(it_.input.destroyed, true, 'the terminal is handed back for the new mc');
     await it_.time.advance(120_000);
     assert.equal(it_.collected.length, 1, 'and nothing refreshes after it');
+  });
+
+  /*
+   * Every whole reprint starts from an empty terminal, so the tab holds the
+   * page once rather than a new copy of it per reprint. Each frame is
+   * asserted whole, byte for byte: the clear, the page, the block under it,
+   * the prompt and the half-typed input, in that order, and the question
+   * about where the prompt now is.
+   */
+  it('live clear: a growth frame clears, then prints the page, the tail, the prompt and the typed input', async () => {
+    const grown = [...frame('2 h'), '  one more row'];
+    const it_ = live([grown], { reports: 9 });
+    const answer = it_.reader.ask(TAIL, '>');
+    it_.input.type('12');
+    const mark = it_.at();
+    await it_.time.advance(31_000);
+    assert.equal(it_.stdout.since(mark), `${CLEAR}${grown.join('\n')}\n${TAIL}> 12${DSR}`);
+    it_.input.type('\r');
+    assert.equal(await answer, '12');
+  });
+
+  it('live clear: a frame after a resize clears and prints the same way', async () => {
+    const it_ = live([frame('2 h')], { reports: 8 });
+    const answer = it_.reader.ask(TAIL, '>');
+    it_.input.type('3');
+    const mark = it_.at();
+    it_.stdout.resize(80);
+    await it_.time.advance(31_000);
+    // The resize asks where the prompt went at once; the frame is the page
+    // again, unchanged in text but drawn for a new width.
+    assert.equal(it_.stdout.since(mark), `${DSR}${CLEAR}${frame('2 h').join('\n')}\n${TAIL}> 3${DSR}`);
+    it_.input.type('\r');
+    assert.equal(await answer, '3');
+  });
+
+  it('live clear: a frame whose key moved with the top off screen clears and prints the same way', async () => {
+    const moved = frame('2 h');
+    moved[0] = '  RUNNER  stopped';
+    // Five rows tall: the page's first row is seven up from the prompt, off
+    // the top, so the change in it can only be shown by printing it again.
+    const it_ = live([async () => ({ data: {}, lines: moved, key: 'b' })], { rows: 5, reports: 5, key: 'a' });
+    const answer = it_.reader.ask(TAIL, '>');
+    it_.input.type('4');
+    const mark = it_.at();
+    await it_.time.advance(31_000);
+    assert.equal(it_.stdout.since(mark), `${CLEAR}${moved.join('\n')}\n${TAIL}> 4${DSR}`);
+    it_.input.type('\r');
+    assert.equal(await answer, '4');
+  });
+
+  it('live clear: an unchanged frame writes nothing, and a one-row change clears nothing', async () => {
+    const it_ = live([frame('2 h'), frame('3 h')], { reports: 40 });
+    const answer = it_.reader.ask(TAIL, '>');
+    let mark = it_.at();
+    await it_.time.advance(31_000);
+    assert.equal(it_.stdout.since(mark), '', 'unchanged is no bytes');
+    mark = it_.at();
+    await it_.time.advance(31_000);
+    const writes = it_.stdout.since(mark);
+    assert.equal(writes, `${SAVE}${ESC}[35;1H${ESC}[2K  cached 3 h${ESC}[40;1H${RESTORE}`);
+    assert.ok(!writes.includes(`${ESC}[2J`) && !writes.includes(`${ESC}[3J`), JSON.stringify(writes));
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
+  });
+
+  it('live clear: show on the live reader starts with the clear', () => {
+    const it_ = live([]);
+    const mark = it_.at();
+    it_.reader.show(frame('5 h'), 'k');
+    assert.equal(it_.stdout.since(mark), `${CLEAR}${frame('5 h').join('\n')}\n`);
+  });
+
+  it('live clear: plainReader.show clears on a TTY stdout and not on one that is not', () => {
+    const tty = screen({ columns: 40 });
+    tty.isTTY = true;
+    plainReader({ stdout: tty, ask: () => null }).show(frame('5 h'));
+    assert.equal(tty.written.join(''), `${CLEAR}${frame('5 h').join('\n')}\n`);
+
+    const pipe = screen({ columns: 40 });
+    plainReader({ stdout: pipe, ask: () => null }).show(frame('5 h'));
+    assert.equal(pipe.written.join(''), `${frame('5 h').join('\n')}\n`, 'exactly the bytes a pipe always got');
+  });
+
+  it('live clear: after a clearing growth frame the next one-row change lands on its row, by anchor', async () => {
+    const grown = [...frame('2 h'), '  one more row'];
+    const changed = [...frame('2 h'), '  one row changed'];
+    // After the clear the page starts on row 1: four lines, a newline, the
+    // four-row block, so the prompt is on row 9 — what this terminal says.
+    const it_ = live([grown, changed], { reports: 9 });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.time.advance(31_000);
+    const mark = it_.at();
+    await it_.time.advance(31_000);
+    // The fourth line is on row 4: 9 - (4 + 4) + 3.
+    assert.equal(it_.stdout.since(mark), `${SAVE}${ESC}[4;1H${ESC}[2K  one row changed${ESC}[9;1H${RESTORE}`);
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
+  });
+
+  it('live clear: after a clearing growth frame the next one-row change lands on its row, by count', async () => {
+    const grown = [...frame('2 h'), '  one more row'];
+    const changed = [...frame('2 h'), '  one row changed'];
+    const it_ = live([grown, changed]);
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.time.advance(31_000);
+    const mark = it_.at();
+    await it_.time.advance(31_000);
+    // The cursor is a row under the page's last line and four more under the
+    // block: the fourth line is five up, and the walk comes back five.
+    assert.equal(it_.stdout.since(mark), `${SAVE}\r${ESC}[5A${ESC}[2K  one row changed\r${ESC}[5B${RESTORE}`);
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
   });
 });
 
@@ -536,16 +651,17 @@ describe('a page taller than the screen', () => {
     await settle();
     assert.equal(it_.cursorRow(), HEIGHT, 'the prompt is on the last row of the screen');
 
-    // One growth frame. The page is reprinted from the top of the screen, its
-    // first 57 lines are history and stay in the scrollback, and the 41 that
-    // fit above the menu are what is on the screen.
+    // One growth frame. The terminal is cleared and the page printed whole as
+    // a first print is: its first 58 lines scroll into a scrollback that held
+    // nothing, and the 40 that fit above the menu are what is on the screen.
     await it_.advance(31_000);
-    assert.equal(it_.rowAt(1), grown[57], 'the first row on screen');
-    assert.equal(it_.rowAt(41), grown[97], 'and the last, just above the keys');
+    assert.equal(it_.rowAt(1), grown[58], 'the first row on screen');
+    assert.equal(it_.rowAt(40), grown[97], 'and the last, above the blank row and the keys');
+    assert.deepEqual(it_.everything().slice(0, TALL + 1), grown, 'one copy of the page, from the top of the scrollback');
 
     // Then one row changes. Where it is, is read off the terminal.
     const was = it_.rowOf(grown[80]);
-    assert.equal(was, 24);
+    assert.equal(was, 23);
     const mark = it_.at();
     await it_.advance(31_000);
 
@@ -556,7 +672,7 @@ describe('a page taller than the screen', () => {
       'and not its neighbour, which is the row a footprint taken from the page\'s length gives',
     );
     // Which is the whole of it: the page on the screen is the page it drew.
-    assert.deepEqual(it_.screen().slice(0, 41), changed.slice(57));
+    assert.deepEqual(it_.screen().slice(0, 40), changed.slice(58));
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
@@ -583,11 +699,12 @@ describe('a page taller than the screen', () => {
     await it_.advance(31_000);
     assert.equal(it_.since(quiet).includes('in flight'), false);
 
-    // The key moved: the page is printed whole, under what is left of the old
-    // one, and the row that changed is in the terminal at last.
+    // The key moved: the terminal is cleared and the page printed whole, and
+    // the row that changed is in the terminal at last — once.
     await it_.advance(31_000);
-    assert.ok(it_.everything().includes(moved[3]), 'the changed row has been printed, where scrolling up finds it');
-    assert.deepEqual(it_.screen().slice(0, 41), moved.slice(TALL - 41), 'the foot of the new page is above the keys');
+    assert.deepEqual(it_.everything().slice(0, TALL), moved, 'one copy of the page, where scrolling up finds it');
+    assert.equal(it_.everything().filter((line) => line === moved[3]).length, 1, 'and no old copy above it');
+    assert.deepEqual(it_.screen().slice(0, 40), moved.slice(TALL - 40), 'the foot of the new page is above the keys');
     assert.equal(it_.cursorRow(), HEIGHT, 'and the prompt is back on the last row');
 
     // The geometry after it is right: the next changed row is written where it is.
@@ -595,7 +712,7 @@ describe('a page taller than the screen', () => {
     const mark = it_.at();
     await it_.advance(31_000);
     assert.ok(it_.since(mark).includes(`${ESC}[${was};1H${ESC}[2K${after[80]}`), JSON.stringify(it_.since(mark)));
-    assert.deepEqual(it_.screen().slice(0, 41), after.slice(TALL - 41));
+    assert.deepEqual(it_.screen().slice(0, 40), after.slice(TALL - 40));
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');
@@ -609,10 +726,10 @@ describe('a page taller than the screen', () => {
     // Long enough for the unanswered question to give up and say so, once.
     await it_.advance(1_000);
     await it_.advance(31_000);
-    assert.equal(it_.rowAt(41), grown[97], 'the growth frame landed the same way');
+    assert.equal(it_.rowAt(40), grown[97], 'the growth frame landed the same way');
 
     const was = it_.rowOf(grown[80]);
-    assert.equal(was, 24);
+    assert.equal(was, 23);
     const mark = it_.at();
     await it_.advance(31_000);
 
@@ -620,7 +737,7 @@ describe('a page taller than the screen', () => {
     assert.ok(!/\x1b\[\d+;1H/u.test(writes), `nothing absolute: the terminal never answered — ${JSON.stringify(writes)}`);
     assert.ok(writes.includes(`${ESC}[${HEIGHT - was}A`), JSON.stringify(writes));
     assert.ok(!writes.includes(`${ESC}[${HEIGHT - was + 1}A`), 'and not one row further up, which `reach` gave');
-    assert.deepEqual(it_.screen().slice(0, 41), changed.slice(57));
+    assert.deepEqual(it_.screen().slice(0, 40), changed.slice(58));
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');

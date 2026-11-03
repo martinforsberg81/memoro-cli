@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  PROGRAMME_ARCHIVE_PREFIX, archiveProgramme, archiveVerdict, programmeRow, shelveProgramme,
+  PROGRAMME_ARCHIVE_PREFIX, archiveProgramme, archiveVerdict, programmeRow, removedKind, shelveProgramme,
 } from '../../src/mc/archive-programme.js';
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
@@ -127,6 +127,31 @@ describe('archiveVerdict', () => {
 
   it('lets a programme with only its own documents go', () => {
     assert.deepEqual(archiveVerdict({ programme: 'x', homes: [{}], areaExists: true, forecast: { kept: [], held_by: [] } }), { ok: true });
+  });
+});
+
+describe('removedKind', () => {
+  const dir = 'docs/project/gone';
+  const before = ['docs/project/gone/README.md', 'docs/project/gone/closeout/a.md', 'docs/project/gone/skills/k.md'];
+  const isGone = removedKind(dir, before, ['docs/project/gone/skills/k.md']);
+
+  it('names a removed file a blob and a directory it emptied a tree', () => {
+    assert.equal(isGone('docs/project/gone/README.md'), 'blob');
+    assert.equal(isGone('docs/project/gone/closeout'), 'tree');
+  });
+
+  it('leaves a directory with a kept file, and every directory above the programme\'s', () => {
+    assert.equal(isGone('docs/project/gone/skills/k.md'), null);
+    assert.equal(isGone('docs/project/gone'), null);
+    assert.equal(isGone('docs'), null);
+    assert.equal(isGone('docs/project'), null);
+  });
+
+  it('names the programme\'s own directory a tree when nothing under it is left', () => {
+    const all = removedKind(dir, before, []);
+    assert.equal(all('docs/project/gone'), 'tree');
+    assert.equal(all('docs'), null);
+    assert.equal(all('docs/project/gone-two'), null);
   });
 });
 

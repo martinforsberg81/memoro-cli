@@ -1012,7 +1012,7 @@ describe('a repository that selects by diff', () => {
    * so no round had ever run one.
    */
   function selecting({
-    files, candidateRed = [], commands = undefined, scripts = {}, full = false,
+    files, candidateRed = [], candidateTap = null, commands = undefined, scripts = {}, full = false,
     // What this fixture's repository calls its whole suite. A repository that
     // declares a selector must declare one too, or `--full` stops — so `null`
     // here is the negative case, not an omission.
@@ -1087,7 +1087,7 @@ describe('a repository that selects by diff', () => {
     });
     const tests = ({ cwd, files: ran, flags }) => {
       runs.push({ files: [...ran], flags, cwd });
-      return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
+      return Promise.resolve({ code: candidateRed.length || candidateTap ? 1 : 0, tap: candidateTap || tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
     };
     const suites = [];
     const suiteCommands = [];
@@ -1937,6 +1937,27 @@ describe('a repository that selects by diff', () => {
      * names `retry_once` is run once more alone before it is red.
      */
     describe('a declared timing test gets one more run alone (retry_once)', () => {
+      it('does not retry a per-test timeout and gives its name and duration for rebuild', async () => {
+        const slowFile = 'tests/slow.test.js';
+        const slowTap = [
+          'TAP version 13', '# Subtest: slow operation', 'not ok 1 - slow operation', '  ---',
+          "  type: 'test'", `  location: '/somewhere/candidate/${slowFile}:8:1'`,
+          "  failureType: 'testTimeoutFailure'", "  error: 'test timed out after 30000ms'", '  ...',
+          '1..1', '# tests 1', '# pass 0', '# fail 1',
+        ].join('\n');
+        const fx = selecting({ files: [slowFile], candidateTap: slowTap, retryOnce: { files: [slowFile] } });
+        const said = [];
+        try {
+          const report = await fx.report({ onProgress: (line) => said.push(line) });
+          assert.equal(report.stopped_at, 'red');
+          assert.equal(report.reason, 'too slow — rebuild: slow operation (30 s)');
+          assert.deepEqual(report.too_slow, [{ file: slowFile, name: 'slow operation', duration_ms: 30_000 }]);
+          assert.equal(fx.runs.length, 1, 'the timeout test was run again');
+          assert.ok(said.includes(report.reason));
+          assert.match(gateLines(report).join('\n'), /RED — 1 test too slow — rebuild:[\s\S]*slow operation \(30 s\)/u);
+        } finally { fx.cleanup(); }
+      });
+
       it('red only in a retry_once file that passes alone: it goes on, green, and the flip is in the round\'s record', async () => {
         const { gitAlso, tests } = onMain({ redAt: {}, round: [scanner] });
         const fx = selecting({ files: [own, scanner], gitAlso, retryOnce: { files: [scanner] } });
@@ -3018,5 +3039,82 @@ describe('the selected files run in their resource classes', () => {
     assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ files: ['db.test.js'], lanes: 3 }]);
     assert.deepEqual(testBatches(['build.test.js'], { 'build.test.js': 'heavy' }, 3), [{ files: ['build.test.js'], lanes: 1 }]);
     assert.deepEqual(testBatches([], {}, 3), []);
+  });
+});
+
+describe('the round ceiling holds in every phase, whatever child is stuck', () => {
+  // A child that never answers and ignores its signal: the round must not wait for it.
+  const stuck = () => new Promise(() => {});
+  // A real child that runs until the round stops it: the signal must reach it.
+  const sleeping = 'node -e \'setInterval(() => {}, 1000)\'';
+  // Long enough for the steps before the stuck one to finish on a loaded machine (a selector is a node process), short enough to test.
+  const CEILING_MS = 1_500;
+  // A margin for a loaded machine, not a second chance: the round is back at the ceiling or not at all.
+  const MARGIN_MS = 3_000;
+
+  // The declaration the round reads, as a repository's own table (`repo-gates.json`).
+  function declare(fx, extra = {}) {
+    writeFileSync(join(fx.mcHome, 'repo-gates.json'), JSON.stringify({ repo: {
+      prepare: null, prepare_why: 'the fixture has no dependencies',
+      select: null, select_why: 'the fixture selects nothing by itself',
+      extra_gates: [], merge_log: null,
+      round_timeout_ms: CEILING_MS, round_timeout_why: 'a short ceiling for the test',
+      ...extra,
+    } }));
+  }
+  // A selector that names one test file and the given command gates, as a repository's selector prints it.
+  const selector = (commands = []) => `node -e 'console.log(${JSON.stringify(JSON.stringify({ files: ['tests/a.test.js'], commands }))})'`;
+
+  const phases = [
+    ['fetching the base', (fx) => ({ git: (args, opts) => (args[0] === 'fetch' ? stuck() : fx.git(args, opts)) })],
+    ['reading the pull request', () => ({ gh: stuck })],
+    ['preparing the candidate', (fx) => { declare(fx, { prepare: sleeping, prepare_why: 'sleeps' }); return {}; }],
+    ['selecting the files', (fx) => { declare(fx, { select: sleeping, select_why: 'sleeps' }); return {}; }],
+    ['running the whole suite', () => ({ suite: stuck })],
+    ['running the selected files', (fx) => { declare(fx, { select: selector() }); return { tests: stuck }; }],
+    ['running a command gate', (fx) => { declare(fx, { select: selector([{ packageScript: 'lint:x' }]) }); return { shell: stuck }; }],
+    ['retrying a command gate', (fx) => {
+      declare(fx, { select: selector([{ packageScript: 'lint:x' }]), retry_once: { gates: ['lint:x'] }, retry_once_why: 'flips under load' });
+      let call = 0;
+      return { shell: () => (call++ === 0 ? Promise.resolve({ status: 1, stdout: '', stderr: 'lint failed', signal: null }) : stuck()) };
+    }],
+    ['running an extra gate', (fx) => { declare(fx, { extra_gates: [{ name: 'sleeper', command: sleeping }] }); return {}; }],
+  ];
+
+  // The round step each phase is, as the timings name it (`report.timings`).
+  const STEP = {
+    'fetching the base': ['fetch'], 'preparing the candidate': ['prepare'], 'selecting the files': ['selection'],
+    'running the whole suite': ['suite'], 'running the selected files': ['suite'], 'running a command gate': ['suite', 'selected gates'],
+    'retrying a command gate': ['retry once'], 'running an extra gate': ['extra gates'],
+  };
+  for (const [phase, make] of phases) {
+    it(`a stuck child while ${phase} is red inside the ceiling, and the lane is released`, async () => {
+      const fx = fixture({ changed: ['tests/a.test.js'] });
+      try {
+        declare(fx);
+        const extra = make(fx);
+        const started = Date.now();
+        const report = await fx.run(extra);
+        const took = Date.now() - started;
+        assert.ok(took < CEILING_MS + MARGIN_MS, `the round took ${took} ms against a ${CEILING_MS} ms ceiling`);
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'red');
+        assert.match(report.reason, /ceiling/u);
+        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the lane was not released');
+        // The stuck child was the one this phase names: the round got that far.
+        if (STEP[phase]) assert.ok(STEP[phase].every((step) => step in report.timings), `the round never reached ${phase}`);
+      } finally { fx.cleanup(); }
+    });
+  }
+
+  it('a whole-suite round names no file it did not hear of, and says so', async () => {
+    const fx = fixture({ changed: ['tests/a.test.js'] });
+    try {
+      declare(fx);
+      const report = await fx.run({ suite: stuck });
+      assert.equal(report.stopped_at, 'red');
+      assert.deepEqual(report.red_files, []);
+      assert.match(report.reason, /no test file was named as unfinished/u);
+    } finally { fx.cleanup(); }
   });
 });

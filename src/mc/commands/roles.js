@@ -8,7 +8,7 @@
  *
  * `check` is the third window and the only one that looks at what is running.
  * `show` prints a role's own words as they are on disk; `check` prints the
- * whole of what a launch would hand a session today — `_common.md` and
+ * whole of what a launch would hand a session today — `all-sessions.md` and
  * the overlay with its includes expanded, joined by `instructionsFor` — and
  * holds it against the digests the live sessions recorded when they started.
  * A session whose text is not that one is named. That question had no answer
@@ -23,7 +23,7 @@ import { readForeground } from '../page-collect.js';
 import { workRoot } from '../paths.js';
 import {
   canonRolesDir, expandRoleIncludes, instructionsFor, listRoles, readCanonRole, readRole,
-  rolesDir, textDigest,
+  roleRef, rolesDir, SHARED_ROLE_FILE, textDigest,
 } from '../roles.js';
 import { skillStatus } from '../skills.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
@@ -57,6 +57,7 @@ export async function run(argv, deps = {}) {
     stdout.write(`  model:     ${role.model || '(tool default)'}\n`);
     stdout.write(`  singleton: ${role.singleton}\n`);
     stdout.write(`  tools:     ${role.tools.length ? role.tools.join(', ') : '(any)'}\n`);
+    if (role.parts?.length && !role.part) stdout.write(`  parts:     ${role.parts.join(', ')} — mc roles show ${role.name}:<part>\n`);
     stdout.write(role.overlay ? `\n${role.overlay}\n` : '\n(no overlay text)\n');
     return 0;
   }
@@ -148,7 +149,7 @@ function assembleFor(role) {
     path: role.path,
     digest: textDigest(instructions),
     // The role's own body, includes expanded — the same text `roleRecord`
-    // hashes at launch, and the half of the comparison `_common.md` cannot move.
+    // hashes at launch, and the half of the comparison `all-sessions.md` cannot move.
     text_digest: textDigest(expandRoleIncludes(role.overlay)),
     instructions,
   };
@@ -185,7 +186,7 @@ function liveSessions(env = process.env) {
  * Whether what this session was launched on has moved under it.
  *
  * `drift` is the fault the verb exists for: the instructions have been edited
- * since the session was launched — its role file or `_common.md` — so it is
+ * since the session was launched — its role file or `all-sessions.md` — so it is
  * running text nobody can read off disk any more. There used to be a second
  * verdict, `profile`, for the Coding Profile moving the assembled text from
  * outside the repository; ruling 24 removed the profile, so every change to
@@ -197,9 +198,9 @@ export function verdictFor(record, today) {
   if (!record.digest) return { verdict: 'resumed', detail: 'no instructions were assembled — a resumed conversation carries its own' };
   if (record.digest === today.digest) return { verdict: 'ok', detail: null };
   if (record.text_digest && record.text_digest !== today.text_digest) {
-    return { verdict: 'drift', detail: `started on ${record.text_digest}, ${record.name}.md is ${today.text_digest} now` };
+    return { verdict: 'drift', detail: `started on ${record.text_digest}, ${roleRef(record.name).file}.md is ${today.text_digest} now` };
   }
-  return { verdict: 'drift', detail: `the role text matches; _common.md has changed since (${record.digest} → ${today.digest})` };
+  return { verdict: 'drift', detail: `the role text matches; ${SHARED_ROLE_FILE} has changed since (${record.digest} → ${today.digest})` };
 }
 
 /** Named in the report as running something other than what a launch produces now. */
@@ -246,7 +247,7 @@ async function check(opts, { stdout, stderr, deps }) {
   if (asked) {
     stdout.write(`${asked.name}  (${asked.source})  ${asked.path}\n`);
     stdout.write(`  role text     ${asked.text_digest || '(no overlay)'}\n`);
-    stdout.write(`  instructions  ${asked.digest || '(nothing to hand over)'}   _common.md + overlay, as a launch joins them\n\n`);
+    stdout.write(`  instructions  ${asked.digest || '(nothing to hand over)'}   ${SHARED_ROLE_FILE} + overlay, as a launch joins them\n\n`);
   }
 
   if (sessions.length === 0) {

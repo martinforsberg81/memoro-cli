@@ -5,7 +5,7 @@ description: Starting, finding and using a dev server for an mc repository (memo
 # Dev servers
 
 Dev servers start only through mc: `mc shot dev` and `mc test dev` start one,
-and mc admits at most two app servers on the machine (`mc dev admit`).
+and mc admits at most four app servers on the machine (`mc dev admit`).
 `npm run dev` is for a person at a terminal.
 
 - A URL for this worktree: `mc test dev --here --url`.

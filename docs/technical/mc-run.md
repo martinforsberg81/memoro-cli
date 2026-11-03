@@ -299,7 +299,7 @@ project used to.
    met is `unmet`: the runner says so once in `runner.log`
    (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
+   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan. The same chore archives a goal under `~/mc/programs/<programme>/goals/` that has been `done` or `dropped` for 24 hours (`archiveGoalsDue`, `goal-archive.js`), by the road `mc goal archive` takes.
 5. **Close** the workareas whose project is finished — whose archive landed
    in 4, or whose plan an earlier archive already took away, which
    `CLOSEOUT.json` or `project_log.md` is what still knows.
@@ -657,7 +657,7 @@ time — a step that names only its effort keeps the plan's model. `tool`,
 
 A `review` is a plan's step whose `kind` is `review`: the session that
 measures the success criteria and lands the project, with the role
-`canon/roles/review.md`. The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
+`canon/roles/review-session.md` (its `project` part). The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
 (2026-09-25): opus 5.5, still at `medium`, and no advisor. From 2026-09-11 a
 step was `sonnet` at `medium` with `opus` as advisor, because opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
@@ -776,9 +776,10 @@ and dropped by `mc project amend`. A sent plan that still carries it reads as
 before and the key means nothing. `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`
 (below) stays set because the tool's own agents read it.
 
-Next to that body go `canon/roles/_common.md` and the build role —
-`canon/roles/build-project.md` for a project's step, `build-goal.md` for a
-goal, both including `_build.md` — assembled by `instructionsFor` and passed through the
+Next to that body go `canon/roles/all-sessions.md` and the build role —
+`canon/roles/build-session.md`, its `project` part for a project's step and its
+`goal` part for a goal, both with the part every headless build shares —
+assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
 them. How that is found and joined, for every session and not only this one, is
 [`mc-roles.md`](mc-roles.md).
@@ -802,7 +803,7 @@ session loads no CLAUDE.md and no auto-memory — and
 `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` to
 the role's TTL; `-c project_doc_max_bytes=0` keeps codex from loading any
 AGENTS.md. The TTL is the role's, never the billing's (ruling 40): `cache: 5m`
-in a role's frontmatter (`step`, `mend`) gives five minutes, and every other
+in a role's frontmatter (`step`) gives five minutes, and every other
 role an hour. Both come from the adapters' `sessionArgs`, and every launch
 carries them — headless, foreground and tmux, and a resumed launch too, where
 only the role text is left off.
@@ -827,7 +828,7 @@ rather than a detached job polled in two-minute `sleep` loops.
 `MC_STEP` (`<project>:<index>`), `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA` (the
 worktree) — and, for every kind of session the runner starts, `MC_SCRATCH`: an
 existing directory `~/mc/runner/scratch/<project>-<stamp>/`, outside the
-worktree, named like the session's log. `canon/roles/_common.md` tells the
+worktree, named like the session's log. `canon/roles/all-sessions.md` tells the
 session to put probes and measuring scripts there, because an untracked file in
 the worktree is a dirty worktree and a session that dies leaves it (a
 `*.tmp.mjs` held `mail-window-overlay-integrity` for 31 rounds, 2026-09-04). The
@@ -862,7 +863,7 @@ or `mc merge <repo> <pr> --watch`, opt-in and read-only
 ([`mc-merge.md`](mc-merge.md) § *Watching a merge*).
 
 Four answers the merger gives without a person (ruling 37,
-[`mc-merge.md`](mc-merge.md) § *The async round, SIGTERM and the mend*):
+[`mc-merge.md`](mc-merge.md) § *The async round, SIGTERM and where a red goes*):
 
 - **Already merged.** A pull request somebody merged on GitHub — before its
   round, or after it came back red — is answered landed with GitHub's merge
@@ -873,15 +874,15 @@ Four answers the merger gives without a person (ruling 37,
   restarted merger does not resume a `landing` job whose earlier step is not.
   The page's queue row and `mc merge watch` say `waits for <project> step
   <n>`.
-- **`mending` in the queue.** A red the change caused gets one mend session
-  first. The entry is `mending` and the step stays `landing`, so the runner
-  starts nothing for it. A push puts the job back in line at its old place
-  with `mended` set; anything else is red as before, and the step goes
-  through `redPatch` with the round's reason and what the mend said.
+- **A red goes on at once.** A red on a step's pull request goes through
+  `redPatch` to the step's next session (ruling 30); a red on a goal's blocks
+  the goal, and the runner wakes plan for it. There is no mend (removed
+  2026-11-02, goal `headless-plan`): an entry an older merger left `mending`
+  reads as `queued`.
 - **The page.** MERGES draws one queue per repository, with its counts and
   red pause/stopped labels on the heading. Each repository keeps one row,
   landing or idle: PRs, phase and clocks, waiting numbers in landing order,
-  reds and plain-text mends/fixes. Its own green success count is landed PRs
+  reds and plain-text fixes. Its own green success count is landed PRs
   in 24 hours, including merges outside runner steps. SESSIONS is the runner's
   section, still expanded by `mc run`; its day line counts outcomes per kind,
   not the merged count. See [mc-ui.md](mc-ui.md).
@@ -921,7 +922,7 @@ waits for another to answer a job, or `MERGER_POLL_MS`, and the merger leaves
 only when no lane has anything. On new code it does not wait for
 its rounds: it releases `merger.json` and starts its successor as soon as it
 sees the new checkout, finishes only the jobs it holds, and the successor skips
-`landing` and `mending` entries whose `merger` pid is alive; measured 2026-10-17
+`landing` entries whose `merger` pid is alive; measured 2026-10-17
 → 24: 76 handovers stalled the queue 643 minutes in all. A deploy waits for the rounds in
 both lanes and starts none while it runs (ruling 32).
 
@@ -1036,7 +1037,7 @@ merge*, above), one pull request per step.
   is not told it; its branch did not move.
 - **The review session.** A step of `kind: review` runs as kind `review`
   (`chooseKind` and `SESSION_DEFAULTS` in `run-plan.js`): its role is
-  `canon/roles/review.md`, its model and effort are the review's defaults (*The
+  `canon/roles/review-session.md` (`review-session:project`), its model and effort are the review's defaults (*The
   session*, above), and its landing is the only one the project makes. A
   criterion `met: false` still refuses it at the door (`criteriaDoor`), so the
   review measures and closes before it can land.
@@ -1068,9 +1069,11 @@ the brief's *Held before merge* is *Failed steps*.
 **`mc run lanes <n>` is the total** — how many headless sessions the runner
 runs at once, across every repository and every kind of session (Martin,
 2026-11-02: *"Vi har enbart mc run lanes x (som blir totalt antal lanes för
-headless)."*). The runner runs three kinds: `plan`, `build` — of a project's
-step (variant `project`) or of a goal (variant `goal`) — and `review`, of a
-project's review step or of a goal (`session-kind.js`). A lane is bound to
+headless)."*). The runner runs three kinds: `plan` — of a blocked goal
+([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*), with no variant —
+`build` — of a project's step (variant `project`) or of a goal (variant
+`goal`) — and `review`, of a project's review step or of a goal
+(`session-kind.js`). A lane is bound to
 no repository and no kind: n lane loops run at once, `lane 1` to `lane n`,
 each on its own clock, and a lane that frees takes the next work of any
 kind on any repository.
@@ -1114,13 +1117,14 @@ its own process, takes no slot here, and `mc run lanes` does not change it.
 
 `pickWork` (`lane-pick.js`) is asked once per pass, with everything that can
 start now on every repository — a project's next step by `nextFor`, a goal
-that is `open` or in `review` — already without what another lane holds, and
-it answers one of them:
+that is `open`, in `review`, or blocked and waiting on plan — already without
+what another lane holds, and it answers one of them:
 
 1. **Finishing comes before starting.** The project the lane has just run
    goes on: a project holds its lane from its first step to its review, and
-   the slot is kept between the two sessions. Then **a review before a
-   build**, and **a project's build before a goal's**.
+   the slot is kept between the two sessions. Then **a review or a plan
+   session before a build** (a plan session unblocks a goal), and **a
+   project's build before a goal's**.
 2. Within one rank, a step the API cut off goes first (its cache is warm,
    ruling 33), and then **the work that has waited longest**: the oldest
    `since` — when it last moved, a project's register entry or a goal's
@@ -1622,11 +1626,11 @@ keeps no parent process.
 Every MC session starts on its selected provider's subscription. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
-This applies to every current MC session path: step, review, mend, helper, and
+This applies to every current MC session path: step, review, goal, plan, helper, and
 interactive sessions. An ordinary interactive `mc plan` still lets Martin
-choose the tool and model; billing follows that choice. The retired headless
-planning path starts no session, so there is no active headless plan launch to
-route. `mc run --billing` shows both providers' next routes. The MC page shows
+choose the tool and model; billing follows that choice. A headless plan session
+on a blocked goal runs on the plan role's model and is billed as any other
+session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 
 The API reserve is switched per provider:

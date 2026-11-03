@@ -114,7 +114,7 @@ describe('mc publish', () => {
     assert.equal(out.stderr, 'mc: unmet-criteria — criterion 2\n');
   });
 
-  it('--no-merge, --json and a detached --branch queue nothing and say what to run next', async () => {
+  it('--no-merge and --json queue nothing and say what to run next', async () => {
     const plain = fixture();
     assert.equal(await run(['--no-merge'], plain.deps), 0);
     assert.deepEqual(plain.out.merged, []);
@@ -122,10 +122,6 @@ describe('mc publish', () => {
     const json = fixture();
     assert.equal(await run(['--json'], json.deps), 0);
     assert.deepEqual(json.out.merged, []);
-    const mend = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'step-x'], mend.deps), 0);
-    assert.deepEqual(mend.out.merged, []);
-    assert.match(mend.out.stdout, /\nnext: mc merge memoro 9\n$/u);
   });
 
   it('a head GitHub does not hold yet is not queued', async () => {
@@ -139,6 +135,55 @@ describe('mc publish', () => {
     assert.equal(await run([], deps), 0);
     assert.deepEqual(out.merged, []);
     assert.match(out.stdout, /GitHub holds ccccccc[^\n]*\nnext: mc merge memoro 9\n$/u);
+  });
+
+  describe('the goal a pull request carries (goal-lifecycle)', () => {
+    const HOME = '/programs';
+    const GDIR = `${HOME}/ios/goals/asc`;
+    const GOAL = '---\nstatus: review\nrepos: memoro, memoro-cli\nclass: large\n---\n# asc\n';
+    /** A goal file model beside the publish fixture. */
+    const withGoal = (over = {}) => {
+      const f = fixture(over.fixture);
+      const files = { [`${GDIR}/GOAL.md`]: GOAL, [`${GDIR}/LOG.md`]: '' };
+      Object.assign(f.deps, {
+        home: HOME, now: () => new Date('2026-11-03T09:00:00Z'),
+        readGoal: (path) => files[path] ?? null, writeGoal: (path, text) => { files[path] = text; },
+        listGoals: (path) => (path === HOME ? ['ios'] : path === `${HOME}/ios/goals` ? ['asc'] : []),
+        ...over.deps,
+      });
+      return { ...f, files };
+    };
+
+    it('--goal writes the pull request into the goal\'s prs, with an entry, and still queues it', async () => {
+      const f = withGoal();
+      assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
+      assert.match(f.files[`${GDIR}/GOAL.md`], /\nprs: memoro#9\n---\n/u);
+      assert.match(f.files[`${GDIR}/LOG.md`], /· person · review\n\nGjort: published memoro#9\n/u);
+      assert.match(f.out.stdout, /goal ios\/asc carries memoro#9 — done when every pull request it carries has landed\n/u);
+      assert.deepEqual(f.out.merged, [['memoro', '9']]);
+    });
+
+    it('MC_GOAL, the goal worktree it stands in, or a goal/<g> branch name the goal too', async () => {
+      const byEnv = withGoal({ deps: { env: { MC_GOAL: 'ios/asc' } } });
+      assert.equal(await run([], byEnv.deps), 0, byEnv.out.stderr);
+      assert.match(byEnv.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+      const byPath = withGoal({ deps: { cwd: `${GDIR}/memoro` } });
+      assert.equal(await run([], byPath.deps), 0, byPath.out.stderr);
+      assert.match(byPath.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+      const byBranch = withGoal({ fixture: { branch: 'goal/asc' } });
+      assert.equal(await run([], byBranch.deps), 0, byBranch.out.stderr);
+      assert.match(byBranch.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+    });
+
+    it('no goal named, none written; a --goal that is no goal is refused before the push', async () => {
+      const none = withGoal();
+      assert.equal(await run([], none.deps), 0);
+      assert.doesNotMatch(none.files[`${GDIR}/GOAL.md`], /prs:/u);
+      const wrong = withGoal();
+      assert.equal(await run(['--goal', 'ios/nope'], wrong.deps), 2);
+      assert.match(wrong.out.stderr, /--goal ios\/nope is not a goal/u);
+      assert.deepEqual(wrong.out.pushed, []);
+    });
   });
 
   it('finds the open pull request rather than opening a second, edits it only when asked, and skips a push the remote already has', async () => {
@@ -214,27 +259,16 @@ describe('mc publish', () => {
     assert.equal(await run(['extra'], fixture().deps), 2);
   });
 
-  it('a detached HEAD publishes to --branch without -u', async () => {
-    const { out, deps } = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'step-x'], deps), 0);
-    assert.deepEqual(out.pushed, ['step-x']);
-    assert.deepEqual(out.pushOpts, [{ detached: true }]);
-    assert.deepEqual(out.gh[1].slice(0, 6), ['pr', 'create', '--base', 'main', '--head', 'step-x']);
+  it('--branch is gone with the mend: refused before the network, from a branch or a detached HEAD', async () => {
+    for (const branch of ['other', 'HEAD']) {
+      const f = fixture({ branch });
+      assert.equal(await run(['--branch', 'step-x'], f.deps), 2);
+      assert.deepEqual([f.out.pushed, f.out.gh], [[], []]);
+    }
     const calls = [];
     const spawn = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: '', stderr: '' }; };
-    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} }, detached: true }).ok, true);
-    assert.deepEqual(calls, [['git', 'push', 'origin', 'HEAD:refs/heads/step-x']]);
-  });
-
-  it('--branch on another branch, or an invalid name, refuses before the network', async () => {
-    const other = fixture({ branch: 'other' });
-    assert.equal(await run(['--branch', 'step-x'], other.deps), 2);
-    assert.deepEqual([other.out.pushed, other.out.gh], [[], []]);
-    assert.match(other.out.stderr, /--branch step-x, but this worktree is on other — drop --branch/u);
-    const bad = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'bad..name'], bad.deps), 2);
-    assert.deepEqual([bad.out.pushed, bad.out.gh], [[], []]);
-    assert.match(bad.out.stderr, /--branch bad\.\.name is not a branch name/u);
+    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} } }).ok, true);
+    assert.deepEqual(calls, [['git', 'push', '-u', 'origin', 'step-x']]);
   });
 
   it('a step before the review is booked built on its branch and queues nothing; the review and a plan without one queue as before', async () => {
@@ -270,7 +304,7 @@ describe('mc publish', () => {
     assert.deepEqual(old.out.merged, [['memoro', '9']]);
   });
 
-  it('a detached HEAD without --branch is still refused', async () => {
+  it('a detached HEAD is refused', async () => {
     const { out, deps } = fixture({ branch: 'HEAD' });
     assert.equal(await run([], deps), 1);
     assert.match(out.stderr, /on HEAD/u);

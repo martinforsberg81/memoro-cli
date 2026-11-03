@@ -57,12 +57,13 @@ export const SESSION_DEFAULTS = Object.freeze({
 export const STEP_KINDS = new Set(['step', 'review']);
 /**
  * The role a session runs with. A project's step and a goal are both a build
- * (`canon/roles/build-project.md`, `build-goal.md`, which share `_build.md`);
- * a project's review step is a review (`review.md`).
+ * (`canon/roles/build-session.md`, its `project` and `goal` parts); a project's
+ * review step is a review (`review-session.md`, its `project` part).
  */
-export const BUILD_ROLES = Object.freeze({ project: 'build-project', goal: 'build-goal' });
+export const BUILD_ROLES = Object.freeze({ project: 'build-session:project', goal: 'build-session:goal' });
+export const PROJECT_REVIEW_ROLE = 'review-session:project';
 export function roleOfKind(kind) {
-  return kind === 'review' ? 'review' : BUILD_ROLES.project;
+  return kind === 'review' ? PROJECT_REVIEW_ROLE : BUILD_ROLES.project;
 }
 // The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
@@ -956,7 +957,7 @@ export function builtPreamble(built) {
 
 /**
  * What a goal session is told: where the goal is and where it works. The rest
- * is the build-goal role's (`canon/roles/build-goal.md`) and `GOAL.md`'s.
+ * is the build role's (`canon/roles/build-session.md`, its `goal` part) and `GOAL.md`'s.
  */
 export function goalPrompt({ name, dir, worktree, branch }) {
   return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
@@ -964,10 +965,34 @@ export function goalPrompt({ name, dir, worktree, branch }) {
 
 /**
  * What a goal's review session is told: the goal, its worktree, and the pull
- * request with the head it is to judge. The rest is `canon/roles/goal-review.md`'s.
+ * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
+ * (its `goal` part).
  */
 export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
   return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
+}
+
+/**
+ * What a plan session woken by a blocked goal is told: the goal, why it is
+ * blocked (its last log entry), and where its worktree is — which it may take
+ * over and finish. The rest is `canon/roles/plan-session.md`'s.
+ */
+export function goalPlanPrompt({ name, dir, worktree, branch, why = null }) {
+  const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
+  return [
+    `The goal ${name} is blocked${reason ? `: ${reason}` : ''}. You are the plan session the runner woke for it, headless.`,
+    `Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
+  ].join('\n');
+}
+
+/** `checkInPrompt` for a plan session on a blocked goal. */
+export function goalPlanCheckInPrompt({ minutes, count }) {
+  return [
+    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
+    'If you are still judging the goal, say so in one line and go on.',
+    '',
+    'If you cannot decide, end now: `mc goal log --status blocked --comment "<the question for Martin>"`, and stop.',
+  ].join('\n');
 }
 
 /** `checkInPrompt` for a goal's build session, which has no step to judge or to block. */
@@ -992,7 +1017,7 @@ export function goalCheckInPrompt({ minutes, count }) {
  * effort and the advisor through its `effortArgs` and `advisorArgs`, and codex
  * its effort through its own `effortArgs` (`-c model_reasoning_effort`) and no
  * advisor; the instructions
- * (`_common.md` + role overlay) through the same channel `mc work` uses;
+ * (`all-sessions.md` + role overlay) through the same channel `mc work` uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
  * ways (`stream: true`, the step lanes): the prompt is not an
  * argument at all but the first user message `deps.session` writes on stdin,

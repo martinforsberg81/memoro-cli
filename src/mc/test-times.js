@@ -47,6 +47,41 @@ export function measuredSeconds(text, cwd) {
   return seconds;
 }
 
+/**
+ * What the runs wrote so far, read from their times files while they are still
+ * going (a run that hangs never writes its last line, so it cannot be read after
+ * it ends). `unfinished` is every file with a top-level test that started and has
+ * not ended; `finished` is every file whose top-level tests all ended, with the
+ * seconds they took, slowest first. Both are absolute paths, as node reports them.
+ * A file that was never started is in neither: the caller knows which it was asked for.
+ */
+export function runProgress(paths) {
+  const started = new Map();
+  const ended = new Map();
+  const seconds = new Map();
+  const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
+  for (const path of paths || []) {
+    let text = '';
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.file !== 'string') continue;
+      if (entry.started) bump(started, entry.file);
+      else if (entry.done) {
+        bump(ended, entry.file);
+        if (entry.ms >= 0) bump(seconds, entry.file, entry.ms / 1000);
+      }
+    }
+  }
+  const unfinished = [...started.keys()].filter((file) => (ended.get(file) || 0) < started.get(file));
+  const done = new Set(unfinished);
+  const finished = [...ended.keys()].filter((file) => !done.has(file))
+    .map((file) => ({ file, seconds: Math.round((seconds.get(file) || 0) * 10) / 10 }))
+    .sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file));
+  return { unfinished: unfinished.sort(), finished };
+}
+
 /** A courtesy: a table that cannot be written costs the next gate its estimate, never this run its verdict. */
 export function recordTestTimes({ root, repo, cwd, text }) {
   try {

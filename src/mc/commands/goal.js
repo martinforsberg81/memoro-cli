@@ -9,6 +9,11 @@
  *                                  one session's entry appended to LOG.md; with --status the front matter's status is set too
  *   mc goal open|review|blocked|done [<programme>/<goal>] [--reason "…"]    mc goal log --status <s> --comment <reason>
  *                                  going open, a worktree whose branch has no commits of its own is remade from origin/main
+ *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
+ *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
+ *   mc goal archive <programme>/<goal>… | <programme>   a done or dropped goal to goals/.archive/, its
+ *                                  worktrees and branch gone, one row in goals/goal_log.md; the runner
+ *                                  does the same 24 hours after a goal is done or dropped
  *   mc goal show <programme>/<goal>      the front matter, the body, the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each
  *
@@ -23,12 +28,16 @@
  * changes the front matter's `after` line, where those change the status, and
  * the status follows from it — waiting while anything named has not landed.
  */
-import { commandUsage } from '../command-help.js';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { commandUsage } from '../command-help.js';
+
 import { writeFileAtomic } from '../atomic-write.js';
+import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
-import { addGoalWorktree, afterCycle, afterOf, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, REVIEW_ROLE, sessions, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, addPr, afterCycle, afterOf, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, parsePrRef, programsGoals, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, PLAN_ROLE, REVIEW_ROLE, sessions, waitsOnPerson, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -43,10 +52,12 @@ const VERB_FLAGS = {
   after: [],
   log: ['--done', '--comment', '--next', '--status'],
   status: ['--reason'],
+  pr: [],
+  archive: [],
   show: [],
   list: [],
 };
-const STATUS_VERBS = ['open', 'review', 'blocked', 'done'];
+const STATUS_VERBS = ['open', 'review', 'blocked', 'done', 'drop'];
 /** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
 export const ROUTES = Object.fromEntries([
   ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
@@ -75,13 +86,19 @@ export async function run(argv, deps = {}) {
     list: deps.list || listDirsOf,
     git: deps.git || gitIn,
     known: deps.known || (() => knownRepositories(env)),
+    gh: deps.gh || ghIn,
+    move: deps.move || moveDir,
+    appendText: deps.appendText || appendText,
   };
   const { flags } = scanned;
 
   if (verb === 'new') return newGoal(rest, flags, ctx);
   if (verb === 'after') return setAfter(rest, ctx);
   if (verb === 'log') return logEntry(rest, { status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
-  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { status: verb, done: null, comment: flags.reason, next: null }, ctx);
+  if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
+  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { status: verb === 'drop' ? 'dropped' : verb, done: null, comment: flags.reason, next: null }, ctx);
+  if (verb === 'pr') return carryPrs(rest, ctx);
+  if (verb === 'archive') return archiveGoals(rest, ctx);
   if (verb === 'show') return showGoal(rest, ctx);
   return listGoals(rest, ctx);
 }
@@ -250,6 +267,9 @@ function setAfter(args, ctx) {
   if (args.length < 1) { stderr.write(usage()); return 2; }
   const [named, ...names] = args;
   if (!isGoalRef(named)) { stderr.write(`mc: ${named} is not <programme>/<goal> — lower-case letters, digits and hyphens\n`); return 2; }
+  // `none` is the word the help gives for clearing: it names no goal, so it may stand alone only.
+  const tokens = names.flatMap((name) => name.split(',')).map((name) => name.trim()).filter(Boolean);
+  if (tokens.includes('none') && tokens.length > 1) { stderr.write(`mc: none clears after and names no goal — give none alone, or the goals it starts after\n`); return 2; }
   const target = goalNamed(named, ctx);
   const text = read(join(target.dir, GOAL_FILE));
   if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
@@ -258,11 +278,11 @@ function setAfter(args, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  if (goal.status === 'review' || goal.status === 'done') {
+  if (goal.status === 'review' || FINISHED.includes(goal.status)) {
     stderr.write(`mc: ${target.name} is ${goal.status} — a goal in ${goal.status} waits on nothing\n`);
     return 1;
   }
-  const after = afterNamed(names.flatMap((name) => name.split(',')), target.name, ctx);
+  const after = afterNamed(tokens.includes('none') ? [] : tokens, target.name, ctx);
   if (after.error) { stderr.write(`mc: ${after.error}\n`); return 2; }
   const status = after.pending.length ? 'waiting' : (goal.status === 'waiting' ? 'open' : goal.status);
   const entry = {
@@ -327,8 +347,9 @@ function showGoal(args, ctx) {
 
 /**
  * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
- * status · n sessions · the last entry's Nästa`. A goal blocked by a red review
- * or a red merge reads `blocked, waits on plan` (`waitsOnPlan`); a waiting one,
+ * status · n sessions · the last entry's Nästa`. A goal blocked by a red review,
+ * a red merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`), any
+ * other blocked one `blocked, waits on a person`; a waiting one,
  * `waiting on <programme>/<goal>, …` — what in its `after` has not landed. A goal that does not parse is
  * listed with its first problems, not skipped.
  */
@@ -349,13 +370,92 @@ function listGoals(args, ctx) {
       stdout.write(`${name} · does not parse — ${goal.problems.join('; ')}\n`);
       continue;
     }
-    const next = (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
+    // A finished goal has no next action, whatever its last entry said.
+    const next = FINISHED.includes(goal.status) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
     const { pending } = afterOf(goal, all);
     const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan`
+      : waitsOnPerson(goal) ? `${goal.status}, waits on a person`
       : (goal.status === 'waiting' && pending.length ? `waiting on ${pending.join(', ')}` : goal.status);
     stdout.write(`${name} · ${goal.repos.join(',')} · ${status} · ${sessions(goal.log)} sessions · ${next}\n`);
   }
   return 0;
+}
+
+/**
+ * `mc goal pr <programme>/<goal> <repo>#<n>…` — the pull requests named carry
+ * the goal: each is written into its `prs`, so the goal is done once every one
+ * has landed (the merger, or the runner's `settleLanded`). For work published
+ * before `mc publish` wrote it there, or from somewhere it could not tell.
+ */
+function carryPrs(args, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  if (args.length < 2) { stderr.write(usage()); return 2; }
+  const [named, ...refs] = args;
+  const target = goalNamed(named, ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const given = refs.flatMap((ref) => ref.split(',')).map((ref) => ref.trim()).filter(Boolean);
+  const parsed = given.map((ref) => ({ ref, pr: parsePrRef(ref) }));
+  const bad = parsed.filter((item) => !item.pr).map((item) => item.ref);
+  if (bad.length) { stderr.write(`mc: ${bad.join(', ')} is not <repo>#<number>\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  for (const { pr } of parsed) {
+    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, status: goal.status, done: `carries ${prRef(pr)}`, comment: null, next: null };
+    const added = addPr({ dir: target.dir, repo: pr.repo, pr: pr.pr, entry, read, write });
+    if (added.problems) { for (const problem of added.problems) stderr.write(`mc: ${target.name}: ${problem}\n`); return 1; }
+    stdout.write(`mc: ${target.name} carries ${prRef(pr)}${added.added ? '' : ' already'}\n`);
+  }
+  return 0;
+}
+
+/**
+ * `mc goal archive <programme>/<goal>…` or `mc goal archive <programme>` (its
+ * every done or dropped goal) — a finished goal leaves the list, by
+ * `archiveGoal` (goal-archive.js), which the runner also calls once a goal has
+ * been finished for 24 hours. Each goal is answered on its own, and its refusal
+ * is said with why; exit 1 if any refused.
+ */
+function archiveGoals(args, ctx) {
+  const { stdout, stderr, home, list, read } = ctx;
+  if (args.length < 1) { stderr.write(usage()); return 2; }
+  const all = programsGoals({ home, list, read });
+  let names;
+  if (args.length === 1 && NAME_RE.test(args[0])) {
+    names = all.filter((goal) => goal.programme === args[0] && FINISHED.includes(goal.status)).map((goal) => `${goal.programme}/${goal.goal}`);
+    if (!names.length) { stdout.write(`mc: ${args[0]} has no done or dropped goal\n`); return 0; }
+  } else {
+    const bad = args.filter((name) => !isGoalRef(name));
+    if (bad.length) { stderr.write(`mc: ${bad.join(', ')} is not <programme>/<goal>, nor one programme alone\n`); return 2; }
+    names = [...new Set(args)];
+  }
+  let refused = 0;
+  for (const name of names) {
+    const goal = all.find((item) => `${item.programme}/${item.goal}` === name);
+    const result = goal ? archiveGoal(goal, all, ctx) : { refused: 'no such goal — mc goal list names them' };
+    if (result.refused) {
+      refused += 1;
+      stderr.write(`mc: ${name} is not archived — ${result.refused}\n`);
+      continue;
+    }
+    stdout.write(`mc: ${name} · archived — ${result.to}\n`);
+  }
+  return refused ? 1 : 0;
+}
+
+/** Text appended to a file, made when it is not there. */
+function appendText(path, text) {
+  appendFileSync(path, text);
+}
+
+/** `gh <args>` in `cwd`, as `{ ok, stdout, stderr }`. */
+function ghIn(cwd, args) {
+  const r = spawnSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 /**
@@ -364,7 +464,7 @@ function listGoals(args, ctx) {
  */
 function goalNamed(arg, { env, home }) {
   const given = arg ?? env.MC_GOAL;
-  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a build-goal session' };
+  if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
   const parts = given.split('/');
   if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
     return { error: `${given} is not <programme>/<goal> — lower-case letters, digits and hyphens` };
@@ -375,14 +475,17 @@ function goalNamed(arg, { env, home }) {
 
 /**
  * Why this caller may not set `status`, or null. A session is a caller with
- * MC_GOAL set and an MC_TOOL that is not `person`. It never sets `done`: the
- * merger does when the goal's pull request lands. A review session never sets
- * `open`: a red review waits on plan, and plan sets it open again.
+ * MC_GOAL set and an MC_TOOL that is not `person`. A plan session sets every
+ * status: it drives the programme toward its aim, and may finish a goal itself
+ * (`canon/roles/plan-session.md`). Any other session never sets `done`, the
+ * merger does when the goal's pull request lands, nor `dropped`. A review
+ * session never sets `open`: a red review waits on plan.
  */
 export function refusedStatus(status, env) {
   const session = Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
-  if (!session) return null;
+  if (!session || env.MC_ROLE === PLAN_ROLE) return null;
   if (status === 'done') return 'a session does not set done — end in review; the merger sets done when the pull request lands';
+  if (status === 'dropped') return 'only plan or a person drops a goal — end blocked with the question';
   if (status === 'open' && env.MC_ROLE === REVIEW_ROLE) return 'a review does not set open — red is blocked, and plan sets the goal open again';
   return null;
 }

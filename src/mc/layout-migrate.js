@@ -231,7 +231,7 @@ function liveFacts({ root, io, oldAreaNames, oldAreaOf }) {
   const merger = readMerger({ root, read, alive });
   if (merger) live.push({ what: 'merger', pid: merger.pid, line: `the merger is running (pid ${merger.pid}) — wait for its queue to empty, or end it` });
   for (const job of parseQueue(read(mergesPath(root)))) {
-    if (job.state !== 'mending' && job.state !== 'landing') continue;
+    if (job.state !== 'landing') continue;
     live.push({ what: 'merge', pid: null, line: `${job.repo ?? 'a repository'}#${job.pr} is ${job.state} in merges.json — wait for the merger to finish it` });
   }
 

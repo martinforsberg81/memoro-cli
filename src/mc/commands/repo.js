@@ -686,20 +686,29 @@ export function gateLines(report) {
   }
 
   const red = report.candidate?.red || [];
+  const tooSlow = report.too_slow || [];
+  const tooSlowNames = new Set(tooSlow.map((test) => test.name));
+  const otherRed = red.filter((name) => !tooSlowNames.has(name));
   // The gates ran before the red tests were judged, so a round that stopped at
   // a red test can still hold a broken contract: a red test and a broken
   // contract are two repairs, and a reader who sees only the first comes back
   // for the second.
   const failed = selectedGates(report).filter((gate) => !gate.ok);
   const what = [
-    red.length ? `${red.length} test${red.length === 1 ? '' : 's'} red` : null,
+    tooSlow.length ? `${tooSlow.length} test${tooSlow.length === 1 ? '' : 's'} too slow — rebuild`
+      + (otherRed.length ? `, ${otherRed.length} other test${otherRed.length === 1 ? '' : 's'} red` : '')
+      : red.length ? `${red.length} test${red.length === 1 ? '' : 's'} red` : null,
     failed.length ? `${failed.length} command gate${failed.length === 1 ? '' : 's'} failed` : null,
   ].filter(Boolean).join(', ');
 
   if (what) {
     lines.push(`mc: ${subjectOf(report)} — RED — ${what}:`);
-    for (const name of red.slice(0, 20)) lines.push(`      ${name}`);
-    if (red.length > 20) lines.push(`      … and ${red.length - 20} more`);
+    for (const test of tooSlow) {
+      lines.push(`      too slow — rebuild: ${test.name} (${Math.ceil(test.duration_ms / 1000)} s)`);
+    }
+    const namedRed = tooSlow.length ? otherRed : red;
+    for (const name of namedRed.slice(0, 20)) lines.push(`      ${name}`);
+    if (namedRed.length > 20) lines.push(`      … and ${namedRed.length - 20} more`);
     for (const gate of failed) {
       lines.push(`      ${gate.name} — ${gate.ran ? `exit ${gate.exit_code}` : 'could not run'} — ${gate.command}`);
     }

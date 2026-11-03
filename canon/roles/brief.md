@@ -12,9 +12,9 @@ Where to read: `mc --fresh` is the page; `mc status <name>` and
 `mc step <project>` are one project; `~/mc/proposals/` holds the proposals;
 `mc repos` names mc's source checkout.
 
-@include _session-work.md
+@include project-verb.md
 
-@include _plan-writing.md
+@include step-verb.md
 
 Skills this role uses:
 

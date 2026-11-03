@@ -1,5 +1,5 @@
 /**
- * `mc build ios --device`: the preflights the asking process runs, the
+ * `mc asc build --device`: the preflights the asking process runs, the
  * builder's commands in order, the read-back, and the row from `running` to
  * how it ended. Every external command is injected — a fake `run` for the
  * preflights, a fake `step` for the builder that records argv, cwd and env —
@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { run } from '../../src/mc/commands/build.js';
+import { run } from '../../src/mc/commands/asc.js';
 import {
   buildIos, buildPaths, builtApp, makeStep, pairedDevices, readBack, xcodeHint,
 } from '../../src/mc/ios-build.js';
@@ -97,7 +97,7 @@ function fakeRun(list) {
   return fn;
 }
 
-async function device({ repo, live, list = FIXTURE, argv = ['ios', '--device'], startBuilder }) {
+async function device({ repo, live, list = FIXTURE, argv = ['build', '--device'], startBuilder }) {
   const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-device-work-')) };
   const stdout = capture();
   const stderr = capture();
@@ -128,7 +128,7 @@ describe('devicectl list devices', () => {
   });
 });
 
-describe('mc build ios --device — the preflights', () => {
+describe('mc asc build --device — the preflights', () => {
   it('refuses without a paired iPhone, and starts nothing', async () => {
     const { repo, second } = makeRepo();
     const unpaired = { ...PHONE, connectionProperties: { ...PHONE.connectionProperties, pairingState: 'unpaired' } };
@@ -152,7 +152,7 @@ describe('mc build ios --device — the preflights', () => {
   it('takes the phone --device-id names among several', async () => {
     const { repo, second } = makeRepo();
     const { code, started } = await device({
-      repo, live: second, list: devices([PHONE, OTHER]), argv: ['ios', '--device', '--device-id', 'Other iPhone'],
+      repo, live: second, list: devices([PHONE, OTHER]), argv: ['build', '--device', '--device-id', 'Other iPhone'],
     });
     assert.equal(code, 1, 'the fake builder did not start');
     assert.equal(started[0].device.id, '00000000-0000-0000-0000-000000000002');
@@ -160,7 +160,7 @@ describe('mc build ios --device — the preflights', () => {
 
   it('refuses a --sha production does not contain', async () => {
     const { repo, first, second } = makeRepo();
-    const { code, err, started, env } = await device({ repo, live: first, argv: ['ios', '--device', '--sha', second] });
+    const { code, err, started, env } = await device({ repo, live: first, argv: ['build', '--device', '--sha', second] });
     assert.equal(code, 1);
     assert.equal(err, `mc: production runs ${first.slice(0, 7)}, which does not contain ${second.slice(0, 7)} — mc deploy first\n`);
     assert.deepEqual(started, []);
@@ -172,7 +172,7 @@ describe('mc build ios --device — the preflights', () => {
     const byDefault = await device({ repo, live: second });
     assert.equal(byDefault.started[0].sha, second);
     assert.equal(byDefault.started[0].live, second);
-    const older = await device({ repo, live: second, argv: ['ios', '--device', '--sha', first.slice(0, 7)] });
+    const older = await device({ repo, live: second, argv: ['build', '--device', '--sha', first.slice(0, 7)] });
     assert.equal(older.started[0].sha, first);
   });
 
@@ -182,18 +182,18 @@ describe('mc build ios --device — the preflights', () => {
     recordStart({ sha: second, kind: 'device', pid: '4321' }, env);
     const stderr = capture();
     const preflights = fakeRun(FIXTURE);
-    const code = await run(['ios', '--device'], {
+    const code = await run(['build', '--device'], {
       env, stdout: capture(), stderr, repos: [{ name: 'memoro', path: repo }], run: preflights, alive: () => true,
     });
     assert.equal(code, 2);
-    assert.equal(stderr.text, 'mc: an iOS build is running (pid 4321) — mc build ios --follow\n');
+    assert.equal(stderr.text, 'mc: an iOS build is running (pid 4321) — mc asc build --follow\n');
     assert.deepEqual(preflights.calls, []);
   });
 
   it('--follow says so when no build runs', async () => {
     const stdout = capture();
     const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-device-work-')) };
-    assert.equal(await run(['ios', '--follow'], { env, stdout, stderr: capture() }), 0);
+    assert.equal(await run(['build', '--follow'], { env, stdout, stderr: capture() }), 0);
     assert.equal(stdout.text, 'mc: no iOS build is running\n');
   });
 });
@@ -398,7 +398,7 @@ describe('buildIos — the builder', () => {
   });
 });
 
-describe('mc build ios --device — start and follow', () => {
+describe('mc asc build --device — start and follow', () => {
   it('writes the running row, names the builder on it, and follows it to installed', async () => {
     const { repo, second } = makeRepo();
     const b = builder();
@@ -417,7 +417,7 @@ describe('mc build ios --device — start and follow', () => {
     assert.equal(seen.kind, 'device');
     assert.equal(seen.live_commit, second);
     assert.equal(seen.pid, '');
-    assert.match(out, /mc: building memoro \w{7} for Test iPhone in its own process \(pid 4242\) — \^C stops watching, not the build; mc build ios --follow watches again\n/u);
+    assert.match(out, /mc: building memoro \w{7} for Test iPhone in its own process \(pid 4242\) — \^C stops watching, not the build; mc asc build --follow watches again\n/u);
     assert.match(out, /▸ npm ci\n/u);
     const row = readIosBuilds(env).at(-1);
     assert.equal(row.pid, '4242');

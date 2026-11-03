@@ -1040,7 +1040,7 @@ export async function followDeploy({ log, pid, key = null, env = process.env, st
 }
 
 /**
- * The watching itself, shared with `mc build ios`: the log as it grows until
+ * The watching itself, shared with `mc asc build`: the log as it grows until
  * `pid` is gone. 130 after a ^C, saying `mc: stopped watching — <stopped>`;
  * null once the process has ended and the log is drained.
  */

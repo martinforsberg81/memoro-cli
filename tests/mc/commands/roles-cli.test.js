@@ -23,7 +23,7 @@ function fixture({ withWorker = true, withShared = false } = {}) {
   const rolesDir = join(root, 'roles');
   mkdirSync(rolesDir);
   if (withWorker) writeFileSync(join(rolesDir, 'worker.md'), WORKER_MD);
-  if (withShared) writeFileSync(join(rolesDir, '_common.md'), 'A turn is the unit of cost.\n');
+  if (withShared) writeFileSync(join(rolesDir, 'all-sessions.md'), 'A turn is the unit of cost.\n');
   return { env: { MC_HOME: join(root, 'home'), MC_ROLES_DIR: rolesDir } };
 }
 
@@ -46,26 +46,29 @@ describe('mc roles', () => {
     assert.match(result.stdout, /You are a worker\. Escalate to the PM\./u);
   });
 
-  // `_common.md` is the text every role session is told, not a role. A
-  // catalogue that has a copy of it must not list `_common` as one.
-  it('lists and shows the build-goal role mc ships', () => {
+  it('lists the build role mc ships, and shows its goal part', () => {
     const env = { MC_HOME: join(mkdtempSync(join(tmpdir(), 'mc-roles-cli-')), 'home') };
     const listed = runMcCli(['roles', 'list'], { ...env, MC_ROLES_DIR: canonRolesDir() });
     assert.equal(listed.status, 0, listed.stderr);
-    assert.match(listed.stdout, /\bbuild-goal\b/u);
+    assert.match(listed.stdout, /\bbuild-session\b/u);
+    assert.doesNotMatch(listed.stdout, /all-sessions|-verb/u);
+    const whole = runMcCli(['roles', 'show', 'build-session'], env);
+    assert.match(whole.stdout, /parts:\s+goal, project, worker —/u);
     // No catalogue of its own: `show` falls back to canon, as a launch does.
-    const shown = runMcCli(['roles', 'show', 'build-goal'], env);
+    const shown = runMcCli(['roles', 'show', 'build-session:goal'], env);
     assert.equal(shown.status, 0, shown.stderr);
     assert.match(shown.stdout, /You are a build session on one goal/u);
     assert.match(shown.stdout, /mc publish --no-merge/u);
   });
 
+  // `all-sessions.md` is the text every role session is told, not a role. A
+  // catalogue that has a copy of it must not list it as one.
   it('does not name the shared text as a role', () => {
     const { env } = fixture({ withShared: true });
     const result = runMcCli(['roles', 'list'], env);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /worker/u);
-    assert.doesNotMatch(result.stdout, /_common/u);
+    assert.doesNotMatch(result.stdout, /all-sessions/u);
   });
 
   it('an empty catalogue says where it looked', () => {
