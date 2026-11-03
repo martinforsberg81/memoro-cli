@@ -55,11 +55,16 @@ export function readShotDeclaration(worktree) {
 /**
  * Which memoro worktree `mc shot` and `mc dev open` read: the one you stand in
  * when it has `.mc/shot.json`, else the shared checkout; `here` forces the
- * first. `{ worktree }`, or `{ error }` saying why there is none.
+ * first, and `main` is the shared checkout's server from any worktree (how the
+ * app is now). `{ worktree }`, or `{ error }` saying why there is none.
  */
 export function shotWorktree({
-  cwd = process.cwd(), env = process.env, here = false, deps = {},
+  cwd = process.cwd(), env = process.env, here = false, main = false, deps = {},
 } = {}) {
+  if (main) {
+    const shared = sharedWorktree(env);
+    return shared ? { worktree: shared } : { error: NO_SHARED_WORKTREE };
+  }
   const standing = (deps.callerWorktree || callerWorktree)(cwd);
   const standsInMemoro = Boolean(standing && (deps.existsSync || existsSync)(join(standing, SHOT_FILE)));
   const worktree = here || standsInMemoro ? standing : sharedWorktree(env);

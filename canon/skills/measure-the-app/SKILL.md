@@ -9,6 +9,11 @@ server when the commit moved or a file changed, and prints the branch and
 commit it served. It signs in through `/dev/login` (`seeded`; `--account new`,
 `--onboarding`). `mc shot dev --list` names targets and viewports.
 
+Two questions, two commands. **How is it now** — what main looks like — is
+`mc shot dev --main <target>`: the shared checkout's server, always up and
+followed to main while idle, from any worktree. **How does my change look** is
+`mc shot dev <target>` from your worktree, which serves your tree.
+
 - `--viewport iphone` carries the safe area. `--measure <css>` prints one JSON
   line per match: rectangle, padding, position, computed colours, scroll state
   and visibility with the ancestors walked.

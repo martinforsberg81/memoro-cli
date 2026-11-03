@@ -9,6 +9,12 @@ and mc admits at most four app servers on the machine (`mc dev admit`).
 `npm run dev` is for a person at a terminal.
 
 - A URL for this worktree: `mc test dev --here --url`.
+- How the app is now, on main: `mc shot dev --main <target>`. That server is the
+  shared checkout's: always up, not a slot, never stopped as a stale holder, and
+  followed to main while it is idle.
+- A wait for a slot is a queue, served in order (a gate round first after two
+  minutes); the waiting line says your place. Who holds the servers and who
+  waits: `mc dev status`.
 - What runs where: `mc dev list`, `mc prs`, `mc status <name>`.
 - One browser at a time.
 - Stopping one: skill `mc-processes`.

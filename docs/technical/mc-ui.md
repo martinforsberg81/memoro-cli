@@ -66,9 +66,14 @@ below is about.
 - **PROGRAMMES** — one heading per programme with its own `x ready · y waiting · z blocked`
   and its open planning-session counts per provider (`plan claude 1 · codex 2`),
   or `no plan session`; then one numbered row
-  per project under it: the repository it lives in, the project's state (one
-  word, one colour — see *The palette*), how many of its steps are done, and
-  the open PR. The next-step detail and last run remain in JSON, not on the row. A waiting project keeps its row; a blocked one collapses under
+  per project under it, then one per goal, both in [the grid](#the-grid):
+  `project` or `goal` in the kind column, the name, the repository, the state
+  (one word, one colour — see *The palette*), the progress (`3/7` of a
+  project's steps; `5 sess`, a goal's sessions), the open PR, and in the grey
+  tail what is next or what it waits on. A goal has the same columns with the
+  same kind of content as a project; the difference is the kind column, not a
+  `g ·` before its name (goal `mc/page-columns`, 2026-11-03). The last run
+  stays in JSON, not on the row. A waiting project keeps its row; a blocked one collapses under
   its heading unless it has an open pull request. A project's `●` means the runner has a
   step in flight on it, and nothing else. A programme is drawn
   whether or not any of its projects have a plan the runner can read; one that
@@ -139,16 +144,19 @@ below is about.
   heading carries the answer: **`n of N lanes`** — sessions running out of
   the total `mc run lanes` sets, bold green while not zero, `not running` in
   bold yellow when there is no process — and how many projects are queued.
-  Under it **one row per lane**, numbered through. An idle lane is `lane 3
-  idle`. A lane with a session in it is read for what is running, in that
-  order: the **kind as its first word** — `PLAN`, `BUILD`, `REVIEW`, in the
-  kind's colour — then what it works on (a goal `mc/<goal>`; a project and
-  which step of its plan, `docx-editor 4/6`, read off the plan because a
-  lane file does not carry it), the repository, the model in grey, and the
-  clock (yellow past a check-in; nothing on a lane row is bold). After them
-  the open pull requests of the project or of the goal's branch, `credits`
-  when the session runs on the API credit, the advisor when it has one, and
-  the check-ins. A build's variant is in what it works on, so it costs no
+  Under it **one row per lane**, in [the grid](#the-grid), its number the
+  lane's. An idle lane is its number and `idle`. A lane with a session in it
+  is read for what is running, in that order: the **kind** — `PLAN`,
+  `BUILD`, `REVIEW`, in the kind's colour — then what it works on (a goal
+  `mc/<goal>`; a project and which step of its plan, `docx-editor 4/6`, read
+  off the plan because a lane file does not carry it), the repository,
+  `running`, the clock as its progress (yellow past a check-in; nothing on a
+  lane row is bold), and the open pull request of the project or of the
+  goal's branch in the PR column, `#1251+2` when there are more. The grey
+  tail is the model, `credits` when the session runs on the API credit, the
+  advisor when it has one, and the check-ins. The model was a column of its
+  own; it is bookkeeping, and the state column says the same kind of thing in
+  every section. A build's variant is in what it works on, so it costs no
   cell; it is `variant` in `mc --json`, beside `kind` and `goal`. The
   sessions fill from the top, oldest first, so a row moves only when one
   above it ends. The tool, the number of turns and the pid are not on the
@@ -173,8 +181,9 @@ below is about.
   kinds — merge rounds, the helper's turns, and mend rows from before 2026-11-02. The list-price cost gives
   way first on a narrow terminal, its basis and then itself. `mc --json`
   carries `runner.sessions` (one per lane file: `kind`, `variant`, `goal`,
-  `name`, `step`, `steps`, `repo`, `model`, the clock), `runner.lanes` (each
-  with its `session`) and `runner.day.by_kind` (`plan`, `build`, `review`,
+  `name` — `mc/<goal>` for a goal's session, as its goal row is named —
+  `step`, `steps`, `repo`, `state`, `progress`, `prs`, `model`, the clock),
+  `runner.lanes` (each with its `state` and its `session`) and `runner.day.by_kind` (`plan`, `build`, `review`,
   each `sessions` and its outcomes, and `other`); the page draws from these
   and nothing else.
 - **MERGES** — two queues, one per repository. The heading gives each queue's
@@ -186,26 +195,34 @@ below is about.
   with `held && !orphaned`. A landing's own lock and lease are not pauses.
   Queued work without a running merger says `merger stopped` in red instead
   of appearing idle.
-  There is **exactly one row per repository**, including idle queues. The row
-  keeps the repository and PR number; titles and secondary detail give way
-  first at 80 columns. A landing carries its phase in words (`gate`, `rebase`,
-  `landing`), elapsed clock and age in the queue. Waiting numbers follow in
-  landing order, with grey words instead of unexplained marks: `awaits
-  <project> step <n>`, `after #N`. Long lists become `… N more`.
-  Reds and fixes stay on their repository's row. Normal work, including
-  fixing, is plain terminal text; clocks, reasons and the fixing
-  session's last sentence are grey. A PR the merger answered red is red.
-  Fixing still means a live runner lane holds the red's project and step; its
-  last sentence is read from the last 64 KiB of `<session.log>.jsonl` with
-  `claudeTail` or `codexTail`. No transcript means the red's reason instead.
-  Each row owns `N merges in 24 h`, green when nonzero. This counts landed PRs
-  in `gate-rounds.jsonl`, including manual and batch merges, not runner step
-  outcomes. The record's start plus duration supplies the landing time. Idle
-  rows also say `last #N · 2 h ago`, in grey, or `no landing recorded`.
-  `mc --json` carries the drawing's exact input as `merges.repos[]`: `repo`,
-  `state`, `pause`, `merger_stopped`, `landing`, `landings`, `waiting`, `reds`,
-  `fixing`, `day_count`, `last`. The older aggregate fields remain
-  for status and PR ownership readers; MERGES draws only `repos[]`.
+  Under the heading, **one row per pull request** in a repository's queue,
+  in [the grid](#the-grid): the round landing (`GATE`), the reds a session is
+  fixing (`FIX`), the reds (`RED`), then what waits (`WAIT`), in landing
+  order — at most six per repository, then `… N more`. The name is the
+  project or the branch, the state is the phase in words (`gate`, `rebase`,
+  `landing`), `fixing`, `red`, `queued` — `waiting` when it `awaits
+  <project> step <n>`, `stopped` when there is no merger — the progress is
+  how long it has been in that state, and the PR is in the PR column, green
+  while the merger has it and red when it came back red. The grey tail is
+  why: `awaits <project> step <n>`, `after #N`, `with #N` for a batch member,
+  `queued 10 min` for a round, the red's reason or the fixing session's last
+  sentence, and the title, which gives way first. Fixing still means a live
+  runner lane holds the red's project and step; its last sentence is read
+  from the last 64 KiB of `<session.log>.jsonl` with `claudeTail` or
+  `codexTail`. No transcript means the red's reason instead. An empty queue is
+  **one row of its own**, `IDLE`, named by its repository — the repo column is
+  not drawn under 90 columns, and the row has to say whose queue it is — with
+  how long ago it last landed and that pull request in grey. The first row of
+  each repository ends on `N merges in 24 h`, green when nonzero. This counts
+  landed PRs in `gate-rounds.jsonl`, including manual and batch merges, not
+  runner step outcomes. The record's start plus duration supplies the landing
+  time. `mc --json` carries the drawing's exact input as `merges.repos[]`:
+  `repo`, `state`, `pause`, `merger_stopped`, `landing`, `landings`,
+  `waiting`, `reds`, `fixing`, `day_count`, `last`, and the idle row's
+  `kind`, `name`, `progress` and `prs`; every item of `landings`, `waiting`,
+  `reds` and `fixing` carries `kind`, `name`, `repo`, `state`, `progress` and
+  `prs`. The older aggregate fields remain for status and PR ownership
+  readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
   `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
   the branch rule; a plan session's, checked out under `~/mc/programs/<programme>/`
@@ -457,17 +474,80 @@ test can look at one row.
   non-empty value turns colour off, and `--json` is never painted at all.
 - No new dependency. The ANSI is by hand, as the rest of the repo is.
 
+## The grid
+
+Every row of PROGRAMMES, SESSIONS and MERGES — and of DEV, when it comes
+(goal `mc/dev-section`) — is drawn in one grid, defined once in
+`page-grid.js` (`GRID`, `gridColumns`, `gridRow`). Each section had widths of
+its own before (goal `mc/page-columns`, Martin 2026-11-03): a project row's,
+which a goal borrowed and filled with `g · <name>` and `N sessions`; a lane
+row's; and none at all for a merge. So the repository, the state and the pull
+request stood at a different x in every section. Now the same kind of fact
+stands in the same column everywhere:
+
+| column | width ≥ 90 / < 90 | PROGRAMMES (project · goal) | SESSIONS | MERGES | DEV |
+|---|---|---|---|---|---|
+| nr + mark | 6 | `12 ●` | the lane's number, `●` | `●` `✗` `·` | `●` |
+| kind | 8 | `project` · `goal` | `PLAN` `BUILD` `REVIEW` | `GATE` `WAIT` `FIX` `RED` `IDLE` | `MAIN` `SLOT` |
+| name | 28 / 20 | the project · the goal | project and `3/7` · `mc/<goal>` | project or branch · the repository | the session that has it |
+| repo | 12 / 0 | repository | repository | repository | repository |
+| state | 9 | the state word | `running` · `idle` | phase, `queued`, `waiting`, `red`, `idle` | `leased` `idle` `cold` |
+| progress | 10 | `3/7` · `5 sess` | the clock | how long in that state | idle time |
+| PR | 9 | `#1251+1` | `#1251` | `#1251` | port |
+| tail | the rest | next · what it waits on | model, credits, advisor, check-ins | why, title, `N merges in 24 h` | worktree, branch |
+
+Every width includes the one space that separates the cell from the next, and
+a cell's text is clipped one short of it. Three changes from the proposal in
+the goal, and why:
+
+- **kind is 8, not 7**: `project` is seven characters, and a cell needs its
+  separating space.
+- **PR is 9, not 8**: `#14709+3` — a memoro number and three more — is eight.
+- **SESSIONS' state is `running`, not the model.** The state column says the
+  same kind of thing in every section, in the same colour (green: in hand); a
+  model is bookkeeping, and it leads the grey tail.
+
+**Data.** Every cell is drawn from a field `mc --json` carries under the same
+name in every section — `name`, `repo`, `state`, `progress`, `prs`, and `kind`
+— on each project and goal (`programmes.programmes[].projects[]`,
+`.goals[]`), each session (`runner.sessions[]`), and each merge item
+(`merges.repos[].landings[]`, `.waiting[]`, `.reds[]`, `.fixing[]`, and the
+repository itself for its idle row). The page computes nothing the JSON lacks;
+the collector does (`page-collect.js`).
+
+**What gives way, in order**: the tail first — it takes what is left, whole
+parts while they fit and the next one clipped — then the repository, which is
+not drawn under 90 columns, then the name, which is 28 from 90 up, 20 under
+it, and down to 10 at the 60-column floor. The state, the progress and the PR
+never give way. At 80 columns no row goes over the edge.
+
+**A cell is clipped with `…` and never in the middle of a number** (`clipCell`):
+a cut that would fall inside a run of digits — with the `#`, `/`, `.`, `:`,
+`+` that join them — goes before the whole run, so `#14709` is never `#147…`
+and `12/30` never `12/3…`. A PR cell drops its `+N` before its number.
+
+The grid has the section headings above it unchanged: the counts on the left,
+the verb on the right.
+
 ## The palette
 
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
-page bends to: **a session kind and a project state have one colour each,
-wherever they are printed.** SESSIONS says `BUILD` in the same green
-wherever a build is named, so a kind is recognised before it is read. They are `KIND_TONE` and
-`STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
-through all three sections.
+page bends to: **a kind and a state have one colour each, wherever they are
+printed.** SESSIONS says `BUILD` in the same green wherever a build is named,
+so a kind is recognised before it is read; `running` is the same green on a
+project row, a goal row and a lane. They are `KIND_TONE` and `STATE_TONE` in
+`page-grid.js`, and `tests/mc/page.test.js` reads both tables below against
+them.
 
-| step kind | colour |
+**Colour is state, and the same word has the same colour everywhere.** Green:
+in hand — running, or with the merger. Yellow: waits on a person or on another
+piece of work, and a clock past a check-in. Red: blocked, red, failed. Grey:
+bookkeeping — the repository, the model, the numbers, the tail, `done`,
+`dropped`, `idle`. Bold cyan: a pull request number with none of those states.
+A zero has no colour.
+
+| kind | colour |
 |---|---|
 | `build` | green |
 | `step` | green |
@@ -475,32 +555,61 @@ through all three sections.
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |
-| anything else | grey |
+| `gate` | green |
+| `fix` | green |
+| `wait` | grey |
+| `red` | red |
+| `project` | grey |
+| `goal` | grey |
+| `idle` | grey |
+| any other kind | grey |
 
 A project's state is its plan's word, with one change: a `blocked` step whose
 blocker releases by itself — a time, a deploy, another project (ruling 35) — is
 `waiting`, because the runner lets it go. `blocked` is what waits on a decision
-or a workarea, which somebody has to open.
+or a workarea, which somebody has to open. A goal's state is its stage, and
+its status is the colour (below). A merge item's is its phase or where it
+waits; a lane's is `running` or `idle`.
 
-| project state | colour |
+| state | colour |
 |---|---|
 | `ready` | green |
 | `running` | green |
 | `landing` | green |
+| `review` | green |
+| `merging` | green |
+| `queued` | green |
+| `gate` | green |
+| `rebase` | green |
+| `fixing` | green |
+| `leased` | green |
 | `waiting` | yellow |
 | `unmet` | yellow bold |
 | `blocked` | red |
+| `red` | red |
+| `paused` | red |
+| `stopped` | red |
 | `failed` | red bold |
 | `invalid` | red bold |
+| `open` | grey |
 | `done` | grey |
-| no plan | grey |
+| `dropped` | grey |
+| `idle` | grey |
+| `cold` | grey |
+| any other state, or none | grey |
 
-A goal's row (`g · <goal>`) uses the same words' colours: a goal in a phase
-its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*) leads its
-tail with `phase <n> — after phase <n-1>` in yellow. Its state is `<stage> ·
-<status>`: any stage `· blocked` is red; `review` and `merging` are green;
-`build` and `finish` are green while a session is on them and grey otherwise;
-`plan`, `done` and `dropped` are grey.
+A pull request's colour is its own flags' (`prTone`): green while the merger
+has it, red bold when it came back red, yellow bold once a day has passed with
+nothing on it, grey once it has landed (an idle queue's last), bold cyan
+otherwise. A goal's state cell is its stage, of `<stage> · <status>`
+([mc-goals.md](mc-goals.md)): `review` and `merging` are green; `build` and
+`finish` are green while a session is on them and grey otherwise; `plan`,
+`done` and `dropped` are grey; any stage of a `blocked` goal is red. A goal's
+tail leads with `criteria <met>/<all>`, green once every one is met, then with
+what it waits on: `phase <n> — after phase <n-1>` in yellow for a goal in a
+phase its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*),
+`blocked · waits on a person` in red for a blocked one. A `ready` goal says
+nothing more of its status.
 
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the
@@ -515,11 +624,11 @@ person set it to.
 | section titles | the count beside it, the verb hint on the right | grey |
 | SESSIONS | the heading's `n of N lanes`: not zero, zero, no runner (`not running`) | bold green, grey, bold yellow |
 | SESSIONS | the heading's queued count | grey |
-| SESSIONS | a lane with a session: its `●`, its kind (`PLAN`, `BUILD`, `REVIEW`) | green, the kind's colour |
-| SESSIONS | what it works on, the repository | plain |
-| SESSIONS | the model | grey |
+| SESSIONS | a lane with a session: its number, its `●`, its kind (`PLAN`, `BUILD`, `REVIEW`) | grey, green, the kind's colour |
+| SESSIONS | what it works on | plain |
+| SESSIONS | the repository; `running` | grey; green |
 | SESSIONS | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | plain, yellow |
-| SESSIONS | the check-ins beside the clock, credits, the advisor | grey |
+| SESSIONS | the tail: the model, credits, the advisor, the check-ins (yellow once there is one) | grey |
 | SESSIONS | the day's kinds, each in its colour | the kind's colour |
 | SESSIONS | the day's `failed`, `timed out` while not zero | red, yellow |
 | SESSIONS | `■ STOP requested` | bold red |
@@ -533,11 +642,13 @@ person set it to.
 | SESSIONS | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
-| MERGES | repository, landing PR and phase, waiting PRs, fixing | plain |
-| MERGES | clocks, queue counts, waiting explanations, fix detail, idle and last landing | grey |
+| MERGES | a row's mark: a round or a fix, a red, a queue that waits | green, red, grey |
+| MERGES | its kind, its state | the kind's colour, the state's colour |
+| MERGES | the project or branch | plain |
+| MERGES | the repository, the progress, the tail, an idle queue's name and last PR | grey |
 | MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
-| MERGES | `paused` with reason; `merger stopped`; a PR answered red | red |
-| SESSIONS | a lane's project's or goal's open pull request, after the clock | bold cyan |
+| MERGES | `paused` with reason; `merger stopped` (heading) | red |
+| SESSIONS | a lane's project's or goal's open pull request, in the PR column | the PR's colour |
 | PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
 | PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |
 | PULL REQUESTS | one nobody holds: its `◆` and whose | yellow |
@@ -548,8 +659,9 @@ person set it to.
 | BRIEF | proposals, when > 0 | yellow |
 | MC | update available; update requested; up to date | bold yellow, green, grey |
 | MC | a process — the merger, the repo watch — on another commit than the checkout: its pid, its commit, the checkout's | yellow |
-| PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold |
-| PROGRAMMES | a quiet project's name | plain |
+| PROGRAMMES | a project the runner is stepping, a goal a session is on — `●`, its name | green, bold |
+| PROGRAMMES | a quiet project's or goal's name | plain |
+| PROGRAMMES | the kind, `project` or `goal`; the tail | grey |
 | PROGRAMMES | the programme heading | bold cyan |
 | PROGRAMMES | a programme's open planning-session counts per provider | grey |
 | PROGRAMMES | a programme with no planning session | grey |
@@ -557,9 +669,9 @@ person set it to.
 | PROGRAMMES | a programme with no project yet | grey |
 | PROGRAMMES | a collapsed row: `N blocked`, its numbers and its blockers | red, grey |
 | PROGRAMMES | the repository a project lives in | grey |
-| PROGRAMMES | the open PR's column after the steps, `#pr` or `#pr+N` | bold cyan |
-| PROGRAMMES | that column when the PR has been quiet a day; when the merger has it | bold yellow, bold green |
-| PROGRAMMES | the number, the steps done | grey |
+| PROGRAMMES | the PR column, `#pr` or `#pr+N` | bold cyan |
+| PROGRAMMES | that column when the PR has been quiet a day; when the merger has it; when it came back red | bold yellow, bold green, bold red |
+| PROGRAMMES | the number, the progress | grey |
 | PROGRAMMES | `not an area mc knows` | yellow |
 | PROGRAMMES | a stray's name, its facts | bold, grey |
 | footer | the cache line, the notes | grey |
@@ -854,6 +966,7 @@ part nobody has run.
 | `src/mc/page-collect.js` | the sections, built from read data — one key each, and its module comment names all of them |
 | `src/mc/merges-collect.js` | `runningMerge` — the gate lock joined to a name and a holder |
 | `src/mc/page-render.js` | how they look |
+| `src/mc/page-grid.js` | the one grid every PROGRAMMES, SESSIONS and MERGES row is drawn in, and the palette (`STATE_TONE`, `KIND_TONE`) |
 | `src/mc/page-frame.js` | the difference between two frames, as bytes — pure, no terminal |
 | `src/mc/page-live.js` | the loop under the prompt: the 30 s interval, the raw-mode reader, the arithmetic |
 | `src/mc/page-cache.js` | `prs.json` |

@@ -74,6 +74,7 @@ import { BUILD_LANE, runningRound } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { readRounds } from './repo-round-log.js';
+import { duration } from './page-grid.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
@@ -283,6 +284,13 @@ export function runnerSection({
     // lane file names, else its goal's (`<programme>/<goal>`), else its
     // project's plan's (goal mc/no-work).
     session.owner = { kind: 'programme', name: session.programme || session.goal?.split('/')[0] || plan?.programme || null };
+    // The grid's fields (page-grid.js), under the names every section uses:
+    // a goal's session is named `mc/<goal>` as its goal row is, a lane with a
+    // session in it is `running`, and its progress is its clock.
+    if (session.goal) session.name = session.goal;
+    session.state = 'running';
+    session.progress = session.elapsed_seconds == null ? null : duration(session.elapsed_seconds);
+    session.prs = session.prs || [];
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
@@ -384,7 +392,9 @@ function lanesOfRunner(sessions = [], setting = {}) {
     || String(a.name).localeCompare(String(b.name)));
   return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
     const session = running[index] || null;
-    return { number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, session };
+    return {
+      number: index + 1, repo: session?.repo ?? null, lane: session?.lane ?? null, state: session ? 'running' : 'idle', session,
+    };
   });
 }
 
@@ -638,6 +648,12 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
   return lanes;
 }
 
+/** A pull request's number, or null when there is none to draw: `#0` and `#NaN` are not pull requests. */
+function prNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
 /**
  * MERGES — one queue per repository, including idle queues. `repos[]` is
  * the page/JSON contract; aggregate fields remain for status/PR readers.
@@ -766,12 +782,33 @@ export function mergesSection({
     ...all.map((item) => item.repo), ...landings.map((item) => item.repo)].filter(Boolean))];
   const repoQueues = names.map((repo) => {
     const own = (items) => items.filter((item) => item.repo === repo);
-    const active = own(landings).filter(isLandingRound).map((item) => ({
-      ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: mergePhase(item.phase),
-    }));
-    const waiting = own(queuedItems);
-    const fixing = own(fixingItems);
-    const red = own(reds);
+    // Every item carries the grid's fields (page-grid.js) under the names every
+    // section uses: what it is (`kind`), its project or branch (`name`), its
+    // `state`, how long it has been in it (`progress`) and its pull request.
+    // An item with no pull request number — a goal's job, a red with nothing
+    // recorded — has no PR cell, never `#0` or `#NaN`.
+    const gridded = (item, kind, state, seconds, flags) => ({
+      ...item,
+      kind,
+      name: item.name ?? item.step?.project ?? item.branch ?? null,
+      state,
+      progress: seconds == null ? null : ageWords(seconds),
+      prs: prNumber(item.pr) ? [{ number: prNumber(item.pr), repo, ...flags }] : [],
+    });
+    const active = own(landings).filter(isLandingRound).map((item) => {
+      const phase = mergePhase(item.phase);
+      return gridded({ ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: phase },
+        'gate', phase === 'landing' ? 'landing' : phase, item.age_seconds ?? null, { merging: 'landing' });
+    });
+    // Queued behind another step's pull request, it waits on other work; else
+    // the merger has it — unless there is no merger to have it, and then the
+    // queue is `stopped`.
+    const queuedOwn = own(queuedItems);
+    const stopped = !mergerAlive && !active.length && Boolean(queuedOwn.length);
+    const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : item.waits_for ? 'waiting' : 'queued',
+      item.wait_seconds, stopped ? {} : { merging: 'queued' }));
+    const fixing = own(fixingItems).map((item) => gridded(item, 'fix', 'fixing', item.age_seconds, { merge_red: item.reason || 'red' }));
+    const red = own(reds).map((item) => gridded(item, 'red', 'red', item.age_seconds, { merge_red: item.reason || 'red' }));
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
       && round.phase !== 'start' && round.merged?.length)
       .flatMap((round) => {
@@ -782,13 +819,21 @@ export function mergesSection({
     const last = landed[0] ? { ...landed[0], age_seconds: ageOf(landed[0].at) } : null;
     const day = new Set(landed.filter((item) => ageOf(item.at) <= DAY_MS / 1000).map((item) => item.pr)).size;
     const pause = pauses[repo] || null;
-    const stopped = !mergerAlive && !active.length && Boolean(waiting.length);
     return {
       repo,
       state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'
         : fixing.length ? 'fixing' : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
       pause, merger_stopped: stopped, landing: active[0] || null, landings: active,
       waiting, fixing, reds: red, day_count: day, last,
+      // The repository's own grid row, drawn while its queue is empty: the
+      // repository by name — under 90 columns the repo column is not drawn —
+      // how long ago it last landed, and that pull request.
+      kind: 'idle',
+      name: repo,
+      progress: last ? ageWords(last.age_seconds) : null,
+      prs: [...active, ...fixing, ...red, ...waiting].length
+        ? [...active, ...fixing, ...red, ...waiting].flatMap((item) => item.prs)
+        : (prNumber(last?.pr) ? [{ number: prNumber(last.pr), repo, merged: true }] : []),
     };
   });
   return {
@@ -965,8 +1010,11 @@ export function prsSection({
 export function attachPrs({ programmes, runner, pulls }) {
   const mine = (repo, name) => pulls.items.filter((item) => item.owner.kind === 'project'
     && item.owner.name === name && (repo == null || item.repo === repo));
+  const goalPrs = (name, repos) => pulls.items.filter((item) => item.branch === `goal/${name}`
+    && (!repos?.length || repos.includes(item.repo)));
   for (const group of programmes?.programmes || []) {
     for (const project of group.projects || []) project.prs = mine(project.repo, project.name);
+    for (const goal of group.goals || []) goal.prs = goalPrs(goal.name, goal.repos);
   }
   // A goal's pull request is its branch's, `goal/<goal>`; a project's, its own.
   for (const session of runner?.sessions || []) {
@@ -1399,6 +1447,12 @@ export function programmesSection({
       area: held.has(name),
       last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
       pr: pr ? pr.number : null,
+      // The grid's fields (page-grid.js): what kind of work the row is, how
+      // far it has got, and its open pull requests — `attachPrs` puts the
+      // fetched ones here when there are any.
+      kind: 'project',
+      progress: steps.length ? `${steps.filter((step) => step?.status === 'done').length}/${steps.length}` : (plan.legacy ? 'PLAN.md' : null),
+      prs: pr ? [{ number: pr.number, repo: plan.repo }] : [],
     };
   });
 
@@ -1495,26 +1549,40 @@ export function programmesSection({
  * still to finish (`phaseOpen`), so the runner does not pick it yet.
  */
 export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
-  return goals.map((goal) => ({
+  return goals.map((goal) => {
+    const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
+    const sessions = goalSessions(goal.log);
+    return {
     name: goal.goal,
     programme: goal.programme,
     repos: goal.repos,
     stage: goal.stage,
     status: goal.status,
+    // The grid's fields (page-grid.js), as a project row has them: its kind,
+    // its first repository, its state — its stage, which says where in the
+    // order it is; the status is beside it, and a blocked one leads its tail —
+    // how many sessions it has had, and its open pull requests (`goal/<goal>`,
+    // put here by `attachPrs`).
+    kind: 'goal',
+    repo: goal.repos?.[0] ?? null,
+    state: goal.stage ?? null,
+    progress: `${sessions} sess`,
+    prs: [],
     phase: goal.phase ?? null,
     held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals),
-    sessions: goalSessions(goal.log),
+    sessions,
     // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
     criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
-    running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
+    running,
     // Blocked, in any stage, it waits on a person (`waitsOnPerson`).
     person: waitsOnPerson(goal),
     // What it waits on the person for: the last entry's comment — the
     // session's question, or the runner's word on why it stopped.
     question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     problems: goal.problems,
-  }));
+    };
+  });
 }
 
 /* ----------------------------------------------------------------- readers */
