@@ -167,7 +167,7 @@ import { billingRoute, gatewayLaunch } from './billing-route.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
-import { attachRepoDepsAsync } from './work-deps.js';
+import { attachRepoDepsAsync } from './shared-deps.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';

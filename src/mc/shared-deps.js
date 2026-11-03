@@ -59,7 +59,7 @@
  * ## The gate's candidate resolves the same directory — until it differs
  *
  * The merge gate builds its throwaway worktree under the work root too
- * (`paths.js`, `WORK_GATE` beside `WORK_DEPS`), so the tree is two parents
+ * (`paths.js`, `WORK_GATE` beside `SHARED_DEPS`), so the tree is two parents
  * above the candidate and there is one copy of it rather than one per place
  * that runs the tests. The round calls this on the candidate itself, names
  * the repository with `repoName` and passes `ownTree`: the candidate's own
@@ -100,9 +100,9 @@ import { join } from 'node:path';
 import { runTool } from './child-async.js';
 import { run as runGit } from './git.js';
 import {
-  workDepsLockPath,
-  workDepsManifestPath,
-  workDepsPath,
+  sharedDepsLockPath,
+  sharedDepsManifestPath,
+  sharedDepsPath,
   workRoot,
 } from './paths.js';
 import { repoNameOf } from './repos.js';
@@ -133,7 +133,7 @@ export function installedHash(lock, manifest) {
  * What gets written to the work root: the repository's manifest, minus the
  * two fields that name files inside the repository.
  */
-export function workDepsManifest(text) {
+export function sharedDepsManifest(text) {
   const manifest = JSON.parse(text);
   delete manifest.scripts;
   delete manifest.bin;
@@ -163,9 +163,9 @@ export function workDepsManifest(text) {
  * reinstalling the shared tree. The shared tree and its copies are then left
  * exactly as they were.
  */
-export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi, ownTree = null } = {}) {
+export function ensureSharedDeps({ repo, repoName = null, env = process.env, install = npmCi, ownTree = null } = {}) {
   const name = repoNameOf(repoName || repo);
-  const path = workDepsPath(env);
+  const path = sharedDepsPath(env);
   if (!SHARED_TREE_REPOS.includes(name)) {
     return { ok: true, state: 'not-shared', path, why: `${name || 'this repository'} keeps its own dependencies` };
   }
@@ -178,13 +178,13 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
     if (manifestText === null) return { ok: true, state: 'no-manifest', path, why: `${name} has no package.json` };
     const lock = fileOf('package-lock.json');
     if (lock === null) return { ok: true, state: 'no-lockfile', path, why: `${name} has no package-lock.json` };
-    const wanted = workDepsManifest(manifestText);
+    const wanted = sharedDepsManifest(manifestText);
     if (!Object.keys(JSON.parse(wanted).dependencies || {}).length) {
       return { ok: true, state: 'no-dependencies', path, why: `${name} declares no dependencies` };
     }
     const hash = installedHash(lock, wanted);
     if (existsSync(path) && read(join(path, INSTALLED_MARK)) === `${hash}\n`
-      && read(workDepsLockPath(env)) === lock && read(workDepsManifestPath(env)) === wanted) {
+      && read(sharedDepsLockPath(env)) === lock && read(sharedDepsManifestPath(env)) === wanted) {
       return { ok: true, state: 'current', path, why: `${name}'s lockfile is the one this tree was installed from` };
     }
     if (ownTree) {
@@ -193,8 +193,8 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
       return settle(install(ownTree), () => installedOwn, own);
     }
     mkdirSync(workRoot(env), { recursive: true });
-    writeFileSync(workDepsManifestPath(env), wanted);
-    writeFileSync(workDepsLockPath(env), lock);
+    writeFileSync(sharedDepsManifestPath(env), wanted);
+    writeFileSync(sharedDepsLockPath(env), lock);
     const installed = { ok: true, state: 'installed', path, why: `${name}'s lockfile changed` };
     // The mark goes in only once npm said yes; a failed install leaves none.
     return settle(install(workRoot(env)), () => { writeFileSync(join(path, INSTALLED_MARK), `${hash}\n`); return installed; }, path);

@@ -35,7 +35,7 @@ import { defaultRepos, repoNameOf, repositoryDir } from './repos.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
-import { attachRepoDeps, ensureWorkDeps } from './work-deps.js';
+import { attachRepoDeps, ensureSharedDeps } from './shared-deps.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
@@ -400,11 +400,11 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   // And so does the dependency tree the checkout's tests will resolve. Both
   // ways to one are reported rather than fatal, and a session with a checkout
   // and no tree can still work: the shared directory above every workarea,
-  // never inside one, for the repository it names (`ensureWorkDeps`, work-deps.js),
+  // never inside one, for the repository it names (`ensureSharedDeps`, shared-deps.js),
   // and the repository's own attach for one that keeps its own (`attachRepoDeps`,
   // memoro's `scripts/ensure-worktree-deps.mjs`). `attach: false` leaves the
   // second to the caller: the runner attaches before every step itself.
-  const dependencies = ensureWorkDeps({ repo, env });
+  const dependencies = ensureSharedDeps({ repo, env });
   const attachment = attach ? attachRepoDeps(target) : null;
   return {
     ok: true,

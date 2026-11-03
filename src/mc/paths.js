@@ -91,7 +91,7 @@ export function workAreaPath(name, env = process.env) {
  * the rest of it.
  *
  * The names live here, with the rest of the work root's shape, for the same
- * reason `PLAN_HOME` and `WORK_DEPS` do: the runner writes them and
+ * reason `PLAN_HOME` and `SHARED_DEPS` do: the runner writes them and
  * the brief role names them for the session to read, and two copies of one word is how the two
  * drift apart.
  */
@@ -416,7 +416,7 @@ export function mcHomeExists() {
  * instead of 41.
  *
  * The name lives here, with the rest of the work root's shape, for the same
- * reason `PLAN_HOME` does: `work-deps.js` builds the tree and the tests assert
+ * reason `PLAN_HOME` does: `shared-deps.js` builds the tree and the tests assert
  * where it is, and two copies of one word is how the two drift apart.
  *
  * It is not a work area and cannot be mistaken for one: both listings that
@@ -424,16 +424,16 @@ export function mcHomeExists() {
  * name a directory under the work root only when it holds a checkout of a
  * repository mc knows, and this one holds none.
  */
-export const WORK_DEPS = 'node_modules';
+export const SHARED_DEPS = 'node_modules';
 
-export function workDepsPath(env = process.env) {
-  return join(workRoot(env), WORK_DEPS);
+export function sharedDepsPath(env = process.env) {
+  return join(workRoot(env), SHARED_DEPS);
 }
 
 /**
  * `~/mc/gate` — where the merge gate builds its throwaway worktrees.
  *
- * A sibling of `WORK_DEPS`, and that is the whole reason it is here rather
+ * A sibling of `SHARED_DEPS`, and that is the whole reason it is here rather
  * than under `mcHome()` where it used to be. The gate's candidate is a
  * checkout with no `node_modules` in it, and it must resolve whatever the
  * manifest declares for exactly the reason a workarea must: a test file that
@@ -468,10 +468,10 @@ export function workGateCachePath(env = process.env) {
 }
 
 /** What `npm ci` in the work root reads: a copy of the repository's two files. */
-export function workDepsManifestPath(env = process.env) {
+export function sharedDepsManifestPath(env = process.env) {
   return join(workRoot(env), 'package.json');
 }
 
-export function workDepsLockPath(env = process.env) {
+export function sharedDepsLockPath(env = process.env) {
   return join(workRoot(env), 'package-lock.json');
 }

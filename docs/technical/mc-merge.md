@@ -373,15 +373,15 @@ counted as skipped; 2368 of 2368 once the tree was linked). A number from such
 a run is not low, it is invalid, and nothing about the number says so.
 
 **So the candidate stands where the tree already is.** It is built at
-`<work root>/gate/<repo>/candidate` — `WORK_GATE` beside `WORK_DEPS` in
+`<work root>/gate/<repo>/candidate` — `WORK_GATE` beside `SHARED_DEPS` in
 [`src/mc/paths.js`](../../src/mc/paths.js) — which puts `~/mc/node_modules` two
 parents above it, found by node's own walk up the directory chain. That is the
 same one tree every workarea resolves through, described in
-[`mc-work.md`](mc-work.md) § *Where a workarea's dependencies come from*: one
+[`mc-shared-deps.md`](mc-shared-deps.md) § *Where a checkout's dependencies come from*: one
 copy for the workareas and the rounds together, no `npm ci` in the round, and
 nothing inside the checkout for git or the selector to trip over. The gate
 directory used to live under `mcHome()`, and moving it is the whole of that
-half. The round calls the same `ensureWorkDeps` on the **candidate** rather
+half. The round calls the same `ensureSharedDeps` on the **candidate** rather
 than on the repository's checkout, so a pull request that changes
 `package-lock.json` is measured against a tree installed from *its* lockfile;
 the shared tree then stands at that lockfile until the next workarea or round

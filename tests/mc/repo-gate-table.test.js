@@ -28,8 +28,8 @@ import {
   SHIPPED, UNKNOWN, declarationFor, gateLaneOf, gateLanes, repoDeclarationPath, tablePath,
 } from '../../src/mc/repo-gate-table.js';
 import { gateRoot } from '../../src/mc/repo-gate.js';
-import { workDepsPath } from '../../src/mc/paths.js';
-import { SHARED_TREE_REPOS } from '../../src/mc/work-deps.js';
+import { sharedDepsPath } from '../../src/mc/paths.js';
+import { SHARED_TREE_REPOS } from '../../src/mc/shared-deps.js';
 
 describe('an override that shadows shipped fields is said, not silent (D-0135)', () => {
   it('names the fields the override dropped, and nothing when there is no override', () => {
@@ -204,7 +204,7 @@ describe('the heuristic mc deliberately does not use', () => {
         `package.json declares ${declares.join(', ')} and nothing installs them: the entry says the `
         + 'round needs no preparation, but mc keeps no tree for this repository',
       );
-      assert.equal(workDepsPath(env), '/work/node_modules');
+      assert.equal(sharedDepsPath(env), '/work/node_modules');
       assert.ok(
         gateRoot(env).startsWith('/work/'),
         `the gate builds its candidate at ${gateRoot(env)}, which is not under the work root — `

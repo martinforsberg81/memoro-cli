@@ -40,7 +40,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { archiveProgramme } from '../archive-programme.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
-import { attachRepoDeps } from '../work-deps.js';
+import { attachRepoDeps } from '../shared-deps.js';
 import { openInWorkArea } from '../work-open.js';
 import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
