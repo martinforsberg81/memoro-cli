@@ -14,8 +14,6 @@ PLAN AND FOLLOW
   mc brief                        Person: open or resume the brief session
   mc plan [<programme>]            Person: open or resume a plan session
   mc status <name>                 One project, whole
-  mc step <project>                Where each step stands
-  mc project <name>                Show a sent plan or a draft
   mc goal list [<programme>]       Goals and their last session's next action
   mc programs list [--json]        Every programme, active or dormant
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
@@ -47,8 +45,8 @@ WHO USES THE VERBS
   Person: mc plan, mc brief, mc helper open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
-  Session: mc project new / step add / send writes plans; mc step records
-           progress; mc gate, mc shot and mc publish do the work.
+  Session: mc goal new / set / criterion add writes goals; mc goal log
+           records progress; mc gate, mc shot and mc publish do the work.
   Headless sessions (MC_HEADLESS=1, set by the runner) are refused mc deploy,
                  merge --admin, production data and credentials; with
                  Martin at the terminal nothing is refused.
@@ -65,10 +63,6 @@ WHO USES THE VERBS
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
 ${commandReference('status')}
-
-${commandReference('project')}
-
-${commandReference('step')}
 
 ${commandReference('goal')}
 

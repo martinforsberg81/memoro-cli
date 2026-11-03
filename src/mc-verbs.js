@@ -35,8 +35,6 @@ export const VERB_MODULES = {
   skills: './mc/commands/skills.js',
   model: './mc/commands/model.js',
   log: './mc/commands/log.js',
-  step: './mc/commands/step.js',
-  project: './mc/commands/project.js',
   goal: './mc/commands/goal.js',
   programs: './mc/commands/programs.js',
 };
@@ -46,10 +44,25 @@ export const VERB_MODULES = {
  * to a programme (plan, build, review) or a desk (brief, helper), and there is
  * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
  */
-export const RETIRED_VERBS = Object.freeze(['work', 'worker']);
+export const RETIRED_VERBS = Object.freeze(['work', 'worker', 'project', 'step']);
+
+/**
+ * The verbs of projects, which went on 2026-11-03 (goal mc/projects-to-goals):
+ * a project's steps are goals ordered with `after` now, and a live project is
+ * turned into them once by `mc goal from-project`.
+ */
+const PROJECT_VERBS = new Set(['project', 'step']);
 
 /** What a retired verb says, whatever follows it: where each kind of session starts now. */
 export function retiredLines(verb) {
+  if (PROJECT_VERBS.has(verb)) {
+    return [
+      `mc: mc ${verb} is gone — projects are goals now`,
+      '    mc goal from-project <programme>/<project>   a live project\'s steps not done, turned into goals once',
+      '    mc goal list [<programme>]                   every goal',
+      '    mc goal --help                               the goal verbs',
+    ];
+  }
   return [
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',

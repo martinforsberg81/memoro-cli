@@ -3358,38 +3358,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * What a free lane takes next, of every kind on every repository
-   * (`pickWork`, lane-pick.js): the projects `runnableFor` says could start —
-   * the same rule the page draws NEXT from — and the goals `goalWork` says
-   * could, each with its kind and how long it has waited, against the
-   * repositories of the sessions already in flight.
+   * What a free lane takes next, on every repository (`pickWork`,
+   * lane-pick.js): the goals `goalWork` says could start, each with its kind
+   * and how long it has waited, against the repositories of the sessions
+   * already in flight. A project's step is never started: projects are goals
+   * now (`mc goal from-project`, 2026-11-03).
    *
    * What this adds to the rule is what only the running process knows: what
    * the lanes are holding, and what this pass has already been refused on —
    * a name (`passed`), or a whole repository whose refusal was about the
-   * moment (`waited`). The projects another runner is in a session on are
-   * claimed as well: after a handover the old runner is still landing what it
-   * holds, and a fresh pick of the same name would start it a second time
-   * (ruling 28).
+   * moment (`waited`).
    */
-  function nextWork({ repo = null, world = {}, passed = new Set(), waited = new Map(), carry = null } = {}) {
+  function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
-    const claimed = new Set([...claims, ...others.map((held) => held.name).filter(Boolean)]);
-    const byProject = new Map((world.plans || []).map((plan) => [plan.project, plan]));
-    const projects = runnableFor({ repo, world, claimed, passed })
-      .filter((pick) => !waited.has(pick.repo))
-      .map((pick) => {
-        const entry = readEntry(root, pick.name, { read: deps.read });
-        const step = entry ? entry.steps[currentIndex(entry)] : null;
-        return {
-          name: pick.name, repo: pick.repo, kind: pick.kind === 'review' ? 'review' : 'build', variant: 'project',
-          since: step?.updated || entry?.updated || '', resumed: Boolean(step?.interrupted),
-        };
-      });
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...projects, ...goalWork({ repos: names, passed })];
-    const repoOfName = (name) => byProject.get(name)?.repo
-      ?? (String(name).startsWith('goal:') ? goals().find((goal) => goalName(goal) === name)?.repos[0] : null) ?? null;
+    const items = goalWork({ repos: names, passed });
+    const repoOfName = (name) => (String(name).startsWith('goal:') ? goals().find((goal) => goalName(goal) === name)?.repos[0] : null) ?? null;
     const held = [...[...claims].map(repoOfName), ...others.map((item) => item.repo)].filter(Boolean);
     return pickWork({ items, held, lanes: capNow(), carry });
   }
@@ -3498,7 +3482,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // the next pass, and the lane sleeps on the first such word when nothing
     // on another repository runs instead.
     const waited = new Map();
-    const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
     if (!diskRoom()) {
       diskSkippedAt = deps.now().getTime();
       return { ran: 0, waited: 'skipped:disk' };
@@ -3509,7 +3492,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
-      const pick = nextWork({ repo, world: known, passed, waited, carry: last?.name });
+      const pick = nextWork({ repo, passed, waited, carry: last?.name });
       if (!pick) {
         const word = [...waited.values()][0];
         return word ? { ran: 0, waited: word } : { ran: 0 };
@@ -3517,42 +3500,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The project this lane carried has let go the moment the lane takes
       // something else: its slot is the one this session is about to use.
       if (last?.name && pick.name !== last.name) carried.delete(last.name);
-      // A goal's build or review, or the plan session a blocked goal wakes.
-      if (pick.goal) {
-        say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
-        const ran = await goalPass(pick.goal, { lane, label });
-        if (ran.ran || ran.stop) return ran;
-        passed.add(pick.name);
-        continue;
-      }
-      if (last?.step != null && pick.name === last.name && stepOf(pick.name) === last.step) {
-        say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
-        passed.add(pick.name);
-        continue;
-      }
-      const plan = known.plans.find((item) => item.project === pick.name) || null;
-      const at = plan?.step && plan?.steps ? ` (step ${plan.step}/${plan.steps})` : '';
-      say(`${label}: next — ${pick.name}${at}`);
-      // The claim, taken in the tick the name was picked: `nextWork` has just
-      // read this set, and a second lane picking a moment from now must see
-      // the name taken before this one's session has opened anything.
-      claims.add(pick.name);
-      const outcome = await runStep(pick.name, known, { lane, claimed: true });
-      if (outcome === 'stop') return { ran: 0, stop: true };
-      if (outcome === 'ran' || outcome === 'merged') {
-        const ran = { ran: 1, name: pick.name, step: stepOf(pick.name) };
-        if (stopRequested()) {
-          say(`${label}: STOP — ${pick.name} has ended, this lane takes nothing more; ${stillHeld()}`);
-          return { ...ran, stop: true };
-        }
-        return ran;
-      }
-      // A refusal that blocked the step is never a wait, whatever its word: the
-      // plan on main is being told, and the next name is the lane's business.
-      if (!persistent.delete(pick.name) && WAIT_REFUSALS.has(outcome)) {
-        if (!waited.has(pick.repo)) waited.set(pick.repo, outcome);
-        continue;
-      }
+      // A goal's build or review, or the plan session a blocked goal wakes: the only work a lane takes.
+      say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
+      const ran = await goalPass(pick.goal, { lane, label });
+      if (ran.ran || ran.stop) return ran;
       passed.add(pick.name);
     }
   }

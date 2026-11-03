@@ -5745,14 +5745,20 @@ test('a lane with no runnable step starts the oldest open goal', async () => {
   assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/runner/projects/')), [], 'nothing in the register');
 });
 
-test('a lane with a runnable step leaves the goals alone', async () => {
-  const f = goalFixture({ waiting: {} }, { plans: { memoro: { alpha: ready } } });
-  f.answer = landsItself(f, 'alpha', 7);
+test('the runner starts no project step: a lane beside a ready step takes the goal, and with none starts nothing', async () => {
+  const f = goalFixture({ waiting: { log: goalLog('2026-08-27T10:00Z') } }, { plans: { memoro: { alpha: ready } } });
+  f.answer = logsItself(f, 'waiting');
   const runner = createRunner({ deps: f.deps });
   const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.name, 'alpha');
+  assert.equal(r.name, 'goal:prog/waiting');
   assert.equal(f.calls.sessions.length, 1);
-  assert.equal(`${GOALS}/waiting/LOG.md` in f.files && f.files[`${GOALS}/waiting/LOG.md`], '');
+  assert.equal(f.calls.sessions[0].cwd, `${GOALS}/waiting/memoro`);
+  assert.equal('MC_STEP' in f.calls.sessions[0].env, false);
+
+  const alone = fixture({ plans: { memoro: { alpha: ready } }, session: okSession() });
+  const none = await createRunner({ deps: alone.deps }).pass({ repo: 'memoro' });
+  assert.equal(none.ran, 0);
+  assert.equal(alone.calls.sessions.length, 0, 'a ready step is never started');
 });
 
 test('a goal of another repository is not this lane\'s', async () => {

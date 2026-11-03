@@ -214,6 +214,20 @@ describe('the workarea verbs are gone', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('mc project and mc step, with or without a name, exit 2 and name mc goal from-project', async () => {
+    const fx = fixture();
+    try {
+      for (const args of [['project'], ['project', 'dev-queue'], ['project', 'send', 'x'], ['step', 'ready', 'x', '2']]) {
+        const result = await runVerb(args, fx.env);
+        const what = `mc ${args.join(' ')}`;
+        assert.equal(result.status, 2, what);
+        assert.equal(result.stdout, '', what);
+        assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — projects are goals now$`, 'mu'), what);
+        assert.match(result.stderr, /mc goal from-project <programme>\/<project>/u, what);
+      }
+    } finally { fx.cleanup(); }
+  });
+
   it('the help has no workarea verb', () => {
     const help = RAN.help.stdout;
     assert.doesNotMatch(help, /mc work\b/u);
