@@ -19,7 +19,6 @@ export const REAL_GIT_FILES = new Set([
   'tests/mc/work-area-add.test.js',
   'tests/mc/close-live.test.js',
   'tests/mc/repo-status.test.js',
-  'tests/mc/repo-watch.test.js',
   'tests/mc/commands/deploy.test.js',
   // Installs a model of its own, and starts no git.
   'tests/mc/fake-git.test.js',

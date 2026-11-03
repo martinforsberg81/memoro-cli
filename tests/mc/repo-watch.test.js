@@ -8,28 +8,61 @@
  * itself and says so — it never refuses and never pretends.
  */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
+import { fakeGitModel } from '../_fake-git-default.mjs';
+import { useGitRunner } from '../../src/mc/git.js';
 import { git } from './_helpers/git-fixture.js';
 import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { runVerb } from './_helpers/mc-verb.js';
 import {
   combinedPath, readCombinedSnapshot, repoStatusRoot, writeSnapshot,
 } from '../../src/mc/repo-snapshot.js';
 import { watchLoop, watchRound } from '../../src/mc/repo-watch-loop.js';
 
+/** mc's own checkout, where the watcher reads the commit it runs. */
+const CHECKOUT = realpathSync(fileURLToPath(new URL('../..', import.meta.url)));
+const CHECKOUT_HEAD = 'c0ffee1';
+
 /** Wait for something the watcher does in its own time. */
-async function until(predicate, { timeoutMs = 30_000, everyMs = 100 } = {}) {
+async function until(predicate, { timeoutMs = 30_000, everyMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = predicate();
+    const value = await predicate();
     if (value) return value;
     if (Date.now() >= deadline) return null;
     await new Promise((resolve) => { setTimeout(resolve, everyMs); });
   }
 }
+
+/**
+ * The reader thread of 'a reader never sees half a round': reads the combined
+ * snapshot as fast as it can until told to stop, and answers with how many
+ * whole reads it made and what each torn one looked like.
+ */
+const READER = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { readFileSync } = require('node:fs');
+const shared = new Int32Array(workerData.shared);
+const torn = [];
+let reads = 0;
+Atomics.store(shared, 1, 1);
+while (Atomics.load(shared, 0) === 0) {
+  let text;
+  try { text = readFileSync(workerData.path, 'utf8'); } catch (error) {
+    if (error.code === 'ENOENT') continue;
+    throw error;
+  }
+  let whole = false;
+  try { whole = Array.isArray(JSON.parse(text).repos); } catch { whole = false; }
+  if (whole) { reads += 1; Atomics.add(shared, 2, 1); } else torn.push(text.slice(0, 80));
+}
+parentPort.postMessage({ reads, torn });
+`;
 
 function report(at, repos) {
   return { at, offline: false, mode: 'computed', repos, unknown: [] };
@@ -56,27 +89,40 @@ describe('the watcher', () => {
       // The interval is deliberately long, and nothing here waits for it. The
       // loop writes its first round before it sleeps, so a short interval buys
       // no speed — it only shortens the window in which that round counts as
-      // fresh, to three seconds. This test then spawns three more mc processes
-      // before it looks, and under load that took longer than three seconds:
-      // the snapshot went STALE mid-test and `view.stale` failed. What the
-      // staleness rule does with an old picture is proved on its own below,
-      // against timestamps rather than against a clock nobody controls.
-      const started = runMcCli(['repo', 'watch', 'start', '--interval', '60'], fx.env);
+      // fresh, to three seconds. This test then asks three more questions
+      // before it looks, and when each was an mc process that took longer than
+      // three seconds under load: the snapshot went STALE mid-test and
+      // `view.stale` failed. What the staleness rule does with an old picture
+      // is proved on its own below, against timestamps rather than against a
+      // clock nobody controls.
+      //
+      // The file's git is the repository model, which knows the fixture and
+      // not mc's own checkout; the checkout's HEAD is answered here, so the
+      // commit the watcher records is pinned to the one read at its start.
+      const model = fakeGitModel();
+      const restoreGit = useGitRunner((cwd, args, options) => (
+        args[0] === '-C' && realpathSync(args[1]) === CHECKOUT && args.slice(2).join(' ') === 'rev-parse --short HEAD'
+          ? { status: 0, stdout: `${CHECKOUT_HEAD}\n`, stderr: '', signal: null }
+          : model.runner(cwd, args, options)));
+      let started;
+      try {
+        started = await runVerb(['repo', 'watch', 'start', '--interval', '60'], fx.env);
+      } finally { restoreGit(); }
       assert.equal(started.status, 0, started.stderr);
       assert.match(started.stdout, /watching every 60s \(pid \d+\)/u);
 
       const written = await until(() => existsSync(combinedPath(fx.mcHome)));
       assert.ok(written, 'the watcher wrote no snapshot');
 
-      const state = json(runMcCli(['repo', 'watch', 'status', '--json'], fx.env));
+      const state = json(await runVerb(['repo', 'watch', 'status', '--json'], fx.env));
       assert.equal(state.running, true);
       assert.ok(state.pid > 0);
-      // The commit it started on: the tests run inside the memoro-cli checkout.
-      assert.match(state.commit, /^[0-9a-f]{7,}$/u);
+      // The commit mc's checkout held when it started.
+      assert.equal(state.commit, CHECKOUT_HEAD);
       assert.equal(state.stale, false);
 
       // And now the view is a file read rather than a fetch and a gh round.
-      const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(view.mode, 'snapshot');
       // Said with the age in it: if this ever fails again, the message is the
       // diagnosis rather than `true !== false`.
@@ -85,14 +131,14 @@ describe('the watcher', () => {
       assert.equal(view.repos[0].path, fx.dir);
       assert.equal(view.repos[0].worktrees[0].area, 'alpha');
 
-      const stopped = runMcCli(['repo', 'watch', 'stop'], fx.env);
+      const stopped = await runVerb(['repo', 'watch', 'stop'], fx.env);
       assert.equal(stopped.status, 0, stopped.stderr);
       assert.match(stopped.stdout, /stopped the watcher \(pid \d+\)/u);
-      const gone = await until(() => json(runMcCli(['repo', 'watch', 'status', '--json'], fx.env)).running === false);
+      const gone = await until(async () => json(await runVerb(['repo', 'watch', 'status', '--json'], fx.env)).running === false);
       assert.ok(gone !== null, 'the watcher was still running after stop');
       assert.equal(existsSync(join(repoStatusRoot(fx.mcHome), 'watcher.json')), false);
     } finally {
-      runMcCli(['repo', 'watch', 'stop'], fx.env);
+      await runVerb(['repo', 'watch', 'stop'], fx.env);
       fx.cleanup();
     }
   });
@@ -143,55 +189,74 @@ describe('the watcher', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a reader never sees half a round', async () => {
+  // `mc repo watch stop` waits for the watcher to leave; a minute's sleep
+  // between rounds must not be what it waits for.
+  it('a stop asked for while the loop sleeps ends the sleep at once', async () => {
     const fx = fixture({ name: 'repo-watch' });
     try {
-      const path = combinedPath(fx.mcHome);
-      let reads = 0;
-      let stop = false;
-      const reader = (async () => {
-        while (!stop) {
-          if (existsSync(path)) {
-            // Parsed, and checked for the last field written: a torn file
-            // would either fail to parse or arrive without its repositories.
-            const value = JSON.parse(readFileSync(path, 'utf8'));
-            assert.ok(Array.isArray(value.repos), 'a half-written snapshot was read');
-            reads += 1;
-          }
-          await new Promise((resolve) => { setTimeout(resolve, 0); });
-        }
-      })();
-
-      const big = Array.from({ length: 40 }, (_, index) => REPO(`/tmp/repo-${index}`, `repo-${index}`));
-      for (let round = 0; round < 200; round += 1) {
-        writeSnapshot(report(at(0), big), { intervalMs: 60_000, root: fx.mcHome });
-        if (round % 20 === 0) await new Promise((resolve) => { setTimeout(resolve, 0); });
-      }
-      stop = true;
-      await reader;
-      assert.ok(reads > 0, 'the reader never managed a read');
+      const said = [];
+      const woken = new AbortController();
+      let stopping = false;
+      const began = Date.now();
+      await watchLoop({
+        rounds: 2, intervalMs: 60_000, root: fx.mcHome, env: { ...process.env, ...fx.env },
+        shouldStop: () => stopping, wake: woken.signal,
+        // Asked once the round is written and the loop has gone to sleep, as a
+        // signal would arrive.
+        log: (line) => { said.push(line); setImmediate(() => { stopping = true; woken.abort(); }); },
+      });
+      assert.equal(said.filter((line) => /^(wrote|round failed)/u.test(line)).length, 1, said.join('\n'));
+      assert.ok(Date.now() - began < 10_000, `the loop slept ${Date.now() - began}ms after the stop`);
     } finally { fx.cleanup(); }
   });
 
-  it('a picture older than three rounds is STALE, and says how to fix it', () => {
+  it('a reader never sees half a round', async () => {
+    const fx = fixture({ name: 'repo-watch' });
+    try {
+      // The reader is a thread of its own, reading while the rounds are being
+      // written rather than between them: in one thread a synchronous write
+      // can never be caught half-done, so only a second one can catch it.
+      // Each read is parsed and checked for the last field written: a torn
+      // file would either fail to parse or arrive without its repositories.
+      const shared = new Int32Array(new SharedArrayBuffer(12)); // stop, ready, reads
+      const reader = new Worker(READER, { eval: true, workerData: { path: combinedPath(fx.mcHome), shared: shared.buffer } });
+      const verdict = new Promise((resolve, reject) => { reader.once('message', resolve); reader.once('error', reject); });
+      await until(() => Atomics.load(shared, 1) === 1, { everyMs: 1 });
+
+      // Rounds go on until the reader has read fifty times mid-write, and
+      // there are at least twenty whatever the reader managed.
+      const big = Array.from({ length: 40 }, (_, index) => REPO(`/tmp/repo-${index}`, `repo-${index}`));
+      let rounds = 0;
+      while (rounds < 20 || (Atomics.load(shared, 2) < 50 && rounds < 2000)) {
+        writeSnapshot(report(at(0), big), { intervalMs: 60_000, root: fx.mcHome });
+        rounds += 1;
+      }
+      Atomics.store(shared, 0, 1);
+      const { reads, torn } = await verdict;
+      assert.deepEqual(torn, [], 'a half-written snapshot was read');
+      assert.ok(reads > 0, `the reader never managed a read in ${rounds} rounds`);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a picture older than three rounds is STALE, and says how to fix it', async () => {
     const fx = fixture({ name: 'repo-watch' });
     try {
       writeSnapshot(report(at(10 * 60_000), [REPO(fx.dir, 'repo')]), {
         intervalMs: 60_000, root: fx.mcHome,
       });
-      const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(view.mode, 'snapshot');
       assert.equal(view.stale, true);
       assert.ok(view.age_ms > 3 * 60_000);
 
-      const page = runMcCli(['repo', 'status'], fx.env);
+      const page = await runVerb(['repo', 'status'], fx.env);
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /STALE/u);
       assert.match(page.stdout, /mc repo watch start/u);
     } finally { fx.cleanup(); }
   });
 
-  it('within three rounds it is simply the answer', () => {
+  it('within three rounds it is simply the answer', async () => {
     const fx = fixture({ name: 'repo-watch' });
     try {
       // One and a half rounds old, of an hour each: the picture is read by an
@@ -201,45 +266,45 @@ describe('the watcher', () => {
       writeSnapshot(report(at(90 * 60_000), [REPO(fx.dir, 'repo')]), {
         intervalMs: 60 * 60_000, root: fx.mcHome,
       });
-      const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--json'], fx.env));
       assert.equal(view.stale, false);
-      assert.doesNotMatch(runMcCli(['repo', 'status'], fx.env).stdout, /STALE/u);
+      assert.doesNotMatch((await runVerb(['repo', 'status'], fx.env)).stdout, /STALE/u);
     } finally { fx.cleanup(); }
   });
 
-  it('with no watcher at all it counts for itself, and says that is what it did', () => {
+  it('with no watcher at all it counts for itself, and says that is what it did', async () => {
     const fx = fixture({ name: 'repo-watch' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(view.mode, 'computed');
       assert.equal(view.stale, false);
       assert.equal(view.watcher.running, false);
-      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /counted now/u);
+      assert.match((await runVerb(['repo', 'status', '--offline'], fx.env)).stdout, /counted now/u);
     } finally { fx.cleanup(); }
   });
 
-  it('a snapshot mc cannot read is no snapshot — it counts instead', () => {
+  it('a snapshot mc cannot read is no snapshot — it counts instead', async () => {
     const fx = fixture({ name: 'repo-watch' });
     addArea(fx, 'alpha', 'alpha');
     try {
       writeSnapshot(report(at(0), [REPO(fx.dir, 'repo')]), { intervalMs: 60_000, root: fx.mcHome });
       writeFileSync(combinedPath(fx.mcHome), '{ "schema": "something-else"');
-      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', '--offline', '--json'], fx.env));
       assert.equal(view.mode, 'computed');
       assert.equal(view.repos.length, 1);
       assert.equal(readCombinedSnapshot({ root: fx.mcHome }).kind, 'absent');
     } finally { fx.cleanup(); }
   });
 
-  it('a repository the picture has never heard of is counted, not denied', () => {
+  it('a repository the picture has never heard of is counted, not denied', async () => {
     const fx = fixture({ name: 'repo-watch' });
     addArea(fx, 'alpha', 'alpha');
     try {
       writeSnapshot(report(at(0), [REPO('/nowhere/other-repo', 'other-repo')]), {
         intervalMs: 60_000, root: fx.mcHome,
       });
-      const view = json(runMcCli(['repo', 'status', 'repo', '--offline', '--json'], fx.env));
+      const view = json(await runVerb(['repo', 'status', 'repo', '--offline', '--json'], fx.env));
       assert.equal(view.mode, 'computed');
       assert.equal(view.repos[0].path, fx.dir);
       assert.deepEqual(view.unknown, []);
@@ -249,17 +314,17 @@ describe('the watcher', () => {
   it('stopping nothing is not an error, and neither is asking twice', async () => {
     const fx = fixture({ name: 'repo-watch' });
     try {
-      const stopped = runMcCli(['repo', 'watch', 'stop'], fx.env);
+      const stopped = await runVerb(['repo', 'watch', 'stop'], fx.env);
       assert.equal(stopped.status, 0);
       assert.match(stopped.stdout, /no watcher is running/u);
 
-      const started = runMcCli(['repo', 'watch', 'start', '--interval', '60'], fx.env);
+      const started = await runVerb(['repo', 'watch', 'start', '--interval', '60'], fx.env);
       assert.equal(started.status, 0, started.stderr);
-      const again = runMcCli(['repo', 'watch', 'start'], fx.env);
+      const again = await runVerb(['repo', 'watch', 'start'], fx.env);
       assert.equal(again.status, 0);
       assert.match(again.stdout, /already running \(pid \d+/u);
     } finally {
-      runMcCli(['repo', 'watch', 'stop'], fx.env);
+      await runVerb(['repo', 'watch', 'stop'], fx.env);
       fx.cleanup();
     }
   });

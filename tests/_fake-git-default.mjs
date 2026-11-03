@@ -45,7 +45,14 @@ function failure(result, args) {
   return error;
 }
 
+/** The model this process answers git from, or null when it keeps real git. */
+let installed = null;
+export function fakeGitModel() {
+  return installed;
+}
+
 export function installFakeGitDefault(model = new FakeGit()) {
+  installed = model;
   const answer = (args, options = {}) => {
     const result = model.runner(options.cwd || process.cwd(), args, { env: options.env, input: options.input, encoding: 'utf8' });
     return { pid: 0, output: [null, result.stdout, result.stderr], ...result };
