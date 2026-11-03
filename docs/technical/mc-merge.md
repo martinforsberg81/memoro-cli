@@ -577,8 +577,8 @@ a lease with its own pid as the holder. The gate runs with `MC_DOCKER_HOLDER`
 can be labelled for the sweep. The lease is released when the gate ends. If the
 runtime cannot be started, the gate does not run: it is `unavailable` when it
 declared `allowUnavailable`, and red otherwise, with the reason in its
-`output`. The field is read from the selector, not from the declaration, because
-the operator's `repo-gates.json` replaces the whole entry. A gate without `needs`
+`output`. The field is read from the selector, not from the declaration: it is
+a fact about the gate's command, which the selector owns. A gate without `needs`
 is run exactly as before.
 
 An empty selection stops the round: it is not a measurement, and a green from it

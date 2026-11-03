@@ -255,7 +255,8 @@ What a repository needs beyond `npm test` is **declared, never guessed**. A gate
 worktree is a fresh checkout with no `node_modules`, and mc keeps a table of
 what each repository requires: a preparation step, any gates beyond the suite,
 and where its merges are written down. `<mc home>/repo-gates.json` adds or
-overrides an entry without a release.
+overrides fields of an entry without a release: it changes the fields it
+states and keeps the rest, and `null` removes one.
 
 After the suite, the round runs **the pull request's own tests**: every
 `*.test.js` the PR adds or changes, wherever it lies, taken from the same diff

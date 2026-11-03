@@ -492,13 +492,6 @@ export async function runGate({
   for (const signal of caught) process.on(signal, onSignal);
 
   report.declaration = { source: declared.source, ...declared.declaration };
-  // An override that shadows shipped fields does it in silence — it took
-  // extra_gates on 2026-08-22 (D-0135) and pr_tests_flags on 2026-08-24,
-  // one repository, same hole. The table says which fields fell out; the
-  // round says it where somebody is listening.
-  for (const field of declared.shadowed || []) {
-    say(`DECLARATION SHADOWED — the override for ${declared.name} omits ${field}, which the shipped table declares; an override states every field it wants (D-0135)`);
-  }
 
   const workspace = join(gateRoot(env), repoFileSlug(repoPath));
   // One worktree. There was a second, at the base branch, and everything that
