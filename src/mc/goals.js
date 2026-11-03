@@ -149,7 +149,7 @@ export function parseGoal(text) {
   try {
     value = JSON.parse(String(text ?? ''));
   } catch (error) {
-    return { problems: [`GOAL.json is not JSON: ${error.message}`] };
+    return { problems: [`GOAL.json is not JSON: ${error.message.replace(/\s+/gu, ' ')}`] };
   }
   const problems = validateGoal(value, { draft: true });
   if (problems.length) return { problems };

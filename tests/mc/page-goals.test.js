@@ -81,6 +81,16 @@ describe('goal rows on the page', () => {
     assert.equal(rollout, cleanup + 1, 'rollout is drawn after cleanup, in name order');
   });
 
+  it('a goal row says criteria 1/2 for a goal with one of two criteria met, green once all are', () => {
+    const rows = [{ ...GOALS[1], criteria: { met: 1, all: 2 } }, { ...GOALS[0], criteria: { met: 2, all: 2 } }];
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW }) });
+    const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
+    assert.ok(lines.some((line) => /^ +4 · g · cleanup\s+memoro-cli\s+blocked\s+1 session\s+criteria 1\/2 waits on Martin$/u.test(line)), lines.join('\n'));
+    const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
+    assert.match(painted.find((line) => line.includes('g · rollout')), /\u001b\[[0-9;]*32mcriteria 2\/2/u);
+    assert.doesNotMatch(painted.find((line) => line.includes('g · cleanup')), /\u001b\[[0-9;]*32mcriteria/u);
+  });
+
   it('the state words keep the project rows\' colours', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: GOALS, now: NOW }) });
     const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
@@ -115,8 +125,8 @@ describe('goal rows on the page', () => {
     const row = lines.find((line) => line.includes('g · broken'));
     assert.ok(row, 'the broken goal is drawn');
     // The problem is drawn in full where it fits; a longer one is cut to the width.
-    assert.match(plain(row), /GOAL\.md: repos names no repository$/u);
-    assert.match(row, /\u001b\[[0-9;]*31m GOAL\.md|\u001b\[[0-9;]*31mGOAL\.md/u, 'the problem is red');
+    assert.match(plain(row), /GOAL\.json: repos names no repository$/u);
+    assert.match(row, /\u001b\[[0-9;]*31m GOAL\.json|\u001b\[[0-9;]*31mGOAL\.json/u, 'the problem is red');
   });
 
   it('the programme header counts goals only when there are any', () => {
@@ -151,7 +161,7 @@ describe('goalsOf — what the page reads of a goal', () => {
   it('counts the sessions, takes the last entry, and is running only while a live current file names it', () => {
     const rows = goalsOf({
       goals: [
-        { programme: 'mc', goal: 'rollout', repos: ['memoro-cli'], status: 'open', log, problems: [] },
+        { programme: 'mc', goal: 'rollout', repos: ['memoro-cli'], status: 'open', log, problems: [], success_criteria: [{ met: true }, { met: false }] },
         { programme: 'mc', goal: 'cleanup', repos: ['memoro-cli'], status: 'open', log, problems: [] },
       ],
       currents: [
@@ -165,6 +175,7 @@ describe('goalsOf — what the page reads of a goal', () => {
     assert.equal(rollout.sessions, 1, 'the person and the runner are not sessions');
     assert.equal(rollout.last.next, null, 'the last entry is the runner\'s');
     assert.equal(rollout.running, true);
+    assert.deepEqual(rollout.criteria, { met: 1, all: 2 }, 'how many of its criteria are met, of how many');
     assert.equal(cleanup.running, false, 'a current file whose process is gone is not a session');
   });
 });

@@ -1593,7 +1593,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
 describe('a goal\'s pull request (goals.js): done at landing, blocked on red, review again when its head moved', () => {
   const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
   const GOAL_JOB = { repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 90, branch: 'goal/g', holder: { name: 'goal:mc/g' }, step: null, goal: GOAL, sha: 'aaa111' };
-  /** `setGoal`, recorded: what the merger writes to GOAL.md and LOG.md. */
+  /** `setGoal`, recorded: what the merger writes to GOAL.json and LOG.md. */
   const goalWrites = () => {
     const writes = [];
     return { writes, setGoal: (call) => { writes.push(call); return { goal: {} }; } };
@@ -1722,6 +1722,28 @@ describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is
     await landJob(PLAIN_JOB, m.deps);
     assert.equal(r.sets[0].status, 'blocked');
     assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+  });
+
+  it('a goal with a criterion not met is not landed: no round, red with the criterion named, and the goal waits on plan', async () => {
+    const r = record();
+    const criteria = [{ criterion: 'a', check: 'x', met: true }, { criterion: 'b', check: 'y', met: false }];
+    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => [{ ...goalAt([{ repo: 'memoro', pr: 14761 }])[0], success_criteria: criteria }] });
+    const [answer] = await landJob(PLAIN_JOB, m.deps);
+    assert.equal(m.rounds.length, 0, 'no round spent on it');
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.stopped_at, 'unmet-criteria');
+    assert.match(answer.report.reason, /^criterion 2 is not met — run its check and record it with mc goal criterion met ios\/asc 2$/u);
+    assert.equal(r.sets[0].status, 'blocked');
+    assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+    assert.match(r.sets[0].entry.comment, /^unmet-criteria: criterion 2 is not met/u);
+
+    // Its own branch's job (a green review queued it) is refused the same way; met, it lands.
+    const own = record();
+    const job = { ...PLAIN_JOB, branch: 'goal/asc', goal: { programme: 'ios', goal: 'asc', dir: DIR }, sha: 'aaa111' };
+    const refused = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria }] });
+    assert.equal((await landJob(job, refused.deps))[0].report.stopped_at, 'unmet-criteria');
+    const met = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria.map((item) => ({ ...item, met: true })) }] });
+    assert.equal((await landJob(job, met.deps))[0].landed, true);
   });
 
   it('a pull request no goal carries tells no goal', async () => {

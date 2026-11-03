@@ -16,6 +16,7 @@ import {
 } from '../../src/mc/status-project.js';
 import { run as project } from '../../src/mc/commands/status-project.js';
 import { runMcCli } from './_helpers/mc-cli.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 /** A plan as the file now is: one step, in the state the test wants. */
 const PLAN = (status, title) => JSON.stringify({
@@ -455,8 +456,8 @@ describe('mc status on a goal', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-status-goal-'));
     const goal = (name, status, after = null) => {
       mkdirSync(join(root, 'programs', 'mc', 'goals', name), { recursive: true });
-      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.md'),
-        `---\nstatus: ${status}\nrepos: memoro-cli\nclass: large\n${after ? `after: ${after}\n` : ''}---\n# ${name}\n`);
+      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.json'),
+        goalJson({ status, title: name, after: after ? after.split(',').map((one) => one.trim()) : [] }));
     };
     goal('headless-plan', 'waiting', 'mc/runner-sessions, mc/goal-waiting');
     goal('runner-sessions', 'done');
