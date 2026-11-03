@@ -37,8 +37,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync 
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import {
+  devQueuePath, joinQueue, leaveQueue, placeOf, queueOrder, readQueue, ticketView,
+} from './dev-queue.js';
 import { log } from './logger.js';
-import { devServersRoot } from './paths.js';
+import { devServersRoot, shotSessionsDir } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
 /** The only schema this mc understands. A manifest saying anything else is refused. */
@@ -302,6 +305,64 @@ export const DEFAULT_MIN_FREE_PERCENT = 15;
  */
 export const DEFAULT_HOLDER_STALE_MINUTES = 5;
 
+/**
+ * The shared checkout's main server is mc's standing one (`mainCheckout`). It is
+ * followed to main once mc has not used it for this long (`MC_DEV_MAIN_IDLE_SECONDS`):
+ * an idle one is fast-forwarded and restarted, a busy one is served as it is.
+ */
+export const DEFAULT_MAIN_IDLE_SECONDS = 60;
+
+/**
+ * A kept browser (`mc shot dev --keep`) that stepped this recently holds its
+ * server: nothing stops or restarts that server under it. A restart after that
+ * is a rebase, which the browser gets as a dev session does after an edit.
+ */
+export const KEPT_HOLD_SECONDS = 60;
+
+/** `MC_DEV_MAIN_IDLE_SECONDS`, or the default. */
+export function mainIdleSecondsOf(env = process.env) {
+  return Number(env.MC_DEV_MAIN_IDLE_SECONDS) || DEFAULT_MAIN_IDLE_SECONDS;
+}
+
+/**
+ * Is `server` the shared checkout's main server? `main` is `{ worktree, service }`
+ * (`mainCheckout`), or null for none. Matched by path, and by service too when the
+ * checkout names one.
+ */
+export function isMainServer(server, main) {
+  if (!main?.worktree || !server?.worktree_path) return false;
+  if (resolve(server.worktree_path) !== resolve(main.worktree)) return false;
+  return !main.service || server.service === main.service;
+}
+
+/**
+ * When a kept browser last stepped on this server, in epoch ms, or null. The
+ * browser writes `server_id` and `last_used` into its session file on every step
+ * (`shot-session.js`); a file that does not parse is nobody's.
+ */
+export function keptStepAt(server, { dir = shotSessionsDir() } = {}) {
+  let names = [];
+  try {
+    names = readdirSync(dir).filter((name) => /^s\d+\.json$/u.test(name));
+  } catch {
+    return null;
+  }
+  let latest = null;
+  for (const name of names) {
+    const session = readJson(join(dir, name));
+    if (session?.server_id !== server.instance_id) continue;
+    const at = Date.parse(session.last_used ?? '');
+    if (Number.isFinite(at) && (latest === null || at > latest)) latest = at;
+  }
+  return latest;
+}
+
+/** Did a kept browser step on this server within KEPT_HOLD_SECONDS of `now`? */
+export function keptHolds(server, { now = Date.now(), dir } = {}) {
+  const at = keptStepAt(server, { dir });
+  return at !== null && now - at < KEPT_HOLD_SECONDS * 1000;
+}
+
 /** When mc last used a server: `last_used_at`, else when it was registered or started. */
 export function lastUsedAt(server) {
   for (const key of ['last_used_at', 'registered_at', 'started_at']) {
@@ -332,24 +393,15 @@ const ADMIT_SAY_MS = 60_000;
  * first, in `evictable`: those mc last used before `staleBefore` (an epoch ms;
  * null names none) and that declare a stop command. Never the asker's own.
  */
-export function admission({ servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null }) {
-  const self = worktree ? resolve(worktree) : null;
-  const holders = (servers || [])
-    .filter((server) => server.live !== false
-      && server.resource_class !== 'light'
-      && !(self && server.worktree_path && resolve(server.worktree_path) === self && server.service === service))
-    .map((server) => ({
-      instance_id: server.instance_id,
-      service: server.service,
-      worktree_path: server.worktree_path,
-      started_at: server.started_at ?? null,
-      url: server.url ?? null,
-    }));
+export function admission({
+  servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null, main = null, capped = true,
+}) {
+  const holders = holdersOf(servers, { service, worktree, main });
   const free = Number.isFinite(freePercent) ? freePercent : null;
   if (free !== null && free < minFreePercent) {
     return { ok: false, reason: 'memory', holders, free_percent: free, cap };
   }
-  if (holders.length >= cap) {
+  if (capped && holders.length >= cap) {
     const evictable = Number.isFinite(staleBefore)
       ? (servers || [])
         .filter((server) => holders.some((holder) => holder.instance_id === server.instance_id))
@@ -361,6 +413,32 @@ export function admission({ servers, service, worktree, cap, minFreePercent, fre
     return { ok: false, reason: 'cap', holders, free_percent: free, cap, ...(evictable.length ? { evictable } : {}) };
   }
   return { ok: true };
+}
+
+/** Whether `server` is the asker's own: the same worktree and service. */
+function isOwn(server, { service, worktree }) {
+  return Boolean(worktree && server.worktree_path && resolve(server.worktree_path) === resolve(worktree) && server.service === service);
+}
+
+/**
+ * The live servers that count against the cap, as a refusal names them: not
+ * `light`, and not the asker's own. `last_used_at` is mc's last use of each
+ * (`lastUsedAt`), so a waiter can see which holder is idle.
+ */
+export function holdersOf(servers, { service, worktree, main = null } = {}) {
+  return (servers || [])
+    .filter((server) => server.live !== false && server.resource_class !== 'light' && !isOwn(server, { service, worktree }) && !isMainServer(server, main))
+    .map((server) => {
+      const used = lastUsedAt(server);
+      return {
+        instance_id: server.instance_id,
+        service: server.service,
+        worktree_path: server.worktree_path,
+        started_at: server.started_at ?? null,
+        last_used_at: used === null ? null : new Date(used).toISOString(),
+        url: server.url ?? null,
+      };
+    });
 }
 
 /** `kern.memorystatus_level` — the percentage of memory free, on macOS — or null. */
@@ -376,20 +454,32 @@ export function freeMemoryPercent(run = spawnSync) {
 }
 
 /**
- * Ask, and wait up to `waitSeconds` for a yes.
+ * Ask, and wait up to `waitSeconds` for a yes — in turn.
+ *
+ * A wait takes a ticket in `dev-queue.json` (`dev-queue.js`), and only the
+ * ticket at the head is admitted when `admission` says yes; the others keep
+ * waiting, told their place. Before 2026-11-03 every waiter polled and the
+ * first to look after a holder left won, so a later request could overtake one
+ * that had waited fifteen minutes. A request whose worktree and service
+ * already has a live server is not queued: a restart replaces itself. A
+ * request that does not wait is not queued either, and is refused with reason
+ * `queue` while others wait, so it cannot overtake them.
  *
  * The registry is read afresh on every turn, through `listServers`, so a
- * holder that died is swept rather than waited for. With `evict`, a holder mc
- * has not used for `MC_DEV_HOLDER_STALE_MINUTES` (5; 30 until 2026-11-03) is stopped through its
- * own stop command to make room, one at a time, each tried once; without it
- * nothing running is stopped and the wait is for a holder to leave by itself.
- * Before 2026-10-19 nothing was ever stopped, and a measure server kept alive
- * by a forgotten browser tab held a slot for two hours while `mc shot dev`
- * waited out its fifteen minutes three times.
+ * holder that died is swept rather than waited for. With `evict`, the head —
+ * and only the head — stops a holder mc has not used for
+ * `MC_DEV_HOLDER_STALE_MINUTES` (5; 30 until 2026-11-03) through its own stop
+ * command to make room, one at a time, each tried once; without it nothing
+ * running is stopped and the wait is for a holder to leave by itself. Before
+ * 2026-10-19 nothing was ever stopped, and a measure server kept alive by a
+ * forgotten browser tab held a slot for two hours while `mc shot dev` waited
+ * out its fifteen minutes three times. A gate round's priority is a place in
+ * the queue, never a stopped server.
  */
 export async function admit({
-  service, worktree, waitSeconds = 0, env = process.env, root, sleep, now, onWaiting,
-  freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer,
+  service, worktree, waitSeconds = 0, env = process.env, root, queueFile, sleep, now, onWaiting,
+  freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer, pid = process.pid,
+  main = null, sessionsDir = null,
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
@@ -397,56 +487,110 @@ export async function admit({
   const minFreePercent = minFreePercentOf(env);
   const startedAt = clock();
   const deadline = startedAt + Math.max(0, Number(waitSeconds) || 0) * 1000;
+  const waits = deadline > startedAt;
   const staleMs = (Number(env.MC_DEV_HOLDER_STALE_MINUTES) || DEFAULT_HOLDER_STALE_MINUTES) * 60_000;
+  const file = queueFile || devQueuePath(root || devServersRoot());
+  // The session files a kept browser writes: the hold it puts on its server (`keptHolds`).
+  const keptDir = sessionsDir || shotSessionsDir(env);
+  // The main server counts for nothing, and a request for it is not capped either.
+  const mainRequest = isMainServer({ worktree_path: worktree, service }, main);
   const tried = new Set();
   let said = null;
-  for (;;) {
-    const { servers } = listServers(root ? { root } : {});
-    const verdict = admission({
-      servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(), staleBefore: evict ? clock() - staleMs : null,
-    });
-    const victim = (verdict.evictable || []).find((id) => !tried.has(id));
-    if (victim) {
-      tried.add(victim);
-      const server = servers.find((item) => item.instance_id === victim);
-      const stopped = stop(server);
-      logEvent(stopped.ok ? 'dev-server-stopped' : 'dev-server-evict-failed', {
-        instance_id: victim,
-        reason: 'stale-holder',
-        service: server.service ?? null,
-        worktree_path: server.worktree_path ?? null,
-        unused_s: Math.round((clock() - lastUsedAt(server)) / 1000),
-        for_worktree: worktree,
-        ...(stopped.ok ? {} : { error: stopped.error }),
-      });
-      // Its wrapper unregisters on the way out; the next turn reads that.
-      if (stopped.ok) await pause(ADMIT_POLL_MS);
-      continue;
-    }
-    if (verdict.ok) {
-      if (said !== null) {
-        logEvent('dev-server-admitted', {
-          service, worktree_path: worktree, waited_s: Math.round((clock() - startedAt) / 1000),
-        });
+  let ticket = null;
+  let placeAtJoin = null;
+  try {
+    for (;;) {
+      const { servers } = listServers(root ? { root } : {});
+      const own = servers.some((server) => server.live !== false && isOwn(server, { service, worktree }));
+      // Where this request stands: null when it is not queued at all. The queue
+      // orders the capped slots, and the main server takes none, so a request
+      // for it is not queued either: "how is it now" never waits behind worktree
+      // servers for a slot it does not use. The memory floor still applies.
+      let standing = null;
+      if (!own && !mainRequest) {
+        if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt });
+        let tickets = readQueue({ file });
+        if (ticket && !tickets.some((item) => item.id === ticket.id)) {
+          // Lost to a write that went ahead of a held lock: taken again, in the same place.
+          joinQueue({ file, pid, worktree, service, env, now: startedAt, id: ticket.id });
+          tickets = readQueue({ file });
+        }
+        const at = clock();
+        if (ticket) {
+          const { place, of, order } = placeOf(ticket.id, tickets, at);
+          standing = { place, of, order };
+          if (placeAtJoin === null) placeAtJoin = place;
+        } else if (tickets.length) {
+          const order = queueOrder(tickets, at);
+          standing = { place: order.length + 1, of: order.length + 1, order };
+        }
       }
-      return verdict;
-    }
-    if (clock() >= deadline) {
-      logEvent('dev-server-refused', {
-        service,
-        worktree_path: worktree,
-        reason: verdict.reason,
-        holders: verdict.holders.map((holder) => holder.instance_id),
-        free_percent: verdict.free_percent,
+      const head = !standing || standing.place === 1;
+      const asked = admission({
+        servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(), staleBefore: evict && head ? clock() - staleMs : null,
+        main, capped: !mainRequest,
       });
-      return verdict;
+      // A holder a kept browser stepped on within the last minute is not stopped under it.
+      const victim = (asked.evictable || []).find((id) => !tried.has(id) && !keptHolds({ instance_id: id }, { now: clock(), dir: keptDir }));
+      if (victim) {
+        tried.add(victim);
+        const server = servers.find((item) => item.instance_id === victim);
+        const stopped = stop(server);
+        logEvent(stopped.ok ? 'dev-server-stopped' : 'dev-server-evict-failed', {
+          instance_id: victim,
+          reason: 'stale-holder',
+          service: server.service ?? null,
+          worktree_path: server.worktree_path ?? null,
+          unused_s: Math.round((clock() - lastUsedAt(server)) / 1000),
+          for_worktree: worktree,
+          ...(stopped.ok ? {} : { error: stopped.error }),
+        });
+        // Its wrapper unregisters on the way out; the next turn reads that.
+        if (stopped.ok) await pause(ADMIT_POLL_MS);
+        continue;
+      }
+      if (asked.ok && head) {
+        if (said !== null) {
+          logEvent('dev-server-admitted', {
+            service,
+            worktree_path: worktree,
+            waited_s: Math.round((clock() - startedAt) / 1000),
+            ...(placeAtJoin !== null ? { place_at_join: placeAtJoin } : {}),
+          });
+        }
+        return asked;
+      }
+      // A yes that is not this request's turn is a wait behind the queue.
+      const verdict = {
+        ...(asked.ok
+          ? { ok: false, reason: 'queue', holders: holdersOf(servers, { service, worktree, main }), free_percent: freeOrNull(freeMemory()), cap }
+          : asked),
+        ...(standing ? { place: standing.place, queue: standing.order.map((item) => ticketView(item, clock())) } : {}),
+      };
+      if (clock() >= deadline) {
+        logEvent('dev-server-refused', {
+          service,
+          worktree_path: worktree,
+          reason: verdict.reason,
+          holders: verdict.holders.map((holder) => holder.instance_id),
+          free_percent: verdict.free_percent,
+          ...(standing ? { place: standing.place } : {}),
+        });
+        return verdict;
+      }
+      if (said === null || clock() - said >= ADMIT_SAY_MS) {
+        said = clock();
+        onWaiting?.(verdict);
+      }
+      await pause(ADMIT_POLL_MS);
     }
-    if (said === null || clock() - said >= ADMIT_SAY_MS) {
-      said = clock();
-      onWaiting?.(verdict);
-    }
-    await pause(ADMIT_POLL_MS);
+  } finally {
+    if (ticket) leaveQueue(ticket.id, { file });
   }
+}
+
+function freeOrNull(value) {
+  return Number.isFinite(value) ? value : null;
 }
 
 /** The free-memory floor `env` sets, as `admit` reads it. */
@@ -462,16 +606,52 @@ export function minFreePercentOf(env = process.env) {
  * reader to an error.
  */
 export function refusalText(verdict, { env = process.env } = {}) {
+  const place = placeText(verdict);
+  const at = place ? ` (${place})` : '';
   if (verdict.reason === 'memory') {
-    return `only ${verdict.free_percent}% memory free (floor ${minFreePercentOf(env)}%)`;
+    return `only ${verdict.free_percent}% memory free (floor ${minFreePercentOf(env)}%)${at}`;
   }
-  return `${verdict.holders.length} of ${verdict.cap} app servers already running — ${holdersText(verdict)};`
+  if (verdict.reason === 'queue') {
+    return `${Math.max(0, (verdict.place ?? 1) - 1)} waiting ahead for an app server${at} — mc dev status shows the queue`;
+  }
+  return `${verdict.holders.length} of ${verdict.cap} app servers already running${at} — ${holdersText(verdict)};`
     + ' stop one with mc test dev --stop in its worktree';
 }
 
-/** `<id> (<worktree>), …` */
-export function holdersText(verdict) {
-  return verdict.holders.map((holder) => `${holder.instance_id} (${holder.worktree_path})`).join(', ');
+/** `place 2 of 3`, or null for a request that is not in the queue. */
+export function placeText(verdict) {
+  if (!Number.isInteger(verdict?.place)) return null;
+  const of = Math.max(verdict.place, Array.isArray(verdict.queue) ? verdict.queue.length : 0);
+  return `place ${verdict.place} of ${of}`;
+}
+
+/** `4 min ago`, `30 s ago`, `2 h ago`. */
+export function agoText(at, now = Date.now()) {
+  const s = Math.max(0, Math.round((now - at) / 1000));
+  if (s < 60) return `${s} s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  return `${Math.floor(s / 3600)} h ago`;
+}
+
+/** `<id> (<worktree>), …` — with `now`, and mc's last use of each: `<id> (<worktree>, used 4 min ago)`. */
+export function holdersText(verdict, { now = null } = {}) {
+  const holders = verdict?.holders || [];
+  if (!holders.length) return 'no app server';
+  return holders.map((holder) => {
+    const used = Date.parse(holder.last_used_at ?? '');
+    const when = now !== null && Number.isFinite(used) ? `, used ${agoText(used, now)}` : '';
+    return `${holder.instance_id} (${holder.worktree_path}${when})`;
+  }).join(', ');
+}
+
+/**
+ * The waiting line `mc shot dev`, `mc test dev` and `mc dev admit` print at
+ * once and then once a minute: the place, then who holds the servers and when
+ * mc last used each one.
+ */
+export function waitingLine(verdict, { now = Date.now() } = {}) {
+  const place = placeText(verdict);
+  return `mc: waiting for a slot — ${place ? `${place}; ` : ''}held by ${holdersText(verdict, { now })}`;
 }
 
 /**

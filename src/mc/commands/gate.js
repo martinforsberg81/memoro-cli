@@ -202,12 +202,15 @@ export async function run(argv, deps = {}) {
     const gate = gateOwner(root, env, io);
     // The free cores, not the core count: a session's gate has no round mode, so
     // `testLanes` answers the free cores here (a merge round takes at least four).
-    const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
-
     startedAt = io.now();
     const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
     const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
     const run = io.id();
+    // `MC_GATE_ROUND` marks a dev server the gate's tests start as a gate
+    // round's in the admission queue, which goes first after two minutes.
+    const childEnv = {
+      MC_TEST_LANES: String(testLanes({ env })), ...env, MC_GATE_ROUND: env.MC_GATE_ROUND || `gate-${run}`, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1',
+    };
     const logPath = join(dir, `gate-${stamp}-${run}.log`);
     const requestPath = `${logPath}.request.json`;
     let child;
