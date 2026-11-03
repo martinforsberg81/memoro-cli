@@ -19,8 +19,8 @@
  * **Why raw mode, given that the terminal's own line editing is free.** The
  * page grows: a session starts, a pull request appears, and a frame with more
  * rows than the last one cannot be written in place (`page-frame.js` says why
- * at length). It is reprinted, and everything below it — the key lines, the
- * prompt, the half-typed answer — has to be printed again by whoever owns
+ * at length). It is reprinted whole, and everything below it — the key lines,
+ * the prompt, the half-typed answer — has to be printed again by whoever owns
  * those rows. In canonical mode the typed characters live in the kernel's
  * line buffer where this process cannot see them, so a growth frame would
  * blank a person's input off the screen while still, invisibly, holding it.
@@ -37,17 +37,26 @@
  * sits. Both are derived, never assumed: change what the menu prints under the
  * page and the arithmetic follows.
  *
- * **And `footprint` is taken from the print, not from the page's length.** A
- * first print ends with a newline, so the cursor is one row below the last row
- * and the footprint is the number of lines. A growth frame is a reprint that
- * *joins* the lines, so the cursor rests on the last row and the footprint is
- * one less — and on a page taller than the screen it is also a page whose top
- * has scrolled off, which is why `page-frame.js` exports `reprintPlan` and
- * this module asks it rather than counting again. Deriving it from
- * `next.length` a second time is the fault Martin saw on 2026-09-06: every
- * absolute target after the first growth frame was one row too high, `CSI 2K`
- * cleared the neighbour, and eleven `sql-readiness` rows arrived on screen as
- * four.
+ * **A whole reprint starts from an empty terminal.** Growth, a resize, and a
+ * key that moved while the top of the page is off the screen are all the same
+ * write: `CLEAR_ALL` — cursor home, erase the screen, erase the scrollback —
+ * then the page's lines each ended by a newline, exactly as `run()` printed
+ * the first one, then the menu's block, the prompt and the half-typed answer.
+ * So the tab only ever holds the current page plus whatever scrolled off since
+ * the last whole reprint, rather than a new copy of a page taller than the
+ * screen every time one was needed: after a few hours that was an endless
+ * scroll of old pages. The price is stated: the first whole reprint also
+ * clears whatever was in the terminal before `mc` started. In-place frames
+ * clear nothing and add nothing to the scrollback.
+ *
+ * **And after it the geometry is a first print's.** The lines are terminated,
+ * not joined, so the cursor is one row below the last of them and `footprint`
+ * is `next.length` — the number a first print gives, and the one every write
+ * after it is addressed by. (An earlier reprint joined the lines and left the
+ * cursor on the last row instead; deriving its footprint from `next.length`
+ * was the fault Martin saw on 2026-09-06, eleven `sql-readiness` rows arriving
+ * on screen as four. Ending every whole print the same way is what makes the
+ * count one number.)
  *
  * **And the terminal is asked where that is.** Deriving alone was not enough,
  * and the way it failed is why this module now asks. `tailRows` counted the
@@ -73,7 +82,7 @@
 import { closeSync, constants, openSync, readSync } from 'node:fs';
 import { ReadStream } from 'node:tty';
 
-import { frameWrites, reprintPlan, reprintWhole, topOffScreen } from './page-frame.js';
+import { CLEAR_ALL, frameWrites, topOffScreen } from './page-frame.js';
 import { ask as askTerminal } from './prompt.js';
 import { clip, width } from './status-render.js';
 
@@ -131,9 +140,18 @@ export function screenRows(text, columns) {
 }
 
 /**
+ * The page printed whole, as the first print printed it: every line ended by a
+ * newline, so the cursor rests one row below the last.
+ */
+const whole = (lines) => `${CLEAR_ALL}${lines.join('\n')}\n`;
+
+/**
  * The reader for a terminal too narrow to hold the page, and the one a test
  * drives: the page is printed, the line is asked for, and nothing refreshes.
- * Exactly what `mc` did before it was live.
+ * Exactly what `mc` did before it was live — except that a page drawn again
+ * at a terminal (`a`, `f`, after a verb) clears the screen and the scrollback
+ * first, as the live one does. A stdout that is not a terminal gets the page
+ * and nothing else.
  */
 export function plainReader({ stdout, ask = askTerminal }) {
   return {
@@ -142,7 +160,7 @@ export function plainReader({ stdout, ask = askTerminal }) {
       return ask(prompt, { stdout });
     },
     show(lines) {
-      stdout.write(`${lines.join('\n')}\n`);
+      stdout.write(stdout.isTTY === true ? whole(lines) : `${lines.join('\n')}\n`);
     },
   };
 }
@@ -188,8 +206,13 @@ export function liveReader({
 
   function columnsOf() { return Number(stdout.columns) || 80; }
 
+  /**
+   * The page again after something printed under it (`a`, `f`, a verb's
+   * output): whole, from an empty terminal. The block under it is `ask`'s to
+   * print, and `ask` takes the rows and the anchor again when it does.
+   */
   function show(next, nextKey = null) {
-    stdout.write(`${next.join('\n')}\n`);
+    stdout.write(whole(next));
     current = [...next];
     currentKey = nextKey;
     footprint = next.length;
@@ -311,45 +334,32 @@ export function liveReader({
       schedule();
     }
 
-    /** The frame, written where the page stands. */
+    /** The frame, written where the page stands — or the page again, whole. */
     function draw(next, nextKey = null) {
       const rows = Number(stdout.rows) || Infinity;
       const above = footprint + tailRows;
 
-      // Something the key covers has changed, and the rows that say so have
-      // scrolled off the top: no in-place write can reach them, so the page is
-      // printed again whole. Only then — a page that fits is diffed as ever,
-      // and a clock ticking in a row out of reach is not worth the scrollback.
+      // Three frames cannot be written in place. Grown past its footprint:
+      // there is nothing below the page's last row but the menu's. Drawn for a
+      // terminal that has since changed shape: the widths are wrong. And
+      // something the key covers has changed in rows that have scrolled off
+      // the top, where no in-place write can reach — only then: a page that
+      // fits is diffed as ever, and a clock ticking out of reach is not worth
+      // a reprint.
       const moved = nextKey !== null && currentKey !== null && nextKey !== currentKey;
       currentKey = nextKey ?? currentKey;
-      if (moved && !dirty && topOffScreen({ above, rows, anchor })) {
-        stdout.write(`${reprintWhole(next, { above, rows, anchor })}${tail}${promptText}${typed}`);
+      if (dirty || next.length > current.length || (moved && topOffScreen({ above, rows, anchor }))) {
+        // From an empty terminal, and then everything below the page too —
+        // the keys, the prompt, the typed answer — because the clear took it.
+        stdout.write(`${whole(next)}${tail}${promptText}${typed}`);
         current = [...next];
-        footprint = Math.max(0, next.length - 1);
-        holding = false;
-        tailRows = screenRows(tail, columnsOf());
-        askAnchor();
-        return;
-      }
-
-      if (dirty || next.length > current.length) {
-        // Grown past its footprint, or drawn for a terminal that has since
-        // changed shape. `frameWrites` erases from the page down and prints
-        // the frame as ordinary lines — which leaves nothing below it, so the
-        // rows under the page are this caller's to print again, the typed
-        // answer among them.
-        stdout.write(`${frameWrites([], next, { above, rows, anchor })}${tail}${promptText}${typed}`);
-        current = [...next];
-        // Where that reprint left the cursor, asked of the module that wrote
-        // it. A page taller than the screen has printed fewer rows than it
-        // has lines, and it did not end with a newline: both are in `below`,
-        // and neither is in `next.length`.
-        footprint = reprintPlan(next, { above, rows, anchor }).below;
+        // A first print's geometry: the cursor is one row under the page.
+        footprint = next.length;
         dirty = false;
         holding = false;
-        // The reprint scrolled the screen and reprinted the block under the
-        // page at whatever width the terminal is now: both numbers this loop
-        // draws by are stale, so both are taken again.
+        // The block under the page was printed again at whatever width the
+        // terminal is now, and the prompt is somewhere else on the screen:
+        // both numbers this loop draws by are taken again.
         tailRows = screenRows(tail, columnsOf());
         askAnchor();
         return;

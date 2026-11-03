@@ -19,11 +19,15 @@ and its `index.lock` are every session's at once.
 - **Commits.** Read `git status` and the diff; stage only the task's files and
   leave unrelated changes alone. A short imperative English subject (`Fix
   session expiry check`), no Conventional Commit prefix.
-- **Branches.** Stay on the branch you were given. Never continue a branch
+- **Branches.** Stay on the branch you were given: a runner session's is
+  built to the end, and merges `origin/main` only for a conflict the merger
+  reported. A session opened by hand branches each delivery from a fresh
+  `origin/main`. Never continue a branch
   that has merged: the same content lands twice under two SHAs. Never stack a
   branch on an open one unless it cannot be built without it.
 - **Pushing.** Only through `mc publish`; never force-push, never rewrite
-  published history, never push to `main`.
+  published history, never push to `main`. A stacked branch is rebuilt from
+  `main` once its parent lands, not rebased onto it.
 - **Worktrees and branches are mc's.** Never delete a local branch or a
   worktree by hand. A remote branch gone after a merge is the repository's
   `deleteBranchOnMerge`, not a fault.

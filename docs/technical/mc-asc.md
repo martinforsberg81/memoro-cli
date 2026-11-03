@@ -1,17 +1,60 @@
-# mc build ios — memoro's iOS binary, paired with the web it will meet
+# mc asc — memoro's App Store Connect side, and the iOS binary
 
-**Status:** current · 2026-10-18 · `src/mc/commands/build.js`,
+**Status:** current · 2026-11-02 · `src/mc/commands/asc.js`,
 `src/mc/ios-build.js`, `src/mc/ios-build-run.js`, `src/mc/ios-builds.js`
 
-`mc build ios` is the verb a person types to find out whether memoro needs a
-new iOS binary, and to make one. It is not a build system. memoro's own
-scripts do the syncing and the uploading; Xcode's command-line tools do the
-building. What the verb adds is the same kind of thing `mc deploy` adds around
-`npm run deploy` ([`mc-deploy.md`](mc-deploy.md)): a reading before anything
-runs, one question before anything leaves the machine, its own process, and a
-record.
+`mc asc` gathers everything about memoro's App Store presence under one verb.
+Before it there was `mc build ios` for the binary and nothing else. Releasing
+1.1.1 on 2026-11-02 needed the state of a version and a release, which no verb
+had, so a session wrote throwaway scripts. `mc build ios` is gone and has no
+alias. Its behaviour is `mc asc build`, unchanged, against the same register
+`~/mc/runner/log/ios-builds.tsv`.
 
-## Why the binary is built from the commit production runs
+## The script subverbs
+
+`status`, `metadata`, `screenshots`, `review-notes`, `iap`, `submit` and
+`release` each run one script that memoro's `.mc/ios.json` on `origin/main`
+declares, under the key of the same name (`review_notes` for
+`review-notes`). The script runs as `origin/main` has it. `atRev` copies
+`scripts/` and the declaration's `script_paths` (`marketing/`) at that commit
+into a directory of their own, links the checkout's `node_modules` in, and
+runs the copy with the working directory in the checkout. So the copy that is
+sent to App Store Connect is main's, whatever branch Martin's checkout stands
+on.
+
+mc reads no App Store Connect key. `secretsEnv` sets `MEMORO_DEV_VARS` to the
+secrets file in memoro's checkout (`self/memoro/.dev.vars`). The script reads
+the key from there, as it does when run by hand. Moving these scripts to
+`mc keys run` is later work.
+
+- `mc asc status [<version>] [--json]` reads only: per iOS version its
+  `appStoreState`, `releaseType`, attached build and processing state, phased
+  release, the latest review submission, and the storefront version in us, se
+  and dk (iTunes lookup).
+- `mc asc metadata | screenshots | review-notes | iap [--dry-run]` run the
+  sync scripts. Any further words (`--version=1.1.2`, `--locale=sv`) go to the
+  script, which refuses what it does not take. `--dry-run` sends nothing.
+- `mc asc submit <version> <build>` and `mc asc release <version> [--phased]`
+  are a person's acts, asked the way `mc deploy` asks. Without a terminal they
+  refuse with exit 2 before anything runs. Otherwise mc first runs the script
+  with `--dry-run --json`. The script refuses a version in the wrong state
+  (`submit` wants `PREPARE_FOR_SUBMISSION` with that VALID build and the
+  review notes equal to `marketing/review/notes.md`; `release` wants
+  `PENDING_DEVELOPER_RELEASE`). After that comes one `[y/N]` question, and
+  only a yes runs the script for real. `--dry-run` alone is the reading: it
+  asks nothing and sends nothing.
+
+## The binary: mc asc build
+
+`mc asc build` is the subverb a person types to find out whether memoro needs
+a new iOS binary, and to make one. It is not a build system. memoro's own
+scripts do the syncing and the uploading; Xcode's command-line tools do the
+building. What the subverb adds is the same kind of thing `mc deploy` adds
+around `npm run deploy` ([`mc-deploy.md`](mc-deploy.md)): a reading before
+anything runs, one question before anything leaves the machine, its own
+process, and a record.
+
+### Why the binary is built from the commit production runs
 
 memoro's iOS app is Capacitor with `server.url` pointing at production. The
 binary does not carry the web app. It loads whatever production serves when it
@@ -39,9 +82,9 @@ memoro is read only through its declaration, `.mc/ios.json` on memoro's
 cannot change what is built. No memoro path, bundle id or team id is written
 in mc's code.
 
-## The question alone
+### The question alone
 
-`mc build ios` with no flag builds nothing and touches no worktree. It
+`mc asc build` with no flag builds nothing and touches no worktree. It
 fetches, reads the declaration, asks production what it runs, and diffs that
 commit against the commit of the last shipped binary (`lastShipped`: the last
 TestFlight upload or `--shipped` seed in the register). Only the declaration's
@@ -51,13 +94,13 @@ in `package-lock.json`. The answer names what differs, or says
 has native changes production does not run yet, it says to deploy first.
 `--json` prints the same reading as an object.
 
-## The preflights
+### The preflights
 
 `--device` and `--testflight` check, in the asking terminal and in this
 order, before anything starts (`devicePreflight`). Each refusal is one line
 that names the fix:
 
-1. no other iOS build is running (exit 2, `mc build ios --follow` watches it);
+1. no other iOS build is running (exit 2, `mc asc build --follow` watches it);
 2. `xcrun xcodebuild -version` answers;
 3. the signing identity is in the login keychain: `Apple Development` for a
    device, `Apple Distribution` for TestFlight;
@@ -70,7 +113,7 @@ that names the fix:
 A missing Xcode sign-in or a locked keychain is not mended here. The verb
 names what a person does, and stops.
 
-## The number
+### The number
 
 A TestFlight build number comes from App Store Connect, never from a file.
 After the preflights, the asking process runs the declaration's `list_builds`
@@ -99,7 +142,7 @@ appeared in App Store Connect meanwhile fails the build at `number-taken`. The
 binary already carries that number in its Info.plist, and is never
 renumbered. Building again takes the next one.
 
-## The question
+### The question
 
 At a terminal, before the builder starts (`interactive`/`ask` from
 `src/mc/prompt.js`, as `mc deploy` asks):
@@ -113,14 +156,14 @@ upload: it asks nothing and needs no terminal, and the verification before the
 upload is the same. `--no-upload` skips the question, because nothing leaves
 the machine. The two together are a bad argument. Without a terminal,
 `--testflight` alone is refused with exit 2:
-`mc build ios --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload`.
+`mc asc build --testflight asks before it uploads — run it in a terminal, or add --yes or --no-upload`.
 
-## The builder's order
+### The builder's order
 
 The builder runs in its own process (`ios-build-run.js` → `buildIos`). It is
 started detached exactly as `mc deploy`'s deployer is, with its log at
 `~/mc/runner/log/ios-build.log`. The terminal follows the log, and ^C stops
-only the watching; `mc build ios --follow` watches again. Every external
+only the watching; `mc asc build --follow` watches again. Every external
 command goes through one `step` that prints `▸ <label>`, streams the output to
 the log, keeps the last 64 KB for the failure note, and stops a command past
 its timeout with SIGTERM and then SIGKILL.
@@ -188,7 +231,7 @@ builds. xcodebuild keys its package checkouts and module caches by path, so a
 new path every time would be a cold build every time. They live under mc's
 home, not `~/mc/`, for the reason the deploy worktree does.
 
-## The read-back
+### The read-back
 
 `readBack` compares the built app with the declaration before anything
 installs or uploads it. Each difference is one problem that names the field
@@ -205,7 +248,7 @@ and both values:
 A TestFlight build is read back twice, from the archive and from the IPA
 itself. The second time also checks the Distribution authority.
 
-## The register
+### The register
 
 `~/mc/runner/log/ios-builds.tsv` (`ios-builds.js`) is shaped like
 `deploys.tsv`. The asking process writes a `running` row before the builder
@@ -217,7 +260,7 @@ production ran, the artifact, the delivery id and the pid. The last
 `uploaded` TestFlight row, or `seed` row, is the binary people have, and it
 is what the bare question compares against.
 
-## Memoro's lane
+### Memoro's lane
 
 The builder holds the heavy gate lock as a deploy does (`holdHeavyLane`
 from `commands/deploy.js`, with `mode: 'ios-build'`). It first waits for the
@@ -227,7 +270,7 @@ meanwhile waits in its detached child (`await-deploy.js`), as it does for a
 deploy. A build and a deploy exclude each other. Both compile on the same
 machine, and both would take three times as long side by side.
 
-## What it never does
+### What it never does
 
 - It opens no GUI application. No `npx cap open`, no `open`, no Xcode.app or
   Simulator.app, and no simulator is booted. Only `xcodebuild`,

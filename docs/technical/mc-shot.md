@@ -113,16 +113,17 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
 - `--click <selector>`, repeatable: the capture script presses each selector in
   order, after the page and its window are open and before `--wait-for`,
   `--scroll` and `--el`. The request carries them as `click`. A result that does
-  not answer `clicked` with one entry per click is refused (exit 1, no path), so
-  until memoro's capture script honours `click` every `--click` is refused. With
-  `--compare`, both sides are pressed and either side's refusal refuses the pair.
+  not answer `acted` with one entry per action is refused (exit 1, no path); an
+  older script's `clicked` array with one entry per click is also accepted for
+  an all-click request. With `--compare`, both sides are pressed and either
+  side's refusal refuses the pair.
 - `--context-click <css>` (right-click), `--long-press <css>[@ms]` (press and
   hold, 600 ms unless said) and `--fill <css>=<text>` (type into it), all
   repeatable. They join `--click` in one list, and the four act in the order
   they are given. `--fill` splits at its first `=`, so a selector holds none.
   The text is read from the command line like any flag's value: type no secret
   into it. A result that does not answer `acted` with one entry per action is
-  refused (exit 1, no path), as `clicked` does for clicks alone.
+  refused (exit 1, no path). `clicked` is not an answer for mixed action kinds.
 - `--eval <js>` (run it in the page; its value comes back as an `eval` line),
   `--upload <css>=<file>` (choose the file in that file input) and `--press
   <key>` (a Playwright key name — `Enter`, `Escape`, `Meta+K` — pressed on the
@@ -179,8 +180,8 @@ mc: warning — …
 
 `--json` prints the result whole, as before. **Exit codes**: 0 when nothing
 failed, whatever `errors` holds — an app's console error is information, not a
-failed shot; 1 when a step failed, or a gate did not hold; 2 for a flag mc
-refuses. When the script answers `ok: false`, mc prints `mc: <error>` on stderr
+failed shot; 1 when a step failed, an eval threw, or a gate did not hold; 2 for
+a flag mc refuses. When the script answers `ok: false`, mc prints `mc: <error>` on stderr
 and then the result's `error` lines, so a page that crashed before the picture
 still says why. With `--compare`, each side's `error`, `eval` and `failed`
 lines come after the diff, each prefixed with its side (`here: ` or `<ref>: `),
@@ -395,10 +396,12 @@ Capture mode also sends `click` and `actions`. `actions` is every acting flag in
 the order given, one object each: `{ kind, selector }`, with `text` on a `fill`
 and `ms` on a `long-press`; `kind` is `click`, `context-click`, `long-press` or
 `fill`. `click` is the same selectors when every action is a plain click, and
-`null` when one is not, so a script that knows only `click` takes the picture
-without its actions and mc says so. A result answers `clicked`, one entry per
-click, when every action is a click, and `acted`, one entry per action,
-otherwise.
+`null` when one is not. A result answers `acted`, one entry per action,
+whatever their kinds. An older script may answer `clicked`, one entry per click,
+for an all-click request. If it answers neither `acted`, `clicked` nor `failed`,
+mc says that the installed mc does not understand the result from the worktree's
+capture script; it does not claim that the action was unsupported. A receipt
+with too few entries is refused as incomplete.
 
 Three more kinds: `{ kind: "eval", script }`, `{ kind: "upload", selector, file }`
 (`file` an absolute path) and `{ kind: "press", key }` (no selector). Each makes
@@ -409,7 +412,9 @@ carry `errors` (`[{ kind, text, count? }]`, `kind` one of `page`, `console`,
 one per eval action, in order) and `failed` (`{ step, kind, selector?, key?,
 error, here? }`, `step` counted from 1). A result with `failed` is not asked for
 a full `acted`: the steps after the failed one were not done, and the `failed`
-line says so. A failure result (`ok: false`) may carry `errors` too. The
+line says so. An eval whose `evaluated` entry has `error` keeps its `eval <n>
+threw:` line and makes the command exit 1. A failure result (`ok: false`) may
+carry `errors` too. The
 capture script performing these is memoro's project `shot-report-capture`.
 
 The script's stderr goes straight to your terminal, so you see its progress.

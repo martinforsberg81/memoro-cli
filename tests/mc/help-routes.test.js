@@ -31,7 +31,7 @@ import { parseArgs as parseDev } from '../../src/mc/commands/dev.js';
 import { parseArgs as parseRepo, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { parseWatchArgs } from '../../src/mc/commands/merge.js';
 import { parseEnvironmentArgs, parseNightlyArgs, TOKEN_FLAGS } from '../../src/mc/commands/test.js';
-import { parseBuildArgs } from '../../src/mc/commands/build.js';
+import { parseArgs as parseAsc } from '../../src/mc/commands/asc.js';
 import { parseDeployArgs } from '../../src/mc/commands/deploy.js';
 import { parseArgs as parseTidy } from '../../src/mc/commands/tidy.js';
 import { parseArgs as parseLog } from '../../src/mc/commands/log.js';
@@ -94,7 +94,7 @@ const PARSERS = {
     if (argv[0] === 'token') return errorOf(scanArgs(argv.slice(1), TOKEN_FLAGS));
     return errorOf(parseMergeArgs(argv, { full: true }));
   },
-  build: (argv) => errorOf(parseBuildArgs(argv)),
+  asc: (argv) => errorOf(parseAsc(argv)),
   deploy: (argv) => errorOf(parseDeployArgs(argv)),
   tidy: (argv) => errorOf(parseTidy(argv)),
   log: (argv) => errorOf(parseLog(argv)),

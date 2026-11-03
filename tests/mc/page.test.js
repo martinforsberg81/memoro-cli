@@ -4,6 +4,7 @@
  * made of real files with no git, no gh and no tmux.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2122,6 +2123,7 @@ describe('the page', () => {
       from: 'aaaaaaaa1',
       to: 'bbbbbbbb2',
       spawn,
+      execve: null,
       argv: ['node', '/opt/homebrew/bin/mc', '--emit-shell-directives'],
     });
     assert.equal(code, 3);
@@ -2138,9 +2140,104 @@ describe('the page', () => {
         fallback.push(options.stdio.length);
         return options.stdio.length > 3 ? { error: new Error('EBADF'), status: null } : { status: 0 };
       },
+      execve: null,
       argv: ['node', 'mc'],
     });
     assert.deepEqual(fallback, [4, 3]);
+  });
+
+  // A restart replaces the process and starts on an empty screen: one `mc` per
+  // tab, and one page in its scrollback.
+  const MOVED = 'mc: mc moved from aaaaaaaa to bbbbbbbb under this page — starting it again on the new code\n';
+  const restartWith = (overrides) => {
+    const written = [];
+    const spawned = [];
+    const code = restartPage({
+      stdout: { write: (text) => written.push(text) },
+      env: { MC_EMIT_SHELL_DIRECTIVES: '1' },
+      from: 'aaaaaaaa1',
+      to: 'bbbbbbbb2',
+      spawn: (bin, args, options) => { spawned.push({ bin, args, stdio: options.stdio, env: options.env }); return { status: 5 }; },
+      execve: null,
+      argv: ['node', '/opt/homebrew/bin/mc', '--emit-shell-directives'],
+      ...overrides,
+    });
+    return { code, written: written.join(''), spawned };
+  };
+
+  it('restartPage: a TTY stdout gets the screen and scrollback cleared before the moved line', () => {
+    const written = [];
+    restartWith({ stdout: { isTTY: true, write: (text) => written.push(text) } });
+    assert.equal(written.join(''), `\x1b[H\x1b[2J\x1b[3J${MOVED}`);
+  });
+
+  it('restartPage: a stdout that is not a TTY gets no escape and the line as before', () => {
+    const { written } = restartWith({});
+    assert.equal(written, `\n${MOVED}`);
+    assert.doesNotMatch(written, /\x1b/u);
+  });
+
+  it('restartPage: with execve, the process is replaced and nothing is spawned', () => {
+    const execs = [];
+    const env = Object.freeze({ MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' });
+    const { spawned } = restartWith({ env, execve: (...args) => { execs.push(args); } });
+    // fd 3 does not survive Node's execve, so the new image is told nothing
+    // about it: no wrapper flag, no wrapper variable, the rest as it was.
+    assert.deepEqual(execs, [[process.execPath, [process.execPath, '/opt/homebrew/bin/mc'], { MC_HOME: '/h' }]]);
+    assert.deepEqual(spawned, []);
+  });
+
+  it('restartPage: a real exec keeps the PID and starts the new image without the wrapper flag', (t) => {
+    if (typeof process.execve !== 'function') return t.skip('no process.execve before Node 22.15');
+    const module = new URL('../../src/mc/commands/home.js', import.meta.url).href;
+    const after = "console.log(JSON.stringify({ pid: process.pid, flag: process.env.MC_EMIT_SHELL_DIRECTIVES ?? null, args: process.argv.slice(1) }));";
+    const before = [
+      `import { restartPage } from ${JSON.stringify(module)};`,
+      'console.log(process.pid);',
+      `restartPage({ stdout: process.stdout, from: 'aaaaaaaa1', to: 'bbbbbbbb2', argv: [process.execPath, '--input-type=module', '-e', ${JSON.stringify(after)}, '--emit-shell-directives'] });`,
+      "throw new Error('execve returned');",
+    ].join('\n');
+    const out = spawnSync(process.execPath, ['--input-type=module', '-e', before], {
+      env: { ...process.env, MC_EMIT_SHELL_DIRECTIVES: '1' }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(out.status, 0, out.stderr);
+    const lines = out.stdout.trim().split('\n');
+    const replaced = JSON.parse(lines.at(-1));
+    assert.equal(replaced.pid, Number(lines[0]), 'the same process, replaced');
+    assert.equal(replaced.flag, null);
+    assert.ok(!replaced.args.includes('--emit-shell-directives'), replaced.args.join(' '));
+  });
+
+  it('restartPage: with execve undefined, mc is spawned and waited on as before', () => {
+    // Node 22 before 22.15 has no `process.execve`: the default is undefined
+    // there, and an undefined dependency falls to that default.
+    const real = process.execve;
+    process.execve = undefined;
+    let result;
+    try {
+      result = restartWith({ execve: undefined });
+    } finally {
+      process.execve = real;
+    }
+    const { code, spawned } = result;
+    assert.equal(code, 5);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].bin, process.execPath);
+    assert.deepEqual(spawned[0].args, ['/opt/homebrew/bin/mc', '--emit-shell-directives']);
+    assert.deepEqual(spawned[0].stdio, ['inherit', 'inherit', 'inherit', 3]);
+    assert.deepEqual(spawned[0].env, { MC_EMIT_SHELL_DIRECTIVES: '1' });
+  });
+
+  it('restartPage: with an execve that throws, mc is spawned and waited on as before', () => {
+    let tried = 0;
+    const env = Object.freeze({ MC_EMIT_SHELL_DIRECTIVES: '1', MC_HOME: '/h' });
+    const { code, spawned } = restartWith({ env, execve: () => { tried += 1; throw new Error('ENOEXEC'); } });
+    assert.equal(tried, 1);
+    assert.equal(code, 5);
+    assert.equal(spawned.length, 1);
+    assert.deepEqual(spawned[0].args, ['/opt/homebrew/bin/mc', '--emit-shell-directives']);
+    assert.deepEqual(spawned[0].stdio, ['inherit', 'inherit', 'inherit', 3]);
+    assert.equal(spawned[0].env, env, 'the failed exec must leave the wrapper environment intact for spawn');
   });
 
   it('reads no commit when mc is not running from a checkout, or git does not answer', () => {

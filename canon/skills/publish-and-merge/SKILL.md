@@ -5,7 +5,8 @@ description: How a change in an mc repository (memoro, memoro-cli) is tested and
 # Publish and merge
 
 What the three verbs do today. Who may land a pull request is your role's to
-say, or the person's. The verbs replace `node --test`, `npm test`, `npm run ci`,
+say, or the person's; a session a person opened by hand lands only on their
+word. The verbs replace `node --test`, `npm test`, `npm run ci`,
 `git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
@@ -17,8 +18,8 @@ in it and say why in the reply.
   [--test-name-pattern <p>]` is a focused rerun.
 - It answers within 540 s with GREEN or RED, the failing lines and the log
   path; give the Bash call `timeout: 600000`. Past the budget: `RUNNING`,
-  exit 3, and `mc gate --wait` reads the same log. Red: fix, then run the
-  `re-run:` line it printed.
+  exit 3, and `mc gate --wait` reads the same log. Nothing goes in the
+  background to be polled. Red: fix, then run the `re-run:` line it printed.
 - `--full` is refused, and so is bypassing the lane with `npm test`,
   `npm run ci` or a bare `node --test`: the whole suite is the merger's.
   Dependencies are attached for you: never `npm ci` or a bare `npm install`;

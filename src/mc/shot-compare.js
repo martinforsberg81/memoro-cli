@@ -263,7 +263,7 @@ export async function runCompare({
       stderr.write(`mc: ${label}: the capture script said ok and named no file\n`);
       return 1;
     }
-    const gap = actionGap(req, result);
+    const gap = actionGap(req, result, { worktree, script: declared.argv.join(' ') });
     if (gap) { stderr.write(`mc: ${label}: ${scrub(gap)}\n`); return 1; }
     results[side] = result;
   }
