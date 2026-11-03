@@ -35,8 +35,8 @@ describe('canonRoot', () => {
   });
 });
 
-describe('canon/roles/_plan-writing.md names the step models and their tool', () => {
-  const role = readFileSync(new URL('../../canon/roles/_plan-writing.md', import.meta.url), 'utf8').replace(/\s+/gu, ' ');
+describe('canon/roles/project-verb.md names the step models and their tool', () => {
+  const role = readFileSync(new URL('../../canon/roles/project-verb.md', import.meta.url), 'utf8').replace(/\s+/gu, ' ');
   // The pairing as the role writes it, e.g. "`haiku` and `opus` on claude".
   const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;
 

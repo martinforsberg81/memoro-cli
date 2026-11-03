@@ -116,7 +116,7 @@ and model default. The definition used to be read from
 role mc still launches depended on the user having written it: a fresh
 machine got the area and none of the role.
 
-It is [`canon/roles/worker.md`](../../canon/roles/worker.md) now, read
+It is the `worker` part of [`canon/roles/build-session.md`](../../canon/roles/build-session.md) now (`build-session:worker`), read
 through `readCanonRole` the way `mc plan` and `mc brief` read theirs, and
 `areaRole` falls back to canon so conversations opened in the area later get
 the overlay too. A catalogue that defines `worker` still wins — it is the

@@ -163,7 +163,7 @@ import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, wri
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
+import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
 import { attachRepoDepsAsync } from './work-deps.js';
@@ -2306,7 +2306,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * What a review session's verdict leads to (`canon/roles/goal-review.md`).
+   * What a review session's verdict leads to (`canon/roles/review-session.md`).
    * Red, or no verdict: `blocked`, and nothing goes back to a build session
    * until plan sets the goal open. Green: queued for the merger as `mc merge`
    * queues — but only the head it judged. A branch that has moved since is not
@@ -2389,7 +2389,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * One goal session: the lane and total caps, the class routing and the billing
    * of a step, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word, as `runStep` does. A goal in `review` gets a review
-   * session instead: the goal-review role, on the review model (`reviewRoute`),
+   * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head, and `settleReview` after it.
    *
    * It is not `runStep`, because nearly all of that is the plan and the register
@@ -2410,7 +2410,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const planning = kind === 'plan';
     const roleName = review ? REVIEW_ROLE : planning ? PLAN_ROLE : BUILD_ROLES.goal;
     const role = deps.role(roleName);
-    if (!role?.overlay) { say(`${name}: canon/roles/${roleName}.md is missing on this machine, skip`); return 'skipped:role-missing'; }
+    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
     const routed = review ? reviewRoute(goal) : { route: planning ? planRoute(role) : routeClass(goal.class) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
@@ -2418,8 +2418,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    // A plan session stands in the programme's directory, beside the goal and
-    // never in its worktree: it writes no code there (`canon/roles/plan.md`).
+    // A plan session stands in the programme's directory, beside the goal; it
+    // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
     const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
@@ -2742,8 +2742,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = roleOfKind(kind);
     const role = deps.role(roleName);
     if (!role?.overlay) {
-      abandonMerge(`canon/roles/${roleName}.md is missing`);
-      return block(REFUSAL['role-missing'], `canon/roles/${roleName}.md is missing on this machine`);
+      abandonMerge(`${roleFileText(roleName)} is missing`);
+      return block(REFUSAL['role-missing'], `${roleFileText(roleName)} is missing on this machine`);
     }
     // A step that names a work class is routed here, before a tool is launched,
     // from the local catalog and capacity snapshot alone (ruling 59). The
@@ -2818,7 +2818,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
-    const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
+    const instructions = instructionsFor(launch.id, withWorkers(role, settings.subagents));
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
 
     // At each launch, use the provider's plan until a window is full or the
@@ -2862,8 +2862,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
-      // names the role, but a name is not a revision: `mc roles check step`
-      // compares this digest with what `canon/roles/step.md` assembles to now,
+      // names the role, but a name is not a revision: `mc roles check
+      // build-session:project` compares this digest with what
+      // `canon/roles/build-session.md` assembles to now,
       // and an hour-long session started before an edit lands is exactly the
       // case nobody could see (#659's goal).
       role: roleRecord({

@@ -30,8 +30,8 @@ export const GOALS_DIR = 'goals';
  * goals in `after` that have not landed. A build session ends a goal it holds
  * met in `review`; the review session sets `blocked` on red; the merger or the
  * runner sets `done` when every pull request the goal carries (`prs`) has
- * landed. Only a person sets `done` by hand, and only plan sets a blocked goal
- * `open` again. `waiting` is the runner's to release (`waitingMoves`): no
+ * landed. A person or a plan session sets any status by hand; a build or
+ * review session never sets `done` or `dropped`, and a review never `open`. `waiting` is the runner's to release (`waitingMoves`): no
  * session is started on it and nothing wakes plan. `dropped` is a goal let go
  * without landing — a person's or plan's word, never done: a goal that starts
  * after it does not start (`afterOf` reads it as gone).
@@ -43,8 +43,8 @@ export const FINISHED = ['done', 'dropped'];
 export const ARCHIVE_DIR = '.archive';
 /** The file under a programme's `goals/` with one row per archived goal. */
 export const GOAL_LOG_FILE = 'goal_log.md';
-/** The role a goal's review session runs with: `canon/roles/goal-review.md`. */
-export const REVIEW_ROLE = 'goal-review';
+/** The role a goal's review session runs with: `canon/roles/review-session.md`, its `goal` part. */
+export const REVIEW_ROLE = 'review-session:goal';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
 export const CLASSES = ['fast', 'large'];
 
@@ -308,8 +308,8 @@ export function waitsOnPerson(goal) {
   return goal.status === 'blocked' && !waitsOnPlan(goal);
 }
 
-/** The role a plan session woken by a blocked goal runs with: `canon/roles/plan.md`. */
-export const PLAN_ROLE = 'plan';
+/** The role every plan session runs with, `mc plan`'s and the runner's: `canon/roles/plan-session.md`. */
+export const PLAN_ROLE = 'plan-session';
 
 /** Whether the runner starts a plan session on `goal`: it parses and waits on plan. */
 export function planDue(goal) {

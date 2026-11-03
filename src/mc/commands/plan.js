@@ -47,6 +47,7 @@ import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from 
 import { ask, interactive, select } from '../prompt.js';
 import { run as runGit } from '../git.js';
 import { planSessionRefusal } from '../session-role.js';
+import { PLAN_ROLE } from '../goals.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
@@ -152,9 +153,9 @@ export async function run(argv, deps = {}) {
   // written. A role file with no body is a session told nothing about
   // planning, which is what that change ended; refused here rather than
   // launched, the way every other role command refuses its own.
-  const role = (deps.role || (() => readCanonRole('plan')))();
+  const role = (deps.role || (() => readCanonRole(PLAN_ROLE)))();
   if (!role?.overlay) {
-    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan.md with an overlay body\n');
+    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan-session.md with an overlay body\n');
     return 1;
   }
 
@@ -179,7 +180,7 @@ export async function run(argv, deps = {}) {
     pick: opts.fresh ? 'new' : null,
     verb: 'plan',
     areaName: planArea(programme, env),
-    roleName: role.name || 'plan',
+    roleName: role.name || PLAN_ROLE,
     roleSource: roleSourceOf(role),
     cache: role.cache,
     model: opts.model,
@@ -374,7 +375,7 @@ export function programmeLabel(row) {
  * the guess is doing the wrong work confidently.
  *
  * It used to go on to name what to read first and to say that a `plan-review`
- * park is this session's. Both are in `canon/roles/plan.md`, which reaches the
+ * park is this session's. Both are in `canon/roles/plan-session.md`, which reaches the
  * session the way every other role's does, and a session
  * told to start by reading and reporting spent its first turn on an intro
  * Martin had not asked for (Martin, 2026-09-13). What a planning session *is*
@@ -382,7 +383,7 @@ export function programmeLabel(row) {
  * already decided and this session therefore does not take — is the role's
  * to say.
  *
- * This function used to read `canon/roles/_common.md` and paste it into the
+ * This function used to read the shared role text and paste it into the
  * prompt, because a role with no overlay inherits nothing: `instructionsFor`
  * hangs the shared text on the overlay, and this role had none. It has one now
  * (#656), so the shared text arrives by the same door as every other session's

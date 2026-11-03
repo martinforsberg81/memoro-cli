@@ -95,7 +95,8 @@ describe('one home per rule in canon/', () => {
 });
 
 describe('every role names the skills it needs', () => {
-  const ROLES = ['brief', 'build-goal', 'build-project', 'goal-review', 'helper', 'intake', 'plan', 'review', 'worker'];
+  const BUILDS = ['build-session:goal', 'build-session:project', 'build-session:worker'];
+  const ROLES = ['brief', ...BUILDS, 'review-session:goal', 'review-session:project', 'helper', 'intake', 'plan-session'];
   const named = (overlay) => [...overlay.matchAll(/^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu)].map((m) => m[1]);
 
   it('names only skills canon ships, and every skill is named by some role', () => {
@@ -121,14 +122,14 @@ describe('every role names the skills it needs', () => {
   });
 
   it('every role that changes code names publish-and-merge, git and scratch-and-probes', () => {
-    for (const role of ['brief', 'build-goal', 'build-project', 'plan', 'review', 'worker']) {
+    for (const role of ['brief', ...BUILDS, 'plan-session', 'review-session:project']) {
       const skills = named(readCanonRole(role).overlay);
       for (const skill of ['publish-and-merge', 'git', 'scratch-and-probes']) assert.ok(skills.includes(skill), `${role} does not name ${skill}`);
     }
   });
 
   it('reaches the session as a pointer to the installed skill, not as its text', () => {
-    const told = instructionsFor('claude-code', readCanonRole('build-project').overlay);
+    const told = instructionsFor('claude-code', readCanonRole('build-session:project').overlay);
     assert.match(told, /Skill `mc-processes` \(/u);
     assert.doesNotMatch(told, /^@skill /mu);
     assert.doesNotMatch(told, phrase(DEFINING.processes));

@@ -51,8 +51,8 @@ Martin asks and change nothing he has not asked for; that it may do every part
 of the work — write a plan, write or drop a proposal, get a blocked or failed
 step moving, fix and land a small problem in the code; and where to read — `mc
 --fresh`, `mc status <name>`, `mc step <project>`, `~/mc/proposals/`,
-`~/memoro-cli`. It includes `_plan-writing.md`, as `mc plan` does. Everything else a session needs comes from
-`canon/roles/_common.md`; the role was cut to that on 2026-09-28 (Martin:
+`~/memoro-cli`. It includes `project-verb.md` and `step-verb.md`, as `mc plan` does. Everything else a session needs comes from
+`canon/roles/all-sessions.md`; the role was cut to that on 2026-09-28 (Martin:
 "för lång och babblig").
 
 A file the runner has never written and a file it wrote and left empty are two
@@ -71,7 +71,7 @@ none, with no opening words: Martin types the first message (2026-09-28 —
 unblocking steps on its own reading before he had asked for anything; the
 resume prompt went 2026-09-19). Opus by default from the role, `--codex`
 allowed through the adapter, then
-`canon/roles/_common.md` and the overlay from `canon/roles/brief.md` —
+`canon/roles/all-sessions.md` and the overlay from `canon/roles/brief.md` —
 assembled like every other session's ([`mc-roles.md`](mc-roles.md)). NOW says
 `brief` for exactly as long as it holds the terminal. A missing role is exit 1.
 

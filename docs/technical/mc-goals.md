@@ -3,8 +3,9 @@
 **Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
 `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
 `reviewRoute`, `settleReview`, `goalWithoutWord`, `releaseWaiting`, `planRoute`,
-`settlePlan`), `src/mc/merger.js` (`tellGoal`), `canon/roles/build-goal.md`
-(with `_build.md`), `canon/roles/goal-review.md` and `canon/roles/plan.md`
+`settlePlan`), `src/mc/merger.js` (`tellGoal`), `canon/roles/build-session.md`
+(its `goal` part), `canon/roles/review-session.md` (its `goal` part),
+`canon/roles/plan-session.md` and `canon/roles/goal-verb.md`
 
 A goal is two text files and a worktree, beside projects. It has no steps, no
 register and no owner. A build session does the work and publishes its pull
@@ -177,11 +178,12 @@ Nine verbs; the status verbs are five words.
   says which (`remade from origin/main — it had no commits of its own, and
   main has 12 more`, `left as it is — 3 commits of its own`), and nothing
   here fails the status change (`remakeUnbuiltBranches`, `goals.js`).
-- A session — `MC_GOAL` set and `MC_TOOL` not `person` — is refused `done`,
-  by either verb: only the merger and a person set it. A review session
-  (`MC_ROLE=goal-review`) is refused `open` too: plan sets a goal open again.
-  A plan session (`MC_ROLE=plan`) is refused `review`. Any session but plan is
-  refused `dropped`.
+- A plan session (`MC_ROLE=plan-session`) sets every status (Martin,
+  2026-11-03: it drives the programme toward its aim, and may finish a goal
+  itself). Any other session — `MC_GOAL` set and `MC_TOOL` not `person` — is
+  refused `done` and `dropped`, by either verb: the merger sets `done` when the
+  goal lands. A review session (`MC_ROLE=review-session:goal`) is refused
+  `open` too: plan decides what comes after a red (`refusedStatus`).
 - **`show <p>/<g>`** — the front matter (with `· after <names>` when set), the body, the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
@@ -245,11 +247,11 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
    candidate too, of kind `plan`.
 2. **Worktrees.** A repository's worktree that has gone is made again on
    `goal/<goal>`, as `mc goal new` makes it.
-3. **Launch.** An `open` goal gets a build session with the `build-goal` role
-   (`canon/roles/build-goal.md`, which includes `_build.md`), in
+3. **Launch.** An `open` goal gets a build session with the `build-session:goal`
+   role (`canon/roles/build-session.md`, its `goal` and shared build parts), in
    the first repository's worktree, with the goal's class routing, model and
    billing as a step has them. A goal in `review` gets a review session with
-   the `goal-review` role instead, on the review class's candidate
+   the `review-session:goal` role instead, on the review class's candidate
    (`mc model set review`), never routed. It never runs on the model of the
    goal's last build entry: when the review model is that model, the goal
    waits until `mc model set review` names another; it is never reviewed by
@@ -297,22 +299,24 @@ be queued, an `after` goal gone without landing. A goal blocked by a person or
 by a build session's own `--status blocked` waits on a person and wakes
 nothing; so does a `waiting` goal.
 
-- **Where and on what.** The `plan` role (`canon/roles/plan.md`, its section
-  *Headless, on a blocked goal*), on the role's model — `fable`, ruling 6 — on
+- **Where and on what.** The `plan-session` role (`canon/roles/plan-session.md`,
+  its section *Headless, on a blocked goal*), on the role's model — `fable`, ruling 6 — on
   claude at high effort, pinned as a review is (`planRoute`), with the billing
   any session has. It stands in the programme's directory
-  (`~/mc/programs/<programme>/`), never in the goal's worktree: `MC_ROLE=plan`,
+  (`~/mc/programs/<programme>/`), beside the goal's worktree: `MC_ROLE=plan-session`,
   `MC_GOAL`, `MC_PROGRAMME`, `MC_TOOL` and `MC_MODEL` are set, `MC_REPO` and
   `MC_WORKAREA` are not. Its prompt (`goalPlanPrompt` in `run-plan.js`) names
-  the goal, the last entry's words and the worktree it may read.
+  the goal, the last entry's words and the worktree, which it may take over.
 - **One at a time.** The session is named `goal:<p>/<g>` like the goal's other
   sessions, so the current file that holds a build or a review holds it too.
 - **What it does.** It reads GOAL.md, LOG.md, the pull request and its
-  comments, the programme's brief and the code, and ends with one of three:
-  revises GOAL.md if needed, writes `Nästa:` and sets the goal `open`; closes
-  the pull request and makes a new goal when this one was wrong; or leaves it
-  `blocked` with the question for Martin. It never writes code, commits,
-  pushes or merges in the goal's worktree.
+  comments, the programme's README and the code, and does what moves the
+  programme's aim most cheaply: finishes the work itself in the goal's
+  worktree and publishes it (`--status review`), revises GOAL.md and sets it
+  `open` with a `Nästa:`, replaces or drops a wrong goal, or leaves it
+  `blocked` with the question for Martin. It never does Martin's acts —
+  `mc deploy`, production data, credentials, `--admin`; work that needs one
+  waits for an interactive session.
 - **No loop** (`settlePlan`). A goal the session leaves `blocked` — with its
   own entry or none — gets the runner's entry `Gjort: plan session ended; the
   goal stays blocked — waits on Martin` (`planHeldText`). A goal whose last
@@ -323,10 +327,10 @@ nothing; so does a `waiting` goal.
 
 ## What a build session does
 
-The role is `canon/roles/build-goal.md`, one of the two variants of the
-build role: what every build does is written once in `canon/roles/_build.md`,
-which it and `build-project.md` both `@include`, and the variant keeps only
-what is a goal's — GOAL.md and LOG.md. It works on the branch as it is, never
+The role is `canon/roles/build-session.md`, started as `build-session:goal`:
+what every headless build does is written once, in the part the goal and the
+project start share, and the `goal` part keeps only what is a goal's — GOAL.md
+and LOG.md. It works on the branch as it is, never
 fetching or merging `origin/main` to keep up: a conflict the merger reports
 is the one time a build merges `origin/main`. It works item after item until
 the criteria hold, and ends at a boundary between two only when the work is
@@ -339,7 +343,7 @@ when it cannot go on. A build session publishes, and never merges or sets
 
 ## What a review session does
 
-The role (`canon/roles/goal-review.md`) judges and never builds: it does not
+The role (`canon/roles/review-session.md`, its `goal` part) judges and never builds: it does not
 edit, commit, push or comment-fix. It reads GOAL.md, LOG.md and the pull
 request's diff against `origin/main`, and checks, in order:
 
