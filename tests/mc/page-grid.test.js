@@ -161,6 +161,22 @@ describe('the grid', () => {
     assert.deepEqual([idle.kind, idle.name, idle.state, idle.progress, idle.prs], ['idle', 'memoro', 'idle', null, []]);
   });
 
+  it('gives a merge item with no pull request number no PR cell — never #0 or #NaN', () => {
+    const queued = [
+      { repo: 'memoro-cli', branch: 'goal/no-number', since: '2026-11-03T11:50:00Z', state: 'queued' },
+      { repo: 'memoro-cli', pr: null, branch: 'null-number', since: '2026-11-03T11:51:00Z', state: 'queued' },
+      { repo: 'memoro-cli', pr: 1104, branch: 'merge-branch', since: '2026-11-03T11:52:00Z', state: 'queued' },
+    ];
+    const merges = mergesSection({ queued, now: NOW, merger: { pid: 7 } });
+    const repo = merges.repos.find((one) => one.repo === 'memoro-cli');
+    const numbers = repo.waiting.flatMap((item) => item.prs.map((pr) => pr.number));
+    assert.deepEqual(numbers, [1104], 'only the item with a number has a PR');
+    assert.ok(repo.waiting.some((item) => item.prs.length === 0), 'an item without a number is still in the queue');
+    assert.deepEqual(repo.prs.map((pr) => pr.number), [1104]);
+    const text = renderPageLines(pageData({ merges }), { columns: 120, now: NOW }).map(plain).join('\n');
+    assert.doesNotMatch(text, /#0\b|#NaN/u, text);
+  });
+
   it('clips a cell with … and never inside a number', () => {
     assert.equal(clipCell('short', 9), 'short');
     assert.equal(clipCell('docx-editor-toolbar', 10), 'docx-edit…');

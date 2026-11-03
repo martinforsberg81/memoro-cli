@@ -648,6 +648,12 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
   return lanes;
 }
 
+/** A pull request's number, or null when there is none to draw: `#0` and `#NaN` are not pull requests. */
+function prNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
 /**
  * MERGES — one queue per repository, including idle queues. `repos[]` is
  * the page/JSON contract; aggregate fields remain for status/PR readers.
@@ -779,13 +785,15 @@ export function mergesSection({
     // Every item carries the grid's fields (page-grid.js) under the names every
     // section uses: what it is (`kind`), its project or branch (`name`), its
     // `state`, how long it has been in it (`progress`) and its pull request.
+    // An item with no pull request number — a goal's job, a red with nothing
+    // recorded — has no PR cell, never `#0` or `#NaN`.
     const gridded = (item, kind, state, seconds, flags) => ({
       ...item,
       kind,
       name: item.name ?? item.step?.project ?? item.branch ?? null,
       state,
       progress: seconds == null ? null : ageWords(seconds),
-      prs: [{ number: Number(item.pr), repo, ...flags }],
+      prs: prNumber(item.pr) ? [{ number: prNumber(item.pr), repo, ...flags }] : [],
     });
     const active = own(landings).filter(isLandingRound).map((item) => {
       const phase = mergePhase(item.phase);
@@ -824,8 +832,8 @@ export function mergesSection({
       name: repo,
       progress: last ? ageWords(last.age_seconds) : null,
       prs: [...active, ...fixing, ...red, ...waiting].length
-        ? [...active, ...fixing, ...red, ...waiting].map((item) => item.prs[0])
-        : (last ? [{ number: last.pr, repo, merged: true }] : []),
+        ? [...active, ...fixing, ...red, ...waiting].flatMap((item) => item.prs)
+        : (prNumber(last?.pr) ? [{ number: prNumber(last.pr), repo, merged: true }] : []),
     };
   });
   return {
