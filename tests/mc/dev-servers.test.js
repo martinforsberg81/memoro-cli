@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 
 import {
   admission, admit, checkManifest, freeMemoryPercent, listServers, processCwd, registerManifest, serversUnder,
-  stopServersUnder, strayCwd, touchServer, unregisterManifest,
+  stopServersUnder, strayCwd, touchServer, unregisterManifest, DEFAULT_MAX_SERVERS, DEFAULT_HOLDER_STALE_MINUTES,
 } from '../../src/mc/dev-servers.js';
 import { run } from '../../src/mc/commands/dev.js';
 import { setLogPath } from '../../src/mc/logger.js';
@@ -373,6 +373,10 @@ describe('admission — may one more server start', () => {
 });
 
 describe('admit — waiting for a slot', () => {
+  // The cases below are about waiting and evicting, with two holders against
+  // the cap and the stale age these tests were written for, pinned here.
+  const TWO_SLOTS = { MC_DEV_MAX_SERVERS: '2', MC_DEV_HOLDER_STALE_MINUTES: '30' };
+
   function register(root, worktree, id) {
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure' })));
@@ -390,7 +394,7 @@ describe('admit — waiting for a slot', () => {
       service: 'memoro-measure',
       worktree: '/w/third',
       waitSeconds: 900,
-      env: {},
+      env: TWO_SLOTS,
       root,
       now: () => t,
       sleep: async (ms) => {
@@ -451,7 +455,7 @@ describe('admit — waiting for a slot', () => {
     const events = [];
     let t = Date.parse('2026-10-19T20:00:00Z');
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 900, env: {}, root, evict: true,
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 900, env: TWO_SLOTS, root, evict: true,
       now: () => t,
       sleep: async (ms) => { t += ms; },
       freeMemory: () => 50,
@@ -474,7 +478,7 @@ describe('admit — waiting for a slot', () => {
     const stopped = [];
     const events = [];
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 60, env: {}, root, evict: true,
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 60, env: TWO_SLOTS, root, evict: true,
       now: () => t,
       sleep: async (ms) => { t += ms; },
       freeMemory: () => 50,
@@ -493,12 +497,29 @@ describe('admit — waiting for a slot', () => {
     register(root, '/w/b', 'measure-b');
     let t = Date.parse('2026-10-19T20:00:00Z');
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 0, env: {}, root,
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 0, env: TWO_SLOTS, root,
       now: () => t, sleep: async (ms) => { t += ms; }, freeMemory: () => 50,
       stop: () => { throw new Error('must not stop'); }, logEvent: () => {},
     });
     assert.equal(verdict.reason, 'cap');
     assert.equal(verdict.evictable, undefined);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('by default four holders are admitted against, and a fifth waits; a holder unused five minutes is stale', async () => {
+    assert.equal(DEFAULT_MAX_SERVERS, 4);
+    assert.equal(DEFAULT_HOLDER_STALE_MINUTES, 5);
+    const root = scratch();
+    for (const id of ['a', 'b', 'c']) register(root, `/w/${id}`, `measure-${id}`);
+    const ask = () => admit({
+      service: 'memoro-measure', worktree: '/w/fifth', waitSeconds: 0, env: {}, root,
+      now: () => 0, sleep: async () => {}, freeMemory: () => 50, logEvent: () => {},
+    });
+    assert.deepEqual(await ask(), { ok: true }, 'three live: a fourth is admitted');
+    register(root, '/w/d', 'measure-d');
+    const refused = await ask();
+    assert.equal(refused.reason, 'cap');
+    assert.equal(refused.cap, 4);
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -522,7 +543,7 @@ describe('admit — waiting for a slot', () => {
     register(root, '/w/b', 'measure-b');
     const out = capture();
     const code = await run(['admit', 'memoro-measure', '--worktree', '/w/third', '--wait', '0', '--json'], {
-      root, stdout: out, stderr: capture(), env: {}, freeMemory: () => 40,
+      root, stdout: out, stderr: capture(), env: TWO_SLOTS, freeMemory: () => 40,
     });
     assert.equal(code, 75);
     const refused = JSON.parse(out.text());
@@ -532,7 +553,7 @@ describe('admit — waiting for a slot', () => {
     rmSync(join(root, 'measure-b.json'));
     const text = capture();
     assert.equal(await run(['admit', 'memoro-measure', '--worktree', '/w/third'], {
-      root, stdout: text, stderr: capture(), env: {}, freeMemory: () => 40,
+      root, stdout: text, stderr: capture(), env: TWO_SLOTS, freeMemory: () => 40,
     }), 0);
     assert.equal(text.text(), 'mc: admitted\n');
 

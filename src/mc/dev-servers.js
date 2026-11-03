@@ -285,15 +285,22 @@ export function listServers({ root = devServersRoot(), reap = true, now = () => 
   return { servers, reaped };
 }
 
-/** How many app servers may run at once, and the free-memory floor under which none starts. */
-export const DEFAULT_MAX_SERVERS = 2;
+/**
+ * How many app servers may run at once, and the free-memory floor under which none starts.
+ *
+ * Two until 2026-11-03. From 31 Oct to 3 Nov 72 starts waited for a slot
+ * (median ~200 s) and 26 were refused after fifteen minutes, every one on the
+ * cap and none on memory (36–41 % free), so the cap was raised to four and the
+ * memory floor is what keeps the machine out of swap.
+ */
+export const DEFAULT_MAX_SERVERS = 4;
 export const DEFAULT_MIN_FREE_PERCENT = 15;
 
 /**
  * How long a holder may go unused by mc before an admission that needs its
  * slot stops it (`MC_DEV_HOLDER_STALE_MINUTES`).
  */
-export const DEFAULT_HOLDER_STALE_MINUTES = 30;
+export const DEFAULT_HOLDER_STALE_MINUTES = 5;
 
 /** When mc last used a server: `last_used_at`, else when it was registered or started. */
 export function lastUsedAt(server) {
@@ -373,7 +380,7 @@ export function freeMemoryPercent(run = spawnSync) {
  *
  * The registry is read afresh on every turn, through `listServers`, so a
  * holder that died is swept rather than waited for. With `evict`, a holder mc
- * has not used for `MC_DEV_HOLDER_STALE_MINUTES` (30) is stopped through its
+ * has not used for `MC_DEV_HOLDER_STALE_MINUTES` (5; 30 until 2026-11-03) is stopped through its
  * own stop command to make room, one at a time, each tried once; without it
  * nothing running is stopped and the wait is for a holder to leave by itself.
  * Before 2026-10-19 nothing was ever stopped, and a measure server kept alive
