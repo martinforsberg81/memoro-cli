@@ -21,6 +21,7 @@ import {
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
+import { PLAN_ROLE } from '../../../src/mc/goals.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
 
@@ -36,8 +37,8 @@ const REPOS = [
 
 describe('the plan role', () => {
   it('is the model and the tools, and a body of its own', () => {
-    const role = readCanonRole('plan');
-    assert.equal(role.name, 'plan');
+    const role = readCanonRole(PLAN_ROLE);
+    assert.equal(role.name, 'plan-session');
     // `fable`, not `opus` (Martin, 2026-09-04). mc passes `--model` through
     // unvalidated, so the word has to be one the tool accepts: `claude --model
     // fable` was run and resolved to `claude-fable-5-1`.
@@ -47,28 +48,33 @@ describe('the plan role', () => {
   });
 
   /**
-   * What the body is for, and the line it must not cross.
-   *
-   * The role had none for months, so an `mc plan` session was told its model,
-   * `_common.md` and the first prompt — nothing about planning at all. What it
-   * says now is only what is already settled elsewhere: the programme is the
-   * unit, a `plan-review` park is this session's, and a project the brief has
-   * decided is not. It still predicts nothing about *this* programme's
-   * deliverable, which is the rule the prompt is held to below.
+   * What the body is for (Martin, 2026-11-03): the programme's aim in its
+   * README, and full freedom toward it, a goal's branch included. Interactive,
+   * no restrictions; headless, never Martin's acts. The ban a headless plan
+   * session had — no code, no commit, no publish, no `review` or `done` — and
+   * its list of three allowed ends are gone.
    */
-  it('says what a planning session is for, and what is not its work', () => {
-    const { overlay } = readCanonRole('plan');
-    assert.match(overlay, /programme is the unit, not a project/u);
-    assert.match(overlay, /`blocked_by:\s*plan-review`/u);
-    assert.match(overlay, /not\s+yours\s+is\s+a\s+project\s+the\s+brief\s+has\s+already\s+decided/u);
-    assert.match(overlay, /not\s+a\s+workarea/u);
+  it('says the session drives the programme toward the README aim, interactive and headless', () => {
+    const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
+    assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
+    assert.match(told, /full freedom/u);
+    assert.match(told, /taking over a goal's branch and finishing the work there/u);
+    assert.match(told, /A goal \(`GOAL\.md`\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
+    assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
+    assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
+    assert.match(told, /Every status is yours to set/u);
+    assert.match(told, /`blocked_by: plan-review`/u);
+    assert.match(told, /not a workarea/u);
+    for (const ban of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u]) {
+      assert.doesNotMatch(told, ban);
+    }
   });
 
   // The plan-writing rules are not restated in the role file: they are the
-  // passage `canon/roles/brief.md` carries too, pulled in at assembly.
+  // verb file `canon/roles/brief.md` carries too, pulled in at assembly.
   it('carries the plan-writing rules by reference, not by copy', () => {
-    const { overlay } = readCanonRole('plan');
-    assert.match(overlay, /^@include _plan-writing\.md$/mu);
+    const { overlay } = readCanonRole(PLAN_ROLE);
+    assert.match(overlay, /^@include project-verb\.md$/mu);
     assert.doesNotMatch(overlay, /`mc project send` is the validation/u);
     const told = instructionsFor('claude-code', overlay);
     assert.match(told, /`mc project send` is the validation/u);
@@ -89,7 +95,7 @@ describe('the plan role', () => {
       open: () => { throw new Error('must not launch'); },
     });
     assert.equal(code, 1);
-    assert.match(stderr.out.text, /canon\/roles\/plan\.md with an overlay body/u);
+    assert.match(stderr.out.text, /canon\/roles\/plan-session\.md with an overlay body/u);
   });
 });
 
@@ -131,13 +137,13 @@ describe('where a planning session lives', () => {
 
   it('in layout 2 names the programs/ directory and says where the projects are', () => {
     const env = { MC_WORK_ROOT: layoutTwoRoot() };
-    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), env });
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env });
     assert.match(prompt, /~\/mc\/programs\/msr-core\//u);
     assert.match(prompt, /Your programme's projects are the directories beside them, each with its PLAN\.json and STATE\.json/u);
   });
 
   it('in layout 1 says nothing about projects beside the session', () => {
-    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), env: { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-layout1-')) } });
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env: { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-layout1-')) } });
     assert.match(prompt, /~\/mc\/plan\/msr-core\//u);
     assert.doesNotMatch(prompt, /projects are the directories beside them/u);
   });
@@ -200,7 +206,7 @@ const BRANCH_RULE = BRANCH_LINE;
 describe('the prompt', () => {
   it('names the programme and where it stands — and waits for Martin', () => {
     const launch = planLaunch({
-      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
+      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole(PLAN_ROLE),
     });
     assert.match(launch.prompt, /plan session for the `msr-core` programme/u);
     // Martin 2026-11-03: the aim and the freedom, not a list of what is the runner's.
@@ -216,7 +222,7 @@ describe('the prompt', () => {
     assert.ok(!launch.prompt.includes('docs/project/'), launch.prompt);
     assert.ok(!/say what\s+you found/u.test(launch.prompt), launch.prompt);
     assert.equal(launch.model, 'fable');
-    assert.equal(launch.overlay, readCanonRole('plan').overlay);
+    assert.equal(launch.overlay, readCanonRole(PLAN_ROLE).overlay);
   });
 
   // The assertion that keeps this prompt from growing back. None of these is
@@ -235,7 +241,7 @@ describe('the prompt', () => {
   // says which name a plan's pull request may not take, not that one comes.
   it('predicts nothing about the deliverable or how it lands', () => {
     const { prompt } = planLaunch({
-      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
+      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole(PLAN_ROLE),
     });
     assert.ok(!prompt.includes(sharedRoleText()), 'the shared text is the overlay\'s to carry now');
     const rest = prompt.split('\n').filter((line) => line !== BRANCH_RULE).join('\n');
@@ -247,7 +253,7 @@ describe('the prompt', () => {
   // A planning session opened its pull request from a branch named after the
   // project and held it in a scratchpad worktree (`morning-calls`, 2026-10-14).
   it('names the plan pull request\'s branch `plan/<project>`, never the project\'s', () => {
-    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan') });
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE) });
     assert.ok(prompt.split('\n').includes(BRANCH_RULE), prompt);
   });
 
@@ -257,7 +263,7 @@ describe('the prompt', () => {
   // inheriting them.
   it('leaves the shared text to the overlay, and is told it exactly once', () => {
     const launch = planLaunch({
-      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
+      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole(PLAN_ROLE),
     });
     const told = instructionsFor('claude-code', launch.overlay);
     const shared = sharedRoleText();
@@ -271,14 +277,14 @@ describe('the prompt', () => {
   // longer repeats it (Martin, 2026-09-13 — the intro was inaktuell).
   it('leaves the plan-review hand-off to the role', () => {
     const { prompt, overlay } = planLaunch({
-      programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'),
+      programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE),
     });
     assert.ok(!prompt.includes('plan-review'), prompt);
     assert.match(overlay, /blocked_by:\s*plan-review/u);
   });
 
   it('names only the checkout it actually got', () => {
-    const launch = planLaunch({ programme: 'mc', repos: ['memoro-cli'], role: readCanonRole('plan') });
+    const launch = planLaunch({ programme: 'mc', repos: ['memoro-cli'], role: readCanonRole(PLAN_ROLE) });
     assert.match(launch.prompt, /with `memoro-cli\/` beside you/u);
     assert.ok(!launch.prompt.includes('`memoro/`'));
   });
@@ -290,7 +296,7 @@ describe('the launch', () => {
     const areaRoot = join(root, 'area');
     mkdirSync(areaRoot);
     const calls = [];
-    const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole('plan') });
+    const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole(PLAN_ROLE) });
     const result = await openInWorkArea({
       areaRoot,
       worktree: { repo: null, path: areaRoot, is_git: false },
@@ -312,7 +318,7 @@ describe('the launch', () => {
     // until `canon/roles/plan.md` grew one.
     assert.equal(call.args[3], instructionsFor('claude-code', launch.overlay));
     assert.ok(call.args[3].startsWith(sharedRoleText()), 'nothing in front of the shared text');
-    assert.match(call.args[3], /You are the planning session for one programme/u);
+    assert.match(call.args[3], /You are the plan session for one programme/u);
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
     assert.equal(call.options.stdio, 'inherit');
@@ -322,7 +328,7 @@ describe('the launch', () => {
   // on the argv rather than through `openInWorkArea`, because resolving the
   // codex launch needs the codex binary and a test must not depend on one.
   it('reaches codex through `-c instructions=`', () => {
-    const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole('plan') });
+    const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole(PLAN_ROLE) });
     const args = profileArgs('codex', instructionsFor('codex', launch.overlay));
     assert.equal(args[0], '-c');
     assert.match(args[1], /^instructions=/u);
@@ -348,7 +354,7 @@ describe('the launch', () => {
     assert.equal(opened[0].worktree.path, '/work/plan/msr-core');
     assert.equal(opened[0].areaName, 'plan/msr-core');
     assert.equal(opened[0].programme, 'msr-core');
-    assert.equal(opened[0].roleName, 'plan');
+    assert.equal(opened[0].roleName, PLAN_ROLE);
     // The session already in the directory is picked up, with no intro;
     // `pick: null` is `openInWorkArea`'s "the most recent one here, else new".
     assert.equal(opened[0].pick, null);
@@ -466,13 +472,13 @@ describe('a standing planning checkout', () => {
 describe('mc plan is the person’s entrance, not a session’s next action', () => {
   it('refuses every recognised session and agent before choosing or creating anything', async () => {
     for (const [cwd, extra, role] of [
-      ['/outside', { MC_ROLE: 'plan', MC_PROGRAMME: 'mc' }, 'plan'],
-      ['/outside', { MC_ROLE: 'review' }, 'review'],
-      ['/outside', { MC_GOAL: 'mc/g' }, 'build-goal'],
-      ['/outside', { MC_STEP: 'p:0' }, 'build-project'],
-      ['/mc/programs/mc', {}, 'plan'],
-      ['/outside', { CLAUDECODE: '1' }, 'coding-agent'],
-      ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent'],
+      ['/outside', { MC_ROLE: PLAN_ROLE, MC_PROGRAMME: 'mc' }, 'plan session'],
+      ['/outside', { MC_ROLE: 'review-session:project' }, 'review session \\(project\\)'],
+      ['/outside', { MC_GOAL: 'mc/g' }, 'build session \\(goal\\)'],
+      ['/outside', { MC_STEP: 'p:0' }, 'build session \\(project\\)'],
+      ['/mc/programs/mc', {}, 'plan session'],
+      ['/outside', { CLAUDECODE: '1' }, 'coding-agent session'],
+      ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent session'],
     ]) {
       const stderr = sink();
       const code = await run(['mc'], {
@@ -481,7 +487,7 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
         open: () => { throw new Error('must not open another session'); },
       });
       assert.equal(code, 1);
-      assert.match(stderr.out.text, new RegExp(`already in a ${role} session`));
+      assert.match(stderr.out.text, new RegExp(`already in a ${role}`));
       for (const command of ['mc project new', 'mc project step add', 'mc project send']) assert.ok(stderr.out.text.includes(command));
     }
   });

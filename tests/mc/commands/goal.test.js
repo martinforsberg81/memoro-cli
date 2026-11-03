@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { refusedStatus, run, usage } from '../../../src/mc/commands/goal.js';
-import { parseGoal, parseLog } from '../../../src/mc/goals.js';
+import { parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STATUSES } from '../../../src/mc/goals.js';
+import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 
 const HOME = '/work/programs';
@@ -272,7 +273,7 @@ test('a goal session ends in review and may not set done; a person may', async (
 });
 
 test('a review session may not set a goal open again', async () => {
-  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'goal-review' } });
+  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE } });
   assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'open'], f.deps), 2);
   assert.match(f.err(), /a review does not set open/u);
   assert.equal(await run(['log', '--done', 'red abc1234', '--status', 'blocked'], f.deps), 0, f.err());
@@ -350,12 +351,16 @@ test('mc goal list shows review, and a goal blocked by a red review or a red mer
   ]);
 });
 
-test('a plan session may not set review, and may set open or blocked', async () => {
-  const env = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: 'plan' };
-  assert.match(refusedStatus('review', env), /plan does not set review/u);
-  assert.match(refusedStatus('done', env), /does not set done/u);
-  assert.equal(refusedStatus('open', env), null);
-  assert.equal(refusedStatus('blocked', env), null);
+test('a plan session may set every status; a build or review session never done or dropped', () => {
+  const plan = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE };
+  for (const status of STATUSES) assert.equal(refusedStatus(status, plan), null, status);
+  const build = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal };
+  assert.match(refusedStatus('done', build), /does not set done/u);
+  assert.match(refusedStatus('dropped', build), /only plan or a person drops/u);
+  assert.equal(refusedStatus('review', build), null);
+  const review = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE };
+  assert.match(refusedStatus('done', review), /does not set done/u);
+  assert.match(refusedStatus('open', review), /a review does not set open/u);
 });
 
 test('mc goal list <programme> lists that programme alone, and says when it has no goals', async () => {
