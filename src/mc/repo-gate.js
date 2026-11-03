@@ -635,7 +635,7 @@ export async function runGate({
 
     // The tree the candidate resolves through, made to match the candidate.
     //
-    // This is `mc work add`'s own mechanism (`work-deps.js`), called on the
+    // This is the workareas' own mechanism (`work-deps.js`), called on the
     // repository being measured — one `node_modules` at the work root, two
     // directories above the candidate, for the workareas and the gate
     // together. A candidate whose lockfile is the one that tree holds

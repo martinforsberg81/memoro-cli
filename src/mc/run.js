@@ -2059,7 +2059,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * open, which is nowhere in the plan and nothing the next round remembers.
    * A project the runner should leave alone says so where every other such
    * fact is written down, by being `blocked` in its own `PLAN.json` (Martin,
-   * 2026-09-02). `mc work` and `mc run` now know nothing about each other.
+   * 2026-09-02). A session somebody has open and `mc run` know nothing about each other.
    *
    * `closeWorkareas` still asks. That is a different question — whether it is
    * safe to *delete* the directory — and pulling the ground from under a

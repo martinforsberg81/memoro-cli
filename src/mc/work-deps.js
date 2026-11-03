@@ -1,7 +1,7 @@
 /**
  * One dependency tree, one directory above the workareas.
  *
- * `mc work add` used to hand a session a checkout with nothing to import
+ * A new worktree used to hand a session a checkout with nothing to import
  * from. Five of this repository's test files needed `@xterm/addon-serialize`,
  * `@xterm/headless` or `node-pty` — measured 2026-09-02 on a clean
  * `origin/main` worktree: 14 failing files without a dependency tree, 9 with,
@@ -211,7 +211,7 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
  * `npm ci` was 510 MB) and prints a line saying which way it went. A repository
  * without the script has nothing to attach and is told so.
  *
- * Never throws and never fatal to its caller: `mc work add`, `mc plan` and
+ * Never throws and never fatal to its caller: `addWorktree`, `mc plan` and
  * `mc deps bump` report a failure and go on with the worktree.
  */
 export function attachRepoDeps(worktree, { run = runAttachScript } = {}) {
@@ -241,7 +241,7 @@ export async function attachRepoDepsAsync(worktree, { run = runAttachScriptAsync
  * The install's outcome, as a promise when `install` returned one, as the
  * result otherwise. The merge gate's install returns a promise, so the
  * merger's process is not held for the ten minutes `npm ci` may take;
- * `mc work add` keeps the synchronous one and gets its answer synchronously.
+ * `addWorktree` keeps the synchronous one and gets its answer synchronously.
  */
 function settle(pending, done, path) {
   const failed = (error) => ({ ok: false, state: 'failed', path, why: whyItFailed(error) });

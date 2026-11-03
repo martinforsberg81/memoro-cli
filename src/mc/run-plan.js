@@ -123,7 +123,7 @@ export function assembleQueue(queueText, plans) {
   return [...named, ...rest];
 }
 
-/** What a project may be called — the same shape `mc work` accepts. */
+/** What a project may be called — the shape a directory name under `~/mc` takes. */
 const QUEUE_NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 /** The lines of the queue file that look like a name at all, in order. */
@@ -1017,7 +1017,7 @@ export function goalCheckInPrompt({ minutes, count }) {
  * effort and the advisor through its `effortArgs` and `advisorArgs`, and codex
  * its effort through its own `effortArgs` (`-c model_reasoning_effort`) and no
  * advisor; the instructions
- * (`all-sessions.md` + role overlay) through the same channel `mc work` uses;
+ * (`all-sessions.md` + role overlay) through the same channel an interactive session uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
  * ways (`stream: true`, the step lanes): the prompt is not an
  * argument at all but the first user message `deps.session` writes on stdin,

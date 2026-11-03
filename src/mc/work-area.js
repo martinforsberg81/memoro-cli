@@ -1,6 +1,7 @@
 /**
- * A piece of work is a directory under `~/mc` — `work/<name>` for what
- * `mc work` makes, `step/<project>` for the runner's.
+ * An area is a directory under `~/mc` — `step/<project>` for the runner's,
+ * a programme's planning directory, and `work/<name>` for what is left of the
+ * workareas retired on 2026-11-03 (`mc tidy` lists those).
  *
  * Everything about it is derived, never stored: the worktrees it spans are the
  * directories under it, their branches come from git, whether a thing can be
@@ -40,10 +41,10 @@ import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
 
 /**
- * The areas `mc work` made: every directory under `~/mc/work/`, named
- * `work/<n>` — their path below the work root, which is what `inspectWorkArea`
- * and every verb take. Nothing directly under `~/mc` is listed: an `mc work`
- * area from before `work/` should not exist any more (Martin, 2026-10-11), and
+ * The areas the retired workarea verb made: every directory under
+ * `~/mc/work/`, named `work/<n>` — their path below the work root, which is
+ * what `inspectWorkArea` takes. Nothing directly under `~/mc` is listed: such
+ * an area from before `work/` should not exist any more (Martin, 2026-10-11), and
  * one that does shows as a stray (`listStrays`).
  */
 export function listWorkAreas(env = process.env, options = {}) {
@@ -211,7 +212,7 @@ export function inspectWorktree(path, repo) {
 /**
  * Turn what the user typed into a repository.
  *
- * `mc work add x memoro-cli` means the repository called memoro-cli, not a
+ * `memoro-cli` means the repository called memoro-cli, not a
  * directory of that name below wherever the shell happens to be. Resolving it
  * as a path found nothing and said so in git's words, which is a poor way to
  * learn that mc looked in the wrong place.
@@ -571,7 +572,7 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = 
     conversations_failed: failedConversations,
     // What keeps the area (and its conversations) in place when nothing
     // above did: the user's own files, named so the dry run and the apply
-    // tell the same story — and so the way forward (mc work discard) has
+    // tell the same story — and so the way forward (`discardWorkArea`) has
     // an object.
     held_by: kept.length === 0 ? heldBy : [],
     dry_run: dryRun,
@@ -660,7 +661,7 @@ export function discardWorkArea(name, { repo = null, env = process.env, dryRun =
 
 /**
  * The repositories mc can see: mc's own (`defaultRepos`, in either layout) and
- * the roots beside the home directory, which is where `mc work add <name>`
+ * the roots beside the home directory, which is where `resolveRepository`
  * already looks. Deriving them here means prune works even when the worktree
  * directory is already gone — which is exactly when a registration is left
  * dangling.

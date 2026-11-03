@@ -1,5 +1,5 @@
 /**
- * The mark `mc work stop` leaves behind: stopped on purpose, by whom, when.
+ * The mark a stop leaves behind: stopped on purpose, by whom, when.
  *
  * The guard's `dead` — alive last round, gone this round, last turn never
  * finished — is arithmetic, and it is right. It is also exactly what a
@@ -12,7 +12,7 @@
  * So the stop says so, in the area it stopped: one small file, `.mc-stopped`,
  * beside `.mc-role` — who asked and when. The guard reads it and says
  * `stopped by pm 03:16` instead of `dead`; the board shows the same line
- * under the area. Opening the area again (`mc work <name>`, in the terminal
+ * under the area. Opening the area again (`openInWorkArea`, in the terminal
  * or in the background) removes it, so the next disappearance is judged on
  * its own.
  *

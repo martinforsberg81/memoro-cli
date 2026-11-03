@@ -10,7 +10,7 @@
  * What the second word means, when there is one:
  *   (nothing)   the most recent conversation here, or a new one if there is none
  *   new         a new one regardless
- *   <id prefix> that one, as shown by `mc work`
+ *   <id prefix> that one, as the conversation picker shows it
  *
  * `prompt` is the conversation's opening words, given to a new conversation
  * only: both tools take it as the last positional argument. A resumed
@@ -140,7 +140,7 @@ export async function openInWorkArea({
     known_here: before.length,
   });
 
-  // Opened again: whatever `mc work stop` noted is over, and the next time
+  // Opened again: whatever a stop noted is over, and the next time
   // this area's conversation disappears it is judged on its own (KP-09).
   clearStopMark(areaRoot);
   // The register exists exactly as long as the tool holds the terminal, and
@@ -243,7 +243,7 @@ export function backgroundTarget(name, { run = null, env = process.env, path = n
  * stands.
  *
  * Nine sessions ran in tmux sessions called `clean`, `ops`, `vocab`, … —
- * started outside mc's naming — and every `mc work send --wake` to them
+ * started outside mc's naming — and every wake sent to them
  * delivered the file and never tried to knock, reporting "nothing is running"
  * (D-0136). They were running the whole time, in panes tmux could name. So
  * when `mc-<name>` does not exist, the panes are asked where they stand: one
@@ -255,7 +255,7 @@ export function backgroundTarget(name, { run = null, env = process.env, path = n
  * of its session, where the session's own name reads better in a message.
  *
  * `name` is the name without its kind (`foo`, not `work/foo`); the area it
- * stands for is the one `mc work <name>` opens (`workAreaName`), unless the
+ * stands for is the one `workAreaName` names, unless the
  * caller already knows the `path` — a role home, which is neither.
  */
 export function discoveredTarget(name, { tmux, env = process.env, path: known = null } = {}) {

@@ -176,8 +176,9 @@ export function stepHome(env = process.env) {
 }
 
 /**
- * `~/mc/work/` — the areas `mc work` makes, one per name. Ruling 39: the path
- * says what an area is.
+ * `~/mc/work/` — what is left of the workareas, retired on 2026-11-03 (goal
+ * mc/no-work). Nothing makes one any more; `mc tidy` lists each (rule W).
+ * Ruling 39: the path says what an area is.
  */
 export const WORK_HOME = 'work';
 
@@ -305,7 +306,7 @@ export function areaKindOf(areaName) {
     return second ? { kind: second.startsWith('deps-') ? 'deps' : 'step', name: second, area: `${first}/${second}` } : null;
   }
   if (first === WORK_HOME) {
-    return second ? { kind: 'work', name: second, area: `${first}/${second}` } : null;
+    return second ? { kind: 'retired', name: second, area: `${first}/${second}` } : null;
   }
   if (STATE_HOMES.has(first) || first.startsWith('.')) return null;
   return { kind: 'legacy', name: first, area: first };
@@ -338,13 +339,13 @@ export function stepAreaName(project, {
 }
 
 /**
- * The area a name typed at `mc work` opens: `{ name, runner }`, where `name`
- * is the area's path relative to the work root.
+ * The area a name without its kind stands for — a lease holder's, a tmux
+ * session's: `{ name, runner }`, where `name` is the area's path relative to
+ * the work root.
  *
- * `work/<name>` when it exists. Else the runner's area for a project of that
- * name, when there is one (`stepAreaName`) — `mc work <project>` is how a
- * person looks into a runner area, and `runner: true` is what lets the verbs
- * say so and `release`/`discard` refuse. Else `work/<name>`, to be created.
+ * `work/<name>` when it exists (a retired workarea). Else the runner's area
+ * for a project of that name, when there is one (`stepAreaName`), with
+ * `runner: true`. Else `work/<name>`, which does not exist.
  */
 export function workAreaName(name, {
   root = workRoot(),
