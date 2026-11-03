@@ -745,6 +745,24 @@ export async function runGate({
       // What a killed or cancelled file failed is not the red either, and is
       // not handed to whoever fixes it (ruling 44).
       if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
+      // A per-test timeout is already an actionable failure. Re-running that
+      // file cannot make the test pass reliably and can spend another full
+      // timeout holding the lane; leave it red for a rebuild instead.
+      const tooSlow = (result.red_tests || []).flatMap((test) => {
+        const error = (test.error || []).join(' ');
+        const timeout = /(?:test )?timed out after\s+(\d+)\s*ms/iu.exec(error);
+        if (!timeout) return [];
+        return [{ file: test.file, name: test.name, duration_ms: Number(timeout[1]) }];
+      });
+      if (tooSlow.length) {
+        report.too_slow = tooSlow;
+        const details = tooSlow.map((test) => `${test.name} (${Math.ceil(test.duration_ms / 1000)} s)`).join(', ');
+        const otherRed = (result.red_tests || []).filter((test) => !tooSlow.some((slow) => slow.name === test.name)).map((test) => test.name);
+        const rest = otherRed.length ? `; other tests red: ${nameSome(otherRed)}` : '';
+        const reason = `too slow — rebuild: ${details}${rest}`;
+        say(reason);
+        return finish('red', reason);
+      }
       // Every red file in it, and every red test located in one: a red name
       // no file accounts for is nobody's to excuse.
       const within = (files) => Boolean(result.red_files?.length)

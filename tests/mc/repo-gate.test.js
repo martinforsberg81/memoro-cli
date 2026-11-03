@@ -1012,7 +1012,7 @@ describe('a repository that selects by diff', () => {
    * so no round had ever run one.
    */
   function selecting({
-    files, candidateRed = [], commands = undefined, scripts = {}, full = false,
+    files, candidateRed = [], candidateTap = null, commands = undefined, scripts = {}, full = false,
     // What this fixture's repository calls its whole suite. A repository that
     // declares a selector must declare one too, or `--full` stops — so `null`
     // here is the negative case, not an omission.
@@ -1087,7 +1087,7 @@ describe('a repository that selects by diff', () => {
     });
     const tests = ({ cwd, files: ran, flags }) => {
       runs.push({ files: [...ran], flags, cwd });
-      return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
+      return Promise.resolve({ code: candidateRed.length || candidateTap ? 1 : 0, tap: candidateTap || tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
     };
     const suites = [];
     const suiteCommands = [];
@@ -1937,6 +1937,27 @@ describe('a repository that selects by diff', () => {
      * names `retry_once` is run once more alone before it is red.
      */
     describe('a declared timing test gets one more run alone (retry_once)', () => {
+      it('does not retry a per-test timeout and gives its name and duration for rebuild', async () => {
+        const slowFile = 'tests/slow.test.js';
+        const slowTap = [
+          'TAP version 13', '# Subtest: slow operation', 'not ok 1 - slow operation', '  ---',
+          "  type: 'test'", `  location: '/somewhere/candidate/${slowFile}:8:1'`,
+          "  failureType: 'testTimeoutFailure'", "  error: 'test timed out after 30000ms'", '  ...',
+          '1..1', '# tests 1', '# pass 0', '# fail 1',
+        ].join('\n');
+        const fx = selecting({ files: [slowFile], candidateTap: slowTap, retryOnce: { files: [slowFile] } });
+        const said = [];
+        try {
+          const report = await fx.report({ onProgress: (line) => said.push(line) });
+          assert.equal(report.stopped_at, 'red');
+          assert.equal(report.reason, 'too slow — rebuild: slow operation (30 s)');
+          assert.deepEqual(report.too_slow, [{ file: slowFile, name: 'slow operation', duration_ms: 30_000 }]);
+          assert.equal(fx.runs.length, 1, 'the timeout test was run again');
+          assert.ok(said.includes(report.reason));
+          assert.match(gateLines(report).join('\n'), /RED — 1 test too slow — rebuild:[\s\S]*slow operation \(30 s\)/u);
+        } finally { fx.cleanup(); }
+      });
+
       it('red only in a retry_once file that passes alone: it goes on, green, and the flip is in the round\'s record', async () => {
         const { gitAlso, tests } = onMain({ redAt: {}, round: [scanner] });
         const fx = selecting({ files: [own, scanner], gitAlso, retryOnce: { files: [scanner] } });

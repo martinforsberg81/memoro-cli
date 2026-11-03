@@ -825,6 +825,9 @@ landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 --test-force-exit` unless the repository declares its own `--test-timeout`; a
 test that runs past ten minutes is a red named `test timed out after 600000ms`,
 not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
+A per-test timeout is not run again by `retry_once`: the verdict says
+`too slow — rebuild` with the test name and timeout duration, so a timed-out
+test is rebuilt by a session rather than consuming another round.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
