@@ -781,7 +781,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: machine slept 26 min — stall guard re-armed/u);
   assert.deepEqual(call.args.slice(-5), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   // Ruling 18's second addendum: a step is opus at medium effort, no advisor.
-  assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob', '--strict-mcp-config']);
+  assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config']);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: build starting \(claude opus · effort medium, check-in every 60 min, killed after 20 min silent\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
   assert.match(call.prompt, /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
@@ -1375,11 +1375,12 @@ test('a workarea with no plan is not in the queue, and gets no step and no skip 
   assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper' && r.kind !== 'nightly'), []);
   const log = f.files['/w/runner/log/runner.log'] || '';
   assert.doesNotMatch(log, /fresh: /u, 'no skip line — nobody reads it');
-  // The two lines it does get are the two places somebody looks: the queue
-  // says why the name left it, and the workarea is written for `mc brief`.
+  // The queue says why the name left it, and the area is counted for
+  // `mc tidy` to list; no table is written for it any more.
   assert.match(log, /queue: dropped "fresh" — no plan on main/u);
   assert.equal(f.files['/w/queue.md'], '', 'the queue empties itself');
-  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
+  assert.match(log, /close: 1 area\(s\) with no project on main — mc tidy lists them/u);
+  assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
@@ -2053,7 +2054,7 @@ test('a review class step runs on the catalog\'s review model whatever the usage
   assert.equal(call.bin, '/bin/claude');
   const at = call.args.indexOf('--model');
   assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'opus', '--effort', 'high']);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: pinned/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: preferred/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\treview\tclaude\thigh\tplan\n/u);
 });
 
@@ -2064,6 +2065,16 @@ test('a review class step keeps its pinned model on API reserve when its plan re
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(f.calls.sessions[0].bin, process.execPath);
   assert.ok(f.calls.sessions[0].args.includes('opus'));
+});
+
+test('a review class step takes the review list in order: a spent first candidate gives the next one', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.5, codex: 1 }) });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'high' }] });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:project');
+  assert.equal(call.bin, '/bin/claude');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: preferred \(review candidate 2 — codex:gpt-6\.1-sol:high: codex is at 100 % of its plan limit\)/u);
 });
 
 test('a codex plan refusal routes the next class step to Codex API', async () => {
@@ -2519,7 +2530,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', step: 1, kind: 'build', variant: 'project', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, billing: 'plan', check_in_minutes: 60, check_ins: 0,
+    name: 'alpha', step: 1, kind: 'build', variant: 'project', programme: 'prog', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, billing: 'plan', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/step/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z', args: [], takeover: true });
@@ -2551,7 +2562,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', step: 1, kind: 'build', variant: 'project', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, billing: 'plan', check_in_minutes: null, check_ins: 0,
+    name: 'cx', step: 1, kind: 'build', variant: 'project', programme: 'prog', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, billing: 'plan', check_in_minutes: null, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/step/cx/memoro-cli',
     // The same text whichever tool it is handed to: `instructionsFor` assembles
     // one body and only the flag that carries it differs (portrait.js).
@@ -3598,8 +3609,8 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
   assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
-  // ...and it is not also filed as a folder nobody can explain.
-  assert.doesNotMatch(f.files['/w/runner/unplanned-workareas.md'], /\| gone \|/u);
+  // ...and it is not also counted as a folder nobody can explain.
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /with no project on main/u);
 });
 
 /**
@@ -3708,7 +3719,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
 });
 
-test('a workarea no project explains is never removed, and is written to intake with whether its branch landed', async () => {
+test('a workarea no project explains is never removed, and is left for mc tidy to list', async () => {
   const f = fixture({
     areas: {
       'msr-track-1': { repo: 'memoro' },
@@ -3720,26 +3731,8 @@ test('a workarea no project explains is never removed, and is written to intake 
   });
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
-  const intake = f.files['/w/runner/unplanned-workareas.md'];
-  assert.match(intake, /# Workareas with no project on main/u);
-  assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
-  assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no project on main/u);
-});
-
-test('the branch is asked of the worktree, not guessed from the folder name', async () => {
-  // The sixteen workareas from before the plan world were made by hand and
-  // need not be named after their branch: msr-track-1 sits on
-  // `msr-track1-skin`. Guessing left the one column that says whether
-  // anything would be lost reading `unknown` for most of the file.
-  const f = fixture({
-    areas: { 'msr-track-1': { repo: 'memoro' } },
-    heads: { 'msr-track-1': 'msr-track1-skin' },
-    landed: ['msr-track1-skin'],
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
+  assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 area\(s\) with no project on main — mc tidy lists them/u);
 });
 
 test('a live workarea is never closed, however done its plan is', async () => {
@@ -6112,31 +6105,84 @@ test('a goal in review gets a review session: the goal-review role, the review m
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
   assert.equal(call.env.MC_GOAL, 'prog/judged');
-  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review.model);
+  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review[0].model);
   assert.match(call.args.join('\n'), /ROLE review-session:goal/u);
   assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
   assert.match(call.prompt.split('\n')[0], /Your role says the rest\.$/u, 'the first line says where; the brief follows');
   assert.match(call.prompt, /\nCRITERIA 0\/1\n  1 ✗ it works\n      check: a test/u, 'the review is briefed with the goal as mc goal show renders it');
 });
 
-test('a review never runs on the model of the goal\'s last build entry: the goal waits, and an open goal behind it runs', async () => {
+test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review.model}`, '2026-08-20T10:00Z');
-  const f = reviewFixture({ log: sameModel, goals: { other: { log: goalLog('2026-08-28T10:00Z') } } });
-  f.answer = logsItself(f, 'other');
-  const runner = createRunner({ deps: f.deps });
-  const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.name, 'goal:prog/other', 'the waiting review does not stand in front');
-  assert.equal(f.calls.sessions.length, 1);
-  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
-  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — the review model is claude opus, the model its last build session ran on/u.test(line)));
-  assert.equal(goalStatusOf(f), 'review', 'it waits; it is not reviewed by its builder');
+  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
+  const f = reviewFixture({ log: sameModel });
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', DEFAULT_CATALOG.review[0].model]);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
+  assert.ok(f.log.some((line) => /review starting .*preferred \(review candidate 1 — claude opus built it, and no other candidate can run on its plan\)/u.test(line)));
+});
 
-  // A review's own entry is no build entry: the one before it is what counts.
-  const reviewed = `${sameModel}\n## 2026-08-21T10:00Z · codex gpt-6.1-sol · review\n\nGjort: green ${HEAD}\n`;
-  const g = reviewFixture({ log: reviewed });
-  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(g.calls.sessions.length, 0);
+test('a review\'s own entry is no build entry: the build entry before it is the model passed over', async () => {
+  // Built on codex sol, then reviewed on claude opus: sol is still the builder,
+  // so the next review passes sol (candidate 1) for opus (candidate 2).
+  const reviewed = `${builtBy('codex gpt-6.1-sol', '2026-08-20T10:00Z')}\n## 2026-08-21T10:00Z · claude opus · review\n\nGjort: green ${HEAD}\n`;
+  const f = reviewList(reviewFixture({ log: reviewed }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
+});
+
+test('a goal built on the second review candidate is reviewed on it when the first one\'s plan is spent and its API is off', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude opus') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', 'opus']);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
+});
+
+const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' };
+const OPUS_REVIEW = { tool: 'claude', model: 'opus', effort: 'high' };
+/** A catalog whose review list is codex sol then claude opus, and a billing whose codex API is `codexApi`. */
+function reviewList(f, { codexApi = false } = {}) {
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [SOL_REVIEW, OPUS_REVIEW] });
+  f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: () => {}, readApi: () => ({ claude: false, codex: codexApi }) };
+  return f;
+}
+
+test('a goal review passes a first candidate at 100 % with its API off for the next on plan', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', 'opus']);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
+});
+
+test('a goal built on the first review candidate is reviewed by the next one when both have plan left', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('codex gpt-6.1-sol') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
+  assert.ok(f.log.some((line) => /review starting .* class large: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
+});
+
+test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1, refuse: { claude: '2026-08-29T13:00:00Z' } }));
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — .*codex is at 100 % of its plan limit.*; API reserve; codex API off/u.test(line)));
 });
 
 test('a red review leaves the goal blocked with its entry, wakes plan, and no build starts until it is set open', async () => {

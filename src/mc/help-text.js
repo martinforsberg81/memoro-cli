@@ -39,7 +39,6 @@ SEE AND SHIP
   mc asc status [<version>]       An iOS version's state, build and storefronts
 
 WORKSPACES
-  mc work <name>                  Open that workarea
   mc prs [--offline] [--json]      Open pull requests and whose they are
   mc tidy [--apply]               Preview removals; --apply rechecks and removes
 
@@ -57,9 +56,10 @@ WHO USES THE VERBS
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
-                                    project numbered, by repository. At a
+                                    project numbered, by programme. At a
                                     terminal it ends in a way in — a number
-                                    opens that project. No model; reads only
+                                    opens that project's runner area. No
+                                    model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
@@ -92,8 +92,6 @@ ${commandReference('deploy')}
 
 ${commandReference('asc')}
 
-${commandReference('work')}
-
 ${commandReference('tidy')}
 
 ${commandReference('layout')}
@@ -122,8 +120,6 @@ ${commandReference('plan')}
 
 ${commandReference('helper')}
 
-${commandReference('worker')}
-
 ${commandReference('roles')}
 
 ${commandReference('skills')}
@@ -149,8 +145,11 @@ WHAT IS NOT HERE
   tool-auth, connections, github, coding-profile, dev, deps, cloud-session,
   cloud-runtime, security, doctor, migrate, and the session verbs before them
   — went on 2026-09-03. Today's mc dev and mc deps are later verbs that
-  share only the name: dev servers, and dependency updates. A work area is a directory, the worktrees it spans and
-  the conversations started in it, and nothing else about it is mc's to know.
+  share only the name: dev servers, and dependency updates.
+
+  Nor is a session of nobody's. Every session belongs to a programme (plan,
+  build, review) or a desk (brief, helper); the verbs that opened folders of
+  their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS
   - Plain mc prints the page and, at a terminal, opens what you pick.

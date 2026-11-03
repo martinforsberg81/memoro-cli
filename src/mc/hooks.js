@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
+import { PLAN_ROLE } from './goals.js';
 import { run as runGit } from './git.js';
 import { sessionIdentity, sessionRoleLine } from './session-role.js';
 import { defaultRepos, gitDirOf } from './repos.js';
@@ -148,9 +149,26 @@ export const TOOLBOX = [
   'Every verb: mc <verb> --help.',
 ];
 
+/**
+ * How many proposals wait in a programme's `proposals/`: its `.md` files, the
+ * `archive/` beside them not counted. Read here, without the helper's
+ * modules, because the hook runs at the start of every session.
+ */
+export function programmeProposalCount(programme, env = process.env) {
+  try {
+    return readdirSync(join(programsHome(env), programme, 'proposals'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
+  } catch { return 0; }
+}
+
 /** The SessionStart context: the worktrees' state, the warnings, the toolbox. */
 export function sessionStartContext({ cwd, inside, states, env = process.env, synced = [] }) {
-  const lines = [sessionRoleLine(sessionIdentity({ cwd, env }), { cwd, env })];
+  const identity = sessionIdentity({ cwd, env });
+  const lines = [sessionRoleLine(identity, { cwd, env })];
+  const waiting = identity.role === PLAN_ROLE && identity.programme ? programmeProposalCount(identity.programme, env) : 0;
+  if (waiting) {
+    lines.push(`${waiting} proposal${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} in ~/mc/programs/${identity.programme}/proposals/ — take a stand on each (your role says how).`);
+  }
   // Said only when something moved: a skill rewritten after the tool listed its
   // skills is read from disk when it is loaded, but the list itself may be old.
   const moved = [...new Set(synced.map((row) => `${row.name} ${row.did}`))];
@@ -243,7 +261,7 @@ export const BASH_RULES = [
   {
     // A whole-tree install in a checkout: memoro's are attached to its
     // per-lockfile cache (`npm run deps:ensure`) and memoro-cli's resolve
-    // the one tree above the workareas (work-deps.js). Adding a package
+    // the one tree above the workareas (shared-deps.js). Adding a package
     // (`npm install <pkg>`) and a lockfile-only install pass.
     id: 'npm-install',
     test: /(^|[;&|(]\s*|\s)npm\s+(ci|clean-install|install|i)(?![\w:-])(?![^\n;&|]*--package-lock-only)(\s+--?[\w-]+(=\S+)?)*\s*(\d?>|[;&|)]|$)/u,

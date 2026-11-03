@@ -2,8 +2,8 @@
 
 `mc --help` describes one system now. Work is a `PLAN.json` under
 `docs/project/`; `mc run` takes its steps; `mc brief` is the hour the
-questions get answered; `mc plan` and `mc worker` are the two sessions
-Martin drives himself; `mc` is the page that says what is running. There is
+questions get answered; `mc plan`, `mc brief` and `mc helper` are the sessions
+Martin drives himself (`mc worker` went on 2026-11-03, [`mc-work.md`](mc-work.md)); `mc` is the page that says what is running. There is
 nothing resident behind any of it — no daemon, no watcher, no inbox anyone
 has to drain.
 
@@ -46,12 +46,12 @@ What stays is the machinery underneath: `src/mc/commands/role-singleton.js`
 (317 lines — one workspace for a role, ever), `src/mc/pm-helper-intake.js`
 (the intake file forms), and the reserved names in
 [`roles.js`](../../src/mc/roles.js) — `pm`, `pm-helper`, `helper` — which
-still refuse `mc worker pm`. The impostor guard is right whether or not a PM
+still refuse `mc plan pm`. The impostor guard is right whether or not a PM
 runs, and if a PM returns it returns in modified form. Deleting the code
 belongs with the wider surface cut (PR #410) and the test-architecture
 question under it, not with the ruling.
 
-The one place dormancy shows through is that guard's wording: `mc worker pm`
+The one place dormancy shows through is that guard's wording: a reserved name
 is refused with "that workspace is created by its own command (`mc pm`)",
 and `mc pm` then says it is dormant. Two hops, each honest, and the name
 stays protected either way. `helper` is reserved on the same list and points
@@ -77,8 +77,8 @@ untouched since 2026-08-24 — 1 197 session records, `notices.jsonl` and
 
 Three things changed on the outside, and only three.
 
-**A wake refused on a draft is reported, not queued.** `mc work send --wake`
-never types over a draft in somebody's prompt; it used to queue the knock and
+**A wake refused on a draft is reported, not queued.** A wake (then the
+workarea verb's `send --wake`, retired 2026-11-03) never types over a draft in somebody's prompt; it used to queue the knock and
 tell the sender it would land when the prompt cleared. The only thing that
 ever retried a queued wake was the watchman's round. With the watchman gone
 the queue had nobody to keep its promise, so the queue went and the sender is
@@ -109,14 +109,14 @@ help containing `watch` must be a `mc repo watch` line.
 
 ## The worker role now ships with mc
 
-`mc worker <name>` marks a workarea with a role, and every conversation
+Until 2026-11-03 a worker verb marked a folder with a role, and every conversation
 started in it — lead or agent, now or later — inherits that role's overlay
 and model default. The definition used to be read from
 `~/.memoro/mc/roles/worker.md`, a catalogue mc does not install, so the one
 role mc still launches depended on the user having written it: a fresh
 machine got the area and none of the role.
 
-It is the `worker` part of [`canon/roles/build-session.md`](../../canon/roles/build-session.md) now (`build-session:worker`), read
+The verb is gone ([`mc-work.md`](mc-work.md)); the role is the `worker` part of [`canon/roles/build-session.md`](../../canon/roles/build-session.md) now (`build-session:worker`), read
 through `readCanonRole` the way `mc plan` and `mc brief` read theirs, and
 `areaRole` falls back to canon so conversations opened in the area later get
 the overlay too. A catalogue that defines `worker` still wins — it is the
@@ -136,6 +136,5 @@ the pull request, written as a proposal he says GO to. That is the same channel
 is the surface, in four parts: each dormant verb says its line and exits 2;
 `mc watch pm status` is refused as an unknown command; `mc repo watch status`
 still answers; and `mc --help` shows one world — no `mc pm`, no watcher but
-the repository one, and still `mc brief`, `mc plan <name>` and
-`mc worker <name>`. Asserting the help alongside the dispatch is deliberate:
+the repository one, and still `mc brief` and `mc plan <name>`. Asserting the help alongside the dispatch is deliberate:
 the two drifting apart is the failure this project exists to end.

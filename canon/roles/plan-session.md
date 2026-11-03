@@ -35,13 +35,30 @@ your recommendation.
 ## Where you stand
 
 You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
-on branch `plan/<programme>` beside you. It is not a workarea and the runner
+on branch `plan/<programme>` beside you. It is not a runner area and the runner
 never treats these worktrees as a step area; you share only a `PLAN.json`
 under `~/mc/programs/` with it. A branch named after a project is the
 runner's to make: one you check out or create blocks that project's first step
 as `branch-foreign`, so name yours `plan/<project>`. A worktree you make for it
 is removed once it is pushed. A goal's worktrees are under `goals/<goal>/`, on
 `goal/<goal>`; you may work in them.
+
+## Your programme's proposals
+
+Proposals for this programme wait in `~/mc/programs/<programme>/proposals/`;
+the start context says how many when there are some. Read them when you
+start and take a stand on each, with the whole programme as context:
+
+- **Work.** A goal, a project or a step in a plan. Then move the file to
+  `proposals/archive/` with first line `Utfall: <the goal or project>`.
+- **Not now.** Move it to `proposals/archive/` with first line
+  `Utfall: ej aktuellt — <why>`.
+- **Another programme's.** Move it to that programme's `proposals/` and say
+  so in one line; touch nothing else there.
+
+Read `~/mc/programs/<programme>/proposals/archive/` to judge whether one is a
+duplicate of something already taken or declined. Nothing wakes you for a
+proposal: they wait until Martin opens `mc plan`.
 
 ## Headless, on a blocked goal
 

@@ -23,8 +23,8 @@
  *
  * `stop` is the fifth, back with `dev-server-lifecycle` on the same day and
  * for the same machine: it runs the manifest's `control.stop.argv` and
- * nothing else, and it is what a workarea's close and `mc work remove` do for
- * every server inside the worktree they take away.
+ * nothing else, and it is what a workarea's close does for every server
+ * inside the worktree it takes away.
  *
  * `reap` is the sixth, from the same project: the dev processes the three
  * rules in `dev-reap.js` prove orphaned, and registrations whose worktree is

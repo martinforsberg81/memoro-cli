@@ -108,7 +108,7 @@ It names the caller and points to `mc project new`, `mc project step add` and
 
 **Refuses a reserved name.** `mc plan pm` would make a directory wearing the
 name that means "the singleton role's workspace". `reservedRoleName` is the
-guard `mc worker` uses too.
+guard the other role verbs use too.
 
 **Makes the session's directory if it is missing**, in `ensurePlanArea`:
 `~/mc/programs/<programme>/` with a worktree of **every** repository mc knows, each
@@ -128,7 +128,7 @@ it without starting anything.
 in the programme directory is resumed, with no intro, and a new one starts
 only when there is none or `--new` says so (Martin, 2026-09-13: "Existerar
 det en session, ska samma öppnas utan intro"). It is the same launch path
-`mc brief`, `mc helper` and `mc worker` use:
+`mc brief`, `mc helper` and a project opened from the page use:
 [`src/mc/work-open.js`](../../src/mc/work-open.js), `spawn` with `stdio:
 'inherit'`. There is no second launcher. NOW says `plan` for exactly as long as
 the session holds the terminal, through the foreground register.
@@ -221,10 +221,11 @@ tool, so `runner.tool` does not apply to it. `effort` takes the same five
 levels on both tools; which model names exist is for the installed, signed-in
 codex CLI to decide, not mc.
 
-**Review.** The review step runs the one review model Martin configures with
-`mc model set review` (Claude Opus at high effort at launch), on either tool,
-and does not inherit the implementation steps' provider; `mc project step add`
-refuses `review`.
+**Review.** The review step runs on the review candidates Martin configures
+with `mc model add|remove review` and `mc model set review` (Claude Opus at
+high effort alone at launch), on either tool, and does not inherit the
+implementation steps' provider; `mc project step add` refuses `review`. Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can.
+A project's review step has no build entry to pass over.
 
 **Checks the review cannot reach.** The merge door refuses the review step
 until every criterion is `met` in the register, so a check that needs this plan
@@ -264,7 +265,7 @@ never triggered.
    function. An archive PR for the programme still open from an earlier
    attempt is landed instead of opening a second.
 3. **Then the planning session**, only once every PR has merged:
-   `releaseWorkArea(planArea(<programme>))`, as `mc work release` — each worktree
+   `releaseWorkArea(planArea(<programme>))` — each worktree
    handed back, `plan/<programme>` deleted, the conversations and the
    directory gone with them. In layout 2 the directory is
    `~/mc/programs/<programme>/` and holds the programme's projects and

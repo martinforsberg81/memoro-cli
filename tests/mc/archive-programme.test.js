@@ -1,6 +1,9 @@
 /**
- * `mc plan <programme> --archive` — against a real repository and a bare
- * origin, with GitHub, the docs merge and the area release stubbed.
+ * `mc plan <programme> --archive` — against a repository and a bare origin in
+ * the repository model (`tests/_fake-git-default.mjs`), with GitHub, the docs
+ * merge and the area release stubbed. Real git here was some twenty processes
+ * a test, 2.2 s under load (2026-11-03); the model answers the same commands
+ * (`git grep -l -F` and pathspec globs included) in process.
  *
  * What is asserted is the order and the refusals: nothing is touched while a
  * plan is on main or release would keep something; main goes first, and the
@@ -37,17 +40,34 @@ const LOG = [
   '',
 ].join('\n');
 
-/** A bare origin and a clone whose main holds `docs/project/<programme>/`. */
-function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
+const EXTRA = {
+  'docs/project/gone/skills/a.md': '# a skill a test reads\n',
+  'docs/project/gone/skills/b.md': '# a skill nothing reads\n',
+  'tests/x.test.js': "import { readFileSync } from 'node:fs';\n\nreadFileSync('docs/project/gone/skills/a.md', 'utf8');\n",
+};
+
+/**
+ * A bare origin and a clone whose main holds `docs/project/gone/`, and with
+ * `extra` the files of EXTRA beside it.
+ */
+function fixture({ plan = null, extra = false } = {}) {
+  const programme = 'gone';
   const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
   const origin = join(root, 'origin.git');
   const repo = join(root, 'memoro-cli');
   git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
   git(root, ['clone', '-q', origin, repo]);
   for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(repo, ['config', k, v]);
-  mkdirSync(join(repo, 'docs', 'project', programme), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', programme, 'README.md'), '# programme\n');
+  mkdirSync(join(repo, 'docs', 'project', 'gone'), { recursive: true });
+  writeFileSync(join(repo, 'docs', 'project', 'gone', 'README.md'), '# programme\n');
   writeFileSync(join(repo, 'docs', 'project', 'project_log.md'), LOG);
+  for (const [path, text] of Object.entries(extra ? EXTRA : {})) {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+  git(repo, ['push', '-q', 'origin', 'HEAD:main']);
   // The plan lives under the work root's programs/, never in the repository.
   const env = { MC_WORK_ROOT: join(root, 'work') };
   if (plan) {
@@ -58,13 +78,6 @@ function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
       steps: [{ title: 'S1 — one', status: plan, done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
     }));
   }
-  for (const [path, text] of Object.entries(extra)) {
-    mkdirSync(join(repo, path, '..'), { recursive: true });
-    writeFileSync(join(repo, path), text);
-  }
-  git(repo, ['add', '-A']);
-  git(repo, ['commit', '-q', '-m', 'init']);
-  git(repo, ['push', '-q', 'origin', 'HEAD:main']);
   return { root, origin, repo, env, repos: [{ name: 'memoro-cli', path: repo }] };
 }
 
@@ -207,16 +220,10 @@ describe('archiveProgramme', () => {
   });
 
   it('keeps a file a test reads, removes the rest, and names it in the PR body', async () => {
-    const fx = fixture({
-      extra: {
-        'docs/project/gone/skills/a.md': '# a skill a test reads\n',
-        'docs/project/gone/skills/b.md': '# a skill nothing reads\n',
-        'tests/x.test.js': "import { readFileSync } from 'node:fs';\n\nreadFileSync('docs/project/gone/skills/a.md', 'utf8');\n",
-      },
-    });
+    const fx = fixture({ extra: true });
     const { deps, calls } = stubs();
     const a = args(fx, deps);
-    assert.equal(await archiveProgramme('gone', a), 0);
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text + a.stdout.out.text);
     const branch = git(fx.origin, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).stdout.split('\n')
       .find((name) => name.startsWith(`${PROGRAMME_ARCHIVE_PREFIX}gone-`));
     assert.deepEqual(git(fx.origin, ['ls-tree', '-r', '--name-only', branch, 'docs/project/gone']).stdout.trim().split('\n'),

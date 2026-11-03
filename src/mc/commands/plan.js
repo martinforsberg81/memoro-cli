@@ -40,7 +40,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { archiveProgramme } from '../archive-programme.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
-import { attachRepoDeps } from '../work-deps.js';
+import { attachRepoDeps } from '../shared-deps.js';
 import { openInWorkArea } from '../work-open.js';
 import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
@@ -406,7 +406,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env }) {
     'With Martin at the terminal you have full freedom toward that aim: investigate, plan, build and land the work yourself.',
     '',
     `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,
-    `worktree on branch \`plan/${programme}\`. This is not a workarea: the runner`,
+    `worktree on branch \`plan/${programme}\`. This is not a runner area: the runner`,
     'never works in it.',
     ...(layoutTwo ? ['Your programme\'s projects are the directories beside them, each with its PLAN.json and STATE.json: `mc project` and `mc step` write them.'] : []),
     BRANCH_LINE,

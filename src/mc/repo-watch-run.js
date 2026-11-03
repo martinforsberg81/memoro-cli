@@ -33,6 +33,7 @@ const flag = (name, fallback) => {
 
 const intervalMs = flag('--interval-ms', DEFAULT_INTERVAL_MS);
 let stopping = false;
+const woken = new AbortController();
 const log = (message) => {
   process.stdout.write(`${new Date().toISOString()}  ${message}\n`);
 };
@@ -41,6 +42,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     if (stopping) return;
     stopping = true;
+    woken.abort();
     log(`${signal} — finishing the round in flight, then leaving`);
   });
 }
@@ -58,7 +60,7 @@ const afterRound = () => {
 };
 
 log(`watching every ${Math.round(intervalMs / 1000)}s (pid ${process.pid})`);
-await watchLoop({ intervalMs, shouldStop: () => stopping, log, afterRound });
+await watchLoop({ intervalMs, shouldStop: () => stopping, log, afterRound, wake: woken.signal });
 log('stopped');
 release();
 

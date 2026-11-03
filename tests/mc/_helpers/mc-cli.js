@@ -8,7 +8,7 @@
  * MC_WORK_ROOT, MC_ROLES_DIR, CLAUDE_CONFIG_DIR, CODEX_HOME, PATH — so a
  * test passes identically inside and outside an mc-managed shell.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +37,35 @@ export function runMcCli(args, env = {}, { cwd } = {}) {
     timeout: HANG_MS,
     cwd,
     env: { ...process.env, MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1', ...env },
+  });
+}
+
+/**
+ * `runMcCli`, without waiting for it: the same binary, environment and
+ * guard, resolving to `{ status, signal, stdout, stderr, elapsed }` when the
+ * process has closed. A file that needs a few runs of the binary starts them
+ * together — at load, say — instead of paying a node start each in turn.
+ */
+export function runMcCliAsync(args, env = {}, { cwd } = {}) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [MC_CLI, ...args], {
+      cwd,
+      env: { ...process.env, MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1', ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    child.stdin.end();
+    const out = [];
+    const err = [];
+    child.stdout.on('data', (chunk) => out.push(chunk));
+    child.stderr.on('data', (chunk) => err.push(chunk));
+    const guard = setTimeout(() => child.kill('SIGTERM'), HANG_MS);
+    child.on('close', (status, signal) => {
+      clearTimeout(guard);
+      resolve({
+        status, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), elapsed: Date.now() - started,
+      });
+    });
   });
 }
 

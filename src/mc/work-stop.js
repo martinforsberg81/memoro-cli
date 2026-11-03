@@ -4,7 +4,7 @@
  * `release` and `discard` are about the worktree, the branch and the
  * conversations — what a piece of work *is*. This is about what it is *doing*:
  * the tool process, and nothing else. Afterwards the branch is where it was,
- * the conversation is on disk in full, and `mc work <name>` resumes it.
+ * the conversation is on disk in full, and opening the area again resumes it.
  *
  * Two kinds of running, one verb. A background worker is a tmux session and is
  * asked to leave; a conversation in someone's terminal is a process and is

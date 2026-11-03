@@ -199,30 +199,23 @@ first again.
 
 ## What is handed to Martin instead
 
-Two things a machine must not decide, so it writes them down and moves on:
+Two things a machine must not decide. The first it writes down and moves on;
+the second it counts and leaves for `mc tidy`:
 
 - **`~/mc/runner/undocumented-closures.md`** — appended when a project is
   archived whose row says `doc: none`. A thin or missing `docs/technical/`
   note never stops an archive: keeping a project alive because its
   documentation is thin is how `docs/plans/` reached 656 files.
-- **`~/mc/runner/unplanned-workareas.md`** — rewritten every chore pass with every
-  runner area — under `~/mc/step/`, or left directly under `~/mc` — that
-  **no project** explains — no plan and no
-  row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
-  world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
-  only Martin can say is finished, so no machine removes one. Each row carries whether the branch's content is already on main —
-  asked of content with `git merge-tree`, not of commit counts — which is the
-  one fact that says whether anything would be lost. The branch is asked of
-  the worktree (`rev-parse --abbrev-ref HEAD`), never guessed from the folder
-  name: a workarea from before the plan world was made by hand and need not
-  be named after its branch, and a stale branch that *does* carry the folder's
-  name would make the column answer confidently about something nobody is on
-  (`mc-repo` sits on `cut-old-surface`). `unknown` in that column means
-  `merge-tree` hit a conflict, which is itself an answer: a branch that
-  conflicts with main holds something main does not.
+- **A runner area no project explains** — under `~/mc/step/`, or left
+  directly under `~/mc` — with no plan and no row in `project_log.md`. Such a
+  folder is work somebody started and only Martin can say is finished, so no
+  machine removes one. The chore pass says how many in one `runner.log` line
+  (`close: N area(s) with no project on main — mc tidy lists them`). Until
+  2026-11-03 it also rewrote a table of them in `~/mc/runner/`; that table
+  is gone (goal `mc/no-work`).
 
-Both are raised in `mc brief`, which is where they are read: the role sends
-the session to the two files, and it walks them one row at a time. An absent file is
+The first is raised in `mc brief`, which is where it is read: the role sends
+the session to the file, and it walks it one row at a time. An absent file is
 reported as absent rather than as "none" — the runner has not written one
 yet is a different answer from there is nothing to report.
 
@@ -234,7 +227,7 @@ back in it the next pass however carefully it was read.
 ## mc tidy
 
 `mc tidy [--apply] [--json] [--days <n>]` (`src/mc/tidy.js`, the verb in
-`src/mc/commands/tidy.js`; `mc work tidy` is the same command) removes what
+`src/mc/commands/tidy.js`) removes what
 the chores above leave behind, per root of
 [Ruling 39](../project/mc/rulings.md) § 39. It exists because of 2026-09-26: the
 data volume had 2.6 GB free, and a shell loop meant to remove orphaned
@@ -246,7 +239,7 @@ stays.
 |---|---|---|
 | `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no project that is not done (I) |
 | `~/mc/step/<project>/` | a step area the runner made | nothing (S) |
-| `~/mc/work/<name>/` | a work area `mc work` made | nothing (W) |
+| `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
@@ -272,8 +265,8 @@ transcript in that directory that cannot be read keeps the whole group: it may
 be the newest.
 
 **X — a planning area's extra worktree.** Anything under `plan/<programme>/`
-but `memoro/` and `memoro-cli/`, judged by `releaseVerdict` as `mc work
-release` judges it: no process stands in it, nothing uncommitted, and its
+but `memoro/` and `memoro-cli/`, judged by `releaseVerdict` as the workarea
+release judged it: no process stands in it, nothing uncommitted, and its
 content on main (or its tip a merged pull request's head). Removed with
 `git worktree remove` without `--force`, then `branch -D`. One `lsof` answers
 for all of them; an lsof that fails keeps every one.
@@ -289,9 +282,25 @@ there and not in the checkout. Removed the same way as X, and `mc plan
 <programme>` adds it back when it next opens the programme. An lsof that fails
 keeps every one, with its error.
 
-**W — work areas** are listed with the rule `work-area` and never removed:
-only `mc work release` or `mc work discard` removes one. **S — step areas**
-are the runner's, closed by `closeWorkareas` when the project is done.
+**W — what is left under `~/mc/work/`.** The workareas were retired on
+2026-11-03 (goal `mc/no-work`, [`mc-work.md`](mc-work.md)), and nothing makes
+one any more. Every directory there is listed under W, never as routine, with
+its verdict: kept because a process stands in it, because it holds more than
+checkouts (its files are named), or because one of its checkouts is not
+releasable — `releaseVerdict` says why: uncommitted changes, commits main
+lacks, or a conflict nobody can settle — or a target, `a retired workarea:
+<repos> landed with nothing uncommitted`. A target is removed only when the
+list says `person: true`: `mc tidy` sets it unless `MC_HEADLESS=1`, and the
+runner's daily apply never does, so there each one is kept with *only a
+person's mc tidy --apply removes one*. The apply hands each checkout back with
+`git worktree remove` without `--force` and `branch -D`, then removes the
+directory; a checkout git refuses keeps the whole area. **S — step areas**
+of a project the register knows are the runner's, closed by `closeWorkareas`
+when the project is done. **U — a step area no project explains** (no
+register entry by its name) is never closed by the runner, so tidy judges it
+as W judges a workarea, with the same `person` rule and the kind
+`orphan-step-area`; one left directly under `~/mc` is only listed. A register
+that could not be read explains every step area.
 
 **L — loose transcripts and leftovers.** What P and G leave, by T1–T5, first
 match wins: no cwd, kept; touched within `--days`, kept; its cwd gone,
@@ -338,7 +347,8 @@ and `memoro-cli.git-365b96c6`.
 
 Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`
 with `writeJsonAtomic` before anything is removed:
-`{ at, rules_version, days, targets: [{ path, kind, rule, why, bytes }], kept: [{ path, rule, why }] }`.
+`{ at, rules_version, days, person, targets: [{ path, kind, rule, why, bytes }], kept: [{ path, rule, why }] }`.
+`person` says whose run it was (W); the apply reads it back from the file.
 `--apply` reads that file back and acts on its `targets` only. Each one is
 asked again: its realpath must lie under the root its kind allows, in the
 shape that kind has, and its rule must still say so on facts read now. A
@@ -394,7 +404,8 @@ the runtime was down.
 
 ### Never touched
 
-A work area; a planning area's `memoro/` and `memoro-cli/`; a worktree with
+A retired workarea outside a person's `--apply`, and one with anything in it
+but landed checkouts; a planning area's `memoro/` and `memoro-cli/`; a worktree with
 uncommitted changes or commits main lacks; any `memory/` under
 `~/.claude/projects`; `runs.tsv`; `~/.memoro/mc/gate-rounds.jsonl`;
 `project_log.md`; anything outside the roots above. No `git worktree move`

@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
+import { commandUsage } from '../../src/mc/command-help.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { CLAUDE_MODELS, CODEX_MODELS, STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
@@ -132,13 +133,27 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
 
   it('names the catalog verbs, API reserve, and Codex hourly reading', () => {
     const text = DOC.replace(/\s+/gu, ' ');
-    for (const verb of ['mc model add fast|large <tool>:<model>:<effort>', 'mc model remove fast|large <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
+    for (const verb of ['mc model add fast|large|review <tool>:<model>:<effort>', 'mc model remove fast|large|review <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
       assert.ok(text.includes(verb), `the doc no longer names \`${verb}\``);
     }
     assert.ok(text.includes('When no candidate has eligible plan capacity, the first catalog candidate uses its provider\'s API key'), 'the doc no longer says how a class uses API reserve');
     assert.ok(text.includes('read once an hour'), 'the doc no longer says Codex is read once an hour');
     assert.ok(text.includes('It is never sent a thread or a turn'), 'the doc no longer says the Codex read starts no thread or turn');
     assert.ok(text.includes('Not verified live.'), 'the doc no longer says the Codex collector is not verified live');
+  });
+
+  it('says how review picks from its ordered list in the same words as mc-goals, mc-plan, ruling 59 and mc model --help', () => {
+    const flat = (text) => text.replace(/\s+/gu, ' ');
+    const sentence = 'Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can.';
+    const read = (path) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), 'utf8');
+    const places = {
+      'docs/technical/mc-run.md': DOC,
+      'docs/technical/mc-goals.md': read('docs/technical/mc-goals.md'),
+      'docs/technical/mc-plan.md': read('docs/technical/mc-plan.md'),
+      'docs/project/mc/rulings.md': read('docs/project/mc/rulings.md'),
+      'mc model --help': commandUsage('model'),
+    };
+    for (const [place, text] of Object.entries(places)) assert.ok(flat(text).includes(sentence), `${place} no longer says how review picks its candidate`);
   });
 
   it('names the four step models on the tool that runs them, and the codex flag and effort override the runner passes', () => {

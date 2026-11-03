@@ -87,7 +87,7 @@ for (const resume of [false, true]) {
     const f = fixture(t);
     if (resume) transcript(f);
     let captured;
-    const result = await openInWorkArea({ ...f, tool: 'codex', pick: resume ? ID : 'new', prompt: 'OPEN', resumePrompt: 'CONTINUE', register: () => () => {}, spawn: (bin, args) => { captured = args; return { error: new Error('fixture: no child launched') }; } });
+    const result = await openInWorkArea({ ...f, verb: 'brief', tool: 'codex', pick: resume ? ID : 'new', prompt: 'OPEN', resumePrompt: 'CONTINUE', register: () => () => {}, spawn: (bin, args) => { captured = args; return { error: new Error('fixture: no child launched') }; } });
     assert.equal(result.reason, 'fixture: no child launched');
     assert.equal(captured[captured.indexOf('--sandbox') + 1], 'danger-full-access');
     assert.ok(!captured.includes('--ask-for-approval'));
@@ -179,7 +179,7 @@ test('the removed Codex environment switch cannot select a different mc boundary
   const f = fixture(t);
   f.env.MC_CODEX_WORKSPACE = 'read-only';
   let args;
-  await openInWorkArea({ ...f, tool: 'codex', pick: 'new', register: () => () => {}, spawn: (_bin, argv) => {
+  await openInWorkArea({ ...f, verb: 'brief', tool: 'codex', pick: 'new', register: () => () => {}, spawn: (_bin, argv) => {
     args = argv;
     return { error: new Error('fixture: no child launched') };
   } });

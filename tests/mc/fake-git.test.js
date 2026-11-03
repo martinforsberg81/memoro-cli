@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -163,6 +163,29 @@ describe('content identity', () => {
     git(cwd, 'worktree', 'remove', '--force', area);
     assert.doesNotMatch(git(cwd, 'worktree', 'list', '--porcelain'), /step-1/u);
   });
+
+  it('worktree move renames the worktree whole, into a directory under its name, and never over anything', () => {
+    const { cwd } = repository('moves');
+    const area = join(root, 'moves-area');
+    git(cwd, 'worktree', 'add', '-q', '--detach', area);
+    const to = join(root, 'moves-moved');
+    git(cwd, 'worktree', 'move', area, to);
+    assert.equal(existsSync(area), false);
+    assert.equal(git(to, 'status', '--porcelain'), '');
+    assert.equal(git(to, 'rev-parse', '--path-format=absolute', '--git-common-dir'), join(realpathSync(cwd), '.git'));
+    const listed = git(cwd, 'worktree', 'list', '--porcelain');
+    assert.match(listed, new RegExp(`worktree ${realpathSync(to).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\n`, 'u'));
+    assert.doesNotMatch(listed, /moves-area/u);
+
+    const into = join(root, 'moves-into');
+    mkdirSync(into);
+    git(cwd, 'worktree', 'move', to, into);
+    assert.equal(existsSync(join(into, 'moves-moved', '.git')), true, 'an existing directory takes it under its own name');
+    mkdirSync(join(root, 'moves-taken', 'moves-moved'), { recursive: true });
+    assert.match(run(cwd, ['worktree', 'move', join(into, 'moves-moved'), join(root, 'moves-taken')]).stderr, /already exists/u);
+    assert.match(run(cwd, ['worktree', 'move', cwd, join(root, 'moves-main')]).stderr, /is a main working tree/u);
+    assert.match(run(cwd, ['worktree', 'move', join(root, 'nowhere'), join(root, 'moves-x')]).stderr, /is not a working tree/u);
+  });
 });
 
 describe("the model's edges", () => {
@@ -222,5 +245,55 @@ describe("the model's edges", () => {
     // children make; the model answered them all.
     const log = process.env.MC_GIT_CALLS ? readFileSync(process.env.MC_GIT_CALLS, 'utf8') : '';
     assert.deepEqual(log.split('\n').filter((line) => line.startsWith(`${process.env.MC_GIT_TEST}\t`)), []);
+  });
+});
+
+describe('what an archive asks of a worktree', () => {
+  it('grep -l -F names the tracked files holding the text, and exits 1 when none does', () => {
+    const { cwd } = repository('greps');
+    mkdirSync(join(cwd, 'docs', 'sub'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'sub', 'k.md'), '# k\n');
+    writeFileSync(join(cwd, 'src', 'b.js'), "read('docs/sub/k.md');\n");
+    writeFileSync(join(cwd, 'src', 'c.js'), "read('docs/sub-two/k.md');\n");
+    writeFileSync(join(cwd, 'untracked.js'), "read('docs/sub/k.md');\n");
+    git(cwd, 'add', 'docs', 'src');
+    assert.equal(git(cwd, 'grep', '-l', '-F', '--', 'docs/sub/', '--', 'src', 'tests'), 'src/b.js', 'tracked only, within the pathspecs');
+    assert.equal(run(cwd, ['grep', '-l', '-F', '--', 'nowhere/', '--', 'src']).status, 1);
+    assert.throws(() => run(cwd, ['grep', 'docs']), /unsupported — git grep docs/u, 'a grep it does not model is refused, not guessed');
+  });
+
+  it('a glob pathspec crosses directories, as ls-files -- "*.md" does in git', () => {
+    const { cwd } = repository('globs');
+    mkdirSync(join(cwd, 'docs', 'deep'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'deep', 'x.md'), 'x\n');
+    git(cwd, 'add', 'docs');
+    assert.deepEqual(git(cwd, 'ls-files', '--', '*.md').split('\n'), ['README.md', 'docs/deep/x.md']);
+    assert.deepEqual(git(cwd, 'ls-files', '--', 'docs').split('\n'), ['docs/deep/x.md']);
+  });
+
+  it('ls-tree -d names a directory itself, or with a trailing slash the directories inside it', () => {
+    const { cwd } = repository('dir-trees');
+    mkdirSync(join(cwd, 'docs', 'project', 'one', 'deep'), { recursive: true });
+    mkdirSync(join(cwd, 'docs', 'project', 'two'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'project', 'one', 'deep', 'a.md'), 'a\n');
+    writeFileSync(join(cwd, 'docs', 'project', 'two', 'b.md'), 'b\n');
+    writeFileSync(join(cwd, 'docs', 'project', 'log.md'), 'log\n');
+    git(cwd, 'add', 'docs');
+    git(cwd, 'commit', '-qm', 'docs');
+    assert.deepEqual(git(cwd, 'ls-tree', '-d', '--name-only', 'HEAD', 'docs/project/').split('\n'), ['docs/project/one', 'docs/project/two']);
+    assert.match(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/one'), /^040000 tree [0-9a-f]{40}\tdocs\/project\/one$/u);
+    assert.equal(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/log.md'), '', 'a file is no tree');
+    assert.equal(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/gone'), '');
+  });
+
+  it('push origin HEAD pushes the branch under its own name; branch --list and refname:short name it', () => {
+    const { cwd, remote } = repository('heads');
+    git(cwd, 'switch', '-qc', 'archive/x-1');
+    git(cwd, 'push', '-q', '-u', 'origin', 'HEAD');
+    assert.equal(git(remote, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'), 'archive/x-1\nmain');
+    assert.equal(git(cwd, 'branch', '--list', 'archive/x-1'), '* archive/x-1');
+    git(cwd, 'switch', '-q', 'main');
+    git(cwd, 'branch', '-D', 'archive/x-1');
+    assert.equal(git(cwd, 'branch', '--list', 'archive/x-1'), '', 'the other branches are not listed');
   });
 });

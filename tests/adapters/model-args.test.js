@@ -13,6 +13,20 @@ import { describe, it } from 'node:test';
 import * as claude from '../../src/adapters/claude-code.js';
 import * as codex from '../../src/adapters/codex.js';
 
+describe('native delegation switches', () => {
+  it('Claude exposes seven tools including Agent, without mc-defined agents', () => {
+    assert.deepEqual(claude.toolArgs(), [
+      '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+    ]);
+  });
+
+  it('Codex enables native delegation regardless of machine config, beside the no-docs switch', () => {
+    assert.deepEqual(codex.sessionArgs(), [
+      '-c', 'project_doc_max_bytes=0', '-c', 'features.multi_agent=true',
+    ]);
+  });
+});
+
 describe('model args', () => {
   it('claude takes --model, appended after --resume', () => {
     assert.deepEqual(claude.modelArgs('opus'), ['--model', 'opus']);

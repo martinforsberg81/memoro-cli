@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { join } from 'node:path';
 
-import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
+import { closable, closeArea, lastRunFor } from '../../src/mc/close-workarea.js';
 
 /**
  * The closable rule: three facts and no judgement. Measured on 2026-08-29,
@@ -98,26 +98,6 @@ test('the last row for a project is the one that decides, not the first', () => 
   assert.equal(lastRunFor(tsv, 'docs-structure').note, 'success,open');
   assert.equal(lastRunFor(tsv, 'never-ran'), null);
   assert.equal(lastRunFor('', 'docs-structure'), null);
-});
-
-/**
- * The intake file is rewritten every round rather than appended to: it is a
- * picture of what is there now, and a workarea that got its plan leaves the
- * list by itself.
- */
-test('the unplanned file is a whole table, and a header on its own when there is nothing to say', () => {
-  const text = unplannedFile([
-    unplannedRow({ name: 'msr-track-1', repo: 'memoro', uncommitted: 0, lastCommit: '2026-08-24', branch: 'ahead' }),
-  ]);
-  assert.match(text, /\| name \| repo \| uncommitted \| last commit \| branch \|/u);
-  assert.match(text, /\| msr-track-1 \| memoro \| 0 \| 2026-08-24 \| ahead \|\n$/u);
-  assert.equal(unplannedFile([]).includes('|---|'), true);
-  assert.equal(unplannedFile([]).trimEnd().endsWith('|---|---|---|---|---|'), true);
-});
-
-test('a pipe in a cell never breaks the table', () => {
-  assert.match(unplannedRow({ name: 'a|b', repo: 'memoro', uncommitted: 1, lastCommit: '-', branch: 'unknown' }),
-    /\| a\\\|b \| memoro \| 1 \| - \| unknown \|/u);
 });
 
 /**

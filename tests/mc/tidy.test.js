@@ -15,7 +15,6 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/tidy.js';
-import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
@@ -23,7 +22,6 @@ import {
   LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy, sessionLogRe,
   staleGateCacheEntry, tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
-import * as workTidy from '../../src/mc/work-tidy.js';
 
 setLogPath(join(mkdtempSync(join(tmpdir(), 'mc-tidy-log-')), 'mc.log'));
 
@@ -102,8 +100,8 @@ describe('tidyPlan — loose transcripts (L), first match wins', () => {
 });
 
 describe('--days', () => {
-  it('mc tidy and mc work tidy take the same: 14 by default, a whole number, at least 1, and no name', () => {
-    for (const [parse, head] of [[parseTidyArgs, []], [parseArgs, ['tidy']]]) {
+  it('mc tidy takes 14 by default, a whole number, at least 1, and no name', () => {
+    for (const [parse, head] of [[parseTidyArgs, []]]) {
       assert.equal(parse([...head]).days, 14);
       assert.equal(parse([...head, '--days', '3']).days, 3);
       assert.ok(parse([...head, '--days', '0']).error);
@@ -115,10 +113,6 @@ describe('--days', () => {
   });
   it('register.log is not a session log, so tidy keeps it', () => {
     assert.equal(sessionLogRe('register').test('register.log'), false);
-  });
-  it('work-tidy.js is tidy.js', () => {
-    assert.equal(workTidy.runTidy, runTidy);
-    assert.equal(workTidy.tidyPlan, tidyPlan);
   });
 });
 
@@ -373,7 +367,9 @@ describe('(X), (W), (S) and (R): areas and worktrees', () => {
       assert.equal(keptOf(list, join(area, 'wt-c')).why, 'in use by claude');
       assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
       assert.equal(keptOf(list, join(area, 'memoro-cli')).rule, 'plan-checkout');
-      assert.equal(keptOf(list, join(m.work, 'work', 'x')).rule, 'work-area');
+      // The runner's run is no person's: a retired workarea that could go is listed and kept.
+      assert.equal(keptOf(list, join(m.work, 'work', 'x')).rule, 'W');
+      assert.match(keptOf(list, join(m.work, 'work', 'x')).why, /only a person's mc tidy --apply removes one/u);
       assert.equal(keptOf(list, '/private/tmp/claude-501/agent-1').rule, 'foreign-worktree');
     } finally { m.cleanup(); }
   });
@@ -399,6 +395,98 @@ describe('(X), (W), (S) and (R): areas and worktrees', () => {
       for (const name of ['memoro', 'memoro-cli', 'wt-b', 'wt-c']) assert.ok(existsSync(join(area, name)));
       assert.ok(existsSync(join(m.work, 'work', 'x', 'memoro')));
     } finally { m.cleanup(); }
+  });
+});
+
+/**
+ * What is left under `~/mc/work/` after the workareas were retired: one that
+ * may go, and one of each reason to stay. `inspect` answers per path, so each
+ * area's checkout says its own thing.
+ */
+function retiredAreas(m) {
+  const at = (name, repo = 'memoro') => join(m.work, 'work', name, repo);
+  for (const name of ['landed', 'dirty', 'ahead', 'notes', 'busy']) m.write(join(at(name), '.git'), 'gitdir: /fake');
+  m.write(join(m.work, 'work', 'landed', '.mc.json'), '{}');
+  m.write(join(m.work, 'work', 'notes', 'notes.md'), 'mine');
+  m.cwds = [{ pid: 1, cwd: '/' }, { pid: 77, cwd: join(m.work, 'work', 'busy') }];
+  const state = { [at('dirty')]: { uncommitted: 3 }, [at('ahead')]: { unmerged_commits: 2, landed: 'ahead' } };
+  const inspect = (path, name) => ({ ...m.inspect(path, name), ...state[path] });
+  return { at, inspect };
+}
+
+describe('(U) a step area no project explains', () => {
+  it('is listed with its verdict; one of a project the register knows is the runner\'s', () => {
+    const m = machine();
+    try {
+      for (const name of ['orphan', 'dirty-orphan', 'known']) m.write(join(m.work, 'step', name, 'memoro-cli', '.git'), 'gitdir: /fake');
+      m.register({ project: 'known', programme: 'mc', repo: 'memoro-cli', steps: [{ status: 'ready' }] });
+      const dirty = join(m.work, 'step', 'dirty-orphan', 'memoro-cli');
+      const inspect = (path, name) => ({ ...m.inspect(path, name), ...(path === dirty ? { uncommitted: 1 } : {}) });
+      const { list } = runTidy(m.doors({ inspect, person: true }));
+      assert.deepEqual(ruled(list, 'U').map((item) => [item.path, item.kind, item.why]),
+        [[join(m.work, 'step', 'orphan'), 'orphan-step-area', 'a step area no project explains: memoro-cli landed with nothing uncommitted']]);
+      assert.equal(keptOf(list, join(m.work, 'step', 'dirty-orphan')).why, 'no project explains it; memoro-cli: 1 uncommitted');
+      assert.equal(keptOf(list, join(m.work, 'step', 'known')).rule, 'step-area');
+      // The runner's apply takes none of them.
+      const runner = runTidy({ ...m.doors({ inspect }), apply: true });
+      assert.deepEqual(ruled(runner.list, 'U'), []);
+      assert.ok(existsSync(join(m.work, 'step', 'orphan', 'memoro-cli')));
+    } finally { m.cleanup(); }
+  });
+});
+
+describe('(W) what is left under ~/mc/work/', () => {
+  it('without --apply lists every one, says why each stays or goes, and removes nothing', () => {
+    const m = machine();
+    try {
+      const { at, inspect } = retiredAreas(m);
+      const { list, outcome } = runTidy(m.doors({ inspect, person: true }));
+      assert.equal(outcome, null);
+      const area = (name) => join(m.work, 'work', name);
+      assert.deepEqual(ruled(list, 'W').map((item) => [item.path, item.kind]), [[area('landed'), 'work-area']]);
+      assert.equal(list.targets.find((item) => item.rule === 'W').why, 'a retired workarea: memoro landed with nothing uncommitted');
+      assert.equal(keptOf(list, area('dirty')).why, 'memoro: 3 uncommitted');
+      assert.equal(keptOf(list, area('ahead')).why, 'memoro: 2 commits main lacks');
+      assert.equal(keptOf(list, area('notes')).why, 'it holds more than checkouts: notes.md');
+      assert.equal(keptOf(list, area('busy')).why, 'process 77 stands in it');
+      for (const name of ['landed', 'dirty', 'ahead', 'notes', 'busy']) {
+        assert.equal(keptOf(list, area(name))?.rule ?? 'W', 'W', `${name} is listed under W`);
+        assert.ok(existsSync(at(name)), `${name} is still there`);
+      }
+      assert.deepEqual(m.released, []);
+    } finally { m.cleanup(); }
+  });
+
+  it('a person\'s --apply hands the landed one back to git and removes it, and leaves every other', () => {
+    const m = machine();
+    try {
+      const { at, inspect } = retiredAreas(m);
+      const { outcome } = runTidy({ ...m.doors({ inspect }), person: true, apply: true });
+      assert.deepEqual(m.released, [at('landed')]);
+      assert.equal(existsSync(join(m.work, 'work', 'landed')), false);
+      assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(m.work, 'work', 'landed'), true]]);
+      for (const name of ['dirty', 'ahead', 'notes', 'busy']) assert.ok(existsSync(at(name)), `${name} is still there`);
+    } finally { m.cleanup(); }
+  });
+
+  it('the runner\'s apply removes none of them', () => {
+    const m = machine();
+    try {
+      const { at, inspect } = retiredAreas(m);
+      const { list } = runTidy({ ...m.doors({ inspect }), apply: true });
+      assert.deepEqual(ruled(list, 'W'), []);
+      assert.deepEqual(m.released, []);
+      assert.ok(existsSync(at('landed')));
+    } finally { m.cleanup(); }
+  });
+
+  it('mc tidy is a person\'s unless MC_HEADLESS says it is a session\'s', async () => {
+    const asked = [];
+    const tidy = (opts) => { asked.push(opts.person); return { list: { targets: [], kept: [] }, listPath: '/l.json', outcome: null }; };
+    const stdout = { write: () => {} };
+    await tidyCommand({ apply: false, days: 14 }, { stdout, tidy, docker: async () => null, env: {} });
+    await tidyCommand({ apply: false, days: 14 }, { stdout, tidy, docker: async () => null, env: { MC_HEADLESS: '1' } });
+    assert.deepEqual(asked, [true, false]);
   });
 });
 
@@ -896,7 +984,8 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 5);
+      assert.equal(written.rules_version, 6);
+      assert.equal(written.person, false, 'the list says whose run it was');
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
@@ -983,7 +1072,8 @@ describe('the printout', () => {
       { path: '/w/plan/mc/wt-a', kind: 'plan-worktree', rule: 'X', why: '#12 merged at this tip', bytes: 2e9 },
     ],
     kept: [
-      { path: '/w/work/x', rule: 'work-area', why: 'only mc work release or discard removes a work area' },
+      { path: '/w/work/x', rule: 'W', why: 'memoro: 3 uncommitted' },
+      { path: '/w/step/y', rule: 'step-area', why: 'the runner closes a step area when its project is done' },
       { path: '/w/plan/mc/wt-b', rule: 'X', why: '2 uncommitted' },
     ],
   };
@@ -1000,7 +1090,8 @@ describe('the printout', () => {
     assert.match(text, /X +1 /u);
     assert.match(text, /the first 10 of 13/u);
     assert.match(text, /X {2}\/w\/plan\/mc\/wt-b — 2 uncommitted/u);
-    assert.doesNotMatch(text, /work\/x/u, 'a work area kept is the ordinary case');
+    assert.match(text, /W {2}\/w\/work\/x — memoro: 3 uncommitted/u, 'a retired workarea kept is said, with why');
+    assert.doesNotMatch(text, /step\/y/u, 'a step area kept is the ordinary case');
     assert.match(text, /list: \/w\/runner\/tidy\/l\.json/u);
   });
 

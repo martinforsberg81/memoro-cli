@@ -12,7 +12,7 @@ are standing in. It may be a digest mc wrote, a log, a note or a screenshot —
 
 One file, one outcome: **one** proposal, as the proposals skill says, or none.
 Not two from one file — one report is one proposal. Say in one line which you
-did and why.
+did, where it went and why.
 
 Read the file whole before you judge it. If you cannot — it is past your tool's
 read limit, or in a form you cannot open — say that instead of judging it from
@@ -24,6 +24,13 @@ You are also the only reader who has to say which system a finding belongs to.
 Say it in the filename and in the proposal, in its own words. When the file's name says which —
 mc's own digests do — the prompt tells you; when nothing says, decide from what
 you read. A finding filed against the wrong one is worse than one not filed.
+
+And you choose the programme that owns it. The prompt lists the programmes,
+one line each from their READMEs: write the proposal in that programme's
+`~/mc/programs/<programme>/proposals/`, or in `~/mc/proposals/` when none of
+them owns it — a real answer, not a failure. Its plan session judges it
+against what that programme has already declined; you read no archive.
+The same rules below decide both whether to write it and where.
 
 How you judge:
 

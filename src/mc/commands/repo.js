@@ -69,7 +69,7 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'rounds') return rounds(opts, { stdout });
   if (opts.verb === 'guard') return guard(opts, { stdout, stderr });
   if (opts.verb === 'push-check') return pushCheck(opts, { stdout, stderr, stdin: deps.stdin || process.stdin, env: deps.env || process.env, git: deps.git, gh: deps.gh });
-  if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null });
+  if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null, now: deps.now || null });
 
   const report = await repoView({ names: opts.names, offline: opts.offline });
 
@@ -150,7 +150,9 @@ async function watch(opts, { stdout, stderr }) {
  * exactly one thing — this command. Nobody's git is blocked, which is why the
  * message says who has it rather than pretending the work cannot proceed.
  */
-async function lease(opts, { stdout, stderr, tell = null }) {
+async function lease(opts, { stdout, stderr, tell = null, now = null }) {
+  // `now` is the clock a test hands in; the lease's own default is the real one.
+  const at = () => (now ? now() : undefined);
   const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
   const repoPath = await resolveRepoPath(opts.repo);
   if (!repoPath) {
@@ -160,7 +162,7 @@ async function lease(opts, { stdout, stderr, tell = null }) {
   const holder = currentHolder();
 
   if (opts.verb === 'who') {
-    const current = readLease(repoPath);
+    const current = readLease(repoPath, { now: at() });
     // Asked of the board, not of a clock. The age above says how long the
     // round has run; this says whether it is still running, which is the
     // question somebody weighing a `--force` is actually asking.
@@ -177,7 +179,7 @@ async function lease(opts, { stdout, stderr, tell = null }) {
   }
 
   if (opts.verb === 'claim') {
-    const outcome = claimLease({ repoPath, errand: opts.errand, holder });
+    const outcome = claimLease({ repoPath, errand: opts.errand, holder, now: at() });
     if (!outcome.ok) {
       stderr.write(`mc: ${repoPath} is held by ${outcome.lease.holder} — ${leaseRow(c, outcome.lease)}\n`);
       // This is the moment somebody decides whether the other round is dead,
@@ -200,7 +202,7 @@ async function lease(opts, { stdout, stderr, tell = null }) {
     return 0;
   }
 
-  const outcome = releaseLease({ repoPath, holder, force: opts.force });
+  const outcome = releaseLease({ repoPath, holder, force: opts.force, now: at() });
   if (!outcome.ok) {
     stderr.write(`mc: ${repoPath} is held by ${outcome.lease.holder}, not by you (${holder.name})\n`);
     stderr.write(`mc: mc repo release ${opts.repo} --force takes it anyway, and the log keeps that\n`);
@@ -726,7 +728,7 @@ export function gateLines(report) {
  * The lease verbs take one repository, named the way the view names them.
  *
  * Cheap first: the names in the last snapshot, then a path or a clone beside
- * the home directory — the same rule as `mc work add`. Only a name none of
+ * the home directory — the same rule as `resolveRepository`. Only a name none of
  * those know costs a full count, because a claim should not wait on an
  * inspection of every checkout on the machine to find out where a name lives.
  */

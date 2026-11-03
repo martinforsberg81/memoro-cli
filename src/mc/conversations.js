@@ -444,7 +444,7 @@ export function deleteConversation(entry, env = process.env) {
   try {
     if (entry.path) {
       rmSync(entry.path, { force: true });
-      // The `<id>/` beside it holds the conversation's subagents and tool
+      // The `<id>/` beside it holds the conversation's side transcripts and tool
       // results. Only a uuid-shaped id names one: anything else would build a
       // path to a directory that is not the conversation's.
       if (SESSION_ID.test(entry.id)) {

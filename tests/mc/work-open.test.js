@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 
 import { sessionArgs, toolArgs } from '../../src/adapters/claude-code.js';
 import { SESSION_IDENTITY_ENV } from '../../src/mc/session-role.js';
-import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
+import { readCanonRole, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
 import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
@@ -62,6 +62,8 @@ function fixture({ entries = null } = {}) {
 function opening(overrides = {}) {
   const calls = [];
   const options = {
+    // Every launch has an owner (session-owner.js); a desk is the plainest.
+    verb: 'brief',
     tool: 'claude',
     spawn: (bin, args, spawnOptions) => { calls.push({ bin, args, spawnOptions }); return { status: 0 }; },
     ...overrides,
@@ -196,6 +198,24 @@ describe('openInWorkArea and the launch switches', () => {
 });
 
 describe('openInWorkArea in a role area', () => {
+  it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
+    for (const name of ['build-session:goal', 'build-session:project', 'build-session:worker', 'review-session:goal', 'review-session:project', 'plan-session', 'brief', 'helper', 'intake']) {
+      const role = readCanonRole(name);
+      assert.ok(role, name);
+      for (const resumed of [false, true]) {
+        const { areaRoot, worktree, env } = fixture({ entries: resumed ? [{ type: 'user', message: { content: 'first' } }] : null });
+        const { calls, options } = opening();
+        await openInWorkArea({ areaRoot, worktree, env, overlay: role.overlay, roleName: name, cache: role.cache, ...options });
+        const { args } = calls[0];
+        assert.deepEqual(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 3), [
+          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+        ], name);
+        assert.equal(args.includes('--agents'), false, name);
+        assert.equal(args.includes('--resume'), resumed, name);
+      }
+    }
+  });
+
   // The shared text every role session is told, then the overlay that is
   // this role's. An area with no role gets neither (see above).
   it('the overlay rides behind the shared text and the role model is the default', async () => {
@@ -277,12 +297,12 @@ describe('openInWorkArea and the foreground register', () => {
   it('registers the verb, the area, the tool and the model, and releases when the tool is done', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    const { options } = opening();
+    const { options } = opening({ verb: 'plan' });
     await openInWorkArea({
-      areaRoot, worktree, env, verb: 'plan', areaName: 'mc-ui', model: 'opus', register, ...options,
+      areaRoot, worktree, env, areaName: 'plan/mc', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'mc-ui', tool: 'claude', model: 'opus', env, role: null },
+      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
   });
@@ -321,7 +341,7 @@ describe('openInWorkArea and the foreground register', () => {
     const { events, register } = registering();
     const { options } = opening();
     const result = await openInWorkArea({
-      areaRoot, worktree, env, verb: 'work', overlay: 'OVERLAY',
+      areaRoot, worktree, env, overlay: 'OVERLAY',
       roleName: 'worker', roleSource: 'catalogue', register, ...options,
     });
     assert.equal(result.resumed, true);
@@ -340,15 +360,29 @@ describe('openInWorkArea and the foreground register', () => {
     assert.deepEqual(events.map((item) => item.event), ['register', 'release']);
   });
 
-  it('a caller that names no verb registers nothing — the register is opt-in', async () => {
+  // Every session belongs to a programme or a desk: a launch that names
+  // neither is refused before anything is registered or spawned (goal mc/no-work).
+  it('refuses a launch with no owner, and registers and spawns nothing', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { events, register } = registering();
-    const { options } = opening();
-    await openInWorkArea({ areaRoot, worktree, env, register, ...options });
-    assert.deepEqual(events, [
-      { event: 'register', verb: null, area: null, tool: 'claude', model: null, env, role: null },
-      { event: 'release' },
-    ]);
+    for (const owner of [{ verb: null }, { verb: 'work', areaName: 'work/x' }, { verb: 'plan', areaName: 'mc-test' }, { verb: 'project' }]) {
+      const { calls, options } = opening(owner);
+      const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
+      assert.equal(result.ok, false, JSON.stringify(owner));
+      assert.equal(result.reason, 'no owner');
+      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc brief, mc helper\)/u);
+      assert.deepEqual(calls, []);
+    }
+    assert.deepEqual(events, []);
+  });
+
+  it('opens a project of a programme, and registers it with its programme', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { options } = opening({ verb: 'project', programme: 'mc' });
+    const result = await openInWorkArea({ areaRoot, worktree, env, areaName: 'step/ui', register, ...options });
+    assert.equal(result.ok, true);
+    assert.deepEqual([events[0].verb, events[0].area, events[0].programme], ['project', 'step/ui', 'mc']);
   });
 });
 
@@ -447,6 +481,7 @@ describe('startInBackground and --model', () => {
     startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', cache: '5m', env, run: fresh.run });
     assert.equal(creation(fresh.calls), `${QUOTED_IDENTITY} 'claude' ${[...toolArgs(), ...sessionArgs({ cache: '5m' })].map((arg) => `'${arg}'`).join(' ')} 'go'`);
     assert.match(creation(fresh.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"/u);
+    assert.ok(creation(fresh.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent' '--strict-mcp-config'"));
 
     const resumed = tmux();
     startInBackground({
@@ -455,6 +490,7 @@ describe('startInBackground and --model', () => {
     });
     assert.equal(creation(resumed.calls), `${QUOTED_IDENTITY} 'claude' '--resume' '${CONVERSATION_ID}' ${QUOTED_SETTINGS} 'go'`);
     assert.match(creation(resumed.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"/u);
+    assert.ok(creation(resumed.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent' '--strict-mcp-config'"));
   });
 
   it('the role default follows the role tool here too', () => {

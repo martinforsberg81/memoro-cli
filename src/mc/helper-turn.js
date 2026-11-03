@@ -7,7 +7,9 @@
  * he has in it by hand. This is the turn that empties it one file at a time: a
  * fresh, headless session with the `intake` role from `canon/roles/intake.md`,
  * standing in `~/mc/intake/`, given one filename and asked for one outcome —
- * one `~/mc/proposals/<date>-<system>-<slug>.md`, or none.
+ * one `<date>-<system>-<slug>.md` in the `proposals/` of the programme that
+ * owns it (`~/mc/programs/<programme>/proposals/`), or in `~/mc/proposals/`
+ * when no programme does — or none.
  *
  * `drainIntake` at the bottom is what makes that an inbox rather than a pile:
  * the oldest files, one turn each, every one archived under
@@ -29,20 +31,24 @@
  * naming it is enough. What it may write is one directory, and the role says
  * so in the same words as this comment.
  *
- * A proposal is not a plan and not a queue entry. It waits in `~/mc/proposals/`
- * until the brief session reads it and Martin decides; mc reads only its name.
+ * A proposal is not a plan and not a queue entry. It waits in its programme's
+ * `proposals/` until that programme's plan session takes a stand on it, and
+ * one no programme owns waits in `~/mc/proposals/`; mc reads only its name.
+ * The turn reads no archive: judging a proposal against the ones already
+ * declined is the plan session's, with its programme as context.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { withoutSessionIdentity } from './session-role.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { defaultRepos, listPlans, listProposals, proposalSystem } from './brief-collect.js';
+import { defaultRepos, listPlans, proposalSystem } from './brief-collect.js';
 import { runAsync as runGitAsync } from './git.js';
-import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
+import { intakeArchiveDir, intakeDir, listAllProposals, programmeNames, proposalsDir } from './helper-collect.js';
+import { programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
@@ -92,7 +98,9 @@ export function repoOfFile(file) {
  * stands in, so a name is enough to open it, and it is the only form that
  * works for a file that is not text.
  */
-export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], repo = null, now = new Date() }) {
+export function helperPrompt({
+  file, proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], projectLog = null, plans = [], proposals = [], repo = null, now = new Date(),
+}) {
   const tagOf = (repo) => (repo === 'memoro-cli' ? 'mc' : 'memoro');
   const date = now.toISOString().slice(0, 10);
   const name = basename(String(file || ''));
@@ -122,16 +130,25 @@ export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog 
   }
   out.push(
     '',
-    `One file, one outcome: either **one** proposal in \`${proposalsPath}\`, named \`${date}-<mc|memoro>-<slug>.md\`,`,
+    `One file, one outcome: either **one** proposal, named \`${date}-<mc|memoro>-<slug>.md\`,`,
     'or none at all. Not two from one file — one report is one proposal — and no proposal is the right',
-    'answer whenever the file does not warrant one. Say in one line which you did and why, then stop.',
+    'answer whenever the file does not warrant one.',
+    '',
+    'A proposal goes to the programme that owns the question it raises: that programme\'s',
+    `\`${programsPath}/<programme>/proposals/\`, where its plan session takes a stand on it with the whole`,
+    'programme as context. The programmes are under PROGRAMMES below, one line each. When none of them',
+    `owns it, it goes in \`${proposalsPath}\` — a valid answer for a proposal no programme owns, not a failure.`,
+    'Say in one line which you did, where it went and why, then stop.',
     '',
     'If you cannot read the file whole — it is past your tool\'s read limit, or in a form you cannot open —',
     'say so rather than judging it from its head: either a proposal that names the limit, or no proposal',
     'with that as the reason in your line.',
     '',
-    '----- PLANS ON MAIN -----',
+    '----- PROGRAMMES -----',
   );
+  if (!programmes.length) out.push('_none_');
+  else for (const p of programmes) out.push(`- ${p.name} — ${clip(p.line || NO_DESCRIPTION, 160)}`);
+  out.push('', '----- PLANS ON MAIN -----');
   if (!plans.length) out.push('_none read_');
   else {
     out.push('| repo | programme / project | status | next |', '|---|---|---|---|');
@@ -140,8 +157,44 @@ export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog 
   out.push('', '----- PROJECT LOG (closed projects) -----', projectLog || '_none read_');
   out.push('', '----- PROPOSALS ALREADY WAITING -----');
   if (!proposals.length) out.push('_none_');
-  else for (const p of proposals) out.push(`- ${p.file}`);
+  else {
+    const groups = new Map();
+    for (const p of proposals) {
+      const key = p.programme || null;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p.file);
+    }
+    const keys = [...groups.keys()].sort((a, b) => (a === null ? -1 : b === null ? 1 : a.localeCompare(b)));
+    for (const key of keys) {
+      out.push(key === null ? `no programme (\`${proposalsPath}\`):` : `programme ${key}:`);
+      for (const name of groups.get(key)) out.push(`- ${name}`);
+    }
+  }
   return out.join('\n');
+}
+
+/** What the routing table says for a programme whose README gives no line. */
+export const NO_DESCRIPTION = '(no description)';
+
+/** A README's first line that is not a heading, or null: the programme's line in the routing table. */
+export function readmeLine(text) {
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (line && !line.startsWith('#')) return line;
+  }
+  return null;
+}
+
+/**
+ * The routing table the intake turn picks a programme from: one row per
+ * programme under `~/mc/programs/`, its line read from its README.
+ */
+export function programmeRoutes(env = process.env, { read = (path) => readFileSync(path, 'utf8') } = {}) {
+  return programmeNames(env).map((name) => {
+    let line = null;
+    try { line = readmeLine(read(join(programsHome(env), name, 'README.md'))); } catch { /* no README */ }
+    return { name, line: line || NO_DESCRIPTION };
+  });
 }
 
 /* -------------------------------------------------------------------- turn */
@@ -150,7 +203,13 @@ export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog 
 /** What the turn produced, in the one line a runner log and a person share. */
 export function describeTurn({ wrote = [], waiting = [] }) {
   if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)`;
-  const line = `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}, ${waiting.length} waiting`;
+  // Where it went, when the listing said: a programme by name, or the root as
+  // the place for what no programme owns.
+  const placed = wrote.filter((p) => p && typeof p === 'object' && 'programme' in p);
+  const where = placed.length
+    ? ` to ${[...new Set(placed.map((p) => (p.programme ? `programme ${p.programme}` : 'no programme (~/mc/proposals)')))].join(' and ')}`
+    : '';
+  const line = `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}${where}, ${waiting.length} waiting`;
   const untagged = wrote.filter((p) => typeof p?.file === 'string' && !proposalSystem(p.file)).map((p) => `proposal ${p.file} names no system (mc|memoro)`);
   return untagged.length ? `${line} — ${untagged.join('; ')}` : line;
 }
@@ -230,12 +289,17 @@ export async function runHelperTurn({
   const dir = intakeDir(env);
   const proposals = proposalsDir(env);
   mkdirSync(proposals, { recursive: true });
-  const before = new Set((deps.list || listProposals)(proposals).map((p) => p.file));
+  // Every directory a proposal may be written in, before and after: the root
+  // and each programme's `proposals/`, never an archive.
+  const listAll = deps.list || listAllProposals;
+  const waitingBefore = listAll(env);
+  const before = new Set(waitingBefore.map((p) => p.path));
 
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
-    file, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
-    proposals: [...before].map((name) => ({ file: name, title: '' })), repo, now,
+    file, proposalsPath: proposals, programsPath: programsHome(env), programmes: (deps.routes || programmeRoutes)(env),
+    projectLog: ground.projectLog, plans: ground.plans,
+    proposals: waitingBefore.map((p) => ({ programme: p.programme, file: p.file })), repo, now,
   });
   const instructions = instructionsFor(launch.id, role.overlay);
   const args = headlessArgs({
@@ -254,8 +318,8 @@ export async function runHelperTurn({
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
   });
-  const after = (deps.list || listProposals)(proposals);
-  const wrote = after.filter((p) => !before.has(p.file));
+  const after = listAll(env);
+  const wrote = after.filter((p) => !before.has(p.path));
   return {
     ok: result.status === 0 && !result.timedOut,
     status: result.status,

@@ -10,7 +10,7 @@
  * What the second word means, when there is one:
  *   (nothing)   the most recent conversation here, or a new one if there is none
  *   new         a new one regardless
- *   <id prefix> that one, as shown by `mc work`
+ *   <id prefix> that one, as the conversation picker shows it
  *
  * `prompt` is the conversation's opening words, given to a new conversation
  * only: both tools take it as the last positional argument. A resumed
@@ -30,6 +30,7 @@ import { instructionsFor, roleRecord, textDigest } from './roles.js';
 import { profileArgs } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
+import { OWNERLESS_HINT, ownerOf } from './session-owner.js';
 import { clearStopMark } from './work-stop-marker.js';
 import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
@@ -64,6 +65,9 @@ export async function openInWorkArea({
   spawn = spawnSync,
   register = registerForeground,
 } = {}) {
+  // Every session belongs to a programme or a desk (session-owner.js); one mc
+  // would start for nobody is refused before anything is looked up or spawned.
+  if (!ownerOf({ verb, area: areaName, programme })) return { ok: false, reason: 'no owner', hint: OWNERLESS_HINT };
   const before = listConversations(areaRoot, env);
 
   // A named conversation decides its own tool: asking for one by id and being
@@ -140,7 +144,7 @@ export async function openInWorkArea({
     known_here: before.length,
   });
 
-  // Opened again: whatever `mc work stop` noted is over, and the next time
+  // Opened again: whatever a stop noted is over, and the next time
   // this area's conversation disappears it is judged on its own (KP-09).
   clearStopMark(areaRoot);
   // The register exists exactly as long as the tool holds the terminal, and
@@ -151,7 +155,7 @@ export async function openInWorkArea({
   // step, whose tool is 'claude' or 'codex', and one page should not call the
   // same tool two things.
   const release = register({
-    verb, area: areaName, tool: launch.shortName || toolId, model: chosenModel || null, env,
+    verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
     // A resumed conversation is handed no instructions at all — its own
     // history holds them — so it records the role and no digests rather than
     // a digest of today's file, which would be a claim nobody checked.
@@ -243,7 +247,7 @@ export function backgroundTarget(name, { run = null, env = process.env, path = n
  * stands.
  *
  * Nine sessions ran in tmux sessions called `clean`, `ops`, `vocab`, … —
- * started outside mc's naming — and every `mc work send --wake` to them
+ * started outside mc's naming — and every wake sent to them
  * delivered the file and never tried to knock, reporting "nothing is running"
  * (D-0136). They were running the whole time, in panes tmux could name. So
  * when `mc-<name>` does not exist, the panes are asked where they stand: one
@@ -255,7 +259,7 @@ export function backgroundTarget(name, { run = null, env = process.env, path = n
  * of its session, where the session's own name reads better in a message.
  *
  * `name` is the name without its kind (`foo`, not `work/foo`); the area it
- * stands for is the one `mc work <name>` opens (`workAreaName`), unless the
+ * stands for is the one `workAreaName` names, unless the
  * caller already knows the `path` — a role home, which is neither.
  */
 export function discoveredTarget(name, { tmux, env = process.env, path: known = null } = {}) {

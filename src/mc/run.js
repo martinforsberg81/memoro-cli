@@ -41,8 +41,8 @@
  * last row in runs.tsv ends `merged` is removed: worktree handed back, local
  * branch deleted, everything it kept beside its checkout moved to
  * `runner/log/closed/<name>/`. A workarea no project explains at all is never
- * removed by a machine; it is written to `~/mc/runner/unplanned-workareas.md`
- * instead. The rules are in close-workarea.js.
+ * removed by the runner: `mc tidy` lists it, with whether it can go, and
+ * removes it only on `--apply`. The rules are in close-workarea.js.
  *
  * The same holds for a plan on origin/main that does not parse: the runner can
  * hand out no step from it and must not guess at what its author meant, so it
@@ -126,7 +126,7 @@ import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
-import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import { closable, closeArea, lastRunFor } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
@@ -136,7 +136,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy, scratchRe } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, archivedProjectsHome, planAreaRoot, programsHome, runnerDir, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNREADABLE_PLANS, archivedProjectsHome, planAreaRoot, programsHome, runnerDir, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -164,10 +164,10 @@ import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, wri
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
-import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf, withWorkers } from './roles.js';
+import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
-import { attachRepoDepsAsync } from './work-deps.js';
+import { attachRepoDepsAsync } from './shared-deps.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { rmTree } from './rm-tree.js';
 import { checkpoint } from './checkpoint.js';
@@ -728,7 +728,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, deps.env),
     // Where a done project's directory is moved once its closeout is written (project-archive.js).
     archived: archivedProjectsHome(deps.env),
-    unplanned: runnerTablePath(UNPLANNED_WORKAREAS, deps.env),
     unreadable: runnerTablePath(UNREADABLE_PLANS, deps.env),
     // The repositories GitHub could not be asked about, and when to ask
     // again (github-backoff.js). The page draws its RUNNER line from it.
@@ -1138,9 +1137,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls) {
+  function routeClass(cls, { avoid = null } = {}) {
     try {
-      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), avoid });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -1620,8 +1619,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The end of the round: every workarea whose plan is finished is taken
-   * down, and every workarea with no plan on main is written where somebody
-   * looks.
+   * down, and every workarea with no plan on main is counted in one line and
+   * left for `mc tidy` to list.
    *
    * A step area (under `step/`) closes as soon as its plan is done: it is the
    * checkout the steps ran in, and once the register says every step is done
@@ -1647,7 +1646,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // it always sees this process — so then tmux alone answers, as tidy's does.
     const reading = deps.cwds ? deps.cwds() : null;
     const standing = reading && reading.length ? reading : null;
-    const rows = [];
+    let unplanned = 0;
     let closed = 0;
     for (const name of workareas()) {
       const plan = byProject.get(name) || null;
@@ -1662,7 +1661,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         legacy,
         stepsDone: stepsDone(name),
       });
-      if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
+      if (verdict.unplanned) { unplanned += 1; continue; }
       if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
       // A legacy area goes after its plan does. A plan this round still read on
       // main goes only if the archive PR that removes it actually merged; one
@@ -1671,9 +1670,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (legacy && plan && !landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
       if (closeWorkarea(name)) { closed += 1; removeScratchOf(name); }
     }
-    deps.write(paths.unplanned, unplannedFile(rows));
-    if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);
-    return { closed, unplanned: rows.length };
+    if (unplanned) say(`close: ${unplanned} area(s) with no project on main — mc tidy lists them`);
+    return { closed, unplanned };
   }
 
   /** Every step of the project is `done` in the register. No entry is not done. */
@@ -1698,29 +1696,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       for (const row of logRows(text || '')) if (row.project) names.add(row.project);
     }
     return names;
-  }
-
-  /**
-   * One row of `~/mc/runner/unplanned-workareas.md`. `branch` is asked of
-   * content rather than of commit counts — the runner squash-merges, so
-   * "ahead" by commits says nothing (branch-landed.js).
-   */
-  function unplannedFor(name) {
-    const [repo] = areaRepos(name);
-    const worktree = join(areaPath(name), repo.name);
-    // The branch is asked of the worktree, not guessed from the folder: a
-    // workarea from before the plan world was made by hand and need not be
-    // named after its branch (msr-track-1 sits on `msr-track1-skin`).
-    // Measured 2026-08-29, guessing left 14 of 20 rows `unknown` — which is
-    // the one column that says whether anything would be lost.
-    const branch = gitOut(worktree, ['rev-parse', '--abbrev-ref', 'HEAD']) || name;
-    return unplannedRow({
-      name,
-      repo: repo.name,
-      uncommitted: uncommitted(name),
-      lastCommit: gitOut(worktree, ['log', '-1', '--format=%cs']) || '-',
-      branch: branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) }),
-    });
   }
 
   /* ---------------------------------------------------------------- queue */
@@ -2084,7 +2059,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * open, which is nowhere in the plan and nothing the next round remembers.
    * A project the runner should leave alone says so where every other such
    * fact is written down, by being `blocked` in its own `PLAN.json` (Martin,
-   * 2026-09-02). `mc work` and `mc run` now know nothing about each other.
+   * 2026-09-02). A session somebody has open and `mc run` know nothing about each other.
    *
    * `closeWorkareas` still asks. That is a different question — whether it is
    * safe to *delete* the directory — and pulling the ground from under a
@@ -2258,21 +2233,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   let lastSettle = -Infinity;
 
   /**
-   * The route a goal's review runs on: the review class's candidate (`mc model
-   * set review`), as `{ ok, route, settings }`, or `{ reason }` when it may not
-   * run now. It never runs on the model of the goal's last build entry — the
-   * heading's `<tool> <model>` — so a goal is not reviewed by its builder: with
-   * no other model, the goal waits.
+   * The route a goal's review runs on: the first review candidate (`mc model`)
+   * that can run on its plan now, as `{ ok, route, settings }`, or `{ reason }`
+   * when it may not run now. A candidate whose model is the goal's last build
+   * entry's — the heading's `<tool> <model>` — is taken only when no other
+   * candidate can run on its plan; a review never waits for want of another
+   * model (`chooseReview`, model-choice.js).
    */
   function reviewRoute(goal) {
-    const route = routeClass(REVIEW_CLASS);
-    if (!route.ok) return { reason: route.reason };
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const built = lastBuildEntry(goal.log);
-    if (built?.model && built.model === settings.model) {
-      return { reason: `the review model is ${settings.tool} ${settings.model}, the model its last build session ran on (${built.at}); set another with mc model set review` };
-    }
-    return { ok: true, route, settings };
+    const route = routeClass(REVIEW_CLASS, { avoid: built?.model ? { tool: built.tool, model: built.model } : null });
+    if (!route.ok) return { reason: route.reason };
+    return { ok: true, route, settings: routedSettings(null, null, { kind: 'goal', candidate: route.candidate }) };
   }
 
   /**
@@ -2507,11 +2479,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // slot are one fact, and the eligibility of this goal is that same fact.
     const currentPath = paths.currentFor(repoName, lane);
     const current = {
-      name, step: null, kind, variant: planning ? null : 'goal', repo: repoName, lane, tool: settings.tool, model: settings.model,
+      name, step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree: cwd,
-      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions, workers: false }),
+      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
     };
     writeJson(currentPath, current);
     const scratch = join(paths.scratch, stem);
@@ -2861,10 +2833,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, built, earlier, now });
-    // Haiku workers (`runner.subagents: on`): the role is told how to use
-    // them through the same include the role files use for a shared passage.
-    const instructions = instructionsFor(launch.id, withWorkers(role, settings.subagents));
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
+    const instructions = instructionsFor(launch.id, role.overlay);
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
 
     // At each launch, use the provider's plan until a window is full or the
     // plan has refused. The gateway wrapper opens the key for API sessions.
@@ -2902,8 +2872,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The step as `mc step` numbers it, for the drain line (run-control.js
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
-      kind: sessionKind(kind).kind, variant: 'project', repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), ...(cls ? { class: cls } : {}), billing: picked.billing,
+      kind: sessionKind(kind).kind, variant: 'project', programme: plan?.programme || null, repo: repo.name, lane, tool: settings.tool, model: settings.model,
+      effort: settings.effort, advisor: settings.advisor, ...(cls ? { class: cls } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2917,7 +2887,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         source: roleSourceOf(role) || 'canon',
         overlay: role.overlay,
         instructions,
-        workers: settings.subagents,
       }),
     };
     writeJson(currentPath, current);
@@ -2954,7 +2923,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // session grant, never the provider key.
     const launchOnce = async (resume, text) => {
       const { billing } = picked;
-      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
+      const sessionArgs = resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args;
       const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args: sessionArgs, billing });
       const running = deps.session({
         bin: tool.bin,

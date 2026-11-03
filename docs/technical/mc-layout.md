@@ -280,8 +280,8 @@ Two small rules come with the bare form. A worktree's repository is
 itself when it is bare — and a repository's name is `repoNameOf(path)`, which
 drops `.git`, so a worktree of `memoro-cli.git` is still `memoro-cli/` in its
 area and `memoro-cli` to the gate table and the dependency tree. A bare
-repository has no `package.json` to copy, so `ensureWorkDeps` reads main's two
-files with `git show origin/main:…` (work-deps.js).
+repository has no `package.json` to copy, so `ensureSharedDeps` reads main's two
+files with `git show origin/main:…` (shared-deps.js).
 
 ### `mc repos`
 

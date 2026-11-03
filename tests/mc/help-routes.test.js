@@ -26,7 +26,6 @@ import { HELP_TEXT } from '../../src/mc/help-text.js';
 import { commandReference, commandUsage } from '../../src/mc/command-help.js';
 import { scanArgs } from '../../src/mc/commands/flags.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
-import { parseArgs as parseWork } from '../../src/mc/commands/work.js';
 import { parseArgs as parseDev } from '../../src/mc/commands/dev.js';
 import { parseArgs as parseRepo, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { parseWatchArgs } from '../../src/mc/commands/merge.js';
@@ -35,7 +34,6 @@ import { parseArgs as parseAsc } from '../../src/mc/commands/asc.js';
 import { parseDeployArgs } from '../../src/mc/commands/deploy.js';
 import { parseArgs as parseTidy } from '../../src/mc/commands/tidy.js';
 import { parseArgs as parseLog } from '../../src/mc/commands/log.js';
-import { parseArgs as parseWorker } from '../../src/mc/commands/worker.js';
 import { parseArgs as parseRoles } from '../../src/mc/commands/roles.js';
 import { parseArgs as parseDocker } from '../../src/mc/commands/docker.js';
 import { parseArgs as parsePlan } from '../../src/mc/commands/plan.js';
@@ -82,7 +80,6 @@ function routed(routes, argv) {
 /** What each verb's handler reads its arguments with. */
 const PARSERS = {
   run: (argv) => errorOf(parseRunArgs(argv)),
-  work: (argv) => errorOf(parseWork(argv)),
   dev: (argv) => errorOf(parseDev(argv, { cwd: '/', callerWorktree: () => '/worktree' })),
   repo: (argv) => errorOf(parseRepo(argv)),
   merge: (argv) => (argv[0] === 'watch'
@@ -98,7 +95,6 @@ const PARSERS = {
   deploy: (argv) => errorOf(parseDeployArgs(argv)),
   tidy: (argv) => errorOf(parseTidy(argv)),
   log: (argv) => errorOf(parseLog(argv)),
-  worker: (argv) => errorOf(parseWorker(argv)),
   roles: (argv) => errorOf(parseRoles(argv)),
   docker: (argv) => errorOf(parseDocker(argv)),
   plan: (argv) => errorOf(parsePlan(argv)),

@@ -123,7 +123,7 @@ describe('areaKindOf', () => {
       ['runner/deps/n', { kind: 'deps', name: 'n', area: 'runner/deps/n' }],
       ['step/p', { kind: 'step', name: 'p', area: 'step/p' }],
       ['step/deps-a', { kind: 'deps', name: 'deps-a', area: 'step/deps-a' }],
-      ['work/n', { kind: 'work', name: 'n', area: 'work/n' }],
+      ['work/n', { kind: 'retired', name: 'n', area: 'work/n' }],
       ['jobbet', { kind: 'legacy', name: 'jobbet', area: 'jobbet' }],
     ];
     for (const [name, expected] of cases) assert.deepEqual(areaKindOf(name), expected, name);
