@@ -17,10 +17,10 @@
  *     `{ target, why }`; one that throws keeps its item with the error.
  *   - Deletion is node `fs` and `git worktree remove` without `--force`: no
  *     shell, no `find`, no globbing. `memory/` is never opened.
- *   - A project's step area is never a target: the runner's `closeWorkareas`
- *     removes it. (U) One no project in the register explains — the runner
- *     never closes it — is judged as (W) is, by the same `person` rule; one
- *     left directly under `~/mc` is only listed.
+ *   - (U) A step area under the step root, left from the project steps that
+ *     went on 2026-11-03 (goal mc/projects-to-goals) — nothing closes one any
+ *     more — is judged as (W) is, by the same `person` rule; one left directly
+ *     under `~/mc` is only listed.
  *   - (W) What is left under `~/mc/work/` — the workareas, retired on
  *     2026-11-03 (goal mc/no-work) — is listed, every one, with why it stays
  *     or why it may go. One goes only when every checkout in it is a worktree
@@ -34,7 +34,7 @@
  *     runs in them, through `git worktree remove` in the repository that
  *     owns each one.
  *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when
- *     their programme has no project that is not done, judged as (X) judges an
+ *     their programme has no goal that is not finished, judged as (X) judges an
  *     extra worktree. `mc plan` adds them back when it next opens the programme.
  *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
@@ -47,27 +47,22 @@
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
-import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
-import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
+import { FINISHED, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
-  planAreaRoot, runnerDir, stepAreaName, stepAreaRoot, workGateCachePath, workGatePath, workRoot,
+  planAreaRoot, runnerDir, stepAreaRoot, workGateCachePath, workGatePath, workRoot,
 } from './paths.js';
-import { PLAN_FILE, lsTreeArgs, planPath } from './plan-source.js';
-import { DRAFT_FILE } from './plan-write.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
-import { closeoutFileOf } from './project-archive.js';
-import { listArchivedEntries, listEntries, readEntry, registerDir, registerPath } from './register.js';
 import { rmTree } from './rm-tree.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
@@ -76,7 +71,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 6;
+export const RULES_VERSION = 7;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -97,7 +92,7 @@ const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** mc's own files in a workarea: never what keeps one, and gone with it. */
 const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'step-area', 'G', 'K', 'A']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A']);
 
 /** Every root tidy reads, by name. A kind removes only under its own. */
 export function tidyRoots(env = process.env) {
@@ -108,11 +103,6 @@ export function tidyRoots(env = process.env) {
     plan: planAreaRoot({ root }),
     step: stepAreaRoot({ root }),
     work: join(root, WORK_HOME),
-    // Null in layout 2: a project's STATE.json is its knowledge (ruling 51), never a target.
-    register: registerDir(root),
-    log: join(runner, 'log'),
-    closed: join(runner, 'log', 'closed'),
-    scratch: join(runner, 'scratch'),
     tidy: join(runner, 'tidy'),
     claude: join(claudeHome(env), 'projects'),
     compare: join(mcHome(env), 'compare'),
@@ -125,10 +115,6 @@ export function tidyRoots(env = process.env) {
 
 /** The root each kind of target must lie under, by `tidyRoots` key. */
 const KIND_ROOT = {
-  register: 'register',
-  'session-log': 'log',
-  'closed-log': 'closed',
-  scratch: 'scratch',
   transcript: 'claude',
   leftover: 'claude',
   'plan-checkout': 'plan',
@@ -164,23 +150,6 @@ function knownSlugs(repos) {
 /** The `at` a store or a hit wrote into a gate-cache entry's meta.json: null when there is none, or it cannot be read. */
 function entryUsedAt(path) {
   try { return Number(JSON.parse(readFileSync(join(path, 'meta.json'), 'utf8')).at) || null; } catch { return null; }
-}
-
-const escape = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-
-/**
- * A runner session file of one project under `runner/log/`:
- * `<project>-<yyyymmddThhmmssZ>.{jsonl,json,json.err}`, gzipped or not.
- * Exact, like `sessionFileRe`: a prefix would give `ui-faults` the files of
- * `ui-faults-2`.
- */
-export function sessionLogRe(project) {
-  return new RegExp(`^${escape(project)}-\\d{8}T\\d{6}Z\\.(jsonl|json|json\\.err)(\\.gz)?$`, 'u');
-}
-
-/** A runner scratch directory of one project: `<project>-<yyyymmddThhmmssZ>`. */
-export function scratchRe(project) {
-  return new RegExp(`^${escape(project)}-\\d{8}T\\d{6}Z$`, 'u');
 }
 
 /** The directories every area of a kind sits under, in both layouts: never an area themselves. */
@@ -230,75 +199,9 @@ export function gatherTidyFacts({
   const root = roots.root;
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
-    git_error: null, register_error: null, projects: [], plan_checkouts: [], plan_worktrees: [],
+    plan_checkouts: [], plan_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
   };
-
-  // origin/main, one `ls-tree` and one `show` per repository. A repository
-  // that cannot answer stops every purge this run.
-  const main = new Map();
-  for (const repo of repos) {
-    const tree = git(repo.path, lsTreeArgs());
-    const text = git(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
-    if (tree == null || text == null) { facts.git_error = `${repo.name} could not say what origin/main holds`; continue; }
-    main.set(repo.name, { tree: new Set(tree.split('\n').filter(Boolean)), rows: logRows(text) });
-  }
-
-  // The live projects, then the archived ones: the runner moved those out of
-  // programs/, and their leftovers are purged as a live project's are.
-  let entries = [];
-  try { entries = listEntries(root).map((entry) => ({ entry, archived: false })); } catch (error) { facts.register_error = message(error); }
-  entries.push(...listArchivedEntries(root).map((entry) => ({ entry, archived: true })));
-  const logFiles = listNames(roots.log);
-  const scratchDirs = listNames(roots.scratch);
-  for (const { entry, archived } of entries) {
-    const item = {
-      project: entry.project, programme: entry.programme, repo: entry.repo,
-      register_path: registerPath(root, entry.project),
-      in_log: false, plan_on_main: null, closeout_on_main: false, area_exists: null,
-      files: [],
-    };
-    if (archived) item.archived_dir = true;
-    facts.projects.push(item);
-    try {
-      const repo = main.get(entry.repo);
-      if (repo) {
-        item.in_log = repo.rows.some((row) => row.project === entry.project
-          && (!row.programme || !entry.programme || row.programme === entry.programme));
-        // A plan under `~/mc/programs/` is a file on this machine, not a path in origin/main's tree.
-        // Its archiving leaves a CLOSEOUT.json beside it (ruling 48): that file is the closeout.
-        if (archived) {
-          // Moved to archive/projects/: no plan directory is left there, and its closeout is beside its STATE.json.
-          item.plan_on_main = false;
-          item.closeout_on_main = present(closeoutFileOf(item.register_path));
-        } else if (isAbsolute(entry.plan || '')) {
-          item.plan_on_main = present(entry.plan) && !present(closeoutFileOf(entry.plan));
-          item.closeout_on_main = present(closeoutFileOf(entry.plan));
-        } else {
-          const planDir = entry.plan ? dirname(entry.plan) : dirname(planPath(entry.programme, entry.project));
-          item.plan_on_main = [...repo.tree].some((path) => path.startsWith(`${planDir}/`));
-          item.closeout_on_main = Boolean(entry.programme) && repo.tree.has(closeoutPath(entry.programme, entry.project));
-        }
-      } else if (!facts.git_error) {
-        item.error = `its repository ${entry.repo || '(none)'} is not one tidy asks`;
-      }
-      item.area_exists = directoryExists(join(root, stepAreaName(entry.project, { root }))) || directoryExists(join(root, entry.project));
-      // Only a project the rule would take has its files listed and weighed.
-      if (!projectPurge(item, facts).target) continue;
-      // An archived project keeps its STATE.json: it is the project's knowledge, not a leftover.
-      if (roots.register && !archived) item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
-      const logRe = sessionLogRe(entry.project);
-      for (const name of logFiles) {
-        if (logRe.test(name)) item.files.push({ path: join(roots.log, name), kind: 'session-log', bytes: treeBytes(join(roots.log, name)) });
-      }
-      const closed = join(roots.closed, entry.project);
-      if (directoryExists(closed)) item.files.push({ path: closed, kind: 'closed-log', bytes: treeBytes(closed) });
-      const dirRe = scratchRe(entry.project);
-      for (const name of scratchDirs) {
-        if (dirRe.test(name)) item.files.push({ path: join(roots.scratch, name), kind: 'scratch', bytes: treeBytes(join(roots.scratch, name)) });
-      }
-    } catch (error) { item.error = message(error); }
-  }
 
   // One lsof for every plan worktree. It always sees this process, so an
   // empty answer is lsof failing — and then nothing can be said to be unused.
@@ -308,7 +211,7 @@ export function gatherTidyFacts({
   const tip = pullAtTip || ((wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {}));
   for (const programme of listNames(roots.plan)) {
     const area = join(roots.plan, programme);
-    const active = programmeHasOpenProject(root, area);
+    const active = programmeHasOpenGoal(area);
     for (const name of listNames(area)) {
       const path = join(area, name);
       if (!present(join(path, '.git'))) continue;
@@ -364,15 +267,11 @@ export function gatherTidyFacts({
   for (const name of listNames(roots.work)) {
     facts.work_areas.push(readArea({ path: join(roots.work, name), name, worktrees: [], others: [], live: null, bytes: 0 }));
   }
-  // (S) and (U): a step area of a project the register knows is the runner's;
-  // one no project explains — the runner never closes it — is read as (W) is.
-  // A register that could not be read explains every one.
-  const registered = new Set(facts.projects.map((item) => item.project));
+  // (U) every step area, left from the retired project steps: one under the
+  // step root is read as (W) is; one directly under `~/mc` is only listed.
   for (const area of listStepAreas({ root })) {
-    const explained = Boolean(facts.register_error) || registered.has(area.name);
-    const underStep = dirname(area.path) === roots.step;
-    if (explained || !underStep) { facts.step_areas.push({ path: area.path, name: area.name, explained, legacy: !underStep }); continue; }
-    facts.step_areas.push(readArea({ path: area.path, name: area.name, explained, legacy: false, worktrees: [], others: [], live: null, bytes: 0 }));
+    if (dirname(area.path) !== roots.step) { facts.step_areas.push({ path: area.path, name: area.name, legacy: true }); continue; }
+    facts.step_areas.push(readArea({ path: area.path, name: area.name, legacy: false, worktrees: [], others: [], live: null, bytes: 0 }));
   }
 
   // (C) `mc shot --compare`'s trees: last used by the directory's mtime,
@@ -480,23 +379,18 @@ export function gatherTidyFacts({
 }
 
 /**
- * Whether a programme has a project that is not done: a draft, or a sent plan
- * with no `CLOSEOUT.json` beside it whose register entry is not done (every
- * step `done` and every criterion met, as `withDoneAt` says). An entry that is
- * missing or cannot be read counts as not done.
+ * Whether a programme has a goal that is not finished: a `goals/<goal>/GOAL.json`
+ * whose status is not done or dropped. One that cannot be read or parsed counts
+ * as not finished.
  */
-function programmeHasOpenProject(root, area) {
-  for (const project of listNames(area)) {
-    const dir = join(area, project);
-    if (present(join(dir, DRAFT_FILE))) return true;
-    const plan = join(dir, PLAN_FILE);
-    if (!present(plan) || present(closeoutFileOf(plan))) continue;
-    let entry = null;
-    try { entry = readEntry(root, project); } catch { return true; }
-    const steps = Array.isArray(entry?.steps) ? entry.steps : [];
-    const criteria = Array.isArray(entry?.criteria) ? entry.criteria : [];
-    const done = steps.length > 0 && steps.every((step) => step.status === 'done') && criteria.every((criterion) => criterion.met === true);
-    if (!done) return true;
+function programmeHasOpenGoal(area) {
+  const goals = join(area, GOALS_DIR);
+  for (const goal of listNames(goals)) {
+    const file = join(goals, goal, GOAL_FILE);
+    if (!present(file)) continue;
+    let parsed = null;
+    try { parsed = parseGoal(readFileSync(file, 'utf8')); } catch { return true; }
+    if (parsed?.problems || !FINISHED.includes(parsed?.status)) return true;
   }
   return false;
 }
@@ -544,26 +438,6 @@ function judge(rule, ...args) {
 }
 
 /**
- * (P) A project's local data goes once git holds what is worth keeping: its
- * row in project_log.md, no plan directory and its closeout, all on
- * origin/main, and no area for it on this machine. A project under
- * `~/mc/programs/` is archived with its CLOSEOUT.json beside its plan
- * (ruling 48): that file on this machine is its closeout, and a plan with
- * one beside it counts as no plan directory. A project the runner has archived
- * is in `archive/projects/` with its STATE.json: its session logs, closed logs
- * and scratch go, and the STATE.json stays.
- */
-export function projectPurge(item, facts) {
-  if (facts.git_error) return { target: false, why: `git could not answer — ${facts.git_error}` };
-  if (item.error) throw new Error(item.error);
-  if (!item.in_log) return { target: false, why: 'not archived: no row in project_log.md on origin/main' };
-  if (item.plan_on_main !== false) return { target: false, why: 'its plan directory is still on origin/main' };
-  if (!item.closeout_on_main) return { target: false, why: 'no closeout on origin/main' };
-  if (item.area_exists !== false) return { target: false, why: 'an area for it still exists' };
-  return { target: true, why: `${item.project} is archived with its closeout on main` };
-}
-
-/**
  * (G) A planning session's transcripts: the newest of its directory stays,
  * and so does every one touched within `PROGRAMME_TRANSCRIPT_KEEP_MS`.
  */
@@ -585,14 +459,14 @@ export function planWorktree(item) {
   return { target: true, why: pr ? `#${pr} merged at this tip` : 'its content is on main' };
 }
 
-/** (I) A planning area's own checkout: idle once its programme has no project that is not done. */
+/** (I) A planning area's own checkout: idle once its programme has no goal that is not finished. */
 export function idlePlanCheckout(item) {
   if (item.error) throw new Error(item.error);
-  if (item.active) return { target: false, why: 'its programme has a project that is not done' };
+  if (item.active) return { target: false, why: 'its programme has a goal that is not finished' };
   if (!item.verdict?.remove || item.verdict.what !== 'worktree and branch') {
     return { target: false, why: item.verdict?.why || 'not a git worktree' };
   }
-  return { target: true, why: 'its programme has no project that is not done; mc plan adds it back' };
+  return { target: true, why: 'its programme has no goal that is not finished; mc plan adds it back' };
 }
 
 /**
@@ -645,7 +519,7 @@ export function orphanSlug(item, now) {
   return { target: true, why: `no repository mc knows has the slug ${item.slug}` };
 }
 
-/** (L) T1–T5: a transcript neither P nor G claims. `rule` names which one answered. */
+/** (L) T1–T5: a transcript G does not claim. `rule` names which one answered. */
 export function looseTranscript(item, { cutoff, days, root, newest }) {
   if (item.error) throw new Error(item.error);
   if (!item.cwd) return { target: false, why: 'no cwd in its head', rule: 'T1' };
@@ -699,29 +573,8 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
   const root = facts.work_root;
   const keep = (path, rule, why) => kept.push({ path, rule: why.startsWith('error: ') ? 'error' : rule, why });
 
-  // (P)
-  const purged = new Set();
-  for (const item of facts.projects || []) {
-    const verdict = judge(projectPurge, item, facts);
-    if (!verdict.target) { keep(item.register_path, item.in_log ? 'P' : 'project', verdict.why); continue; }
-    purged.add(item.project);
-    // The register file last: a run cut short finds the project again.
-    const files = [...item.files.filter((file) => file.kind !== 'register'), ...item.files.filter((file) => file.kind === 'register')];
-    for (const file of files) targets.push({ path: file.path, kind: file.kind, rule: 'P', why: verdict.why, bytes: file.bytes || 0 });
-  }
-
   const claimed = new Set();
   const transcripts = facts.transcripts || [];
-  for (const item of transcripts) {
-    // A project's areas are its step area and a legacy one; a planning, work
-    // or deps area is never a project's.
-    const area = item.error ? null : areaKindOf(areaOf(item.cwd, root) || '');
-    if (area?.kind !== 'step' && area?.kind !== 'legacy') continue;
-    const project = area.name;
-    if (!purged.has(project)) continue;
-    claimed.add(item);
-    targets.push({ path: item.path, kind: 'transcript', rule: 'P', why: `a session of ${project}, which is archived`, bytes: item.bytes || 0 });
-  }
 
   // (G) per `~/.claude/projects/<dir>`, its planning transcripts.
   const groups = new Map();
@@ -766,14 +619,13 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     if (verdict.target) targets.push({ path: item.path, kind: 'work-area', rule: 'W', why: verdict.why, bytes: item.bytes || 0 });
     else keep(item.path, 'W', verdict.why);
   }
-  // (S) a project's step area is the runner's; (U) one no project explains is
-  // judged as (W) is — and one left directly under `~/mc` is only listed.
+  // (U) a step area left from the retired project steps is judged as (W) is —
+  // and one left directly under `~/mc` is only listed.
   for (const item of facts.step_areas || []) {
-    if (item.explained !== false) { keep(item.path, 'step-area', 'the runner closes a step area when its project is done'); continue; }
-    if (item.legacy) { keep(item.path, 'U', 'no project explains it, and it stands directly under ~/mc: a person removes it'); continue; }
-    const verdict = judge(workArea, item, { person, label: 'a step area no project explains' });
+    if (item.legacy) { keep(item.path, 'U', 'a step area left from the retired project steps, directly under ~/mc: a person removes it'); continue; }
+    const verdict = judge(workArea, item, { person, label: 'a step area left from the retired project steps' });
     if (verdict.target) targets.push({ path: item.path, kind: 'orphan-step-area', rule: 'U', why: verdict.why, bytes: item.bytes || 0 });
-    else keep(item.path, 'U', verdict.why.startsWith('a step area') ? verdict.why : `no project explains it; ${verdict.why}`);
+    else keep(item.path, 'U', verdict.why.startsWith('a step area') ? verdict.why : `a step area left from the retired project steps; ${verdict.why}`);
   }
   // (R)
   for (const item of facts.foreign || []) keep(item.path, 'foreign-worktree', `a worktree of ${item.repo} outside ${root}`);
@@ -799,7 +651,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     else keep(item.path, 'A', verdict.why);
   }
 
-  // (L) T1–T5 and leftovers, unchanged, over what P and G left.
+  // (L) T1–T5 and leftovers, unchanged, over what G left.
   const cutoff = facts.now - days * DAY_MS;
   const loose = transcripts.filter((item) => !claimed.has(item));
   const newest = new Map();
@@ -855,10 +707,6 @@ export function outsideRoots(target, roots) {
   const name = basename(real);
   const parent = dirname(real);
   const shaped = {
-    register: parent === base && name.endsWith('.json'),
-    'session-log': parent === base,
-    'closed-log': parent === base,
-    scratch: parent === base,
     transcript: dirname(parent) === base && SESSION_ID.test(TRANSCRIPT.exec(name)?.[1] || ''),
     leftover: dirname(parent) === base && SESSION_ID.test(name) && lstatSync(real).isDirectory(),
     // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
@@ -917,9 +765,7 @@ export function applyTidy({
 
   const applied = [];
   let freed = 0;
-  // Register files last, so a run cut short finds the project again.
-  const ordered = [...targets.filter((t) => t?.kind !== 'register'), ...targets.filter((t) => t?.kind === 'register')];
-  for (const target of ordered) {
+  for (const target of targets) {
     const path = target?.path;
     try {
       const refused = outsideRoots(target, roots);

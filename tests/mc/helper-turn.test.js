@@ -60,7 +60,7 @@ function fakeSession(seen, { write = PROPOSAL, status = 0, timedOut = false, std
   };
 }
 
-const GROUND = async () => ({ plans: [], projectLog: null, notes: ['no docs/project/project_log.md on origin/main in memoro'] });
+const GROUND = async () => ({ goals: [], projectLog: null, notes: ['no docs/project/project_log.md on origin/main in memoro'] });
 
 async function turn(overrides = {}, options = {}) {
   const e = options.env || env();
@@ -186,7 +186,7 @@ describe('the helper turn', () => {
 });
 
 describe('what the turn is told', () => {
-  const PLANS = [{ repo: 'memoro-cli', programme: 'mc', project: 'mc-helper', status: 'ready', next: 'Step 2 — the proposal turn' }];
+  const GOALS = [{ programme: 'mc', goal: 'mc-helper', status: 'open', title: 'The helper', next: 'Step 2 — the proposal turn' }];
 
   it('names the date, the file to write and the directory to write it in', () => {
     const prompt = helperPrompt({ file: FILE, now: NOW });
@@ -226,17 +226,17 @@ describe('what the turn is told', () => {
     assert.match(helperPrompt({ file: 'screenshot.png', repo: 'memoro-cli', now: NOW }), /`2026-08-29-mc-<slug>\.md`/u);
   });
 
-  it('carries the plans on main and the project log as the ground to judge against', () => {
+  it('carries the goals not finished and the project log as the ground to judge against', () => {
     const prompt = helperPrompt({
-      file: FILE, plans: PLANS, projectLog: '| 2026-08-26 | msr-core | main-red-fix |', now: NOW,
+      file: FILE, goals: GOALS, projectLog: '| 2026-08-26 | msr-core | main-red-fix |', now: NOW,
     });
-    assert.match(prompt, /\| memoro-cli \| mc \/ mc-helper \| ready \| Step 2 — the proposal turn \|/u);
+    assert.match(prompt, /\| mc \/ mc-helper \| open \| The helper \| Step 2 — the proposal turn \|/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\)[\s\S]*main-red-fix/u);
   });
 
   it('says a source is absent rather than leaving a section that reads as empty', () => {
     const prompt = helperPrompt({ file: FILE, now: NOW });
-    assert.match(prompt, /PLANS ON MAIN -----\n_none read_/u);
+    assert.match(prompt, /GOALS NOT FINISHED -----\n_none read_/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\) -----\n_none read_/u);
     assert.match(prompt, /PROPOSALS ALREADY WAITING -----\n_none_/u);
   });
@@ -272,19 +272,11 @@ describe('the ground', () => {
     return { root, repos: [{ name: 'memoro', path: join(root, 'memoro') }, { name: 'gone', path: join(root, 'gone') }] };
   }
 
-  const PROGRAM_TEXT = JSON.stringify({
-    schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
-    success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
-    steps: [
-      { title: 'S1 — one', status: 'done', done_when: 'one', instruction: [], pr: null, blocked_by: null },
-      { title: 'S2 — two', status: 'ready', done_when: 'two', instruction: ['Do it.'], pr: null, blocked_by: null },
-    ],
-  });
-  const program = (project, repo) => ({
-    path: `/w/programs/mc/${project}/PLAN.json`, programme: 'mc', project, file: 'PLAN.json', text: PROGRAM_TEXT, repo,
+  const goal = (name, status, next) => ({
+    programme: 'mc', goal: name, status, title: `The ${name} goal`, log: [{ next: 'earlier' }, { next }],
   });
 
-  it('lists the plans under ~/mc/programs/ of each repository here, and reads the project log on origin/main', async () => {
+  it('lists the goals not finished, each with its last next action, and reads the project log on origin/main', async () => {
     const { repos: list } = repos();
     const asked = [];
     const git = async (cwd, args) => {
@@ -293,22 +285,19 @@ describe('the ground', () => {
       if (args[1] === 'origin/main:docs/project/project_log.md') return '| 2026-08-26 | msr-core |';
       return null;
     };
-    const programs = () => [program('mc-x', 'memoro'), program('mc-gone', 'gone')];
-    const ground = await helperGround({ env: {}, repos: list, git, programs });
-    assert.equal(ground.plans.length, 1, 'the plan of a repository that is not here is not listed');
-    const [record] = ground.plans;
-    assert.deepEqual([record.repo, record.programme, record.project, record.path, record.status],
-      ['memoro', 'mc', 'mc-x', '/w/programs/mc/mc-x/PLAN.json', 'ready']);
-    assert.ok(record.next, 'the next step is named');
+    const goals = () => [goal('mc-x', 'open', 'Step 2'), goal('mc-gone', 'done', 'nothing')];
+    const ground = await helperGround({ env: {}, repos: list, git, goals });
+    assert.equal(ground.goals.length, 1, 'a finished goal is not listed');
+    assert.deepEqual(ground.goals[0], { programme: 'mc', goal: 'mc-x', status: 'open', title: 'The mc-x goal', next: 'Step 2' });
     assert.match(ground.projectLog, /msr-core/u);
     assert.deepEqual(ground.notes, []);
-    assert.equal(asked.includes('ls-tree'), false, 'no repository is listed for plans');
+    assert.equal(asked.includes('ls-tree'), false, 'no repository is listed');
   });
 
   it('notes the project log it could not read instead of pretending it is empty', async () => {
     const { repos: list } = repos();
-    const ground = await helperGround({ env: {}, repos: list, git: async () => null, programs: () => [] });
-    assert.deepEqual(ground.plans, []);
+    const ground = await helperGround({ env: {}, repos: list, git: async () => null, goals: () => [] });
+    assert.deepEqual(ground.goals, []);
     assert.equal(ground.projectLog, null);
     assert.deepEqual(ground.notes, ['no docs/project/project_log.md on origin/main in memoro']);
   });

@@ -463,7 +463,6 @@ describe('every name in the help is routed', () => {
       '  mc shot login dev                login is for prod',
       '  mc language run                  run takes a manifest',
       '  mc prs extra                     prs takes no positional',
-      '  mc layout migrate --apply --json   --json is the dry run\'s',
       '  mc deps bump x                   bump takes a repository and what',
       'usage — mc shot <dev|prod> <target>   a PNG\n          [--me]                      dev only: said of the wrong place',
       // A flag one alternative refuses, written after both: walked on each.

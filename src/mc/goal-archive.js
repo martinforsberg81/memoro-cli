@@ -6,8 +6,7 @@
  * touches nothing when it does; otherwise each worktree is removed through git,
  * the goal's branch deleted, its directory moved to `goals/.archive/`, and one
  * row written to `goals/goal_log.md`. The runner calls it once a goal has been
- * finished for `ARCHIVE_HOLD_MS`, the hold a project under `~/mc/programs/` has
- * too (`project-archive.js`). A programme is never archived by the runner.
+ * finished for `ARCHIVE_HOLD_MS`. A programme is never archived by the runner.
  *
  * The rules take what they need as arguments: `git`, `gh`, `known`, `move`,
  * `appendText`, `read` and `now` come from the caller, as goal.js and run.js
@@ -16,15 +15,16 @@
 import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ARCHIVE_HOLD_MS } from './project-archive.js';
 import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalBranch, goalLogRow, prRef, statusSince } from './goals.js';
 import { repoNameOf } from './repos.js';
+
+/** How long a finished goal stays listed before the runner archives it. */
+export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * Whether the runner archives this goal now, and why in one line, as
- * `archiveDue` does for a project: a goal is due once it has been `done` or
+ * Whether the runner archives this goal now, and why in one line: a goal is due once it has been `done` or
  * `dropped` for `holdMs` — exactly that long is due — counted from the log
  * entry that set the status (`statusSince`), not from the file's mtime.
  */

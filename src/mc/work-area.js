@@ -30,7 +30,6 @@ import { run as runGit } from './git.js';
 import {
   PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, areaKindOf, layoutVersion, programsHome, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
 } from './paths.js';
-import { registerPath } from './register.js';
 import { defaultRepos, repoNameOf, repositoryDir } from './repos.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
@@ -62,24 +61,19 @@ export function listWorkAreas(env = process.env, options = {}) {
 /**
  * The directories directly under `~/mc` that are none of the kinds mc knows:
  * not one of `STATE_HOMES` (paths.js), not a dot-directory, not a role home
- * (`mc worker`'s, marked `.mc-role`), and not a legacy runner area — one that
- * holds a checkout and whose name is a project in the register. `{ name,
+ * (`mc worker`'s, marked `.mc-role`). A legacy runner area — a project's,
+ * directly under `~/mc` — was not one either while projects had a register;
+ * they went on 2026-11-03, and such a directory is a stray now. `{ name,
  * path }`, sorted. Read-only: nothing removes a stray.
  */
 export function listStrays({
   root = workRoot(),
-  repoNames = ['memoro', 'memoro-cli'],
   list = (path) => { try { return readdirSync(path, { withFileTypes: true }); } catch { return []; } },
-  exists = existsSync,
 } = {}) {
-  const legacy = layoutVersion({ root }) === 1;
   return list(root)
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !STATE_HOMES.has(entry.name))
     .map((entry) => ({ name: entry.name, path: join(root, entry.name) }))
     .filter((dir) => !areaRoleName(dir.path))
-    // Layout 2 has no legacy areas: every runner area is under `runner/step/`.
-    .filter((dir) => !(legacy && exists(registerPath(root, dir.name))
-      && repoNames.some((repo) => exists(join(dir.path, repo, '.git')))))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

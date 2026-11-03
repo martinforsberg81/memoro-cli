@@ -7,16 +7,14 @@
  *   - **A number where a number is the answer**, a line only where the
  *     identity matters — and every count names the verb that expands it, on
  *     the right of its own heading.
- *   - **What is not actionable is collapsed, never dropped.** A programme's
- *     blocked projects are one row that keeps their numbers, so the page gets
- *     shorter without any project leaving it, and `expand` — `a` at the menu —
- *     draws every one of them again.
+ *   - **What is not actionable is collapsed, never dropped.** The dormant
+ *     programmes are one line, and `mc programs list` names every one.
  *   - **Width-aware.** `stdout.columns` clamped to 60–160 through `width`,
  *     `pad` and `clip` from status-render.js, which are escape-aware. Nothing
  *     here is padded to a number somebody typed once.
  *   - **Colour carries state, never decoration**: green is work that moves by
  *     itself (ready, running, landing), yellow waits — on a time, a deploy,
- *     another project or a measurement (waiting, unmet), red waits on a person
+ *     another goal or a measurement (waiting, unmet), red waits on a person
  *     (blocked, failed, invalid), grey is quiet. Only on a TTY, and
  *     only when `NO_COLOR` is unset or empty — the convention is that any
  *     non-empty value turns colour off.
@@ -30,7 +28,7 @@
  *
  * Two colours this file does not use, and will not: `dim` and `white`. `dim
  * grey` is `ESC[2m` over `ESC[90m`, two steps away from the foreground, and it
- * drew the repository of all 41 project rows at or below the background of
+ * drew the repository of all 41 rows at or below the background of
  * Martin's terminal — a cell nobody could read is not a quiet cell. `white` is
  * `ESC[37m`, one fixed colour a theme never chose: on a light theme it is the
  * wrong end of the scale, on a dark one it is dimmer than the text beside it.
@@ -60,7 +58,7 @@ const PR_TONE = ['cyan', 'bold'];
 /** Past this long without anything happening on it, an open pull request waits on a person. */
 export const PR_QUIET_S = 24 * 60 * 60;
 
-/** Where a project stands, one colour each, wherever its state is printed. */
+/** Where a piece of work stands, one colour each, wherever its state is printed. */
 const STATUS_TONE = {
   ready: ['green'],
   running: ['green'],
@@ -79,11 +77,10 @@ const STATUS_TONE = {
 /**
  * What is being done, one colour each, wherever a kind is printed. The
  * runner's three session kinds — `plan`, `build`, `review` — and the
- * foreground verbs. `step` is a project's build under the word it had before.
+ * foreground verbs.
  */
 const KIND_TONE = {
   build: ['green'],
-  step: ['green'],
   review: ['magenta'],
   triage: ['blue'],
   brief: ['cyan'],
@@ -95,7 +92,7 @@ function kindTone(kind) {
   return KIND_TONE[String(kind || '').replace(/^mc /u, '')] || ['grey'];
 }
 
-/** A project state's colour; no plan at all is bookkeeping, and grey says so. */
+/** A state's colour; an unknown one is bookkeeping, and grey says so. */
 function statusTone(status) {
   return STATUS_TONE[status] || ['grey'];
 }
@@ -233,13 +230,10 @@ function row(c, wide, left, middle, right, tone = null) {
 /**
  * SESSIONS — the headless sessions `mc run` is running, and nothing else.
  *
- * The runner runs three kinds of session: `plan`, `build` (a project's step,
- * or a goal) and `review` (Martin, 2026-11-02). The section was STEPS while
- * every session was a project's step; a goal's build and a review are not
- * steps, and RUNNER names the machine rather than what it holds — `mc run` on
- * the right of the heading already does that. So the heading names what the
- * rows are, and carries the answer: `n of N lanes`, how many sessions are
- * running out of the total `mc run lanes` set, and how much is queued.
+ * The runner runs three kinds of session: `plan`, `build` and `review`
+ * (Martin, 2026-11-02). The heading names what the rows are, and carries the
+ * answer: `n of N lanes`, how many sessions are running out of the total
+ * `mc run lanes` set.
  *
  * One row per lane, session or no session: a lane is a lane between sessions
  * as much as during one, and with a row only where there was a session, a
@@ -264,7 +258,6 @@ function runnerLines(lines, c, wide, runner) {
       ? { text: `${flight} of ${lanes.length || flight} lane${(lanes.length || flight) === 1 ? '' : 's'}`, styles: flight ? ['green', 'bold'] : ['grey'] }
       : { text: 'not running', styles: ['yellow', 'bold'] },
   ];
-  counts.push({ text: `${now.queue?.projects ?? 0} queued`, styles: ['grey'] });
   heading(lines, c, wide, 'SESSIONS', between(counts, ' · '), 'mc run');
   if (lanes.length && (alive || flight)) {
     for (const lane of lanes) lines.push(laneLine(c, wide, lane));
@@ -283,7 +276,7 @@ function runnerLines(lines, c, wide, runner) {
         stop_requested: now.stop_requested?.at ?? null,
         stop_since_seconds: now.stop_requested?.age_seconds ?? null,
         inFlight: sessions.map((session) => ({
-          name: session.goal ?? session.name, step: session.step ?? null, lane: `${session.repo}#${(session.lane || 0) + 1}`, elapsed_seconds: session.elapsed_seconds,
+          name: session.goal ?? session.name, lane: `${session.repo}#${(session.lane || 0) + 1}`, elapsed_seconds: session.elapsed_seconds,
         })),
         lanes: lanes.length || null,
       })
@@ -395,16 +388,9 @@ const SESSION_REPO = 12;
 const LANE_MODEL = 8;
 const LANE_CLOCK = 9;
 
-/**
- * What a session works on, as the row says it, in `room` characters:
- * `mc/<goal>`, or a project and its step. A long project name gives way and
- * its step does not — `study-starter-se… 1/4` — because the step is the part
- * of the cell that changes.
- */
+/** What a session works on, as the row says it, in `room` characters: `mc/<goal>`, or its name. */
 export function sessionWork(session, room = Infinity) {
-  if (session.goal) return clip(session.goal, room);
-  const at = session.step && session.steps ? ` ${session.step}/${session.steps}` : '';
-  return `${clip(session.name || '?', Math.max(1, room - at.length))}${at}`;
+  return clip(session.goal || session.name || '?', room);
 }
 
 /**
@@ -428,18 +414,15 @@ export function sessionPrs(prs = [], room = Infinity) {
  * One lane. Idle it is `lane 3`, and the number is all it has to say. With a
  * session in it, the row is read for what is running, in that order: its
  * kind as the first word — `PLAN`, `BUILD`, `REVIEW`, in the kind's colour —
- * what it works on (a goal `mc/<goal>`, a project and `4/6`, which step of
- * its plan), the repository, the model and the clock. After them the
- * project's or the goal's open pull requests, in the colour a pull request
+ * what it works on (a goal, `mc/<goal>`), the repository, the model and the
+ * clock. After them the goal's open pull requests, in the colour a pull request
  * has everywhere on the page, and the bookkeeping: credits when the session
  * runs on the API credit, the advisor when it has one, and the check-ins.
  * Nothing on the row is bold (Martin, 2026-09-19); the clock turns yellow past
  * a check-in. There is no end on it: nothing is killed on elapsed time
  * (ruling 18).
  *
- * The variant of a build is in what it works on — a goal reads `mc/<goal>`,
- * a project its name and step — so it costs the row no cell of its own; it
- * is `variant` in `mc --json`. The tool and the pid are there too and not
+ * The variant of a build is `variant` in `mc --json`. The tool and the pid are there too and not
  * here: the model names the tool, and the pid is the runner's own, the same
  * number on every row.
  */
@@ -490,7 +473,7 @@ function laneLine(c, wide, lane) {
  * 2026-09-06 a failed deploy's own `stopped_at` — `Deploy source preflight`,
  * the one word on the row that says what to go and look at — was clipped off
  * the end while `by martin@laptop` sat in the middle of the line. The holder is
- * bookkeeping; it is in `mc --json` and in `mc status`, and it is not here.
+ * bookkeeping; it is in `mc --json`, and it is not here.
  *
  * Absent when neither source knows anything, which is the state before the
  * first `mc deploy` and before the helper has ever collected.
@@ -715,16 +698,13 @@ function helperLines(lines, c, wide, session, intake) {
 
 /**
  * BRIEF — the desk, and what is waiting for it: the proposals nobody has
- * queued or dropped, and the projects that stand still until somebody answers.
+ * queued or dropped.
  *
  * The proposals are a count, how far back the pile reaches, and the newest few
  * by name — enough to see whether anything arrived since the last look. The count
- * is split by the system in each filename, and `untagged` is drawn yellow. The
- * blocked rollup and the finished-blocker fault were under NEXT; NEXT is the
- * order the runner takes now and nothing else, and both of these are questions
- * for a person, which is what this desk is for.
+ * is split by the system in each filename, and `untagged` is drawn yellow.
  */
-function briefLines(lines, c, wide, session, intake, programmes, stale) {
+function briefLines(lines, c, wide, session, intake) {
   deskLine(lines, c, wide, 'BRIEF', session, 'mc brief');
   const count = intake?.proposals || 0;
   const files = intake?.proposal_files || {};
@@ -742,8 +722,6 @@ function briefLines(lines, c, wide, session, intake, programmes, stale) {
   } else {
     say(lines, c, wide, 7, 'no proposals waiting');
   }
-  blockedLines(lines, c, wide, programmes?.blocked, programmes?.waiting);
-  staleLine(lines, c, wide, stale);
 }
 
 /**
@@ -791,11 +769,10 @@ function mergeQueueLabel(repo, compact = false, stopped = false) {
   const counts = [
     repo.landings.length ? `${repo.landings.length} landing` : '',
     repo.waiting.length ? `${repo.waiting.length} waiting` : '',
-    repo.fixing.length ? `${repo.fixing.length} fixing` : '',
     repo.reds.length ? `${repo.reds.length} red` : '',
   ].filter(Boolean);
   const count = compact && counts.length
-    ? `${repo.landings.length + repo.waiting.length + repo.fixing.length + repo.reds.length}`
+    ? `${repo.landings.length + repo.waiting.length + repo.reds.length}`
     : counts.join(', ') || 'idle';
   return [
     { text: `${repo.repo} ${count}`, styles: ['grey'] },
@@ -814,18 +791,15 @@ function mergeRepoLine(c, wide, repo) {
         item.queue_age_seconds != null ? `queued ${ageWords(item.queue_age_seconds)}` : ''].filter(Boolean).join(' · '),
     });
   }
-  for (const [items, label] of [[repo.fixing, 'fixing'], [repo.reds, 'red']]) {
-    for (const item of items) chunks.push({
-      text: `#${item.pr} ${label}`, styles: label === 'red' ? ['red'] : [],
-      detail: [item.age_seconds != null ? `${ageWords(item.age_seconds)}${label === 'red' ? ' ago' : ''}` : '',
-      one(item.said || item.reason)].filter(Boolean).join(' · '),
+  for (const item of repo.reds) {
+    chunks.push({
+      text: `#${item.pr} red`, styles: ['red'],
+      detail: [item.age_seconds != null ? `${ageWords(item.age_seconds)} ago` : '', one(item.reason)].filter(Boolean).join(' · '),
     });
   }
   for (const item of repo.waiting) {
     chunks.push({
-      text: `#${item.pr}`, styles: [],
-      detail: [item.waits_for ? `awaits ${item.waits_for}` : 'waiting',
-        item.parent ? `after #${item.parent.pr}` : ''].filter(Boolean).join(' · '),
+      text: `#${item.pr}`, styles: [], detail: 'waiting',
     });
   }
   const head = `    ${pad(repo.repo, 11)} `;
@@ -902,11 +876,8 @@ function ownerWords(owner) {
 }
 
 /**
- * PULL REQUESTS — every open pull request no project row already draws.
- *
- * A project's pull requests are under its row in PROGRAMMES, with the step they
- * are, and the merger's are in MERGES. What is left is what the page could not
- * see at all before: a plan session's, one opened from a terminal, and one
+ * PULL REQUESTS — every open pull request the merger does not already draw in
+ * MERGES: a plan session's, a workarea's, one opened from a terminal, and one
  * nobody holds any more — the last with the waiting mark in yellow, because it
  * is a person's and nobody knows it (Martin, 2026-10-09). The heading counts
  * them all, so the answer to *how many are open* is one place.
@@ -915,7 +886,6 @@ function prsLines(lines, c, wide, prs) {
   if (!prs) return;
   const counts = prs.counts || {};
   const words = [
-    counts.project ? `${counts.project} on a step` : '',
     counts.plan ? `${counts.plan} plan` : '',
     counts.workarea ? `${counts.workarea} in a workarea` : '',
     counts.worktree ? `${counts.worktree} checked out elsewhere` : '',
@@ -930,7 +900,7 @@ function prsLines(lines, c, wide, prs) {
   ].filter(Boolean);
   heading(lines, c, wide, 'PULL REQUESTS', prs.fetched ? between(parts, ' · ') : 'not asked yet — mc prs asks GitHub', 'mc prs');
   for (const pr of prs.items || []) {
-    if (pr.owner.kind === 'project' || pr.merging || pr.merge_red) continue;
+    if (pr.merging || pr.merge_red) continue;
     lines.push(prRow(c, wide, pr, ownerWords(pr.owner)));
   }
 }
@@ -953,10 +923,9 @@ function prRow(c, wide, pr, whose) {
 }
 
 /**
- * `mc prs` — every open pull request, grouped by whose it is: a project's
- * step, a plan session's, a workarea's, a folder elsewhere, or nobody's. The
- * page draws only what PROGRAMMES and MERGES do not; this draws all of them,
- * the project ones with the step they are.
+ * `mc prs` — every open pull request, grouped by whose it is: a plan
+ * session's, a workarea's, a folder elsewhere, or nobody's. The page draws
+ * only what MERGES does not; this draws all of them.
  */
 export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
   const c = painter(colour);
@@ -964,7 +933,6 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
   const lines = [''];
   const items = prs?.items || [];
   const groups = [
-    ['ON A STEP', (pr) => pr.owner.kind === 'project', (pr) => `${pr.owner.name}${pr.step ? ` step ${pr.step}${pr.steps ? `/${pr.steps}` : ''}` : ''}${pr.status ? ` · ${pr.status}` : ''}`],
     ['PLAN SESSIONS', (pr) => pr.owner.kind === 'plan', (pr) => ownerWords(pr.owner)],
     ['WORKAREAS', (pr) => pr.owner.kind === 'workarea', (pr) => ownerWords(pr.owner)],
     ['ELSEWHERE', (pr) => pr.owner.kind === 'worktree', (pr) => ownerWords(pr.owner)],
@@ -1001,119 +969,20 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * The one line for a plan that may have been waiting for nothing: a step
- * blocked on a project that is gone from main (stale-blockers.js). One whose
- * project is done on main is released by the runner (ruling 35) and never
- * reaches this line.
- * Yellow, because the palette's yellow is what waits on a person and this is
- * the page asking for one — nothing flips a blocker but a human with a plan
- * edit.
- *
- * It says **blocker finished** and not *stale*, though the mechanism is named
- * for staleness, because RUNNER two sections up already spends that word on a
- * lane file whose process is gone. One word, one meaning, on one page.
- *
- * It says *no longer on main* and not *not coming*, because that is the one
- * thing the check can know — `stale-blockers.js` computes `why` as `is not on
- * main` and its docstring is careful about it, since a project also leaves
- * main when it is abandoned. The
- * header said *not coming*, which is a prediction neither the module nor
- * anything else on this page is entitled to make.
- *
- * It is drawn under `skipped` rather than beside it on purpose. `skipped` is
- * the runner declining work correctly; this is the runner declining work it
- * should have been given, and reading as one number would hide it inside the
- * other. Absent when there are none, which is the state to expect.
+ * The fixed columns of a goal row, sized to the terminal rather than to a
+ * number somebody typed once. The name gives way before the tail drops under
+ * ~28 columns: the tail is the sentence that says what the goal waits on.
  */
-function staleLine(lines, c, wide, stale) {
-  if (!stale?.count) return;
-  // One line each, not one line for all of them: at 120 columns a second name
-  // was already being clipped away, and a fault a person has to widen the
-  // terminal to see is one the page has not really reported.
-  lines.push(`       ${paint(c, [
-    { text: `blocker finished ${stale.count}`, styles: ['yellow', 'bold'] },
-    { text: ' — a blocked step names a project no longer on main', styles: ['yellow'] },
-  ], wide - 7)}`);
-  for (const item of stale.items) {
-    lines.push(`       ${paint(c, [
-      { text: `· ${item.project} step ${item.step} on ${item.blocker}, which ${item.why}`, styles: ['yellow'] },
-    ], wide - 7)}`);
-  }
-  if (stale.more) lines.push(`       ${paint(c, [{ text: `· … ${stale.more} more`, styles: ['yellow'] }], wide - 7)}`);
-}
-
-/**
- * The fixed columns of a project row, sized to the terminal rather than to a
- * number somebody typed once — which is the rule this file keeps everywhere
- * else, and the one a first draft of this section broke: 41 columns of name
- * plus 17 of status is wider than the 60-column floor all by itself.
- *
- * `blocked` and `invalid` are the longest statuses there are — seven columns.
- * The cell was seventeen, sized when `waiting-decision` existed, and ten of
- * those columns had been empty ever since; they go to `next`, which is the one
- * cell on the row whose whole value is how much of the sentence survives.
- *
- * The repository has a column of its own now: the section groups by programme,
- * so which of the two a project lives in is a fact about the row rather than
- * the shape of the page. `memoro-cli` is the longer of the two names.
- *
- * The name is the project's alone — the programme is the heading above it — so
- * it needs `language-voice-transcript-hygiene` and nothing wider.
- */
-function projectColumns(wide) {
+function goalColumns(wide) {
   const roomy = wide >= 90;
   const status = roomy ? 9 : 8;
-  const steps = roomy ? 8 : 6;
+  const sessions = roomy ? 17 : 12;
   const repo = roomy ? 12 : 0;
-  // The name gives way before `next` drops under ~28 columns: `next` is the
-  // sentence that says what the row is waiting on.
-  return { status, steps, repo, name: Math.max(roomy ? 22 : 16, Math.min(34, wide - 10 - status - steps - repo - PR_CELL - 9 - 28)) };
+  return { status, sessions, repo, name: Math.max(roomy ? 22 : 16, Math.min(34, wide - 10 - status - sessions - repo - 9 - 28)) };
 }
 
 /**
- * One project row: the number the menu opens it by, which repository it lives
- * in, where the plan stands, how far through its steps it is, and its PR.
- * Next-step and last-run details stay on the data object, not on the page.
- *
- * The name is the project's alone — the programme is the heading above it now,
- * and repeating it on every row said the same word four times in a column
- * eight rows tall. The steps cell is what a list of names could never say:
- * `3/7` is where the work stands.
- *
- * The `●` means the runner has a step in flight on this project. It used to
- * mean a live tmux area — somebody sitting in the folder — which made one mark
- * answer two questions. A session somebody has open is its programme's, on
- * the heading.
- */
-function projectLine(c, wide, project) {
-  const mark = project.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  // The row's word is its state (`stateOf`, page-collect.js). A cache from before
-  // the state existed has only the plan's own word, and that is what it draws.
-  const word = project.state ?? project.status;
-  // A plan still on the old markdown file has no steps to count and is said to
-  // be what it is, rather than drawn as a fraction of nothing.
-  const steps = project.steps
-    ? `${project.steps.done}/${project.steps.total}`
-    : (project.legacy ? 'PLAN.md' : '—');
-  const column = projectColumns(wide);
-  // The repository is bookkeeping and grey; it was `dim grey`, which on this
-  // terminal put the same cell on 41 rows at the background's own brightness.
-  const repo = column.repo
-    ? `${c(pad(clip(project.repo || '—', column.repo), column.repo), 'grey')} `
-    : '';
-  // The name is what the row is about: bold while the runner is on it, and
-  // otherwise the terminal's own foreground rather than a colour of ours.
-  const name = pad(clip(project.name, column.name), column.name);
-  const left = `  ${c(String(project.number).padStart(3), 'grey')} ${mark} `
-    + `${project.running ? c(name, 'bold') : name} `
-    + repo
-    + `${c(pad(clip(word || '—', column.status), column.status), ...statusTone(word))} `
-    + `${c(pad(steps, column.steps), 'grey')}`;
-  return `${left} ${prCell(c, project)}`;
-}
-
-/**
- * One goal, in a project row's columns (Martin, 2026-11-01): its row number, a
+ * One goal (Martin, 2026-11-01): its row number, a
  * mark while a session is on it, `g · <name>`, its first repository, its state,
  * how many sessions it has had, and `criteria <met>/<all>` — green when every
  * one is met. The grey tail after that is what the last
@@ -1122,17 +991,16 @@ function projectLine(c, wide, project) {
  *
  * `open` is green while a session is on it and grey otherwise, `review` is
  * green — a review session or the merger moves it by itself — `blocked` is the
- * blocked colour, and `done` and `dropped` are grey: the project rows' colours
- * for the same words. A finished goal's tail is its last `Done:`, never a
+ * blocked colour, and `done` and `dropped` are grey. A finished goal's tail is its last `Done:`, never a
  * `Next:` that is over. A goal blocked by a red review, a red merge or the runner waits on
  * plan, which the runner wakes, and its tail says so first; any other blocked
  * goal — a person's, a build session's question, one plan left blocked —
  * `waits on a person`. Both are in the colour of what waits on a person. A `waiting`
- * goal is yellow, the projects' waiting colour — the runner lets it go when
+ * goal is yellow — the runner lets it go when
  * its `after` has landed — and its tail says first what it waits on.
  */
 function goalLine(c, wide, goal) {
-  const column = projectColumns(wide);
+  const column = goalColumns(wide);
   const mark = goal.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
   const word = goal.status ?? '—';
   const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
@@ -1143,16 +1011,19 @@ function goalLine(c, wide, goal) {
     : '';
   const name = pad(clip(`g · ${goal.name}`, column.name), column.name);
   const sessionsWords = goal.sessions === 1 ? '1 session' : `${goal.sessions} sessions`;
-  // Padded to the project row's steps and PR cells together, so the tail lands
-  // where a project's pull request does.
-  const left = `  ${c(String(goal.number).padStart(3), 'grey')} ${mark} `
+  const head = `  ${c(String(goal.number).padStart(3), 'grey')} ${mark} `
     + `${goal.running ? c(name, 'bold') : name} `
     + repo
     + `${c(pad(clip(word, column.status), column.status), ...tone)} `
-    + c(pad(sessionsWords, column.steps + 1 + PR_CELL), 'grey')
-    + (goal.criteria ? `${c(`criteria ${goal.criteria.met}/${goal.criteria.all}`, goal.criteria.all && goal.criteria.met === goal.criteria.all ? 'green' : 'grey')} ` : '');
+    + c(pad(sessionsWords, column.sessions), 'grey');
+  const criteria = goal.criteria ? `criteria ${goal.criteria.met}/${goal.criteria.all}` : '';
+  // The criteria cell is dropped before it runs the row over the margin.
+  const left = criteria && width(head) + criteria.length + 1 <= wide
+    ? `${head}${c(criteria, goal.criteria.all && goal.criteria.met === goal.criteria.all ? 'green' : 'grey')} `
+    : head;
   const room = wide - width(left);
-  if (room <= 0) return left;
+  // Too little room for any of the tail to say something: the row ends here.
+  if (room < 4) return left;
   if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.json: ${goal.problems[0]}`), room), 'red')}`;
   // A finished goal has no next action: its tail is what was done last.
   const finished = goal.status === 'done' || goal.status === 'dropped';
@@ -1160,37 +1031,10 @@ function goalLine(c, wide, goal) {
   const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
   if (goal.plan || goal.person || waits) {
     const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
-    const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
+    const tail = said && one(said) !== head && room - head.length > 3 ? clip(` · ${one(said)}`, room - head.length) : '';
     return `${left}${c(clip(head, room), ...statusTone(waits ? 'waiting' : 'blocked'))}${tail ? c(tail, 'grey') : ''}`;
   }
   return said ? `${left}${c(clip(one(said), room), 'grey')}` : left;
-}
-
-/** `#13242+1` — the widest a project's pull request cell gets. */
-const PR_CELL = 8;
-
-/**
- * The project's open pull request, in a column of its own after the steps:
- * one row per project (Martin, 2026-10-09), and the number where a narrow
- * terminal cannot drop it. It was a cyan `#12314` at the right margin — the
- * first thing to go, and only ever the first of a project's pull requests.
- * More than one is `+N`; `mc prs` names them all, with the step each is.
- *
- * Green while the merger has it — it waits on nobody. Yellow once a day has
- * passed with nothing on it — then it waits on a person, which is how #12314
- * sat ten days behind a blocked step. Bold cyan otherwise, the colour a pull
- * request has everywhere on the page. Empty, it is spaces.
- */
-function prCell(c, project) {
-  const prs = Array.isArray(project.prs) ? project.prs : (project.pr ? [{ number: project.pr }] : []);
-  if (!prs.length) return ' '.repeat(PR_CELL);
-  const [first] = prs;
-  const text = clip(`#${first.number}${prs.length > 1 ? `+${prs.length - 1}` : ''}`, PR_CELL);
-  const tone = prs.some((pr) => pr.merging)
-    ? ['green', 'bold']
-    : prs.some((pr) => pr.merge_red) ? ['red', 'bold']
-    : (prs.some((pr) => pr.quiet_seconds >= PR_QUIET_S) ? ['yellow', 'bold'] : PR_TONE);
-  return cell(c, text, PR_CELL, tone);
 }
 
 /** `#13265` and one space: the column a pull request's number is drawn in. */
@@ -1205,40 +1049,11 @@ function programmeColumns(wide) {
   return { name: wide >= 90 ? 31 : 22, counts: 31 };
 }
 
-/**
- * How many of a programme's projects are ready, waiting on the runner and
- * blocked, or that it has no project yet.
- *
- * A zero keeps no colour. Green on `0 ready` would give a state's colour to the
- * absence of it, and the page's rule is that colour carries state — so a count
- * of nothing reads as the bookkeeping it is.
- */
+/** How many goals a programme has, or that it has none yet, padded to its cell. */
 function programmeCounts(c, group, columns) {
-  // A programme's goals are counted after its projects' own words, and the cell
-  // is wider by exactly those words when it has any: the projects' counts are
-  // never cut to make room for them. No goal, and the cell is as it was.
   const goals = (group.goals || []).length;
-  const goalWords = goals ? ` · ${goals} goal${goals === 1 ? '' : 's'}` : '';
-  const room = columns + goalWords.length;
-  const goalsPart = goals ? [{ text: goalWords, styles: ['grey'] }] : [];
-  const statuses = group.statuses || {};
-  const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
-  // A programme whose only work is goals says those and nothing about the
-  // projects it lacks: `no project yet` is the dormant programme's words, and
-  // the collapsed page draws none of those (Martin, 2026-11-02).
-  if (!total && goals) return pad(paint(c, [{ text: goalWords.slice(3), styles: ['grey'] }], room), room);
-  if (!total) return pad(paint(c, [{ text: 'no project yet', styles: ['grey'] }], room), room);
-  const ready = statuses.ready || 0;
-  const waiting = statuses.waiting || 0;
-  const blocked = statuses.blocked || 0;
-  return pad(paint(c, [
-    { text: `${ready} ready`, styles: ready ? statusTone('ready') : ['grey'] },
-    { text: ' · ', styles: ['grey'] },
-    { text: `${waiting} waiting`, styles: waiting ? statusTone('waiting') : ['grey'] },
-    { text: ' · ', styles: ['grey'] },
-    { text: `${blocked} blocked`, styles: blocked ? statusTone('blocked') : ['grey'] },
-    ...goalsPart,
-  ], room), room);
+  const words = goals ? `${goals} goal${goals === 1 ? '' : 's'}` : 'no goal yet';
+  return pad(paint(c, [{ text: words, styles: ['grey'] }], columns), columns);
 }
 
 /**
@@ -1283,8 +1098,7 @@ function programmeLine(c, wide, group) {
   const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
   const counts = programmeCounts(c, group, column.counts);
   const meta = planSessionWords(group);
-  // A project of the programme opened from the page is its session too, and
-  // is said on the same heading (goal mc/no-work).
+  // The programme's other open sessions are said on the same heading (goal mc/no-work).
   const opened = (group.sessions || []).length;
   const detail = `${meta ? `plan ${meta}` : '·  no plan session'}${opened ? `  ·  ${opened} open` : ''}`;
   // Provider counts take precedence over the programme's rollup on a narrow
@@ -1292,90 +1106,6 @@ function programmeLine(c, wide, group) {
   const prefix = meta && width(left) + width(counts) + detail.length + 2 > wide
     ? `${left} ` : `${left} ${counts} `;
   return `${prefix}${c(clip(detail, Math.max(0, wide - width(prefix))), 'grey')}`.trimEnd();
-}
-
-/** How many blockers a collapsed row and the rollup line name before they stop. */
-export const BLOCKERS_DRAWN = 3;
-
-/** `1–3, 7` — a run of row numbers as the shortest thing that still opens them. */
-export function numberRanges(numbers) {
-  const sorted = [...numbers].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-  const out = [];
-  let start = null;
-  let last = null;
-  const flush = () => { if (start !== null) out.push(start === last ? `${start}` : `${start}–${last}`); };
-  for (const n of sorted) {
-    if (start === null) { start = n; last = n; continue; }
-    if (n === last + 1) { last = n; continue; }
-    flush();
-    start = n;
-    last = n;
-  }
-  flush();
-  return out.join(', ');
-}
-
-/** `plan-review 12, home-on-msr 7` — the blockers, biggest first. */
-function blockerWords(blockers, drawn = BLOCKERS_DRAWN) {
-  const named = blockers.slice(0, drawn);
-  const rest = blockers.length - named.length;
-  return `${named.map((item) => `${item.name} ${item.count}`).join(', ')}${rest ? `, … ${rest} more` : ''}`;
-}
-
-/**
- * As many blockers as the room holds, biggest first — the widest of `lead` plus
- * three, two or one of them that fits, and nothing at all if even one does not.
- *
- * A blocker's name is a project's or a decision's, and those run long
- * (`martin-iphone-cold-restore-confirmation`). Dropping the whole tail because
- * the third name overran costs the row the one thing it is drawn for, so the
- * count of names gives way before the fact does — and after it, the words
- * around the names, which is what the second lead is for.
- */
-function blockersFitting(blockers, leads, space) {
-  for (const lead of [].concat(leads)) {
-    for (let drawn = Math.min(BLOCKERS_DRAWN, blockers.length); drawn > 0; drawn -= 1) {
-      const text = `${lead}${blockerWords(blockers, drawn)}`;
-      if (text.length <= space) return text;
-    }
-  }
-  return '';
-}
-
-/**
- * The one line worth more than every red cell under it: how many projects are
- * stopped, how many of them wait on an answer and how many on another project,
- * and the blockers holding the most.
- *
- * Drawn under NEXT and not in PROGRAMMES, because it answers *what should I
- * do* and NEXT is where somebody asking that is already looking. It says
- * `blocked` — the state's word, and the word the brand row and the skip line
- * use — rather than inventing a third for the same thirty-three projects.
- *
- * The projects waiting on the runner are not stopped, so they are not in that
- * count; their number rides after the blocker words, in grey, so the line still
- * says how much is waiting on a time, a deploy or another project.
- */
-function blockedLines(lines, c, wide, blocked, waiting = 0) {
-  if (!blocked?.count) return;
-  const kinds = blocked.kinds || {};
-  const waits = [
-    kinds.decision ? `${kinds.decision} on a decision` : '',
-    kinds.project ? `${kinds.project} on a project` : '',
-    // The runner's own: a step it could not start, waiting on a workarea
-    // somebody has to open (`blockStep`, run.js). Drawn beside the other two
-    // because the count above already holds it, and a blocked project whose
-    // reason is missing from this line reads as one of the other kinds.
-    kinds.workarea ? `${kinds.workarea} on a workarea` : '',
-  ].filter(Boolean).join(', ');
-  const room = wide - 7;
-  const head = [
-    { text: `${blocked.count} blocked`, styles: statusTone('blocked') },
-    { text: waits ? ` · ${waits}` : '', styles: ['grey'] },
-    { text: waiting ? ` · ${waiting} waiting` : '', styles: ['grey'] },
-  ];
-  const holders = blockersFitting(blocked.blockers, [' · held most by ', ' · '], room - head.reduce((n, part) => n + part.text.length, 0));
-  lines.push(`       ${paint(c, fitting([...head, { text: holders, styles: ['grey'] }], room), room)}`);
 }
 
 function programmesLines(lines, c, wide, programmes, expand) {
@@ -1387,13 +1117,13 @@ function programmesLines(lines, c, wide, programmes, expand) {
   const dormant = programmes.dormant ?? asleep.length;
   const active = programmes.active ?? groups.length - dormant;
   heading(lines, c, wide, 'PROGRAMMES', [
-    { text: `${active} active · ${dormant} dormant · ${programmes.count} project${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
+    { text: `${active} active · ${dormant} dormant · ${programmes.count} goal${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
     ...between(statuses, ' · '),
   ], 'p  plan a programme');
 
-  // The dormant programmes — no project, no goal — are this one line and not a
+  // The dormant programmes — no goal — are this one line and not a
   // heading each: on 2026-11-02 they were 27 of 41 headings, every one saying
-  // `no project yet`. Directly under the heading, where the counts it explains
+  // that it had nothing yet. Directly under the heading, where the counts it explains
   // are, rather than after the last active group's rows, where it reads as part
   // of that programme. A live plan session is the one thing on a dormant
   // programme somebody may come looking for, so the line counts those.
@@ -1410,19 +1140,6 @@ function programmesLines(lines, c, wide, programmes, expand) {
   for (const group of groups) {
     if (group.dormant && !expand) continue;
     lines.push(programmeLine(c, wide, group));
-    // What is actionable keeps its row; what is stopped is the `N blocked` on
-    // the programme's own heading and nothing more — a row under it said the
-    // same thing twice (Martin, 2026-09-19). The numbers still open them, BRIEF
-    // says what holds them, and `a` at the menu draws every one of them again.
-    // A blocked project with an open pull request keeps its row: the pull
-    // request is work that exists, and collapsing it is how one was lost.
-    const collapsed = expand ? null : group.blocked;
-    const held = new Set(collapsed ? collapsed.names : []);
-    for (const project of group.projects) {
-      if (held.has(project.name) && !project.prs?.length) continue;
-      lines.push(projectLine(c, wide, project));
-    }
-    // A goal is not collapsed: it is work that exists whatever the blocked rows do.
     for (const goal of group.goals || []) lines.push(goalLine(c, wide, goal));
   }
   strayLines(lines, c, wide, programmes.strays);
@@ -1534,17 +1251,14 @@ export function renderPageLines(data, {
 
   const cost = money(data.runner?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold')}${version ? c(`  ${version}`, 'grey') : ''}`;
-  // What is true of the work, in three numbers that are all on the page below:
-  // the sessions the runner has in flight (SESSIONS), and the plans that are ready
-  // and blocked (PROGRAMMES). It said `N of M queued` until 2026-09-06, which
-  // on an empty `queue.md` was `0 of 0 queued` while 41 projects had plans and
-  // the runner was stepping one of them. The three ride in one part so that a
-  // narrow terminal drops the cost rather than half of the answer.
+  // What is true of the work, in numbers that are all on the page below: the
+  // sessions the runner has in flight (SESSIONS), and the goals that are open,
+  // waiting and blocked (PROGRAMMES). They ride in one part so that a narrow
+  // terminal drops the cost rather than half of the answer.
   const statuses = data.programmes?.statuses || {};
   const flight = (data.runner?.sessions || []).length;
-  // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
-    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.waiting || 0} waiting · ${statuses.blocked || 0} blocked` },
+    { text: `${flight} in flight · ${statuses.open || 0} open · ${statuses.waiting || 0} waiting · ${statuses.blocked || 0} blocked` },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');
@@ -1568,17 +1282,15 @@ export function renderPageLines(data, {
   // had: **what does not move sits above what does.** The live loop rewrites
   // rows where they stand (page-live.js), and a row near the prompt is one it
   // can always reach. PROGRAMMES is the page as a listing; the two
-  // desks change when somebody sits down; NEXT changes every round and RUNNER
-  // every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // desks change when somebody sits down; RUNNER every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
   helperLines(lines, c, wide, sessions.desks?.helper, data.intake);
   lines.push('');
-  briefLines(lines, c, wide, sessions.desks?.brief, data.intake, data.programmes, data.next?.stale);
+  briefLines(lines, c, wide, sessions.desks?.brief, data.intake);
   lines.push('');
-  const queuedProjects = (data.next?.items || []).filter(item => item.runnable).length;
-  runnerLines(lines, c, wide, { ...data.runner, at_ms: at, queue: { projects: queuedProjects } });
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
   mergesLines(lines, c, wide, data.merges);

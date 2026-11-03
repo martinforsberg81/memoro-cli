@@ -4,7 +4,7 @@
  *   mc programs list [--json]    one line per programme, sorted by name
  *
  * The page draws only the programmes with work on them and folds the dormant
- * ones — no project, no goal — into one line that points here. This is the
+ * ones — no goal — into one line that points here. This is the
  * whole list, read from the same sources and through the same collector
  * (`readProgrammes`, page-collect.js), so a programme is active or dormant
  * here exactly when it is on the page. `mc programs` alone prints the usage.
@@ -45,7 +45,7 @@ export async function run(argv, deps = {}) {
 /**
  * Every programme as one record: the page's group, reduced to the facts this
  * list says. The repositories are the tree's (`homes`, where the programme is
- * a directory) and every project's and goal's, so a dormant programme still
+ * a directory) and every goal's, so a dormant programme still
  * says where it lives.
  */
 export function programmesListing({ section, homes = {} }) {
@@ -55,12 +55,10 @@ export function programmesListing({ section, homes = {} }) {
     dormant: Boolean(group.dormant),
     repos: [...new Set([
       ...(homes[group.programme] || []),
-      ...group.projects.map((project) => project.repo),
       ...(group.goals || []).flatMap((goal) => goal.repos || []),
     ].filter(Boolean))].sort(),
-    projects: group.projects.length,
-    statuses: Object.fromEntries(statusRollup(group.statuses)),
     goals: (group.goals || []).length,
+    statuses: Object.fromEntries(statusRollup(group.statuses)),
     plan_sessions: planProviders(group),
   })).sort((a, b) => a.name.localeCompare(b.name));
   const dormant = programmes.filter((item) => item.dormant).length;
@@ -78,8 +76,7 @@ function cells(item) {
     item.name,
     item.state,
     item.repos.join(',') || '—',
-    item.projects ? `${plural(item.projects, 'project')}${rollup ? ` · ${rollup}` : ''}` : 'no project yet',
-    item.goals ? plural(item.goals, 'goal') : 'no goal',
+    item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
     meta ? `plan ${meta}` : 'no plan session',
   ];
 }

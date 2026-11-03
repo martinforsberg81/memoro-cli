@@ -470,7 +470,6 @@ through all three sections.
 | step kind | colour |
 |---|---|
 | `build` | green |
-| `step` | green |
 | `review` | magenta |
 | `triage` | blue |
 | `brief` | cyan |
@@ -616,19 +615,13 @@ At a terminal the page ends in a prompt:
 
 | | |
 |---|---|
-| a number | opens a session in that project's runner area, as a session of its programme (`project-open.js`) — **PROGRAMMES’ number**, not a listing of its own, and it opens a project whose row is inside a collapsed one just the same. A project the runner has not started has no area yet, and says so; nothing makes one |
-| a name | the same, by the project's name |
-| `a` | draws the page again with nothing collapsed — every blocked project back as its own row, under the number it always had. `a` again puts them away |
+| a goal's number | `mc goal show` for it, and the page again — **PROGRAMMES’ number**, not a listing of its own |
+| `a` | draws the page again with every programme, the dormant ones too. `a` again folds them |
 | `b` | `mc brief` |
 | `p <name>` | `mc plan <name>` |
-| `s <name>` | `mc status <name>` |
 | `q`, empty | quit |
-| a goal's number | `mc goal show` for it, and the page again |
 | a retired verb (`work …`, `worker …`) | the line the shell gives it, and the page again |
 | anything else | said out loud — *nothing here called …* — and the page again |
-
-A project session refuses a workplace a tool already stands in (D-0154), the
-runner's step included.
 
 The prompt reads `/dev/tty` by design, so a subprocess without a terminal
 never reaches it.

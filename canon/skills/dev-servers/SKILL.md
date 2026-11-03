@@ -9,7 +9,7 @@ and mc admits at most four app servers on the machine (`mc dev admit`).
 `npm run dev` is for a person at a terminal.
 
 - A URL for this worktree: `mc test dev --here --url`.
-- What runs where: `mc dev list`, `mc prs`, `mc status <name>`.
+- What runs where: `mc dev list`, `mc prs`, `mc goal show <programme>/<goal>`.
 - One browser at a time.
 - Stopping one: skill `mc-processes`.
 - Start one only when the work asks for something seen or measured.

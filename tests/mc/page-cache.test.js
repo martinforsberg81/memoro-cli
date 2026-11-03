@@ -1,17 +1,15 @@
 /**
- * The page's reads: the plans under `~/mc/programs/`, and the pull-request
- * cache. Fixtures only: the plans and the cache files are functions and an
+ * The page's pull-request cache. Fixtures only: the cache files are an
  * object, so nothing spawns and nothing is written to disk.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  ageWords, cachePath, dropPr, loadPlans, loadPrs, mergePrs, savePrs,
+  ageWords, cachePath, dropPr, loadPrs, mergePrs, savePrs,
 } from '../../src/mc/page-cache.js';
 
 const ROOT = '/w';
-const REPOS = [{ name: 'memoro', path: '/r/memoro' }, { name: 'memoro-cli', path: '/r/memoro-cli' }];
 const NOW = new Date('2026-08-29T12:00:00Z');
 
 /** A fake filesystem: `read` throws on a name it does not hold, as fs does. */
@@ -26,34 +24,6 @@ function files(initial = {}) {
     write: (path, value) => { held[path] = JSON.stringify(value); },
   };
 }
-
-describe('loadPlans', () => {
-  /**
-   * The plans live under `~/mc/programs/` (ruling 48), which no sha keys, so
-   * they are read on every call and nothing is cached for them.
-   */
-  it('reads ~/mc/programs/ on every call, asks no git and writes nothing', () => {
-    const PROGRAM = JSON.stringify({
-      schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
-      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
-      steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
-    });
-    let text = PROGRAM;
-    const programs = () => [{ path: '/w/programs/mc/memoro/PLAN.json', programme: 'mc', project: 'memoro', file: 'PLAN.json', text, repo: 'memoro' }];
-    const git = () => { throw new Error('loadPlans asked git'); };
-    const fs = files();
-    const first = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git, programs, ...fs });
-    assert.deepEqual(first.plans.map((p) => [p.repo, p.path, p.status]), [['memoro', '/w/programs/mc/memoro/PLAN.json', 'ready']]);
-    assert.deepEqual(first.sources, [
-      { repo: 'memoro', sha: null, cached: false }, { repo: 'memoro-cli', sha: null, cached: false },
-    ]);
-
-    text = '{'; // the same file, edited in place
-    const second = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git, programs, ...fs });
-    assert.deepEqual(second.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'invalid']]);
-    assert.deepEqual(fs.held, {});
-  });
-});
 
 describe('prs.json', () => {
   it('is empty and ageless until --fresh writes it, then carries its age', () => {

@@ -81,7 +81,7 @@ import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
-import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
+import { queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
@@ -1643,9 +1643,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   function wakeMerger() {
     const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const mayGo = pending.length && nextJob(pending, {
-      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }), now: deps.now().getTime(),
-    });
+    const mayGo = pending.length && nextJob(pending, { now: deps.now().getTime() });
     if (!mayGo || !deps.startMerger || readMerger({ root, alive })) return;
     const started = deps.startMerger({ root });
     say(`merger: ${pending.length} pull request${pending.length === 1 ? '' : 's'} queued and no merger running — ${started.pid ? `started pid ${started.pid}` : `could not start one (${started.error || 'no pid'})`}`);

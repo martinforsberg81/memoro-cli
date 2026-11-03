@@ -11,9 +11,6 @@
  *              whose process is gone, what is in production, and the day.
  * sessions   — the two desks, the planning session of each programme, and
  *              everything else somebody has open, oldest first.
- * next       — the order `mc run` would take (`assembleQueue`), one block per
- *              lane and three deep: what each lane starts now, how much of the
- *              walk is runnable, and what is skipped, counted by reason.
  * merges     — the gate rounds running now, one per lane (`runningMerges`), and the two
  *              queues behind it: what `mc merge` left for the runner's lane,
  *              and what the runner refuses to land at all.
@@ -23,13 +20,11 @@
  * checks     — per repository, the nightly's last full test and the last
  *              daily `mc deps` reading: when, of which commit, and what each
  *              found. Two file reads each; nothing is run.
- * programmes — one heading per programme with its own counts and its planning
- *              session, and under it one numbered row per project on
- *              `origin/main`: the plan's status, how many of its steps are
- *              done, `next`, the open PR, whether it has a runner area, and
- *              what holds it when it is blocked. The number is the one the
- *              menu opens, whether or not a row is drawn for it. What no kind
- *              explains is `strays`: directories and ownerless sessions.
+ * programmes — one heading per programme with its planning session, and
+ *              under it one numbered row per goal (`goalsOf`): its status, its
+ *              sessions, its criteria and its last entry. The number is the
+ *              one the menu shows the goal by. What no kind explains is
+ *              `strays`: directories and ownerless sessions.
  * language   — the language side, from files `mc language` leaves: each
  *              cached reading's numbers, the newest run, and the gap a stopped
  *              run left open (`languageState`, language-runs.js).
@@ -43,13 +38,12 @@
  * the only part that touches the machine, and `renderPage` (page-render.js)
  * is the only part that knows how it looks.
  *
- * The readers are shared: `nowBlock`, `kindFor`,
- * `areasWithCheckout` and `pidAlive` come from status-collect.js, the plan and
- * runs.tsv parsers from brief-collect.js, the digest's shape from
- * helper-collect.js.
+ * The readers are shared: `nowBlock` and `pidAlive`
+ * come from status-collect.js, the runs.tsv parser from brief-collect.js, the
+ * digest's shape from helper-collect.js.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 import { join } from 'node:path';
 
@@ -66,7 +60,7 @@ import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import {
-  inLine, mergesPath, queueEntries, queueOrder, redEntries, samePr, stepsDone, waitingOn,
+  inLine, mergesPath, queueEntries, queueOrder, redEntries,
 } from './merge-queue.js';
 import { readMerger } from './merger.js';
 import { runningMerges } from './merges-collect.js';
@@ -83,38 +77,21 @@ import { readCapacity } from './model-capacity.js';
 import { readBillingState } from './billing.js';
 import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
-  PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
+  PRS_STALE_SECONDS, ageWords, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { RUNNER_DISK, RUNNER_MEMORY, areaKindOf, mcHome, programsHome, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, mcHome, programsHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
-import { overlayPlans, readEntry, realLock } from './register.js';
 import { gitDirOf } from './repos.js';
-import { readTailEntries } from './conversations.js';
-import { claudeTail, codexTail } from './work-status.js';
-import { planState, planSummary, unmetCriteria } from './plan-schema.js';
-import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
+import { PR_LIST_ARGS, parseWorktrees, prOwner } from './project-prs.js';
 import {
-  PR_LIST_ARGS, openPrsFor, parseWorktrees, prOwner, stepForPr,
-} from './project-prs.js';
-import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
-import { staleBlockers } from './stale-blockers.js';
-import {
-  REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
-  readCurrents,
+  REPO_NAMES, RUNNER_MODEL, nowBlock, pidAlive, readCurrents,
 } from './status-collect.js';
 
-/**
- * How many of each list the page names rather than counts. NEXT names four per
- * repository: every repository with something runnable keeps rows of its own,
- * so a long queue on one never pushes the other off the list.
- */
-export const LANE_DEEP = 4;
+/** How many of each list the page names rather than counts. */
 export const DECISIONS_NAMED = 3;
-/** How many stale blockers the line names before it only counts them. */
-export const STALE_NAMED = 3;
 
 /* ---------------------------------------------------------------- RUNNER */
 
@@ -123,11 +100,9 @@ export const STALE_NAMED = 3;
  * pending STOP, the lane files whose process is gone, and one line of the day
  * behind it.
  *
- * A session is one of three kinds (session-kind.js): `plan`, `build` — of a
- * project's step (variant `project`) or of a goal (variant `goal`) — and
+ * A session is one of three kinds (session-kind.js): `plan`, `build` and
  * `review`. Each carries its `kind` and `variant`, and what it works on:
- * `goal` (`mc/<goal>`) for a goal's, `name`, `step` and `steps` for a
- * project's. The list is `sessions`, and the day counts outcomes per kind in
+ * `goal` (`mc/<goal>`). The list is `sessions`, and the day counts outcomes per kind in
  * `day.by_kind`; the page draws from these and nothing else.
  *
  * This was NOW, and NOW held two different kinds of thing at once — the
@@ -253,9 +228,6 @@ export function runnerSection({
   // What `mc run lanes` set: how many sessions run at once, across every
   // repository. The rows are one per lane, so the page needs the number.
   lanes: setting = { lanes: DEFAULT_LANES },
-  // The plans, for the one thing a lane file does not carry: which step of its
-  // plan the session is on.
-  plans = [],
   // `~/mc/runner/github.json` as the round left it: the repositories whose
   // last `gh pr list` failed, why, and since when (github-backoff.js).
   github = null,
@@ -273,16 +245,10 @@ export function runnerSection({
     cacheRead: acc.cacheRead + (Number(r.cache_read) || 0),
     cacheWrite: acc.cacheWrite + (Number(r.cache_write) || 0),
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
   for (const session of sessions) {
-    // A goal's session has no plan step; its name is `goal:<programme>/<goal>`.
-    const plan = session.goal ? null : byProject.get(session.name);
-    session.step = plan?.step ?? null;
-    session.steps = plan?.steps ?? null;
     // Every session has an owner, and a lane's is a programme: the one its
-    // lane file names, else its goal's (`<programme>/<goal>`), else its
-    // project's plan's (goal mc/no-work).
-    session.owner = { kind: 'programme', name: session.programme || session.goal?.split('/')[0] || plan?.programme || null };
+    // lane file names, else its goal's (`<programme>/<goal>`) (goal mc/no-work).
+    session.owner = { kind: 'programme', name: session.programme || session.goal?.split('/')[0] || null };
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
@@ -397,7 +363,7 @@ export { DESKS, ownerOf };
  * Who is sitting where — everything running that the runner did not start.
  *
  * Every session has an owner, and there are two kinds (goal mc/no-work): a
- * programme — its planning session, or a project of it opened from the page —
+ * programme — its planning session, or another session in one of its rooms —
  * or a desk. The two desks are singletons and get a fixed row each, drawn open
  * or not: there is one helper and one brief, and *"is the helper running?"* is
  * a question an empty row answers as well as a full one. A programme's
@@ -436,8 +402,8 @@ export function sessionsSection({
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
   // that programme's own heading — which is the whole reason `mc plan` puts
-  // one at `planAreaName` (paths.js). A project opened from the page belongs
-  // to its programme too, and is drawn on the same heading. Keyed by
+  // one at `planAreaName` (paths.js). Any other session of the programme is
+  // drawn on the same heading. Keyed by
   // programme here, so the section that owns programmes never has to know how
   // a session's area is spelled.
   const planning = {};
@@ -479,165 +445,6 @@ export function sessionsSection({
   };
 }
 
-/* -------------------------------------------------------------------- NEXT */
-
-/**
- * The order the runner would actually take: every name with the kind it would
- * be run as, or the reason it would be passed over.
- *
- * It read `~/mc/queue.md` and nothing else until 2026-09-06, so with that file
- * empty the section said *"empty — mc brief queues the next thing"* while the
- * runner was walking 41 projects and running one. `queue.md` is not the queue —
- * it is Martin's *these first*, and it empties itself. The order is
- * `assembleQueue`'s (run-plan.js), which is the runner's own: the file's names
- * that have a non-legacy plan on `main`, then every other such plan
- * alphabetically. The section reads the runner's function rather than repeating
- * its rule, so the page and the round cannot come to disagree about what is
- * next.
- *
- * Lanes are why it is blocks rather than a list: `mc run` drives one lane loop
- * per repository at the same time — `lanes` of them, as `mc run lanes` says —
- * so the head of *each* starts now and a flat list would say one of them is
- * second. `heads` on a block is how many of its rows start now. Three deep per
- * repository is what is coming; past that it is a count, and the whole order is
- * in `items` for `mc --json`.
- *
- * The order is the runner's own picker: `nextFor` (run-plan.js), asked
- * repeatedly with each pick added to `claimed`, which is exactly what a lane
- * does. It is given this section's own reading per name — the plan, and then
- * `machineState` — because the page can see a dirty worktree that the runner's
- * pure reading cannot, and a lane that would refuse on it must not be drawn as
- * starting it.
- *
- * A live area used to be a skip with a reason of its own, because the runner
- * would not start a step where somebody had a session open. It no longer
- * declines for that (`run.js`), so neither does this — a page that predicts a
- * skip the runner will not make is worse than one that says nothing, because
- * it is read as the runner's own answer. What stops a project is what the plan
- * says, and the plan is the only thing counted here.
- *
- * `stale` is the counterweight to `skipped`, and it is the reason this
- * section reads every plan rather than only the queued ones: a step blocked
- * on a project that has finished is not in the queue at all, and the whole
- * fault is that nothing was ever going to put it there
- * (stale-blockers.js). It is drawn from the same `origin/main` plans the
- * runner obeys, and it names rather than only counts, because a count of two
- * does not say which two a person has to go and read.
- *
- * `machine` is the other half of "would the runner start this" — a dirty
- * worktree, a held pull request, work already in flight (`machineState`,
- * status-collect.js). Without it this block counted only what the plans say,
- * and on 2026-09-05 it reported two names runnable while `held.json` held both
- * of them: a count that is a partial answer is read as the whole one. It is
- * injected rather than read here because this module takes read data and
- * `machineState` has to ask a worktree whether it is dirty; a caller with no
- * reader gets the plan-shaped answer alone, exactly as before.
- */
-export function nextSection({
-  queueText = '', plans = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
-  lanes: perRepo = 1,
-  machine = () => null,
-} = {}) {
-  const order = assembleQueue(queueText, plans);
-  // What `queue.md` actually put at the front: its own lines, minus the ones
-  // `assembleQueue` dropped for having no plan on main. The heading says how
-  // many, so an empty file reads as *the order is alphabetical* rather than as
-  // an empty queue.
-  const queued = new Set(queueFileNames(queueText));
-  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-
-  const items = order.map((name) => {
-    const plan = byProject.get(name) || null;
-    // The step number and its title come off the plan record (`planSummary`),
-    // where they are numbers and a string; the row draws `step 2/5` from them
-    // rather than parsing the `next` sentence back apart.
-    const base = {
-      name,
-      repo: plan?.repo || null,
-      programme: plan?.programme || null,
-      step: plan?.step ?? null,
-      steps: plan?.steps ?? null,
-      title: plan?.title ?? null,
-      queued: queued.has(name),
-    };
-    const kind = kindFor(name, { plans });
-    // The plan first, and no machine reading at all for a name it already
-    // refuses: that is `machineState`'s own economy and the reason a round
-    // walks 38 projects in a second rather than a minute.
-    if (kind.startsWith('skip')) return { ...base, kind, runnable: false, machine: null };
-    const state = machine(name) || null;
-    if (state && !state.runnable) return { ...base, kind: `skip:${state.reason}`, runnable: false, machine: state };
-    return { ...base, kind: state?.kind || kind, runnable: true, machine: state };
-  });
-  const runnable = items.filter((item) => item.runnable);
-  const skipped = items.filter((item) => !item.runnable);
-  const reasons = {};
-  for (const item of skipped) {
-    const reason = item.kind.slice('skip:'.length);
-    reasons[reason] = (reasons[reason] || 0) + 1;
-  }
-  const lanes = lanesOf({ order, plans, items, deep, perRepo });
-  return {
-    // How far the runner's order reaches: every non-legacy plan on `main`,
-    // `queue.md`'s names first. Not a depth anybody types — a depth it walks.
-    depth: items.length,
-    from_queue: order.filter((name) => queued.has(name)).length,
-    runnable: runnable.length,
-    items,
-    lanes,
-    more: lanes.reduce((n, lane) => n + lane.more, 0),
-    skipped: { count: skipped.length, reasons },
-    stale: staleSection(plans, staleNamed),
-  };
-}
-
-/**
- * One block per repository, in the order its first runnable name appears, each
- * holding what that repository's lanes would take next: `deep` of them named
- * and the rest counted, and `heads` — how many of those rows start *now*,
- * which is how many lane loops the repository has (`mc run lanes`).
- *
- * The picks are the runner's, name by name: `nextFor` over the same order,
- * with each pick claimed before the next is asked for, which is what a lane
- * does with `claims`. Until 2026-09-08 this grouped the runnable list by
- * repository instead — the same answer at one lane per repository, and the
- * wrong one as soon as the runner's rule changed, because there were two
- * rules.
- */
-function lanesOf({ order, plans, items, deep, perRepo }) {
-  const byName = new Map(items.map((item) => [item.name, item]));
-  const world = { names: order, plans };
-  // The section's own reading per name, which `nextFor` asks instead of the
-  // plan-and-PR one it uses in the runner: the machine's answer is already in
-  // `items`, and asking twice is how two answers on one page come to differ.
-  const state = (name) => {
-    const item = byName.get(name);
-    return { runnable: Boolean(item?.runnable), kind: item?.kind || null };
-  };
-  const lanes = [];
-  const byRepo = new Map();
-  const claimed = new Set();
-  for (;;) {
-    const pick = nextFor({ world, claimed, state });
-    if (!pick) break;
-    claimed.add(pick.name);
-    const repo = pick.repo || null;
-    if (!byRepo.has(repo)) {
-      const lane = { repo, count: 0, items: [], more: 0, heads: 0 };
-      byRepo.set(repo, lane);
-      lanes.push(lane);
-    }
-    const lane = byRepo.get(repo);
-    lane.count += 1;
-    if (lane.items.length < deep) lane.items.push(byName.get(pick.name));
-  }
-  for (const lane of lanes) {
-    lane.more = lane.count - lane.items.length;
-    lane.heads = Math.min(Math.max(1, perRepo), lane.items.length);
-  }
-  return lanes;
-}
-
 /**
  * MERGES — one queue per repository, including idle queues. `repos[]` is
  * the page/JSON contract; aggregate fields remain for status/PR readers.
@@ -648,30 +455,18 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * `landing` is `runningMerges`'s list (merges-collect.js) — one round per
  * gate lane, so two when a memoro and a memoro-cli round run side by side —
  * or one such object, or null. This function does not read the locks itself,
- * so its tests never touch a real one. The held rows went with `held.json` (ruling 21): a step that did not
- * land is `failed` in the register and drawn where every other plan state is.
+ * so its tests never touch a real one.
  *
  * `red` is what came back red and has not been queued again: inline per repository
  * until `mc merge` puts it back in line (Martin, 2026-10-10). One whose pull
  * request is no longer open is nobody's to fix and is not drawn — when the
  * open pull requests are known at all.
  *
- * A queued job whose plan's earlier step is not `done` (`ordered`, the
- * merger's own rule) carries `waits_for: '<project> step <n>'`.
- *
  * `landings` is one item per pull request in a round: the first carries the
  * round's phase, age and lane, the rest `batch_of: <first pr>`.
- *
- * `fixing` is a red whose step a live runner session holds (ruling 39): a
- * lane file (`currents`, `current-*.json`) of kind `step` on the red's project
- * and step, with a pid `alive` says is running. It leaves `red` and carries
- * the session's last assistant sentence (`said`, from `<session.log>.jsonl`
- * of the register step `entry(project)` returns; null when there is no
- * reader or no transcript), how long the session has run, and its lane.
  */
 export function mergesSection({
-  landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
-  currents = [], alive = pidAlive, entry = null,
+  landing = null, queued = [], prs = [], now = new Date(), alive = pidAlive,
   repos = REPO_NAMES, pauses = {}, merger = null, history = [],
 } = {}) {
   const all = queueEntries(queued);
@@ -680,19 +475,13 @@ export function mergesSection({
   const ofRepo = (round, item) => !round.repo || !item.repo || round.repo === item.repo;
   const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing' && ofRepo(round, item);
   // The one a round is landing is drawn as the round, not twice — but its
-  // queue entry is where its branch and its step are, and the open pull
-  // requests are where its title is: the row names what is landing, not only
+  // queue entry is where its branch is, and the open pull requests are where its title is: the row names what is landing, not only
   // its number (Martin, 2026-10-09).
   const titled = (repo, number) => prs.find((pr) => pr.repo === repo && Number(pr.number) === Number(number)) || null;
   const named = (repo, number, entry) => {
     const pr = titled(repo, number);
     const branch = entry?.branch || pr?.headRefName || null;
-    return {
-      branch,
-      name: entry?.step ? entry.step.project : branch,
-      step: entry?.step ? entry.step.index + 1 : null,
-      title: pr?.title || null,
-    };
+    return { branch, name: branch, title: pr?.title || null };
   };
   // A batch is one round, but every pull request in it keeps its own row
   // (Martin, 2026-10-10: *"den pr som mergas genom en session får behålla sin
@@ -720,46 +509,25 @@ export function mergesSection({
     const ms = Date.parse(when || '');
     return Number.isFinite(ms) ? Math.max(0, Math.round((at - ms) / 1000)) : null;
   };
-  const waits = waitingOn(all, { ordered }).filter((one) => one.step);
   const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
     const since = Date.parse(item.since || '');
-    const step = waits.find((one) => samePr(one.entry, item))?.step || null;
     return {
       ...item,
       title: titled(item.repo, item.pr)?.title || null,
-      waits_for: step ? `${step.project} step ${step.number}` : null,
       wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
     };
   });
   const open = (item) => !prs.length || Boolean(titled(item.repo, item.pr));
-  const redItems = redEntries(all).filter(open).map((item) => {
+  const reds = redEntries(all).filter(open).map((item) => {
     const answered = Date.parse(item.answered || '');
     const pr = titled(item.repo, item.pr);
     return {
       ...item,
-      name: item.step ? item.step.project : (item.branch || pr?.headRefName || null),
-      step_number: item.step ? item.step.index + 1 : null,
+      name: item.branch || pr?.headRefName || null,
       title: pr?.title || null,
       age_seconds: Number.isFinite(answered) ? Math.max(0, Math.round((at - answered) / 1000)) : null,
     };
   });
-  // A red the runner has handed a session (ruling 30: the next session's
-  // first) is somebody's work, not a row asking for one (Martin, 2026-10-11).
-  const holder = (item) => (item.step ? currents.find((current) => current?.kind === 'step'
-    && current.name === item.step.project && Number(current.step) === item.step.index + 1
-    && current.pid != null && alive(current.pid)) : null) || null;
-  const fixingItems = [];
-  const reds = [];
-  for (const item of redItems) {
-    const current = holder(item);
-    if (!current) { reds.push(item); continue; }
-    fixingItems.push({
-      ...item,
-      said: saidBy(entry, item.step, current.tool),
-      age_seconds: ageOf(current.started),
-      lane: current.lane ?? null,
-    });
-  }
   const liveJobMerger = all.some((item) => item.merger != null && alive(item.merger));
   const mergerAlive = Boolean(merger) || liveJobMerger;
   const names = [...new Set([...REPO_NAMES, ...repos.map((repo) => repo.name || repo),
@@ -770,7 +538,6 @@ export function mergesSection({
       ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: mergePhase(item.phase),
     }));
     const waiting = own(queuedItems);
-    const fixing = own(fixingItems);
     const red = own(reds);
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
       && round.phase !== 'start' && round.merged?.length)
@@ -786,9 +553,9 @@ export function mergesSection({
     return {
       repo,
       state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'
-        : fixing.length ? 'fixing' : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
+        : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
       pause, merger_stopped: stopped, landing: active[0] || null, landings: active,
-      waiting, fixing, reds: red, day_count: day, last,
+      waiting, reds: red, day_count: day, last,
     };
   });
   return {
@@ -797,7 +564,6 @@ export function mergesSection({
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
-    fixing: { count: fixingItems.length, items: fixingItems },
     red: { count: reds.length, items: reds },
     count: landings.length + queuedItems.length,
   };
@@ -843,24 +609,6 @@ export function mergePauses({
   }));
 }
 
-/** How much of a session's transcript the fixing row reads: its last sentence is near the end. */
-export const SAID_TAIL_BYTES = 64 * 1024;
-
-/**
- * The last thing a runner session said, from the transcript its register step
- * names (`session.log` + `.jsonl`, written as it streams). Null when there is
- * no reader, no step, no log or nothing readable — never an error.
- */
-function saidBy(entry, step, tool) {
-  if (!entry) return null;
-  try {
-    const log = entry(step.project)?.steps?.[step.index]?.session?.log;
-    if (!log) return null;
-    const entries = readTailEntries(`${log}.jsonl`, SAID_TAIL_BYTES);
-    return (tool === 'codex' ? codexTail(entries) : claudeTail(entries)).said || null;
-  } catch { return null; }
-}
-
 /**
  * CHECKS — the two daily readings of each repository, side by side: the
  * nightly's last full test (`nightly-history.js`) and the runner's last
@@ -900,32 +648,22 @@ export function checksSection({ repos = [], now = new Date() } = {}) {
 /* ------------------------------------------------------------- PULL REQUESTS */
 
 /**
- * Every open pull request, and whose it is (`prOwner`, project-prs.js).
- *
- * The page used to know a pull request only through a project's branch, so a
- * plan session's, a terminal session's and one nobody had checked out any
- * more were not on it at all: four of eight on 2026-10-09, one of them a week
- * old with no worktree anywhere. Each item says which step of which project it
- * is, when it is a project's; whether the merger has it; and how long since
- * anything happened on it.
+ * Every open pull request, and whose it is (`prOwner`, project-prs.js): a
+ * plan session's, a workarea's, a folder elsewhere, or nobody's. Each item
+ * says whether the merger has it, and how long since anything happened on it.
  *
  * `worktrees` is `{ <repo>: [{ path, branch }] }`, one `git worktree list` per
  * repository — local, and the only way to know which folder holds a branch.
  */
 export function prsSection({
-  prs = [], plans = [], worktrees = {}, root = '', merges = null, fetched = null, ageSeconds = null, now = new Date(),
+  prs = [], worktrees = {}, root = '', merges = null, fetched = null, ageSeconds = null, now = new Date(),
 } = {}) {
   const at = now instanceof Date ? now.getTime() : Number(now);
   const landings = merges?.landings || [].concat(merges?.landing || []);
   const queued = merges?.queued?.items || [];
-  // A red being fixed is still red from the merger, and still drawn in MERGES.
-  const reds = [...(merges?.red?.items || []), ...(merges?.fixing?.items || [])];
+  const reds = merges?.red?.items || [];
   const items = prs.map((pr) => {
-    const names = plans.filter((plan) => plan.repo === pr.repo).map((plan) => plan.project);
-    const owner = prOwner(pr, { names, worktrees: worktrees[pr.repo] || [], root });
-    const plan = owner.kind === 'project'
-      ? plans.find((candidate) => candidate.repo === pr.repo && candidate.project === owner.name) || null
-      : null;
+    const owner = prOwner(pr, { worktrees: worktrees[pr.repo] || [], root });
     const updated = Date.parse(pr.updatedAt || '');
     const number = Number(pr.number);
     return {
@@ -935,9 +673,6 @@ export function prsSection({
       branch: pr.headRefName || null,
       draft: Boolean(pr.isDraft),
       owner,
-      step: plan ? stepForPr(pr, plan) : null,
-      steps: plan ? (Array.isArray(plan.plan?.steps) ? plan.plan.steps.length : plan.steps ?? null) : null,
-      status: plan?.status || null,
       merging: landings.some((landing) => landing.repo === pr.repo && Number(landing.pr) === number)
         ? 'landing'
         : (queued.some((item) => item.repo === pr.repo && item.pr === number) ? 'queued' : null),
@@ -957,30 +692,18 @@ export function prsSection({
 }
 
 /**
- * The pull requests onto the rows that own them: every project row and every
- * running lane gets the list of its own, so the step a pull request is and the
- * work it belongs to are read on the same line (Martin, 2026-10-09). Same
- * objects as `prs.items`, not copies.
+ * The pull requests onto the running lanes that own them, so the work a pull
+ * request belongs to is read on the same line (Martin, 2026-10-09): a goal's
+ * pull request is its branch's, `goal/<goal>`. Same objects as `prs.items`,
+ * not copies.
  */
-export function attachPrs({ programmes, runner, pulls }) {
-  const mine = (repo, name) => pulls.items.filter((item) => item.owner.kind === 'project'
-    && item.owner.name === name && (repo == null || item.repo === repo));
-  for (const group of programmes?.programmes || []) {
-    for (const project of group.projects || []) project.prs = mine(project.repo, project.name);
-  }
-  // A goal's pull request is its branch's, `goal/<goal>`; a project's, its own.
+export function attachPrs({ runner, pulls }) {
   for (const session of runner?.sessions || []) {
     session.prs = session.goal
       ? pulls.items.filter((item) => item.branch === `goal/${session.goal.split('/').pop()}`
         && (session.repo == null || item.repo === session.repo))
-      : mine(session.repo, session.name);
+      : [];
   }
-}
-
-/** The stale blockers as the line draws them: how many, and the first few. */
-function staleSection(plans, named) {
-  const items = staleBlockers(plans);
-  return { count: items.length, items: items.slice(0, named), more: Math.max(0, items.length - named) };
 }
 
 /* ------------------------------------------------------------------ INTAKE */
@@ -1160,266 +883,56 @@ export function mcSection({
   };
 }
 
-/* ---------------------------------------------------------------- PROJECTS */
+/* -------------------------------------------------------------- PROGRAMMES */
 
 /**
- * What holds a blocked project: the `blocked_by` of the step that stopped it.
- *
- * The step is the one `planState` picks — the first that is not done, which is
- * the only step the runner considers and therefore the only one the row's
- * `blocked` is about. A later step blocked on something else is not why this
- * project is standing still.
- *
- * Read off the plan rather than out of the `next` sentence: `blocked_by` is a
- * `{ kind, name }` every blocked step carries, and parsing the prose back apart
- * would be a second answer to a question the plan already answers.
- * `stale-blockers.js` walks the same field for its own purpose, and is the
- * precedent for reading it here.
+ * How many goals of each status a set of goals holds: the heading's own count.
  */
-function blockerOf(record) {
-  if (record.status !== 'blocked') return null;
-  const { step } = planState(record.plan);
-  if (step?.status !== 'blocked') return null;
-  const by = step.blocked_by;
-  return by?.name ? { kind: by.kind || null, name: by.name } : null;
-}
-
-/**
- * The one word a project row says its state in. `status` is the plan's own
- * word and `mc --json` keeps it; `state` is what the row means by it. A blocked
- * step whose blocker releases by itself — a time, a deploy or another project
- * (ruling 35) — is `waiting`: the runner lets it go, so it is not the red of a
- * step waiting on Martin. A decision, a workarea or no blocker stays `blocked`.
- */
-const RELEASED_BY_RUNNER = new Set(['time', 'deploy', 'project']);
-export function stateOf({ status, blocker }) {
-  if (status === 'blocked' && RELEASED_BY_RUNNER.has(blocker?.kind)) return 'waiting';
-  return status;
-}
-
-/** A reason as one line of at most `max` characters, cut with `…`; '' when there is none. */
-function clipLine(text, max) {
-  const line = String(text ?? '').replace(/\s+/gu, ' ').trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-}
-
-/**
- * A project row's NEXT cell, the same shape on every row: the step's title,
- * then what the state says about it. `title` is the step the row is about, as
- * `planSummary` names it; `done`, `unmet` and `invalid` have no step, so they
- * say their own sentence, and `invalid` keeps the plan's.
- *
- * A time wait is said in `describeWait`'s words, with how long it has left. A
- * deploy wait is not said with what it has left: that needs the landed sha's
- * ancestry in memoro's checkout, a git call per paint, so the row says what it
- * waits for and `mc step` says how long.
- */
-function nextCell(record, state, now) {
-  const { title } = record;
-  const { step } = planState(record.plan);
-  const by = step?.blocked_by;
-  switch (state) {
-    case 'ready':
-    case 'running':
-      return title;
-    case 'landing':
-      return step?.pr ? `${title} · #${step.pr} in the merge queue` : title;
-    case 'waiting': {
-      if (by?.kind === 'time') return `${title} · ${describeWait(step, { now })}`;
-      if (by?.kind === 'deploy') {
-        const hours = Number.isFinite(by.hours) && by.hours > 0 ? ` + ${by.hours}h` : '';
-        return `${title} · after deploy of step ${by.step}${hours}`;
-      }
-      return `${title} · after project ${by?.name}`;
-    }
-    case 'blocked':
-      return by?.name ? `${title} · on ${by.kind} ${by.name}` : `${title} · blocked`;
-    case 'failed': {
-      const reason = clipLine(step?.reason, 120);
-      return `${title} · failed${reason ? `: ${reason}` : ''}`;
-    }
-    case 'done':
-      return 'every step is done';
-    case 'unmet':
-      return `criteria ${unmetCriteria(record.plan).join(', ')} not met`;
-    default:
-      return record.next || null;
-  }
-}
-
-/**
- * How many of each state a set of projects holds: the heading's own count. It
- * is the row's word, not the plan's, so a waiting project counts as `waiting`.
- */
-function statusesOf(projects) {
+function statusesOf(goals) {
   const out = {};
-  for (const project of projects) {
-    const key = project.state || 'unknown';
+  for (const goal of goals) {
+    const key = goal.status || 'unknown';
     out[key] = (out[key] || 0) + 1;
   }
   return out;
 }
 
 /**
- * The blockers a set of projects waits on, biggest first — the shape both the
- * programme's collapsed row and the page's one rollup line are drawn from.
+ * One heading per **programme**, its goals under it, sorted programme then
+ * goal.
  *
- * By name *and* kind, because the two namespaces are different: a `decision`
- * called `plan-review` and a project called `plan-review` would be two
- * different things waiting, and nothing here can merge them.
- */
-function blockersOf(projects) {
-  const tally = new Map();
-  for (const project of projects) {
-    const blocker = project.blocked_by;
-    if (!blocker) continue;
-    const key = `${blocker.kind} ${blocker.name}`;
-    const held = tally.get(key) || { kind: blocker.kind, name: blocker.name, count: 0 };
-    held.count += 1;
-    tally.set(key, held);
-  }
-  return [...tally.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-}
-
-/**
- * What a programme's blocked projects collapse to: how many, the numbers that
- * still open them, and what holds them.
- *
- * `names` is what the renderer leaves out; `numbers` is what it draws instead.
- * Both, rather than one derived from the other, because the numbering runs
- * through every project of every programme and a row that is not drawn is still
- * openable by its number — that is the contract the collapsing is allowed under.
- *
- * A blocked project the runner has a step in flight on keeps its own row: the
- * plan on `origin/main` says blocked, but something is happening to it right
- * now, and that is the one thing a person watching this page wants to see.
- * A waiting project keeps its row too: nobody stopped it, and its row says what
- * it waits for and until when.
- */
-function collapsedOf(projects) {
-  const blocked = projects.filter((project) => project.state === 'blocked' && !project.running);
-  if (!blocked.length) return null;
-  return {
-    count: blocked.length,
-    numbers: blocked.map((project) => project.number),
-    names: blocked.map((project) => project.name),
-    blockers: blockersOf(blocked),
-  };
-}
-
-/**
- * One heading per **programme**, its projects under it, sorted programme then
- * project.
- *
- * The grouping was by repository, and a repository is not a unit of work — it
- * is where the code happens to live. A programme is: it is what `mc plan`
- * opens on, what a project belongs to, and the thing several projects add up
- * to. `msr-core` spanning both repositories read as two unrelated blocks under
- * two headings; `mc` and `docx-editing-surface` sat interleaved under one.
- * So the repository moves to a column on the project's own row, where it is a
- * fact about that project rather than the shape of the page.
+ * A programme is what `mc plan` opens on and what a goal belongs to, so it is
+ * the shape of the section; a goal's repository is a column on its own row.
+ * Projects went on 2026-11-03 (goal mc/projects-to-goals): a project's steps
+ * are goals ordered with `after` now, and this section draws goals only.
  *
  * The programme heading carries its **planning session**, open or not — that
  * is the room `mc plan <programme>` fills, and a programme with none is a
  * programme nobody is thinking about right now (Martin, 2026-09-02). A
- * programme is drawn whether or not any of its projects have a plan the runner
- * can read, and a programme that exists *only* as an open planning session is
- * drawn too: it is on its way to having projects, and it would otherwise be
- * the one piece of work the page could not show.
+ * programme is drawn whether or not it has a goal, and a programme that exists
+ * *only* as an open planning session is drawn too.
  *
- * A project row's `●` means **the runner has a step in flight on it**, and
- * nothing else. A session somebody has open is its programme's, drawn on the
- * heading (`programme_sessions`), never on the row.
- *
- * Every row says whether the project has a runner area (`area`) — opening the
- * project by its number opens a session there (`project-open.js`), and a
- * project the runner has not started has none yet. Numbering runs through the
- * projects and then the goals, so every row is reachable by the number beside
- * it.
+ * Numbering runs through the goals in the order the page draws them
+ * (programme, then name), so the menu reaches each by the number beside it.
  *
  * What no kind explains is a stray (`strays`): a directory under `~/mc` that is
  * no area (`listStrays`), and a session with no owner (`sessionsSection`).
  * Nothing on the page removes one; `mc tidy` lists what is left.
- *
- * **Every programme carries its own counts, and its blocked projects collapse.**
- * Thirty-three of forty-four projects were `blocked` on 2026-09-06 and the page
- * said so thirty-three times without once saying what would move any of them,
- * though every blocked step carries `blocked_by: { kind, name }`. So a group
- * carries `statuses` — its own `x ready · y blocked` — and `blocked`: how many,
- * which numbers they are, and the blockers holding them, biggest first. The
- * section carries the same rollup over every programme at once, which is the
- * line worth more than all thirty-three red cells: `plan-review` holds twelve
- * of them and `home-on-msr` seven.
- *
- * The rows themselves are all still here. Collapsing is the renderer's, and it
- * is drawing rather than listing: `projects` is every project of the programme
- * whether or not a row is drawn for it, which is what keeps `mc --json` whole
- * and every number openable (`commands/home.js` § `menu`).
  */
 export function programmesSection({
-  plans = [], areas = [], rows = [], openPrs = [],
-  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], running = [], programmes = [], now = new Date(),
+  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [],
   strays = [], sessionStrays = [],
 } = {}) {
-  const lastRun = {};
-  for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
-  const held = new Set(areas.map((area) => (typeof area === 'string' ? area : area.name)));
-  // A project's branches are `<name>` or `<name>-<suffix>`, so the row can say
-  // what the project is waiting on rather than only what sits on a branch of
-  // its own name: `action-window` had three branches with an open pull request
-  // and an empty PR column on 2026-09-02. The siblings are what tell
-  // `mc-cut-2` from `mc`'s, so the whole repository's names go in.
-  const namesIn = (repo) => plans.filter((p) => p.repo === repo).map((p) => p.project);
-
-  const projects = plans.map((plan) => {
-    const name = plan.project;
-    const last = lastRun[name] || null;
-    const pr = openPrsFor({ prs: openPrs, name, names: namesIn(plan.repo), repo: plan.repo })[0] || null;
-    // The steps are on the plan the cache already holds, so how far a project
-    // has got costs nothing to say — and "3 of 7" is the one number that turns
-    // a list of names into a picture of where the work stands.
-    const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
-    const blocked_by = blockerOf(plan);
-    const state = stateOf({ status: plan.status || null, blocker: blocked_by });
-    return {
-      name,
-      repo: plan.repo,
-      programme: plan.programme,
-      status: plan.status || null,
-      state,
-      next: nextCell(plan, state, now),
-      // What would move it, for a project that is stopped. Null for every other
-      // project, and for a blocked plan too old to carry the field.
-      blocked_by,
-      legacy: Boolean(plan.legacy),
-      steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
-      // The runner, and only the runner: a session somebody has open in the
-      // folder is its programme's, on the heading.
-      running: running.includes(name),
-      area: held.has(name),
-      last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
-      pr: pr ? pr.number : null,
-    };
-  });
-
-  projects.sort((a, b) => String(a.programme).localeCompare(String(b.programme))
-    || a.name.localeCompare(b.name));
-
-  let number = 0;
-  for (const project of projects) { number += 1; project.number = number; }
-  // A goal continues the numbering after every project's, in the order the page
-  // draws the goals (programme, then name), so the menu reaches each by number.
   const goalList = goalRows.map((goal) => ({ ...goal }))
     .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
+  let number = 0;
   for (const goal of goalList) { number += 1; goal.number = number; }
-  // Every programme that has a project, plus every one that exists only as an
-  // open planning session or as a directory on main with nothing runnable
-  // under it yet. `programmes` is the tree's own answer (`listProgrammes`),
-  // which is what keeps a programme whose projects have all been archived on
-  // the page — that is exactly the heading the next piece of its work belongs
-  // under.
+  // Every programme that has a goal, plus every one that exists only as an
+  // open planning session or as a directory with nothing under it yet.
+  // `programmes` is the tree's own answer (`listProgrammes`), which is what
+  // keeps a programme whose work has all been archived on the page — that is
+  // exactly the heading the next piece of its work belongs under.
   const names = [...new Set([
-    ...projects.map((project) => project.programme),
     ...Object.keys(planning),
     ...Object.keys(planningSessions),
     ...Object.keys(programmeSessions),
@@ -1428,53 +941,32 @@ export function programmesSection({
   ])].filter(Boolean).sort((a, b) => a.localeCompare(b));
 
   const groups = names.map((name) => {
-    const own = projects.filter((project) => project.programme === name);
     const goals = goalList.filter((goal) => goal.programme === name);
     return {
       programme: name,
-      // A programme with no project of any status and no goal of any status.
-      // An open plan session does not make it active: nothing is on it yet.
-      // Twenty-seven of forty-one headings said `no project yet` on
-      // 2026-11-02; the renderer folds these into one line (Martin).
-      dormant: own.length === 0 && goals.length === 0,
-      projects: own,
-      // The programme's goals, after its project rows (programmesLines).
+      // A programme with no goal of any status. An open plan session does not
+      // make it active: nothing is on it yet. The renderer folds these into
+      // one line (Martin, 2026-11-02).
+      dormant: goals.length === 0,
       goals,
-      repos: [...new Set(own.map((project) => project.repo))].sort(),
+      repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
-      // The programme's other sessions: its projects opened from the page.
+      // The programme's other sessions, somebody's open in one of its rooms.
       sessions: programmeSessions[name] || [],
-      // The heading's own answer: how many of this programme's projects are
-      // ready and how many are stopped. An empty object is a programme with no
-      // project yet, which the heading says in words.
-      statuses: statusesOf(own),
-      blocked: collapsedOf(own),
+      statuses: statusesOf(goals),
     };
   });
 
-  const stopped = projects.filter((project) => project.state === 'blocked');
-  const kinds = {};
-  for (const project of stopped) {
-    const kind = project.blocked_by?.kind;
-    if (kind) kinds[kind] = (kinds[kind] || 0) + 1;
-  }
-
   const dormant = groups.filter((group) => group.dormant).length;
   return {
-    count: projects.length,
+    count: goalList.length,
     programmes: groups,
     active: groups.length - dormant,
     dormant,
-    statuses: statusesOf(projects),
-    // Every stopped project at once: how many wait on an answer from Martin (a
-    // decision or a workarea), and which blockers hold the most. A project that
-    // the runner releases itself is `waiting`, counted below and not here. The
-    // page draws it under NEXT, where somebody is looking for what to do.
-    blocked: { count: stopped.length, kinds, blockers: blockersOf(stopped) },
+    statuses: statusesOf(goalList),
     planning: groups.filter((group) => group.planning).length,
-    running: projects.filter((project) => project.running).length,
-    waiting: projects.filter((project) => project.state === 'waiting').length,
+    running: goalList.filter((goal) => goal.running).length,
     // What no kind explains, drawn under `not an area mc knows`: the
     // directories under `~/mc` that are no area (`listStrays`), then the
     // sessions with no owner. Nothing removes one.
@@ -1621,19 +1113,6 @@ function dateOf(name) {
 }
 
 /**
- * The runner's areas that hold a checkout — under `~/mc/step/`, and the ones
- * from before it directly under `~/mc` — each with its project name, its mtime
- * and the repositories it holds. `repoNames` is what makes a directory an
- * area at all, and defaults to the two mc knows — mc's own folders under
- * `~/mc` hold neither.
- */
-export function readAreas(root, repoNames) {
-  const mtimeOf = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
-  const runner = areasWithCheckout(root, repoNames).map(({ name, path, repos }) => ({ name, repos, mtime_ms: mtimeOf(path) }));
-  return runner;
-}
-
-/**
  * The strays under `~/mc` (`listStrays`, work-area.js), with the two facts
  * the page says about each and nothing it would have to weigh: whether it
  * holds a checkout, and how many uncommitted changes those hold. Read-only.
@@ -1652,9 +1131,8 @@ export function readStrays(root, { git = runGit } = {}) {
 }
 
 /**
- * PROGRAMMES alone, from the sources `collectPage` reads it from — the plans,
- * the register over them, the goals, the open plan sessions and the tree's own
- * programmes (`listProgrammes`) — and through the same `programmesSection`, so
+ * PROGRAMMES alone, from the sources `collectPage` reads it from — the goals,
+ * the open plan sessions and the tree's own programmes (`listProgrammes`) — and through the same `programmesSection`, so
  * `mc programs list` and the page cannot give a programme two verdicts. No
  * fetch, no GitHub, no tmux: none of those decide whether a programme is
  * active, and the verb answers in the time it takes to read files.
@@ -1663,29 +1141,23 @@ export function readProgrammes({
   env = process.env,
   now = new Date(),
   repos = defaultRepos(env),
-  git = runGit,
   alive = pidAlive,
-  cache = { loadPlans },
   programmes = (repo) => listProgrammes(repo),
 } = {}) {
   const root = workRoot(env);
   const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
-  const { plans: filed } = cache.loadPlans({ root, repos: present, now, git });
-  const plans = overlayPlans(filed, { root, lock: realLock, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
   const sessions = sessionsSection({ foreground: readForeground(join(root, 'runner', 'foreground')), now, alive });
   // Which repository's tree each programme is a directory in: the one fact a
-  // programme with no project and no goal has about where it lives.
+  // programme with no goal has about where it lives.
   const homes = {};
   for (const repo of present) {
     for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
   }
   const section = programmesSection({
-    plans,
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
     programmes: Object.keys(homes),
-    now,
   });
   return { section, homes };
 }
@@ -1696,8 +1168,8 @@ export function readProgrammes({
  * Everything the page shows, in one object: one key per section, plus what the
  * caches did and whatever could not be read.
  *
- * Plans come from `~/mc/programs/` (page-cache.js `loadPlans`); open PRs
- * come from `prs.json` with their age said out loud. `fresh: true` (`--fresh`, `mc prs`) asks GitHub for all
+ * Goals come from `~/mc/programs/` (`programsGoals`); open PRs come from
+ * `prs.json` with their age said out loud. `fresh: true` (`--fresh`, `mc prs`) asks GitHub for all
  * of them; `fresh: 'stale'` — the page at a terminal — asks only when the
  * cache is older than `PRS_STALE_SECONDS`, and only the repositories the
  * runner's backoff (`github.json`) does not hold. `--offline` skips the fetch
@@ -1714,7 +1186,7 @@ export async function collectPage({
   exec = execAsync,
   alive = pidAlive,
   laneCount = readLaneCount,
-  cache = { loadPlans, loadPrs, savePrs, mergePrs },
+  cache = { loadPrs, savePrs, mergePrs },
   // `~/mc/runner/github.json`, for `fresh: 'stale'`: a repository the runner
   // is backing off from is not asked by the page either — every ask at a
   // locked keychain left a modal behind (2026-09-20).
@@ -1738,23 +1210,19 @@ export async function collectPage({
   let fetched = false;
   if (!offline) {
     const results = await Promise.all(present.map((repo) => exec('git', ['-C', repo.path, 'fetch', '-q', 'origin'])
-      .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); return r.ok; })));
+      .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed`); return r.ok; })));
     fetched = present.length === 0 || results.some(Boolean);
   }
 
   let prs = { prs: [], fetched: null, age_seconds: null };
-  // The repositories whose open pull requests are unknown rather than none:
-  // what nobody asked and what failed read the same to a list, and the queue
-  // reading below would otherwise call a project runnable on that silence.
-  const prsFailed = [];
   const askGithub = async (targets) => {
     const asked = [];
     const answered = [];
     await Promise.all(targets.map((repo) => exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
       try {
         if (r.ok) { asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr }))); answered.push(repo.name); }
-        else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
-      } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
+        else notes.push(`${repo.name}: gh pr list failed`);
+      } catch { notes.push(`${repo.name}: gh pr list unreadable`); }
     })));
     return { asked, answered };
   };
@@ -1776,47 +1244,28 @@ export async function collectPage({
     prs = (answered.length ? (cache.mergePrs || mergePrs)({ root, repos: answered, prs: asked, now }) : null) || cached;
     if (answered.length < present.length) {
       const missing = present.map((repo) => repo.name).filter((name) => !answered.includes(name));
-      if (!prs.fetched) prsFailed.push(...missing);
       notes.push(`PRs for ${missing.join(', ')} from cache — GitHub not answering or held back`);
     }
   } else if (cached) {
     prs = cached;
   } else {
     prs = cache.loadPrs({ root, now });
-    if (!prs.fetched) prsFailed.push(...present.map((repo) => repo.name));
     notes.push(prs.fetched
       ? `PRs from cache, ${ageWords(prs.age_seconds)} old — --fresh asks GitHub`
       : 'no PR cache yet — --fresh asks GitHub and fills it');
   }
 
-  // The file's word on each step, then the register's over it: the plan on
-  // main says what a step is, the register where it stands (register.js).
-  const { plans: filed, sources } = cache.loadPlans({ root, repos: present, now, git });
-  const plans = overlayPlans(filed, { root, lock: realLock, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
-  // The file's text, not its names: `assembleQueue` reads it the way the round
-  // does, and a second parser here is a second answer waiting to happen.
-  let queueText = '';
-  try { queueText = readFileSync(join(root, 'queue.md'), 'utf8'); } catch { notes.push('no queue.md'); }
-
   const live = liveAreas(run);
-  const areas = readAreas(root);
 
-  // PROGRAMMES reads from both of these — which programme has a planning
-  // session open, and which projects the runner has a step in flight on — so
-  // they are built before it rather than beside it.
-  // Read once, for NOW and for the queue reading both: they are the same two
-  // facts, and asking twice is how two answers on one page come to differ.
   const stop = existsSync(join(root, 'runner', 'STOP'));
   const queuedForMerge = queueEntries(readJson(mergesPath(root)));
 
-  // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
-  // one head per lane.
+  // RUNNER draws one row per lane, and the drain line counts them.
   const laneSetting = laneCount({ root: home, repos: present.length });
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
-  // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
   const currents = readCurrents(join(root, 'runner'));
   const runner = runnerSection({
     runner: runnerFile,
@@ -1828,7 +1277,6 @@ export async function collectPage({
     // total `mc run lanes` set, across all of them.
     repos: present.map((repo) => repo.name),
     lanes: laneSetting,
-    plans,
     github: readJson(join(root, 'runner', GITHUB_STATE)),
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
     memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
@@ -1853,49 +1301,29 @@ export async function collectPage({
     repos: repos.map((repo) => repo.name),
     pauses: mergePauses({ repos: present, rounds: roundsNow, env, root: home, now, alive }),
     merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
-    ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
-    currents, alive, entry: (project) => readEntry(root, project),
+    alive,
   });
   const programmes = programmesSection({
-    plans, areas, rows, openPrs: prs.prs,
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     programmeSessions: sessions.programme_sessions,
     sessionStrays: sessions.strays,
-    running: runner.sessions.map((session) => session.name).filter(Boolean),
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     strays: readStrays(root, { git }),
-    now,
   });
   const worktrees = Object.fromEntries(present.map((repo) => [
     repo.name, parseWorktrees(git(repo.path, ['worktree', 'list', '--porcelain'])),
   ]));
   const pulls = prsSection({
-    prs: prs.prs, plans, worktrees, root, merges: mergesNow, fetched: prs.fetched, ageSeconds: prs.age_seconds, now,
+    prs: prs.prs, worktrees, root, merges: mergesNow, fetched: prs.fetched, ageSeconds: prs.age_seconds, now,
   });
-  attachPrs({ programmes, runner, pulls });
+  attachPrs({ runner, pulls });
 
   return {
     runner,
     billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
     sessions,
-    next: nextSection({
-      queueText,
-      plans,
-      // How many lanes there are, so a block bolds no more heads than there
-      // are lanes to start them (`mc run lanes`).
-      lanes: laneSetting.lanes,
-      machine: (name) => machineState(name, {
-        plans,
-        prs: prs.prs,
-        prsFailed,
-        stop,
-        root,
-        // `git` answers with a string or null here; the reading wants ok and text.
-        git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
-      }),
-    }),
     merges: mergesNow,
     prs: pulls,
     checks: checksSection({
@@ -1940,7 +1368,7 @@ export async function collectPage({
       now,
     }),
     caches: {
-      fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length, asked: askedGithub },
+      fresh, offline, fetched, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length, asked: askedGithub },
     },
     notes,
   };

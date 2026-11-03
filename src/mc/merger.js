@@ -12,12 +12,11 @@
  * could be six processes polling one lock, each giving up after eight
  * minutes and asking to be run again. Now:
  *
- *   - `queueMerge` is what `mc merge` and the runner call: the step (if the
- *     pull request is one) is `landing` in the register, the job is in
+ *   - `queueMerge` is what `mc merge` and the runner call: the job is in
  *     `merges.json`, and a merger is running. It returns at once.
  *   - `serve` is the merger: take the oldest job, run the round, write the
- *     register, drop the job — or keep it as `red` with the reason, for the
- *     page — take the next; leave when nothing is left in line.
+ *     goal's answer, drop the job — or keep it as `red` with the reason, for
+ *     the page — take the next; leave when nothing is left in line.
  *   - `merger.json` is its pid. Taken with `O_EXCL`; a file naming a dead pid
  *     is a merger that was killed, and the next `mc merge` (or the runner's
  *     next read of the world) starts another, which lands the job the dead
@@ -33,25 +32,23 @@
  * that queue goes on after it. Another repository's lane does not wait for it.
  */
 import { spawn as realSpawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
-import { runAsync as runGitAsync } from './git.js';
 import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setStatus, unmetGoalWords } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldBy, heldLanding, inLine, markLanding, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
-  placeOf, queuedFor, stepsDone,
+  dequeue, enqueue, heldBy, inLine, markLanding, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
+  placeOf, queuedFor,
 } from './merge-queue.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
-import { bookBuilt, landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
-import { readEntry, realLock, updateStep } from './register.js';
+import { shouldWait } from './merge-step.js';
+import { realLock } from './runner-lock.js';
 import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
@@ -224,25 +221,20 @@ function sameCommit(a, b) {
 }
 
 /**
- * Hand a pull request to the merger. The register first — the step is
- * `landing` with its pull request — then the job, then a merger to take it.
+ * Hand a pull request to the merger: the job, then a merger to take it.
  * Returns `{ place, merger, already }`: `place` 0 is next, `already` when the
  * merger is landing this very pull request now.
  */
 export function queueMerge({
-  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null, goal = null, sha = null,
+  root, repo, repoPath, pr, branch = null, holder = null, goal = null, sha = null,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, start = startMerger,
 } = {}) {
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
-  if (step) {
-    updateStep({ root, project: step.project, index: step.index, patch: landingPatch({ pr, branch }), now: stamp, read, write, lock });
-  }
   const job = {
     repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
-    step: step ? { project: step.project, index: step.index } : null,
-    parent, goal, sha,
+    goal, sha,
   };
   const entries = lock(root, () => {
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
@@ -252,90 +244,6 @@ export function queueMerge({
   const already = queuedFor(entries, repo, pr)?.state === 'landing';
   const merger = start({ root, env });
   return { place: placeOf(entries, repo, pr), merger, already };
-}
-
-/**
- * Whether the job a stacked job is built on has landed: its step is `done`
- * in the register. A parent with no step to read is taken as landed — the
- * queue's own order has already kept the two apart.
- */
-export function parentLanded(root, { read = realRead } = {}) {
-  return (parent) => {
-    if (!parent?.project || !Number.isInteger(parent.index)) return true;
-    return readEntry(root, parent.project, { read })?.steps?.[parent.index]?.status === 'done';
-  };
-}
-
-/**
- * Whether every earlier step of a job's plan is `done` in the register
- * (`stepsDone`, merge-queue.js): a plan's steps land in order, with or
- * without a `parent`. A register that cannot be read is taken as done, as in
- * `parentLanded`.
- */
-export function stepsBeforeDone(root, { read = realRead } = {}) {
-  return stepsDone((project) => readEntry(root, project, { read })?.steps ?? null);
-}
-
-// Without holding the event loop: a restack of a memoro branch took 29 s on
-// 2026-10-10, and the other lane stood still for all of it.
-const realGit = async (cwd, args) => {
-  const r = await runGitAsync(cwd, args);
-  return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
-};
-
-/**
- * A stacked branch moved onto main once the job below it has landed
- * (ruling 30, A). The one below was squash-merged, so its commits are in
- * this branch and not on main under the same names. Only this step's own
- * commits are replayed onto origin/main: the non-merge commits on the tip
- * that are neither on the sha this branch started on nor on main (ruling 38)
- * — a `rebase --onto` would also replay what a merge of main, or a parent
- * moved after the stack, brought in. A pick that main already has is empty
- * and skipped. A pick that conflicts falls back to merging origin/main into
- * the tip, as `freshenBranchForLanding` does; only a conflicting merge is a
- * stop. The branch is pushed back with a lease on the tip it had. A branch
- * that no longer carries that sha was moved already. Returns
- * `{ ok, moved, reason }`.
- */
-export async function restack(job, { git = realGit, say = () => {} } = {}) {
-  const repoPath = job.repo_path;
-  const branch = job.branch;
-  if (!branch || !job.parent?.sha) return { ok: true, moved: false };
-  if (!(await git(repoPath, ['fetch', '-q', 'origin'])).ok) return { ok: false, reason: 'git fetch failed before moving the branch onto main' };
-  const tip = await git(repoPath, ['rev-parse', `origin/${branch}`]);
-  if (!tip.ok) return { ok: false, reason: `origin/${branch} is not there to move onto main` };
-  if (!(await git(repoPath, ['merge-base', '--is-ancestor', job.parent.sha, tip.stdout])).ok) return { ok: true, moved: false };
-  const dir = mkdtempSync(join(tmpdir(), 'mc-restack-'));
-  try {
-    if (!(await git(repoPath, ['worktree', 'add', '-q', '--detach', dir, tip.stdout])).ok) return { ok: false, reason: 'git worktree add failed for the move onto main' };
-    const conflictedIn = async () => (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
-    const own = await git(dir, ['rev-list', '--reverse', '--no-merges', tip.stdout, `^${job.parent.sha}`, '^origin/main']);
-    if (!own.ok) return { ok: false, reason: `git rev-list failed listing ${branch}'s own commits` };
-    let replayed = (await git(dir, ['checkout', '-q', '--detach', 'origin/main'])).ok;
-    for (const sha of replayed ? own.stdout.split('\n').filter(Boolean) : []) {
-      if ((await git(dir, ['cherry-pick', sha])).ok) continue;
-      // An empty pick — main already has it as a squash — is no conflict.
-      if (!(await conflictedIn()).length && (await git(dir, ['cherry-pick', '--skip'])).ok) continue;
-      await git(dir, ['cherry-pick', '--abort']);
-      replayed = false;
-      break;
-    }
-    if (!replayed) {
-      if (!(await git(dir, ['checkout', '-q', '--detach', tip.stdout])).ok) return { ok: false, reason: `git checkout of ${branch}'s tip failed for the move onto main` };
-      if (!(await git(dir, ['merge', '--no-edit', 'origin/main'])).ok) {
-        const conflicted = await conflictedIn();
-        await git(dir, ['merge', '--abort']);
-        return { ok: false, reason: `moving #${job.pr} onto main after #${job.parent.pr} landed conflicts${conflicted.length ? ` in ${conflicted.join(' ')}` : ''} — merge origin/main into ${branch} and keep both intents` };
-      }
-    }
-    const pushed = await git(dir, ['push', '-q', `--force-with-lease=${branch}:${tip.stdout}`, 'origin', `HEAD:${branch}`]);
-    if (!pushed.ok) return { ok: false, reason: `the moved ${branch} could not be pushed (${pushed.stderr.split('\n').at(-1) || 'push refused'})` };
-    say(`${job.repo} #${job.pr}: moved onto main past #${job.parent.pr}${replayed ? '' : ' (merged main in)'}`);
-    return { ok: true, moved: true };
-  } finally {
-    await git(repoPath, ['worktree', 'remove', '--force', dir]);
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 // The call merger-run.js makes, for a caller that hands no `gh`.
@@ -426,8 +334,8 @@ const closedOnGitHub = (job) => ({
 
 /**
  * Red entries whose pull request has left GitHub's open list since: a merged
- * one is dequeued and its step `done` (the `tell` path, landed), a closed one
- * is dequeued with the register left as it is (2026-10-10: #13370 and #13372
+ * one is dequeued and answered landed (the `tell` path), a closed one
+ * is dequeued (2026-10-10: #13370 and #13372
  * sat red after being merged by hand). GitHub is asked outside the lock; an
  * entry `mc merge` queued again meanwhile is not red any more and is left.
  * Returns the number of entries dequeued.
@@ -496,12 +404,11 @@ export function answersFor(jobs, report) {
 
 /**
  * A batch of jobs for one repository (one job is a batch of one), landed or
- * answered: move the stacked ones onto main, wait while somebody else
- * measures, run one round over all of them, record it, and write each job's
- * own answer. Each answer is written to the register and told to `onAnswer`
- * when it is given, so the queue and the page know an answer given before
- * the round (a restack refused, merged or closed on GitHub) for the whole
- * round. Returns the answers, `[{ job, landed, report }]`.
+ * answered: wait while somebody else measures, run one round over all of
+ * them, record it, and write each job's own answer. Each answer is written
+ * to its goal and told to `onAnswer` when it is given, so the queue and the
+ * page know an answer given before the round (merged or closed on GitHub)
+ * for the whole round. Returns the answers, `[{ job, landed, report }]`.
  */
 export async function landJob(batch, {
   root, mergeRound = runMergeRound, sleep, say, gh = null,
@@ -509,12 +416,11 @@ export async function landJob(batch, {
   readRunningDeploy = () => runningDeploy({ ...process.env, MC_WORK_ROOT: root }),
   now = () => new Date(), read = realRead, write, lock = realLock,
   recordStart = recordRoundStart, record = recordRound, appendRun = null,
-  moveOntoMain = restack,
   // The page's PR cache, told at once (page-cache.js `dropPr`).
   dropFromPage = dropPr,
   // The repository's lane: the round waited for is the one in this lane.
   lane = null,
-  // Told each answer as it is given, after the register is written: `serve`
+  // Told each answer as it is given, after its goal is written: `serve`
   // writes the queue from it.
   onAnswer = null,
   // How often a round in flight asks GitHub whether its pull request is gone (`watchSubject`).
@@ -536,16 +442,14 @@ export async function landJob(batch, {
     const moved = !landed && Boolean(job.goal) && (report?.stopped_at === 'pushed' || report?.stopped_at === 'moved');
     // A round the watch stopped for a new push: back in line at its place.
     const back = !landed && !moved && report?.stopped_at === 'pushed';
-    // A red goes where it goes without a mend: a step's to its next session
-    // (`redPatch`, ruling 30), a goal's to plan (`tellGoal` blocks it).
+    // A red goes where it goes without a mend: a goal's to plan (`tellGoal` blocks it).
     const requeued = !landed && !back && !moved && mayRequeue(job, report);
     const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}) };
     answers.push({ job, landed, report, ...flags });
     await tell(job, landed, report, {
       root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, setGoal, goalsOf, noteGoal,
     });
-    // Outside any lock: `tell` has let go of the register's, and the queue's
-    // is the same lock, which a second take by this process waits 5 s for.
+    // Outside any lock: the queue's lock, taken twice by this process, waits 5 s.
     if (onAnswer) {
       try {
         await onAnswer({ job, landed, report, ...flags });
@@ -554,17 +458,7 @@ export async function landJob(batch, {
       }
     }
   };
-  const jobs = [];
-  for (const job of [].concat(batch)) {
-    // Built on a job that has landed since: onto main first, or the round
-    // measures the one below a second time and the squash conflicts with it.
-    // One that cannot be moved is answered now and leaves the batch.
-    if (job.parent) {
-      const moved = await moveOntoMain(job, { say });
-      if (!moved.ok) { await answer(job, false, { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason }); continue; }
-    }
-    jobs.push(job);
-  }
+  const jobs = [].concat(batch);
   // Asked first: a pull request somebody merged or closed on GitHub is
   // answered by itself and leaves the batch, rather than stopping the round
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
@@ -803,7 +697,7 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
   }
 }
 
-/** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
+/** One job's answer, said and written: the page's cache, the goal, the runs.tsv row. */
 async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal is reviewed again`
@@ -822,40 +716,6 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // Its last red is nobody's to read any more.
   if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
-  // A requeued or pushed step stays `landing`: the runner leaves it alone, and the next round answers it.
-  if (job.step && !requeued && !back) {
-    const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
-    const io = { read, lock, ...(write ? { write } : {}) };
-    try {
-      const standing = readEntry(root, job.step.project, { read })?.steps?.[job.step.index];
-      if (standing?.status === 'done' || standing?.status === 'blocked') {
-        say(`${label}: ${job.step.project} step ${job.step.index + 1} is ${standing.status} — the register is left as it is`);
-      } else if (landed) {
-        let body = null;
-        if (gh) {
-          const seen = await gh(['pr', 'view', String(job.pr), '--json', 'body'], { cwd: job.repo_path });
-          try { body = JSON.parse(seen?.stdout || '{}')?.body || null; } catch { body = null; }
-        }
-        updateStep({ root, project: job.step.project, index: job.step.index, patch: landedPatch({ pr: job.pr, report, now: stamp, body }), now: stamp, ...io });
-        // A branch flow's review lands the steps built under it too.
-        const built = bookBuilt({ root, project: job.step.project, pr: job.pr, report, now: stamp, io, updateStep, readEntry });
-        say(`${label}: ${job.step.project} step ${job.step.index + 1} is done`);
-        if (built.length) say(`${label}: ${job.step.project} steps ${built.map((index) => index + 1).join(', ')} were built on its branch — done with it`);
-      } else {
-        const patch = redPatch({ step: standing, report });
-        // Once the one below has landed, the next session merges main into
-        // this branch before it starts, and nothing is to be moved again.
-        const below = job.parent && parentLanded(root, { read })(job.parent) ? { stacked_on: null } : {};
-        updateStep({ root, project: job.step.project, index: job.step.index, patch: { ...patch, pr: job.pr, ...below }, now: stamp, ...io });
-        say(patch.status === 'ready'
-          ? `${label}: ${job.step.project} step ${job.step.index + 1} is ready again (attempt ${patch.attempts}) — the next session fixes it on the same pull request`
-          : `${label}: ${job.step.project} step ${job.step.index + 1} failed — ${patch.reason}`);
-      }
-    } catch (error) {
-      say(`${label}: the register could not be written (${error?.message || error}) — the round stands as said above`);
-    }
-  }
-
   const goal = back ? null : goalOfJob(job, goalsOf);
   if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
 
@@ -863,14 +723,14 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     try {
       appendRun({
         ts: now().toISOString().replace(/\.\d{3}Z$/u, 'Z'),
-        name: job.step?.project || (job.goal ? `goal:${job.goal.programme}/${job.goal.goal}` : job.repo),
+        name: (job.goal ? `goal:${job.goal.programme}/${job.goal.goal}` : job.repo),
         kind: 'merge',
         exit: landed ? 0 : 1,
         seconds,
         pr: job.pr,
         note: landed ? 'merged' : back ? 'pushed' : moved ? 'moved' : `red,${report?.stopped_at || 'unknown'}`,
       });
-    } catch { /* the row is a courtesy; the register and the round log carry the answer */ }
+    } catch { /* the row is a courtesy; the goal and the round log carry the answer */ }
   }
 }
 
@@ -895,8 +755,6 @@ export async function serve({
   version = null,
   take = () => takeMerger({ root, commit: version?.commit || null }), release = () => releaseMerger({ root }),
   land = (batch, lane, extra = {}) => landJob(batch, { root, say, now, read, lock, lane, ...extra }),
-  landed = parentLanded(root, { read }),
-  ordered = stepsBeforeDone(root, { read }),
   laneOf = (job) => gateLaneOf(job.repo),
   // The most jobs one round lands (merge-queue.js): one, unless a test asks.
   batchMax = MERGE_BATCH_MAX,
@@ -940,7 +798,7 @@ export async function serve({
   await sweepReds();
   // Entries another live merger holds are its own (`heldBy`): not taken here.
   const held = heldBy({ pid, alive });
-  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime(), max: batchMax, held });
+  const batchIn = (entries, lane) => nextBatch(entries, { lane, laneOf, now: now().getTime(), max: batchMax, held });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();
@@ -1023,19 +881,12 @@ export async function serve({
       let pending = [];
       const batch = lock(root, () => {
         let entries = parseQueue(read(mergesPath(root)));
-        // A job a dead merger was landing whose earlier step is no longer
-        // `done` goes back in line rather than being landed out of order.
-        const back = heldLanding(entries, { ordered, held }).filter((job) => laneOf(job) === lane);
-        for (const job of back) {
-          entries = markQueued(entries, job);
-          say(`${job.repo} #${job.pr}: back in line — ${job.step.project} step ${job.step.index} is not done`);
-        }
         const next = batchIn(entries, lane);
         if (next.length) {
           const started = now().toISOString();
           entries = next.reduce((all, job) => markLanding(all, job, started, pid), entries);
         }
-        if (next.length || back.length) write(mergesPath(root), entries);
+        if (next.length) write(mergesPath(root), entries);
         pending = entries;
         return next;
       });
@@ -1069,7 +920,7 @@ export async function serve({
       }
       const [job] = batch;
       say(batch.length === 1
-        ? `${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`
+        ? `${job.repo} #${job.pr}: landing`
         : `${job.repo}: landing a batch of ${batch.length} — ${batch.map((item) => `#${item.pr}`).join(' ')}`);
       let answers = null;
       inFlight += batch.length;

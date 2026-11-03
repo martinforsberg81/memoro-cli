@@ -13,7 +13,6 @@ THE PAGE
 PLAN AND FOLLOW
   mc brief                        Person: open or resume the brief session
   mc plan [<programme>]            Person: open or resume a plan session
-  mc status <name>                 One project, whole
   mc goal list [<programme>]       Goals and their last session's next action
   mc programs list [--json]        Every programme, active or dormant
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
@@ -54,16 +53,13 @@ WHO USES THE VERBS
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
-                                    project numbered, by programme. At a
+                                    goal numbered, by programme. At a
                                     terminal it ends in a way in — a number
-                                    opens that project's runner area. No
-                                    model; reads only
+                                    shows that goal. No model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
-${commandReference('status')}
-
 ${commandReference('goal')}
 
 ${commandReference('programs')}

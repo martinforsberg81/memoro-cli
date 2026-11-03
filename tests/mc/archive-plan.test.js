@@ -1,13 +1,11 @@
 /**
- * The rows of `project_log.md` and the cells derived from a plan, with no
- * repository behind them, and what a programme archive keeps where code reads it.
+ * The rows of `project_log.md`, with no repository behind them, and what a programme archive keeps where code reads it.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  NO_DOC, UNDOCUMENTED_HEADER, appendRow, duplicateRow, formatRow, isUndocumented, keptFiles, keptParagraph,
-  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, relinkRemoved, remoteSlug, rowFor, undocumentedRow,
+  appendRow, duplicateRow, formatRow, keptFiles, keptParagraph, logRows, namedFiles, relinkRemoved, remoteSlug,
 } from '../../src/mc/archive-plan.js';
 
 const LOG = `# Project log
@@ -26,16 +24,15 @@ test('the header and the |---| rule are not rows; a row starts with a date', () 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].project, 'mc-ui');
   assert.equal(rows[0].outcome, 'delivered');
-  assert.equal(rowFor(LOG, 'mc-ui').programme, 'mc');
-  assert.equal(rowFor(LOG, 'project'), null, 'the header does not answer for a project called "project"');
-  assert.equal(rowFor(LOG, 'mc-status'), null);
+  assert.equal(rows[0].programme, 'mc');
+  assert.equal(logRows(LOG).some((row) => row.project === 'project'), false, 'the header is no row for a project called "project"');
 });
 
 test('a row is appended after the last row of the table, not at the end of the file', () => {
   const text = `${LOG}\n## Notes\n\nProse below the table.\n`;
   const out = appendRow(text, {
     date: '2026-08-29', programme: 'mc', project: 'mc-status', outcome: 'delivered',
-    summary: 'Did the thing.', doc: NO_DOC, pointer: '#1',
+    summary: 'Did the thing.', doc: 'none', pointer: '#1',
   });
   const lines = out.split('\n');
   const at = lines.findIndex((line) => line.includes('| mc-status |'));
@@ -45,11 +42,11 @@ test('a row is appended after the last row of the table, not at the end of the f
 });
 
 test('a row already in the log is not appended a second time', () => {
-  const again = { date: '2026-10-10', programme: 'mc', project: 'mc-ui', outcome: 'delivered', summary: 'other', doc: NO_DOC, pointer: '#2' };
+  const again = { date: '2026-10-10', programme: 'mc', project: 'mc-ui', outcome: 'delivered', summary: 'other', doc: 'none', pointer: '#2' };
   assert.equal(appendRow(LOG, again), LOG, 'same programme and project: the text comes back unchanged');
-  const programmeRow = appendRow(LOG, { date: '2026-10-10', programme: 'staff', project: null, outcome: 'delivered', summary: 's', doc: NO_DOC, pointer: '#3' });
+  const programmeRow = appendRow(LOG, { date: '2026-10-10', programme: 'staff', project: null, outcome: 'delivered', summary: 's', doc: 'none', pointer: '#3' });
   assert.equal(logRows(programmeRow).length, 2);
-  assert.equal(appendRow(programmeRow, { date: '2026-10-11', programme: 'staff', project: '-', outcome: 'delivered', summary: 's', doc: NO_DOC, pointer: '#4' }), programmeRow,
+  assert.equal(appendRow(programmeRow, { date: '2026-10-11', programme: 'staff', project: '-', outcome: 'delivered', summary: 's', doc: 'none', pointer: '#4' }), programmeRow,
     'a programme row (project `-`) is not written twice either');
   assert.equal(logRows(appendRow(LOG, { ...again, programme: 'other' })).length, 2, 'another programme\'s project of the same name is its own row');
 });
@@ -64,7 +61,7 @@ test('duplicateRow names the first row that occurs twice by date, programme and 
 });
 
 test('a log with no table at all still gets its row', () => {
-  const out = appendRow('# Project log\n', { date: '2026-08-29', programme: 'mc', project: 'x', outcome: 'delivered', summary: 's', doc: NO_DOC, pointer: '#1' });
+  const out = appendRow('# Project log\n', { date: '2026-08-29', programme: 'mc', project: 'x', outcome: 'delivered', summary: 's', doc: 'none', pointer: '#1' });
   assert.equal(logRows(out).length, 1);
   assert.match(out, /# Project log\n\n\| 2026-08-29 \| mc \| x \|/u);
 });
@@ -75,65 +72,11 @@ test('a cell is one line and its pipes are escaped, so the table survives a plan
   assert.equal(logRows(`|---|\n${row}`).length, 1);
 });
 
-test('the summary is the plan\'s next: on one line, the doc the docs/technical path it names', () => {
-  const plan = [
-    '---',
-    'status: done',
-    'next: "Step 3 — close-out: the note in',
-    '  `docs/technical/mc-tidy.md` and the row"',
-    'budget: 150k',
-    '---',
-    '# mc tidy',
-    '',
-    'See `docs/technical/mc-run.md` for the runner.',
-  ].join('\n');
-  assert.equal(planSummary(plan), 'Step 3 — close-out: the note in `docs/technical/mc-tidy.md` and the row');
-  assert.equal(planDoc(plan), '[docs/technical/mc-tidy.md](../technical/mc-tidy.md)');
-  assert.equal(planSummary('---\nstatus: done\n---\n'), '-');
-  assert.equal(planDoc('---\nstatus: done\n---\n# X\n'), NO_DOC);
-  assert.equal(isUndocumented({ doc: NO_DOC }), true);
-  assert.equal(isUndocumented({ doc: '[docs/technical/x.md](../technical/x.md)' }), false);
-});
-
-test('the doc is the first docs/technical path the tree has, not the first one the plan names', () => {
-  const named = 'Defers to docs/technical/missing.md, and wrote docs/technical/there.md.';
-  assert.equal(
-    planDoc(named, (p) => p === 'docs/technical/there.md'),
-    '[docs/technical/there.md](../technical/there.md)',
-  );
-  assert.equal(planDoc('Only docs/technical/missing.md is named.', () => false), NO_DOC);
-});
-
-test('the pointer is the PRs the runner merged for the project, linked when the slug is known', () => {
-  const tsv = [
-    'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
-    '2026-08-28T10:00:00Z\tmc-ui\tstep\t0\t900\t430\t9\t1\t2\t3\t4\ts\tsuccess,merged',
-    '2026-08-28T12:00:00Z\tmc-ui\tstep\t0\t900\t431\t9\t1\t2\t3\t4\ts\tsuccess,open',
-    '2026-08-28T13:00:00Z\tmc-ui\tstep\t0\t900\t435\t9\t1\t2\t3\t4\ts\tsuccess,merged',
-    '2026-08-28T14:00:00Z\tother\tstep\t0\t900\t999\t9\t1\t2\t3\t4\ts\tsuccess,merged',
-    '2026-08-28T15:00:00Z\tmc-ui\tstep\t1\t9\t-\t1\t-\t-\t-\t-\t-\tquota',
-  ].join('\n');
-  assert.deepEqual(mergedPrs(tsv, 'mc-ui'), ['430', '435']);
-  assert.equal(pointerCell(mergedPrs(tsv, 'mc-ui'), { slug: 'o/r' }),
-    '[#430](https://github.com/o/r/pull/430), [#435](https://github.com/o/r/pull/435)');
-  assert.equal(pointerCell(['430'], {}), '#430');
-  assert.equal(pointerCell([], { fallback: 'abc1234' }), 'abc1234', 'no merged run: the last commit that touched it');
-  assert.equal(pointerCell([], {}), NO_DOC);
-});
-
 test('the repository slug comes from the remote, in either URL shape', () => {
   assert.equal(remoteSlug('git@github.com:martinforsberg81/memoro-cli.git'), 'martinforsberg81/memoro-cli');
   assert.equal(remoteSlug('https://github.com/martinforsberg81/memoro.git\n'), 'martinforsberg81/memoro');
   assert.equal(remoteSlug('https://github.com/martinforsberg81/memoro'), 'martinforsberg81/memoro');
   assert.equal(remoteSlug(''), null);
-});
-
-test('the intake row names the project and where its record is', () => {
-  assert.match(UNDOCUMENTED_HEADER, /\| date \| repo \| programme \| project \| pointer \|/u);
-  assert.equal(
-    undocumentedRow({ date: '2026-08-29', repo: 'memoro', programme: 'prog', project: 'p', pointer: '#7' }),
-    '| 2026-08-29 | memoro | prog | p | #7 |',
-  );
 });
 
 /** A worktree as `git grep` and `git ls-files` answer it, with the files `read` returns. */

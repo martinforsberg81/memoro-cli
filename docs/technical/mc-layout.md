@@ -1,4 +1,4 @@
-# mc layout — where programmes, step areas and registers are, and the move between them
+# mc layout — where programmes, step areas and deps areas are
 
 Ruling 51 moves a programme's directory, the runner's step and deps areas, and
 each project's register beside its plan. mc knows two layouts at once:
@@ -88,29 +88,12 @@ it reads the file, a `read` function, so a test can run on a temporary root.
 
 ## The register
 
-`src/mc/register.js`. A project's state is one JSON file, the same shape in both
-layouts:
-
-- **Layout 1:** `~/mc/runner/projects/<project>.json`.
-- **Layout 2:** `~/mc/programs/<programme>/<project>/STATE.json`, found by
-  `findProjectDir` (`src/mc/plan-write.js`). `registerPath` returns `null` when
-  there is no such project.
-
-`registerDir()` is `null` in layout 2 — nothing lists or creates a register
-directory there. A write to a project with no path is refused with a message
-naming `~/mc/programs`; a read of one is no entry. `listEntries` reads every
-`STATE.json` under `programs/`, archived projects included.
-
-**The lock** guards every read-patch-write of the register and of the other
-runner files that share its discipline (`merges.json`, deploys, language runs,
-iOS builds). It stays under `runner/` in both layouts:
-`runner/projects/.lock` in layout 1 (so old and new code still exclude each
-other) and `runner/register.lock` in layout 2 (`realLock`). `overlayPlans` takes
-the lock for its seed and its reconcile and re-reads the entry inside it, so a
-concurrent `updateStep` is not overwritten. `mc run` passes the real lock to its
-writes; before this change its writes took none.
-
-Every register write appends a line to `runner/log/register.log`, unchanged.
+Gone with projects on 2026-11-03 (goal `mc/projects-to-goals`). A project's
+state was one JSON file beside its plan, read and written by `register.js`; a
+project's remaining steps are goals now (`mc goal from-project`), and a goal's
+state is its own `GOAL.json` and `LOG.md`. The lock that guarded the register
+guards the runner's other files still: `runner/register.lock`
+(`src/mc/runner-lock.js`).
 
 ## A programme's directory
 
@@ -162,78 +145,10 @@ Codex sessions get no mc hook (`src/adapters/codex.js`), so they are not covered
 
 ## mc layout migrate
 
-`mc layout` (`src/mc/commands/layout.js`) prints the layout and its roots.
-`mc layout migrate` moves a layout-1 machine to layout 2
-(`src/mc/layout-migrate.js`). It is a person's command, run from a terminal
-standing outside every area it moves, with the runner stopped. Nothing in mc
-calls it.
-
-- `mc layout migrate` (no flag) is the dry run. It prints the moves under their
-  headings, `PLANNING SESSIONS`, `STEP AREAS`, `REGISTERS`, `TRANSCRIPTS`,
-  `HOOKS`, `LAYOUT`, then any `REFUSED` lines, and a count. It writes nothing.
-  It exits 0 with no refusal, 1 otherwise. `--json` prints
-  `{ layout, moves, refusals }`. In layout 2 it says `layout 2 — nothing to move`.
-- `--apply` makes the plan again from the facts — it never trusts an earlier dry
-  run. Any refusal prints the list, exits 1 and touches nothing.
-
-**What it refuses.** Each refusal names its path or pid:
-
-- Something that must not run while areas move: a runner or its predecessor
-  alive; a build session with a live pid; the merger alive; a `merges.json` entry
-  `landing`; a foreground planning session with a live pid in an
-  old area; any process standing in an old area; a dev server serving one.
-- The plan itself: a destination that exists, or two moves to one destination;
-  a `plan/<p>` whose name is not a valid programme name; a register whose JSON
-  does not parse.
-
-**The order of the moves.** Each move is `{ kind, from, to, how }`:
-
-1. Planning areas: every entry of `plan/<p>/` into `programs/<p>/`. A git
-   worktree moves with `git worktree move`, so git rewrites both its pointers;
-   anything else (`.claude/`, files, untracked directories) is renamed whole. Then
-   `plan/<p>/` and `plan/` are removed, each only when empty.
-2. Step areas: `step/<x>/<entry>` into `runner/step/<x>/` (or `runner/deps/<x>/`
-   for a `deps-` area); a legacy `~/mc/<x>/` into `runner/step/<x>/`. Emptied
-   directories go, `step/` last.
-3. Registers: `runner/projects/<x>.json` to its project's `STATE.json`. A register
-   with no project directory goes to `runner/log/closed/registers/`.
-4. Transcripts (below).
-5. Hooks: `mc hook install`, for the new matcher.
-6. Layout: `runner/layout.json`, always last.
-
-The layout file is written last. Until it is, every reader reads layout 1, and a
-run that stops half way leaves moves that the next run finishes.
-
-**The transcript rewrite, and why.** `mc plan` finds a programme's conversation
-by the `cwd` recorded inside its transcript, not by the name of the directory
-(`listConversations` and `within` in `src/mc/conversations.js`). Moving the
-worktrees alone would leave the conversation under `plan/<p>`, where `mc plan`
-no longer looks, and a resumed session would start fresh. So for each Claude
-project directory whose head `cwd` is in an old area, `--apply` rewrites every
-transcript in it (sub-agents' under `<id>/` too):
-
-- every line's `cwd`, `payload.cwd` and `relocatedCwd` equal to the old area
-  path, or below it, has that prefix replaced; `relocatedCwd` matters because
-  Claude Code prefers the last `relocated` entry over the head's `cwd`;
-- a line is parsed and serialised again only when it changed; every other line
-  is written back byte for byte;
-- the file is written to `<file>.migrating` and renamed over the original, keeping
-  its times, since the newest conversation is the one resumed;
-- the directory is renamed to `encodePath(<new cwd>)`. When that already exists
-  (another old directory mapped to the same name) its entries are moved in, and
-  a file both hold is a failure. `memory/` moves unchanged.
-
-**Its log.** Each move, as it is attempted, is one JSON line in
-`~/mc/runner/log/layout-migrate.log`: `{ at, how, from, to, ok, error }`. Each is
-also one `moved <from> → <to>` line on stdout.
-
-**A failure, and a second run.** At the first move that fails, `--apply` stops,
-prints what failed and that a second run continues from there, and exits 1. It
-never forces, never overwrites, never removes a file it has not moved, and never
-unlocks a locked worktree. A second `--apply` re-reads the facts, so it finds
-only what is left; after success it says `layout 2 — nothing to move`. It ends by
-naming the next things a person does: `mc layout` to see the roots, `mc run
-start`.
+The one-time move from layout 1 to layout 2. It ran on Martin's machine on
+2026-10-20 and went with projects on 2026-11-03: most of what it moved was
+project registers. `mc layout` (`src/mc/commands/layout.js`) prints the layout
+and its roots; `mc layout migrate` says it is gone and exits 2.
 
 ## The repositories
 

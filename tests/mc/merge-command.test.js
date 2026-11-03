@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
-import { remainderOf } from '../../src/mc/merge-step.js';
 import { roundLogPath } from '../../src/mc/repo-round-log.js';
 
 let root = null;
@@ -84,7 +83,7 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.equal(job.pr, 671);
     assert.equal(job.branch, 'some-branch');
     assert.equal(job.state, 'queued');
-    assert.equal(job.step, null, 'a branch that is nobody\'s step');
+    assert.equal('step' in job, false, 'a job carries no step');
     assert.equal(job.since, '2026-09-06T18:00:00Z');
     assert.ok(job.holder?.name, 'who asked is kept for the round\'s lease');
     assert.equal(d.starts.length, 1);
@@ -147,15 +146,6 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.equal(await gate({ repo: 'memoro-cli', pr: 671, json: true }, d.io), 0);
     const said = JSON.parse(d.out.out);
     assert.deepEqual(said, { queued: true, repo: 'memoro-cli', pr: 671, place: 0, merger_pid: 777 });
-  });
-});
-
-describe('remainderOf', () => {
-  it('remainderOf reads a `## Remainder` and nothing else', () => {
-    assert.equal(remainderOf('## Remainder\n\n`smart-search.js` — 16 sites.\n\n## Verified\n\nnpm test'), '`smart-search.js` — 16 sites.');
-    assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
-    assert.equal(remainderOf('no such heading'), null);
-    assert.equal(remainderOf('## Remainder\nOne thing.\n\n<!-- mc:described abc1234 -->'), 'One thing.');
   });
 });
 

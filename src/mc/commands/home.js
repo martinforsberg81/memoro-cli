@@ -12,17 +12,16 @@
  * `page-render.js`. What it does after printing depends only on where it is
  * printing to:
  *
- *   - a terminal      the page, then a menu — a project's number or name
- *                     opens a session in that project's runner area, which
- *                     belongs to its programme (`project-open.js`), and the
- *                     numbers are the ones in PROGRAMMES above the prompt. The page stays true while
+ *   - a terminal      the page, then a menu — a goal's number shows the
+ *                     goal (`mc goal show`), and the numbers are the ones in
+ *                     PROGRAMMES above the prompt. The page stays true while
  *                     the menu waits: every 30 seconds the rows that changed
  *                     are rewritten where they stand
  *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever, and
  *                     nothing loops — the fork is `interactive()` below and
  *                     there is no second opinion about it
  *
- * Every print fetches `origin/main` first (ruling 20); the plans are read
+ * Every print fetches `origin/main` first (ruling 20); the goals are read
  * from `~/mc/programs/`. `prs.json` comes from cache with its age; at a terminal the page
  * refills it itself when it is five minutes old (`freshFor`), `f` at the menu
  * and `--fresh` ask GitHub now, and a pipe reads the cache as it is.
@@ -43,13 +42,11 @@ import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { childEnv, mcCheckout } from '../run-control.js';
-import { openProject } from '../project-open.js';
 import { RETIRED_VERBS, retiredLines } from '../../mc-verbs.js';
 
 const USAGE = [
   'usage — mc                       the page, and at a terminal a way in',
   '        mc --json [--fresh|--offline]   the same page, as one object',
-  '        mc status <name>         one project',
 ].join('\n');
 
 export function usage() {
@@ -74,11 +71,11 @@ export async function run(argv, deps = {}) {
 
   const collect = deps.collect || collectPage;
   const version = await getPackageVersion().catch(() => '');
-  // Whether the page draws every project or collapses each programme's blocked
-  // ones. It lives here rather than in the menu because the live loop refreshes
+  // Whether the page draws every programme or folds the dormant ones into one
+  // line. It lives here rather than in the menu because the live loop refreshes
   // through this same closure (`page-live.js`): a frame that did not know the
-  // mode would collapse the rows again, thirty seconds after somebody asked to
-  // see them.
+  // mode would fold them again, thirty seconds after somebody asked to see
+  // them.
   let expand = false;
   // At a terminal the page keeps its own pull requests current: every draw,
   // the live loop's included, asks GitHub when the cache is older than five
@@ -138,7 +135,7 @@ export async function run(argv, deps = {}) {
   if (!live) return 0;
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
-    stdout, stderr, page, reader, open: deps.openProject, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
+    stdout, stderr, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -225,7 +222,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
 }
 
 /**
- * Where every project stands, as one string: the facts PROGRAMMES draws that a
+ * Where every goal stands, as one string: the facts PROGRAMMES draws that a
  * person acts on, and none of the clocks beside them.
  *
  * The live loop compares it between frames. PROGRAMMES is the top of a page
@@ -235,12 +232,9 @@ export function readerFor({ stdout, lines, page, key = null }) {
  * changes every minute and is deliberately not in it.
  */
 export function pageKey(data) {
-  const projects = (data?.programmes?.programmes || []).flatMap((group) => group.projects || []);
-  return projects
-    // Every open pull request, not only the first: each is a row under its
-    // project now, so one opening or closing moves the rows below it.
-    .map((p) => [p.name, p.status, p.steps?.done ?? '', p.steps?.total ?? '', p.running ? 1 : 0,
-      (p.prs || []).map((pr) => pr.number).join(',') || (p.pr ?? '')].join(':'))
+  const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
+  return goals
+    .map((g) => [g.programme, g.name, g.status, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
     .join('|');
 }
 
@@ -259,8 +253,8 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  open it   ·   a  every project   ·   b  brief',
-  '  p  plan a programme   ·   s <name>  that project   ·   f  fresh from GitHub   ·   q  quit',
+  '  <n>  show that goal   ·   a  every programme   ·   b  brief',
+  '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -294,13 +288,10 @@ async function showGoalVerb(argv, io) {
  * The way on from the page.
  *
  * The numbers are the page's — the page above the prompt is the listing, so the
- * menu has none of its own. A project's number opens the project, and a goal's
- * number shows it (`mc goal show`). A number opens its project whether or not a
- * row was drawn for it: a programme's blocked projects are one
- * collapsed row, and `a` is what draws them all again. Everything a number cannot say is a letter.
- * A project's name opens it as its number does. Anything else is said out
- * loud rather than swallowed, and the page is drawn again with whatever
- * changed.
+ * menu has none of its own. A goal's number shows it (`mc goal show`). `a`
+ * draws the dormant programmes too. Everything a number cannot say is a
+ * letter. Anything else is said out loud rather than swallowed, and the page
+ * is drawn again with whatever changed.
  *
  * The reading is a `reader` rather than a call, because at a terminal it is
  * two things at once: the line being typed, and the page above it refreshing
@@ -309,7 +300,7 @@ async function showGoalVerb(argv, io) {
  * back — and the reader owns everything from the prompt onwards.
  */
 export async function menu(first, {
-  stdout, stderr, page, reader, open = openProject, expand = () => {},
+  stdout, stderr, page, reader, expand = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -326,19 +317,14 @@ export async function menu(first, {
   // is set on the caller's closure and the page is simply asked for again.
   let all = false;
   for (;;) {
-    // Every project PROGRAMMES numbered. Opening one opens its runner area,
-    // as a session of its programme (`project-open.js`); a project the runner
-    // has not started yet has no area, and says so.
-    const projects = data.programmes.programmes.flatMap((group) => group.projects);
-    // A goal is reached by its number only: a typed name is a project's, and
-    // a goal's name may be one of those too.
+    // Every goal PROGRAMMES numbered, reached by its number.
     const goals = data.programmes.programmes.flatMap((group) => group.goals || []);
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
 
-    // The page again with nothing collapsed — every blocked project back as its
-    // own row, under the number it always had. `a` again puts them away.
+    // The page again with every programme drawn, the dormant ones too. `a`
+    // again folds them.
     if (answer === 'a' || answer === 'all') {
       all = !all;
       expand(all);
@@ -374,16 +360,9 @@ export async function menu(first, {
       const plan = await import('./plan.js');
       return plan.run(words.slice(1), { stdout, stderr });
     }
-    if (words[0] === 's' && words.length === 2) {
-      const project = await import('./status-project.js');
-      stdout.write('\n');
-      await project.run([words[1]], { stdout, stderr });
-      data = await redraw();
-      continue;
-    }
 
     // A goal's number shows the goal, and the page is drawn again under the
-    // prompt, as `s` does: a goal is looked at, not opened.
+    // prompt: a goal is looked at, not opened.
     const goal = goals.find((item) => item.number === Number(answer));
     if (goal) {
       stdout.write('\n');
@@ -391,13 +370,6 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
-
-    // By the number printed beside the row, not by position: the two lists
-    // are numbered through, and the page is the listing.
-    const byNumber = projects.find((project) => project.number === Number(answer));
-    const byName = projects.find((project) => project.name === answer);
-    const project = byNumber || byName;
-    if (project) return open(project.name, { programme: project.programme || null, stdout, stderr });
 
     typed(answer, { stderr });
     data = await redraw();
@@ -407,7 +379,7 @@ export async function menu(first, {
    * The page again, printed, with the rows the numbers now mean.
    *
    * Through the reader rather than to the stream: something has printed under
-   * the last frame — a project, a verb's output — so the page is somewhere
+   * the last frame — a goal, a verb's output — so the page is somewhere
    * else on the screen now, and the reader is what has to be told.
    */
   async function redraw() {
@@ -430,5 +402,5 @@ export function typed(answer, { stderr }) {
     stderr.write(`\n${retiredLines(words[0]).join('\n')}\n`);
     return;
   }
-  stderr.write(`\nmc: nothing here called "${words.join(' ')}" — a project's number or name opens it\n`);
+  stderr.write(`\nmc: nothing here called "${words.join(' ')}" — a goal's number shows it\n`);
 }

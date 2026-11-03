@@ -1,26 +1,27 @@
 /**
- * The shared readers of plans, runs and the runner's tables — what the page,
- * the runner, `mc status`, `mc plan`, `mc step` and the helper each read, so
- * that they read the same thing.
+ * The shared readers of programmes, runs and the runner's tables — what the
+ * page, the runner, `mc plan` and the helper each read, so that they read the
+ * same thing.
  *
- * Plans come from `~/mc/programs/` (`listPlans`); programmes and old
- * closeouts from `docs/project/` on `origin/main` (`listProgrammes`,
- * `listArchived`); the runs are the rows of `~/mc/runner/log/runs.tsv`
- * (`parseRuns`, `runsFor`); the proposals are the files in `~/mc/proposals/`
- * (`listProposals`). The pure readers take text and
- * return data so a test can feed them fixtures; the git calls are injected.
+ * Programmes come from `docs/project/` on `origin/main` (`listProgrammes`);
+ * the runs are the rows of `~/mc/runner/log/runs.tsv` (`parseRuns`,
+ * `runsFor`); the proposals are the files in `~/mc/proposals/`
+ * (`listProposals`). The pure readers take text and return data so a test
+ * can feed them fixtures; the git calls are injected. The plan readers went
+ * with projects on 2026-11-03 (goal mc/projects-to-goals).
  *
  * It was `mc brief --collect` once, a document gathered for the brief session.
- * `mc brief` gathers nothing now (2026-09-19): the session reads the page,
- * `mc status` and `mc step` where they live. The file kept its name because
- * a dozen modules import from it.
+ * `mc brief` gathers nothing now (2026-09-19): the session reads the page and
+ * `mc goal list` where they live. The file kept its name because a dozen
+ * modules import from it.
  */
 import { readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { run as runGitSync } from './git.js';
-import { planSummary, readPlanText } from './plan-schema.js';
-import { PROJECT_DIR, programsArchived, programsPlans } from './plan-source.js';
+
+/** Where the programmes are, in each repository. */
+const PROJECT_DIR = 'docs/project';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -65,51 +66,15 @@ export function proposalSystem(file) {
   return match ? match[1] : null;
 }
 
-/* --------------------------------------------------------------------- plans */
-
-/**
- * Every frontmatter field of a PLAN.md, in the order it is written, each
- * value unquoted and folded onto one line. `mc status <name>` prints them
- * all; the page takes two of them through `parsePlanFrontmatter`.
- */
-export function planFields(text) {
-  const normalised = String(text || '').replace(/\r\n/gu, '\n');
-  const match = /^---\n([\s\S]*?)\n---/u.exec(normalised);
-  if (!match) return {};
-  const raws = {};
-  let key = null;
-  for (const raw of match[1].split('\n')) {
-    const pair = /^([A-Za-z_-]+):\s*(.*)$/u.exec(raw);
-    if (pair) {
-      key = pair[1].toLowerCase();
-      raws[key] = pair[2].trim();
-    } else if (key && /^\s+\S/u.test(raw)) {
-      raws[key] = `${raws[key]} ${raw.trim()}`.trim();
-    }
-  }
-  const scalar = (value) => {
-    let v = value.replace(/^[>|][-+]?\s*/u, '').trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-    return v.replace(/\\"/gu, '"') || null;
-  };
-  return Object.fromEntries(Object.entries(raws).map(([k, v]) => [k, scalar(v)]));
-}
-
-/** `status` and `next` from a PLAN.md frontmatter; `next` may be a folded scalar. */
-export function parsePlanFrontmatter(text) {
-  const fields = planFields(text);
-  return { status: fields.status ?? null, next: fields.next ?? null };
-}
+/* ---------------------------------------------------------------- programmes */
 
 /**
  * The programmes on a ref: the directories directly under `docs/project/`.
  *
- * Asked of the tree rather than derived from the plans, because a programme
- * outlives its projects. `mc run` archives a project directory the round its
- * plan says done, so a programme whose work is finished for now holds only its
- * own document and its rulings — no plan anywhere under it — and
- * `listPlans` cannot see it at all. It is still a programme, and still the
- * place the next piece of that work belongs (`mc plan`).
+ * Asked of the tree, because a programme outlives its work: one whose work is
+ * finished for now holds only its own document and its rulings, and it is
+ * still a programme, and still the place the next piece of that work belongs
+ * (`mc plan`).
  */
 export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {}) {
   const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, `${PROJECT_DIR}/`]);
@@ -118,73 +83,6 @@ export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {})
     .map((path) => path.split('/')[2])
     .filter(Boolean)
     .sort();
-}
-
-/**
- * The plans of one repository as the readers see them: the plans under
- * `~/mc/programs/` whose `repo` is this repository (ruling 48), built by
- * `planRecords`. An archived project is not among them (`programsPlans`).
- * `ref`, `git`, `batch` and `archived` are accepted and not used: no
- * repository holds a plan any more, so callers that still pass them need not
- * change.
- */
-export function listPlans(repo, { programs = programsPlans } = {}) {
-  const own = programs().filter((e) => e.repo === repo.name);
-  const texts = new Map(own.map((e) => [e.path, e.text]));
-  return planRecords(repo.name, own, (path) => texts.get(path) || '');
-}
-
-/**
- * The records `listPlans` returns, built from plan-source's entries and a
- * reader of their text: one record a project, `{ repo, programme, project,
- * path, legacy, plan, problems, …planSummary(plan) }`. One project, one plan.
- */
-export function planRecords(repoName, entries, textOf) {
-  const byProject = new Map();
-  for (const entry of entries) {
-    const { plan, problems } = readPlanText(textOf(entry.path));
-    byProject.set(entry.project, {
-      repo: repoName,
-      programme: entry.programme,
-      project: entry.project,
-      path: entry.path,
-      legacy: false,
-      plan,
-      problems,
-      ...(plan ? planSummary(plan) : { status: 'invalid', next: problems[0] || 'the plan does not parse' }),
-    });
-  }
-  return [...byProject.values()];
-}
-
-/**
- * The archived projects of one repository, closeout names first, each name once:
- * the names of its `docs/project/<programme>/closeout/<project>.json` files on a
- * ref, then the `project` of every archived project under `~/mc/programs/` whose
- * `repo` is this repository (`programsArchived`: a `CLOSEOUT.json` beside its
- * plan, under `~/mc/programs/` or moved to `~/mc/archive/projects/`). The ref's names are what `mc run` writes when it archives a plan
- * (`closeoutPath` in `closeout.js`), and the archive takes only a done plan, so
- * a project with one was delivered. When the ref cannot be read, the programs
- * names are still returned.
- * A `closeout/<project>.md` is not a name, and a file nested deeper under
- * `closeout/` is not one either.
- */
-export function listArchived(repo, { ref = 'origin/main', git = runGit, archived = programsArchived } = {}) {
-  const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
-  const closeouts = tree == null ? [] : tree.split('\n')
-    .map((path) => path.split('/'))
-    .filter((parts) => parts.length === 5 && parts[3] === 'closeout' && parts[4].endsWith('.json'))
-    .map((parts) => parts[4].slice(0, -'.json'.length));
-  const programs = archived().filter((e) => e.repo === repo.name).map((e) => e.project);
-  return [...new Set([...closeouts, ...programs])];
-}
-
-/**
- * A batch reader made from an injected `git`: one `show` per ref. The runner
- * still hands one to `listPlans`, which no longer reads git and ignores it.
- */
-export function showBatch(git) {
-  return (cwd, refs) => new Map(refs.map((ref) => [ref, git(cwd, ['show', ref]) || '']));
 }
 
 /* -------------------------------------------------------------------- runner */

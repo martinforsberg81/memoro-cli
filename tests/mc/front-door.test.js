@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { runMcCliAsync } from './_helpers/mc-cli.js';
-import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
+import { runVerb } from './_helpers/mc-verb.js';
 import { freshFor, menu, parsePageArgs, runnerOrder } from '../../src/mc/commands/home.js';
 import { plainReader } from '../../src/mc/page-live.js';
 import { programmesSection } from '../../src/mc/page-collect.js';
@@ -68,7 +68,6 @@ const binary = (args, { world = true } = {}) => {
 };
 const [page, pageJson, nonsense, help] = await Promise.all([
   binary([]), binary(['--json']), binary(['--nonsense']), binary(['--help'], { world: false }),
-  preloadVerbs('status'),
 ]);
 const RAN = { page, pageJson, nonsense, help };
 after(() => { for (const fx of BINARY_FIXTURES) fx.cleanup(); });
@@ -96,11 +95,11 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'next', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
       assert.match(page.billing, /claude \? plan · codex \? plan/u);
-      // No plan on main here, so there are no projects, and both folders are
+      // No goal here, so there are no programme rows, and both folders are
       // strays — mc's own brief/ is not one. There is no WORK data anywhere.
       assert.deepEqual(page.programmes.programmes, []);
       assert.equal(page.programmes.count, 0);
@@ -262,21 +261,22 @@ describe('the verbs that became mc', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('bare mc status says where it went; a name still answers', async () => {
+  it('mc status, bare or with a name, says where it went and names mc goal show', async () => {
     const fx = fixture();
     try {
-      const bare = await runVerb(['status'], fx.env);
-      assert.equal(bare.status, 2);
-      assert.match(bare.stderr, /mc status is now mc/u);
-      assert.match(bare.stderr, /mc status <name>/u);
-
-      const named = await runVerb(['status', 'alpha', '--json'], fx.env);
-      assert.equal(named.status, 0, named.stderr);
-      assert.equal(JSON.parse(named.stdout).name, 'alpha');
+      for (const args of [['status'], ['status', 'alpha'], ['status', 'alpha', '--json']]) {
+        const result = await runVerb(args, fx.env);
+        const what = `mc ${args.join(' ')}`;
+        assert.equal(result.status, 2, what);
+        assert.equal(result.stdout, '', what);
+        assert.match(result.stderr, /mc status is now mc/u, what);
+        assert.match(result.stderr, /mc goal show <programme>\/<goal>/u, what);
+        assert.doesNotMatch(result.stderr, /mc status <name>/u, what);
+      }
     } finally { fx.cleanup(); }
   });
 
-  it('the board flags are gone — they are a name now, and there is no such project', async () => {
+  it('the board flags are gone too', async () => {
     const fx = fixture();
     try {
       for (const flag of ['--sessions', '--watch', '--wait']) {
@@ -318,20 +318,19 @@ describe('the menu under the page', () => {
    */
   const DATA = {
     programmes: programmesSection({
-      plans: [
-        { repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'a' },
-        { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', next: 'b' },
+      goalRows: [
+        { name: 'mc-ui', programme: 'mc', repos: ['memoro-cli'], status: 'open', sessions: 0, last: null, running: false, problems: [] },
+        { name: 'docx-editor', programme: 'docx-editing-surface', repos: ['memoro'], status: 'open', sessions: 0, last: null, running: false, problems: [] },
       ],
-      areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }],
     }),
   };
 
-  // The numbers the page drew are the numbers the menu opens by; a folder no
-  // project explains has none.
-  it('numbers the projects, and nothing else', () => {
-    assert.deepEqual(DATA.programmes.programmes.flatMap((g) => g.projects).map((p) => [p.number, p.name]),
+  // The numbers the page drew are the numbers the menu shows by: goals, in
+  // programme order, and no project.
+  it('numbers the goals, and nothing else', () => {
+    assert.deepEqual(DATA.programmes.programmes.flatMap((g) => g.goals || []).map((goal) => [goal.number, goal.name]),
       [[1, 'docx-editor'], [2, 'mc-ui']]);
-    assert.equal('unplanned' in DATA.programmes, false);
+    assert.equal(DATA.programmes.programmes.some((g) => 'projects' in g), false);
   });
 
   function drive(answers) {
@@ -352,28 +351,22 @@ describe('the menu under the page', () => {
         stderr: { write: (text) => written.push(text) },
         page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
         reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
-        open: async (name, opts) => { opened.push(name); programmes.push(opts.programme); return 0; },
+        showGoal: async (argv) => { opened.push(argv[1]); return 0; },
       }),
     };
   }
 
-  it('opens what a number names — PROGRAMMES\' number, not a list of its own', async () => {
-    const first = drive(['1']);
+  it('shows what a number names — PROGRAMMES\' number, not a list of its own', async () => {
+    const first = drive(['1', 'q']);
     assert.equal(await first.run(), 0);
-    assert.deepEqual(first.opened, ['docx-editor']);
-    // Opened as a session of its programme, not a workarea of its own.
-    assert.deepEqual(first.programmes, ['docx-editing-surface']);
+    assert.deepEqual(first.opened, ['docx-editing-surface/docx-editor']);
 
-    const second = drive(['2']);
+    const second = drive(['2', 'q']);
     assert.equal(await second.run(), 0);
-    assert.deepEqual(second.opened, ['mc-ui']);
+    assert.deepEqual(second.opened, ['mc/mc-ui']);
   });
 
-  it('opens it by name too, and quits on q or on nothing', async () => {
-    const byName = drive(['docx-editor']);
-    assert.equal(await byName.run(), 0);
-    assert.deepEqual(byName.opened, ['docx-editor']);
-
+  it('quits on q or on nothing', async () => {
     const quit = drive(['q']);
     assert.equal(await quit.run(), 0);
     assert.deepEqual(quit.opened, []);
@@ -387,7 +380,7 @@ describe('the menu under the page', () => {
     const typo = drive(['mc-uii', 'q']);
     assert.equal(await typo.run(), 0);
     assert.deepEqual(typo.opened, []);
-    assert.match(typo.written.join(''), /nothing here called "mc-uii" — a project's number or name opens it/u);
+    assert.match(typo.written.join(''), /nothing here called "mc-uii" — a goal's number shows it/u);
   });
 
   it('answers a workarea verb typed at the prompt with the line the shell gives, and opens nothing', async () => {
@@ -399,15 +392,16 @@ describe('the menu under the page', () => {
     assert.match(text, /nothing here called "n"/u, 'n starts nothing any more');
   });
 
-  it('offers a, b, p and s beside the numbers, and no watch or new', async () => {
+  it('offers a, b and p beside the numbers, and no project, watch or new', async () => {
     const shown = drive(['q']);
     await shown.run();
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['a  every project', 'b  brief', 'p  plan a programme', 's <name>', 'q  quit']) {
+    for (const key of ['<n>  show that goal', 'a  every programme', 'b  brief', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
+    assert.ok(!keys.includes('s <name>'), 'the menu offers no project');
     assert.ok(!keys.includes('watch'), 'the menu offers no watch');
     assert.ok(!keys.includes('start something new'), 'the menu starts no workarea');
   });
@@ -500,8 +494,6 @@ describe('the menu under the page', () => {
   it("a goal's number opens mc goal show", async () => {
     const goalData = {
       programmes: programmesSection({
-        plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'a' }],
-        areas: [],
         goalRows: [{
           name: 'rollout', programme: 'mc', repos: ['memoro-cli'], status: 'open', sessions: 0, last: null, running: false, problems: [],
         }],
@@ -509,7 +501,7 @@ describe('the menu under the page', () => {
     };
     const shown = [];
     const opened = [];
-    const answers = ['2', 'q'];
+    const answers = ['1', 'q'];
     const written = [];
     const stdout = { columns: 100, write: (text) => written.push(text) };
     let drawn = 0;

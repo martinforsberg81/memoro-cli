@@ -35,16 +35,20 @@
  * attempt is landed rather than opened twice.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
-import { listPlans, listProgrammes } from './brief-collect.js';
+import { listProgrammes } from './brief-collect.js';
+import { FINISHED, programsGoals } from './goals.js';
 import { archivedProgramsHome, programsHome } from './paths.js';
-import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
-import { tilde } from './status-project.js';
 import { isProgrammeArea } from './work-area.js';
+
+/** `path` with the home directory folded to `~`, as every line here prints it. */
+function tilde(path, home = homedir()) {
+  return path && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
 export const PROGRAMME_ARCHIVE_PREFIX = 'mc-programme-archive-';
@@ -97,13 +101,10 @@ export function removedKind(dir, before, after) {
  * looked up, so the verdict reads no directory — not even the user's ~/mc.
  */
 export function archiveVerdict({
-  programme, plans = [], homes = [], areaExists = false, forecast = null, area,
+  programme, goals = [], homes = [], areaExists = false, forecast = null, area,
 }) {
   const lines = [];
-  for (const plan of plans) {
-    lines.push(`${plan.repo} ${programme}/${plan.project} is still on main (${plan.status || 'no status'})`
-      + (plan.status === 'done' ? ' — mc run archives it first' : ''));
-  }
+  for (const goal of goals) lines.push(`goal ${programme}/${goal.goal} is ${goal.status || 'unreadable'} — it is finished or dropped first`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
   for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
@@ -130,14 +131,13 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       stderr.write(`mc: git fetch in ${repo.path} failed — origin/main may be stale\n`);
     }
   }
-  const programs = () => programsPlans({ home: programsHome(env) });
-  const plans = present.flatMap((repo) => listPlans(repo, { programs }))
-    .filter((plan) => plan.programme === programme);
+  const goals = programsGoals({ home: programsHome(env) })
+    .filter((goal) => goal.programme === programme && !FINISHED.includes(goal.status));
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;
 
-  const verdict = archiveVerdict({ programme, plans, homes, areaExists, forecast, area: tilde(areaPath) });
+  const verdict = archiveVerdict({ programme, goals, homes, areaExists, forecast, area: tilde(areaPath) });
   if (!verdict.ok) {
     stderr.write(`mc: ${programme} is not archived — nothing was touched:\n`);
     for (const line of verdict.lines) stderr.write(`  ${line}\n`);

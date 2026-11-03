@@ -239,7 +239,7 @@ export function selfHome(env = process.env) {
 /**
  * `~/mc/runner/layout.json` says which structure the work root has (ruling 51).
  * Absent, unreadable, or anything but `{"schema":"mc-layout","version":2}` is
- * layout 1, today's. `mc layout migrate` writes the file last, so its presence
+ * layout 1. `mc layout migrate` wrote it last, on 2026-10-20, so its presence
  * means the move is done. Read on every call, with no cache: a long-lived
  * runner must see the file the moment it appears.
  */

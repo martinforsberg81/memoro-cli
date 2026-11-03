@@ -1,6 +1,6 @@
 /**
- * Dormant programmes (Martin, 2026-11-02): a programme with no project and no
- * goal, of any status, is dormant. PROGRAMMES counts both kinds on its heading,
+ * Dormant programmes (Martin, 2026-11-02): a programme with no goal, of any
+ * status, is dormant. PROGRAMMES counts the goals on its heading,
  * draws the active ones as before and folds the dormant ones into one grey
  * line pointing at `mc programs list`; `a` (expand) draws them all. `mc --json`
  * keeps every programme, flagged. `mc programs list` reads the same sources
@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  intakeSection, mergesSection, nextSection, programmesSection, readProgrammes, runnerSection, sessionsSection,
+  intakeSection, mergesSection, programmesSection, readProgrammes, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { listingText, programmesListing, run as programs } from '../../src/mc/commands/programs.js';
@@ -25,12 +25,11 @@ function pageData(over = {}) {
   return {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
-    next: nextSection({ plans: [] }),
     merges: mergesSection({}),
     intake: intakeSection({ digests: [], proposals: [], now: NOW }),
-    programmes: programmesSection({ areas: [], plans: [] }),
+    programmes: programmesSection({}),
     language: { languages: [], last_run: null, open_gap: null },
-    caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
+    caches: { fresh: false, prs: { fetched: null, age_seconds: null, count: 0 } },
     notes: [],
     ...over,
   };
@@ -48,36 +47,35 @@ function programmesOf(lines) {
 }
 
 /**
- * Five programmes: `mc` with a ready project, `done-only` whose one project is
- * done, `goal-only` with nothing but a goal, `planned` with nothing but an open
- * plan session, and `empty` with nothing at all — a directory on main.
+ * Five programmes: `mc` with an open goal, `done-only` whose one goal is done,
+ * `goal-only` with a blocked goal, `planned` with nothing but an open plan
+ * session, and `empty` with nothing at all — a directory on main.
  */
-const PLANS = [
-  { repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready' },
-  { repo: 'memoro', programme: 'done-only', project: 'finished', status: 'done' },
-];
-const GOALS = [{
-  name: 'rollout', programme: 'goal-only', repos: ['memoro'], status: 'blocked', sessions: 1,
+const goalRow = (name, programme, repo, status) => ({
+  name, programme, repos: [repo], status, sessions: 1,
   last: { next: null, comment: null }, running: false, problems: [],
-}];
+});
+const GOALS = [
+  goalRow('mc-ui', 'mc', 'memoro-cli', 'open'),
+  goalRow('finished', 'done-only', 'memoro', 'done'),
+  goalRow('rollout', 'goal-only', 'memoro', 'blocked'),
+];
 const SESSION = { verb: 'plan', area: 'plan/planned', tool: 'claude-code', pid: 1 };
 const section = () => programmesSection({
-  plans: PLANS,
   goalRows: GOALS,
   planning: { planned: SESSION },
   planningSessions: { planned: [SESSION] },
   programmes: ['empty', 'mc'],
-  now: NOW,
 });
 
 describe('dormant programmes in the collector', () => {
-  it('flags each programme and counts both kinds', () => {
+  it('flags each programme and counts its goals', () => {
     const programmes = section();
     const verdict = Object.fromEntries(programmes.programmes.map((group) => [group.programme, group.dormant]));
     assert.deepEqual(verdict, {
-      'done-only': false, // only done projects: still a programme with work on it
+      'done-only': false, // only a done goal: still a programme with work on it
       empty: true,
-      'goal-only': false, // only a goal
+      'goal-only': false, // a blocked goal
       mc: false,
       planned: true, // only a plan session: nothing is on it yet
     });
@@ -90,9 +88,9 @@ describe('dormant programmes in the collector', () => {
 describe('dormant programmes on the page', () => {
   it('draws only active programmes, and one line for the dormant ones under the heading', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    assert.match(lines[0], /^ {2}PROGRAMMES {2}3 active · 2 dormant · 2 projects {2}/u);
+    assert.match(lines[0], /^ {2}PROGRAMMES {2}3 active · 2 dormant · 3 goals {2}/u);
     assert.equal(lines[1], '  2 dormant · 1 with a plan session · mc programs list');
-    assert.ok(!lines.some((line) => /no project yet/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
     for (const name of ['mc', 'done-only', 'goal-only']) {
       assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
     }
@@ -102,16 +100,16 @@ describe('dormant programmes on the page', () => {
   });
 
   it('leaves the plan-session count out when no dormant programme has one', () => {
-    const programmes = programmesSection({ plans: PLANS, programmes: ['empty'], now: NOW });
+    const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
     assert.equal(lines[1], '  1 dormant · mc programs list');
-    assert.match(lines[0], /2 active · 1 dormant · 2 projects/u);
+    assert.match(lines[0], /2 active · 1 dormant · 2 goals/u);
   });
 
   it('draws no dormant line when every programme is active', () => {
-    const programmes = programmesSection({ plans: PLANS.slice(0, 1), now: NOW });
+    const programmes = programmesSection({ goalRows: GOALS.slice(0, 1) });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.match(lines[0], /1 active · 0 dormant · 1 project {2}/u);
+    assert.match(lines[0], /1 active · 0 dormant · 1 goal {2}/u);
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
   });
 
@@ -121,9 +119,9 @@ describe('dormant programmes on the page', () => {
     for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) {
       assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
     }
-    assert.ok(lines.some((line) => /^ {2}empty +no project yet/u.test(line)));
+    assert.ok(lines.some((line) => /^ {2}empty +no goal yet/u.test(line)));
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
-    const numbers = data.programmes.programmes.flatMap((group) => [...group.projects, ...group.goals]).map((row) => row.number);
+    const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
     assert.deepEqual(numbers.sort(), [1, 2, 3]);
   });
 });
@@ -142,6 +140,7 @@ describe('mc programs', () => {
     assert.deepEqual(byName.empty.repos, ['memoro'], 'a dormant programme says where it lives');
     assert.deepEqual(byName['goal-only'].repos, ['memoro']);
     assert.deepEqual(byName['done-only'].statuses, { done: 1 });
+    assert.ok(!('projects' in byName.mc), 'no project count');
     assert.equal(byName['goal-only'].goals, 1);
     assert.deepEqual(byName.planned.plan_sessions, { claude: 1 });
   });
@@ -150,10 +149,10 @@ describe('mc programs', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
     assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
     assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +memoro +1 project · done 1 +no goal +no plan session$/u);
-    assert.match(lines[2], /^ {2}empty +dormant +memoro +no project yet +no goal +no plan session$/u);
-    assert.match(lines[3], /^ {2}goal-only +active +memoro +no project yet +1 goal +no plan session$/u);
-    assert.match(lines[5], /^ {2}planned +dormant +— +no project yet +no goal +plan claude 1$/u);
+    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · done 1 +no plan session$/u);
+    assert.match(lines[2], /^ {2}empty +dormant +memoro +no goal +no plan session$/u);
+    assert.match(lines[3], /^ {2}goal-only +active +memoro +1 goal · blocked 1 +no plan session$/u);
+    assert.match(lines[5], /^ {2}planned +dormant +— +no goal +plan claude 1$/u);
   });
 
   it('prints the list, or the same as data with --json', async () => {
@@ -178,7 +177,7 @@ describe('mc programs', () => {
     assert.equal(await programs(['list', '--all'], deps), 2);
   });
 
-  it('reads the page’s sources: the tree’s programmes, the plans, the goals and the plan sessions', () => {
+  it('reads the page’s sources: the tree’s programmes, the goals and the plan sessions', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-programs-'));
     try {
       const goal = join(root, 'programs', 'goal-only', 'goals', 'rollout');
@@ -193,12 +192,11 @@ describe('mc programs', () => {
         now: NOW,
         repos: [repo],
         alive: () => true,
-        cache: { loadPlans: () => ({ plans: [{ repo: 'memoro', programme: 'done-only', project: 'finished', status: 'done' }] }) },
         programmes: () => ['empty'],
       });
       assert.deepEqual(homes, { empty: ['memoro'] });
       const verdict = Object.fromEntries(read.programmes.map((group) => [group.programme, group.dormant]));
-      assert.deepEqual(verdict, { 'done-only': false, empty: true, 'goal-only': false, planned: true });
+      assert.deepEqual(verdict, { empty: true, 'goal-only': false, planned: true });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -16,10 +16,10 @@ import { describe, it } from 'node:test';
 
 import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/tidy.js';
 import { setLogPath } from '../../src/mc/logger.js';
-import { registerPath } from '../../src/mc/register.js';
+import { goalJson } from './_helpers/goal-file.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy, sessionLogRe,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy,
   staleGateCacheEntry, tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
 
@@ -111,20 +111,14 @@ describe('--days', () => {
     assert.equal(parseTidyArgs(['--apply', '--json']).apply, true);
     assert.equal(parseTidyArgs(['--apply', '--json']).json, true);
   });
-  it('register.log is not a session log, so tidy keeps it', () => {
-    assert.equal(sessionLogRe('register').test('register.log'), false);
-  });
 });
 
 /* ---------------------------------------------------------- filesystem */
 
-const LOG_HEAD = '| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
-const logRow = (project) => `| 2026-10-01 | mc | ${project} | done | it ended | none | - |\n`;
-
 /**
  * A temp home: the work root, `~/.claude`, and `MC_REPOS_HOME` with both
- * repositories. git is faked: `main` holds what each repository's origin/main
- * has under `docs/project/`, and its project_log.md.
+ * repositories. git is faked: it lists each repository's worktrees and names
+ * the repository that owns a compare tree.
  */
 function machine() {
   const home = mkdtempSync(join(tmpdir(), 'mc-tidy-'));
@@ -134,12 +128,10 @@ function machine() {
   const reposHome = join(home, 'repos');
   for (const dir of [work, projects, join(reposHome, 'memoro'), join(reposHome, 'memoro-cli')]) mkdirSync(dir, { recursive: true });
   const env = { ...process.env, MC_WORK_ROOT: work, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(home, 'codex'), MC_REPOS_HOME: reposHome, MC_HOME: join(home, 'mchome') };
-  const main = { memoro: { tree: [], log: LOG_HEAD }, 'memoro-cli': { tree: [], log: LOG_HEAD } };
   const worktrees = { memoro: [], 'memoro-cli': [] };
   const nameOf = (cwd) => (cwd.endsWith('memoro-cli') ? 'memoro-cli' : 'memoro');
   const m = {
-    home, work, projects, env, main, worktrees,
-    gitFails: false,
+    home, work, projects, env, worktrees,
     worktreeState: {},
     cwds: [{ pid: 1, cwd: '/' }],
     released: [],
@@ -151,16 +143,7 @@ function machine() {
     utimesSync(path, new Date(at), new Date(at));
   };
   m.head = (cwd) => `${JSON.stringify({ type: 'user', cwd, message: { content: 'hi' } })}\n`;
-  m.register = (entry) => {
-    const path = registerPath(work, entry.project);
-    mkdirSync(join(path, '..'), { recursive: true });
-    writeFileSync(path, JSON.stringify(entry));
-  };
   m.git = (cwd, args) => {
-    if (m.gitFails) return null;
-    const repo = main[nameOf(cwd)];
-    if (args[0] === 'ls-tree') return repo.tree.join('\n');
-    if (args[0] === 'show') return repo.log;
     if (args[0] === 'worktree') return [cwd, ...worktrees[nameOf(cwd)]].map((path) => `worktree ${path}\nHEAD abc\n`).join('\n');
     if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return `${join(reposHome, 'memoro')}/.git\n`;
     return null;
@@ -179,145 +162,10 @@ function machine() {
   return m;
 }
 
-/** A finished project, archived or not, with every file the runner leaves of it. */
-function project(m, name, { programme = 'mc', archived = true, closeout = true, planOnMain = false, legacyArea = false, steps = [] } = {}) {
-  // Layout 2: the project's directory under programs/, its CLOSEOUT.json beside its plan, its register STATE.json.
-  const plan = existsSync(join(m.work, 'runner', 'layout.json')) ? join(m.work, 'programs', programme, name, 'PLAN.json') : null;
-  if (plan) m.write(plan, '{}');
-  if (plan && closeout) m.write(join(m.work, 'programs', programme, name, 'CLOSEOUT.json'), '{}');
-  m.register({ project: name, repo: 'memoro-cli', programme, steps, ...(plan ? { plan } : {}) });
-  const repo = m.main['memoro-cli'];
-  if (archived) repo.log += logRow(name);
-  if (closeout) repo.tree.push(`docs/project/${programme}/closeout/${name}.json`);
-  if (planOnMain) repo.tree.push(`docs/project/${programme}/${name}/PLAN.json`);
-  if (legacyArea) mkdirSync(join(m.work, name, 'memoro-cli'), { recursive: true });
-  const files = {
-    log: join(m.work, 'runner', 'log', `${name}-20261001T100000Z.jsonl`),
-    err: join(m.work, 'runner', 'log', `${name}-20261001T100000Z.json.err`),
-    closed: join(m.work, 'runner', 'log', 'closed', name, 'step-1.jsonl'),
-    scratch: join(m.work, 'runner', 'scratch', `${name}-20261001T100000Z`, 'probe.txt'),
-    register: registerPath(m.work, name),
-  };
-  for (const key of ['log', 'err', 'closed', 'scratch']) m.write(files[key]);
-  return files;
+/** A goal of programme `programme` in layout 2, with its GOAL.json at `status`. */
+function goal(m, name, status = 'open', { programme = 'mc', text = null } = {}) {
+  m.write(join(m.work, 'programs', programme, 'goals', name, 'GOAL.json'), text ?? goalJson({ status }), NOW);
 }
-
-describe('(P) a project archived with its closeout on main', () => {
-  it('loses its register file, session logs, closed logs, scratch and transcripts — and ui-faults-2 keeps its own', () => {
-    const m = machine();
-    try {
-      const mine = project(m, 'ui-faults');
-      const other = project(m, 'ui-faults-2', { archived: false, closeout: false, planOnMain: true });
-      const session = join(m.projects, '-mc-step-ui-faults-memoro-cli', `${ID(1)}.jsonl`);
-      m.write(session, m.head(join(m.work, 'step', 'ui-faults', 'memoro-cli')), NOW - HOUR);
-      const { list } = runTidy(m.doors());
-      const p = ruled(list, 'P');
-      assert.deepEqual(p.map((item) => item.path).sort(), [
-        mine.log, mine.err, join(m.work, 'runner', 'log', 'closed', 'ui-faults'), join(m.work, 'runner', 'scratch', 'ui-faults-20261001T100000Z'), mine.register, session,
-      ].sort());
-      assert.equal(p.filter((item) => item.kind !== 'transcript').at(-1).kind, 'register', 'the register file last');
-      for (const file of Object.values(other)) assert.ok(!p.some((item) => file === item.path || file.startsWith(`${item.path}/`)), `${file} is ui-faults-2's`);
-      assert.equal(keptOf(list, other.register).rule, 'project');
-    } finally { m.cleanup(); }
-  });
-
-  it('nothing goes without a closeout, with a legacy area, or with a step blocked on time', () => {
-    const m = machine();
-    try {
-      const bare = project(m, 'no-closeout', { closeout: false });
-      const legacy = project(m, 'legacy', { legacyArea: true });
-      const waiting = project(m, 'waiting', {
-        archived: false, closeout: false, planOnMain: true,
-        steps: [{ status: 'blocked', blocked_by: { kind: 'time', name: '2026-10-20T00:00:00Z' } }],
-      });
-      const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'P'), []);
-      assert.equal(keptOf(list, bare.register).why, 'no closeout on origin/main');
-      assert.equal(keptOf(list, legacy.register).why, 'an area for it still exists');
-      assert.equal(keptOf(list, waiting.register).why, 'not archived: no row in project_log.md on origin/main');
-    } finally { m.cleanup(); }
-  });
-
-  it('a repository git cannot answer for stops every purge', () => {
-    const m = machine();
-    try {
-      const mine = project(m, 'ui-faults');
-      m.gitFails = true;
-      const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'P'), []);
-      assert.match(keptOf(list, mine.register).why, /^git could not answer/u);
-    } finally { m.cleanup(); }
-  });
-});
-
-describe('(P) a plan under ~/mc/programs/ is there while its file is', () => {
-  it('plan_on_main is the file\'s existence, and origin/main\'s tree is not asked for it', () => {
-    const m = machine();
-    try {
-      const here = join(m.home, 'programs', 'mc', 'here', 'PLAN.json');
-      const gone = join(m.home, 'programs', 'mc', 'gone', 'PLAN.json');
-      m.write(here);
-      m.register({ project: 'here', repo: 'memoro-cli', programme: 'mc', plan: here, steps: [] });
-      m.register({ project: 'gone', repo: 'memoro-cli', programme: 'mc', plan: gone, steps: [] });
-      m.main['memoro-cli'].tree.push('docs/project/mc/gone/PLAN.json');
-      const items = Object.fromEntries(gatherTidyFacts(m.doors()).projects.map((item) => [item.project, item]));
-      assert.equal(items.here.plan_on_main, true);
-      assert.equal(items.gone.plan_on_main, false, 'the repository has it, but the file under programs does not');
-    } finally { m.cleanup(); }
-  });
-});
-
-describe('(P) a plan under ~/mc/programs/ with its closeout beside it', () => {
-  it('is a purge target once its row is on main and no area is left', () => {
-    const m = machine();
-    try {
-      const plan = join(m.work, 'programs', 'mc', 'closed', 'PLAN.json');
-      m.write(plan);
-      m.write(join(m.work, 'programs', 'mc', 'closed', 'CLOSEOUT.json'));
-      m.main['memoro-cli'].log += logRow('closed');
-      m.register({ project: 'closed', repo: 'memoro-cli', programme: 'mc', plan, steps: [] });
-      const { list } = runTidy(m.doors());
-      assert.ok(ruled(list, 'P').some((item) => item.path === registerPath(m.work, 'closed')));
-    } finally { m.cleanup(); }
-  });
-
-  it('without its CLOSEOUT.json the plan is still there, and the project is kept', () => {
-    const m = machine();
-    try {
-      const plan = join(m.work, 'programs', 'mc', 'open', 'PLAN.json');
-      m.write(plan);
-      m.main['memoro-cli'].log += logRow('open');
-      m.register({ project: 'open', repo: 'memoro-cli', programme: 'mc', plan, steps: [] });
-      const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'P'), []);
-      assert.equal(keptOf(list, registerPath(m.work, 'open')).why, 'its plan directory is still on origin/main');
-    } finally { m.cleanup(); }
-  });
-});
-
-describe('(P) a project the runner has archived: its directory is under archive/projects/', () => {
-  it('its session log and scratch go, and its STATE.json stays', () => {
-    const m = machine();
-    try {
-      layout2(m);
-      const dir = join(m.work, 'archive', 'projects', 'mc', 'moved');
-      m.write(join(dir, 'PLAN.json'), '{}');
-      m.write(join(dir, 'CLOSEOUT.json'), '{}');
-      m.write(join(dir, 'STATE.json'), JSON.stringify({ project: 'moved', repo: 'memoro-cli', programme: 'mc', steps: [], criteria: [] }));
-      m.main['memoro-cli'].log += logRow('moved');
-      const log = join(m.work, 'runner', 'log', 'moved-20261001T100000Z.jsonl');
-      const scratch = join(m.work, 'runner', 'scratch', 'moved-20261001T100000Z');
-      m.write(log);
-      m.write(join(scratch, 'probe.txt'));
-      const { list } = runTidy(m.doors());
-      const p = ruled(list, 'P').map((item) => item.path);
-      assert.ok(p.includes(log), 'its session log is a P target');
-      assert.ok(p.includes(scratch), 'its scratch directory is a P target');
-      assert.ok(!list.targets.some((item) => item.path === join(dir, 'STATE.json')), 'its STATE.json is not a target');
-      assert.equal(existsSync(join(dir, 'STATE.json')), true);
-    } finally { m.cleanup(); }
-  });
-});
 
 describe('(G) planning transcripts', () => {
   it('the newest of a directory stays at any age, and so does anything within 72 hours; memory/ is never listed', () => {
@@ -414,23 +262,24 @@ function retiredAreas(m) {
   return { at, inspect };
 }
 
-describe('(U) a step area no project explains', () => {
-  it('is listed with its verdict; one of a project the register knows is the runner\'s', () => {
+describe('(U) a step area left from the retired project steps', () => {
+  it('is listed with its verdict, and only a person\'s apply removes one', () => {
     const m = machine();
     try {
-      for (const name of ['orphan', 'dirty-orphan', 'known']) m.write(join(m.work, 'step', name, 'memoro-cli', '.git'), 'gitdir: /fake');
-      m.register({ project: 'known', programme: 'mc', repo: 'memoro-cli', steps: [{ status: 'ready' }] });
+      for (const name of ['orphan', 'dirty-orphan']) m.write(join(m.work, 'step', name, 'memoro-cli', '.git'), 'gitdir: /fake');
       const dirty = join(m.work, 'step', 'dirty-orphan', 'memoro-cli');
       const inspect = (path, name) => ({ ...m.inspect(path, name), ...(path === dirty ? { uncommitted: 1 } : {}) });
       const { list } = runTidy(m.doors({ inspect, person: true }));
       assert.deepEqual(ruled(list, 'U').map((item) => [item.path, item.kind, item.why]),
-        [[join(m.work, 'step', 'orphan'), 'orphan-step-area', 'a step area no project explains: memoro-cli landed with nothing uncommitted']]);
-      assert.equal(keptOf(list, join(m.work, 'step', 'dirty-orphan')).why, 'no project explains it; memoro-cli: 1 uncommitted');
-      assert.equal(keptOf(list, join(m.work, 'step', 'known')).rule, 'step-area');
+        [[join(m.work, 'step', 'orphan'), 'orphan-step-area', 'a step area left from the retired project steps: memoro-cli landed with nothing uncommitted']]);
+      assert.equal(keptOf(list, join(m.work, 'step', 'dirty-orphan')).why, 'a step area left from the retired project steps; memoro-cli: 1 uncommitted');
       // The runner's apply takes none of them.
       const runner = runTidy({ ...m.doors({ inspect }), apply: true });
       assert.deepEqual(ruled(runner.list, 'U'), []);
       assert.ok(existsSync(join(m.work, 'step', 'orphan', 'memoro-cli')));
+      const person = runTidy({ ...m.doors({ inspect }), person: true, apply: true });
+      assert.deepEqual(person.outcome.applied.map((item) => [item.path, item.ok]), [[join(m.work, 'step', 'orphan'), true]]);
+      assert.equal(existsSync(join(m.work, 'step', 'orphan')), false);
     } finally { m.cleanup(); }
   });
 });
@@ -498,7 +347,7 @@ function checkoutsOf(m, programme = 'mc') {
   return area;
 }
 
-describe('(I) a planning area\'s own checkouts, while their programme has no project that is not done', () => {
+describe('(I) a planning area\'s own checkouts, while their programme has no goal that is not finished', () => {
   it('a clean, landed checkout of an idle programme is an (I) target, and the apply releases it through git', () => {
     const m = machine();
     try {
@@ -514,39 +363,52 @@ describe('(I) a planning area\'s own checkouts, while their programme has no pro
     } finally { m.cleanup(); }
   });
 
-  it('a draft in the programme keeps both, and says why', () => {
+  it('an open goal in the programme keeps both, and says why', () => {
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      m.write(join(area, 'drafting', 'DRAFT.json'), '{}');
+      goal(m, 'busy', 'open');
       const { list } = runTidy(m.doors());
       assert.deepEqual(ruled(list, 'I'), []);
       assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
-      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a project that is not done');
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a goal that is not finished');
     } finally { m.cleanup(); }
   });
 
-  it('a sent plan whose step is not done keeps both', () => {
+  it('a waiting, review or blocked goal keeps both; only done and dropped are finished', () => {
+    for (const status of ['waiting', 'review', 'blocked']) {
+      const m = machine();
+      try {
+        const area = checkoutsOf(m);
+        goal(m, 'landed', 'done');
+        goal(m, 'stuck', status);
+        const { list } = runTidy(m.doors());
+        assert.deepEqual(ruled(list, 'I'), [], status);
+        assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a goal that is not finished', status);
+      } finally { m.cleanup(); }
+    }
+  });
+
+  it('every goal done or dropped lets both go; another programme\'s open goal does not hold them', () => {
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      project(m, 'busy', { archived: false, closeout: false, steps: [{ status: 'ready' }] });
+      goal(m, 'one', 'done');
+      goal(m, 'two', 'dropped');
+      goal(m, 'elsewhere', 'open', { programme: 'staff' });
       const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'I'), []);
-      assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a project that is not done');
+      assert.deepEqual(paths(ruled(list, 'I')), [join(area, 'memoro'), join(area, 'memoro-cli')]);
     } finally { m.cleanup(); }
   });
 
-  it('a plan whose every step is done but whose criterion is not met keeps both: it is not done', () => {
+  it('a GOAL.json that does not parse counts as not finished and keeps both', () => {
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      const plan = join(area, 'waiting', 'PLAN.json');
-      m.write(plan, '{}');
-      m.register({ project: 'waiting', repo: 'memoro-cli', programme: 'mc', plan, steps: [{ status: 'done' }], criteria: [{ met: false }] });
+      goal(m, 'broken', 'open', { text: '{ not json' });
       const { list } = runTidy(m.doors());
       assert.deepEqual(ruled(list, 'I'), []);
-      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a project that is not done');
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a goal that is not finished');
     } finally { m.cleanup(); }
   });
 
@@ -586,17 +448,17 @@ describe('(I) a planning area\'s own checkouts, while their programme has no pro
     } finally { m.cleanup(); }
   });
 
-  it('a draft that appears between the list and the apply keeps both: the apply asks again', () => {
+  it('a goal opened between the list and the apply keeps both: the apply asks again', () => {
     const m = machine();
     try {
-      const area = checkoutsOf(m);
+      checkoutsOf(m);
       const { listPath } = runTidy(m.doors());
-      m.write(join(area, 'late', 'DRAFT.json'), '{}');
+      goal(m, 'late', 'open');
       const outcome = applyTidy({ listPath, ...m.doors() });
       assert.deepEqual(m.released, []);
       assert.equal(outcome.removed, 0);
       assert.equal(outcome.applied.length, 2);
-      assert.ok(outcome.applied.every((item) => !item.ok && /^re-check: its programme has a project that is not done/u.test(item.why)), JSON.stringify(outcome.applied));
+      assert.ok(outcome.applied.every((item) => !item.ok && /^re-check: its programme has a goal that is not finished/u.test(item.why)), JSON.stringify(outcome.applied));
     } finally { m.cleanup(); }
   });
 
@@ -658,52 +520,19 @@ describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
     for (const n of [1, 3, 4]) assert.equal(keptOf(plan, transcript(n).path).rule, 'T4');
   });
 
-  it('a transcript under runner/step/<x> falls under P once x is purged, its STATE.json never; a deps area\'s never does', () => {
-    const m = machine();
-    try {
-      layout2(m);
-      const mine = project(m, 'x');
-      project(m, 'deps-a');
-      const session = join(m.projects, '-mc-runner-step-x-memoro-cli', `${ID(1)}.jsonl`);
-      const bump = join(m.projects, '-mc-runner-deps-deps-a-memoro', `${ID(2)}.jsonl`);
-      m.write(session, m.head(join(m.work, 'runner', 'step', 'x', 'memoro-cli')), NOW - HOUR);
-      m.write(bump, m.head(join(m.work, 'runner', 'deps', 'deps-a', 'memoro')), NOW - HOUR);
-      const { list } = runTidy(m.doors());
-      const p = paths(ruled(list, 'P'));
-      assert.ok(p.includes(session));
-      assert.equal(mine.register, join(m.work, 'programs', 'mc', 'x', 'STATE.json'));
-      assert.ok(!p.includes(mine.register), 'a project\'s state is its knowledge (ruling 51)');
-      for (const file of [mine.log, mine.err, join(m.work, 'runner', 'log', 'closed', 'x'), join(m.work, 'runner', 'scratch', 'x-20261001T100000Z')]) {
-        assert.ok(p.includes(file), `${file} is still purged`);
-      }
-      assert.ok(!p.includes(bump), 'a deps area is no project\'s');
-    } finally { m.cleanup(); }
-  });
-
-  it('a project whose runner/step area is still there is kept', () => {
-    const m = machine();
-    try {
-      layout2(m);
-      const mine = project(m, 'x');
-      mkdirSync(join(m.work, 'runner', 'step', 'x', 'memoro-cli'), { recursive: true });
-      const { list } = runTidy(m.doors());
-      assert.equal(keptOf(list, mine.register).why, 'an area for it still exists');
-    } finally { m.cleanup(); }
-  });
-
-  it('X walks programs/: a project\'s directory is skipped, a merged worktree goes through the root check', () => {
+  it('X walks programs/: the goals directory is skipped, a merged worktree goes through the root check', () => {
     const m = machine();
     try {
       layout2(m);
       const area = join(m.work, 'programs', 'mc');
       for (const name of ['memoro', 'memoro-cli', 'wt-a']) m.write(join(area, name, '.git'), 'gitdir: /fake');
-      m.write(join(area, 'layout', 'PLAN.json'), '{}');
+      goal(m, 'layout', 'open');
       const { list, outcome } = runTidy({ ...m.doors(), apply: true });
       assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [[join(area, 'wt-a'), 'plan-worktree', 'X']]);
       assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
-      assert.ok(![...list.targets, ...list.kept].some((item) => item.path.startsWith(join(area, 'layout'))), 'a project directory is not a worktree');
+      assert.ok(![...list.targets, ...list.kept].some((item) => item.path.startsWith(join(area, 'goals'))), 'the goals directory is not a worktree');
       assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(area, 'wt-a'), true]]);
-      assert.ok(existsSync(join(area, 'layout', 'PLAN.json')));
+      assert.ok(existsSync(join(area, 'goals', 'layout', 'GOAL.json')));
     } finally { m.cleanup(); }
   });
 });
@@ -821,7 +650,6 @@ describe('(K) slug directories no repository mc knows has, under the gate, its c
     try {
       const facts = gatherTidyFacts(m.doors({ repos: repos(m) }));
       assert.deepEqual(facts.cache_slugs, []);
-      assert.equal(facts.register_error, null);
     } finally { m.cleanup(); }
   });
 
@@ -978,17 +806,18 @@ describe('the list file and the apply', () => {
   it('a dry run writes the list whole, every target and keep with its rule', () => {
     const m = machine();
     try {
-      project(m, 'ui-faults');
+      const area = planArea(m);
       const { list, listPath, outcome } = runTidy(m.doors());
       assert.equal(outcome, null);
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 6);
+      assert.equal(written.rules_version, 7);
       assert.equal(written.person, false, 'the list says whose run it was');
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
-      assert.ok(existsSync(registerPath(m.work, 'ui-faults')), 'a dry run removes nothing');
+      assert.ok(written.targets.length > 0, 'it has a target to list');
+      assert.ok(existsSync(join(area, 'wt-a')), 'a dry run removes nothing');
       assert.equal(runTidy(m.doors()).listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z-2.json'));
     } finally { m.cleanup(); }
   });
@@ -996,7 +825,13 @@ describe('the list file and the apply', () => {
   it('the list is written before the first removal, and applied is appended to it', () => {
     const m = machine();
     try {
-      const mine = project(m, 'ui-faults');
+      // Two transcripts whose directory is gone (T3), each with its <uuid>/ beside it.
+      const mine = [1, 2].flatMap((n) => {
+        const file = join(m.projects, '-gone', `${ID(n)}.jsonl`);
+        m.write(file, m.head(join(m.home, 'gone')));
+        m.write(join(m.projects, '-gone', ID(n), 'tool.txt'));
+        return [file, join(m.projects, '-gone', ID(n))];
+      });
       const order = [];
       const write = (path, value) => { order.push(['write', value.applied ? 'applied' : 'list']); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, JSON.stringify(value)); };
       const remove = (path) => { order.push(['remove', path]); rmSync(path, { recursive: true }); };
@@ -1004,12 +839,11 @@ describe('the list file and the apply', () => {
       assert.deepEqual(order[0], ['write', 'list']);
       assert.deepEqual(order.at(-1), ['write', 'applied']);
       assert.ok(order.slice(1, -1).every(([what]) => what === 'remove'));
-      assert.equal(order.slice(1, -1).at(-1)[1], mine.register, 'the register file last');
-      for (const file of Object.values(mine)) assert.equal(existsSync(file), false, file);
+      for (const file of mine) assert.equal(existsSync(file), false, file);
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
-      assert.equal(written.applied.length, 5);
+      assert.equal(written.applied.length, 2);
       assert.ok(written.applied.every((item) => item.ok));
-      assert.equal(outcome.removed, 5);
+      assert.equal(outcome.removed, 2);
     } finally { m.cleanup(); }
   });
 
@@ -1073,7 +907,7 @@ describe('the printout', () => {
     ],
     kept: [
       { path: '/w/work/x', rule: 'W', why: 'memoro: 3 uncommitted' },
-      { path: '/w/step/y', rule: 'step-area', why: 'the runner closes a step area when its project is done' },
+      { path: '/w/programs/mc/memoro', rule: 'plan-checkout', why: 'its programme has a goal that is not finished' },
       { path: '/w/plan/mc/wt-b', rule: 'X', why: '2 uncommitted' },
     ],
   };
@@ -1091,7 +925,7 @@ describe('the printout', () => {
     assert.match(text, /the first 10 of 13/u);
     assert.match(text, /X {2}\/w\/plan\/mc\/wt-b — 2 uncommitted/u);
     assert.match(text, /W {2}\/w\/work\/x — memoro: 3 uncommitted/u, 'a retired workarea kept is said, with why');
-    assert.doesNotMatch(text, /step\/y/u, 'a step area kept is the ordinary case');
+    assert.doesNotMatch(text, /programs\/mc\/memoro/u, 'a checkout kept for an open goal is the ordinary case');
     assert.match(text, /list: \/w\/runner\/tidy\/l\.json/u);
   });
 

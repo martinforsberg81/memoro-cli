@@ -1,7 +1,6 @@
 /**
- * `docs/technical/mc-status.md` is `mc status <name>` written down: what it
- * prints, which file every fact comes from, and what the status board that
- * `mc status` used to print was before it went.
+ * `docs/technical/mc-status.md` says where `mc status` went — the page, and
+ * `mc goal show` for one goal — and how the page's cost estimate is priced.
  *
  * A close-out note about a *retired* mechanism rots in a particular way: it
  * keeps naming files and verbs that have since been deleted, and nothing
@@ -45,7 +44,7 @@ describe('docs/technical/mc-status.md says what mc status reads', () => {
     for (const [, path] of DOC.matchAll(/`((?:src|tests|docs)\/[\w./<>-]+\.(?:js|md))`/gu)) {
       if (!path.includes('<')) paths.add(path);
     }
-    assert.ok(paths.size >= 8, `the doc names too few files to be pinning anything: ${paths.size}`);
+    assert.ok(paths.size >= 4, `the doc names too few files to be pinning anything: ${paths.size}`);
     for (const path of paths) {
       assert.ok(existsSync(fileURLToPath(new URL(path, root))), `the doc names ${path}, which is gone`);
     }
@@ -62,7 +61,7 @@ describe('docs/technical/mc-status.md says what mc status reads', () => {
     // The doc names `mc --watch` and `--sessions` — it has to, that is what
     // the old board was — so the guard cannot be "never say the word". It is
     // this instead: the block the doc shows a reader is the block the verb
-    // writes, and `tests/mc/status-project.test.js` runs every `mc …` in it.
+    // writes.
     const quoted = /```\n(mc: mc status is now mc[\s\S]*?)```/u.exec(DOC);
     assert.ok(quoted, 'the doc no longer quotes what bare `mc status` says');
     const bare = runMcCli(['status'], {});

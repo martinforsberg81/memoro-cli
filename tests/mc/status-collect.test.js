@@ -8,41 +8,8 @@ import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
-import { kindFor, machineState, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
+import { nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
-/**
- * Plans as `listPlans` returns them, with the parsed plan on the record: a
- * status belongs to the first step that is not done, so a fixture says which
- * state it is in by building that step.
- */
-function planRecord({ repo, programme, project, status, title }) {
-  const stopped = status === 'blocked';
-  const plan = {
-    schema: 'mc-plan',
-    version: 1,
-    goal: ['One thing.'],
-    contract: ['Not without Martin.'],
-    out_of_scope: ['Everything else.'],
-    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
-    documents: [],
-    steps: [{
-      title,
-      status,
-      done_when: 'the step is finished',
-      instruction: status === 'done' ? [] : ['Do it.'],
-      pr: null,
-      blocked_by: stopped ? { kind: status === 'blocked' ? 'project' : 'decision', name: `${programme}-1` } : null,
-    }],
-  };
-  return { repo, programme, project, path: `docs/project/${programme}/${project}/PLAN.json`, legacy: false, plan, problems: [], status, next: title };
-}
-
-const PLANS = [
-  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'blocked', title: 'Answer decision 4' }),
-  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-image-animation', status: 'ready', title: 'Publish Tim' }),
-  planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'blocked', title: 'Wait' }),
-  planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-status', status: 'ready', title: 'The page' }),
-];
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
   '2026-08-25T18:00:00Z\tdocx-editor\tstep\t0\t698\t10958\t49\t88\t36423\t3683298\t94528\ts2\tsuccess,open',
@@ -50,16 +17,6 @@ const TSV = [
   '2026-08-25T19:30:00Z\tfocused-session-ui\ttriage\t142\t5400\t-\t-\t-\t-\t-\t-\t-\ttimeout',
 ].join('\n');
 const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('2026-08-25T00:00:00Z'));
-
-describe('kind', () => {
-  it('decides each queued name the way the runner does: only ready runs', () => {
-    const ctx = { plans: PLANS };
-    assert.equal(kindFor('brand-new', ctx), 'skip:no-plan', 'the runner does not write plans');
-    assert.equal(kindFor('avatar-image-animation', ctx), 'step');
-    assert.equal(kindFor('avatar-self-serve', ctx), 'skip:blocked', 'a blocked step is not ready');
-    assert.equal(kindFor('docx-editor', ctx), 'skip:blocked');
-  });
-});
 
 describe('COST', () => {
   it('prices by family, and says n/a for a model it does not know', () => {
@@ -168,45 +125,5 @@ describe('NOW', () => {
     assert.equal(pidAlive(0), false);
     assert.equal(pidAlive(null), false);
     assert.equal(pidAlive('nope'), false);
-  });
-});
-
-
-describe('machineState reads a merge left in progress as the runner does', () => {
-  const plans = [PLANS[3]];
-  // The fake answers `git status` verbatim: the leading space of ` M c.js` is
-  // the porcelain's, and a fake that trimmed it would hide the column bug.
-  const reading = (rows, { merging = true } = {}) => machineState('mc-status', {
-    plans, root: '/w', exists: () => true, mtime: () => null,
-    git: (_cwd, args) => {
-      if (args[0] === 'rev-parse') return { ok: merging, stdout: '' };
-      if (args[0] === 'status') return { ok: true, stdout: rows.join('\n') };
-      return { ok: false, stdout: '' };
-    },
-  });
-
-  it('is runnable when the only dirt is unmerged paths and what main changed', () => {
-    const m = reading(['UU a.js', 'M  b.js', 'A  c.js', 'D  d.js']);
-    assert.equal(m.runnable, true);
-    assert.equal(m.kind, 'step');
-  });
-
-  it('keeps dirty when work sits beside the merge, whichever line it is on', () => {
-    for (const rows of [['UU a.js', 'M  b.js', ' M c.js'], [' M c.js', 'UU a.js', 'M  b.js'], ['UU a.js', 'MM b.js'], ['UU a.js', '?? new.js'], ['UU a.js', ' D gone.js']]) {
-      const m = reading(rows);
-      assert.equal(m.reason, 'dirty', rows.join(' | '));
-      assert.equal(m.runnable, false);
-    }
-  });
-
-  it('is dirty without MERGE_HEAD whatever the rows are — a staged file is then somebody\'s work', () => {
-    assert.equal(reading(['UU a.js', 'M  b.js'], { merging: false }).reason, 'dirty');
-    assert.equal(reading(['M  b.js'], { merging: false }).reason, 'dirty');
-  });
-
-  it('parses the columns as written: a leading-space first line is a worktree change', () => {
-    const m = reading([' M c.js', 'M  b.js']);
-    assert.equal(m.reason, 'dirty');
-    assert.match(m.detail, /uncommitted work in \/w\/mc-status\/memoro: c\.js, b\.js/u);
   });
 });

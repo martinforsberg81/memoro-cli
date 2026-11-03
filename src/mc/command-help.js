@@ -82,13 +82,6 @@ export const COMMAND_USAGE = Object.freeze({
     "show includes each worktree's changed files, commits past origin/main and last commit.\n",
     "list includes repositories, status, criteria met/all, session count and the last entry's next action.\n",
   ].join(''),
-  status: [
-    "usage — mc status <name> [--json] [--offline]\n",
-    "\n",
-    "One project: its plan, register progress, decisions, last three runner steps and open\n",
-    "pull request. --json returns data; --offline avoids network reads.\n",
-    "A goal is shown by mc goal show, not this verb. Without a name, use mc for the page.\n",
-  ].join(''),
   tidy: [
     "usage — mc tidy [--apply] [--json] [--days <n>] [--docker]\n",
     "\n",
@@ -99,14 +92,7 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   layout: [
     "usage — mc layout [--json]               layout 1 or 2, and where the planning sessions,\n",
-    "                                         step areas, deps areas and registers are\n",
-    "        mc layout migrate [--json]       the move to layout 2 as a dry run: every move in\n",
-    "                                         order, and what refuses it (a runner, a session,\n",
-    "                                         the merger, a process in an old area); writes\n",
-    "                                         nothing, exit 1 when something refuses\n",
-    "        mc layout migrate --apply        the move: the plan made again, each move done in\n",
-    "                                         order and logged; the first that fails stops it,\n",
-    "                                         a second run continues\n",
+    "                                         step areas and deps areas are\n",
   ].join(''),
   repos: [
     "usage — mc repos [--json]   the repositories: bare or primary, the git directory, the\n",

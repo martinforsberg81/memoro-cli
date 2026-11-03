@@ -145,7 +145,7 @@ export const TOOLBOX = [
   '  run tests         mc gate <files…> [--test-name-pattern …]   (in the gate lane, at most 30 files, 2 KB verdict)',
   '                    mc gate alone: the test files this branch changed; no whole suite — that is the merger\'s',
   '  publish + land    mc publish [--title … --body-file … --base …]   (push, open/update the PR, queue it for the merger)',
-  '  what runs where   mc dev list · mc prs · mc status <name>',
+  '  what runs where   mc dev list · mc prs · mc goal show <programme>/<goal>',
   'Every verb: mc <verb> --help.',
 ];
 

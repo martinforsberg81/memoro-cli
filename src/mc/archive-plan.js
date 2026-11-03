@@ -1,27 +1,18 @@
 /**
- * The rows of `docs/project/project_log.md` and the cells a row needs that
- * have to be derived from a plan's own text: the summary from its `next:`, the
- * doc from the `docs/technical/` path it names. Also the files under a
- * programme's directory that code outside `docs/` reads (`keptFiles`), which a
- * programme archive leaves where they are.
+ * The rows of `docs/project/project_log.md` — the gate refuses a row that
+ * occurs twice (`duplicateRow`), and a programme archive appends its own
+ * (`appendRow`) — and the files under a programme's directory that code
+ * outside `docs/` reads (`keptFiles`), which a programme archive leaves where
+ * they are. The project archive that wrote the log's project rows went with
+ * projects on 2026-11-03 (goal mc/projects-to-goals).
  *
  * Everything here is a function of text, so these rules can be covered with
- * no repository behind them. The git and gh half is run.js and
- * archive-programme.js, and the archive itself is project-archive.js.
+ * no repository behind them. The git and gh half is archive-programme.js.
  */
 import { posix } from 'node:path';
 
-import { planFields } from './brief-collect.js';
-import { readPlanText } from './plan-schema.js';
-
-/** Every archive branch the runner has ever pushed starts with this. */
-export const ARCHIVE_BRANCH_PREFIX = 'mc-archive-';
-
 /** The cells of `docs/project/project_log.md`, in the order the table has them. */
 export const LOG_COLUMNS = ['date', 'programme', 'project', 'outcome', 'summary', 'doc', 'pointer'];
-
-/** A row whose `doc` cell is this names no lasting documentation. */
-export const NO_DOC = 'none';
 
 /* ------------------------------------------------------------ the log file */
 
@@ -48,11 +39,6 @@ export function logRows(text) {
     out.push(Object.fromEntries(LOG_COLUMNS.map((key, i) => [key, cells[i] ?? ''])));
   }
   return out;
-}
-
-/** The row that already names this project, or null. The runner never writes a second. */
-export function rowFor(text, project) {
-  return logRows(text).find((row) => row.project === project) || null;
 }
 
 /** One cell as the table writes it: one line, pipes escaped, `-` for nothing. */
@@ -89,8 +75,8 @@ export function duplicateRow(text) {
  * only place left.
  *
  * A log that already has a row for this programme and project (a programme's
- * own row has project `-`) is returned as it is: both archives come here, and
- * only one of them asked `rowFor` first.
+ * own row has project `-`) is returned as it is: the project archive and the
+ * programme archive both came here once.
  */
 export function appendRow(text, row) {
   const programme = cellText(row.programme);
@@ -110,95 +96,10 @@ export function appendRow(text, row) {
   return lines.join('\n');
 }
 
-/* --------------------------------------------------------- the cells to derive */
-
-/**
- * The summary cell: what the project was last doing, which for a plan that
- * reached `done` is what it finished.
- *
- * In a JSON plan that is the last step's title — the steps are the record,
- * and the last one is where the project got to. A `PLAN.md` still on the old
- * shape answers with its `next:`, which was the one line written to be read on
- * its own; that arm goes when the last plan is migrated.
- */
-export function planSummary(planText) {
-  const { plan } = readPlanText(planText);
-  const last = plan?.steps?.at(-1)?.title;
-  if (last) return String(last).replace(/\s+/gu, ' ').trim();
-  const next = planFields(planText).next;
-  return next ? String(next).replace(/\s+/gu, ' ').trim() : '-';
-}
-
-/**
- * The doc cell: the first `docs/technical/…` path the plan names that `exists`
- * says is in the tree, as the relative link the log's other rows use, or
- * `none`. `exists` is asked with the repository-relative path. A plan often
- * names a document it defers to later before the ones it wrote, so a path the
- * plan only mentions, and that is not in the tree, gives no link. A thin or
- * missing note never stops an archive — it is reported (`undocumentedRow`) and
- * Martin decides whether to write it.
- */
-export function planDoc(planText, exists = () => true) {
-  for (const [path] of String(planText || '').matchAll(/docs\/technical\/[A-Za-z0-9._-]+\.md/gu)) {
-    if (exists(path)) return `[${path}](../technical/${path.slice('docs/technical/'.length)})`;
-  }
-  return NO_DOC;
-}
-
-/** Does this row's doc cell name nothing? */
-export function isUndocumented(row) {
-  return !row?.doc || String(row.doc).trim().toLowerCase() === NO_DOC;
-}
-
 /** `owner/repo` from a git remote URL, or null — the pointer links need it. */
 export function remoteSlug(url) {
   const match = /github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/u.exec(String(url || '').trim());
   return match ? match[1] : null;
-}
-
-/** Every PR the runner merged for this project, oldest first, from runs.tsv. */
-export function mergedPrs(tsv, project) {
-  const out = [];
-  for (const line of String(tsv || '').split('\n').slice(1)) {
-    const cells = line.split('\t');
-    if (cells[1] !== project || cells[5] === '-' || !cells[5]) continue;
-    if (!String(cells[12] || '').includes('merged')) continue;
-    if (!out.includes(cells[5])) out.push(cells[5]);
-  }
-  return out;
-}
-
-/**
- * The pointer cell: the PRs the runner merged for the project, linked when
- * the repository's slug is known. With no merged run to point at — a project
- * finished before the runner existed, or by hand — the fallback the caller
- * passes is used, and `none` is the last resort. The row is a one-line
- * index; this is how a reader gets from it to the record.
- */
-export function pointerCell(prs, { slug = null, fallback = null } = {}) {
-  if (prs.length) {
-    return prs.map((pr) => (slug ? `[#${pr}](https://github.com/${slug}/pull/${pr})` : `#${pr}`)).join(', ');
-  }
-  return fallback || NO_DOC;
-}
-
-/* ------------------------------------------------- intake: the missing docs */
-
-export const UNDOCUMENTED_HEADER = [
-  '# Projects archived with no docs/technical/ note',
-  '',
-  'Written by `mc run` when it archives a project whose `project_log.md` row',
-  'says `doc: none`. A missing note never stops an archive — it is recorded',
-  'here for `mc brief` to raise, and Martin decides whether to write it.',
-  '',
-  '| date | repo | programme | project | pointer |',
-  '|---|---|---|---|---|',
-  '',
-].join('\n');
-
-export function undocumentedRow({ date, repo, programme, project, pointer }) {
-  const cell = (value) => String(value ?? '-').replace(/\s+/gu, ' ').replace(/\|/gu, '\\|').trim() || '-';
-  return `| ${[date, repo, programme, project, pointer].map(cell).join(' | ')} |`;
 }
 
 /* ----------------------------------------------- what code outside docs/ reads */

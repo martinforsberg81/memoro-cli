@@ -22,7 +22,6 @@ mkdirSync(join(mc, 'step', 'retention', 'memoro-cli', '.git'), { recursive: true
 const {
   discardWorkArea, inspectWorkArea, listStepAreas, listStrays, listWorkAreas, releaseWorkArea,
 } = await import('../../src/mc/work-area.js');
-const { registerPath } = await import('../../src/mc/register.js');
 
 describe('the areas left under work/', () => {
   it('listWorkAreas enumerates work/ and nothing else', () => {
@@ -119,11 +118,6 @@ describe('listStrays', () => {
       mkdirSync(join(strayRoot, 'step', 'p'), { recursive: true });
       mkdirSync(join(strayRoot, 'work', 'w'), { recursive: true });
       mkdirSync(join(strayRoot, '.cache'), { recursive: true });
-      // A legacy runner area of a project in the register is the runner's.
-      mkdirSync(join(strayRoot, 'oldproj', 'memoro-cli', '.git'), { recursive: true });
-      const register = registerPath(strayRoot, 'oldproj');
-      mkdirSync(join(register, '..'), { recursive: true });
-      writeFileSync(register, '{}\n');
       // A role home is mc worker's.
       mkdirSync(join(strayRoot, 'helper2'), { recursive: true });
       writeFileSync(join(strayRoot, 'helper2', '.mc-role'), 'worker\n');
@@ -132,14 +126,11 @@ describe('listStrays', () => {
     } finally { rmSync(strayRoot, { recursive: true, force: true }); }
   });
 
-  it('layout 2 has no legacy areas: a checkout directly under the root is a stray, even named like a project', () => {
+  it('a checkout directly under the root is a stray, even named like an old project', () => {
     const strayRoot = mkdtempSync(join(tmpdir(), 'mc-strays-'));
     try {
       mkdirSync(join(strayRoot, 'runner'), { recursive: true });
       writeFileSync(join(strayRoot, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
-      mkdirSync(join(strayRoot, 'programs', 'mc', 'oldproj'), { recursive: true });
-      writeFileSync(join(strayRoot, 'programs', 'mc', 'oldproj', 'PLAN.json'), '{}\n');
-      writeFileSync(registerPath(strayRoot, 'oldproj'), '{}\n');
       mkdirSync(join(strayRoot, 'oldproj', 'memoro-cli', '.git'), { recursive: true });
 
       assert.deepEqual(listStrays({ root: strayRoot }).map((dir) => dir.name), ['oldproj']);
