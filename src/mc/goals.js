@@ -18,6 +18,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { samePr } from './merge-queue.js';
 import { programsHome } from './paths.js';
 import { NAME_RE } from './plan-schema.js';
 
@@ -253,12 +254,16 @@ export function lastBuildEntry(log) {
 }
 
 /**
- * Whether a goal waits for a review session: it is in `review`, and the last
- * entry is not the runner's for a green it has queued — that one waits for the
- * merger, which writes the next entry.
+ * Whether a goal waits for a review session: it is in `review`, the last
+ * entry is not the runner's for a green it has queued, and none of its pull
+ * requests is in the merger's line (`inLine`, merge-queue.js) — a session that
+ * fixed a red mechanically queues it with `mc merge` itself. Either waits for
+ * the merger, which writes the next entry: landed is done, red is blocked,
+ * moved past its head is reviewed again.
  */
-export function reviewDue(goal) {
-  return goal.status === 'review' && !queuedOf(goal.log.at(-1));
+export function reviewDue(goal, inLine = []) {
+  if (goal.status !== 'review' || queuedOf(goal.log.at(-1))) return false;
+  return !(goal.prs ?? []).some((item) => inLine.some((entry) => samePr(entry, item)));
 }
 
 /** The runner's entry for a red merge (`merger.js`): `Gjort: merger answered red on #<pr>`. */
@@ -412,9 +417,9 @@ export function goalName({ programme, goal }) {
  * leaves out a review that cannot run now, so it does not stand in front of
  * every other goal.
  */
-export function nextGoal(goals, { repos = [], held = new Set(), may = () => true } = {}) {
+export function nextGoal(goals, { repos = [], held = new Set(), may = () => true, inLine = [] } = {}) {
   const lastAt = (goal) => goal.log.at(-1)?.at ?? '';
-  const eligible = goals.filter((goal) => (goal.status === 'open' || reviewDue(goal)) && goal.problems.length === 0
+  const eligible = goals.filter((goal) => (goal.status === 'open' || reviewDue(goal, inLine)) && goal.problems.length === 0
     && repos.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal));
   return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
 }

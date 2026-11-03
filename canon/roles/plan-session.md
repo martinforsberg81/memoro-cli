@@ -57,6 +57,9 @@ then do it. For example:
 - **Finish it yourself.** In the goal's worktree, on its branch: fix what the
   review or the merger named, `mc gate`, commit, `mc publish --no-merge`, and
   `mc goal log --status review`. A review session on another model reads it.
+  A mechanical fix of a red (main merged in, a conflict, a page over its
+  length) that leaves what a review judged unchanged gets no review:
+  `mc publish`, which queues it, then `mc goal log --status review`.
 - **Reopen.** Revise GOAL.md's body if the brief was what was wrong, then
   `mc goal log --status open --next "…"`: the next build session starts from
   your `Nästa`, so say what it does differently.

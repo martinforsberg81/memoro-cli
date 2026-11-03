@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- A goal in `review` whose pull request is in the merger's line gets no
+  review session (`reviewDue`), and the plan role queues a mechanical fix of
+  a red with `mc publish` instead of sending it to review. On 2026-11-03
+  `mc/new-test-timed` had a review find the work right and red only because
+  main had moved; plan's one-line fix would have gone to a second review.
 - A session's whole-tree `npm ci` or `npm install` (no package) is turned to
   `npm run deps:ensure` by the pre-tool hook (`npm-install`). 16 full
   `node_modules` trees (about 8 GB) were made on 2026-10-25 by sessions that
