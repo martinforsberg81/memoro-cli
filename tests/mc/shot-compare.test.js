@@ -424,6 +424,42 @@ describe('mc shot dev --compare', () => {
     assert.equal(refOnly.stdout, '');
   });
 
+  it('receipt: a missing compare receipt names the installed mc and the script actually used on either side', async () => {
+    for (const side of ['here', 'ref']) {
+      const result = await compare(['dev', 'assistant', '--click', '.tab', '--compare', 'origin/main'], {
+        clicked: side === 'ref' ? { here: true } : {},
+      });
+      assert.equal(result.code, 1);
+      const label = side === 'here' ? 'here' : 'origin/main';
+      assert.ok(result.stderr.includes(`mc: ${label}: the picture at `), result.stderr);
+      assert.ok(result.stderr.includes(`this installed mc does not understand the result from ${SHOT_JSON.argv.join(' ')} in ${result.worktree}`), result.stderr);
+      assert.doesNotMatch(result.stderr, /<unknown worktree>|<unknown script>/u);
+      assert.equal(result.stdout, '');
+    }
+  });
+
+  it('receipt: compare accepts acted for clicks on both sides and a thrown eval on either side exits 1', async () => {
+    const clicked = await compare(['dev', 'assistant', '--click', '.tab', '--compare', 'origin/main'], {
+      extra: { here: { acted: [{}] }, ref: { acted: [{}] } },
+    });
+    assert.equal(clicked.code, 0, clicked.stderr);
+    assert.deepEqual(clicked.stdout.trimEnd().split('\n'), clicked.captures.map(({ request }) => request.out));
+
+    for (const side of ['here', 'ref']) {
+      const result = await compare(['dev', 'assistant', '--eval', 'document.title', '--compare', 'origin/main'], {
+        extra: {
+          here: { acted: [{}] }, ref: { acted: [{}] },
+          [side]: { acted: [{}], evaluated: [{ error: 'Error: bad' }] },
+        },
+      });
+      assert.equal(result.code, 1, result.stderr);
+      assert.deepEqual(result.stdout.trimEnd().split('\n'), [
+        ...result.captures.map(({ request }) => request.out),
+        `${side === 'here' ? 'here' : 'origin/main'}: eval 1  threw: Error: bad`,
+      ]);
+    }
+  });
+
   it('each side prints its own error, eval and failed lines, and a failed step on either side exits 1', async () => {
     const result = await compare(['dev', 'assistant', '--eval', 'document.title', '--compare', 'origin/main'], {
       extra: {
