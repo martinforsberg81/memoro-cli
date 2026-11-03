@@ -25,9 +25,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { installTmuxStub } from './_helpers/tmux-stub.js';
-import { runVerb } from './_helpers/mc-verb.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { parseArgs } from '../../src/mc/commands/work.js';
 import { startInBackground } from '../../src/mc/work-open.js';
+
+await preloadVerbs('work');
 
 const ID = '3f9d2c81-0000-4000-8000-000000000001';
 

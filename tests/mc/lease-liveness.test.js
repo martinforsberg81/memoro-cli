@@ -20,9 +20,11 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { livenessForLeases, livenessOf } from '../../src/mc/lease-liveness.js';
 import { livenessRow } from '../../src/mc/repo-render.js';
+
+await preloadVerbs('repo');
 
 const NOW = Date.parse('2026-08-17T12:00:00.000Z');
 
@@ -189,12 +191,12 @@ describe('the line a person reads before deciding to force', () => {
  * would be the opposite of what it is for.
  */
 describe('mc repo who, and force left exactly as it was', () => {
-  it('prints the liveness line under the lease', () => {
+  it('prints the liveness line under the lease', async () => {
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha'));
-      const asked = runMcCli(['repo', 'who', 'repo'], fx.env);
+      (await runVerb(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha')));
+      const asked = (await runVerb(['repo', 'who', 'repo'], fx.env));
       assert.equal(asked.status, 0, asked.stderr);
       assert.match(asked.stdout, /alpha .*a round/u);
       // A fresh area with no conversation in it has nothing to have been seen
@@ -204,43 +206,43 @@ describe('mc repo who, and force left exactly as it was', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('--json carries the liveness for a surface that reads no prose', () => {
+  it('--json carries the liveness for a surface that reads no prose', async () => {
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha'));
-      const asked = runMcCli(['repo', 'who', 'repo', '--json'], fx.env);
+      (await runVerb(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha')));
+      const asked = (await runVerb(['repo', 'who', 'repo', '--json'], fx.env));
       const page = JSON.parse(asked.stdout);
       assert.equal(page.holder, 'alpha');
       assert.equal(page.liveness.known, true);
       assert.ok(['working', 'waiting', 'idle'].includes(page.liveness.state));
       // A free one carries null rather than a fabricated fourth state.
-      runMcCli(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
-      assert.equal(JSON.parse(runMcCli(['repo', 'who', 'repo', '--json'], fx.env).stdout).liveness, null);
+      (await runVerb(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha')));
+      assert.equal(JSON.parse((await runVerb(['repo', 'who', 'repo', '--json'], fx.env)).stdout).liveness, null);
     } finally { fx.cleanup(); }
   });
 
-  it('a holder outside the work root reads unknown at the command line too', () => {
+  it('a holder outside the work root reads unknown at the command line too', async () => {
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     try {
       // Claimed from outside any work area: the holder is `user@host`.
-      runMcCli(['repo', 'claim', 'repo', 'from a shell'], fx.env, { cwd: fx.root });
-      const asked = runMcCli(['repo', 'who', 'repo'], fx.env);
+      (await runVerb(['repo', 'claim', 'repo', 'from a shell'], fx.env, { cwd: fx.root }));
+      const asked = (await runVerb(['repo', 'who', 'repo'], fx.env));
       assert.match(asked.stdout, /liveness unknown/u);
       assert.doesNotMatch(asked.stdout, /holder idle/u, 'an unseen holder was reported as idle');
     } finally { fx.cleanup(); }
   });
 
-  it('a refused claim says whether the other round is alive', () => {
+  it('a refused claim says whether the other round is alive', async () => {
     // The decision point: this is the message that offers `--force`, so it is
     // the one that must not show an age without a life.
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     addArea(fx, 'beta', 'beta');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'their round'], fx.env, inArea(fx, 'alpha'));
-      const refused = runMcCli(['repo', 'claim', 'repo', 'my round'], fx.env, inArea(fx, 'beta'));
+      (await runVerb(['repo', 'claim', 'repo', 'their round'], fx.env, inArea(fx, 'alpha')));
+      const refused = (await runVerb(['repo', 'claim', 'repo', 'my round'], fx.env, inArea(fx, 'beta')));
       assert.equal(refused.status, 1);
       assert.match(refused.stderr, /is held by alpha/u);
       assert.match(refused.stderr, /holder idle|holder working|liveness unknown/u);
@@ -248,31 +250,31 @@ describe('mc repo who, and force left exactly as it was', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('force still works, whatever the liveness says', () => {
+  it('force still works, whatever the liveness says', async () => {
     // No code block, by design. Warn, log, never bar the way — the liveness
     // line is grounds for a human decision, not a gate on one.
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     addArea(fx, 'beta', 'beta');
     try {
-      runMcCli(['repo', 'claim', 'repo', 'their round'], fx.env, inArea(fx, 'alpha'));
-      const forced = runMcCli(['repo', 'release', 'repo', '--force'], fx.env, inArea(fx, 'beta'));
+      (await runVerb(['repo', 'claim', 'repo', 'their round'], fx.env, inArea(fx, 'alpha')));
+      const forced = (await runVerb(['repo', 'release', 'repo', '--force'], fx.env, inArea(fx, 'beta')));
       assert.equal(forced.status, 0, forced.stderr);
       assert.match(forced.stdout, /took the lease .* from alpha — logged/u);
-      assert.match(runMcCli(['repo', 'who', 'repo'], fx.env).stdout, /free/u);
+      assert.match((await runVerb(['repo', 'who', 'repo'], fx.env)).stdout, /free/u);
     } finally { fx.cleanup(); }
   });
 
-  it('claim and release say exactly what they said before', () => {
+  it('claim and release say exactly what they said before', async () => {
     const fx = repoFixture({ name: 'lease-liveness' });
     addArea(fx, 'alpha', 'alpha');
     try {
       const grew = /^mc: (holder \w+|liveness )/mu;
-      const claimed = runMcCli(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha'));
+      const claimed = (await runVerb(['repo', 'claim', 'repo', 'a round'], fx.env, inArea(fx, 'alpha')));
       assert.match(claimed.stdout, /alpha holds .*a round/u);
       assert.equal(claimed.stdout.split('\n').filter(Boolean).length, 2);
       assert.doesNotMatch(claimed.stdout, grew, 'claiming grew a line it did not have');
-      const released = runMcCli(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha'));
+      const released = (await runVerb(['repo', 'release', 'repo'], fx.env, inArea(fx, 'alpha')));
       assert.match(released.stdout, /released/u);
       assert.doesNotMatch(released.stdout, grew);
     } finally { fx.cleanup(); }

@@ -20,9 +20,11 @@ import { git } from './_helpers/git-fixture.js';
 import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
 import { board as workModel } from './_helpers/board.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { runVerb } from './_helpers/mc-verb.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { writeSnapshot } from '../../src/mc/repo-snapshot.js';
+
+await preloadVerbs('repo', 'work');
 
 /** A shell standing in one of the work areas — that is who holds a lease. */
 function inArea(fx, name) {

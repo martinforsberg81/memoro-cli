@@ -23,11 +23,13 @@ import { describe, it } from 'node:test';
 
 import { git } from './_helpers/git-fixture.js';
 import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { loggedTick, nightlyTick } from '../../src/mc/nightly-loop.js';
+
+await preloadVerbs('test', 'repo');
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-'));
 
@@ -349,11 +351,11 @@ describe('the log', () => {
 });
 
 describe('the verbs', () => {
-  it('start and stop are gone: they exit 2 with the usage, and start nothing', () => {
+  it('start and stop are gone: they exit 2 with the usage, and start nothing', async () => {
     const fx = fixture({ name: 'nightly' });
     try {
       for (const argv of [['start'], ['stop'], ['start', '--interval', '1']]) {
-        const out = runMcCli(['test', 'nightly', ...argv], fx.env);
+        const out = (await runVerb(['test', 'nightly', ...argv], fx.env));
         assert.equal(out.status, 2, `${argv.join(' ')}: ${out.stdout}`);
         assert.match(out.stderr, /usage — mc test dev/u);
         assert.doesNotMatch(out.stderr, /mc test nightly (start|stop) \[/u);
@@ -362,14 +364,14 @@ describe('the verbs', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('the old spelling says where it went, and starts nothing', () => {
+  it('the old spelling says where it went, and starts nothing', async () => {
     const fx = fixture({ name: 'nightly' });
     try {
-      const moved = runMcCli(['repo', 'nightly', 'start', '--interval', '3600'], fx.env);
+      const moved = (await runVerb(['repo', 'nightly', 'start', '--interval', '3600'], fx.env));
       assert.equal(moved.status, 2, moved.stdout);
       assert.match(moved.stderr, /mc repo nightly is now mc test nightly/u);
       assert.equal(existsSync(join(fx.mcHome, 'nightly', 'nightly.json')), false);
-      assert.equal(runMcCli(['repo', 'nightly', 'status'], fx.env).status, 2);
+      assert.equal((await runVerb(['repo', 'nightly', 'status'], fx.env)).status, 2);
     } finally { fx.cleanup(); }
   });
 });
@@ -391,7 +393,7 @@ describe('mc test nightly status — red, and since when', () => {
     reason: null, red, tests: 2445,
   }, { root: fx.mcHome });
 
-  it('prints each repository\'s last measured run, and the oldest red with its date', () => {
+  it('prints each repository\'s last measured run, and the oldest red with its date', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -401,7 +403,7 @@ describe('mc test nightly status — red, and since when', () => {
       record(fx, first, ['data-bus event names'], 'a'.repeat(40));
       record(fx, ago(1), ['data-bus event names'], 'b'.repeat(40));
 
-      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner stopped {2}— no tick will happen until mc run start/u);
       assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+bbbbbbb/u);
@@ -409,7 +411,7 @@ describe('mc test nightly status — red, and since when', () => {
       // as one, with the name it is about.
       assert.match(page.stdout, /since at least 3d ago\s+data-bus event names/u);
 
-      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
+      const state = json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env)));
       assert.equal(state.runner.running, false);
       assert.equal(state.interval_ms, 86_400_000);
       const reading = state.repos.repo;
@@ -423,20 +425,20 @@ describe('mc test nightly status — red, and since when', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a repository nobody has measured is named anyway, rather than left out', () => {
+  it('a repository nobody has measured is named anyway, rather than left out', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /full run\s+never — the runner's chore takes it when it is due/u);
-      assert.deepEqual(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).repos.repo, {
+      assert.deepEqual(json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env))).repos.repo, {
         runs: 0, last: null, measured: null, red: [],
       });
     } finally { fx.cleanup(); }
   });
 
-  it('says a repository was skipped because nothing changed, and still shows the last measurement', () => {
+  it('says a repository was skipped because nothing changed, and still shows the last measurement', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -447,7 +449,7 @@ describe('mc test nightly status — red, and since when', () => {
         reason: 'main is still aaaaaaa, last measured x', red: null, tests: null,
       }, { root: fx.mcHome });
 
-      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+aaaaaaa/u);
       assert.match(page.stdout, /skipped, nothing changed/u);
@@ -455,7 +457,7 @@ describe('mc test nightly status — red, and since when', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('says the tick is the runner\'s chore, and when it is next due, while the runner runs', () => {
+  it('says the tick is the runner\'s chore, and when it is next due, while the runner runs', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -466,28 +468,28 @@ describe('mc test nightly status — red, and since when', () => {
         + `${new Date(Date.now() - 2 * 3_600_000).toISOString()}\tnightly\tnightly\t0\t900\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-measured,0-unchanged\n`;
       writeFileSync(join(runner, 'log', 'runs.tsv'), tsv);
 
-      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner running {2}pid \d+/u);
       assert.match(page.stdout, /the tick is its chore/u);
       assert.match(page.stdout, /the next is due in 22 h/u);
       assert.match(page.stdout, /\n {4}full run\s+never/u, 'the per-repository block is still there');
-      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
+      const state = json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env)));
       assert.equal(state.runner.running, true);
       assert.equal(state.tick.due, false);
 
       // Due: the last tick is more than a day old.
       writeFileSync(join(runner, 'log', 'runs.tsv'), tsv.replace(/^\d{4}-[^\t]*/mu, (m, offset) => (offset ? '2026-09-01T00:00:00.000Z' : m)));
-      const due = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const due = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.match(due.stdout, /a tick is due now/u);
 
       // A STOP beside a live runner: on its way out, no further tick.
       writeFileSync(join(runner, 'STOP'), '');
-      assert.match(runMcCli(['test', 'nightly', 'status'], fx.env).stdout, /runner stopping.*no further tick will start/u);
+      assert.match((await runVerb(['test', 'nightly', 'status'], fx.env)).stdout, /runner stopping.*no further tick will start/u);
     } finally { fx.cleanup(); }
   });
 
-  it('says the runner is stopped, and that no tick will happen, when no runner is alive', () => {
+  it('says the runner is stopped, and that no tick will happen, when no runner is alive', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -495,7 +497,7 @@ describe('mc test nightly status — red, and since when', () => {
       mkdirSync(runner, { recursive: true });
       // A pid file a dead runner left behind: nobody has that pid.
       writeFileSync(join(runner, 'runner.json'), JSON.stringify({ pid: 2_147_483_000, started: '2026-09-19T08:00:00Z' }));
-      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner stopped {2}— no tick will happen until mc run start/u);
       assert.match(page.stdout, /full run\s+never/u, 'the readings are printed whatever the runner is doing');

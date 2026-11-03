@@ -3,13 +3,15 @@
  *
  * A throwaway repository with a bare "origin" beside it, a work root of its
  * own, and a PATH holding only the tools under test — so a machine with (or
- * without) gh installed reads the same either way.
+ * without) gh installed reads the same either way, and an `lsof` that sees
+ * nobody standing in it.
  *
  * `gh` is written as a shell script rather than mocked in-process: the view
  * shells out exactly as a user's machine would, and the script records every
  * call so a test can assert that `--offline` made none.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
@@ -45,6 +47,18 @@ function ghStub() {
 }
 
 /**
+ * An `lsof` that sees nobody standing anywhere, beside every fixture's `gh`.
+ * The view asks lsof which tools stand in each worktree (`toolProcesses`); the
+ * machine's own took 150-300 ms a call (2026-11-03), and no process of the
+ * machine stands in a fixture made a moment ago, so the answer is the same.
+ * A test that puts a tool in an area writes its own (`installStandingStub`).
+ * Written and run once while this module loads.
+ */
+const LSOF = join(mkdtempSync(join(tmpdir(), 'mc-test-lsof-')), 'lsof');
+writeFileSync(LSOF, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+spawnSync(LSOF);
+
+/**
  * A repository, one piece of work with a worktree on it, and a PATH.
  *
  * `gh` is written as a shell script rather than mocked in-process: the view
@@ -64,6 +78,7 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
     writeFileSync(prsPath, JSON.stringify(prs));
     symlinkSync(ghStub(), join(bin, 'gh'));
   }
+  symlinkSync(LSOF, join(bin, 'lsof'));
 
   return {
     ...repo,

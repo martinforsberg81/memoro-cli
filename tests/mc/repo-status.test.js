@@ -18,12 +18,14 @@ import { git } from './_helpers/git-fixture.js';
 import {
   addArea, addedPaths, fixture, json, moveOriginMain, snapshot,
 } from './_helpers/repo-fixture.js';
-import { runVerb } from './_helpers/mc-verb.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 // Loaded with the file, not inside the first test that asks: its imports are
 // most of a first call's time.
 import '../../src/mc/commands/repo.js';
 import { board as workModel } from './_helpers/board.js';
 import { recordNightlyRun } from '../../src/mc/nightly-history.js';
+
+await preloadVerbs('repo');
 
 describe('mc repo status — the view', () => {
   it('groups the work model\'s own worktree inspection by repository', async () => {

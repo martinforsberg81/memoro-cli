@@ -9,11 +9,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { runMcCli } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { instructionsFor } from '../../src/mc/roles.js';
 import {
   canonSkills, canonSkillsDir, expandRoleSkills, parseSkill, skillStatus, skillTargets, syncSkills,
 } from '../../src/mc/skills.js';
+
+await preloadVerbs('roles', 'skills');
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), 'mc-skills-'));
@@ -136,23 +138,23 @@ describe('@skill in a role', () => {
 });
 
 describe('mc roles check and mc skills', () => {
-  it('names skill drift, missing and stale, and sync clears it', () => {
+  it('names skill drift, missing and stale, and sync clears it', async () => {
     const { env, claude } = home();
     const base = { ...env, MC_HOME: join(env.HOME, 'mc-home'), MC_ROLES_DIR: join(env.HOME, 'roles') };
-    const before = runMcCli(['roles', 'check'], base);
+    const before = (await runVerb(['roles', 'check'], base));
     assert.equal(before.status, 0, before.stderr);
     assert.match(before.stdout, /mc-publish-and-merge\s+missing \(canon\)/u);
 
-    assert.equal(runMcCli(['skills', 'sync'], base).status, 0);
+    assert.equal((await runVerb(['skills', 'sync'], base)).status, 0);
     writeFileSync(join(claude, 'mc-publish-and-merge', 'SKILL.md'), 'changed\n');
     mkdirSync(join(claude, 'mc-old'));
-    const drift = runMcCli(['roles', 'check', '--json'], base);
+    const drift = (await runVerb(['roles', 'check', '--json'], base));
     const rows = JSON.parse(drift.stdout).skills.rows.filter((r) => r.tool === 'claude' && r.state !== 'ok');
     assert.deepEqual(rows.map((r) => `${r.name} ${r.state}`), ['mc-publish-and-merge drift', 'mc-old stale']);
-    assert.match(runMcCli(['roles', 'check'], base).stdout, /mc-publish-and-merge\s+drift/u);
+    assert.match((await runVerb(['roles', 'check'], base)).stdout, /mc-publish-and-merge\s+drift/u);
 
-    assert.equal(runMcCli(['skills', 'sync'], base).status, 0);
-    const after = runMcCli(['skills'], base);
+    assert.equal((await runVerb(['skills', 'sync'], base)).status, 0);
+    const after = (await runVerb(['skills'], base));
     assert.doesNotMatch(after.stdout, /drift|stale|missing/u);
   });
 });

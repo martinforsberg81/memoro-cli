@@ -38,7 +38,7 @@
  * politely or has to replace the pane it is itself running in.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -199,6 +199,9 @@ export function installTmuxStub(root, {
  */
 export function installStandingStub(bin, entries = []) {
   const lsof = entries.map((entry) => `p${entry.pid}\nn${entry.cwd}`).join('\n');
+  // Removed first: a bin may hold a link to a shared stub (repo-fixture.js's
+  // lsof), and a write would go through it.
+  for (const name of ['lsof', 'ps']) rmSync(join(bin, name), { force: true });
   writeFileSync(join(bin, 'lsof'), `#!/bin/sh
 printf '%s\n' "${lsof}"
 exit 0

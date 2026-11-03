@@ -19,8 +19,25 @@ import { VERB_MODULES } from '../../../src/mc-verbs.js';
 
 const PINNED = { MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1' };
 
-export async function runVerb([name, ...argv], env = {}, { cwd = null, ...deps } = {}) {
-  const module = await import(new URL(VERB_MODULES[name].replace('./', '../../../src/'), import.meta.url));
+const PAGE_FLAGS = new Set(['--json', '--fresh', '--offline']);
+
+const moduleOf = (path) => import(new URL(path.replace('./', '../../../src/'), import.meta.url));
+
+/**
+ * The verbs' modules, loaded now: a file calls it at its top, so its first
+ * test does not pay every import the verb makes (0.4-0.7 s, 2026-11-03).
+ */
+export async function preloadVerbs(...names) {
+  await Promise.all(names.map((name) => moduleOf(VERB_MODULES[name])));
+}
+
+export async function runVerb(args, env = {}, { cwd = null, ...deps } = {}) {
+  // Bare `mc`, and `mc` with only the page's flags, is the page, as
+  // `routeV1Command` in src/mc-cli.js routes it; anything else is a verb.
+  const page = args.every((arg) => PAGE_FLAGS.has(arg) || /^\d+$/u.test(arg)) && (!args.length || PAGE_FLAGS.has(args[0]));
+  const [path, argv] = page ? ['./mc/commands/home.js', args] : [VERB_MODULES[args[0]], args.slice(1)];
+  if (!path) throw new Error(`runVerb: ${args[0]} is not a verb in VERB_MODULES`);
+  const module = await moduleOf(path);
   const overlay = { ...PINNED, ...env };
   const saved = {};
   for (const [key, value] of Object.entries(overlay)) {
