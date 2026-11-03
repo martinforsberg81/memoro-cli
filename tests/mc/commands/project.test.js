@@ -920,6 +920,22 @@ test('send refuses a plan that names a model for itself, or a step model that is
   } finally { f.cleanup(); }
 });
 
+test('send refuses a plan that carries runner.subagents, on the plan or a step, naming the removal, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    plan.runner = { subagents: 'on' };
+    plan.steps[0].runner.subagents = 'off';
+    writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    const said = f.err.join('');
+    assert.match(said, /runner\.subagents: removed — mc starts no workers of its own/u);
+    assert.match(said, /steps\[1\]\.runner\.subagents: removed/u);
+    assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
+  } finally { f.cleanup(); }
+});
+
 test('send of a project already sent, or of a name mc does not hold, is refused, exit 1, and writes nothing', async () => {
   const f = draftFixture();
   try {

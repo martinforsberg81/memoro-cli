@@ -1,4 +1,4 @@
-Tools: Bash, Read, Edit, Write, Grep, Glob. No Agent, no MCP.
+Tools: Bash, Read, Edit, Write, Grep, Glob, Agent; no MCP. A session may use its own tool's subagents; mc neither starts nor counts them.
 A turn is the unit of cost: every turn re-reads the whole context. So:
 
 - Search with `Grep`, find files with `Glob` — not `grep`/`sed` through Bash.

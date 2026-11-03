@@ -106,16 +106,23 @@ const STEP_KEYS = Object.freeze([
 /** `met` in the file is written `false` by the verbs and read by nothing; the register holds it. */
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
-const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'subagents', 'check_in_minutes', 'stall_minutes']);
+const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'check_in_minutes', 'stall_minutes']);
 /**
  * What a step may say for itself in its own `runner`: which model does the
- * work, at what effort, advised by what, with Haiku workers or without. The
- * tool and the interval stay the plan's — a step on another tool is not
- * planned (step-cost, ruling 18).
+ * work, at what effort, advised by what. The tool and the interval stay the
+ * plan's — a step on another tool is not planned (step-cost, ruling 18).
  */
-const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor', 'subagents']);
-/** `runner.subagents`: whether a claude step may hand work to Haiku workers. */
-export const SUBAGENT_SETTINGS = Object.freeze(['on', 'off']);
+const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor']);
+/**
+ * Runner keys mc once read and no longer does, each with what a send says of
+ * it. A sent plan that still carries one reads as before and the key means
+ * nothing; `mc project send` refuses it (`sendProblems`), and `mc project
+ * amend` drops it from the plan it writes. Martin, 2026-11-02: mc starts no
+ * workers of its own.
+ */
+export const REMOVED_RUNNER_KEYS = Object.freeze({
+  subagents: 'removed — mc starts no workers of its own (2026-11-02)',
+});
 /**
  * claude's `--effort` levels, as `claude --help` lists them (2.1.268). A codex
  * step's effort is the same word, passed as `model_reasoning_effort`: the
@@ -200,7 +207,7 @@ function positiveInteger(value) {
 function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, tool = runner?.tool ?? 'claude', classes = null } = {}) {
   if (runner === null || runner === undefined) return;
   if (!plain(runner)) { problems.push(`${at}: must be an object, or absent for the defaults`); return; }
-  for (const key of unknownKeys(runner, keys)) {
+  for (const key of unknownKeys(runner, keys).filter((key) => !Object.hasOwn(REMOVED_RUNNER_KEYS, key))) {
     problems.push(`${at}.${key}: ${RUNNER_KEYS.includes(key) ? 'a plan-level key' : 'unknown key'}`);
   }
   if (runner.tool !== undefined && !TOOL_RE.test(String(runner.tool))) {
@@ -223,9 +230,6 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS, t
   // `off` is a name by MODEL_RE too; it is spelled out so the message says it.
   if (runner.advisor !== undefined && runner.advisor !== null && !MODEL_RE.test(String(runner.advisor))) {
     problems.push(`${at}.advisor: a model name, or off`);
-  }
-  if (runner.subagents !== undefined && runner.subagents !== null && !SUBAGENT_SETTINGS.includes(runner.subagents)) {
-    problems.push(`${at}.subagents: on or off`);
   }
   // The two intervals a session is watched with (ruling 18): how often it is
   // asked about its step, and how long it may say nothing before it is killed.

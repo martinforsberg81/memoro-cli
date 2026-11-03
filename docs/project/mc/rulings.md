@@ -1394,6 +1394,8 @@ in step 10, mended on Opus in 86 s. Opus steps 4–7 of the same project cost
    and `subagents`. The schema and the code keep accepting both, so the plans
    on `main` that use `subagents: on` still run; the code goes in a later
    clean-up once no plan uses them.
+   *Superseded for `subagents` by ruling 62 (2026-11-02): the key and the
+   workers are removed.*
 5. Steps already planned elsewhere are not re-planned.
 
 Mend stays on Opus (Martin, 2026-10-13, at the trial). Carried by
@@ -2140,3 +2142,34 @@ lane: it runs at once at low priority, and an unnamed gate leaves test files
 that cost too much, by measured time, to the merge round, which runs them all.
 A deploy or iOS build of memoro still goes first (2026-10-18).
 
+## 62 · No subagent mechanism in mc; a session may use its own tool's
+
+Martin, 2026-11-02 (row *A subagent per step* of #1232's contradictions
+table): *"OM sessionen själv skulle starta det genom sin egen claude/codex så
+kan vi tillåta det men det ska inte finnas någon mc-mekanism kring det hela."*
+
+This supersedes item 4 of ruling 42 for `subagents`, and the trial of
+2026-10-11 it kept running. `runner.subagents` is no longer a plan or step
+key: `mc project send` refuses it by name, `mc project amend` drops it from the
+plan it writes, and a sent plan that still carries it reads as before with the
+key meaning nothing — so the three plans that set it run on, untouched, and
+no running step changes. The runner launches no Haiku workers: no `Agent` in
+mc's tool list for it, no `step-worker`, no `_step-workers.md`, and no
+`subagents` or `workers` field in the register or the role record. A session
+may use its own tool's subagents where the tool offers them; mc neither starts
+nor counts them (`canon/roles/_common.md`).
+
+### 2026-11-03 · Native delegation is switched on for every session
+
+*The tool-availability restriction above (no `Agent` in mc's tool list) is
+superseded by this clarification; the removal of mc's worker mechanism stands.*
+
+Martin, 2026-11-03: *"Alla de sessioner inkl headless plan ska få använda
+subagenter; det verktyget måste slås på. Det ska fungera för både codex och
+claude."*
+
+Every session mc launches, including headless plan, gets its tool's native
+delegation switched on: `Agent` in Claude's seven-tool allowlist, without
+mc-defined `--agents`; `-c features.multi_agent=true` for Codex, regardless of
+the machine's config. The adapter switches cover every role and both fresh
+and resumed launches. mc neither starts nor counts these agents.

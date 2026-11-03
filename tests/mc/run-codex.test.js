@@ -187,6 +187,9 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   // `-c project_doc_max_bytes=0` comes first: the session loads no AGENTS.md.
   const at = argv.indexOf('project_doc_max_bytes=0');
   assert.equal(argv[at - 1], '-c');
+  const delegation = argv.indexOf('features.multi_agent=true');
+  assert.ok(delegation > at);
+  assert.equal(argv[delegation - 1], '-c');
   const instructions = argv.find((arg, i) => argv[i - 1] === '-c' && arg.startsWith('instructions='));
   assert.ok(at < argv.indexOf(instructions), 'the switch rides before the instructions');
   assert.match(instructions, /^instructions="/u);

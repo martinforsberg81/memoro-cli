@@ -751,24 +751,29 @@ A step gets it; the helper and intake turns, which share
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
 
-Every claude launch of mc's, foreground and tmux too, gets the tool allowlist
-`--tools Bash,Read,Edit,Write,Grep,Glob` (`CLAUDE_TOOLS`) and
-`--strict-mcp-config`, and so has those six tools and no other — no `Agent`,
-no `Skill`, no Cron, Web or Task tool, no user-level MCP server — whatever
-any repository's files say. Two reasons. A headless session has no use for a
-subagent: a step is bounded by its plan, the strong model is reached through
-`--advisor`, and a subagent runs on whatever model the repository's
-instruction files name rather than the plan's `runner` choice (over the first
-41 sonnet step sessions, 2026-09-11..12, 19 spawned opus subagents on
-memoro's `CLAUDE.md` instruction — a quarter of the era's cost, invisible in
-`runs.tsv`, and three of them ended their turn waiting for a child that never
-reports back). And every tool definition rides in every request: on claude
-2.1.280 the default set minus `Agent` (the `--disallowedTools Agent` this was
-until 2026-09-25) is 18 687 tokens per request, the six are 13 073, and a
-step session re-reads its context ~90 times. The six include `Grep` and
-`Glob`, which the default set omits — until this flag a step searched with
-`grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
-over 2026-09-15..25, each a screen of file kept in the context.
+Every claude launch of mc's, foreground, tmux and headless, gets the tool
+allowlist `--tools Bash,Read,Edit,Write,Grep,Glob,Agent` (`CLAUDE_TOOLS`) and
+`--strict-mcp-config`: seven tools, including the tool's own general-purpose
+`Agent`, with no `--agents` definitions supplied by mc. No `Skill`, Cron, Web
+or Task tool, and no user-level MCP server. The allowlist keeps tool
+definitions out of every request unless needed, and includes native `Grep`
+and `Glob` rather than making the session search through Bash.
+
+Every Codex launch gets `-c features.multi_agent=true` through its adapter's
+session switches, before the prompt or resumed session id. Native delegation
+is on even if the machine's config disables it. These switches apply to every
+role — goal build, project step, review, merger and plan — and both fresh and
+resumed launches, including headless launches assembled by `headlessArgs`.
+A session may use its own tool's subagents; mc neither starts nor counts them
+(Martin, 2026-11-03). This enables the tool, not a worker mechanism in mc.
+
+mc defines no subagent of its own and starts none (Martin, 2026-11-02). From
+2026-10-11 a plan's `runner.subagents: on` gave a step `Agent` and one
+Haiku `step-worker`, with `canon/roles/_step-workers.md` in its
+instructions; all of it is gone, and the key is refused by `mc project send`
+and dropped by `mc project amend`. A sent plan that still carries it reads as
+before and the key means nothing. `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`
+(below) stays set because the tool's own agents read it.
 
 Next to that body go `canon/roles/all-sessions.md` and the build role —
 `canon/roles/build-session.md`, its `project` part for a project's step and its
@@ -783,11 +788,12 @@ The two argument lists are the only place the tools differ:
 ```
 claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
-        --tools Bash,Read,Edit,Write,Grep,Glob --strict-mcp-config \
+        --tools Bash,Read,Edit,Write,Grep,Glob,Agent --strict-mcp-config \
         --settings <env> --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] [-c model_reasoning_effort=…] \
-        -c project_doc_max_bytes=0 -c instructions=<instructions> <prompt>
+        -c project_doc_max_bytes=0 -c features.multi_agent=true \
+        -c instructions=<instructions> <prompt>
 ```
 
 `--settings <env>` is a JSON object whose `env` sets

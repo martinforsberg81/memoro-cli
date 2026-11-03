@@ -272,10 +272,11 @@ export function cacheTtlMs() {
 /**
  * What every session mc launches is handed beside its role text: no
  * AGENTS.md (codex-cli 0.151.0 reads `project_doc_max_bytes`; 0 loads none).
+ * Native delegation is on even when the machine's config turns it off.
  * Codex has no cache TTL to choose and ignores `cache`.
  */
 export function sessionArgs() {
-  return ['-c', 'project_doc_max_bytes=0'];
+  return ['-c', 'project_doc_max_bytes=0', '-c', 'features.multi_agent=true'];
 }
 
 /**

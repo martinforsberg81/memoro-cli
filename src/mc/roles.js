@@ -252,7 +252,7 @@ export function readRole(ref, env = process.env) {
  * the name becomes `<name>:<part>`. A part the file does not have is no role:
  * a start would otherwise run on the shared words alone. Without a part, the
  * overlay is the shared words only and `parts` lists what there is to choose.
- * `body` keeps the whole text, for a start that adds a part (`withWorkers`).
+ * `body` keeps the whole text.
  */
 export function parseRole(text, fallbackName = null, part = null) {
   if (typeof text !== 'string' || !text.trim()) return null;
@@ -344,19 +344,6 @@ export function areaRole(areaPath, env = process.env) {
  * expanded — see `expandRoleIncludes`. It is the same door because a second
  * one is how a kind of session quietly stops being told something.
  */
-/**
- * A step with Haiku workers (`runner.subagents: on`): the role's overlay with
- * its `workers` part kept as well (`build-session.md`). The launch and
- * `mc roles check` both assemble it here, so a worker session's digest is
- * compared with the text it was actually given. A role with no `workers` part
- * is its overlay.
- */
-export function withWorkers(role, workers) {
-  if (!role) return null;
-  if (!workers || !role.body || !role.parts?.includes('workers')) return role.overlay;
-  return selectParts(role.body, [role.part, 'workers'].filter(Boolean));
-}
-
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
   const body = expandRoleIncludes(overlay, { tool: toolId || 'claude' });
@@ -405,14 +392,13 @@ export function roleSourceOf(role) {
  * session is running is not knowable from here, and a digest of today's file
  * would be a claim about it that nobody checked.
  */
-export function roleRecord({ name = null, source = null, overlay = null, instructions = null, workers = false } = {}) {
+export function roleRecord({ name = null, source = null, overlay = null, instructions = null } = {}) {
   if (!name) return null;
   return {
     name,
     source: source || 'canon',
     digest: textDigest(instructions),
     text_digest: textDigest(expandRoleIncludes(overlay)),
-    ...(workers ? { workers: true } : {}),
   };
 }
 

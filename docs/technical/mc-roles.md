@@ -68,7 +68,7 @@ session is for; a verb file says how a verb is used).
 |---|---|---|---|
 | `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
-| | | `build-session:project` | `mc run`, one step of a `PLAN.json` (with its `workers` part when the plan says `subagents: on`) |
+| | | `build-session:project` | `mc run`, one step of a `PLAN.json` |
 | | | `build-session:worker` | `mc worker`, and every conversation in that area after |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | | | `review-session:project` | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
@@ -97,8 +97,7 @@ name wherever one is kept: `MC_ROLE`, the register's role record, and
 `mc roles check build-session:goal`. A part the file does not have is no role,
 so a start never runs on the shared words alone; `readCanonRole` with no part
 gives the shared words and `parts`, which `mc roles show build-session` lists.
-`withWorkers(role, true)` keeps the `workers` part as well, for a step with
-Haiku workers. The constants are `PLAN_ROLE` and `REVIEW_ROLE` in `goals.js`,
+The constants are `PLAN_ROLE` and `REVIEW_ROLE` in `goals.js`,
 `BUILD_ROLES` and `PROJECT_REVIEW_ROLE` in `run-plan.js` and `WORKER_ROLE` in
 `roles.js`. An area marked `worker` before 2026-11-03 still opens as the
 worker part (`MOVED_MARKS`).
@@ -332,7 +331,7 @@ tomorrow, which is what the brief above needed and did not have.
 
 | file | what |
 |---|---|
-| `src/mc/roles.js` | `parseRole` and parts (`roleRef`, `selectParts`, `withWorkers`), the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, `textDigest`/`roleRecord`/`roleSourceOf`, the `.mc-role` mark, the reserved names |
+| `src/mc/roles.js` | `parseRole` and parts (`roleRef`, `selectParts`), the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, `textDigest`/`roleRecord`/`roleSourceOf`, the `.mc-role` mark, the reserved names |
 | `src/mc/canon.js` | `canonRoot` — where the packaged `canon/` is, resolved from the module's own path |
 | `src/mc/portrait.js` | `profileArgs` — the per-tool launch argument the assembled text rides on |
 | `src/mc/commands/roles.js` | `mc roles list`, `mc roles show <role>` over the user's catalogue; `mc roles check` over both catalogues and the two registers |

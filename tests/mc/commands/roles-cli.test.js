@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from '../_helpers/mc-cli.js';
-import { canonRolesDir, instructionsFor, readCanonRole, readRole, textDigest, withWorkers } from '../../../src/mc/roles.js';
+import { canonRolesDir, instructionsFor, readRole, textDigest } from '../../../src/mc/roles.js';
 
 const WORKER_MD = `---
 name: worker
@@ -53,7 +53,7 @@ describe('mc roles', () => {
     assert.match(listed.stdout, /\bbuild-session\b/u);
     assert.doesNotMatch(listed.stdout, /all-sessions|-verb/u);
     const whole = runMcCli(['roles', 'show', 'build-session'], env);
-    assert.match(whole.stdout, /parts:\s+goal, project, worker, workers/u);
+    assert.match(whole.stdout, /parts:\s+goal, project, worker —/u);
     // No catalogue of its own: `show` falls back to canon, as a launch does.
     const shown = runMcCli(['roles', 'show', 'build-session:goal'], env);
     assert.equal(shown.status, 0, shown.stderr);
@@ -143,20 +143,6 @@ describe('mc roles check', () => {
     assert.equal(payload.drifting, 0);
     assert.equal(payload.sessions.length, 1);
     assert.equal(payload.sessions[0].verdict, 'ok');
-  });
-
-  it('holds a session with Haiku workers against the text with workers', () => {
-    const { env } = fixtureWithWork();
-    const name = 'build-session:project';
-    const today = checked(env, [name]).role;
-    const role = readCanonRole(name);
-    registered(env, {
-      name, source: 'canon', workers: true, text_digest: today.text_digest,
-      digest: textDigest(instructionsFor('claude', withWorkers(role, true))),
-    });
-    const payload = checked(env, [name]);
-    assert.equal(payload.sessions[0].verdict, 'ok');
-    assert.notEqual(today.digest, textDigest(instructionsFor('claude', withWorkers(role, true))));
   });
 
   it('names the session, by pid, when the role file has moved under it', () => {
