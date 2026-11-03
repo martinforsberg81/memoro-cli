@@ -22,6 +22,7 @@ import { describe, it } from 'node:test';
 import { runGate } from '../../src/mc/repo-gate.js';
 import { readLease } from '../../src/mc/repo-lease.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
+import { runningRound } from '../../src/mc/gate-lock.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -34,7 +35,7 @@ const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
  * the interesting case; since 2026-08-31 it is the case where nothing lands
  * until somebody repairs it, which is asserted below rather than assumed.
  */
-function repository({ branchBreaksSuite = false, standingRed = false } = {}) {
+function repository({ branchBreaksSuite = false, standingRed = false, hangingBranch = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
   const repo = join(root, 'repo');
   const bare = join(root, 'origin.git');
@@ -71,6 +72,7 @@ function repository({ branchBreaksSuite = false, standingRed = false } = {}) {
     "import { test } from 'node:test';",
     "import assert from 'node:assert/strict';",
     `test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`,
+    ...(hangingBranch ? ["test('never settles', async () => { await new Promise(() => {}); });"] : []),
     '',
   ].join('\n'));
   git(repo, ['add', '-A']);
@@ -124,6 +126,29 @@ function repository({ branchBreaksSuite = false, standingRed = false } = {}) {
 }
 
 describe('the merge round, for real', () => {
+  it('a round ceiling kills a hanging test red and releases its lane', async () => {
+    const fx = repository({ hangingBranch: true });
+    writeFileSync(fx.logPath, '| Datum | PR | Kontroller | Klass | Beslut | Anteckning |\n|---|---|---|---|---|---|\n');
+    writeFileSync(join(fx.mcHome, 'repo-gates.json'), JSON.stringify({ repo: {
+      prepare: null, prepare_why: 'the fixture has no dependencies',
+      select: `node -e 'console.log(${JSON.stringify(JSON.stringify({ files: ['tests/b.test.js'], commands: [] }))})'`,
+      select_why: 'the fixture selects the hanging branch test', extra_gates: [], merge_log: null,
+      round_timeout_ms: 5_000, round_timeout_why: 'short timeout fixture', pr_tests_flags: ['--test-timeout=30000'],
+    } }));
+    try {
+      const started = Date.now();
+      const report = await runMergeRound({ repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: fx.logPath });
+      assert.ok(Date.now() - started < 15_000, 'the round stops at its 5 s ceiling');
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red');
+      assert.match(report.reason, /ceiling.*tests\/b\.test\.js/u);
+      assert.deepEqual(report.red_files, ['tests/b.test.js']);
+      assert.deepEqual(report.gate.red_files, ['tests/b.test.js'], 'the gate verdict handed to the round log names the file');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the next job can claim the released lane');
+      assert.equal(fx.mainAt(), git(fx.repo, ['rev-parse', 'refs/remotes/origin/main']).trim(), 'a red round does not land');
+    } finally { fx.cleanup(); }
+  });
+
   it('gates a green branch and squash-merges it onto main', async () => {
     const fx = repository();
     writeFileSync(fx.logPath, '| Datum | PR | Kontroller | Klass | Beslut | Anteckning |\n|---|---|---|---|---|---|\n');

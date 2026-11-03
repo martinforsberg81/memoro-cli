@@ -28,9 +28,12 @@ import { spawn } from 'node:child_process';
 
 const MAX_BUFFER = 256 << 20;
 
-/** `tool` with `args`, no shell. */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null } = {}) {
-  return collect(() => spawn(tool, args, { cwd, env: env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs });
+/**
+ * `tool` with `args`, no shell. A `signal` that aborts stops the child, as it
+ * does for `runShell`: a round's ceiling must not leave `npm ci` running.
+ */
+export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null } = {}) {
+  return collect(() => spawn(tool, args, { cwd, env: env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal });
 }
 
 /**

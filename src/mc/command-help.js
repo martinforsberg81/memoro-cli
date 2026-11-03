@@ -245,6 +245,8 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc gate --wait                wait for the gate running here and print its verdict\n",
     "\n",
     "The merge gate still verifies the candidate with the current base; --full is refused.\n",
+    "Each repository has a hard gate-round ceiling (memoro 15 min; memoro-cli 15 min). At the ceiling the process group is killed, the gate is red, and its lane is released.\n",
+    "The red names the unfinished test files (the ones to rebuild) and, apart, the slowest finished ones; --json carries them as red_files and slowest_files, with stopped_at: \"timeout\".\n",
     "The gate starts at once at low priority, beside merge rounds; a deploy or iOS build of memoro goes first.\n",
     "Costly affected tests are left to the merge round by measured time; those this change touches always run.\n",
     "Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n",
@@ -359,6 +361,8 @@ export const COMMAND_USAGE = Object.freeze({
     "\n",
     "Refuses on main, on a detached HEAD, on a dirty tree, and when origin's branch moved (never force).\n",
     "Then queues the pull request for the merger, as mc merge <repo> <pr> does — not with --no-merge or --json.\n",
+    "A merger gate round has a per-repository hard ceiling (memoro 15 min; memoro-cli 15 min). When it is reached the round is killed and goes red, naming its unfinished test files (the ones to rebuild) and, apart, its slowest finished ones; the lane is released for the next job.\n",
+    "mc publish queues the pull request into that same round, so the same ceiling holds for it.\n",
   ].join(''),
   dev: [
     "usage — mc dev list [--json]                  what is running, and where\n",

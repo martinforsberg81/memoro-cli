@@ -1226,6 +1226,13 @@ describe('MERGES', () => {
     assert.equal(section({ merger: null }).repos[0].state, 'idle');
   });
 
+  it('treats a live merger pid on a queued job as live without merger.json', () => {
+    const merges = section({ merger: null, queued: [job(1, { state: 'landing', merger: process.pid })], alive: (pid) => pid === process.pid });
+    assert.equal(merges.repos[0].state, 'waiting');
+    assert.equal(merges.repos[0].merger_stopped, false);
+    assert.doesNotMatch(strip(drawing(merges, 80, true)[0]), /merger stopped/u);
+  });
+
   it('keeps both pause reasons and the stopped merger visible when the facts coincide', () => {
     const merges = section({ merger: null, queued: [job(1), job(2, { repo: 'memoro-cli' })],
       pauses: { memoro: { kind: 'deploy', reason: 'deploy' }, 'memoro-cli': { kind: 'gate', reason: 'gate round' } } });

@@ -755,6 +755,8 @@ export function mergesSection({
       lane: current.lane ?? null,
     });
   }
+  const liveJobMerger = all.some((item) => item.merger != null && alive(item.merger));
+  const mergerAlive = Boolean(merger) || liveJobMerger;
   const names = [...new Set([...REPO_NAMES, ...repos.map((repo) => repo.name || repo),
     ...all.map((item) => item.repo), ...landings.map((item) => item.repo)].filter(Boolean))];
   const repoQueues = names.map((repo) => {
@@ -775,7 +777,7 @@ export function mergesSection({
     const last = landed[0] ? { ...landed[0], age_seconds: ageOf(landed[0].at) } : null;
     const day = new Set(landed.filter((item) => ageOf(item.at) <= DAY_MS / 1000).map((item) => item.pr)).size;
     const pause = pauses[repo] || null;
-    const stopped = !merger && !active.length && Boolean(waiting.length);
+    const stopped = !mergerAlive && !active.length && Boolean(waiting.length);
     return {
       repo,
       state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'

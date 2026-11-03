@@ -82,6 +82,24 @@ were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
 seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
+**Every gate round has a repository ceiling.** `round_timeout_ms` and its
+`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 15
+minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
+247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
+ordinary-load rounds red). The deadline bounds the complete round, from the
+moment the lane is held: the preparation, git, selection, the suite, the
+command gates and the retry, and no await in the round waits past it even when
+a child ignores its signal. At the ceiling mc stops the active process group,
+returns a red verdict, and releases the lane so the next queued job can start.
+The verdict and the merge log name two groups of files, kept apart: the
+**unfinished** files (a test file whose top-level test started and did not
+end, or a selected file that never started) are the red, the ones to rebuild;
+the **slowest finished** files are for the reader. A whole-suite round names
+only the files it started, since its selection is not known to mc. A test that
+exceeds its own time limit is `too slow — rebuild` and is not run again. `mc
+gate` and the gate a session reaches through `mc publish` use this same
+repository ceiling; a caller's wait budget cannot extend it.
+
 ## The door
 
 Before the wait and before the gate, the door refuses a pull request GitHub
@@ -815,6 +833,9 @@ landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 --test-force-exit` unless the repository declares its own `--test-timeout`; a
 test that runs past ten minutes is a red named `test timed out after 600000ms`,
 not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
+A per-test timeout is not run again by `retry_once`: the verdict says
+`too slow — rebuild` with the test name and timeout duration, so a timed-out
+test is rebuilt by a session rather than consuming another round.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,

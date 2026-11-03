@@ -160,8 +160,17 @@ export const SHIPPED = Object.freeze({
     // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
     // here is costly enough to leave to the merge round.
     session_whole: true,
+    // Measured: the whole suite took 128 s in a session gate on 2026-11-01, and
+    // on 2026-11-03 it took 247 s and 273 s with the machine quiet and 568 s
+    // under load (merge and session rounds, LOG.md). A 5 min ceiling turned
+    // those rounds red under ordinary load, so the ceiling is 15 min: well
+    // above the slowest measured round, and still a bound on a stuck one.
+    round_timeout_ms: 900_000,
+    round_timeout_why: 'measured 2026-11-01 (128 s in a session gate) and 2026-11-03 (247 s and 273 s quiet, 568 s under load): 15 min is above the slowest measured round and bounds a stuck one',
   }),
   memoro: Object.freeze({
+    round_timeout_ms: 900_000,
+    round_timeout_why: 'set 2026-11-03 by Martin after merger gate round #14760 held the lane for over 30 min; 15 min is the repository ceiling',
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
     // in the operator table 2026-08-21, shipped here 2026-08-22). A clean
     // checkout without `npm ci`: exit 1, ~30 files fail with
@@ -432,6 +441,15 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
     }
+    if (declared.round_timeout_ms !== undefined
+      && (!(Number.isInteger(declared.round_timeout_ms) && declared.round_timeout_ms > 0)
+        || typeof declared.round_timeout_why !== 'string' || !declared.round_timeout_why.trim())) {
+      return {
+        ok: false,
+        name,
+        reason: `${name} must declare a positive integer round_timeout_ms and round_timeout_why in its repository gate table — a gate without a measured ceiling may hold its lane indefinitely`,
+      };
+    }
     // A switch the round cannot read as one would switch nothing in silence.
     if (declared.select_changed_path != null && typeof declared.select_changed_path !== 'boolean') {
       return {
@@ -456,7 +474,13 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
     return {
       ok: true,
       name,
-      declaration: normalise(declared, env),
+      // A repository-wide ceiling is safety policy, not an optional test
+      // selector field. An operator override can tune it, but cannot drop it.
+      declaration: normalise({
+        ...declared,
+        round_timeout_ms: declared.round_timeout_ms ?? shipped?.round_timeout_ms,
+        round_timeout_why: declared.round_timeout_why ?? shipped?.round_timeout_why,
+      }, env),
       source: 'declared',
       shadowed,
       // Which of the three files each field came from. A reader who disagrees
@@ -604,6 +628,8 @@ function normalise(entry, env) {
       gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
     },
     retry_once_why: entry.retry_once_why ?? null,
+    round_timeout_ms: entry.round_timeout_ms ?? null,
+    round_timeout_why: entry.round_timeout_why ?? null,
     // A session's gate runs all it selected, leaving nothing to the merge round.
     session_whole: entry.session_whole === true,
     // The test files a pull request's selection leaves to the run on main.
