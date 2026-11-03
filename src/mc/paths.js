@@ -34,6 +34,11 @@ export function devServersRoot(root = mcHome()) {
   return join(root, 'dev-servers');
 }
 
+/** `<mcHome>/shots/sessions`: one file per kept browser, as `shot-session.js` writes it. */
+export function shotSessionsDir(env = process.env) {
+  return join(mcHome(env), 'shots', 'sessions');
+}
+
 /**
  * Slug for a repo, derived from the basename of its primary worktree path.
  *

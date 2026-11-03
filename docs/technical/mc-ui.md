@@ -600,9 +600,11 @@ waits; a lane's is `running` or `idle`.
 A pull request's colour is its own flags' (`prTone`): green while the merger
 has it, red bold when it came back red, yellow bold once a day has passed with
 nothing on it, grey once it has landed (an idle queue's last), bold cyan
-otherwise. A goal's tail leads with what it waits on: `waits on <p>/<g>` in
-yellow for a `waiting` goal, `waits on plan` or `waits on a person` in red for
-a blocked one.
+otherwise. A goal's tail leads with `criteria <met>/<all>`, green once every
+one is met, then with what it waits on: `phase <n> — after phase <n-1>` in
+yellow for a goal in a phase its programme has not reached
+([mc-goals.md](mc-goals.md), *Phases*), `waits on plan` or `waits on a person`
+in red for a blocked one.
 
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the

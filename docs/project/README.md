@@ -296,7 +296,7 @@ into the removed directory are rewritten to these in the same pull request
 
 ## Goals beside projects
 
-A goal has no `PLAN.json`, steps or register. It is `GOAL.md`, `LOG.md` and one
+A goal has no `PLAN.json`, steps or register. It is `GOAL.json`, `LOG.md` and one
 worktree per repository under `~/mc/programs/<programme>/goals/<goal>/`, and it
 never merges: a goal session publishes with `mc publish --no-merge`. See
 [`docs/technical/mc-goals.md`](../technical/mc-goals.md).

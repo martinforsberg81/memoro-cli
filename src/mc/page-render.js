@@ -1019,31 +1019,37 @@ function projectLine(c, wide, project) {
  * row (Martin, 2026-11-03): its row number, a mark while a session is on it,
  * `goal` in the kind column, its name, its first repository, its state, how
  * many sessions it has had, its open pull request (`goal/<goal>`). The grey
- * tail after that is what the last session said is next (or its comment, when
- * it said nothing next). A goal whose GOAL.md does not parse says its first
- * problem in red there instead.
+ * tail after that starts with `criteria <met>/<all>` — green when every one is
+ * met — then what the last session said is next (or its comment, when it said
+ * nothing next). A goal whose GOAL.json does not parse says its first problem
+ * in red there instead.
  *
  * The state is the goal's status, and `running` while a session is on it: the
  * same word in the same colour as everywhere (`STATE_TONE`). A finished goal's
- * tail is its last `Gjort:`, never a `Nästa:` that is over. A goal blocked by a
+ * tail is its last `Done:`, never a `Next:` that is over. A goal blocked by a
  * red review, a red merge or the runner waits on plan, which the runner wakes,
  * and its tail says so first; any other blocked goal — a person's, a build
  * session's question, one plan left blocked — `waits on a person`. Both are in
- * the colour of what is blocked. A `waiting` goal is yellow — the runner lets
- * it go when its `after` has landed — and its tail says first what it waits on.
+ * the colour of what is blocked. A goal in a phase its programme has not
+ * reached (`held`) has the waiting colour, and its tail says first which phase
+ * it waits on.
  */
 function goalLine(c, wide, goal) {
   const word = goal.state ?? goal.status ?? '—';
   const finished = goal.status === 'done' || goal.status === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
-  const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
+  const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
+  const criteria = goal.criteria?.all
+    ? { text: `criteria ${goal.criteria.met}/${goal.criteria.all}`, styles: [goal.criteria.met === goal.criteria.all ? 'green' : 'grey'] }
+    : null;
   let tail = said ? [{ text: said, styles: ['grey'] }] : [];
-  if (goal.problems?.length) tail = [{ text: `GOAL.md: ${goal.problems[0]}`, styles: ['red'] }];
+  if (goal.problems?.length) tail = [{ text: `GOAL.json: ${goal.problems[0]}`, styles: ['red'] }];
   else if (goal.plan || goal.person || waits) {
     const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
     tail = [{ text: head, styles: stateTone(waits ? 'waiting' : 'blocked') },
       said && one(said) !== head ? { text: said, styles: ['grey'] } : null];
   }
+  if (criteria && !goal.problems?.length) tail = [criteria, ...tail];
   return gridRow(c, wide, {
     nr: goal.number,
     mark: goal.running ? { text: MARK.running, styles: ['green'] } : { text: MARK.quiet, styles: ['grey'] },

@@ -139,7 +139,7 @@ export function warningsFor(state) {
 export const TOOLBOX = [
   'mc is the first choice for every mechanical step; the raw tool only when mc cannot (say why).',
   '  see the app       mc shot dev <target|/app/path> [--viewport iphone] [--measure <css>] [--keep → mc shot next …]',
-  '                    serves the worktree you stand in, restarts it after edits, prints which tree it served',
+  '                    serves the worktree you stand in (--main: shared), restarts after edits, says which tree it served',
   '  step a flow       mc shot next [<id>] --click/--fill/--press/--upload/--eval <js> … — errors back in the same call',
   '  a server URL      mc test dev --here --url',
   '  run tests         mc gate <files…> [--test-name-pattern …]   (in the gate lane, at most 30 files, 2 KB verdict)',

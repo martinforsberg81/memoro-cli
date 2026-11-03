@@ -204,6 +204,10 @@ export async function runGate({
   env = selectionState(env, {
     root, repoPath, writes: Boolean(full) && pr == null && !(Array.isArray(prs) && prs.length),
   });
+  // A dev server this round's tests start waits in the admission queue as a
+  // gate round, which goes ahead of screenshots after two minutes (`dev-queue.js`).
+  // A session's `mc gate` has named its round already; a merge round names its own.
+  if (!env.MC_GATE_ROUND) env = { ...env, MC_GATE_ROUND: `gate-${process.pid}-${startedAt}` };
   // The narration goes two places. `onProgress` is the operator's stderr and
   // scrolls away with the pane; the log keeps it under this run's id, so a
   // round that is killed still says how far it had got and what it had decided

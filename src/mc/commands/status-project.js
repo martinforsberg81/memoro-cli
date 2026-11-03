@@ -3,7 +3,7 @@
  * this file parses the two flags and prints.
  */
 import { commandUsage } from '../command-help.js';
-import { afterOf, programsGoals } from '../goals.js';
+import { phaseOpen, programsGoals } from '../goals.js';
 import { programsHome } from '../paths.js';
 import { collectProject, renderProject } from '../status-project.js';
 
@@ -13,12 +13,12 @@ export function usage() {
 
 /**
  * The first goal called `name` under the programmes home, or null, with
- * `waitingOn`: what in its `after` has not landed (`afterOf`).
+ * `held`: whether a lower phase of its programme is still to finish (`phaseOpen`).
  */
 function goalNamed(name, env) {
   const goals = programsGoals({ home: programsHome(env) });
   const goal = goals.find((each) => each.goal === name);
-  return goal ? { ...goal, waitingOn: afterOf(goal, goals).pending } : null;
+  return goal ? { ...goal, held: goal.problems.length === 0 && !phaseOpen(goal, goals) } : null;
 }
 
 /** The one form, a project's name and two flags (help-routes.test.js walks the help with it). */
@@ -47,7 +47,7 @@ export async function run(argv, deps = {}) {
     // the goal is shown, and that is the answer to the question asked.
     const goal = goalNamed(names[0], deps.env || process.env);
     if (goal) {
-      const state = goal.status === 'waiting' && goal.waitingOn.length ? `waiting on ${goal.waitingOn.join(', ')}` : goal.status;
+      const state = goal.held ? `${goal.status}, phase ${goal.phase} — after phase ${goal.phase - 1}` : goal.status;
       stderr.write(`${goal.goal} is a goal${state ? ` · ${state}` : ''} — mc goal show ${goal.programme}/${goal.goal}\n`);
       return 1;
     }

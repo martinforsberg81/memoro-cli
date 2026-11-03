@@ -101,6 +101,16 @@ describe('goal rows on the page', () => {
     assert.equal(rollout, cleanup + 1, 'rollout is drawn after cleanup, in name order');
   });
 
+  it('a goal row says criteria 1/2 for a goal with one of two criteria met, green once all are', () => {
+    const rows = [{ ...GOALS[1], criteria: { met: 1, all: 2 } }, { ...GOALS[0], criteria: { met: 2, all: 2 } }];
+    const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW }) });
+    const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
+    assert.ok(lines.some((line) => /^ +4 · goal +cleanup\s+memoro-cli\s+blocked\s+1 sess\s+criteria 1\/2 · waits on Martin$/u.test(line)), lines.join('\n'));
+    const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
+    assert.match(goalLineOf(painted, 'rollout'), /\u001b\[[0-9;]*32mcriteria 2\/2/u);
+    assert.doesNotMatch(goalLineOf(painted, 'cleanup'), /\u001b\[[0-9;]*32mcriteria/u);
+  });
+
   it('the state words keep the project rows\' colours', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: GOALS, now: NOW }) });
     const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
@@ -137,8 +147,8 @@ describe('goal rows on the page', () => {
     const row = goalLineOf(lines, 'broken');
     assert.ok(row, 'the broken goal is drawn');
     // The problem is drawn in full where it fits; a longer one is cut to the width.
-    assert.match(plain(row), /GOAL\.md: repos names no repository$/u);
-    assert.match(row, /\u001b\[[0-9;]*31m GOAL\.md|\u001b\[[0-9;]*31mGOAL\.md/u, 'the problem is red');
+    assert.match(plain(row), /GOAL\.json: repos names no repository$/u);
+    assert.match(row, /\u001b\[[0-9;]*31m GOAL\.json|\u001b\[[0-9;]*31mGOAL\.json/u, 'the problem is red');
   });
 
   it('the programme header counts goals only when there are any', () => {
@@ -173,7 +183,7 @@ describe('goalsOf — what the page reads of a goal', () => {
   it('counts the sessions, takes the last entry, and is running only while a live current file names it', () => {
     const rows = goalsOf({
       goals: [
-        { programme: 'mc', goal: 'rollout', repos: ['memoro-cli'], status: 'open', log, problems: [] },
+        { programme: 'mc', goal: 'rollout', repos: ['memoro-cli'], status: 'open', log, problems: [], success_criteria: [{ met: true }, { met: false }] },
         { programme: 'mc', goal: 'cleanup', repos: ['memoro-cli'], status: 'open', log, problems: [] },
       ],
       currents: [
@@ -187,6 +197,7 @@ describe('goalsOf — what the page reads of a goal', () => {
     assert.equal(rollout.sessions, 1, 'the person and the runner are not sessions');
     assert.equal(rollout.last.next, null, 'the last entry is the runner\'s');
     assert.equal(rollout.running, true);
+    assert.deepEqual(rollout.criteria, { met: 1, all: 2 }, 'how many of its criteria are met, of how many');
     assert.equal(cleanup.running, false, 'a current file whose process is gone is not a session');
   });
 });
@@ -234,35 +245,33 @@ describe('a goal in review, and one waiting on plan', () => {
   });
 });
 
-describe('a waiting goal', () => {
-  const log = [{ at: '2026-11-02T11:25Z', tool: 'person', model: null, status: 'waiting', done: 'skapat', comment: 'waits on mc/runner-sessions', next: null }];
+describe('a goal in a phase its programme has not reached', () => {
   const goals = [
-    { programme: 'mc', goal: 'goal-waiting', repos: ['memoro-cli'], status: 'done', after: [], log: [], problems: [] },
-    { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], status: 'open', after: [], log: [], problems: [] },
-    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], status: 'waiting', after: ['mc/runner-sessions', 'mc/goal-waiting'], log, problems: [] },
+    { programme: 'mc', goal: 'landed', repos: ['memoro-cli'], status: 'done', phase: 1, log: [], problems: [] },
+    { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], status: 'open', phase: 2, log: [], problems: [] },
+    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], status: 'open', phase: 3, log: [], problems: [] },
   ];
 
-  it('goalsOf gives its after and what of it has not landed, and the page JSON carries both', () => {
+  it('goalsOf gives its phase and whether it is held, and the page JSON carries both', () => {
     const rows = goalsOf({ goals });
     const row = rows.find((each) => each.name === 'headless-plan');
-    assert.equal(row.status, 'waiting');
-    assert.deepEqual(row.after, ['mc/runner-sessions', 'mc/goal-waiting']);
-    assert.deepEqual(row.waiting_on, ['mc/runner-sessions']);
-    assert.deepEqual(rows.find((each) => each.name === 'runner-sessions').waiting_on, []);
+    assert.equal(row.status, 'open', 'it keeps its status');
+    assert.equal(row.phase, 3);
+    assert.equal(row.held, true);
+    assert.equal(rows.find((each) => each.name === 'runner-sessions').held, false, 'the phase in progress is not held');
 
     const section = programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW });
     const json = JSON.parse(JSON.stringify(section));
     const listed = json.programmes.flatMap((group) => group.goals ?? []).find((goal) => goal.name === 'headless-plan');
-    assert.equal(listed.status, 'waiting');
-    assert.deepEqual(listed.waiting_on, ['mc/runner-sessions']);
+    assert.equal(listed.phase, 3);
+    assert.equal(listed.held, true);
   });
 
-  it('the page draws waiting in the projects\' waiting colour, and what it waits on first', () => {
+  it('the page leads its tail with the phase it waits on, in the projects\' waiting colour', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: goalsOf({ goals }), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
     const row = goalLineOf(lines, 'headless-plan');
-    assert.match(plain(row), /waiting .*waits on mc\/runner-sessions$/u, 'a comment saying the same is not said twice');
-    assert.match(row, /\u001b\[33mwaiting/u, 'waiting is yellow');
-    assert.match(row, /\u001b\[33mwaits on mc\/runner-sessions/u, 'what it waits on is yellow');
+    assert.match(plain(row), /open .*phase 3 — after phase 2$/u);
+    assert.match(row, /\u001b\[33mphase 3 — after phase 2/u, 'yellow');
   });
 });

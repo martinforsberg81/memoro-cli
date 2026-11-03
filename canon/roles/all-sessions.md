@@ -23,4 +23,4 @@ CLAUDE.md, AGENTS.md or memory. A repository's `AGENTS.md`, `CLAUDE.md` and
 cover; never read one whole.
 
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
-plans: English.
+plans — and every goal and its log: English.

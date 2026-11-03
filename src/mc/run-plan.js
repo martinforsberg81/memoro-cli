@@ -956,11 +956,20 @@ export function builtPreamble(built) {
 
 
 /**
- * What a goal session is told: where the goal is and where it works. The rest
- * is the build role's (`canon/roles/build-session.md`, its `goal` part) and `GOAL.md`'s.
+ * The goal as text (`renderGoalText`, what `mc goal show` prints), after a
+ * prompt: the brief a goal's build, review and plan session is given.
  */
-export function goalPrompt({ name, dir, worktree, branch }) {
-  return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
+function withBrief(prompt, brief) {
+  return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
+}
+
+/**
+ * What a goal session is told: where the goal is and where it works, and the
+ * goal itself (`brief`). The rest is the build role's
+ * (`canon/roles/build-session.md`, its `goal` part).
+ */
+export function goalPrompt({ name, dir, worktree, branch, brief = null }) {
+  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`, brief);
 }
 
 /**
@@ -968,8 +977,8 @@ export function goalPrompt({ name, dir, worktree, branch }) {
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
-  return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null }) {
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`, brief);
 }
 
 /**
@@ -977,12 +986,12 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
  * blocked (its last log entry), and where its worktree is — which it may take
  * over and finish. The rest is `canon/roles/plan-session.md`'s.
  */
-export function goalPlanPrompt({ name, dir, worktree, branch, why = null }) {
+export function goalPlanPrompt({ name, dir, worktree, branch, why = null, brief = null }) {
   const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
-  return [
+  return withBrief([
     `The goal ${name} is blocked${reason ? `: ${reason}` : ''}. You are the plan session the runner woke for it, headless.`,
-    `Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
-  ].join('\n');
+    `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
+  ].join('\n'), brief);
 }
 
 /** `checkInPrompt` for a plan session on a blocked goal. */

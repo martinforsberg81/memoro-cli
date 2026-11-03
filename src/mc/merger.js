@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setStatus } from './goals.js';
+import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setStatus, unmetGoalWords } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -519,7 +519,7 @@ export async function landJob(batch, {
   onAnswer = null,
   // How often a round in flight asks GitHub whether its pull request is gone (`watchSubject`).
   watchMs = SUBJECT_POLL_MS,
-  // A goal job's answer written to its GOAL.md and LOG.md (goals.js `setStatus`).
+  // A goal job's answer written to its GOAL.json and LOG.md (goals.js `setStatus`).
   setGoal = realSetGoal,
   // `() => goals` (goals.js `programsGoals`): how a pull request queued by
   // anyone finds the goal whose `prs` carry it. Null knows only `job.goal`;
@@ -585,6 +585,18 @@ export async function landJob(batch, {
     const head = await headOf(one, ask);
     if (!head || head === one.sha) continue;
     await answer(one, false, { ok: false, merged: false, stopped_at: 'moved', reason: `#${one.pr} is at ${head.slice(0, 12)}, not ${one.sha.slice(0, 12)}, the head its review judged` });
+    jobs.splice(jobs.indexOf(one), 1);
+  }
+  // Done means the goal's criteria hold: a goal's pull request with one not
+  // met — or with none — is answered red before any round is spent on it
+  // (`criteriaDoor` is the same door for a plan). A goal the merger cannot
+  // read (`success_criteria` null) is not checked.
+  for (const one of [...jobs]) {
+    const goal = goalOfJob(one, goalsOf);
+    if (!goal || !Array.isArray(goal.success_criteria)) continue;
+    const unmet = unmetGoalWords(goal, `${goal.programme}/${goal.goal}`);
+    if (!unmet) continue;
+    await answer(one, false, { ok: false, merged: false, stopped_at: 'unmet-criteria', reason: unmet });
     jobs.splice(jobs.indexOf(one), 1);
   }
   if (!jobs.length) return answers;
@@ -730,13 +742,14 @@ export function mayRequeue(job, report) {
   return Boolean(report) && !report.ok && REQUEUE_STOPS.includes(report.stopped_at) && (job?.requeues || 0) < MAX_REQUEUES;
 }
 
-/** A goal's status and a runner entry, written to its GOAL.md and LOG.md. */
+/** A goal's status and a runner entry, written to its GOAL.json and LOG.md. */
 function realSetGoal({ dir, status, entry }) {
   return setStatus({ dir, status, entry });
 }
 
 /**
- * The goal a job answers to, as `{ programme, goal, dir, status, prs }`, or null: the
+ * The goal a job answers to, as `{ programme, goal, dir, status, prs,
+ * success_criteria }`, or null: the
  * job's own (a goal's green review queued it), else the goal whose `prs` name
  * this pull request (`mc publish` or `mc goal pr` put it there), so a pull
  * request a person or another session queued is the goal's too. `prs` is read
@@ -747,10 +760,10 @@ export function goalOfJob(job, goalsOf) {
   try { goals = goalsOf ? goalsOf() : []; } catch { goals = []; }
   if (job.goal) {
     const found = goals.find((goal) => goal.programme === job.goal.programme && goal.goal === job.goal.goal);
-    return { ...job.goal, status: found?.status ?? null, prs: found?.prs ?? [] };
+    return { ...job.goal, status: found?.status ?? null, prs: found?.prs ?? [], success_criteria: found?.success_criteria ?? null };
   }
   const found = goalOfPr(goals, job.repo, job.pr);
-  return found && !found.problems?.length ? { programme: found.programme, goal: found.goal, dir: found.dir, status: found.status, prs: found.prs } : null;
+  return found && !found.problems?.length ? { programme: found.programme, goal: found.goal, dir: found.dir, status: found.status, prs: found.prs, success_criteria: found.success_criteria ?? null } : null;
 }
 
 /**

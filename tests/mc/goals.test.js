@@ -1,44 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { afterCycle, afterGoneText, afterOf, appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitingMoves, planDue, planHeld, planHeldText, waitsOnPerson, waitsOnPlan } from '../../src/mc/goals.js';
+import { appendEntry, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, renderGoalText, reviewDue, sessions, setStatus, unmetGoalWords, updateGoal, validateGoal, verdictOf, phaseMoves, phaseOpen, renumberPhases, planDue, planHeld, planHeldText, waitsOnPerson, waitsOnPlan } from '../../src/mc/goals.js';
 import { programsPlans } from '../../src/mc/plan-source.js';
+import { validatePlan } from '../../src/mc/plan-schema.js';
+import * as criteria from '../../src/mc/criteria.js';
+import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 
-const GOAL_TEXT = [
-  '---',
-  'status: open',
-  'repos: memoro-cli, memoro',
-  'class: large',
-  'created: 2026-11-01T20:00:00Z',
-  '---',
-  '# Make the goal plain',
-  '',
-  '## Goal',
-  '',
-  'Two files and a worktree.',
-  '',
-  '## Criteria',
-  '',
-  '## Out of scope',
-  '',
-].join('\n');
+const GOAL_TEXT = goalJson({ repos: ['memoro-cli', 'memoro'] });
 
 const LOG_TEXT = [
   '## 2026-11-01T20:00Z · person · open',
   '',
-  'Gjort: skapat',
+  'Done: created',
   '',
   '## 2026-11-01T21:30Z · claude claude-opus-5-5 · open',
   '',
-  'Gjort: the reader',
+  'Done: the reader',
   'and its tests, over two paragraphs',
   '',
-  'Kommentar: none yet',
-  'Nästa: the verbs',
+  'Comment: none yet',
+  'Next: the verbs',
   '',
   '## 2026-11-01T22:00Z · runner · open',
   '',
-  'Kommentar: no session ran',
+  'Comment: no session ran',
   '',
 ].join('\n');
 
@@ -60,35 +46,98 @@ function model(files) {
   return { store, list, read, write };
 }
 
-test('parseGoal reads the front matter and the title, and keeps the body as it is', () => {
+test('parseGoal reads GOAL.json: its fields, prose as paragraphs, criteria and documents', () => {
   const goal = parseGoal(GOAL_TEXT);
   assert.equal(goal.status, 'open');
   assert.deepEqual(goal.repos, ['memoro-cli', 'memoro']);
   assert.equal(goal.class, 'large');
   assert.equal(goal.created, '2026-11-01T20:00:00Z');
   assert.equal(goal.title, 'Make the goal plain');
-  assert.equal(goal.body, GOAL_TEXT.slice(GOAL_TEXT.indexOf('# Make')));
+  assert.deepEqual(goal.goal, ['Two files and a worktree.']);
+  assert.deepEqual(goal.success_criteria, [{ criterion: 'it works', check: 'a test', met: false }]);
+  assert.deepEqual(goal.documents, []);
 });
 
-test('parseGoal names each problem: no front matter, a status or class unknown, no repository, a bad repository name', () => {
-  assert.deepEqual(parseGoal('# no front matter\n').problems, ['GOAL.md has no front matter between --- lines']);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, waiting, dropped, not started/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, waiting, dropped, not missing/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: huge')).problems.join(), /class is fast or large, not huge/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: ')).problems.join(), /repos names no repository/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: Memoro_CLI')).problems.join(), /repo Memoro_CLI is not a repository name/u);
+test('parseGoal names each problem by its field: not JSON, a status or class unknown, no repository, a bad repository name', () => {
+  assert.match(parseGoal('# no json\n').problems.join(), /^GOAL\.json is not JSON/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'started' })).problems.join(), /status: one of open, review, blocked, done, dropped, not started/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { status: undefined })).problems.join(), /status: .*not missing/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { class: 'huge' })).problems.join(), /class: fast or large, not huge/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: [] })).problems.join(), /repos: at least one repository/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: ['Memoro_CLI'] })).problems.join(), /repos: Memoro_CLI is not a repository name/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { schema: 'mc-plan' })).problems.join(), /schema: must be "mc-goal"/u);
 });
 
-test('renderGoal writes the front matter back, and the body untouched, so a parsed goal renders as it was', () => {
+test('the schema refuses a goal without a criterion, a criterion without a check, and an unknown key, naming the field', () => {
+  const value = JSON.parse(GOAL_TEXT);
+  assert.deepEqual(validateGoal(value), []);
+  assert.deepEqual(validateGoal({ ...value, success_criteria: [] }), ['success_criteria: at least one criterion — a goal with none cannot be finished']);
+  assert.deepEqual(validateGoal({ ...value, success_criteria: [{ criterion: 'it works', met: false }] }),
+    ['success_criteria[0].check: how it is checked — the assertion, the query, the measurement in the running app']);
+  assert.deepEqual(validateGoal({ ...value, steps: [] }), ['steps: unknown key']);
+  assert.deepEqual(validateGoal({ ...value, success_criteria: [{ criterion: 'x', check: 'y', met: false, by: 'me' }] }), ['success_criteria[0].by: unknown key']);
+  assert.deepEqual(validateGoal({ ...value, documents: [{ label: 'doc' }] }), ['documents[0].path: a path or URL a checkout can follow']);
+  // A draft — mc goal new's skeleton — may have no criterion yet; it parses.
+  assert.deepEqual(validateGoal({ ...value, success_criteria: [] }, { draft: true }), []);
+  assert.deepEqual(parseGoal(withGoal(GOAL_TEXT, { success_criteria: [] })).success_criteria, []);
+});
+
+test('PLAN.json and GOAL.json check criteria and documents with the same functions', () => {
+  const plan = { schema: 'mc-plan', version: 1, goal: ['g'], contract: ['c'], out_of_scope: ['o'], documents: [], steps: [{ title: 't', status: 'ready', done_when: 'd', instruction: ['i'] }] };
+  const bad = [{ criterion: 'it works', met: false }];
+  const fromPlan = validatePlan({ ...plan, success_criteria: bad }).problems;
+  const fromGoal = validateGoal({ ...JSON.parse(GOAL_TEXT), success_criteria: bad });
+  const shared = [];
+  criteria.validateCriteria(bad, shared);
+  assert.deepEqual(fromPlan, shared);
+  assert.deepEqual(fromGoal, shared);
+});
+
+test('renderGoal writes every key in order, so a parsed goal renders as it was; an invalid goal is never rendered', () => {
   const goal = parseGoal(GOAL_TEXT);
   assert.equal(renderGoal(goal), GOAL_TEXT);
-  assert.equal(renderGoal({ ...goal, status: 'blocked' }), GOAL_TEXT.replace('status: open', 'status: blocked'));
+  assert.equal(renderGoal({ ...goal, status: 'blocked' }), withGoal(GOAL_TEXT, { status: 'blocked' }));
+  assert.throws(() => renderGoal({ ...goal, status: 'maybe' }), /GOAL\.json would not validate: status/u);
+  assert.throws(() => renderGoal({ ...goal, success_criteria: [{ criterion: 'x', met: false }] }), /success_criteria\[0\]\.check/u);
+});
+
+test('renderGoalText shows the goal, contract, out of scope, documents and each criterion with ✓ or ✗ and its check', () => {
+  const goal = parseGoal(withGoal(GOAL_TEXT, {
+    contract: ['No new dependency.'], out_of_scope: ['Phases.'], documents: [{ label: 'the doc', path: 'docs/technical/mc-goals.md' }],
+    success_criteria: [{ criterion: 'it parses', check: 'mc gate tests/mc/goals.test.js', met: true }, { criterion: 'it shows', check: 'a test on the text', met: false }],
+  }));
+  const text = renderGoalText(goal);
+  assert.match(text, /^# Make the goal plain\n\nGOAL\n  Two files and a worktree\.\n\nCONTRACT\n  No new dependency\.\n\nOUT OF SCOPE\n  Phases\.\n\nDOCUMENTS\n  the doc — docs\/technical\/mc-goals\.md\n/u);
+  assert.match(text, /\nCRITERIA 1\/2\n  1 ✓ it parses\n      check: mc gate tests\/mc\/goals\.test\.js\n  2 ✗ it shows\n      check: a test on the text\n$/u);
+  assert.equal(criteriaWords(goal), 'criteria 1/2');
+  assert.match(renderGoalText(parseGoal(withGoal(GOAL_TEXT, { success_criteria: [] }))), /CRITERIA 0\/0\n  none yet — mc goal criterion add/u);
+});
+
+test('unmetGoalWords names the unmet criteria by number, and a goal with none; null when all hold', () => {
+  const two = (a, b) => ({ success_criteria: [{ met: a }, { met: b }] });
+  assert.equal(unmetGoalWords(two(true, true), 'mc/g'), null);
+  assert.equal(unmetGoalWords(two(true, false), 'mc/g'), 'criterion 2 is not met — run its check and record it with mc goal criterion met mc/g 2');
+  assert.match(unmetGoalWords(two(false, false), 'mc/g'), /^criteria 1, 2 are not met/u);
+  assert.match(unmetGoalWords({ success_criteria: [] }, 'mc/g'), /^mc\/g has no criterion — mc goal criterion add mc\/g/u);
+});
+
+test('updateGoal writes a valid change, and refuses an invalid one without writing', () => {
+  const files = { '/g/GOAL.json': GOAL_TEXT };
+  const io = { read: (path) => files[path] ?? null, write: (path, text) => { files[path] = text; } };
+  const met = updateGoal({ dir: '/g', change: (goal) => ({ ...goal, success_criteria: [{ ...goal.success_criteria[0], met: true }] }), ...io });
+  assert.equal(met.goal.success_criteria[0].met, true);
+  assert.equal(goalField(files['/g/GOAL.json'], 'success_criteria')[0].met, true);
+  const before = files['/g/GOAL.json'];
+  const bad = updateGoal({ dir: '/g', change: (goal) => ({ ...goal, success_criteria: [{ criterion: 'x', met: false }] }), ...io });
+  assert.match(bad.problems.join(), /success_criteria\[0\]\.check/u);
+  assert.equal(files['/g/GOAL.json'], before, 'nothing written');
+  assert.deepEqual(updateGoal({ dir: '/g', change: () => ({ problems: ['no'] }), ...io }).problems, ['no']);
 });
 
 test('parseLog reads each heading, and each labelled line up to the next label or heading', () => {
   const log = parseLog(LOG_TEXT);
   assert.equal(log.length, 3);
-  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null });
+  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'created', comment: null, next: null });
   assert.deepEqual(log[1], {
     at: '2026-11-01T21:30Z', tool: 'claude', model: 'claude-opus-5-5', status: 'open',
     done: 'the reader\nand its tests, over two paragraphs', comment: 'none yet', next: 'the verbs',
@@ -96,19 +145,27 @@ test('parseLog reads each heading, and each labelled line up to the next label o
   assert.deepEqual(log[2], { at: '2026-11-01T22:00Z', tool: 'runner', model: null, status: 'open', done: null, comment: 'no session ran', next: null });
 });
 
+test('parseLog still reads a log written with the Swedish labels', () => {
+  const log = parseLog('## 2026-11-01T20:00Z · person · open\n\nGjort: skapat\n\n## 2026-11-01T21:30Z · claude opus · open\n\nGjort: the reader\nKommentar: none yet\nNästa: the verbs\n');
+  assert.deepEqual(log.map(({ done, comment, next }) => ({ done, comment, next })), [
+    { done: 'skapat', comment: null, next: null },
+    { done: 'the reader', comment: 'none yet', next: 'the verbs' },
+  ]);
+});
+
 test('parseLog skips a heading that is not one, and the lines under it', () => {
-  const log = parseLog('## not an entry\n\nGjort: nothing\n\n## 2026-11-01T20:00Z · person · done\n\nGjort: closed\n');
+  const log = parseLog('## not an entry\n\nDone: nothing\n\n## 2026-11-01T20:00Z · person · done\n\nDone: closed\n');
   assert.equal(log.length, 1);
   assert.equal(log[0].status, 'done');
   assert.equal(log[0].done, 'closed');
 });
 
-test('appendLog adds one heading at the end, with a blank line between entries, and renders the labels that are set', () => {
+test('appendLog adds one heading at the end, with a blank line between entries, and renders the labels that are set — Done, Comment, Next', () => {
   const entry = { at: '2026-11-01T23:00Z', tool: 'claude', model: 'claude-haiku-5-5', status: 'blocked', done: 'part', comment: null, next: 'the rest' };
   const text = appendLog(LOG_TEXT, entry);
   assert.equal(text, `${LOG_TEXT.trimEnd()}\n\n${renderEntry(entry)}`);
-  assert.match(text, /^## 2026-11-01T23:00Z · claude claude-haiku-5-5 · blocked\n\nGjort: part\nNästa: the rest\n$/mu);
-  assert.equal(appendLog('', { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }), '## 2026-11-01T20:00Z · person · open\n\nGjort: skapat\n');
+  assert.match(text, /^## 2026-11-01T23:00Z · claude claude-haiku-5-5 · blocked\n\nDone: part\nNext: the rest\n$/mu);
+  assert.equal(appendLog('', { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'created', comment: 'c', next: null }), '## 2026-11-01T20:00Z · person · open\n\nDone: created\nComment: c\n');
 });
 
 test('sessions counts the entries a session wrote: not the runner\'s, not a person\'s', () => {
@@ -118,11 +175,11 @@ test('sessions counts the entries a session wrote: not the runner\'s, not a pers
 
 test('programsGoals lists every goal under every programme, in listing order, with its log', () => {
   const { list, read } = model({
-    '/p/mc/goals/plain/GOAL.md': GOAL_TEXT,
+    '/p/mc/goals/plain/GOAL.json': GOAL_TEXT,
     '/p/mc/goals/plain/LOG.md': LOG_TEXT,
-    '/p/mc/goals/second/GOAL.md': GOAL_TEXT.replace('class: large', 'class: fast'),
+    '/p/mc/goals/second/GOAL.json': withGoal(GOAL_TEXT, { class: 'fast' }),
     '/p/mc/goals/notes/LOG.md': LOG_TEXT,
-    '/p/other/goals/broken/GOAL.md': 'no front matter here\n',
+    '/p/other/goals/broken/GOAL.json': 'no json here\n',
     '/p/other/goals/broken/LOG.md': LOG_TEXT,
   });
   const goals = programsGoals({ home: '/p', list, read });
@@ -134,8 +191,10 @@ test('programsGoals lists every goal under every programme, in listing order, wi
   assert.equal(goals[0].dir, '/p/mc/goals/plain');
   assert.equal(goals[0].log.length, 3);
   assert.deepEqual(goals[0].problems, []);
+  assert.deepEqual(goals[0].goal_text, ['Two files and a worktree.']);
+  assert.equal(goals[0].success_criteria.length, 1);
   assert.equal(goals[1].class, 'fast');
-  assert.deepEqual(goals[2].problems, ['GOAL.md has no front matter between --- lines']);
+  assert.match(goals[2].problems.join(), /^GOAL\.json is not JSON/u);
   assert.equal(goals[2].status, null);
   assert.equal(goals[2].log.length, 3);
 });
@@ -144,7 +203,7 @@ test('programsPlans ignores a goals directory: no PLAN.json sits directly under 
   // A plan is `<programme>/<project>/PLAN.json`: the goal is `goals/<goal>`, one level deeper.
   const { list, read } = model({
     '/p/mc/proj/PLAN.json': '{"repo":"memoro-cli"}',
-    '/p/mc/goals/plain/GOAL.md': GOAL_TEXT,
+    '/p/mc/goals/plain/GOAL.json': GOAL_TEXT,
     '/p/mc/goals/plain/memoro-cli/PLAN.json': '{"repo":"memoro-cli"}',
   });
   const plans = programsPlans({ home: '/p', list, read });
@@ -160,7 +219,7 @@ test('setStatus rewrites the status and appends the entry, in one call; nothing 
   const entry = { at: '2026-11-02T08:00Z', tool: 'claude', model: 'claude-sonnet-5-5', status: 'blocked', done: null, comment: 'waits for Martin', next: null };
   const outcome = setStatus({ dir, status: 'blocked', entry, read, write });
   assert.equal(outcome.goal.status, 'blocked');
-  assert.equal(store[`${dir}/${GOAL_FILE}`], GOAL_TEXT.replace('status: open', 'status: blocked'));
+  assert.equal(store[`${dir}/${GOAL_FILE}`], withGoal(GOAL_TEXT, { status: 'blocked' }));
   assert.equal(store[`${dir}/${LOG_FILE}`], appendLog(LOG_TEXT, entry));
 
   const broken = { [`${dir}/${GOAL_FILE}`]: 'nothing here' };
@@ -173,11 +232,11 @@ test('setStatus rewrites the status and appends the entry, in one call; nothing 
 
 test('appendEntry adds to LOG.md alone, and starts it when there is none', () => {
   const { store, read, write } = model({});
-  appendEntry({ dir: '/p/mc/goals/plain', entry: { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'skapat', comment: null, next: null }, read, write });
-  assert.equal(store['/p/mc/goals/plain/LOG.md'], '## 2026-11-01T20:00Z · person · open\n\nGjort: skapat\n');
+  appendEntry({ dir: '/p/mc/goals/plain', entry: { at: '2026-11-01T20:00Z', tool: 'person', model: null, status: 'open', done: 'created', comment: null, next: null }, read, write });
+  assert.equal(store['/p/mc/goals/plain/LOG.md'], '## 2026-11-01T20:00Z · person · open\n\nDone: created\n');
 });
 
-test('verdictOf reads green or red and the head sha off the first Gjort line, and nothing else is a verdict', () => {
+test('verdictOf reads green or red and the head sha off the first Done line, and nothing else is a verdict', () => {
   assert.deepEqual(verdictOf({ done: 'green 46a61dea' }), { verdict: 'green', sha: '46a61dea' });
   assert.deepEqual(verdictOf({ done: 'red — head 46a61dea0b1c\nmore' }), { verdict: 'red', sha: '46a61dea0b1c' });
   assert.equal(verdictOf({ done: 'green light for the page' }), null);
@@ -187,10 +246,10 @@ test('verdictOf reads green or red and the head sha off the first Gjort line, an
 
 test('lastBuildEntry is the last entry a build session wrote: not the runner\'s, a person\'s or a review\'s', () => {
   const log = parseLog([
-    '## 2026-11-02T09:00Z · person · open', '', 'Gjort: skapat', '',
-    '## 2026-11-02T10:00Z · claude opus · review', '', 'Gjort: built', '',
-    '## 2026-11-02T11:00Z · codex gpt-6.1-sol · blocked', '', 'Gjort: red abc1234', '',
-    '## 2026-11-02T12:00Z · runner · blocked', '', 'Kommentar: x', '',
+    '## 2026-11-02T09:00Z · person · open', '', 'Done: created', '',
+    '## 2026-11-02T10:00Z · claude opus · review', '', 'Done: built', '',
+    '## 2026-11-02T11:00Z · codex gpt-6.1-sol · blocked', '', 'Done: red abc1234', '',
+    '## 2026-11-02T12:00Z · runner · blocked', '', 'Comment: x', '',
   ].join('\n'));
   assert.equal(lastBuildEntry(log).model, 'opus');
   assert.equal(lastBuildEntry(log.slice(0, 1)), null);
@@ -219,6 +278,10 @@ test('nextGoal takes open goals and goals due a review, oldest first, and leaves
   const goals = [goal('a', 'open', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'blocked', '2026-11-01T10:00Z')];
   assert.equal(nextGoal(goals, { repos: ['memoro'] }).goal, 'b');
   assert.equal(nextGoal(goals, { repos: ['memoro'], may: (g) => g.status !== 'review' }).goal, 'a');
+  // An open goal with no criterion yet — mc goal new's skeleton — is not started.
+  const bare = [{ ...goal('a', 'open', '2026-11-02T12:00Z'), success_criteria: [] }];
+  assert.equal(nextGoal(bare, { repos: ['memoro'] }), null);
+  assert.equal(nextGoal([{ ...bare[0], success_criteria: [{ criterion: 'x', check: 'y', met: false }] }], { repos: ['memoro'] }).goal, 'a');
 });
 
 test('waitsOnPlan: a goal blocked by a red review or by the runner, not one blocked on a question or left blocked by plan', () => {
@@ -239,86 +302,82 @@ test('waitsOnPlan: a goal blocked by a red review or by the runner, not one bloc
   assert.equal(waitsOnPerson({ status: 'open', log: [] }), false);
 });
 
-/* ------------------------------------------------------------- after, waiting */
+/* ------------------------------------------------------------- phases */
 
-/** A goal as `programsGoals` gives it, for the after tests. */
-const listed = (name, status, after = [], extra = {}) => {
+/** A goal as `programsGoals` gives it, for the phase tests. */
+const listed = (name, status, phase = 1, extra = {}) => {
   const [programme, goal] = name.split('/');
-  return { programme, goal, dir: `/p/${programme}/goals/${goal}`, status, repos: ['memoro-cli'], class: 'large', after, log: [], problems: [], ...extra };
+  return { programme, goal, dir: `/p/${programme}/goals/${goal}`, status, phase, repos: ['memoro-cli'], class: 'large', log: [], problems: [], success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra };
 };
 
-test('parseGoal reads after as <programme>/<goal> names, and renderGoal writes it back', () => {
-  const text = GOAL_TEXT.replace('created: 2026-11-01T20:00:00Z\n', 'created: 2026-11-01T20:00:00Z\nafter: mc/runner-sessions, mc/agent-skills-text\n').replace('status: open', 'status: waiting');
-  const goal = parseGoal(text);
-  assert.equal(goal.status, 'waiting');
-  assert.deepEqual(goal.after, ['mc/runner-sessions', 'mc/agent-skills-text']);
-  assert.equal(renderGoal(goal), text);
-  assert.deepEqual(parseGoal(GOAL_TEXT).after, [], 'no after line, no after');
-  assert.doesNotMatch(renderGoal(parseGoal(GOAL_TEXT)), /after:/u, 'no after, no line');
-  assert.deepEqual(parseGoal(text.replace('mc/agent-skills-text', 'agent-skills-text')).problems, ['after agent-skills-text is not <programme>/<goal>']);
+test('a goal without a phase in GOAL.json is read as phase 1, and renderGoal writes it', () => {
+  const { phase: _phase, ...bare } = JSON.parse(GOAL_TEXT);
+  const goal = parseGoal(JSON.stringify(bare));
+  assert.equal(goal.phase, 1);
+  assert.equal(goalField(renderGoal(goal), 'phase'), 1);
+  assert.equal(parseGoal(withGoal(GOAL_TEXT, { phase: 3 })).phase, 3);
+  assert.equal(renderGoal(parseGoal(withGoal(GOAL_TEXT, { phase: 3 }))), withGoal(GOAL_TEXT, { phase: 3 }), 'round trip');
+  for (const bad of [0, -1, 1.5, '2', null]) assert.match(parseGoal(withGoal(GOAL_TEXT, { phase: bad })).problems.join(), /phase: a whole number from 1/u, String(bad));
 });
 
-test('setStatus with after writes both, and keeps the after it has when given none', () => {
-  const store = { '/g/GOAL.md': GOAL_TEXT, '/g/LOG.md': '' };
-  const io = { read: (path) => store[path] ?? null, write: (path, text) => { store[path] = text; } };
-  const entry = { at: '2026-11-02T10:00Z', tool: 'person', model: null, status: 'waiting', done: 'after mc/a', comment: null, next: null };
-  setStatus({ dir: '/g', status: 'waiting', after: ['mc/a'], entry, ...io });
-  assert.match(store['/g/GOAL.md'], /^status: waiting\n.*\nafter: mc\/a\n---/msu);
-  setStatus({ dir: '/g', status: 'blocked', entry: { ...entry, status: 'blocked' }, ...io });
-  assert.deepEqual(parseGoal(store['/g/GOAL.md']).after, ['mc/a']);
+test('a GOAL.json with after, or waiting, does not parse, and says mc goal convert gives it a phase', () => {
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { after: ['mc/a'] })).problems.join(), /after: goals run in phases now — mc goal convert/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'waiting' })).problems.join(), /status: one of open, review, blocked, done, dropped/u);
 });
 
-test('afterOf: done is landed, a goal not there is gone, anything else — blocked too — is pending', () => {
-  const goals = [listed('mc/landed', 'done'), listed('mc/stuck', 'blocked'), listed('mc/going', 'open')];
-  assert.deepEqual(afterOf({ after: ['mc/landed', 'mc/stuck', 'mc/going', 'mc/discarded'] }, goals), {
-    landed: ['mc/landed'], pending: ['mc/stuck', 'mc/going'], gone: ['mc/discarded'],
-  });
-  assert.deepEqual(afterOf({ after: [] }, goals), { landed: [], pending: [], gone: [] });
+test('the phase a programme is in is the lowest of its unfinished goals; done and dropped both finish one', () => {
+  const goals = [listed('mc/a', 'done'), listed('mc/b', 'dropped'), listed('mc/c', 'open', 2), listed('mc/d', 'blocked', 3), listed('other/e', 'open')];
+  assert.equal(currentPhase(goals, 'mc'), 2);
+  assert.equal(currentPhase(goals, 'other'), 1);
+  assert.equal(currentPhase([listed('mc/a', 'done')], 'mc'), null);
+  assert.equal(currentPhase([listed('mc/a', 'open'), { ...listed('mc/broken', null, null), problems: ['x'] }], 'mc'), 1, 'a goal that does not parse holds nothing back');
 });
 
-test('waitingMoves opens a goal whose after has all landed, keeps one behind a blocked goal waiting, and blocks one whose after is gone', () => {
-  const goals = [
-    listed('mc/runner-sessions', 'done'),
-    listed('mc/stuck', 'blocked'),
-    listed('mc/ready', 'waiting', ['mc/runner-sessions']),
-    listed('mc/behind', 'waiting', ['mc/runner-sessions', 'mc/stuck']),
-    listed('mc/orphan', 'waiting', ['mc/discarded']),
-    listed('mc/early', 'open', ['mc/stuck']),
-    listed('mc/judged', 'review', ['mc/stuck']),
-    listed('mc/asked', 'blocked', ['mc/runner-sessions']),
-  ];
-  const moves = waitingMoves(goals).map((move) => ({ goal: move.goal.goal, status: move.status, done: move.done, comment: move.comment }));
-  assert.deepEqual(moves, [
-    { goal: 'ready', status: 'open', done: 'mc/runner-sessions landed — starting', comment: null },
-    { goal: 'orphan', status: 'blocked', done: null, comment: afterGoneText(['mc/discarded']) },
-    { goal: 'early', status: 'waiting', done: null, comment: 'waits on mc/stuck' },
-  ]);
-  assert.equal(waitsOnPlan({ status: 'blocked', log: [{ tool: 'runner', status: 'blocked', done: null, comment: afterGoneText(['mc/discarded']) }] }), true, 'a gone after waits on plan');
+test('a goal in phase 2 is not picked while a goal in phase 1 is open, review or blocked; it is when all are done or dropped; one phase runs side by side', () => {
+  for (const status of ['open', 'review', 'blocked']) {
+    const goals = [listed('mc/first', status, 1, { repos: ['memoro'] }), listed('mc/second', 'open', 2)];
+    assert.equal(phaseOpen(goals[1], goals), false, status);
+    assert.equal(nextGoal(goals, { repos: ['memoro-cli'] }), null, `not picked while phase 1 is ${status}`);
+  }
+  const finished = [listed('mc/first', 'done', 1, { repos: ['memoro'] }), listed('mc/gone', 'dropped', 1), listed('mc/second', 'open', 2)];
+  assert.equal(nextGoal(finished, { repos: ['memoro-cli'] }).goal, 'second', 'picked once phase 1 is done or dropped');
+  const side = [listed('mc/a', 'open'), listed('mc/b', 'open'), listed('mc/later', 'open', 2)];
+  assert.equal(nextGoal(side, { repos: ['memoro-cli'] }).goal, 'a');
+  assert.equal(nextGoal(side, { repos: ['memoro-cli'], held: new Set(['goal:mc/a']) }).goal, 'b', 'the second of phase 1 runs while the first is held');
+  assert.equal(nextGoal(side, { repos: ['memoro-cli'], held: new Set(['goal:mc/a', 'goal:mc/b']) }), null, 'phase 2 still waits');
+  assert.equal(phaseOpen(listed('other/x', 'open', 2), side), true, 'another programme\'s phases do not hold it');
 });
 
-test('nextGoal never picks a waiting goal', () => {
-  const goals = [listed('mc/held', 'waiting', ['mc/other']), listed('mc/other', 'blocked')];
-  assert.equal(nextGoal(goals, { repos: ['memoro-cli'] }), null);
+test('phaseMoves renumbers each programme so the lowest phase is 1 and there are no holes', () => {
+  const goals = [listed('mc/b', 'open', 2), listed('mc/c', 'open', 3), listed('mc/c2', 'open', 3), listed('mc/e', 'open', 5), listed('other/x', 'open', 1)];
+  assert.deepEqual(phaseMoves(goals).map((move) => [move.goal.goal, move.from, move.to]), [['b', 2, 1], ['c', 3, 2], ['c2', 3, 2], ['e', 5, 3]]);
+  assert.deepEqual(phaseMoves([listed('mc/a', 'open'), listed('mc/b', 'done', 2)]), [], 'nothing to move');
 });
 
-test('afterCycle finds a ring of goals waiting on each other', () => {
-  const goals = [listed('mc/a', 'waiting', ['mc/b']), listed('mc/b', 'waiting', ['mc/c']), listed('mc/c', 'open')];
-  assert.equal(afterCycle('mc/c', ['mc/a'], goals), 'mc/a');
-  assert.equal(afterCycle('mc/c', ['mc/x'], goals), null);
-  assert.equal(afterCycle('mc/d', ['mc/a'], goals), null);
+test('renumberPhases writes each moved goal\'s phase into its GOAL.json, one programme only', () => {
+  const store = {
+    '/h/mc/goals/b/GOAL.json': withGoal(GOAL_TEXT, { phase: 2 }),
+    '/h/mc/goals/c/GOAL.json': withGoal(GOAL_TEXT, { phase: 3 }),
+    '/h/other/goals/x/GOAL.json': withGoal(GOAL_TEXT, { phase: 2 }),
+  };
+  const list = (path) => ({ '/h': ['mc', 'other'], '/h/mc/goals': ['b', 'c'], '/h/other/goals': ['x'] }[path] ?? []);
+  const made = renumberPhases({ home: '/h', programme: 'mc', list, read: (path) => store[path] ?? null, write: (path, text) => { store[path] = text; } });
+  assert.deepEqual(made.map((move) => [move.goal.goal, move.from, move.to]), [['b', 2, 1], ['c', 3, 2]]);
+  assert.equal(goalField(store['/h/mc/goals/b/GOAL.json'], 'phase'), 1);
+  assert.equal(goalField(store['/h/mc/goals/c/GOAL.json'], 'phase'), 2);
+  assert.equal(goalField(store['/h/other/goals/x/GOAL.json'], 'phase'), 2, 'another programme is left');
 });
 
 /* ------------------------------------------------ prs, done at landing, archive (goal-lifecycle) */
 
-test('prs: <repo>#<n> each once, written back after created and after; a bad one is a problem', async () => {
+test('prs: <repo>#<n> each once, written back as strings; a bad one is a problem', async () => {
   const { prRef } = await import('../../src/mc/goals.js');
-  const text = GOAL_TEXT.replace('class: large', 'class: large\nprs: memoro#14761, memoro-cli#1238, memoro#14761');
+  const text = withGoal(GOAL_TEXT, { prs: ['memoro#14761', 'memoro-cli#1238', 'memoro#14761'] });
   const goal = parseGoal(text);
   assert.deepEqual(goal.prs, [{ repo: 'memoro', pr: 14761 }, { repo: 'memoro-cli', pr: 1238 }]);
-  assert.match(renderGoal(goal), /\nprs: memoro#14761, memoro-cli#1238\n---\n/u);
+  assert.deepEqual(goalField(renderGoal(goal), 'prs'), ['memoro#14761', 'memoro-cli#1238']);
   assert.deepEqual(parseGoal(GOAL_TEXT).prs, []);
-  assert.doesNotMatch(renderGoal(parseGoal(GOAL_TEXT)), /prs:/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: large\nprs: 14761')).problems.join(), /prs 14761 is not <repo>#<number>/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { prs: ['14761'] })).problems.join(), /prs: 14761 is not <repo>#<number>/u);
   assert.equal(prRef({ repo: 'memoro', pr: 3 }), 'memoro#3');
 });
 
@@ -357,7 +416,7 @@ test('addPr writes a pull request into prs once, with its entry', async () => {
   assert.equal(parseLog(files[`/g/${LOG_FILE}`]).length, 1);
 });
 
-test('goalLogRow: one table row, its pipes escaped, the last Gjort', async () => {
+test('goalLogRow: one table row, its pipes escaped, the last Done', async () => {
   const { goalLogRow } = await import('../../src/mc/goals.js');
   const log = [{ done: 'first' }, { done: 'a | b\nc' }, { done: null }];
   assert.equal(goalLogRow({ date: '2026-11-03', goal: 'g', status: 'done', prs: [{ repo: 'memoro', pr: 1 }], log }), '| 2026-11-03 | g | done | memoro#1 | a \\| b c |');
