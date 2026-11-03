@@ -301,7 +301,7 @@ describe('the verb memoro calls', () => {
     const stderr = capture();
     const code = await run(['ensure'], { stdout: capture(), stderr, root: scratch() });
     assert.equal(code, 2);
-    assert.match(stderr.text(), /mc dev ensure\? — list, register, unregister/u);
+    assert.match(stderr.text(), /mc dev ensure\? — list, status, register, unregister/u);
   });
 
   it('register without a manifest is a usage error, not a crash', async () => {
