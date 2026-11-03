@@ -171,3 +171,4 @@ existed?
 | 2026-11-02 | mc | goals-runner-wiring | delivered | Review the project against its goal | none | [#1190](https://github.com/martinforsberg81/memoro-cli/pull/1190) |
 | 2026-11-02 | mc | goals-plain | delivered | Review the project against its goal | [docs/technical/mc-goals.md](../technical/mc-goals.md) | [#1217](https://github.com/martinforsberg81/memoro-cli/pull/1217) |
 | 2026-11-03 | mc | dev-queue | delivered | Review the project against its goal | [docs/technical/mc-shot.md](../technical/mc-shot.md) | none |
+| 2026-11-03 | mc | page-one-screen | delivered | Review the project against its goal | none | [#1230](https://github.com/martinforsberg81/memoro-cli/pull/1230) |
