@@ -27,6 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
+import { VERB_MODULES } from '../../src/mc-verbs.js';
 import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
@@ -35,6 +36,20 @@ import { redNames, tapTotals } from '../../src/mc/tap-red.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, gateConfiguration, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
+
+/**
+ * `mc <verb> …` as the binary runs it, in this process: the module
+ * `VERB_MODULES` dispatches the word to, its `run` with the arguments after
+ * it, and what it wrote. A process per call cost a node start each; the
+ * grammar is the verb's own, and the dispatch is the table's.
+ */
+async function verb([name, ...argv]) {
+  const module = await import(new URL(VERB_MODULES[name].replace('./', '../../src/'), import.meta.url));
+  const out = [];
+  const err = [];
+  const status = await module.run(argv, { stdout: { write: (text) => { out.push(text); } }, stderr: { write: (text) => { err.push(text); } } });
+  return { status, stdout: out.join(''), stderr: err.join('') };
+}
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -448,38 +463,29 @@ describe('what the round reports', () => {
  * grammar makes: that a verb called `merge` cannot be made to merge yet.
  */
 describe('mc merge — the grammar', () => {
-  it('offers two modes and no way to overrule a red gate', () => {
-    const fx = repoFixture({ name: 'repo-gate-cli' });
-    try {
-      // `--check` gates and stops; without it the same round also merges.
-      // What must not exist is a third mode — anything that lands a change the
-      // gate called red. Overruling one is the human's call and should cost a
-      // human action rather than a flag on a routine command.
-      const usage = runMcCli(['merge'], fx.env).stderr;
-      assert.match(usage, /mc merge <repo> <pr> \[<pr>\.\.\.\] \[--check\]/u);
-      for (const flag of ['--force', '--anyway', '--no-verify', '--skip-gate', '--apply']) {
-        const tried = runMcCli(['merge', 'repo', '400', flag], fx.env);
-        assert.notEqual(tried.status, 0, `${flag} was accepted`);
-      }
-    } finally { fx.cleanup(); }
+  it('offers two modes and no way to overrule a red gate', async () => {
+    // `--check` gates and stops; without it the same round also merges.
+    // What must not exist is a third mode — anything that lands a change the
+    // gate called red. Overruling one is the human's call and should cost a
+    // human action rather than a flag on a routine command.
+    const usage = (await verb(['merge'])).stderr;
+    assert.match(usage, /mc merge <repo> <pr> \[<pr>\.\.\.\] \[--check\]/u);
+    for (const flag of ['--force', '--anyway', '--no-verify', '--skip-gate', '--apply']) {
+      const tried = await verb(['merge', 'repo', '400', flag]);
+      assert.equal(tried.status, 2, `${flag} was accepted`);
+    }
   });
 
-  it('asks for the pull request rather than guessing one', () => {
-    const fx = repoFixture({ name: 'repo-gate-cli' });
-    try {
-      assert.match(runMcCli(['merge', 'repo'], fx.env).stderr, /which pull request\?/u);
-      assert.match(runMcCli(['merge'], fx.env).stderr, /which repository\?/u);
-      assert.match(runMcCli(['merge', 'repo', 'later', '--check'], fx.env).stderr, /not a pull request number/u);
-    } finally { fx.cleanup(); }
+  it('asks for the pull request rather than guessing one', async () => {
+    assert.match((await verb(['merge', 'repo'])).stderr, /which pull request\?/u);
+    assert.match((await verb(['merge'])).stderr, /which repository\?/u);
+    assert.match((await verb(['merge', 'repo', 'later', '--check'])).stderr, /not a pull request number/u);
   });
 
-  it('a repository nobody has heard of is an error, not a round', () => {
-    const fx = repoFixture({ name: 'repo-gate-cli' });
-    try {
-      const asked = runMcCli(['merge', 'nowhere-at-all', '400', '--check'], fx.env);
-      assert.equal(asked.status, 1);
-      assert.match(asked.stderr, /no repository called "nowhere-at-all"/u);
-    } finally { fx.cleanup(); }
+  it('a repository nobody has heard of is an error, not a round', async () => {
+    const asked = await verb(['merge', 'nowhere-at-all', '400', '--check']);
+    assert.equal(asked.status, 1);
+    assert.match(asked.stderr, /no repository called "nowhere-at-all"/u);
   });
 
   it('leaves the other repo verbs exactly as they were', () => {
@@ -2659,9 +2665,13 @@ describe('the green record file', () => {
   it('keeps its last 2,000 lines, and finds the last match', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-greens-'));
     try {
-      for (let i = 0; i < 2005; i += 1) {
-        recordGreen({ root, entry: { repo: 'r', tree: `t${i}`, selection: 's', gate_version: GATE_MEASUREMENT_VERSION, at: `${i}`, session: 'x' } });
-      }
+      // 2,005 greens: the first 1,999 as recordGreen writes them, in one
+      // write (2,005 calls each read and rewrote the whole file), and the last
+      // six through recordGreen, which trims the file past 2,000.
+      const entry = (i) => ({ repo: 'r', tree: `t${i}`, selection: 's', gate_version: GATE_MEASUREMENT_VERSION, at: `${i}`, session: 'x' });
+      mkdirSync(dirname(greensPath(root)), { recursive: true });
+      writeFileSync(greensPath(root), Array.from({ length: 1999 }, (_, i) => `${JSON.stringify(entry(i))}\n`).join(''));
+      for (let i = 1999; i < 2005; i += 1) recordGreen({ root, entry: entry(i) });
       const lines = readFileSync(greensPath(root), 'utf8').trim().split('\n');
       assert.equal(lines.length, 2000);
       assert.equal(JSON.parse(lines[0]).tree, 't5');
@@ -2674,38 +2684,33 @@ describe('the green record file', () => {
 });
 
 describe('mc test — the grammar', () => {
-  it('is a verb of its own, and asks the same questions merge does', () => {
-    const fx = repoFixture({ name: 'repo-gate-cli' });
-    try {
-      // The measurement was reachable as `mc merge --check`: a flag on the
-      // verb for landing things, which is not where a person looks when the
-      // question is "is this red?". Its own name, and its own usage line.
-      const usage = runMcCli(['test'], fx.env).stderr;
-      assert.match(usage, /which repository\?/u);
-      assert.match(usage, /mc test <repo> <pr>/u);
-      assert.match(usage, /mc test <repo> --full/u);
-      assert.doesNotMatch(usage, /--check/u);
-      assert.match(runMcCli(['test', 'repo'], fx.env).stderr, /which pull request\?/u);
-      assert.match(runMcCli(['test', 'repo', 'later'], fx.env).stderr, /not a pull request number/u);
-      const nowhere = runMcCli(['test', 'nowhere-at-all', '400'], fx.env);
-      assert.equal(nowhere.status, 1);
-      assert.match(nowhere.stderr, /no repository called "nowhere-at-all"/u);
-    } finally { fx.cleanup(); }
+  it('is a verb of its own, and asks the same questions merge does', async () => {
+    // The measurement was reachable as `mc merge --check`: a flag on the
+    // verb for landing things, which is not where a person looks when the
+    // question is "is this red?". Its own name, and its own usage line.
+    assert.equal(VERB_MODULES.test, './mc/commands/test.js', 'mc test is not a verb the binary dispatches');
+    const usage = (await verb(['test'])).stderr;
+    assert.match(usage, /which repository\?/u);
+    assert.match(usage, /mc test <repo> <pr>/u);
+    assert.match(usage, /mc test <repo> --full/u);
+    assert.doesNotMatch(usage, /--check/u);
+    assert.match((await verb(['test', 'repo'])).stderr, /which pull request\?/u);
+    assert.match((await verb(['test', 'repo', 'later'])).stderr, /not a pull request number/u);
+    const nowhere = await verb(['test', 'nowhere-at-all', '400']);
+    assert.equal(nowhere.status, 1);
+    assert.match(nowhere.stderr, /no repository called "nowhere-at-all"/u);
   });
 
-  it('has no flag that makes it land anything', () => {
-    const fx = repoFixture({ name: 'repo-gate-cli' });
-    try {
-      // The one promise the name makes. `mc test` reaches `runGate`, which has
-      // no merge in it — and the flags a person might reach for to change that
-      // are refused at the grammar rather than somewhere deeper.
-      for (const flag of ['--merge', '--land', '--force', '--apply', '--no-verify']) {
-        const tried = runMcCli(['test', 'repo', '400', flag], fx.env);
-        assert.notEqual(tried.status, 0, `${flag} was accepted`);
-      }
-      const source = readFileSync(new URL('../../src/mc/commands/test.js', import.meta.url), 'utf8');
-      assert.doesNotMatch(source, /runMergeRound|pr merge|--squash/u);
-    } finally { fx.cleanup(); }
+  it('has no flag that makes it land anything', async () => {
+    // The one promise the name makes. `mc test` reaches `runGate`, which has
+    // no merge in it — and the flags a person might reach for to change that
+    // are refused at the grammar rather than somewhere deeper.
+    for (const flag of ['--merge', '--land', '--force', '--apply', '--no-verify']) {
+      const tried = await verb(['test', 'repo', '400', flag]);
+      assert.equal(tried.status, 2, `${flag} was accepted`);
+    }
+    const source = readFileSync(new URL('../../src/mc/commands/test.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /runMergeRound|pr merge|--squash/u);
   });
 });
 
