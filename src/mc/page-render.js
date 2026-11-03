@@ -1138,7 +1138,9 @@ function goalLine(c, wide, goal) {
     : goal.stage === 'build' || goal.stage === 'finish' ? (goal.running ? ['green'] : ['grey'])
     : goal.stage === 'review' || goal.stage === 'merging' ? ['green']
     : ['grey'];
-  const stateWidth = column.status + 1 + column.steps;
+  // `merging · blocked` takes 17: the state cell is the status and steps
+  // columns and two more, and the sessions cell `99 sessions` wide.
+  const stateWidth = column.status + 1 + column.steps + 2;
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
     : '';
@@ -1150,7 +1152,7 @@ function goalLine(c, wide, goal) {
     + `${goal.running ? c(name, 'bold') : name} `
     + repo
     + `${c(pad(clip(word, stateWidth), stateWidth), ...tone)} `
-    + c(pad(sessionsWords, PR_CELL), 'grey')
+    + c(pad(sessionsWords, SESSIONS_CELL), 'grey')
     + (goal.criteria ? `${c(`criteria ${goal.criteria.met}/${goal.criteria.all}`, goal.criteria.all && goal.criteria.met === goal.criteria.all ? 'green' : 'grey')} ` : '');
   const room = wide - width(left);
   if (room <= 0) return left;
@@ -1169,6 +1171,8 @@ function goalLine(c, wide, goal) {
 
 /** `#13242+1` — the widest a project's pull request cell gets. */
 const PR_CELL = 8;
+/** `99 sessions ` — a goal row's sessions cell, with the space after it. */
+const SESSIONS_CELL = 12;
 
 /**
  * The project's open pull request, in a column of its own after the steps:
