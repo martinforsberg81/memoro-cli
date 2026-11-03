@@ -12,9 +12,10 @@
  *
  * Review is an ordered list, and its order is preference, not headroom: it
  * takes the first candidate that can run on its plan now — not refused, and no
- * window at its limit — and a later one only when an earlier cannot, or is the
- * model the goal was built on (`avoid`). When none can run on its plan, the
- * first candidate it may run on goes to its provider's API reserve.
+ * window at its limit — and is not the model the goal was built on (`avoid`);
+ * that model only when no other can. When none can run on its plan, the first
+ * candidate that is not that model goes to its provider's API reserve, or that
+ * model's when every candidate is it.
  *
  * A candidate is judged at `now` as:
  *   - refused: its provider refused and the refusal has not passed. Never chosen.
@@ -76,18 +77,18 @@ function judge(capacity, candidate, now) {
 const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls, candidate, spec: candidateSpec(candidate), basis, headroom, why });
 
 /**
- * The review candidate: the first in the list, past `avoid`'s model, whose plan
- * can run it now. Only the refusal and the windows are read, as for review
+ * The review candidate: the first in the list whose plan can run it now and
+ * that is not `avoid`'s model, and `avoid`'s model on its plan only when no
+ * other can (Martin, 2026-11-03: *"I första hand väljs en annan modell,
+ * annars samma"*). Only the refusal and the windows are read, as for review
  * before it was a list; capacity that is unknown is no reason to pass one by.
  */
 function chooseReview(cls, catalog, capacity, now, avoid) {
   const list = catalog.review;
-  const eligible = avoid?.model ? list.filter((value) => value.model !== avoid.model) : list;
-  if (eligible.length === 0) {
-    const names = [...new Set(list.map((value) => `${value.tool} ${value.model}`))].join(', ');
-    return { ok: false, transient: true, class: cls, avoided: true, reason: `every review candidate is ${names}, the model its last build session ran on`, retry_at: null };
-  }
-  const judged = eligible.map((value) => {
+  const builtOn = (value) => Boolean(avoid?.model) && value.model === avoid.model;
+  const others = list.filter((value) => !builtOn(value));
+  const order = [...others, ...list.filter(builtOn)];
+  const judged = order.map((value) => {
     const standing = providerAt(capacity, value.tool, now);
     if (standing.refusal_until) return { candidate: value, onPlan: false, why: `${value.tool} plan refused until ${standing.refusal_until}` };
     const windows = windowStanding(value.tool, standing);
@@ -97,10 +98,10 @@ function chooseReview(cls, catalog, capacity, now, avoid) {
   const index = judged.findIndex((entry) => entry.onPlan);
   if (index >= 0) {
     const chosen = judged[index];
-    const reasons = [
-      ...(eligible.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []),
-      ...judged.slice(0, index).map(passed),
-    ];
+    const same = builtOn(chosen.candidate);
+    const reasons = same
+      ? [...judged.slice(0, index).map(passed), `${avoid.tool} ${avoid.model} built it, and no other candidate can run on its plan`]
+      : [...(others.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []), ...judged.slice(0, index).map(passed)];
     const place = `review candidate ${list.indexOf(chosen.candidate) + 1}`;
     return answer(cls, chosen.candidate, 'preferred', null, reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`);
   }
@@ -119,11 +120,11 @@ function chooseReview(cls, catalog, capacity, now, avoid) {
  * `{ ok: false, transient: true, class, reason, retry_at }` when nothing can take
  * the class now. `retry_at` is the earliest instant that changes an answer (a
  * refusal passing, a window resetting), or null when none is known. Transient:
- * the step waits for it, it is not a block on the project. A review whose every
- * candidate is `avoid`'s model is such an answer, with `avoided: true`.
+ * the step waits for it, it is not a block on the project.
  *
  * `avoid` (`{ tool, model }`, review only) is the model a goal's last build
- * session ran on: a review never runs on it.
+ * session ran on: a review runs on it only when no other candidate can run on
+ * its plan, and goes to the API reserve only when neither can.
  */
 export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null }) {
   if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid);

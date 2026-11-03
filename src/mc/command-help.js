@@ -87,7 +87,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc model set review <tool>:<model>:<effort>   replace the whole review list with that one candidate\n",
     "\n",
     "Review is an ordered list of candidates: it takes the first that can run on its plan\n",
-    "now, and a later one only when an earlier cannot or is the model the goal was built on.\n",
+    "now and is not the model the goal was built on, and that model only when no other can.\n",
     "The catalog does not poll capacity. --json applies only to list.\n",
   ].join(''),
   goal: [

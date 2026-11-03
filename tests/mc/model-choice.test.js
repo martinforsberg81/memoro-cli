@@ -134,12 +134,35 @@ test('review with no candidate on plan goes to the first one\'s API reserve', ()
   assert.equal(past.billing, 'credits');
 });
 
-test('review waits when every candidate is the build model', () => {
+test('review runs on the build model when every candidate is it, rather than waiting', () => {
   const only = { ...DEFAULT_CATALOG, review: [SOL] };
   const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(0.1)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
-  assert.equal(result.ok, false);
-  assert.equal(result.avoided, true);
-  assert.equal(result.reason, 'every review candidate is codex gpt-6.1-sol, the model its last build session ran on');
+  assert.equal(result.ok, true);
+  assert.equal(result.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(result.basis, 'preferred');
+  assert.equal(result.billing, undefined, 'on the plan, not credits');
+  assert.equal(result.why, 'review candidate 1 — codex gpt-6.1-sol built it, and no other candidate can run on its plan');
+});
+
+test('review takes the build model on its plan when every other candidate\'s plan is spent, before any API reserve', () => {
+  const spentCodex = codex(claude(empty(), win(0.5)), win(1, LATER));
+  const result = review(spentCodex, { tool: 'claude', model: 'opus' });
+  assert.equal(result.ok, true);
+  assert.equal(result.spec, 'claude:opus:high');
+  assert.equal(result.basis, 'preferred');
+  assert.equal(result.billing, undefined, 'the build model\'s plan comes before another\'s reserve');
+  assert.equal(result.why, 'review candidate 2 — codex:gpt-6.1-sol:high: codex is at 100 % of its plan limit; claude opus built it, and no other candidate can run on its plan');
+  const roomy = review(codex(claude(empty(), win(0.5)), win(0.5)), { tool: 'claude', model: 'opus' });
+  assert.equal(roomy.spec, 'codex:gpt-6.1-sol:high', 'another model on its plan is still taken first');
+});
+
+test('review with only the build model\'s candidates and none on plan goes to its API reserve', () => {
+  const only = { ...DEFAULT_CATALOG, review: [SOL] };
+  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(1, LATER)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
+  assert.equal(result.ok, true);
+  assert.equal(result.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(result.basis, 'api');
+  assert.equal(result.billing, 'credits');
 });
 
 test('a refusal in force makes its provider ineligible, and a passed one does not', () => {
