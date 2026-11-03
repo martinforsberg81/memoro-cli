@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
-import { parseLog } from '../../src/mc/goals.js';
+import { parseLog, planHeldText } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, TIDY_KIND, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -5813,8 +5813,85 @@ test('a goal session that writes no log entry gets a runner entry, and three in 
   assert.equal(entries().at(-1).status, 'blocked');
   assert.equal(entries().at(-1).comment, 'three sessions ended without a word — see the logs under runner/log');
 
+  // Blocked by the runner, it wakes one plan session; that one says nothing
+  // either, so the runner's entry leaves it to a person, and nothing starts.
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(entries().at(-1).done, planHeldText(false));
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(runRows(f.files).length, 3);
+  assert.equal(runRows(f.files).length, 4);
+});
+
+/* ------------------------------------------------------- plan on a blocked goal */
+
+/** A plan session that writes its entry with `status`, as `mc goal log --status` does. */
+const plans = (f, name, status, inner = okSession()) => (call) => {
+  const dir = `${GOALS}/${name}`;
+  f.files[`${dir}/LOG.md`] = `${f.files[`${dir}/LOG.md`]}\n## 2026-08-29T11:00Z · claude fable · ${status}\n\nKommentar: judged it\n${status === 'open' ? 'Nästa: do it differently\n' : ''}`;
+  f.files[`${dir}/GOAL.md`] = f.files[`${dir}/GOAL.md`].replace(/^status: \w+$/mu, `status: ${status}`);
+  return inner(call);
+};
+const redMerge = '## 2026-08-28T10:00Z · runner · blocked\n\nGjort: merger answered red on #31\n';
+
+test('a goal blocked by a red merge starts one plan session: the plan role, the planning model, the programme directory, no worktree', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked', log: redMerge } });
+  f.answer = plans(f, 'stuck', 'blocked');
+  const runner = createRunner({ deps: f.deps });
+  const r = await runner.pass({ repo: 'memoro', lane: 1 });
+  assert.equal(r.ran, 1);
+  assert.equal(r.name, 'goal:prog/stuck');
+  const [call] = f.calls.sessions;
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(call.env.MC_ROLE, 'plan');
+  assert.equal(call.env.MC_GOAL, 'prog/stuck');
+  assert.equal(call.env.MC_MODEL, 'fable', 'ruling 6: plan runs on fable');
+  assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
+  assert.equal('MC_WORKAREA' in call.env, false);
+  assert.equal('MC_REPO' in call.env, false);
+  assert.match(call.args.join('\n'), /ROLE plan/u);
+  assert.match(call.prompt, /blocked: merger answered red on #31/u);
+  assert.match(call.prompt, /never write in it/u);
+
+  const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
+  assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'plan', null]);
+  const [row] = runRows(f.files);
+  assert.equal(row.kind, 'plan');
+
+  // It left the goal blocked: the runner's entry hands it to a person, and no
+  // second plan session starts.
+  const log = parseLog(f.files[`${GOALS}/stuck/LOG.md`]);
+  assert.deepEqual([log.at(-1).tool, log.at(-1).status, log.at(-1).done], ['runner', 'blocked', planHeldText(true)]);
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a plan session that sets the goal open hands it to a build session, and a new red wakes plan again', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked', log: redMerge } });
+  f.answer = plans(f, 'stuck', 'open');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude', 'no runner entry after an open');
+  f.answer = logsItself(f, 'stuck');
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'build-goal');
+
+  // Red again: blocked by the runner, plan is woken with the whole log.
+  const dir = `${GOALS}/stuck`;
+  f.files[`${dir}/LOG.md`] += `\n${redMerge.replace('08-28', '08-30')}`;
+  f.files[`${dir}/GOAL.md`] = f.files[`${dir}/GOAL.md`].replace('status: open', 'status: blocked');
+  f.answer = plans(f, 'stuck', 'blocked');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+});
+
+test('a goal blocked by a person, by a build session\'s question, or still blocked after plan starts nothing', async () => {
+  const f = goalFixture({
+    person: { status: 'blocked', log: '## 2026-08-28T10:00Z · person · blocked\n\nKommentar: brief being written\n' },
+    asked: { status: 'blocked', log: '## 2026-08-28T10:00Z · claude opus · blocked\n\nKommentar: which table?\n' },
+    held: { status: 'blocked', log: `${redMerge}\n## 2026-08-28T11:00Z · runner · blocked\n\nGjort: ${planHeldText(true)}\n` },
+  });
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
 });
 
 test('a session with a word between runner entries keeps the goal open', async () => {
@@ -5863,14 +5940,15 @@ test('when the last after-goal lands the runner opens the waiting goal, logs wha
   assert.ok(f.log.some((line) => /goal:prog\/next: open — prog\/first, prog\/second landed/u.test(line)));
 });
 
-test('a waiting goal whose after-goal is gone without landing goes blocked for plan', async () => {
+test('a waiting goal whose after-goal is gone without landing goes blocked for plan, and wakes it', async () => {
   const f = goalFixture({ orphan: { status: 'waiting', after: 'prog/discarded' } });
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  f.answer = plans(f, 'orphan', 'blocked');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
   assert.match(f.files[`${GOALS}/orphan/GOAL.md`], /^status: blocked$/mu);
-  const entry = parseLog(f.files[`${GOALS}/orphan/LOG.md`]).at(-1);
+  const [entry] = parseLog(f.files[`${GOALS}/orphan/LOG.md`]);
   assert.deepEqual([entry.tool, entry.status], ['runner', 'blocked']);
   assert.match(entry.comment, /^prog\/discarded is gone without landing — waits on plan/u);
-  assert.equal(f.calls.sessions.length, 0);
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['plan']);
 });
 
 test('a blocked or done goal is never started', async () => {
@@ -5983,7 +6061,7 @@ test('a review never runs on the model of the goal\'s last build entry: the goal
   assert.equal(g.calls.sessions.length, 0);
 });
 
-test('a red review leaves the goal blocked with its entry, and no session is started for it until someone sets it open', async () => {
+test('a red review leaves the goal blocked with its entry, wakes plan, and no build starts until it is set open', async () => {
   const f = reviewFixture();
   f.answer = judges(f, `red ${HEAD}`, 'blocked');
   const runner = createRunner({ deps: f.deps });
@@ -5992,8 +6070,11 @@ test('a red review leaves the goal blocked with its entry, and no session is sta
   assert.match(goalEntries(f).at(-1).done, /^red abc1234def5678$/u);
   assert.equal(f.calls.rounds.length, 0, 'nothing queued');
 
+  f.answer = plans(f, 'judged', 'blocked');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.calls.sessions.length, 2);
 
   // A red that left the status as it was is blocked by the runner.
   const g = reviewFixture();

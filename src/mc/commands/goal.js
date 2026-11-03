@@ -28,7 +28,7 @@ import { join } from 'node:path';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { run as runGit } from '../git.js';
-import { addGoalWorktree, afterCycle, afterOf, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, REVIEW_ROLE, sessions, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
+import { addGoalWorktree, afterCycle, afterOf, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, parseGoal, parseLog, programsGoals, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, PLAN_ROLE, REVIEW_ROLE, sessions, waitsOnPerson, waitsOnPlan, setStatus, STATUSES } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -327,8 +327,9 @@ function showGoal(args, ctx) {
 
 /**
  * `mc goal list [<programme>]` — one line per goal: `programme/goal · repos ·
- * status · n sessions · the last entry's Nästa`. A goal blocked by a red review
- * or a red merge reads `blocked, waits on plan` (`waitsOnPlan`); a waiting one,
+ * status · n sessions · the last entry's Nästa`. A goal blocked by a red review,
+ * a red merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`), any
+ * other blocked one `blocked, waits on a person`; a waiting one,
  * `waiting on <programme>/<goal>, …` — what in its `after` has not landed. A goal that does not parse is
  * listed with its first problems, not skipped.
  */
@@ -352,6 +353,7 @@ function listGoals(args, ctx) {
     const next = (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
     const { pending } = afterOf(goal, all);
     const status = waitsOnPlan(goal) ? `${goal.status}, waits on plan`
+      : waitsOnPerson(goal) ? `${goal.status}, waits on a person`
       : (goal.status === 'waiting' && pending.length ? `waiting on ${pending.join(', ')}` : goal.status);
     stdout.write(`${name} · ${goal.repos.join(',')} · ${status} · ${sessions(goal.log)} sessions · ${next}\n`);
   }
@@ -377,13 +379,15 @@ function goalNamed(arg, { env, home }) {
  * Why this caller may not set `status`, or null. A session is a caller with
  * MC_GOAL set and an MC_TOOL that is not `person`. It never sets `done`: the
  * merger does when the goal's pull request lands. A review session never sets
- * `open`: a red review waits on plan, and plan sets it open again.
+ * `open`: a red review waits on plan, and plan sets it open again. A plan
+ * session never sets `review`: it hands a goal to a build session or a person.
  */
 export function refusedStatus(status, env) {
   const session = Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
   if (!session) return null;
   if (status === 'done') return 'a session does not set done — end in review; the merger sets done when the pull request lands';
   if (status === 'open' && env.MC_ROLE === REVIEW_ROLE) return 'a review does not set open — red is blocked, and plan sets the goal open again';
+  if (status === 'review' && env.MC_ROLE === PLAN_ROLE) return 'plan does not set review — it sets the goal open for a build session, or leaves it blocked';
   return null;
 }
 

@@ -181,10 +181,6 @@ export function renderProject({
       out.push(`  #${entry.pr} came back red from the merger${entry.answered ? ` (${when(entry.answered)})` : ''} — ${entry.reason || 'no reason given'}`);
       continue;
     }
-    if (entry.state === 'mending') {
-      out.push(`  #${entry.pr} is being mended after ${entry.mend?.reason || 'a red'}${entry.mend?.started ? ` (since ${when(entry.mend.started)})` : ''}`);
-      continue;
-    }
     if (entry.batch_of) {
       out.push(`  #${entry.pr} lands in the same round as #${entry.batch_of}`);
       continue;

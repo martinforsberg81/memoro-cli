@@ -4,7 +4,7 @@
  * An estimate for the eye, never what Martin pays: the subscription's quota
  * is the real limit. Cache reads are billed at 0.1× input. A cache write's
  * factor follows the TTL it carried: 1.25× input for 5 minutes, 2× for 1
- * hour. Since ruling 40 the TTL is the session's role (`step` and `mend` 5m,
+ * hour. Since ruling 40 the TTL is the session's role (`step` 5m,
  * every other role 1h), and a message's `usage.cache_creation` splits the
  * write into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`. A
  * usage line without the split is priced at 2×: the 1-hour claude default.

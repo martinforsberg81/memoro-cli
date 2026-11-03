@@ -172,7 +172,7 @@ export function redPatch({ step, report }) {
 
 // `file-killed` (a test file ended by a signal from outside the round) and
 // `red-under-load` (red files green alone on the base and the candidate, or
-// cancelled with none failed) stay out of `MEND_STOPS` (mend.js): the merger
+// cancelled with none failed) are not the step's red: the merger
 // measures each once more without counting it as the step's red, puts a second
 // one back in line (`REQUEUE_STOPS`, merger.js) without reaching `redPatch`,
 // and answers it red as it stands only once its requeues are spent.

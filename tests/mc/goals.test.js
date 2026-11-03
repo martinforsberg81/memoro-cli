@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { afterCycle, afterGoneText, afterOf, appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitingMoves, waitsOnPlan } from '../../src/mc/goals.js';
+import { afterCycle, afterGoneText, afterOf, appendEntry, appendLog, GOAL_FILE, goalDirIn, lastBuildEntry, LOG_FILE, nextGoal, parseGoal, parseLog, programsGoals, queuedOf, queuedText, renderEntry, renderGoal, reviewDue, sessions, setStatus, verdictOf, waitingMoves, planDue, planHeld, planHeldText, waitsOnPerson, waitsOnPlan } from '../../src/mc/goals.js';
 import { programsPlans } from '../../src/mc/plan-source.js';
 
 const GOAL_TEXT = [
@@ -213,12 +213,22 @@ test('nextGoal takes open goals and goals due a review, oldest first, and leaves
   assert.equal(nextGoal(goals, { repos: ['memoro'], may: (g) => g.status !== 'review' }).goal, 'a');
 });
 
-test('waitsOnPlan: a goal blocked by a red review or a red merge, not one blocked on a question', () => {
-  const blocked = (tool, done) => ({ status: 'blocked', log: [{ tool, done }] });
+test('waitsOnPlan: a goal blocked by a red review or by the runner, not one blocked on a question or left blocked by plan', () => {
+  const blocked = (tool, done, comment = null) => ({ status: 'blocked', problems: [], log: [{ tool, status: 'blocked', done, comment }] });
   assert.equal(waitsOnPlan(blocked('codex', 'red abc1234')), true);
   assert.equal(waitsOnPlan(blocked('runner', 'merger answered red on #12')), true);
+  assert.equal(waitsOnPlan(blocked('runner', null, 'three sessions ended without a word — see the logs under runner/log')), true);
   assert.equal(waitsOnPlan(blocked('claude', null)), false);
+  assert.equal(waitsOnPlan(blocked('person', null, 'brief being written')), false);
+  assert.equal(waitsOnPlan(blocked('runner', planHeldText(true))), false, 'plan has been: it waits on a person');
+  assert.equal(planHeld({ tool: 'runner', done: planHeldText(false) }), true);
   assert.equal(waitsOnPlan({ status: 'open', log: [{ tool: 'codex', done: 'red abc1234' }] }), false);
+  assert.equal(planDue(blocked('runner', 'merger answered red on #12')), true);
+  assert.equal(planDue({ ...blocked('runner', 'merger answered red on #12'), problems: ['x'] }), false);
+  assert.equal(waitsOnPerson(blocked('claude', null)), true);
+  assert.equal(waitsOnPerson(blocked('runner', planHeldText(true))), true);
+  assert.equal(waitsOnPerson(blocked('codex', 'red abc1234')), false);
+  assert.equal(waitsOnPerson({ status: 'open', log: [] }), false);
 });
 
 /* ------------------------------------------------------------- after, waiting */
@@ -275,7 +285,7 @@ test('waitingMoves opens a goal whose after has all landed, keeps one behind a b
     { goal: 'orphan', status: 'blocked', done: null, comment: afterGoneText(['mc/discarded']) },
     { goal: 'early', status: 'waiting', done: null, comment: 'waits on mc/stuck' },
   ]);
-  assert.equal(waitsOnPlan({ status: 'blocked', log: [{ tool: 'runner', done: null, comment: afterGoneText(['mc/discarded']) }] }), true, 'a gone after waits on plan');
+  assert.equal(waitsOnPlan({ status: 'blocked', log: [{ tool: 'runner', status: 'blocked', done: null, comment: afterGoneText(['mc/discarded']) }] }), true, 'a gone after waits on plan');
 });
 
 test('nextGoal never picks a waiting goal', () => {

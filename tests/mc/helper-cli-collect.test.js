@@ -151,7 +151,7 @@ describe('the four sources', () => {
     const g = ground();
     try {
       runs(g, [
-        // `merger.js` writes `merged` and `mend.js` writes `pushed` for a landing:
+        // `merger.js` writes `merged`, and the mend wrote `pushed` until 2026-11-02, for a landing:
         // 563 and 52 such rows in one day, every one exit 0, all bumped before this.
         '2026-08-30T09:00:00Z\tzeta\tmerge\t0\t100\t7\t-\t-\t-\t-\t-\t-\tmerged',
         '2026-08-30T09:10:00Z\teta\tmend\t0\t100\t7\t-\t-\t-\t-\t-\t-\tpushed',

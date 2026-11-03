@@ -33,8 +33,7 @@ in it and say why in the reply.
   open pull request, edits only the fields given (`--title`, `--body`,
   `--body-file`, `--base`).
 - Then it queues the pull request for the merger in the same call.
-  `--no-merge` pushes and opens and queues nothing; so do `--json` and
-  `--branch <name>` (a detached HEAD).
+  `--no-merge` pushes and opens and queues nothing; so does `--json`.
 - The body says what changed, why, the user impact, the root cause of a fix,
   what was run and what was not, and known gaps. Never claim a run you did
   not make: "suite not run" is an acceptable sentence.

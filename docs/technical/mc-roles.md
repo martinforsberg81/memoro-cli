@@ -63,9 +63,8 @@ What canon holds today:
 | `brief` | opus | `mc brief`, a foreground session in `~/mc/brief/` |
 | `helper` | sonnet | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | the inbox drain, one headless turn per file |
-| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/` |
+| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a blocked goal ([mc-goals.md](mc-goals.md) § *A blocked goal wakes plan*) |
 | `goal` | opus | `mc run`, one headless session on a goal; no steps or merge authority |
-| `mend` | opus | the merger, one headless repair of a red pull request |
 | `step` | opus | `mc run`, one step of a `PLAN.json` |
 | `review` | opus | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
 | `worker` | opus | `mc worker`, and every conversation in that area after |
@@ -363,8 +362,7 @@ verified by opening a real planning session with it (2026-09-05, #614).
 
 Every launch sets `MC_ROLE` for its own session, including resumed foreground
 sessions and tmux replacements. `MC_PROGRAMME` accompanies plan, step, goal and
-review launches when the programme is known; a mend reads it from the step's
-register when there is one. The intake turn sets `MC_ROLE=intake`, not `helper`.
+review launches when the programme is known. The intake turn sets `MC_ROLE=intake`, not `helper`.
 An ordinary work conversation sets `MC_ROLE=work`; a worker uses `worker`.
 Launchers clear inherited role, programme, goal and step identity first, so a
 child never inherits its caller's job by accident.
@@ -373,8 +371,8 @@ child never inherits its caller's job by accident.
 the SessionStart hook and the `mc plan` refusal. It reads `MC_ROLE` first, then
 older `MC_GOAL` and `MC_STEP` markers, then cwd under the work root. Programme
 directories identify an interactive plan session; their `goals/<goal>/`
-subtrees identify goal sessions instead. Both step layouts, the mend directory,
-brief, helper and intake have cwd fallbacks. An unrecognised directory is
+subtrees identify goal sessions instead. Both step layouts, brief, helper and
+intake have cwd fallbacks. An unrecognised directory is
 unknown, not a guessed role. The hook names what it checked in its first line.
 
 `mc plan` is the person's entrance. It refuses a recognised session, or a

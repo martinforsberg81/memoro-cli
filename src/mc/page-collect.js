@@ -59,7 +59,7 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
-import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPlan } from './goals.js';
+import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -335,7 +335,7 @@ export function outcomeOf(row) {
  * `sessions` and a count per outcome (`DAY_OUTCOMES`, and `other`), so each
  * kind's outcomes add up to its sessions. A row under an old word (`step`,
  * `goal`) counts as the build it was. What is not a session of these kinds — a
- * merge round, a mend, the helper's turns — is `other` beside them, a count
+ * merge round, a mend row from before 2026-11-02, the helper's turns — is `other` beside them, a count
  * and nothing more: the line before counted every row as a step, merge rounds
  * and helper turns with them.
  */
@@ -655,9 +655,7 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * merger's own rule) carries `waits_for: '<project> step <n>'`.
  *
  * `landings` is one item per pull request in a round: the first carries the
- * round's phase, age and lane, the rest `batch_of: <first pr>`. `mending` is
- * what is getting its one mend, each with the red's reason and how long the
- * session has run (`waiting` before it has a pid).
+ * round's phase, age and lane, the rest `batch_of: <first pr>`.
  *
  * `fixing` is a red whose step a live runner session holds (ruling 39): a
  * lane file (`currents`, `current-*.json`) of kind `step` on the red's project
@@ -717,23 +715,8 @@ export function mergesSection({
     const ms = Date.parse(when || '');
     return Number.isFinite(ms) ? Math.max(0, Math.round((at - ms) / 1000)) : null;
   };
-  // A red getting its one mend (mend.js) is not a waiter —
-  // the merger cannot take it until the mend puts it back as `queued`.
-  const mendingItems = entries.filter((item) => item.state === 'mending').map((item) => {
-    const { name, title } = named(item.repo, item.pr, item);
-    const started = item.mend?.pid != null;
-    return {
-      ...item,
-      name,
-      step_number: item.step ? item.step.index + 1 : null,
-      title,
-      reason: item.mend?.reason || null,
-      waiting: !started,
-      age_seconds: started ? ageOf(item.mend?.started) : null,
-    };
-  });
   const waits = waitingOn(all, { ordered }).filter((one) => one.step);
-  const queuedItems = entries.filter((item) => !isLanding(item) && item.state !== 'mending').map((item) => {
+  const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
     const since = Date.parse(item.since || '');
     const step = waits.find((one) => samePr(one.entry, item))?.step || null;
     return {
@@ -780,7 +763,6 @@ export function mergesSection({
       ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: mergePhase(item.phase),
     }));
     const waiting = own(queuedItems);
-    const mending = own(mendingItems);
     const fixing = own(fixingItems);
     const red = own(reds);
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
@@ -793,13 +775,13 @@ export function mergesSection({
     const last = landed[0] ? { ...landed[0], age_seconds: ageOf(landed[0].at) } : null;
     const day = new Set(landed.filter((item) => ageOf(item.at) <= DAY_MS / 1000).map((item) => item.pr)).size;
     const pause = pauses[repo] || null;
-    const stopped = !merger && !active.length && Boolean(waiting.length || mending.length);
+    const stopped = !merger && !active.length && Boolean(waiting.length);
     return {
       repo,
       state: stopped ? 'stopped' : pause ? 'paused' : active.length ? 'landing'
-        : mending.length ? 'mending' : fixing.length ? 'fixing' : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
+        : fixing.length ? 'fixing' : waiting.length ? 'waiting' : red.length ? 'red' : 'idle',
       pause, merger_stopped: stopped, landing: active[0] || null, landings: active,
-      waiting, mending, fixing, reds: red, day_count: day, last,
+      waiting, fixing, reds: red, day_count: day, last,
     };
   });
   return {
@@ -808,7 +790,6 @@ export function mergesSection({
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
-    mending: { count: mendingItems.length, items: mendingItems },
     fixing: { count: fixingItems.length, items: fixingItems },
     red: { count: reds.length, items: reds },
     count: landings.length + queuedItems.length,
@@ -1556,8 +1537,15 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     sessions: goalSessions(goal.log),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
-    // Blocked by a red review or a red merge: it waits on plan (`waitsOnPlan`).
+    // Blocked by a red review, a red merge or the runner: it waits on plan,
+    // which the runner wakes (`waitsOnPlan`). Blocked otherwise — by a person,
+    // a build session's question, or still after a plan session — it waits on
+    // a person (`waitsOnPerson`).
     plan: waitsOnPlan(goal),
+    person: waitsOnPerson(goal),
+    // What it waits on the person for: the last session's or person's comment,
+    // past the runner's own entry after a plan session.
+    question: waitsOnPerson(goal) ? (goal.log.findLast((entry) => entry.tool !== 'runner')?.comment ?? null) : null,
     problems: goal.problems,
   }));
 }

@@ -728,7 +728,7 @@ export async function runGate({
       }
       const red = result.red;
       // What a killed or cancelled file failed is not the red either, and is
-      // not handed to whoever mends it (ruling 44).
+      // not handed to whoever fixes it (ruling 44).
       if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
       // Every red file in it, and every red test located in one: a red name
       // no file accounts for is nobody's to excuse.
@@ -1063,7 +1063,7 @@ export async function runGate({
     if (!reused) say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
-      // The mend gets one try, so the red names every gate that failed beside the tests (memoro #14169, 2026-10-24).
+      // The red names every gate that failed beside the tests, so the session it goes to fixes them in one go (memoro #14169, 2026-10-24).
       if (stop?.stopped_at === 'red' && failedGates.length) stop.reason = `${stop.reason} — and ${failedGatesText(failedGates)}`;
       if (stop) return stop;
     }
@@ -1306,7 +1306,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
-      // Each red test's failure, cut out of the run for whoever mends it.
+      // Each red test's failure, cut out of the run for whoever fixes it.
       red_tests: redTests(run.tap, null, { cwd }),
       // No file list to name them by: the locations as node wrote them.
       ...killedOf(run.tap, null),

@@ -486,7 +486,8 @@ describe('every name in the help is routed', () => {
     assert.notDeepEqual(unknownFlags('log', '--open lists gate rounds; --fictional names the files.'), []);
     assert.deepEqual(unknownFlags('hook', 'npm run dev* → mc test dev --here --url, a scratch'), []);
     assert.notDeepEqual(unknownFlags('hook', 'npm run dev* → mc test dev --here --fictional, a scratch'), []);
-    assert.deepEqual(unknownFlags('publish', 'as mc merge <repo> <pr> does — not with --no-merge, --json or --branch.'), []);
+    assert.deepEqual(unknownFlags('publish', 'as mc merge <repo> <pr> does — not with --no-merge or --json.'), []);
+    assert.notDeepEqual(unknownFlags('publish', 'not with --no-merge, --json or --branch.'), [], '--branch went with the mend');
   });
 
   it('expands placeholders, alternatives and optional parts into command lines', () => {

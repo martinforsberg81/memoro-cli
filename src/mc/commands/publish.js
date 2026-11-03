@@ -5,7 +5,6 @@
  *   mc publish                         last commit's subject and body as the PR's
  *   mc publish --title "…" --body "…"  named instead
  *   mc publish --body-file <path>      the body from a file
- *   mc publish --branch <name>         a detached HEAD (a mend's worktree) to that branch
  *   mc publish --json                  the snapshot as one object, and nothing queued
  *   mc publish --no-merge              push and open it, and queue nothing
  *
@@ -20,9 +19,7 @@
  * does, in the same call (Martin, 2026-10-24: every turn a session spends
  * after its work is done is a turn for nothing). A session's publish was
  * always followed by that `mc merge`, one model turn later, to read one line.
- * Not with `--no-merge`, not with `--json` (a script decides), and not for a
- * detached HEAD published with `--branch`: that is a mend's, and the merger
- * that started the mend measures it again. Nor when GitHub does not yet hold
+ * Not with `--no-merge`, not with `--json` (a script decides). Nor when GitHub does not yet hold
  * the head that was pushed — `mc merge` would refuse it at the door. In a
  * branch flow a step before the review is booked built instead, and queues
  * nothing (`bookBuilt`).
@@ -47,7 +44,7 @@ import { commandUsage } from '../command-help.js';
 export const ROUTES = {
   '': {
     booleans: ['--json', '--no-merge'],
-    strictValues: ['--title', '--body', '--body-file', '--base', '--branch'],
+    strictValues: ['--title', '--body', '--body-file', '--base'],
     check: ({ positional }) => (positional.length ? `mc publish takes no positional (${positional.join(' ')})` : null),
   },
 };
@@ -66,10 +63,9 @@ export async function run(argv, deps = {}) {
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
   const current = git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (flags.branch && current !== 'HEAD' && current !== flags.branch) { stderr.write(`mc: --branch ${flags.branch}, but this worktree is on ${current} — drop --branch\n`); return 2; }
-  if (flags.branch && git(['check-ref-format', '--branch', flags.branch]) === null) { stderr.write(`mc: --branch ${flags.branch} is not a branch name\n`); return 2; }
-  const branch = flags.branch || current;
-  const detached = current === 'HEAD';
+  // A detached HEAD is `HEAD`, which `refusal` refuses: a pull request is
+  // opened from a branch checked out.
+  const branch = current;
   const localHead = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
   const remoteLine = git(['ls-remote', '--heads', 'origin', branch]) || '';
@@ -81,8 +77,8 @@ export async function run(argv, deps = {}) {
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
-    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch, { detached });
-    if (!push.ok) { stderr.write(`mc: ${detached ? 'git push' : 'git push -u'} origin ${branch} failed:\n${push.text}\n`); return 1; }
+    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch);
+    if (!push.ok) { stderr.write(`mc: git push -u origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
   const listed = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
   let open = null;
@@ -145,7 +141,7 @@ export async function run(argv, deps = {}) {
   }
   const head = String(pr.headRefOid || '');
   const held = head.startsWith(localHead) || localHead.startsWith(head);
-  const queue = !flags['no-merge'] && !detached && held;
+  const queue = !flags['no-merge'] && held;
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
   if (!queue) return 0;
   const built = bookBuilt({ branch, number: pr.number, localHead, deps, stdout, stderr });
@@ -215,13 +211,12 @@ export function repoName(url, root) {
 }
 
 /**
- * Non-force `git push -u`, or for a detached HEAD `git push origin
- * HEAD:refs/heads/<branch>`. GitHub has refused a thin pack with `Internal
+ * Non-force `git push -u`. GitHub has refused a thin pack with `Internal
  * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
  * so that rejection — and only that one — is pushed once more without it.
  */
-export function pushBranch(cwd, branch, { spawn = spawnGit, stderr = process.stderr, detached = false } = {}) {
-  const target = detached ? ['origin', `HEAD:refs/heads/${branch}`] : ['-u', 'origin', branch];
+export function pushBranch(cwd, branch, { spawn = spawnGit, stderr = process.stderr } = {}) {
+  const target = ['-u', 'origin', branch];
   const push = (extra) => spawn('git', ['push', ...extra, ...target], { cwd, encoding: 'utf8', timeout: 120_000 });
   let r = push([]);
   if (r.status !== 0 && /Internal Server Error/u.test(r.stderr || '')) {

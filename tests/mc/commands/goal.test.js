@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { run, usage } from '../../../src/mc/commands/goal.js';
+import { refusedStatus, run, usage } from '../../../src/mc/commands/goal.js';
 import { parseGoal, parseLog } from '../../../src/mc/goals.js';
 import { runModule } from '../../../src/mc-verbs.js';
 
@@ -346,8 +346,16 @@ test('mc goal list shows review, and a goal blocked by a red review or a red mer
     'mc/a · memoro-cli · review · 1 sessions · —',
     'mc/b · memoro-cli · blocked, waits on plan · 1 sessions · —',
     'mc/c · memoro-cli · blocked, waits on plan · 0 sessions · —',
-    'mc/d · memoro-cli · blocked · 1 sessions · —',
+    'mc/d · memoro-cli · blocked, waits on a person · 1 sessions · —',
   ]);
+});
+
+test('a plan session may not set review, and may set open or blocked', async () => {
+  const env = { MC_GOAL: 'mc/a', MC_TOOL: 'claude', MC_ROLE: 'plan' };
+  assert.match(refusedStatus('review', env), /plan does not set review/u);
+  assert.match(refusedStatus('done', env), /does not set done/u);
+  assert.equal(refusedStatus('open', env), null);
+  assert.equal(refusedStatus('blocked', env), null);
 });
 
 test('mc goal list <programme> lists that programme alone, and says when it has no goals', async () => {

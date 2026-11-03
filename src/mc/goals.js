@@ -241,17 +241,48 @@ export function afterGoneText(names) {
 }
 
 /**
- * Whether a blocked goal waits on plan: blocked by a red review (its last entry
- * is a `red` verdict), by a red merge (the runner's `redMergeText` entry), or
- * by an `after` goal gone without landing (`afterGoneText`). Nothing goes back
- * to a build session from there until plan sets it open.
+ * The runner's entry after a plan session that left the goal `blocked`: its
+ * `Gjort:`. A goal whose last entry is this one waits on a person, and wakes no
+ * plan session again (`waitsOnPlan`).
+ */
+export function planHeldText(spoke) {
+  return spoke ? 'plan session ended; the goal stays blocked — waits on Martin'
+    : 'plan session ended without a log entry; the goal stays blocked — waits on Martin';
+}
+
+/** Whether `entry` is the runner's `planHeldText` entry. */
+export function planHeld(entry) {
+  return entry?.tool === 'runner' && String(entry.done ?? '').startsWith('plan session ended');
+}
+
+/**
+ * Whether a blocked goal waits on plan, which the runner wakes headless
+ * (`planDue`): blocked by a red review (its last entry is a `red` verdict), or
+ * by the runner — a red merge (`redMergeText`), three sessions in a row without
+ * a word, a review with no verdict or no pull request, an `after` goal gone
+ * without landing (`afterGoneText`). Nothing goes back to a build session from
+ * there until plan sets it open. A goal blocked by a person or by a build
+ * session's question, or still blocked after a plan session (`planHeld`),
+ * waits on a person (`waitsOnPerson`) and wakes nothing.
  */
 export function waitsOnPlan(goal) {
   if (goal.status !== 'blocked') return false;
   const last = goal.log.at(-1);
-  return verdictOf(last)?.verdict === 'red'
-    || (last?.tool === 'runner' && String(last.done ?? '').startsWith('merger answered red'))
-    || (last?.tool === 'runner' && / gone without landing — waits on plan/u.test(String(last.comment ?? '')));
+  if (verdictOf(last)?.verdict === 'red') return true;
+  return last?.tool === 'runner' && last.status === 'blocked' && !planHeld(last);
+}
+
+/** Whether a blocked goal waits on a person: blocked, and not on plan (`waitsOnPlan`). */
+export function waitsOnPerson(goal) {
+  return goal.status === 'blocked' && !waitsOnPlan(goal);
+}
+
+/** The role a plan session woken by a blocked goal runs with: `canon/roles/plan.md`. */
+export const PLAN_ROLE = 'plan';
+
+/** Whether the runner starts a plan session on `goal`: it parses and waits on plan. */
+export function planDue(goal) {
+  return goal.problems.length === 0 && waitsOnPlan(goal);
 }
 
 /**

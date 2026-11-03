@@ -77,9 +77,8 @@ describe('role files', () => {
     assert.equal(parseRole(WORKER_MD).cache, '1h');
   });
 
-  it('the canon step and mend roles run on 5m and plan on an hour', () => {
+  it('the canon step role runs on 5m and plan on an hour', () => {
     assert.equal(readCanonRole('build-project').cache, '5m');
-    assert.equal(readCanonRole('mend').cache, '5m');
     assert.equal(readCanonRole('plan').cache, '1h');
   });
 
@@ -375,10 +374,10 @@ describe('reserved names', () => {
 describe('the role catalogue', () => {
   // A role that goes is removed on purpose, and one that arrives is added on
   // purpose: `repair.md` went with ruling 21 and nothing would have said so
-  // had it stayed.
+  // had it stayed; `mend.md` went with the goal `headless-plan` (2026-11-02).
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_build.md', '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'build-goal.md', 'build-project.md', 'goal-review.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'review.md', 'worker.md',
+      '_build.md', '_common.md', '_plan-writing.md', '_session-work.md', '_step-workers.md', 'brief.md', 'build-goal.md', 'build-project.md', 'goal-review.md', 'helper.md', 'intake.md', 'plan.md', 'review.md', 'worker.md',
     ]);
   });
 });

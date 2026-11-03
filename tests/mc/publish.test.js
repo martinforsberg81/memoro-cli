@@ -114,7 +114,7 @@ describe('mc publish', () => {
     assert.equal(out.stderr, 'mc: unmet-criteria — criterion 2\n');
   });
 
-  it('--no-merge, --json and a detached --branch queue nothing and say what to run next', async () => {
+  it('--no-merge and --json queue nothing and say what to run next', async () => {
     const plain = fixture();
     assert.equal(await run(['--no-merge'], plain.deps), 0);
     assert.deepEqual(plain.out.merged, []);
@@ -122,10 +122,6 @@ describe('mc publish', () => {
     const json = fixture();
     assert.equal(await run(['--json'], json.deps), 0);
     assert.deepEqual(json.out.merged, []);
-    const mend = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'step-x'], mend.deps), 0);
-    assert.deepEqual(mend.out.merged, []);
-    assert.match(mend.out.stdout, /\nnext: mc merge memoro 9\n$/u);
   });
 
   it('a head GitHub does not hold yet is not queued', async () => {
@@ -214,27 +210,16 @@ describe('mc publish', () => {
     assert.equal(await run(['extra'], fixture().deps), 2);
   });
 
-  it('a detached HEAD publishes to --branch without -u', async () => {
-    const { out, deps } = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'step-x'], deps), 0);
-    assert.deepEqual(out.pushed, ['step-x']);
-    assert.deepEqual(out.pushOpts, [{ detached: true }]);
-    assert.deepEqual(out.gh[1].slice(0, 6), ['pr', 'create', '--base', 'main', '--head', 'step-x']);
+  it('--branch is gone with the mend: refused before the network, from a branch or a detached HEAD', async () => {
+    for (const branch of ['other', 'HEAD']) {
+      const f = fixture({ branch });
+      assert.equal(await run(['--branch', 'step-x'], f.deps), 2);
+      assert.deepEqual([f.out.pushed, f.out.gh], [[], []]);
+    }
     const calls = [];
     const spawn = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: '', stderr: '' }; };
-    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} }, detached: true }).ok, true);
-    assert.deepEqual(calls, [['git', 'push', 'origin', 'HEAD:refs/heads/step-x']]);
-  });
-
-  it('--branch on another branch, or an invalid name, refuses before the network', async () => {
-    const other = fixture({ branch: 'other' });
-    assert.equal(await run(['--branch', 'step-x'], other.deps), 2);
-    assert.deepEqual([other.out.pushed, other.out.gh], [[], []]);
-    assert.match(other.out.stderr, /--branch step-x, but this worktree is on other — drop --branch/u);
-    const bad = fixture({ branch: 'HEAD' });
-    assert.equal(await run(['--branch', 'bad..name'], bad.deps), 2);
-    assert.deepEqual([bad.out.pushed, bad.out.gh], [[], []]);
-    assert.match(bad.out.stderr, /--branch bad\.\.name is not a branch name/u);
+    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} } }).ok, true);
+    assert.deepEqual(calls, [['git', 'push', '-u', 'origin', 'step-x']]);
   });
 
   it('a step before the review is booked built on its branch and queues nothing; the review and a plan without one queue as before', async () => {
@@ -270,7 +255,7 @@ describe('mc publish', () => {
     assert.deepEqual(old.out.merged, [['memoro', '9']]);
   });
 
-  it('a detached HEAD without --branch is still refused', async () => {
+  it('a detached HEAD is refused', async () => {
     const { out, deps } = fixture({ branch: 'HEAD' });
     assert.equal(await run([], deps), 1);
     assert.match(out.stderr, /on HEAD/u);
