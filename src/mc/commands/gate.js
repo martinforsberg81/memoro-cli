@@ -23,6 +23,11 @@
  * measures them. The tests this change touches always run, and so does all of
  * a goal's measured gate.
  *
+ * Each test the change adds or changes (the tests the diff against the base
+ * reaches: a test whose lines it touches, or every test of a new file) is timed
+ * in the verdict, one line each, `test <file> › <name> — 0.xyz s`, as node
+ * reports it. Information only: the verdict does not read it.
+ *
  * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
  * system temp directory otherwise — as it is written; when the tests end the
  * worker writes their exit code beside the log. This verb answers within the
@@ -43,7 +48,8 @@ import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
-import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags } from '../gate-local.js';
+import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags, timedTestLines } from '../gate-local.js';
+import { changedRanges } from '../test-times.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
@@ -140,9 +146,9 @@ export async function run(argv, deps = {}) {
   let select = null;
   let declaration = null;
   let addedTests = [];
+  const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
+  const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
   if (!files.length) {
-    const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
-    const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
     if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${baseRef} — name the test files: mc gate <files…>\n`); return 2; }
     if (!changed.length) {
       stdout.write(`NOTHING CHANGED — no changes against ${baseRef}\n`);
@@ -174,6 +180,12 @@ export async function run(argv, deps = {}) {
   const configuration = gateConfiguration(declaration, effectiveFlags);
   const command = files.length ? namedCommand(manifest, files, { pattern, flags })
     : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
+  // The test files this change adds or changes, with the changed lines of each: the tests
+  // among them are timed in the verdict (`touchedTests`). Nothing here decides the verdict.
+  const timed = {};
+  if (mergeBase && changed) {
+    for (const file of (files.length ? files : addedTests).filter((one) => changed.includes(one))) timed[file] = timedRanges(io, root, mergeBase, file);
+  }
 
   const launchPath = `${lockPath}.launch`;
   const launch = io.claim(launchPath, { pid: process.pid });
@@ -201,7 +213,7 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, timed, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
         round_timeout_ms: declaration?.round_timeout_ms ?? null,
         log: logPath, defer: !files.length && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
@@ -262,11 +274,20 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   const left = deferred ? `\n${deferred} costly test files left to the merge round, which runs them all — this green does not cover them` : '';
   if (json) {
     const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
-    stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}${left}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests) })}${left}\n`);
   }
   return summary.ok ? 0 : 1;
+}
+
+/**
+ * The changed ranges of one test file against the merge base (`changedRanges`),
+ * or null when the file is new to the branch: the whole file is then touched.
+ */
+function timedRanges(io, root, mergeBase, file) {
+  if (io.git(root, ['cat-file', '-e', `${mergeBase}:${file}`]) === null) return null;
+  return changedRanges(io.git(root, ['diff', '-U0', '--no-color', mergeBase, '--', file]) || '');
 }
 
 /** Polls for the exit code until it is written, the process is gone, or the budget is spent. */

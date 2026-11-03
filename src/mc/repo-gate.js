@@ -72,7 +72,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes, runProgress } from './test-times.js';
+import { TIMES_REPORTER, recordTestTimes, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -2371,20 +2371,22 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   let tap = '';
   let stderr = '';
   let code = 0;
+  const tests = [];
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
     const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal, times });
     tap += ran.tap;
     stderr += ran.stderr || '';
-    if (ran.error) return { code: -1, tap, stderr, error: ran.error };
+    tests.push(...(ran.tests || []));
+    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests };
     // A batch with an unknown exit or no summary cannot disappear behind the
     // passing totals of another resource class.
     const totals = tapTotals(ran.tap);
     if (!code && (ran.code !== 0 || !totals.finished || !totals.tests)) code = ran.code || -1;
-    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs };
-    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs };
+    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests };
+    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests };
   }
-  return { code, tap, stderr, timedOut: false, timeoutMs, lanes };
+  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests };
 }
 
 function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
@@ -2413,10 +2415,13 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     const reporters = timesFile
       ? ['--test-reporter=tap', '--test-reporter-destination=stdout', `--test-reporter=${TIMES_REPORTER}`, `--test-reporter-destination=${timesFile}`]
       : ['--test-reporter=tap'];
+    // What the run measured, each test by name (`testsMeasured`), read before the file goes.
     const noteTimes = () => {
-      if (!timesFile) return;
-      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      if (!timesFile) return [];
+      let text = '';
+      try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       rmSync(timesFile, { force: true });
+      return testsMeasured(text, cwd);
     };
     const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
@@ -2450,7 +2455,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
+    child.on('close', (code) => { const tests = noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null, tests }); });
   });
 }
 

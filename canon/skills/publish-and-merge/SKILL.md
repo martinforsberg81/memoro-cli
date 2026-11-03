@@ -37,6 +37,8 @@ in it and say why in the reply.
 - The body says what changed, why, the user impact, the root cause of a fix,
   what was run and what was not, and known gaps. Never claim a run you did
   not make: "suite not run" is an acceptable sentence.
+- Each new or changed test is listed in the body with its measured time from
+  your session's `mc gate` (`test <file> › <name> — 0.xyz s`).
 
 ## `mc merge <repo> <pr>` — the one door to main
 

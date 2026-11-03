@@ -12,7 +12,7 @@ import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { readTestTimes, runProgress, sessionFiles } from './test-times.js';
+import { readTestTimes, runProgress, sessionFiles, touchedTests } from './test-times.js';
 import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
@@ -126,9 +126,12 @@ async function executeSessionGate(request, {
   let code = 0;
   let details = [];
   let testResult = null;
+  let timed = [];
   if (files.length) {
     const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track } : undefined });
     write(`${run.tap || ''}\n${run.stderr || ''}`);
+    // The tests this change touches and how long node says each took: information, not a verdict.
+    timed = touchedTests(run.tests || [], request.timed || {});
     details = redTests(run.tap, files, { cwd });
     const totals = tapTotals(run.tap);
     for (const key of ['tests', 'pass', 'fail', 'skipped']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
@@ -156,7 +159,7 @@ async function executeSessionGate(request, {
     if (!ok) code = 1;
   }
   if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
-  return { ok: code === 0, code, files, deferred, commands, red_tests: details,
+  return { ok: code === 0, code, files, deferred, commands, red_tests: details, timed_tests: timed,
     // `partial` is never reusable evidence: the merge round measures the whole selection.
     coverage: { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
       flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null },

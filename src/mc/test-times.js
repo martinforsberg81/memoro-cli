@@ -34,17 +34,79 @@ export function readTestTimes({ root, repo }) {
   } catch { return {}; }
 }
 
-/** Seconds per repository-relative file, from the reporter's lines. A line that will not parse is skipped. */
+/** Seconds per repository-relative file, from the reporter's lines. A line that will not parse is skipped, and so is a test's own line (`testsMeasured`). */
 export function measuredSeconds(text, cwd) {
   const seconds = {};
   for (const line of String(text || '').split('\n')) {
     let entry = null;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (typeof entry?.file !== 'string' || !(entry.ms >= 0)) continue;
+    if (typeof entry?.file !== 'string' || !(entry.ms >= 0) || entry.test) continue;
     const file = relative(cwd, entry.file);
     seconds[file] = (seconds[file] || 0) + entry.ms / 1000;
   }
   return seconds;
+}
+
+/**
+ * Every test the reporter named, at any nesting: `{ file, name, line, seconds }`,
+ * the file repository-relative and `seconds` null when node gave no time. A line
+ * that will not parse, or that names no test line, is skipped.
+ */
+export function testsMeasured(text, cwd) {
+  const tests = [];
+  for (const line of String(text || '').split('\n')) {
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const test = entry?.test;
+    if (typeof entry?.file !== 'string' || !test || typeof test.name !== 'string' || !(test.line > 0)) continue;
+    tests.push({ file: relative(cwd, entry.file), name: test.name, line: Number(test.line), seconds: test.ms >= 0 ? test.ms / 1000 : null });
+  }
+  return tests;
+}
+
+/**
+ * The new-side line ranges a diff with no context adds or changes: each
+ * `@@ -a,b +c,d @@` hunk gives `[c, c+d-1]`. A hunk that only deletes lines
+ * (`d` is 0) marks the line it lands on and the one after, so a test the
+ * deletion is in still counts.
+ */
+export function changedRanges(diff) {
+  const ranges = [];
+  for (const line of String(diff || '').split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/u.exec(line);
+    if (!hunk) continue;
+    const start = Number(hunk[1]);
+    const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+    ranges.push(count > 0 ? [start, start + count - 1] : [Math.max(1, start), Math.max(1, start) + 1]);
+  }
+  return ranges;
+}
+
+/**
+ * The tests a change touches, of the tests `testsMeasured` named. `timed` maps
+ * each repository-relative test file the change adds or changes to its changed
+ * ranges (`changedRanges`), or to null for a file the change adds whole. A test
+ * is touched when a changed line falls from its own line to the line before the
+ * next test's in the same file, so a test whose body the change edits counts and
+ * its neighbour's does not. A file not in `timed` contributes nothing.
+ */
+export function touchedTests(tests, timed = {}) {
+  const byFile = new Map();
+  for (const test of tests) {
+    if (!Object.hasOwn(timed, test.file)) continue;
+    byFile.set(test.file, [...(byFile.get(test.file) || []), test]);
+  }
+  const touched = [];
+  for (const [file, list] of byFile) {
+    const ranges = timed[file];
+    const ordered = list.sort((a, b) => a.line - b.line);
+    ordered.forEach((test, i) => {
+      const end = i + 1 < ordered.length ? ordered[i + 1].line - 1 : Infinity;
+      const hit = ranges === null || ranges.some(([from, to]) => from <= end && to >= test.line);
+      if (hit && test.seconds !== null) touched.push(test);
+    });
+  }
+  return touched;
 }
 
 /**

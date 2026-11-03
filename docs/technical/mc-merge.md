@@ -500,6 +500,18 @@ files and a bound gate (`measurementBinding`, `wholeSelection`) defer
 nothing, and neither does a repository that declares `session_whole`
 (memoro-cli, whose whole suite took 128 s in a session's gate on 2026-11-01).
 
+**A session's gate times the tests the change touches.** Every test the run
+reports, at any nesting, comes back from `realTests` with its name, line and
+node's own duration (`testsMeasured` in `src/mc/test-times.js`, from the same
+reporter that writes the per-file times). `mc gate` keeps those whose lines the
+diff against the merge base changed (`changedRanges`; a test runs to the line
+before the next test's, and a new test file counts whole) and prints one line
+each, `test <file> › <name> — 0.xyz s`, slowest first, at most eight. The
+time is information for the session and never changes GREEN or RED. A test
+over 1 s is the writing session's to rebuild before it publishes; the merge
+round still runs every file, so a slow test is red there only under the
+repository's own per-test limit.
+
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
 `MC_WORK_ROOT` and `MC_HOME` (`suiteEnv` in `src/mc/repo-gate.js`): the last two
