@@ -338,8 +338,9 @@ export class FakeGit {
     const tree = this.treeOf(repo, index);
     const parent = this.headSha(repo, state);
     if (!allowEmpty && parent && repo.commits.get(parent).tree === tree) this.die('nothing to commit, working tree clean', 1);
-    const sha = sha1(`commit ${tree} ${parent ?? ''} ${message} ${repo.serial++} ${this.now++}`);
-    repo.commits.set(sha, { tree, parents: parent ? [parent] : [], message });
+    const at = this.now++;
+    const sha = sha1(`commit ${tree} ${parent ?? ''} ${message} ${repo.serial++} ${at}`);
+    repo.commits.set(sha, { tree, parents: parent ? [parent] : [], message, at });
     if (state.head.startsWith('refs/')) repo.refs.set(state.head, sha); else state.head = sha;
     return sha;
   }
@@ -795,7 +796,16 @@ export class FakeGit {
     const format = (flags.format ?? flags.pretty ?? (flags.oneline ? '%h %s' : '%H%n%s')).replace(/^(format:|tformat:)/u, '');
     return shas.map((sha) => {
       const commit = repo.commits.get(sha);
-      return `${format.replace(/%H/gu, sha).replace(/%h/gu, sha.slice(0, 7)).replace(/%s/gu, commit.message.split('\n')[0]).replace(/%B/gu, `${commit.message}\n`).replace(/%T/gu, commit.tree).replace(/%P/gu, commit.parents.join(' ')).replace(/%n/gu, '\n')}\n`;
+      // One commit time stands for both author and committer: the model's clock.
+      const seconds = commit.at ?? this.now;
+      const iso = new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, '+00:00');
+      const fields = {
+        H: sha, h: sha.slice(0, 7), s: commit.message.split('\n')[0], B: `${commit.message}\n`,
+        T: commit.tree, P: commit.parents.join(' '), n: '\n', cI: iso, aI: iso, ct: String(seconds), at: String(seconds),
+      };
+      const line = format.replace(/%(x[0-9a-fA-F]{2}|cI|aI|ct|at|[HhsBTPn])/gu, (_, code) => (
+        code.startsWith('x') ? String.fromCharCode(Number.parseInt(code.slice(1), 16)) : fields[code]));
+      return `${line}\n`;
     }).join('');
   }
 

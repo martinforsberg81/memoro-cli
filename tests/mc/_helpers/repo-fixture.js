@@ -11,13 +11,38 @@
  */
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { git, makeTempRepo } from './git-fixture.js';
 
 const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+/**
+ * The one `gh` script every fixture's `bin/gh` links to, written once per
+ * process. It finds its fixture from the path it was run by — `<root>/bin/gh`
+ * — and logs to and answers from that root. One file rather than one per
+ * fixture: macOS checks an executable the first time it runs, and a script
+ * written fresh for each test paid 250–400 ms for that on its first call.
+ */
+let sharedGh = null;
+function ghStub() {
+  if (sharedGh) return sharedGh;
+  const path = join(mkdtempSync(join(tmpdir(), 'mc-test-gh-')), 'gh');
+  writeFileSync(path, [
+    '#!/bin/sh',
+    'bin="${0%/*}"',
+    'root="${bin%/*}"',
+    `printf '%s\\n' "$*" >> "$root/gh-calls.log"`,
+    'if [ "$1" = "pr" ]; then cat "$root/prs.json"; exit 0; fi',
+    'exit 1',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  sharedGh = path;
+  return path;
+}
 
 /**
  * A repository, one piece of work with a worktree on it, and a PATH.
@@ -37,13 +62,7 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
   const prsPath = join(repo.root, 'prs.json');
   if (gh) {
     writeFileSync(prsPath, JSON.stringify(prs));
-    writeFileSync(join(bin, 'gh'), [
-      '#!/bin/sh',
-      `printf '%s\\n' "$*" >> "${ghLog}"`,
-      `if [ "$1" = "pr" ]; then cat "${prsPath}"; exit 0; fi`,
-      'exit 1',
-    ].join('\n'));
-    chmodSync(join(bin, 'gh'), 0o755);
+    symlinkSync(ghStub(), join(bin, 'gh'));
   }
 
   return {
