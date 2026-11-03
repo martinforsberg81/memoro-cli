@@ -15,10 +15,11 @@ describing it for two days — a specification for a surface nobody could type.
 The paragraphs below are what exists. Everything else is in the history if it
 is ever wanted back.
 
-Five verbs:
+Six verbs:
 
 ```sh
 mc dev list [--json]                     what is running, and where
+mc dev status [--json]                   the app servers, the queue for one, cap and memory (see Admission)
 mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
 mc dev unregister <manifest> [--json]    forget it
 mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
@@ -218,9 +219,10 @@ of:
 
 ```json
 { "ok": true }
-{ "ok": false, "reason": "cap" | "memory",
-  "holders": [{ "instance_id", "service", "worktree_path", "started_at", "url" }],
-  "free_percent": 31, "cap": 4 }
+{ "ok": false, "reason": "cap" | "memory" | "queue",
+  "holders": [{ "instance_id", "service", "worktree_path", "started_at", "last_used_at", "url" }],
+  "free_percent": 31, "cap": 4,
+  "place": 2, "queue": [ … ] }
 ```
 
 What counts is live registered servers whose `resource_class` is not
@@ -233,10 +235,53 @@ fifteen minutes, every one on the cap and none on memory (36–41 % free). Memor
 `MC_DEV_MIN_FREE_PERCENT`, default 15, refuses with reason `memory`, and where
 the sysctl is missing the memory check is skipped (`free_percent: null`).
 
-`--wait` polls every ten seconds and says who holds the slots once a minute
-(on stderr with `--json`). `mc dev admit` stops nothing to make room. A
-refusal that ends a wait is logged as `dev-server-refused`, an admission that
-had to wait as `dev-server-admitted` with `waited_s`.
+### The queue
+
+A wait is served in order. Until 2026-11-03 every waiter polled the registry
+and whoever looked first after a holder left took the slot, so a request that
+started waiting later could overtake one that had waited fifteen minutes, and a
+gate round waited behind sessions that only wanted a screenshot.
+
+`--wait` takes a ticket in `~/.memoro/mc/dev-queue.json`, written under
+`dev-queue.json.lock` and atomically, as the registry's other files are:
+
+```json
+{ "schema_version": 1,
+  "tickets": [{ "id", "pid", "worktree_path", "service",
+                "holder": "MC_STEP | MC_GATE_ROUND | the coding session id",
+                "gate": false, "joined_at": "2026-11-03T10:00:00.000Z" }] }
+```
+
+Only the ticket at the head is admitted when the rule above says yes; the
+others keep waiting. The order is `nextInQueue(tickets, now)`
+(`src/mc/dev-queue.js`), pure: first come, first served by `joined_at`, except
+that a **gate round's** ticket (`MC_GATE_ROUND` in its environment, which
+`mc gate` and the merger's round set) that has waited two minutes goes ahead of
+every non-gate ticket — never ahead of an earlier gate ticket. Priority is a
+place and nothing else: a gate ticket stops no server to take one. A ticket
+leaves when it is admitted, when it gives up, or when its pid is gone — swept on
+every read, as `list` sweeps a dead server. A request whose worktree and service
+already has a live server is not queued at all (a restart replaces itself), and
+a request that does not wait is refused with reason `queue` while others wait,
+so it cannot overtake them.
+
+The waiter is told at once and then once a minute, on the line `mc shot dev`
+and `mc test dev` print (on stderr with `--json`):
+
+```
+mc: waiting for a slot — place 2 of 3; held by dev-a (/w/a, used 4 min ago), …
+```
+
+A refusal from a waiter carries `"place"` and `"queue"` (the tickets in order,
+each with `holder`, `worktree_path`, `service`, `gate`, `pid`, `joined_at` and
+`waited_s`), and every holder its `last_used_at`. `mc dev admit` stops nothing
+to make room. A refusal that ends a wait is logged as `dev-server-refused` with
+`place`, an admission that had to wait as `dev-server-admitted` with `waited_s`
+and `place_at_join`.
+
+`mc dev status [--json]` reads the same state and changes none of it: the live
+app servers with mc's last use of each, the queue in the order it will be
+served, the cap and free memory. `mc dev list` keeps its meaning.
 
 `mc test dev` asks before it starts a server — up to fifteen minutes, printing
 the waiting line — and starts the project's command with `MC_DEV_ADMITTED=1`
@@ -246,7 +291,7 @@ does not ask, since it would not count once running.
 
 `mc test dev` and `mc shot dev` (through `ensureAppServer`) also make room: a
 holder mc has not used for `MC_DEV_HOLDER_STALE_MINUTES` (default 5; 30 until 2026-11-03) is
-stopped through its own `control.stop` command, oldest use first, each tried
+stopped by the request at the head of the queue — and only by it — through its own `control.stop` command, oldest use first, each tried
 once, and logged as `dev-server-stopped` with `reason: 'stale-holder'` (or
 `dev-server-evict-failed`). Use is mc's, not the server's traffic: every reuse
 and every fresh start writes `last_used_at` on mc's copy of the manifest

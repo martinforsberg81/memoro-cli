@@ -3,6 +3,7 @@
  * person.
  *
  *   mc dev list [--json]                    what is running, and where
+ *   mc dev status [--json]                  the app servers, the queue for one, the cap and free memory
  *   mc dev register <manifest> [--json]     take a copy of a wrapper's manifest
  *   mc dev unregister <manifest> [--json]   forget it
  *   mc dev admit <service> [--worktree <path>] [--wait <s>] [--json]
@@ -35,8 +36,12 @@
  * their work is in `dev-open.js`. A session that wanted to look at its change
  * had made five calls to get there; `open` is one.
  *
+ * `status` is the ninth (2026-11-03, `dev-queue`), and is not the `status`
+ * `mc-cut` removed: it reads the admission queue (`dev-queue.js`) beside the
+ * app servers, so a session waiting for a slot can see who is ahead of it.
+ *
  * Six protocol verbs, and not the thirteen-verb session manager `mc-cut` removed on
- * 2026-09-03. `ensure`, `plan`, `status`, `logs` and `restart` are not coming
+ * 2026-09-03. `ensure`, `plan`, `logs` and `restart` are not coming
  * back with them: the month of `mc.log` that decided this recorded ten human
  * invocations of `mc dev` in total, six of them `ensure`, and the verb that
  * starts a server for a session is `mc test dev`, which is a different
@@ -58,8 +63,10 @@ import { resolve } from 'node:path';
 
 import { devServersRoot } from '../paths.js';
 import {
-  admit, holdersText, listServers, processCwd, refusalText, registerManifest, stopServer, strayCwd, unregisterManifest,
+  admit, agoText, DEFAULT_MAX_SERVERS, freeMemoryPercent, holdersOf, listServers, minFreePercentOf, processCwd, refusalText,
+  registerManifest, stopServer, strayCwd, unregisterManifest, waitingLine,
 } from '../dev-servers.js';
+import { devQueuePath, queueOrder, readQueue, ticketView } from '../dev-queue.js';
 import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-reap.js';
 import { open as openSurface, surfaces } from '../dev-open.js';
 import { log } from '../logger.js';
@@ -68,7 +75,7 @@ import { callerWorktree } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
-const VERBS = ['list', 'register', 'unregister', 'admit', 'stop', 'reap', 'open', 'surfaces'];
+const VERBS = ['list', 'status', 'register', 'unregister', 'admit', 'stop', 'reap', 'open', 'surfaces'];
 const SURFACE_VERBS = ['open', 'surfaces'];
 
 /** `EX_TEMPFAIL`: refused for now, try again later. */
@@ -89,6 +96,7 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'surfaces') return surfaces(opts, { stdout, stderr, deps });
   if (opts.verb === 'open') return openSurface(opts, { stdout, stderr, deps });
   if (opts.verb === 'list') return list(opts, { stdout, root, cwdOf: deps.processCwd || processCwd });
+  if (opts.verb === 'status') return status(opts, { stdout, root, deps });
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
   if (opts.verb === 'admit') return askAdmission(opts, { stdout, root, deps });
   if (opts.verb === 'stop') return stop(opts, { stdout, stderr, root, stopServer: deps.stopServer || stopServer });
@@ -127,6 +135,45 @@ function list(opts, { stdout, root, cwdOf }) {
 }
 
 /**
+ * Who holds the app servers and who waits for one, in the order they will be
+ * served. Stops nothing and joins nothing; like `list`, reading sweeps what is
+ * dead — a server whose pid is gone, a ticket whose waiter is.
+ */
+function status(opts, { stdout, root, deps }) {
+  const env = deps.env || process.env;
+  const at = (deps.now || Date.now)();
+  const { servers } = listServers({ root });
+  const app = holdersOf(servers);
+  const queue = queueOrder(readQueue({ file: deps.queueFile || devQueuePath(root) }), at).map((ticket) => ticketView(ticket, at));
+  const cap = Number(env.MC_DEV_MAX_SERVERS) || DEFAULT_MAX_SERVERS;
+  const free = (deps.freeMemory || freeMemoryPercent)();
+  const freePercent = Number.isFinite(free) ? free : null;
+  const floor = minFreePercentOf(env);
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({
+      schema_version: 1, cap, free_percent: freePercent, min_free_percent: floor, servers: app, queue,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const memory = freePercent === null ? 'free memory unknown' : `${freePercent}% memory free (floor ${floor}%)`;
+  stdout.write(`mc: ${app.length} of ${cap} app servers · ${memory}\n`);
+  for (const server of app) {
+    const used = Date.parse(server.last_used_at ?? '');
+    stdout.write(`  ${server.instance_id}  ${server.service}  ${server.worktree_path}  ${Number.isFinite(used) ? `used ${agoText(used, at)}` : 'never used by mc'}\n`);
+  }
+  if (!queue.length) {
+    stdout.write('mc: nobody is waiting\n');
+    return 0;
+  }
+  stdout.write(`mc: ${queue.length} waiting, in the order they will be admitted\n`);
+  queue.forEach((ticket, index) => {
+    const who = ticket.holder || `pid ${ticket.pid}`;
+    stdout.write(`  ${index + 1}. ${who}${ticket.gate ? ' (gate)' : ''}  ${ticket.service}  ${ticket.worktree_path}  joined ${agoText(Date.parse(ticket.joined_at), at)}\n`);
+  });
+  return 0;
+}
+
+/**
  * May one more server start? `{ ok: true }` or the refusal, and the exit says
  * the same thing for a caller that reads only that. Waiting lines go to stderr
  * with `--json`, so stdout stays one JSON document.
@@ -141,10 +188,11 @@ async function askAdmission(opts, { stdout, root, deps }) {
     waitSeconds: opts.wait,
     env,
     root,
+    ...(deps.queueFile ? { queueFile: deps.queueFile } : {}),
     sleep: deps.sleep,
     now: deps.now,
     freeMemory: deps.freeMemory,
-    onWaiting: (waiting) => say.write(`mc: waiting for a slot — held by ${holdersText(waiting)}\n`),
+    onWaiting: (waiting) => say.write(`${waitingLine(waiting, { now: (deps.now || Date.now)() })}\n`),
   });
   if (opts.json) stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   else stdout.write(verdict.ok ? 'mc: admitted\n' : `mc: ${refusalText(verdict, { env })}\n`);
@@ -242,8 +290,8 @@ export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeO
     return { ...opts, error: `--dry-run and --min-age-seconds belong to mc dev reap, not mc dev ${word}` };
   }
 
-  if (word === 'list') {
-    if (positional.length) return { ...opts, error: `mc dev list takes no argument (${positional[0]})` };
+  if (word === 'list' || word === 'status') {
+    if (positional.length) return { ...opts, error: `mc dev ${word} takes no argument (${positional[0]})` };
     return opts;
   }
   if (word === 'reap') {

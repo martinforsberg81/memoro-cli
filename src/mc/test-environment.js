@@ -33,7 +33,7 @@ import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import {
-  admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer,
+  admit, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer, waitingLine,
 } from './dev-servers.js';
 import { log } from './logger.js';
 import { pidAlive } from './status-collect.js';
@@ -439,7 +439,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
       + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
     // Its own callback: `onWaiting` is handed admission verdicts, and a line
-    // given to it reached `holdersText` as a verdict and threw (2026-11-02).
+    // given to it reached `waitingLine` as a verdict and threw (2026-11-02).
     if (deps.onSlowStart) deps.onSlowStart(line);
     else process.stderr.write(`${line}\n`);
   }
@@ -501,9 +501,9 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     onRegistered: json ? null : (registered) => stdout.write(
       `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
     ),
-    // Two app servers already up is a wait, not a failure — said once a
-    // minute with who holds the slots, so the wait has a name on it.
-    onWaiting: json ? null : (verdict) => stdout.write(`mc: waiting for a slot — held by ${holdersText(verdict)}\n`),
+    // A full machine is a wait, not a failure — said once a minute with the
+    // place in the queue and who holds the slots, so the wait has a name on it.
+    onWaiting: json ? null : (verdict) => stdout.write(`${waitingLine(verdict, { now: (deps.now || Date.now)() })}\n`),
     // A wrapper still building when its register window lapses gets one more;
     // the line says so, on stdout with the others.
     onSlowStart: json ? null : (line) => stdout.write(`${line}\n`),

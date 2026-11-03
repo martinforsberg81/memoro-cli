@@ -368,6 +368,8 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   dev: [
     "usage — mc dev list [--json]                  what is running, and where\n",
+    "        mc dev status [--json]                the app servers and mc's last use of each, the queue\n",
+    "                                              waiting for one in order, the cap and free memory\n",
     "        mc dev register <manifest> [--json]   take a copy of it\n",
     "        mc dev unregister <manifest> [--json]  forget it\n",
     "        mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]\n",
@@ -387,8 +389,12 @@ export const COMMAND_USAGE = Object.freeze({
     "mc speaks the protocol. The wrapper stays authoritative for how its server starts, stops\n",
     "and becomes healthy; unregistering nothing is not an error. admit allows at most\n",
     "MC_DEV_MAX_SERVERS (4) servers that are not resource_class light, the asker's own not\n",
-    "counted, and none under MC_DEV_MIN_FREE_PERCENT (15) free memory; --wait polls for a\n",
-    "slot, and it stops nothing to make room. mc also stops a worktree's servers when mc work\n",
+    "counted, and none under MC_DEV_MIN_FREE_PERCENT (15) free memory; --wait takes a ticket in\n",
+    "~/.memoro/mc/dev-queue.json and is admitted only at the head of the queue, first come first\n",
+    "served, except that a gate round that has waited two minutes goes ahead of the rest. The\n",
+    "waiting line names the place (place 2 of 3) and the holders; --json adds place and queue to\n",
+    "a refusal, and refuses a request without --wait with reason queue while others wait. A restart\n",
+    "of the asker's own worktree and service is not queued. admit stops nothing to make room. mc also stops a worktree's servers when mc work\n",
     "remove or the runner's close takes the worktree away. The runner reaps every chore pass.\n",
   ].join(''),
   docker: [
