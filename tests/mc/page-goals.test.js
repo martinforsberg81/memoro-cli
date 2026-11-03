@@ -232,6 +232,7 @@ describe('a goal in a phase its programme has not reached', () => {
     const listed = json.programmes.flatMap((group) => group.goals ?? []).find((goal) => goal.name === 'headless-plan');
     assert.equal(listed.phase, 3);
     assert.equal(listed.held, true);
+    assert.deepEqual([listed.stage, listed.status], ['plan', 'ready'], 'mc --json carries stage and status');
   });
 
   it('the page leads its tail with the phase it waits on, in the projects\' waiting colour', () => {
