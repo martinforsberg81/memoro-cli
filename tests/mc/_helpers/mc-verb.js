@@ -14,12 +14,15 @@
  * streams: the seams a verb takes (a clock, a sleep); `deps.cwd` is where
  * the call stands (`process.chdir`, put back afterwards), for a verb that
  * reads who asks from where they are.
+ *
+ * The word is routed by the binary's own `routeV1Command`, with the module
+ * run here instead of through `runModule`: bare `mc` and its page flags are
+ * the page, `mc list` and `mc sessions` say where they went, and a word the
+ * binary hands to the capability dispatcher is not one this runs.
  */
-import { VERB_MODULES } from '../../../src/mc-verbs.js';
+import { VERB_MODULES, routeV1Command } from '../../../src/mc-verbs.js';
 
 const PINNED = { MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1' };
-
-const PAGE_FLAGS = new Set(['--json', '--fresh', '--offline']);
 
 const moduleOf = (path) => import(new URL(path.replace('./', '../../../src/'), import.meta.url));
 
@@ -32,12 +35,6 @@ export async function preloadVerbs(...names) {
 }
 
 export async function runVerb(args, env = {}, { cwd = null, ...deps } = {}) {
-  // Bare `mc`, and `mc` with only the page's flags, is the page, as
-  // `routeV1Command` in src/mc-cli.js routes it; anything else is a verb.
-  const page = args.every((arg) => PAGE_FLAGS.has(arg) || /^\d+$/u.test(arg)) && (!args.length || PAGE_FLAGS.has(args[0]));
-  const [path, argv] = page ? ['./mc/commands/home.js', args] : [VERB_MODULES[args[0]], args.slice(1)];
-  if (!path) throw new Error(`runVerb: ${args[0]} is not a verb in VERB_MODULES`);
-  const module = await moduleOf(path);
   const overlay = { ...PINNED, ...env };
   const saved = {};
   for (const [key, value] of Object.entries(overlay)) {
@@ -46,15 +43,17 @@ export async function runVerb(args, env = {}, { cwd = null, ...deps } = {}) {
   }
   const out = [];
   const err = [];
+  const stdout = { write: (text) => { out.push(text); } };
+  const stderr = { write: (text) => { err.push(text); } };
   const was = process.cwd();
   if (cwd) process.chdir(cwd);
   try {
-    const status = await module.run(argv, {
-      ...deps,
-      stdout: { write: (text) => { out.push(text); } },
-      stderr: { write: (text) => { err.push(text); } },
+    const status = await routeV1Command(args, {
+      stderr,
+      run: async (path, argv) => ((await moduleOf(path)).run(argv, { ...deps, stdout, stderr })) ?? 0,
     });
-    return { status: status ?? 0, stdout: out.join(''), stderr: err.join('') };
+    if (status === null) throw new Error(`runVerb: ${args[0]} is not a word routeV1Command routes`);
+    return { status, stdout: out.join(''), stderr: err.join('') };
   } finally {
     if (cwd) process.chdir(was);
     for (const [key, value] of Object.entries(saved)) {

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -162,6 +162,29 @@ describe('content identity', () => {
     assert.equal(git(remote, 'rev-parse', 'refs/heads/step-1'), git(area, 'rev-parse', 'HEAD'));
     git(cwd, 'worktree', 'remove', '--force', area);
     assert.doesNotMatch(git(cwd, 'worktree', 'list', '--porcelain'), /step-1/u);
+  });
+
+  it('worktree move renames the worktree whole, into a directory under its name, and never over anything', () => {
+    const { cwd } = repository('moves');
+    const area = join(root, 'moves-area');
+    git(cwd, 'worktree', 'add', '-q', '--detach', area);
+    const to = join(root, 'moves-moved');
+    git(cwd, 'worktree', 'move', area, to);
+    assert.equal(existsSync(area), false);
+    assert.equal(git(to, 'status', '--porcelain'), '');
+    assert.equal(git(to, 'rev-parse', '--path-format=absolute', '--git-common-dir'), join(realpathSync(cwd), '.git'));
+    const listed = git(cwd, 'worktree', 'list', '--porcelain');
+    assert.match(listed, new RegExp(`worktree ${realpathSync(to).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\n`, 'u'));
+    assert.doesNotMatch(listed, /moves-area/u);
+
+    const into = join(root, 'moves-into');
+    mkdirSync(into);
+    git(cwd, 'worktree', 'move', to, into);
+    assert.equal(existsSync(join(into, 'moves-moved', '.git')), true, 'an existing directory takes it under its own name');
+    mkdirSync(join(root, 'moves-taken', 'moves-moved'), { recursive: true });
+    assert.match(run(cwd, ['worktree', 'move', join(into, 'moves-moved'), join(root, 'moves-taken')]).stderr, /already exists/u);
+    assert.match(run(cwd, ['worktree', 'move', cwd, join(root, 'moves-main')]).stderr, /is a main working tree/u);
+    assert.match(run(cwd, ['worktree', 'move', join(root, 'nowhere'), join(root, 'moves-x')]).stderr, /is not a working tree/u);
   });
 });
 

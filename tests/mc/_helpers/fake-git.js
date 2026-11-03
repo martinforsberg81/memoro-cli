@@ -22,7 +22,7 @@
  * merge round in operation is where those are measured (decided 2026-11-01).
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { useGitRunner } from '../../../src/mc/git.js';
 
@@ -1055,6 +1055,26 @@ export class FakeGit {
       repo.worktrees.delete(path);
       this.worktreeOwner.delete(path);
       rmSync(path, { recursive: true, force: true });
+      return '';
+    }
+    if (verb === 'move') {
+      // As git does it: into an existing directory under the worktree's own
+      // name, never over something there, never the main worktree; the
+      // directory is renamed whole and its `.git` keeps naming the same record.
+      const [fromArg, toArg] = parse(rest, [], []).rest;
+      const from = real(resolve(dir, fromArg));
+      const state = repo.worktrees.get(from);
+      if (!state) this.die(`fatal: '${fromArg}' is not a working tree`);
+      if (from === real(dirname(repo.gitDir))) this.die(`fatal: '${fromArg}' is a main working tree`);
+      let to = resolve(dir, toArg);
+      if (existsSync(to) && statSync(to).isDirectory()) to = join(to, from.split(sep).pop());
+      if (existsSync(to)) this.die(`fatal: '${to}' already exists`);
+      renameSync(from, to);
+      const moved = real(to);
+      repo.worktrees.delete(from);
+      repo.worktrees.set(moved, state);
+      this.worktreeOwner.delete(from);
+      this.worktreeOwner.set(moved, repo);
       return '';
     }
     if (verb === 'prune') {
