@@ -151,8 +151,8 @@ export function helperPrompt({
   out.push('', '----- GOALS NOT FINISHED -----');
   if (!goals.length) out.push('_none read_');
   else {
-    out.push('| programme / goal | status | title | next |', '|---|---|---|---|');
-    for (const g of goals) out.push(`| ${g.programme} / ${g.goal} | ${g.status || '?'} | ${clip(g.title || '—')} | ${clip(g.next || '—')} |`);
+    out.push('| programme / goal | stage · status | title | next |', '|---|---|---|---|');
+    for (const g of goals) out.push(`| ${g.programme} / ${g.goal} | ${g.stage ? `${g.stage} · ${g.status}` : '?'} | ${clip(g.title || '—')} | ${clip(g.next || '—')} |`);
   }
   out.push('', '----- PROJECT LOG (closed projects) -----', projectLog || '_none read_');
   out.push('', '----- PROPOSALS ALREADY WAITING -----');
@@ -244,8 +244,8 @@ function realGit(cwd, args) {
 export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit, goals: readGoals = () => programsGoals({ home: programsHome(env) }) } = {}) {
   const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
   await Promise.all(present.map((repo) => git(repo.path, ['fetch', '-q', 'origin'])));
-  const goals = readGoals().filter((g) => !FINISHED.includes(g.status)).map((g) => ({
-    programme: g.programme, goal: g.goal, status: g.status ?? null, title: g.title ?? null,
+  const goals = readGoals().filter((g) => !FINISHED.includes(g.stage)).map((g) => ({
+    programme: g.programme, goal: g.goal, stage: g.stage ?? null, status: g.status ?? null, title: g.title ?? null,
     next: [...(g.log || [])].reverse().find((entry) => entry.next)?.next ?? null,
   }));
   const notes = [];

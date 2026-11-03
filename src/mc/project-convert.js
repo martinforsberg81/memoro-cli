@@ -4,23 +4,27 @@
  *
  * Projects were mc's other unit of work: a plan of several steps, each with a
  * check, run one after the other. A goal carries everything a plan did; the
- * steps become goals ordered with `after`. This is the one place in mc that
+ * steps become goals in consecutive phases. This is the one place in mc that
  * reads PLAN.json and STATE.json (`docs/technical/mc-goals.md` § *From a
  * project*); a project with every step done is not read by anything else, and
  * is refused here.
  *
  *   - One goal per step not `done` (STATE.json's status laid over the plan's,
- *     step by step), named `<project>-<n>` after the step's number, each
- *     `after` the one before. A step blocked on another project waits on that
- *     project's last goal instead, when it has been converted; on a finished
- *     project it waits on nothing.
+ *     step by step), named `<project>-<n>` after the step's number. The first
+ *     is in the phase its programme is in now (1 when it has no goal left to
+ *     finish), and each after it one phase later, so the steps still run one
+ *     after the other. A step blocked on another project of the same
+ *     programme goes one phase past that project's last goal, which must be
+ *     converted first; one blocked on a project in another programme, which a
+ *     phase cannot wait on, is `blocked` and says so.
  *   - A step's title is the goal's title, its instruction the goal, its
  *     `done_when` a criterion with that check. The project's contract, out of
  *     scope and documents go to every goal, its success criteria to the last.
  *   - A step that is `built` or `landing` with a pull request is a goal in
- *     `review` carrying it, its criterion met; a `blocked` step a `blocked`
- *     goal whose first log entry says the blocker. A step with a branch of its
- *     own has its goal's worktree on that branch, so the work goes on there.
+ *     `review · ready` carrying it, its criterion met; a `blocked` step is
+ *     `build · blocked`, its first log entry the blocker; any other is
+ *     `build · ready`. A step with a branch of its own has its goal's
+ *     worktree on that branch, so the work goes on there.
  *   - A branch-flow project (its last step `kind: review`) is one goal, named
  *     after the project, on the project's branch, with every remaining step's
  *     criterion: a session builds what is left and the review lands it all.
@@ -30,7 +34,7 @@
  */
 import { join } from 'node:path';
 
-import { addGoalWorktree, appendLog, CLASSES, GOAL_FILE, GOALS_DIR, goalDirIn, listDirsOf, LOG_FILE, logStamp, readTextOrNull, renderGoal } from './goals.js';
+import { addGoalWorktree, appendLog, CLASSES, currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, goalDirIn, listDirsOf, LOG_FILE, logStamp, programsGoals, readTextOrNull, renderGoal } from './goals.js';
 import { repoNameOf } from './repos.js';
 
 const PLAN = 'PLAN.json';
@@ -85,23 +89,31 @@ function blockerWords(step) {
 }
 
 /**
- * The goal a step blocked on another project waits on: `{ after }`, the last
- * goal that project was converted into, or none when that project is
- * finished or not there; `{ refused }` when it is live and not converted yet.
+ * What a step blocked on project `name` waits on, of `goals` (`programsGoals`'
+ * answer, every programme): `{ phase }`, the phase of the last goal that
+ * project was converted into in `programme`; `{ elsewhere }`, that goal's name
+ * when it is in another programme, whose phases this one does not wait on;
+ * `{}` when that goal is finished or the project is finished or not there; or
+ * `{ refused }` when the project is live and not converted yet.
  */
-function projectAfter(name, { home, list, read }) {
-  for (const programme of list(home)) {
-    const made = list(join(home, programme, GOALS_DIR))
-      .map((goal) => goal.match(new RegExp(`^${name}(?:-(\\d+))?$`, 'u')))
-      .filter(Boolean)
-      .sort((a, b) => Number(a[1] ?? 0) - Number(b[1] ?? 0));
-    if (made.length) return { after: [`${programme}/${made.at(-1)[0]}`] };
+function projectWait(name, { programme, goals, home, list, read }) {
+  // A project's name is a goal's name too (lower-case letters, digits and
+  // hyphens), so a name that is not one is no project, and needs no escaping.
+  if (!/^[a-z0-9][a-z0-9-]*$/u.test(name)) return { refused: `it is blocked on project "${name}", which is not a project's name` };
+  const pattern = new RegExp(`^${name}(?:-(\\d+))?$`, 'u');
+  const step = (goal) => Number(pattern.exec(goal.goal)[1] ?? 0);
+  const made = goals.filter((goal) => goal.problems.length === 0 && pattern.test(goal.goal));
+  const own = made.filter((goal) => goal.programme === programme);
+  const mine = (own.length ? own : made.filter((goal) => goal.programme === made[0]?.programme)).sort((a, b) => step(a) - step(b));
+  if (mine.length) {
+    const last = mine.at(-1);
+    if (FINISHED.includes(last.stage)) return {};
+    return last.programme === programme ? { phase: last.phase ?? 1 } : { elsewhere: `${last.programme}/${last.goal}` };
   }
-  for (const programme of list(home)) {
-    const dir = join(home, programme, name);
-    if (live({ dir, read })) return { refused: `it waits on project ${programme}/${name}, which is not converted yet — convert that one first` };
+  for (const other of list(home)) {
+    if (live({ dir: join(home, other, name), read })) return { refused: `it waits on project ${other}/${name}, which is not converted yet — convert that one first` };
   }
-  return { after: [] };
+  return {};
 }
 
 /** The first sentence of the project's goal, as a title; the project's name when it has none. */
@@ -134,10 +146,11 @@ function successCriteria(plan, state) {
  * worktree takes over (null for a new `goal/<name>` from origin/main), `entry`
  * its first LOG.md entry — or `{ refused }`. `existing` names the goal
  * directories already under the programme; a project whose goals are among
- * them was converted already. `waitsOn(project)` answers for a step blocked
- * on another project (`projectAfter`).
+ * them was converted already. `phase` is the phase the first goal takes, the
+ * programme's own now. `waitsOn(project)` answers for a step blocked on
+ * another project (`projectWait`).
  */
-export function planGoals({ programme, project, plan, state, existing = [], waitsOn = () => ({ after: [] }), now, tool = 'person', model = null }) {
+export function planGoals({ programme, project, plan, state, existing = [], phase = 1, waitsOn = () => ({}), now, tool = 'person', model = null }) {
   if (!plan || !Array.isArray(plan.steps)) return { refused: `${programme}/${project} has no ${PLAN} that reads` };
   const steps = projectSteps(plan, state);
   const left = steps.filter((step) => step.status !== 'done');
@@ -154,56 +167,58 @@ export function planGoals({ programme, project, plan, state, existing = [], wait
   const success = successCriteria(plan, state);
   const at = logStamp(now);
   const from = (n) => `converted from project ${programme}/${project}${n ? `, step ${n}` : ''}`;
+  const built = (step) => step.status === 'built' || step.status === 'landing';
 
-  /** `after` for a step: the goal before it, and the last goal of a project it is blocked on. */
-  const afterFor = (step, before) => {
-    const after = before ? [`${programme}/${before}`] : [];
-    if (step.blocked_by?.kind === 'project' && step.blocked_by.name) {
-      const waits = waitsOn(step.blocked_by.name);
-      if (waits.refused) return waits;
-      after.push(...waits.after);
-    }
-    return { after };
+  /**
+   * What holds a step: `{ after }`, the phase it must come after (0 for
+   * none), and `blocker`, the words of what blocks it on a person — a
+   * blocker that is not a project, or a project in another programme.
+   */
+  const holdOf = (step) => {
+    const by = step.blocked_by;
+    if (step.status !== 'blocked') return { after: 0, blocker: null };
+    if (by?.kind !== 'project' || !by.name) return { after: 0, blocker: blockerWords(step) };
+    const waits = waitsOn(by.name);
+    if (waits.refused) return { refused: waits.refused };
+    if (waits.elsewhere) return { after: 0, blocker: `${blockerWords(step)} — its last goal is ${waits.elsewhere}, in another programme, and a phase waits only on its own programme's goals` };
+    return { after: waits.phase ?? 0, blocker: null };
   };
 
   if (flow) {
-    const blocked = left.find((step) => step.status === 'blocked' && step.blocked_by?.kind !== 'project');
-    const after = [];
-    for (const step of left) {
-      const waits = afterFor(step, null);
-      if (waits.refused) return { refused: waits.refused };
-      after.push(...waits.after.filter((name) => !after.includes(name)));
-    }
+    const holds = left.map(holdOf);
+    const refused = holds.find((hold) => hold.refused);
+    if (refused) return { refused: refused.refused };
+    const blocker = holds.find((hold) => hold.blocker)?.blocker ?? null;
     const work = left.filter((step) => step.kind !== 'review');
     const pr = [...steps].reverse().find((step) => step.pr)?.pr ?? null;
     const branch = [...steps].reverse().find((step) => step.branch)?.branch ?? null;
-    const built = (step) => step.status === 'built' || step.status === 'landing';
-    const status = blocked ? 'blocked' : (pr && work.every(built) ? 'review' : (after.length ? 'waiting' : 'open'));
+    const where = blocker ? { stage: 'build', status: 'blocked' } : (pr && work.every(built) ? { stage: 'review', status: 'ready' } : { stage: 'build', status: 'ready' });
     const goalText = [...paragraphs(plan.goal), ...left.flatMap((step) => [`**Step ${step.n} — ${step.title}.**`, ...step.instruction])];
     const goal = {
-      ...shared, status, class: left.find((step) => step.class)?.class ?? 'large', after, prs: pr ? [{ repo, pr }] : [],
+      ...shared, ...where, phase: Math.max(phase, ...holds.map((hold) => hold.after + 1)),
+      class: left.find((step) => step.class)?.class ?? 'large', prs: pr ? [{ repo, pr }] : [],
       title: titleOf(plan, project), goal: goalText,
       success_criteria: [...left.map((step) => stepCriterion(step, built(step))), ...success],
     };
-    const comment = blocked ? blockerWords(blocked) : (after.length && status === 'waiting' ? `waits on ${after.join(', ')}` : null);
-    return { goals: [{ name: project, goal, branch, entry: { at, tool, model, status, done: `${from(null)} (branch flow, steps ${left.map((step) => step.n).join(', ')})${pr ? ` — carries ${repo}#${pr}` : ''}`, comment, next: null } }] };
+    return { goals: [{ name: project, goal, branch, entry: { at, tool, model, ...where, done: `${from(null)} (branch flow, steps ${left.map((step) => step.n).join(', ')}), phase ${goal.phase}${pr ? ` — carries ${repo}#${pr}` : ''}`, comment: blocker, next: null } }] };
   }
 
   const goals = [];
+  let before = null;
   for (const [i, step] of left.entries()) {
-    const waits = afterFor(step, i ? names[i - 1] : null);
-    if (waits.refused) return { refused: waits.refused };
-    const review = Boolean(step.pr) && (step.status === 'built' || step.status === 'landing');
-    const blocked = step.status === 'blocked' && step.blocked_by?.kind !== 'project';
-    const status = review ? 'review' : blocked ? 'blocked' : (waits.after.length ? 'waiting' : 'open');
+    const hold = holdOf(step);
+    if (hold.refused) return { refused: hold.refused };
+    const review = Boolean(step.pr) && built(step);
+    const where = review ? { stage: 'review', status: 'ready' } : { stage: 'build', status: hold.blocker ? 'blocked' : 'ready' };
+    const stepPhase = Math.max(before === null ? phase : before + 1, hold.after + 1);
+    before = stepPhase;
     const last = i === left.length - 1;
     const goal = {
-      ...shared, status, class: step.class ?? 'large', after: waits.after, prs: review ? [{ repo, pr: step.pr }] : [],
+      ...shared, ...where, phase: stepPhase, class: step.class ?? 'large', prs: review ? [{ repo, pr: step.pr }] : [],
       title: step.title, goal: step.instruction,
       success_criteria: [stepCriterion(step, review), ...(last ? success : [])],
     };
-    const comment = blocked ? blockerWords(step) : (status === 'waiting' ? `waits on ${waits.after.join(', ')}` : null);
-    goals.push({ name: names[i], goal, branch: step.branch, entry: { at, tool, model, status, done: `${from(step.n)}${review ? ` — carries ${repo}#${step.pr}` : ''}`, comment, next: null } });
+    goals.push({ name: names[i], goal, branch: step.branch, entry: { at, tool, model, ...where, done: `${from(step.n)}, phase ${stepPhase}${review ? ` — carries ${repo}#${step.pr}` : ''}`, comment: hold.blocker, next: null } });
   }
   return { goals };
 }
@@ -215,16 +230,18 @@ export function planGoals({ programme, project, plan, state, existing = [], wait
  * origin's when there is no local one), else on `goal/<name>` from
  * origin/main (`addGoalWorktree`). Every repository is fetched and every
  * branch to be taken over is checked first, so a refusal leaves nothing
- * written. Returns `{ made: [{ name, status, path, branch, after, prs }] }` or
- * `{ refused }`.
+ * written. Returns `{ made: [{ name, stage, status, phase, path, branch, prs,
+ * worktree }] }` or `{ refused }`.
  */
 export function convertProject({ home, programme, project, now, tool, model, list = listDirsOf, read = readTextOrNull, write, git, known }) {
   const dir = join(home, programme, project);
   if (read(join(dir, PLAN)) === null) return { refused: `no project ${programme}/${project} — ${dir} has no ${PLAN}` };
   if (read(join(dir, CLOSEOUT)) !== null) return { refused: `${programme}/${project} is archived — a finished project is left as it is` };
+  const goals = programsGoals({ home, list, read });
   const planned = planGoals({
     programme, project, plan: json(read, join(dir, PLAN)), state: json(read, join(dir, STATE)),
-    existing: list(join(home, programme, GOALS_DIR)), waitsOn: (name) => projectAfter(name, { home, list, read }), now, tool, model,
+    existing: list(join(home, programme, GOALS_DIR)), phase: currentPhase(goals, programme) ?? 1,
+    waitsOn: (name) => projectWait(name, { programme, goals, home, list, read }), now, tool, model,
   });
   if (planned.refused) return planned;
 
@@ -255,7 +272,7 @@ export function convertProject({ home, programme, project, now, tool, model, lis
     } else {
       added = addGoalWorktree({ git, bare, path, goal: name });
     }
-    made.push({ name: `${programme}/${name}`, status: goal.status, path, branch: added.branch, after: goal.after, prs: goal.prs, worktree: added.ok ? null : added.stderr.trim() || 'git failed' });
+    made.push({ name: `${programme}/${name}`, stage: goal.stage, status: goal.status, phase: goal.phase, path, branch: added.branch, prs: goal.prs, worktree: added.ok ? null : added.stderr.trim() || 'git failed' });
   }
   return { made };
 }

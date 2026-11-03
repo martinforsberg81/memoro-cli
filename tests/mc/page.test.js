@@ -33,9 +33,10 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * Goals as `goalsOf` gives them to PROGRAMMES: two programmes, one goal a
  * session is on, one open, one blocked on a person.
  */
-const goalRow = (name, programme, { repos = ['memoro-cli'], status = 'open', running = false, last = { next: 'the next thing', comment: null } } = {}) => ({
-  name, programme, repos, status, after: [], waiting_on: [], sessions: 1, criteria: { met: 0, all: 1 },
-  last, running, plan: false, person: status === 'blocked', question: status === 'blocked' ? 'which one?' : null, problems: [],
+const goalRow = (name, programme, { repos = ['memoro-cli'], stage = 'build', status = 'ready', running = false, last = { next: 'the next thing', comment: null } } = {}) => ({
+  name, programme, repos, stage, status, phase: 1, held: false, sessions: 1, criteria: { met: 0, all: 1 },
+  kind: 'goal', repo: repos[0], state: stage, progress: '1 sess', prs: [], carries: [],
+  last, running, person: status === 'blocked', question: status === 'blocked' ? 'which one?' : null, problems: [],
 });
 const GOALS = [
   goalRow('docx-editor', 'docx-editing-surface', { repos: ['memoro'], running: true }),
@@ -303,6 +304,10 @@ describe('SESSIONS', () => {
     assert.equal(over.lanes.length, 2, 'a step past the setting still has its row');
 
 
+    const cells = (row) => {
+      const cell = cellsOf(row, 120);
+      return [cell.nr, cell.kind, cell.name, cell.repo, cell.state, cell.progress, cell.pr, cell.tail];
+    };
     const lines = paintedPage(pageData({ runner }));
     assert.deepEqual(cells(rowWith(lines, 'docx-editor')),
       ['2 ●', 'BUILD', 'docx-editor', 'memoro-cli', 'running', '10 min', '', 'sonnet · opus advisor · 0 check-ins']);
@@ -952,10 +957,11 @@ describe('MERGES', () => {
     assert.match(cellsOf(lines[2], 120).tail, /^with #11651/u);
   });
 
-  it('explains waiting markers with grey words instead of symbols', () => {
+  it('draws a queued pull request in words, never in symbols', () => {
     const merges = section({ queued: [job(10)] });
     const row = drawing(merges, 120, true)[1];
-    assert.ok(strip(row).includes('#10 · waiting'), row);
+    const cell = cellsOf(row, 120);
+    assert.deepEqual([cell.kind, cell.state, cell.pr], ['WAIT', 'queued', '#10']);
     assert.doesNotMatch(strip(row), /⏸|↻|→/u);
     assert.match(row, /\x1b\[90m/u);
   });
@@ -1344,7 +1350,7 @@ describe('the page', () => {
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work: the session in flight, and the goals
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 2 open · 0 waiting · 1 blocked/u);
+    assert.match(text, /1 in flight · 2 ready · 1 blocked/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
@@ -1371,14 +1377,14 @@ describe('the page', () => {
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
-    assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}open 2 · blocked 1\s+p {2}plan a programme/u);
+    assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}ready 2 · blocked 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+1 goal\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own goals');
     // Every goal is a row under its programme, numbered in programme order,
     // with its repository in a column of its own.
-    assert.match(text, /^ {4}1 · g · avatar-self-serve\s+memoro\s+blocked/mu);
-    assert.match(text, /^ {4}2 ● g · docx-editor\s+memoro\s+open/mu, 'the repository is a column on the row');
-    assert.match(text, /^ {4}3 · g · mc-ui\s+memoro-cli\s+open/mu);
+    assert.match(text, /^ {4}1 · goal +avatar-self-serve\s+memoro\s+build\s+1 sess .*blocked · waits on a/mu);
+    assert.match(text, /^ {4}2 ● goal +docx-editor\s+memoro\s+build/mu, 'the repository is a column on the row');
+    assert.match(text, /^ {4}3 · goal +mc-ui\s+memoro-cli\s+build/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
     assert.doesNotMatch(text, /unplanned-workareas/u);
     // mc itself is the last line: how long the runner has been up, on what, and
@@ -1405,7 +1411,7 @@ describe('the page', () => {
    * the goals keep their numbers either way.
    */
   it('draws every programme on expand, with the same numbers', () => {
-    const numbers = (lines) => lines.flatMap((line) => (/^ {2}( *\d+) [·●]/u.exec(line) || []).slice(1).map(Number));
+    const numbers = (lines) => lines.flatMap((line) => (/^ {2}( *\d+) [·●] goal /u.exec(line) || []).slice(1).map(Number));
     const folded = renderPageLines(DATA, { columns: 120, now: NOW });
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
     assert.deepEqual(numbers(all), [1, 2, 3]);
@@ -1824,7 +1830,7 @@ describe('collectPage', () => {
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);
-    assert.deepEqual(data.programmes.programmes.flatMap((g) => g.goals).map((goal) => [goal.programme, goal.name, goal.status]), [['mc', 'mc-ui', 'open']]);
+    assert.deepEqual(data.programmes.programmes.flatMap((g) => g.goals).map((goal) => [goal.programme, goal.name, goal.status]), [['mc', 'mc-ui', 'ready']]);
     assert.equal(data.prs.items.find((pr) => pr.number === 440).branch, 'mc-ui');
     assert.equal('no_workarea' in data.programmes, false);
     assert.equal('unplanned' in data.programmes, false);
@@ -2070,7 +2076,7 @@ describe('MC', () => {
     const key = (over) => pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, ...over }) }));
     assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, running: true })) }), 'a goal the runner took is');
-    assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, status: 'review' })) }), 'a goal that moved is');
+    assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, stage: 'review', state: 'review' })) }), 'a goal that moved is');
     assert.equal(pageKey({}), '');
   });
 });
@@ -2086,16 +2092,16 @@ describe('the palette', () => {
   // two ways — to nothing, or to plain `grey`.
   const SNAPSHOT = [
     '',
-    'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 open · 0 waiting · 1 blocked · ≈$7.28 today
+    'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 1 blocked · ≈$7.28 today
     '',
-    'bold+cyan grey grey grey red grey', //           PROGRAMMES  3 active · 1 dormant · 3 goals  open 2 · blocked 1
+    'bold+cyan grey green grey red grey', //          PROGRAMMES  3 active · 1 dormant · 3 goals  ready 2 · blocked 1
     'grey', //                                          1 dormant · mc programs list
     'bold+cyan grey grey', //                         assistant-avatar  1 goal  ·  no plan session
-    'grey grey grey red grey grey red grey', //         1 · g · avatar-self-serve  memoro  blocked  1 session  criteria 0/1  waits on a person · which one?
+    'grey grey grey grey red grey grey grey red grey red', // 1 · goal avatar-self-serve  memoro  build  1 sess  criteria 0/1 · blocked · waits on a person · which one?
     'bold+cyan grey grey', //                         docx-editing-surface  1 goal  ·  no plan session
-    'grey green bold grey green grey grey grey', //     2 ● g · docx-editor  memoro  open  1 session  criteria 0/1  the next thing
+    'grey green grey bold grey green grey grey grey grey', // 2 ● goal docx-editor  memoro  build  1 sess  criteria 0/1 · the next thing
     'bold+cyan grey grey', //                         mc  1 goal  ·  no plan session
-    'grey grey grey grey grey grey grey', //            3 · g · mc-ui  memoro-cli  open  1 session  criteria 0/1  the next thing
+    'grey grey grey grey grey grey grey grey grey', //  3 · goal mc-ui  memoro-cli  build  1 sess  criteria 0/1 · the next thing
     'yellow', //                                         not an area mc knows
     'bold grey', //                                      mc-docx-editor  tmux session · open 60 min
     '',

@@ -104,7 +104,7 @@ export function archiveVerdict({
   programme, goals = [], homes = [], areaExists = false, forecast = null, area,
 }) {
   const lines = [];
-  for (const goal of goals) lines.push(`goal ${programme}/${goal.goal} is ${goal.status || 'unreadable'} — it is finished or dropped first`);
+  for (const goal of goals) lines.push(`goal ${programme}/${goal.goal} is ${goal.stage || 'unreadable'} — it is finished or dropped first`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
   for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
@@ -132,7 +132,7 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     }
   }
   const goals = programsGoals({ home: programsHome(env) })
-    .filter((goal) => goal.programme === programme && !FINISHED.includes(goal.status));
+    .filter((goal) => goal.programme === programme && !FINISHED.includes(goal.stage));
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;

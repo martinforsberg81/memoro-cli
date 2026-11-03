@@ -55,7 +55,7 @@ import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addGoalWorktree, addPr, backward, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addGoalWorktree, addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -287,14 +287,15 @@ function logEntry(args, fields, ctx) {
  * review judged, as `mc merge` queues — with the goal and that sha on the
  * job, so the merger lands that head and no other (`merger.js` `landJob`).
  * `{ text }` said into the entry, or `{ error }`: no sha, no pull request on
- * `goal/<goal>`, or a queue that fails.
+ * the goal's branch, or a queue that fails.
  */
 function queueJudged(target, goal, sha, ctx) {
   if (!sha) return { error: 'which head did the review judge? MC_REVIEW_HEAD is not set — --sha <sha>' };
   const [repoName] = goal.repos;
   const repoPath = ctx.known().find((path) => repoNameOf(path) === repoName);
   if (!repoPath) return { error: `${repoName} is not a repository mc knows` };
-  const branch = `goal/${target.goal}`;
+  // The goal's own branch, or the project branch it took over (`goalBranch`).
+  const branch = goalBranch({ git: ctx.git, dir: target.dir, goal: target.goal, repo: repoName });
   const asked = ctx.gh(repoPath, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number,headRefOid']);
   if (!asked.ok) return { error: `its pull request could not be read (${asked.stderr.trim() || 'gh failed'})` };
   let pr;
@@ -452,8 +453,8 @@ function convert(args, ctx) {
 
 /**
  * `mc goal from-project <programme>/<project>` — a live project turned into
- * goals (`convertProject`), each said with its status, branch, what it waits
- * on and the pull request it carries. A finished project, or one converted
+ * goals (`convertProject`), each said with its stage and status, its phase,
+ * its branch and the pull request it carries. A finished project, or one converted
  * already, is refused with exit 1.
  */
 function fromProject(args, ctx) {
@@ -463,8 +464,8 @@ function fromProject(args, ctx) {
   const answer = convertProject({ home, programme, project, now, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, list, read, write, git, known });
   if (answer.refused) { stderr.write(`mc: ${args[0]} is not converted — ${answer.refused}\n`); return 1; }
   for (const goal of answer.made) {
-    const extra = [goal.after.length ? `after ${goal.after.join(', ')}` : null, goal.prs.length ? `carries ${goal.prs.map(prRef).join(', ')}` : null].filter(Boolean);
-    stdout.write(`mc: ${goal.name} · ${goal.status} · ${goal.branch}${extra.length ? ` · ${extra.join(' · ')}` : ''}\n`);
+    const carries = goal.prs.length ? ` · carries ${goal.prs.map(prRef).join(', ')}` : '';
+    stdout.write(`mc: ${goal.name} · ${goal.stage} · ${goal.status} · phase ${goal.phase} · ${goal.branch}${carries}\n`);
     if (goal.worktree) stderr.write(`mc: ${goal.name}'s worktree is not made — ${goal.worktree}; the goal's files stand\n`);
   }
   stdout.write(`mc: ${answer.made.length} goal${answer.made.length === 1 ? '' : 's'} made from ${args[0]}; the project's own files are left as they are\n`);

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { run } from '../../src/mc/commands/goal.js';
 import { parseGoal, parseLog } from '../../src/mc/goals.js';
+import { goalJson } from './_helpers/goal-file.js';
 import { planGoals, projectSteps } from '../../src/mc/project-convert.js';
 
 const HOME = '/work/programs';
@@ -87,7 +88,7 @@ function fixture(projects, { branches = [], checkedOut = '' } = {}) {
   return { deps, store, calls, goal, log, out: () => out.join(''), err: () => err.join('') };
 }
 
-test('from-project: a project with done, built, ready and blocked steps becomes three goals chained by after', async () => {
+test('from-project: a project with done, built, ready and blocked steps becomes three goals in consecutive phases', async () => {
   const f = fixture({ mixed: { plan: MIXED_PLAN, state: MIXED_STATE } }, { branches: ['mixed-2'] });
   const code = await run(['from-project', 'mc/mixed'], f.deps);
   assert.equal(code, 0, f.err());
@@ -97,9 +98,8 @@ test('from-project: a project with done, built, ready and blocked steps becomes 
   const three = f.goal('mixed-3');
   const four = f.goal('mixed-4');
 
-  assert.equal(two.status, 'review');
+  assert.deepEqual([two.stage, two.status, two.phase], ['review', 'ready', 1]);
   assert.deepEqual(two.prs, [{ repo: 'memoro-cli', pr: 41 }]);
-  assert.deepEqual(two.after, []);
   assert.equal(two.title, 'two');
   assert.deepEqual(two.goal, ['Do two.']);
   assert.deepEqual(two.success_criteria, [{ criterion: 'two', check: 'two passes', met: true }]);
@@ -107,28 +107,27 @@ test('from-project: a project with done, built, ready and blocked steps becomes 
   assert.deepEqual(two.documents, [{ label: 'protocol', path: 'docs/dev.md' }]);
   assert.equal(two.class, 'large');
 
-  assert.equal(three.status, 'waiting');
-  assert.deepEqual(three.after, ['mc/mixed-2']);
+  assert.deepEqual([three.stage, three.status, three.phase], ['build', 'ready', 2], 'the next step is the next phase');
   assert.deepEqual(three.prs, []);
   assert.equal(three.class, 'fast');
   assert.deepEqual(three.success_criteria, [{ criterion: 'three', check: 'three passes', met: false }]);
 
-  assert.equal(four.status, 'blocked');
-  assert.deepEqual(four.after, ['mc/mixed-3']);
+  assert.deepEqual([four.stage, four.status, four.phase], ['build', 'blocked', 3]);
   assert.deepEqual(four.success_criteria, [
     { criterion: 'four', check: 'four passes', met: false },
     { criterion: 'No refusals', check: 'grep the log', met: false },
     { criterion: 'Place told', check: 'a test', met: true },
   ], 'the success criteria go to the last goal, met as the state held them');
   const [first] = f.log('mixed-4');
-  assert.equal(first.status, 'blocked');
+  assert.deepEqual([first.stage, first.status], ['build', 'blocked']);
   assert.match(first.comment, /blocked on decision which-cap — Martin decides the cap/);
 
   // The built step's worktree takes over its branch; the others are goal/<name> from origin/main.
   const adds = f.calls.filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add').map((call) => call.args);
   assert.deepEqual(adds[0], ['worktree', 'add', '-q', `${HOME}/mc/goals/mixed-2/memoro-cli`, 'mixed-2']);
   assert.deepEqual(adds[1], ['worktree', 'add', '-q', '-b', 'goal/mixed-3', `${HOME}/mc/goals/mixed-3/memoro-cli`, 'origin/main']);
-  assert.match(f.out(), /mc\/mixed-2 · review · mixed-2 · carries memoro-cli#41/);
+  assert.match(f.out(), /mc\/mixed-2 · review · ready · phase 1 · mixed-2 · carries memoro-cli#41/);
+  assert.match(f.out(), /mc\/mixed-3 · build · ready · phase 2 · goal\/mixed-3\n/);
   assert.match(f.out(), /3 goals made from mc\/mixed/);
 
   // A second run is refused, and writes nothing.
@@ -144,7 +143,7 @@ test('from-project: a branch-flow project becomes one goal on the project branch
   const code = await run(['from-project', 'mc/flow'], f.deps);
   assert.equal(code, 0, f.err());
   const goal = f.goal('flow');
-  assert.equal(goal.status, 'review');
+  assert.deepEqual([goal.stage, goal.status, goal.phase], ['review', 'ready', 1]);
   assert.deepEqual(goal.prs, [{ repo: 'memoro-cli', pr: 77 }]);
   assert.equal(goal.title, 'Main stays up.');
   assert.deepEqual(goal.success_criteria.map((item) => [item.criterion, item.met]), [
@@ -185,15 +184,38 @@ test('from-project: a finished project is refused, and so is one that is not the
   assert.equal(await run(['from-project', 'nowhere'], f.deps), 2);
 });
 
-test('from-project: a step blocked on another project waits on that project\'s last goal, or refuses until it is converted', () => {
-  const plan = { ...MIXED_PLAN, steps: [step('one')] };
-  const state = { steps: [{ status: 'blocked', blocked_by: { kind: 'project', name: 'other' } }] };
+test('from-project: the first goal takes the phase its programme is in, and the steps go on from there', async () => {
+  const f = fixture({ mixed: { plan: MIXED_PLAN, state: MIXED_STATE } }, { branches: ['mixed-2'] });
+  // A programme in phase 2: a done goal in phase 1, an open one in phase 2.
+  f.store[`${HOME}/mc/goals/old/GOAL.json`] = goalJson({ stage: 'done', phase: 1 });
+  f.store[`${HOME}/mc/goals/now/GOAL.json`] = goalJson({ stage: 'build', phase: 2 });
+  assert.equal(await run(['from-project', 'mc/mixed'], f.deps), 0, f.err());
+  assert.deepEqual(['mixed-2', 'mixed-3', 'mixed-4'].map((name) => f.goal(name).phase), [2, 3, 4]);
+});
+
+test('from-project: a step blocked on another project goes one phase past that project\'s last goal, or refuses until it is converted', () => {
+  const plan = { ...MIXED_PLAN, steps: [step('one'), step('two')] };
+  const state = { steps: [{ status: 'blocked', blocked_by: { kind: 'project', name: 'other' } }, { status: 'ready' }] };
   const now = new Date('2026-11-04T10:00:00Z');
-  const waits = planGoals({ programme: 'mc', project: 'p', plan, state, now, waitsOn: () => ({ after: ['mc/other-3'] }) });
-  assert.equal(waits.goals[0].goal.status, 'waiting');
-  assert.deepEqual(waits.goals[0].goal.after, ['mc/other-3']);
+  const waits = planGoals({ programme: 'mc', project: 'p', plan, state, now, phase: 1, waitsOn: () => ({ phase: 3 }) });
+  assert.deepEqual(waits.goals.map(({ goal }) => [goal.stage, goal.status, goal.phase]), [['build', 'ready', 4], ['build', 'ready', 5]]);
+  const landed = planGoals({ programme: 'mc', project: 'p', plan, state, now, phase: 2, waitsOn: () => ({}) });
+  assert.deepEqual(landed.goals.map(({ goal }) => [goal.status, goal.phase]), [['ready', 2], ['ready', 3]], 'a blocker that has landed holds nothing');
+  const elsewhere = planGoals({ programme: 'mc', project: 'p', plan, state, now, waitsOn: () => ({ elsewhere: 'ios/other-3' }) });
+  assert.deepEqual([elsewhere.goals[0].goal.stage, elsewhere.goals[0].goal.status], ['build', 'blocked']);
+  assert.match(elsewhere.goals[0].entry.comment, /ios\/other-3, in another programme/u);
   const refused = planGoals({ programme: 'mc', project: 'p', plan, state, now, waitsOn: () => ({ refused: 'convert other first' }) });
   assert.equal(refused.refused, 'convert other first');
+});
+
+test('from-project: a step blocked on a converted project of its programme goes after that project\'s last goal', async () => {
+  const plan = { ...MIXED_PLAN, steps: [step('one')] };
+  const state = { steps: [{ status: 'blocked', blocked_by: { kind: 'project', name: 'other' } }] };
+  const f = fixture({ waits: { plan, state } });
+  f.store[`${HOME}/mc/goals/other-2/GOAL.json`] = goalJson({ stage: 'build', phase: 1 });
+  f.store[`${HOME}/mc/goals/other-3/GOAL.json`] = goalJson({ stage: 'build', phase: 2 });
+  assert.equal(await run(['from-project', 'mc/waits'], f.deps), 0, f.err());
+  assert.deepEqual([f.goal('waits-1').status, f.goal('waits-1').phase], ['ready', 3]);
 });
 
 test('projectSteps: STATE.json is laid over PLAN.json step by step; a step it does not hold keeps the plan\'s', () => {

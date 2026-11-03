@@ -27,7 +27,7 @@ import { estimateCost } from './prices.js';
  * on this machine still carries the thirteen it was made with. A column
  * appended is a cell a header-keyed reader ignores; a column inserted would
  * shift `note` one to the left for every reader of the old header, and
- * `close-workarea.js` decides whether a workarea may go by reading it.
+ * an old reader may still key on it.
  * `model` (step-cost, 2026-09-11) is appended after it for the same reason:
  * the alias the session was launched on, `-` on every row that is not a
  * session and on every row written before it. `class`, `tool`, `effort` and

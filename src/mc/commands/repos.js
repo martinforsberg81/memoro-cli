@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 
 import { run as runGit } from '../git.js';
 import { tildePath } from './layout.js';
-import { parseWorktrees } from '../project-prs.js';
+import { parseWorktrees } from '../open-prs.js';
 import { defaultRepos } from '../repos.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';

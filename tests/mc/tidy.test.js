@@ -162,9 +162,9 @@ function machine() {
   return m;
 }
 
-/** A goal of programme `programme` in layout 2, with its GOAL.json at `status`. */
-function goal(m, name, status = 'open', { programme = 'mc', text = null } = {}) {
-  m.write(join(m.work, 'programs', programme, 'goals', name, 'GOAL.json'), text ?? goalJson({ status }), NOW);
+/** A goal of programme `programme` in layout 2, with its GOAL.json at `stage` and `status`. */
+function goal(m, name, stage = 'build', { programme = 'mc', status = 'ready', text = null } = {}) {
+  m.write(join(m.work, 'programs', programme, 'goals', name, 'GOAL.json'), text ?? goalJson({ stage, status }), NOW);
 }
 
 describe('(G) planning transcripts', () => {
@@ -367,7 +367,7 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      goal(m, 'busy', 'open');
+      goal(m, 'busy', 'build');
       const { list } = runTidy(m.doors());
       assert.deepEqual(ruled(list, 'I'), []);
       assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
@@ -375,16 +375,16 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     } finally { m.cleanup(); }
   });
 
-  it('a waiting, review or blocked goal keeps both; only done and dropped are finished', () => {
-    for (const status of ['waiting', 'review', 'blocked']) {
+  it('a goal in review, in merging or blocked keeps both; only done and dropped are finished', () => {
+    for (const [stage, status] of [['review', 'ready'], ['merging', 'ready'], ['build', 'blocked']]) {
       const m = machine();
       try {
         const area = checkoutsOf(m);
         goal(m, 'landed', 'done');
-        goal(m, 'stuck', status);
+        goal(m, 'stuck', stage, { status });
         const { list } = runTidy(m.doors());
-        assert.deepEqual(ruled(list, 'I'), [], status);
-        assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a goal that is not finished', status);
+        assert.deepEqual(ruled(list, 'I'), [], stage);
+        assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a goal that is not finished', stage);
       } finally { m.cleanup(); }
     }
   });
@@ -395,7 +395,7 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
       const area = checkoutsOf(m);
       goal(m, 'one', 'done');
       goal(m, 'two', 'dropped');
-      goal(m, 'elsewhere', 'open', { programme: 'staff' });
+      goal(m, 'elsewhere', 'build', { programme: 'staff' });
       const { list } = runTidy(m.doors());
       assert.deepEqual(paths(ruled(list, 'I')), [join(area, 'memoro'), join(area, 'memoro-cli')]);
     } finally { m.cleanup(); }
@@ -405,7 +405,7 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      goal(m, 'broken', 'open', { text: '{ not json' });
+      goal(m, 'broken', 'build', { text: '{ not json' });
       const { list } = runTidy(m.doors());
       assert.deepEqual(ruled(list, 'I'), []);
       assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a goal that is not finished');
@@ -453,7 +453,7 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     try {
       checkoutsOf(m);
       const { listPath } = runTidy(m.doors());
-      goal(m, 'late', 'open');
+      goal(m, 'late', 'build');
       const outcome = applyTidy({ listPath, ...m.doors() });
       assert.deepEqual(m.released, []);
       assert.equal(outcome.removed, 0);
@@ -526,7 +526,7 @@ describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
       layout2(m);
       const area = join(m.work, 'programs', 'mc');
       for (const name of ['memoro', 'memoro-cli', 'wt-a']) m.write(join(area, name, '.git'), 'gitdir: /fake');
-      goal(m, 'layout', 'open');
+      goal(m, 'layout', 'build');
       const { list, outcome } = runTidy({ ...m.doors(), apply: true });
       assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [[join(area, 'wt-a'), 'plan-worktree', 'X']]);
       assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');

@@ -1,7 +1,7 @@
 # mc goals
 
 **Status:** current · 2026-11-03 · derived from `src/mc/goals.js`,
-`src/mc/criteria.js`, `src/mc/goal-convert.js`, `src/mc/commands/goal.js` (`refusedMove`,
+`src/mc/criteria.js`, `src/mc/goal-convert.js`, `src/mc/project-convert.js`, `src/mc/commands/goal.js` (`refusedMove`,
 `queueJudged`), `src/mc/run.js` (`goalPass`, `runGoal`, `goalWork`,
 `reviewRoute`, `afterReview`, `afterPlan`, `goalWithoutWord`, `convertAfter`,
 `planRoute`), `src/mc/goal-archive.js`, `src/mc/merger.js` (`landJob`, `tellGoal`),
@@ -9,7 +9,7 @@
 (its `goal` part), `canon/roles/review-session.md` (its `goal` part),
 `canon/roles/plan-session.md` and `canon/roles/goal-verb.md`
 
-A goal is two files and a worktree, beside projects: `GOAL.json`, the brief as
+A goal is mc's one unit of work, two files and a worktree: `GOAL.json`, the brief as
 data, and `LOG.md`. It has no steps, no register and no owner. A build session
 does the work, records each criterion it has checked as met, and publishes its
 pull request; a review session on another model runs the checks and decides;
@@ -230,8 +230,8 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   date, goal, status, pull requests, the last `Done:`. Then the programme's
   phases are renumbered (*Phases*): when the goal was the last of the lowest
   phase, every goal left moves one phase down, and the line names each. The runner does the same
-  by itself for a goal that has been `done` or `dropped` for 24 hours, the hold
-  a project under `~/mc/programs/` has (`ARCHIVE_HOLD_MS`, in the same chore),
+  by itself for a goal that has been `done` or `dropped` for 24 hours
+  (`ARCHIVE_HOLD_MS`, in its chores),
   counted from the log entry that set the stage (`stageSince`). A refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass. A programme is never archived by the runner.
@@ -302,38 +302,52 @@ the Swedish prose by hand.
 Until 2026-11-03 mc had a second unit of work, the project: a `PLAN.json` of
 steps under `~/mc/programs/<programme>/<project>/`, with its state in a
 `STATE.json` beside it. A goal carries everything a plan did; a plan's steps
-are goals ordered with `after`. `mc goal from-project <programme>/<project>`
+are goals in consecutive phases. `mc goal from-project <programme>/<project>`
 (`src/mc/project-convert.js`, the one reader of PLAN.json and STATE.json left)
 turns a live project into goals:
 
 - one goal per step not `done` (STATE.json's status laid over the plan's),
-  named `<project>-<n>` after the step's number, each `after` the one before.
-  A step blocked on another project waits on that project's last goal, which
-  must be converted first; on a finished project it waits on nothing;
+  named `<project>-<n>` after the step's number. The first is in the phase its
+  programme is in now (`currentPhase`; 1 when no goal of it is left to
+  finish), and each after it one phase later, so the steps still run one after
+  the other — and a later step waits on every goal of its programme in the
+  phase before it, not only on its own project's (*Phases*); `mc goal phase`
+  moves one;
+- a step blocked on another project of the same programme goes one phase past
+  that project's last goal, which must be converted first (until then the
+  conversion is refused); on a project that is finished, or whose last goal
+  is done or dropped, it waits on nothing. One blocked on a project converted
+  in another programme is `build · blocked`, its first entry naming that goal:
+  a phase waits only on its own programme's goals;
 - the step's `title` is the goal's title, its `instruction` the goal, its
   `done_when` a criterion — the title, checked by `done_when`. The project's
   contract, out of scope and documents go to every goal, its success criteria
   to the last, `met` as STATE.json held them. `class` is the step's work class,
   or the plan's, or `large`;
-- a `built` or `landing` step with a pull request is a goal in `review`
-  carrying it, its criterion met; a `blocked` step is a `blocked` goal whose
-  first LOG.md entry says the blocker; any other is `open`, or `waiting` on the
-  goal before it;
+- a `built` or `landing` step with a pull request is a goal in `review ·
+  ready` carrying it, its criterion met; a `blocked` step is `build · blocked`,
+  its first LOG.md entry the blocker; any other is `build · ready`. The first
+  entry says the step and the phase, `Done: converted from project <p>/<project>,
+  step <n>, phase <m>`;
 - a step with a branch of its own in STATE.json has its goal's worktree on
   that branch — the local one, or a local branch of that name from origin's —
   so its pull request stays the goal's; any other goal's worktree is
-  `goal/<name>` from `origin/main`. The runner's review and `mc goal archive`
-  read a goal's branch from its worktree (`goalBranch`);
+  `goal/<name>` from `origin/main`. The runner's review, `mc goal stage
+  merging` and `mc goal archive` read a goal's branch from its worktree
+  (`goalBranch`), and the page finds its pull request by the ones GOAL.json
+  says carry it as well as by `goal/<name>`;
 - a branch-flow project — its last step `kind: review` — is one goal, named
   after the project, on the project's branch: the project's goal and every
   remaining step's instruction as its text, every remaining step's criterion,
-  in `review` with the pull request when every step before the review is built.
+  in `review · ready` with the pull request when every step before the review
+  is built, else `build`.
 
 A project with every step done, or archived (a `CLOSEOUT.json` beside its
 plan), is refused and left as it is on disk; nothing else in mc reads it. So
 is a project whose goals already exist, and one whose branch is checked out in
 another worktree — with nothing written. The answer names each goal made with
-its status, branch, `after` and pull request.
+its stage, status, phase, branch and pull request:
+`mc: mc/mixed-2 · review · ready · phase 1 · mixed-2 · carries memoro-cli#41`.
 
 ## Phases
 
@@ -357,11 +371,9 @@ it may start; its stage does not change for it.
   n+1 n istället"*). A renumbering writes GOAL.json only, no log entry.
 - **Seen.** `mc goal list` groups by phase and names the phase in progress;
   `mc goal show` gives the goal's phase. On the page a goal in a phase not yet
-  reached is in the projects' waiting colour (yellow, `docs/technical/mc-ui.md`)
+  reached is in the waiting colour (yellow, `docs/technical/mc-ui.md`)
   and leads its tail with `phase <n> — after phase <n-1>`; its row in `mc
-  --json` (`programmes[].goals[]`) carries `phase` and `held`, and `mc status
-  <goal>` answers `<goal> is a goal · build · ready, phase 2 — after phase 1 — mc goal
-  show …`.
+  --json` (`programmes[].goals[]`) carries `phase` and `held`.
 
 ### Converting after into phases
 
@@ -398,10 +410,9 @@ status and its log, with an entry `Done: <stage> · <status>, from <old>`:
 
 ## How the runner takes a goal
 
-A goal is one more candidate for a free lane, beside project steps and
-reviews: `pickWork` (`lane-pick.js`) orders them all, and a goal is not
-waiting for the steps to run out ([mc-run.md](mc-run.md), *What a free lane
-takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
+A free lane takes a goal's session: `pickWork` (`lane-pick.js`) orders the
+candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
+`goalPass` in `src/mc/run.js` takes the pick:
 
 1. **Pick.** After goals written with `after` or one status are converted
    (*Converting …*), of the goals the runner starts a session on
@@ -465,8 +476,8 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
 `build-goal`, `review-goal` or `plan`; rows from before say `goal`, and are
 read as the build they were. On the page it is a `BUILD`, `REVIEW` or `PLAN`
-row in SESSIONS working on `<p>/<g>`. A build waits behind a project's build
-and every review for a free lane; a plan session ranks with the reviews
+row in SESSIONS working on `<p>/<g>`. A build waits behind every review for a
+free lane; a plan session ranks with the reviews
 ([mc-run.md](mc-run.md) § *Lanes*).
 
 ## Finish and a red merge: a plan session
@@ -503,8 +514,8 @@ build session or a second review.
 ## What a build session does
 
 The role is `canon/roles/build-session.md`, started as `build-session:goal`:
-what every headless build does is written once, in the part the goal and the
-project start share, and the `goal` part keeps only what is a goal's — its
+what every headless build does is written once, in the shared part, and the
+`goal` part keeps only what is a goal's — its
 brief, LOG.md and the criterion verbs. It works on the branch as it is, never
 fetching or merging `origin/main` to keep up: a conflict the merger reports
 is the one time a build merges `origin/main`. It works item after item until
@@ -663,5 +674,5 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
   and writes one row; nothing is written into a repository.
 
 Programme-level goals are not built, and a headless plan session is started
-only on a goal in `finish`, or in `merging` after a red: not for projects, and
-not by a goal that landed.
+only on a goal in `finish`, or in `merging` after a red: not by a goal that
+landed.

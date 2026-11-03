@@ -390,7 +390,7 @@ function programmeHasOpenGoal(area) {
     if (!present(file)) continue;
     let parsed = null;
     try { parsed = parseGoal(readFileSync(file, 'utf8')); } catch { return true; }
-    if (parsed?.problems || !FINISHED.includes(parsed?.status)) return true;
+    if (parsed?.problems || !FINISHED.includes(parsed?.stage)) return true;
   }
   return false;
 }

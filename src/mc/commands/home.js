@@ -227,14 +227,14 @@ export function readerFor({ stdout, lines, page, key = null }) {
  *
  * The live loop compares it between frames. PROGRAMMES is the top of a page
  * that is taller than most terminals, so its rows are the ones that scroll out
- * of reach, and a status that changed up there is the one change worth printing
+ * of reach, and a stage or status that changed up there is the one change worth printing
  * the page again for (page-live.js, `draw`). A planning session's age
  * changes every minute and is deliberately not in it.
  */
 export function pageKey(data) {
   const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
   return goals
-    .map((g) => [g.programme, g.name, g.status, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
+    .map((g) => [g.programme, g.name, g.stage, g.status, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
     .join('|');
 }
 

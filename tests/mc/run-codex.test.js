@@ -98,7 +98,7 @@ function codexWorld(t) {
   git(repo, 'fetch', '-q', 'origin');
   const dir = join(work, 'programs', 'mc', 'goals', 'cx');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'open', repos: ['memoro-cli'], class: 'fast', title: 'cx' }));
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ repos: ['memoro-cli'], class: 'fast', title: 'cx' }));
   writeFileSync(join(dir, 'LOG.md'), '');
   const worktree = join(dir, 'memoro-cli');
   git(repo, 'worktree', 'add', '-q', '-b', 'goal/cx', worktree, 'origin/main');

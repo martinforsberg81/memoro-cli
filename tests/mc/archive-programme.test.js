@@ -74,7 +74,7 @@ function fixture({ goal = null, extra = false } = {}) {
   if (goal) {
     mkdirSync(join(root, 'work', 'programs', programme, 'goals', 'g'), { recursive: true });
     writeFileSync(join(root, 'work', 'programs', programme, 'goals', 'g', 'GOAL.json'), renderGoal({
-      status: goal, repos: ['memoro-cli'], class: 'large', title: 'G', goal: ['g'],
+      stage: goal, status: 'ready', repos: ['memoro-cli'], class: 'large', title: 'G', goal: ['g'],
       success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
     }));
   }
@@ -121,9 +121,9 @@ function args(fx, deps, extra = {}) {
 
 describe('archiveVerdict', () => {
   it('refuses while a goal of the programme is not finished', () => {
-    const v = archiveVerdict({ programme: 'x', goals: [{ goal: 'g', status: 'open' }], homes: [{}] });
+    const v = archiveVerdict({ programme: 'x', goals: [{ goal: 'g', stage: 'build' }], homes: [{}] });
     assert.equal(v.ok, false);
-    assert.match(v.lines[0], /goal x\/g is open — it is finished or dropped first/u);
+    assert.match(v.lines[0], /goal x\/g is build — it is finished or dropped first/u);
   });
 
   it('refuses what release would keep, and anything somebody put in the area', () => {
@@ -234,11 +234,11 @@ describe('archiveProgramme', () => {
   });
 
   it('touches nothing while a goal of the programme is not finished', async () => {
-    const fx = fixture({ goal: 'open' });
+    const fx = fixture({ goal: 'build' });
     const { deps, calls } = stubs();
     const a = args(fx, deps);
     assert.equal(await archiveProgramme('gone', a), 1);
-    assert.match(a.stderr.out.text, /goal gone\/g is open/u);
+    assert.match(a.stderr.out.text, /goal gone\/g is build/u);
     assert.deepEqual(calls.prs, []);
   });
 

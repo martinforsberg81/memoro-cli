@@ -86,7 +86,7 @@ import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
 import { gitDirOf } from './repos.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
-import { PR_LIST_ARGS, parseWorktrees, prOwner } from './project-prs.js';
+import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import {
   REPO_NAMES, RUNNER_MODEL, nowBlock, pidAlive, readCurrents,
 } from './status-collect.js';
@@ -568,12 +568,11 @@ export function mergesSection({
       return gridded({ ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: phase },
         'gate', phase === 'landing' ? 'landing' : phase, item.age_seconds ?? null, { merging: 'landing' });
     });
-    // Queued behind another pull request, it waits on other work; else the
-    // merger has it — unless there is no merger to have it, and then the queue
-    // is `stopped`.
+    // The merger has it — unless there is no merger to have it, and then the
+    // queue is `stopped`.
     const queuedOwn = own(queuedItems);
     const stopped = !mergerAlive && !active.length && Boolean(queuedOwn.length);
-    const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : item.waits_for ? 'waiting' : 'queued',
+    const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : 'queued',
       item.wait_seconds, stopped ? {} : { merging: 'queued' }));
     const red = own(reds).map((item) => gridded(item, 'red', 'red', item.age_seconds, { merge_red: item.reason || 'red' }));
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
@@ -693,7 +692,7 @@ export function checksSection({ repos = [], now = new Date() } = {}) {
 /* ------------------------------------------------------------- PULL REQUESTS */
 
 /**
- * Every open pull request, and whose it is (`prOwner`, project-prs.js): a
+ * Every open pull request, and whose it is (`prOwner`, open-prs.js): a
  * plan session's, a workarea's, a folder elsewhere, or nobody's. Each item
  * says whether the merger has it, and how long since anything happened on it.
  *
@@ -743,10 +742,11 @@ export function prsSection({
  * not copies.
  */
 export function attachPrs({ programmes, runner, pulls }) {
-  const goalPrs = (name, repos) => pulls.items.filter((item) => item.branch === `goal/${name}`
-    && (!repos?.length || repos.includes(item.repo)));
+  const goalPrs = (goal) => pulls.items.filter((item) => (item.branch === `goal/${goal.name}`
+      || (goal.carries || []).some((carried) => carried.repo === item.repo && Number(carried.pr) === item.number))
+    && (!goal.repos?.length || goal.repos.includes(item.repo)));
   for (const group of programmes?.programmes || []) {
-    for (const goal of group.goals || []) goal.prs = goalPrs(goal.name, goal.repos);
+    for (const goal of group.goals || []) goal.prs = goalPrs(goal);
   }
   // A goal's session's pull request is its branch's, `goal/<goal>`.
   for (const session of runner?.sessions || []) {
@@ -955,7 +955,7 @@ function statusesOf(goals) {
  * A programme is what `mc plan` opens on and what a goal belongs to, so it is
  * the shape of the section; a goal's repository is a column on its own row.
  * Projects went on 2026-11-03 (goal mc/projects-to-goals): a project's steps
- * are goals ordered with `after` now, and this section draws goals only.
+ * are goals in phases now, and this section draws goals only.
  *
  * The programme heading carries its **planning session**, open or not — that
  * is the room `mc plan <programme>` fills, and a programme with none is a
@@ -1058,6 +1058,10 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     state: goal.stage ?? null,
     progress: `${sessions} sess`,
     prs: [],
+    // The pull requests GOAL.json says carry it: `attachPrs` finds a goal's
+    // open one by these as well as by `goal/<goal>`, for a goal on a branch
+    // it took over from a project (`mc goal from-project`).
+    carries: goal.prs ?? [],
     phase: goal.phase ?? null,
     held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals),
     sessions,

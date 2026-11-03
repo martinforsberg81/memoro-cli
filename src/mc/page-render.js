@@ -723,14 +723,13 @@ const MERGE_MARK = {
 };
 
 /**
- * What a merge row's tail says, after its cells: why it waits or why it is
- * red, and the pull request's title — the title gives way first.
+ * What a merge row's tail says, after its cells: the round it is batched
+ * with, how long it has been queued, or why it is red, and the pull
+ * request's title — the title gives way first.
  */
 function mergeTail(item) {
   const why = item.kind === 'wait'
-    ? [item.waits_for ? { text: `awaits ${item.waits_for}`, styles: ['yellow'] } : null,
-      item.parent ? { text: `after #${item.parent.pr}`, styles: ['grey'] } : null,
-      item.batch_of ? { text: `with #${item.batch_of}`, styles: ['grey'] } : null]
+    ? [item.batch_of ? { text: `with #${item.batch_of}`, styles: ['grey'] } : null]
     : item.kind === 'gate'
       ? [item.batch_of ? { text: `with #${item.batch_of}`, styles: ['grey'] } : null,
         item.queue_age_seconds != null ? { text: `queued ${ageWords(item.queue_age_seconds)}`, styles: ['grey'] } : null]

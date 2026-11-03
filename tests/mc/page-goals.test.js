@@ -109,7 +109,7 @@ describe('goal rows on the page', () => {
     // green for `build` while a session is on it, red for any stage of a blocked goal
     assert.match(rollout, /\u001b\[[0-9;]*32m\s*build/u);
     assert.doesNotMatch(plain(rollout), /g · /u, 'no `g ·` before the name');
-    assert.match(plain(rollout), /^ +5 ● goal {4}rollout/u, '`goal` in the kind column');
+    assert.match(plain(rollout), /^ +2 ● goal {4}rollout/u, '`goal` in the kind column');
     assert.match(cleanup, /\u001b\[[0-9;]*31m\s*build/u);
   });
 

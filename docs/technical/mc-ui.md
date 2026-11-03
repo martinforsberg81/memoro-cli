@@ -224,16 +224,14 @@ below is about.
   `prs`. The older aggregate fields remain for status and PR ownership
   readers; MERGES draws only `repos[]`.
 - **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
-  `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
-  the branch rule; a plan session's, checked out under `~/mc/programs/<programme>/`
-  or called `plan/…`; a workarea's; one checked out somewhere else; or
-  nobody's. The heading counts them all — `8 open · 4 on a step · 1 plan ·
-  1 nobody's` — and the rows are only the ones no other row draws: a
-  project's pull request is a column of its own on the project's row in
-  PROGRAMMES, after the steps — `#N`, or `#N+1` for more than one; one row per
-  project (Martin, 2026-10-09), and a blocked project holding one is never
-  collapsed — and the merger's are in MERGES. A running SESSIONS lane carries its
-  project's or its goal's `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
+  `page-collect.js`; the rule is `prOwner`, `open-prs.js`): a plan session's,
+  checked out under `~/mc/programs/<programme>/` or called `plan/…`; a
+  workarea's; one checked out somewhere else; or nobody's. The heading counts
+  them all — `5 open · 1 plan · 1 nobody's` — and the rows are only the ones no
+  other row draws: a goal's pull request is in the PR column of its row in
+  PROGRAMMES (`goal/<goal>`, or one GOAL.json says carries it), and the
+  merger's are in MERGES. A running SESSIONS lane carries its goal's `#N`.
+  The one nobody holds has the waiting `◆` in yellow;
   any pull request quiet for a day turns its `quiet …` yellow. The open pull
   requests come from `prs.json`, which every runner round now refills for the
   repositories it asked (`mergePrs`, `page-cache.js`) as well as `--fresh`.

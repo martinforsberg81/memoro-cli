@@ -186,7 +186,7 @@ describe('the helper turn', () => {
 });
 
 describe('what the turn is told', () => {
-  const GOALS = [{ programme: 'mc', goal: 'mc-helper', status: 'open', title: 'The helper', next: 'Step 2 — the proposal turn' }];
+  const GOALS = [{ programme: 'mc', goal: 'mc-helper', stage: 'build', status: 'ready', title: 'The helper', next: 'Step 2 — the proposal turn' }];
 
   it('names the date, the file to write and the directory to write it in', () => {
     const prompt = helperPrompt({ file: FILE, now: NOW });
@@ -230,7 +230,7 @@ describe('what the turn is told', () => {
     const prompt = helperPrompt({
       file: FILE, goals: GOALS, projectLog: '| 2026-08-26 | msr-core | main-red-fix |', now: NOW,
     });
-    assert.match(prompt, /\| mc \/ mc-helper \| open \| The helper \| Step 2 — the proposal turn \|/u);
+    assert.match(prompt, /\| mc \/ mc-helper \| build · ready \| The helper \| Step 2 — the proposal turn \|/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\)[\s\S]*main-red-fix/u);
   });
 
@@ -272,8 +272,8 @@ describe('the ground', () => {
     return { root, repos: [{ name: 'memoro', path: join(root, 'memoro') }, { name: 'gone', path: join(root, 'gone') }] };
   }
 
-  const goal = (name, status, next) => ({
-    programme: 'mc', goal: name, status, title: `The ${name} goal`, log: [{ next: 'earlier' }, { next }],
+  const goal = (name, stage, next) => ({
+    programme: 'mc', goal: name, stage, status: 'ready', title: `The ${name} goal`, log: [{ next: 'earlier' }, { next }],
   });
 
   it('lists the goals not finished, each with its last next action, and reads the project log on origin/main', async () => {
@@ -285,10 +285,10 @@ describe('the ground', () => {
       if (args[1] === 'origin/main:docs/project/project_log.md') return '| 2026-08-26 | msr-core |';
       return null;
     };
-    const goals = () => [goal('mc-x', 'open', 'Step 2'), goal('mc-gone', 'done', 'nothing')];
+    const goals = () => [goal('mc-x', 'build', 'Step 2'), goal('mc-gone', 'done', 'nothing')];
     const ground = await helperGround({ env: {}, repos: list, git, goals });
     assert.equal(ground.goals.length, 1, 'a finished goal is not listed');
-    assert.deepEqual(ground.goals[0], { programme: 'mc', goal: 'mc-x', status: 'open', title: 'The mc-x goal', next: 'Step 2' });
+    assert.deepEqual(ground.goals[0], { programme: 'mc', goal: 'mc-x', stage: 'build', status: 'ready', title: 'The mc-x goal', next: 'Step 2' });
     assert.match(ground.projectLog, /msr-core/u);
     assert.deepEqual(ground.notes, []);
     assert.equal(asked.includes('ls-tree'), false, 'no repository is listed');

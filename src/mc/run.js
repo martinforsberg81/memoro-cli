@@ -84,7 +84,7 @@ import {
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
-import { PR_LIST_ARGS } from './project-prs.js';
+import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
