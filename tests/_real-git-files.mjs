@@ -13,7 +13,6 @@ export const REAL_GIT_FILES = new Set([
   'tests/mc/push-guard.test.js',
   // `git archive`, and worktree removal on disk.
   'tests/mc/asc-build-testflight.test.js',
-  'tests/mc/archive-programme.test.js',
   'tests/mc/work-layout.test.js',
   'tests/mc/work-area-add.test.js',
   'tests/mc/close-live.test.js',

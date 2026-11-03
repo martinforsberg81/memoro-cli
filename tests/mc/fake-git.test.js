@@ -247,3 +247,53 @@ describe("the model's edges", () => {
     assert.deepEqual(log.split('\n').filter((line) => line.startsWith(`${process.env.MC_GIT_TEST}\t`)), []);
   });
 });
+
+describe('what an archive asks of a worktree', () => {
+  it('grep -l -F names the tracked files holding the text, and exits 1 when none does', () => {
+    const { cwd } = repository('greps');
+    mkdirSync(join(cwd, 'docs', 'sub'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'sub', 'k.md'), '# k\n');
+    writeFileSync(join(cwd, 'src', 'b.js'), "read('docs/sub/k.md');\n");
+    writeFileSync(join(cwd, 'src', 'c.js'), "read('docs/sub-two/k.md');\n");
+    writeFileSync(join(cwd, 'untracked.js'), "read('docs/sub/k.md');\n");
+    git(cwd, 'add', 'docs', 'src');
+    assert.equal(git(cwd, 'grep', '-l', '-F', '--', 'docs/sub/', '--', 'src', 'tests'), 'src/b.js', 'tracked only, within the pathspecs');
+    assert.equal(run(cwd, ['grep', '-l', '-F', '--', 'nowhere/', '--', 'src']).status, 1);
+    assert.throws(() => run(cwd, ['grep', 'docs']), /unsupported — git grep docs/u, 'a grep it does not model is refused, not guessed');
+  });
+
+  it('a glob pathspec crosses directories, as ls-files -- "*.md" does in git', () => {
+    const { cwd } = repository('globs');
+    mkdirSync(join(cwd, 'docs', 'deep'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'deep', 'x.md'), 'x\n');
+    git(cwd, 'add', 'docs');
+    assert.deepEqual(git(cwd, 'ls-files', '--', '*.md').split('\n'), ['README.md', 'docs/deep/x.md']);
+    assert.deepEqual(git(cwd, 'ls-files', '--', 'docs').split('\n'), ['docs/deep/x.md']);
+  });
+
+  it('ls-tree -d names a directory itself, or with a trailing slash the directories inside it', () => {
+    const { cwd } = repository('dir-trees');
+    mkdirSync(join(cwd, 'docs', 'project', 'one', 'deep'), { recursive: true });
+    mkdirSync(join(cwd, 'docs', 'project', 'two'), { recursive: true });
+    writeFileSync(join(cwd, 'docs', 'project', 'one', 'deep', 'a.md'), 'a\n');
+    writeFileSync(join(cwd, 'docs', 'project', 'two', 'b.md'), 'b\n');
+    writeFileSync(join(cwd, 'docs', 'project', 'log.md'), 'log\n');
+    git(cwd, 'add', 'docs');
+    git(cwd, 'commit', '-qm', 'docs');
+    assert.deepEqual(git(cwd, 'ls-tree', '-d', '--name-only', 'HEAD', 'docs/project/').split('\n'), ['docs/project/one', 'docs/project/two']);
+    assert.match(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/one'), /^040000 tree [0-9a-f]{40}\tdocs\/project\/one$/u);
+    assert.equal(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/log.md'), '', 'a file is no tree');
+    assert.equal(git(cwd, 'ls-tree', '-d', 'HEAD', 'docs/project/gone'), '');
+  });
+
+  it('push origin HEAD pushes the branch under its own name; branch --list and refname:short name it', () => {
+    const { cwd, remote } = repository('heads');
+    git(cwd, 'switch', '-qc', 'archive/x-1');
+    git(cwd, 'push', '-q', '-u', 'origin', 'HEAD');
+    assert.equal(git(remote, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'), 'archive/x-1\nmain');
+    assert.equal(git(cwd, 'branch', '--list', 'archive/x-1'), '* archive/x-1');
+    git(cwd, 'switch', '-q', 'main');
+    git(cwd, 'branch', '-D', 'archive/x-1');
+    assert.equal(git(cwd, 'branch', '--list', 'archive/x-1'), '', 'the other branches are not listed');
+  });
+});
