@@ -299,7 +299,7 @@ project used to.
    met is `unmet`: the runner says so once in `runner.log`
    (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
+   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan. The same chore archives a goal under `~/mc/programs/<programme>/goals/` that has been `done` or `dropped` for 24 hours (`archiveGoalsDue`, `goal-archive.js`), by the road `mc goal archive` takes.
 5. **Close** the workareas whose project is finished — whose archive landed
    in 4, or whose plan an earlier archive already took away, which
    `CLOSEOUT.json` or `project_log.md` is what still knows.

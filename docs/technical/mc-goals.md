@@ -36,7 +36,7 @@ blocked  ── a person sets it open ──────────────
 ~/mc/programs/<programme>/goals/<goal>/GOAL.md    the brief and its status
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
-~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive), its worktrees gone
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner 24 h after done or dropped), its worktrees gone
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
@@ -161,7 +161,12 @@ Nine verbs; the status verbs are five words.
   each worktree is removed with `git worktree remove` and the local branch
   `goal/<g>` deleted, the directory moves to `goals/.archive/<g>/` (a
   dot-directory, so no reader lists it), and `goals/goal_log.md` gets a row:
-  date, goal, status, pull requests, the last `Gjort:`.
+  date, goal, status, pull requests, the last `Gjort:`. The runner does the same
+  by itself for a goal that has been `done` or `dropped` for 24 hours, the hold
+  a project under `~/mc/programs/` has (`ARCHIVE_HOLD_MS`, in the same chore),
+  counted from the log entry that set the status. A refusal the runner gets is
+  written once into the goal's LOG.md, as a runner entry, and not again at
+  every pass. A programme is never archived by the runner.
 - **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
   logs the reason as the entry's `Kommentar`. Going `open` (by `open` or
   `log --status open`) is refused, with nothing written, while the goal's
