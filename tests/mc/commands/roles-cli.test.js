@@ -53,7 +53,7 @@ describe('mc roles', () => {
     assert.match(listed.stdout, /\bbuild-session\b/u);
     assert.doesNotMatch(listed.stdout, /all-sessions|-verb/u);
     const whole = runMcCli(['roles', 'show', 'build-session'], env);
-    assert.match(whole.stdout, /parts:\s+goal, project, worker —/u);
+    assert.match(whole.stdout, /parts:\s+goal —/u);
     // No catalogue of its own: `show` falls back to canon, as a launch does.
     const shown = runMcCli(['roles', 'show', 'build-session:goal'], env);
     assert.equal(shown.status, 0, shown.stderr);

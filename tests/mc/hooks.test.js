@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile, TOOLBOX,
+  ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedGoalFile, TOOLBOX,
   readClaudeSettings, repoHookDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
@@ -73,7 +73,7 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(text, /b · 0 behind \/ 2 ahead of origin\/main · 1 changed file · dev server http:\/\/127\.0\.0\.1:8920/u);
     assert.match(text, /mc shot dev/u);
     assert.match(text, /mc publish/u);
-    assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL.*MC_STEP.*cwd \/x/u);
+    assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL and cwd \/x/u);
   });
 
   it('a plan session is told how many proposals wait in its programme, archive not counted', () => {
@@ -185,48 +185,44 @@ describe('mc hook — shell commands that have an mc verb', () => {
   });
 });
 
-describe('mc hook — a plan file under ~/mc/programs is mc\'s to change', () => {
+describe('mc hook — a goal file under ~/mc/programs is mc\'s to change', () => {
   const programs = mkdtempSync(join(tmpdir(), 'mc-hook-programs-'));
   const deny = (input) => preToolDecision(input, { programs });
 
-  it('names a plan, draft, state or closeout file under programs, at any depth, and no other', () => {
-    assert.equal(protectedPlanFile(join(programs, 'a', 'x', 'PLAN.json'), { programs }), true);
-    assert.equal(protectedPlanFile(join(programs, 'PLAN.json'), { programs }), true);
-    assert.equal(protectedPlanFile(join(programs, 'a', 'rulings.md'), { programs }), false);
-    assert.equal(protectedPlanFile(`${programs}-other/a/PLAN.json`, { programs }), false, 'a sibling directory is not under it');
+  it('names a GOAL.json under programs, at any depth, and no other', () => {
+    assert.equal(protectedGoalFile(join(programs, 'a', 'goals', 'x', 'GOAL.json'), { programs }), true);
+    assert.equal(protectedGoalFile(join(programs, 'GOAL.json'), { programs }), true);
+    assert.equal(protectedGoalFile(join(programs, 'a', 'goals', 'x', 'LOG.md'), { programs }), false);
+    assert.equal(protectedGoalFile(`${programs}-other/a/GOAL.json`, { programs }), false, 'a sibling directory is not under it');
   });
 
-  it('refuses a Write, Edit or MultiEdit of a plan, draft, state or closeout file', () => {
+  it('refuses a Write, Edit or MultiEdit of a goal file', () => {
     for (const tool of ['Write', 'Edit', 'MultiEdit']) {
-      for (const name of ['PLAN.json', 'DRAFT.json', 'STATE.json', 'CLOSEOUT.json']) {
-        const decision = deny({ tool_name: tool, tool_input: { file_path: join(programs, 'a', 'x', name) } });
-        assert.equal(decision?.id, 'plan-file', `${tool} ${name}`);
-        assert.match(decision.reason, /a plan changes through `mc project`/u);
-      }
+      const decision = deny({ tool_name: tool, tool_input: { file_path: join(programs, 'a', 'goals', 'x', 'GOAL.json') } });
+      assert.equal(decision?.id, 'goal-file', tool);
+      assert.match(decision.reason, /a goal changes through `mc goal`/u);
     }
   });
 
   it('lets through the same name under another directory, and the other files of a programme', () => {
-    for (const name of ['PLAN.json', 'STATE.json']) {
-      assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: join('/elsewhere', 'x', name) } }), null, name);
-    }
+    assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: join('/elsewhere', 'x', 'GOAL.json') } }), null);
     assert.equal(deny({ tool_name: 'Edit', tool_input: { file_path: join(programs, 'a', 'rulings.md') } }), null);
   });
 
   it('resolves a relative file_path against the session\'s cwd', () => {
-    const input = { tool_name: 'Edit', cwd: join(programs, 'a'), tool_input: { file_path: join('x', 'STATE.json') } };
-    assert.equal(deny(input)?.id, 'plan-file');
+    const input = { tool_name: 'Edit', cwd: join(programs, 'a'), tool_input: { file_path: join('goals', 'x', 'GOAL.json') } };
+    assert.equal(deny(input)?.id, 'goal-file');
     assert.equal(deny({ ...input, cwd: '/elsewhere' }), null, 'the same relative name under another cwd is another file');
   });
 
   it('refuses a shell command that writes one, with the escape named, and lets a read of one through', () => {
-    const file = join(programs, 'a', 'x', 'PLAN.json');
-    for (const command of [`jq . > ${file}`, "sed -i '' s/a/b/ STATE.json", 'mv DRAFT.json PLAN.json', 'echo x | tee CLOSEOUT.json']) {
+    const file = join(programs, 'a', 'goals', 'x', 'GOAL.json');
+    for (const command of [`jq . > ${file}`, "sed -i '' s/a/b/ GOAL.json", 'mv x.json GOAL.json', 'echo x | tee GOAL.json']) {
       const decision = preToolDecision(bash(command), { programs });
-      assert.equal(decision?.id, 'plan-file', command);
+      assert.equal(decision?.id, 'goal-file', command);
       assert.match(decision.reason, /Escape, when the raw command is really meant/u, `${command}: the escape is named`);
     }
-    for (const command of ['cat PLAN.json', 'jq . PLAN.json', 'mc project send x']) {
+    for (const command of ['cat GOAL.json', 'jq . GOAL.json', 'mc goal set x/y title --text z']) {
       assert.equal(preToolDecision(bash(command), { programs }), null, command);
     }
     assert.equal(preToolDecision(bash(`${ALLOW_MARK} jq . > ${file}`), { programs }), null, 'the escape lets it through');
@@ -503,13 +499,12 @@ describe('mc hook — the door', () => {
 
 
 describe('SessionStart names the session before anything else', () => {
-  it('names plan, step, goal and unknown directories even without a repository', async () => {
+  it('names plan, goal and unknown directories even without a repository', async () => {
     for (const [cwd, extra, expected] of [
-      ['/mc/programs/mc', {}, /^You are the plan session for programme `mc`.*you never run it.*mc project/u],
-      ['/mc/runner/step/p/memoro', {}, /^You are the build session \(project\)\./u],
+      ['/mc/programs/mc', {}, /^You are the plan session for programme `mc`.*you never run it.*mc goal/u],
       ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the build session \(goal\) for programme `mc`\./u],
-      ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL, MC_STEP and cwd \/elsewhere against \/mc\./u],
-      ['/mc/programs/mc', { MC_ROLE: 'review-session:project', MC_PROGRAMME: 'mc' }, /^You are the review session \(project\) for programme `mc`\./u],
+      ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd \/elsewhere against \/mc\./u],
+      ['/mc/programs/mc', { MC_ROLE: 'review-session:goal', MC_PROGRAMME: 'mc' }, /^You are the review session \(goal\) for programme `mc`\./u],
       ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the brief session\./u],
       ['/elsewhere', { MC_ROLE: 'helper' }, /^You are the helper session\./u],
       ['/elsewhere', { MC_ROLE: 'review-session:goal' }, /^You are the review session \(goal\)\./u],

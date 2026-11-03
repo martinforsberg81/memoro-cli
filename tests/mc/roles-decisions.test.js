@@ -8,8 +8,7 @@
  * defended from the code, that he answers with a word.
  *
  * There is no decision file any more, and no answer line: what he decides is
- * written into the plan it is about, and the plan comes back to the runner by
- * its first unfinished step being `ready`.
+ * written into the goal it is about.
  */
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -30,7 +29,7 @@ import { canonSkillsDir } from '../../src/mc/skills.js';
  * to reach him, it can be asked — so its overlay says read first and ask the
  * one thing, rather than holding it to the shape a written proposal takes.
  */
-const AUTHORS = ['build-session:worker', 'build-session:project'];
+const AUTHORS = ['build-session:goal'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
@@ -84,36 +83,6 @@ describe('the decision shape every role writes', () => {
     });
   }
 
-  /**
-   * What Martin decides goes into the plan it is about — there is nowhere
-   * else for it to live now that mc keeps no decision file.
-   */
-  // The sessions that unblock a step — the brief and the planning session —
-  // carry it, through `step-verb.md`; a step session never answers.
-  for (const name of ['brief', 'plan-session']) {
-    it(`${name} writes the answer into the plan, and nothing else carries it`, () => {
-      const told = toldTo(name);
-      assert.match(told, phrase('the answer is written into the plan'));
-      assert.match(told, phrase('so the plan carries it on its own'));
-      assert.match(told, phrase('a plan comes back by its first unfinished step being `ready`'));
-      assert.doesNotMatch(told, /decision file/u);
-    });
-  }
-
-  /**
-   * The boundary the runner checks on the way back in. It is in the overlay as
-   * well, so a session is told before it is caught.
-   */
-  it('a project build is told the plan file is not its to edit, that criteria are met through mc project, that state goes through mc step, and that it is checked', () => {
-    const { overlay } = readCanonRole('build-session:project');
-    assert.match(overlay, phrase('You never change the plan file'));
-    assert.match(overlay, phrase('written by `mc step`'));
-    assert.match(overlay, phrase('`mc step note "…"`'));
-    assert.match(overlay, phrase('`mc step blocked --on <decision-name>`'));
-    assert.match(overlay, phrase('recorded with `mc project criterion met <n>`'));
-    assert.match(overlay, phrase('on the last step every criterion is, or the PR does not land'));
-    assert.doesNotMatch(overlay, /set\s+your step `done`/u, 'mc merge writes done; the file is not where it goes');
-  });
 });
 
 /**
@@ -125,7 +94,7 @@ describe('the decision shape every role writes', () => {
  * them names them.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const BUILDS = ['build-session:goal', 'build-session:project', 'build-session:worker'];
+  const BUILDS = ['build-session:goal'];
   const CANON_ROLES = ['brief', ...BUILDS, 'helper', 'intake', 'plan-session'];
   const PUBLISHERS = ['brief', ...BUILDS, 'plan-session'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');

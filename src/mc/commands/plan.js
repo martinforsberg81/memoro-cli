@@ -3,11 +3,10 @@
  * is for. That is the whole verb.
  *
  * It opens a foreground session in the programme's planning directory and hands it one
- * prompt naming the programme. What comes out of it — one plan or four, under
- * which project names, reaching `main` by which route, or nothing this time —
- * is not this command's business and cannot be known when it starts (Martin,
- * 2026-08-31). `mc run` reads `PLAN.json` files off `origin/main`; how they
- * got there is not a thing the runner or this verb has an opinion about.
+ * prompt naming the programme. What comes out of it — one goal or four, under
+ * which names, reaching `main` by which route, or nothing this time — is not
+ * this command's business and cannot be known when it starts (Martin,
+ * 2026-08-31).
  *
  * A programme is the unit rather than a project, and the directory is not a
  * workarea. That is what this replaces: `mc plan <name>` made
@@ -36,7 +35,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
+import { defaultRepos, listProgrammes } from '../brief-collect.js';
 import { archiveProgramme } from '../archive-programme.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
@@ -262,11 +261,9 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
  * Which programme? Every one on main in either repository, every one already
  * being planned under the planning root, and a way to name a new one.
  *
- * A programme is offered whether or not it has a plan the runner can read
- * today. `listProgrammes` asks the tree, so a programme whose projects have all
- * been archived is still on the list — which is the case where the offer is
- * worth most, because the next piece of that work belongs under the heading
- * that already exists rather than under a parallel one somebody invents.
+ * A programme is offered whether or not it has work the runner can start
+ * today: the next piece of that work belongs under the heading that already
+ * exists rather than under a parallel one somebody invents.
  */
 export function chooseProgramme({ repos, env = process.env, stdout, rows = null } = {}) {
   const listed = rows || programmeRows({ repos, env });
@@ -284,33 +281,20 @@ export function chooseProgramme({ repos, env = process.env, stdout, rows = null 
 }
 
 /**
- * One row per programme: where it lives, how many projects it has on main and
- * how many of those are unfinished, and whether it is already open in a
- * planning session.
- *
- * The two readings are separate on purpose. `listProgrammes` is the tree and
- * answers *which programmes exist*; `listPlans` is the plans and answers *what
- * is in them*. A programme whose projects have all been archived is a real
- * answer to the first and an empty one to the second, and asking only the
- * second would drop it off the list.
+ * One row per programme: the repositories whose tree holds it
+ * (`listProgrammes`), and whether it is already open in a planning session.
  */
 export function programmeRows({ repos, env = process.env, read = null } = {}) {
-  const source = read || ((repo) => ({ programmes: listProgrammes(repo), plans: listPlans(repo) }));
+  const source = read || ((repo) => ({ programmes: listProgrammes(repo) }));
   const rows = new Map();
   const touch = (name) => {
-    if (!rows.has(name)) rows.set(name, { name, repos: [], projects: 0, unfinished: 0, planning: false });
+    if (!rows.has(name)) rows.set(name, { name, repos: [], planning: false });
     return rows.get(name);
   };
   const seenIn = (row, repo) => { if (!row.repos.includes(repo)) row.repos.push(repo); };
   for (const repo of repos) {
-    const { programmes = [], plans = [] } = source(repo) || {};
+    const { programmes = [] } = source(repo) || {};
     for (const name of programmes) seenIn(touch(name), repo.name);
-    for (const plan of plans) {
-      const row = touch(plan.programme);
-      seenIn(row, repo.name);
-      row.projects += 1;
-      if (plan.status !== 'done') row.unfinished += 1;
-    }
   }
   // A programme being planned right now may have nothing on main yet — its PR
   // is still open, or still unwritten — and is exactly the one somebody
@@ -322,8 +306,8 @@ export function programmeRows({ repos, env = process.env, read = null } = {}) {
 /**
  * The programmes that already have a planning session: a directory under the
  * planning root that holds a checkout in at least one child directory. In
- * layout 2 a programme's directory can hold only its projects (`PLAN.json` and
- * `STATE.json`, no checkout), and such a programme is not being planned.
+ * layout 2 a programme's directory can hold only its goals and documents (no
+ * checkout), and such a programme is not being planned.
  */
 export function openPlanAreas(env = process.env) {
   const root = planAreaRoot({ root: workRoot(env) });
@@ -347,12 +331,6 @@ function holdsCheckout(dir) {
 /** The one line the picker shows for a programme. */
 export function programmeLabel(row) {
   const parts = [row.repos.join(', ') || 'not on main'];
-  if (row.projects) {
-    parts.push(`${row.projects} project${row.projects === 1 ? '' : 's'}`
-      + (row.unfinished ? `, ${row.unfinished} unfinished` : ', all done'));
-  } else if (row.repos.length) {
-    parts.push('no projects on main');
-  }
   if (row.planning) parts.push('being planned');
   return `${row.name}  —  ${parts.join(' · ')}`;
 }
@@ -364,24 +342,21 @@ export function programmeLabel(row) {
  * it stands. Martin opens; what to read follows from what he asks.
  *
  * It stops there on purpose. An earlier version of this prompt went on to name
- * the deliverable — a programme document, one `PLAN.json` per project that can
+ * the deliverable — a programme document, one plan per piece of work that can
  * start now, a `Plan: <programme>` PR, the docs merge that lands it — and none
  * of that is knowable when the session opens (Martin, 2026-08-31: "Hur en
  * EVENTUELL PLAN SENARE SKA LÄGGAS PÅ MAIN OCH I VILKET PROJEKT GÅR INTE ATT
- * FÖRUTSÄGA"). Whether this programme needs one project or four, whether it
- * needs a plan at all this time, and how what comes out of it reaches `main`
+ * FÖRUTSÄGA"). Whether this programme needs one goal or four, whether it
+ * needs one at all this time, and how what comes out of it reaches `main`
  * are the session's and Martin's to work out together, at the terminal. A
  * prompt that answers them in advance is guessing, and a session that follows
  * the guess is doing the wrong work confidently.
  *
- * It used to go on to name what to read first and to say that a `plan-review`
- * park is this session's. Both are in `canon/roles/plan-session.md`, which reaches the
- * session the way every other role's does, and a session
- * told to start by reading and reporting spent its first turn on an intro
- * Martin had not asked for (Martin, 2026-09-13). What a planning session *is*
- * — the programme as the unit, the plan-review, the projects the brief has
- * already decided and this session therefore does not take — is the role's
- * to say.
+ * It used to go on to name what to read first. That is in
+ * `canon/roles/plan-session.md`, which reaches the session the way every other
+ * role's does, and a session told to start by reading and reporting spent its
+ * first turn on an intro Martin had not asked for (Martin, 2026-09-13). What a
+ * planning session *is* is the role's to say.
  *
  * This function used to read the shared role text and paste it into the
  * prompt, because a role with no overlay inherits nothing: `instructionsFor`
@@ -391,12 +366,12 @@ export function programmeLabel(row) {
  * twice. The `shared` parameter is gone with it.
  */
 /**
- * What a branch named after a project does: the runner cannot make that
- * project's workarea and blocks its first step as `branch-foreign`. Said as
- * the consequence, not a ban (Martin, 2026-11-03: a plan session has full
+ * What a branch of the session's own is named: `goal/<goal>` is a goal's
+ * worktree's, so one of the session's is `plan/<slug>`. Said as the
+ * consequence, not a ban (Martin, 2026-11-03: a plan session has full
  * freedom; text says what breaks, never who may).
  */
-export const BRANCH_LINE = 'A branch named `<project>` blocks that project\'s first step as `branch-foreign` (the runner makes it); name yours `plan/<project>`.';
+export const BRANCH_LINE = 'A branch named `goal/<goal>` is that goal\'s worktree\'s; name yours `plan/<slug>`.';
 
 export function planLaunch({ programme, repos = [], role, env = process.env }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
@@ -408,7 +383,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env }) {
     `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,
     `worktree on branch \`plan/${programme}\`. This is not a runner area: the runner`,
     'never works in it.',
-    ...(layoutTwo ? ['Your programme\'s projects are the directories beside them, each with its PLAN.json and STATE.json: `mc project` and `mc step` write them.'] : []),
+    ...(layoutTwo ? ['Your programme\'s goals are under `goals/`, each with its GOAL.json and LOG.md: `mc goal` writes them.'] : []),
     BRANCH_LINE,
     '',
     'Martin is at the terminal. Wait for him.',
@@ -417,7 +392,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env }) {
 }
 
 export function parseArgs(argv) {
-  // `--repo` was how the old, project-shaped `mc plan` chose which repository
+  // `--repo` was how the old, single-repository `mc plan` chose which repository
   // to make a workarea in. A programme is not in one repository, so the flag
   // has nothing left to select — said plainly, because "unknown flag" reads
   // like a typo to whoever typed what worked yesterday.

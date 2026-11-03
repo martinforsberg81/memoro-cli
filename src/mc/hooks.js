@@ -190,18 +190,18 @@ export function sessionStartContext({ cwd, inside, states, env = process.env, sy
 }
 
 /**
- * A programme's plan, draft, state and closeout files are written by the verbs
- * only (ruling 51): `mc project`, `mc step`, the runner and the merger. The hook
- * catches a session's hand-edit of one — a mistake, not an intent: a codex
- * session has no mc hook, and a Bash rule is a regular expression.
+ * A goal's GOAL.json is written by the verbs only (ruling 51): `mc goal`, the
+ * runner and the merger. The hook catches a session's hand-edit of one — a
+ * mistake, not an intent: a codex session has no mc hook, and a Bash rule is a
+ * regular expression.
  */
-const PROTECTED = /^(PLAN|DRAFT|STATE|CLOSEOUT)\.json$/u;
+const PROTECTED = /^GOAL\.json$/u;
 
-/** The reason a plan-file refusal gives, whichever tool made it. */
-const PLAN_FILE_REASON = 'This file is mc\'s: a plan changes through `mc project` (new, edit, criterion add, step add, step edit, send), a step\'s state through `mc step`, a criterion through `mc project criterion met`. Run `mc project <name>` to read it.';
+/** The reason a goal-file refusal gives, whichever tool made it. */
+const GOAL_FILE_REASON = 'This file is mc\'s: a goal changes through `mc goal` (set, criterion add, criterion met, document add, after). Run `mc goal show <programme>/<goal>` to read it.';
 
-/** Whether `path` is one of those files anywhere under `programs`. */
-export function protectedPlanFile(path, { programs = programsHome() } = {}) {
+/** Whether `path` is one anywhere under `programs`. */
+export function protectedGoalFile(path, { programs = programsHome() } = {}) {
   const file = resolve(String(path));
   return file.startsWith(`${resolve(programs)}${sep}`) && PROTECTED.test(basename(file));
 }
@@ -286,10 +286,10 @@ export const BASH_RULES = [
     reason: 'Use the one simulator, the device named `mc`: `xcrun simctl boot mc`, then `xcrun simctl install mc <app>` and `xcrun simctl launch mc <bundle id>`. A clean phone is `xcrun simctl shutdown mc && xcrun simctl erase mc`, not a new device. When it does not exist yet, create exactly that one: `xcrun simctl create mc "iPhone 17"`.',
   },
   {
-    id: 'plan-file',
-    // A write verb naming a plan file: a redirect, tee, sed -i, or a move, copy, removal or install of it.
-    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\b(PLAN|DRAFT|STATE|CLOSEOUT)\.json\b/u,
-    reason: PLAN_FILE_REASON,
+    id: 'goal-file',
+    // A write verb naming a goal file: a redirect, tee, sed -i, or a move, copy, removal or install of it.
+    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\bGOAL\.json\b/u,
+    reason: GOAL_FILE_REASON,
   },
 ];
 
@@ -404,8 +404,8 @@ export function preToolDecision(input, { inRepo = () => false, programs = progra
   }
   if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit') {
     // A relative path lands where the session's own cwd says, so it is resolved there.
-    if (protectedPlanFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
-      return { id: 'plan-file', reason: PLAN_FILE_REASON };
+    if (protectedGoalFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
+      return { id: 'goal-file', reason: GOAL_FILE_REASON };
     }
   }
   if (tool === 'Write') {
@@ -521,7 +521,7 @@ export function inMcTerritory(cwd, deps = {}) {
  * the ones `--check` and the page compare the file against. `|| true`: a hook
  * must never stand between a session and its work. `Read` is in the matcher so
  * the repositories' Read hooks (memoro's block-sqlite-state.sh) answer through
- * `mc hook pre-tool`. `Edit` and `MultiEdit` are in it so the plan-file refusal
+ * `mc hook pre-tool`. `Edit` and `MultiEdit` are in it so the goal-file refusal
  * sees them, and the Claude in Chrome tools so a dev-server flow is turned to
  * `mc shot next`.
  */

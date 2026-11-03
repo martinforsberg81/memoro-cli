@@ -63,21 +63,20 @@ describe('the plan role', () => {
     assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
     assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
     assert.match(told, /Every status is yours to set/u);
-    assert.match(told, /`blocked_by: plan-review`/u);
     assert.match(told, /not a runner area/u);
     for (const ban of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u]) {
       assert.doesNotMatch(told, ban);
     }
   });
 
-  // The plan-writing rules are not restated in the role file: they are the
+  // The goal-writing rules are not restated in the role file: they are the
   // verb file `canon/roles/brief.md` carries too, pulled in at assembly.
-  it('carries the plan-writing rules by reference, not by copy', () => {
+  it('carries the goal-writing rules by reference, not by copy', () => {
     const { overlay } = readCanonRole(PLAN_ROLE);
-    assert.match(overlay, /^@include project-verb\.md$/mu);
-    assert.doesNotMatch(overlay, /`mc project send` is the validation/u);
+    assert.match(overlay, /^@include goal-verb\.md$/mu);
+    assert.doesNotMatch(overlay, /\*\*Written by verbs\.\*\*/u);
     const told = instructionsFor('claude-code', overlay);
-    assert.match(told, /`mc project send` is the validation/u);
+    assert.match(told, /\*\*Written by verbs\.\*\*/u);
     assert.doesNotMatch(told, /@include/u);
   });
 
@@ -127,25 +126,25 @@ describe('where a planning session lives', () => {
   it('in layout 2 is "being planned" only where a checkout stands', () => {
     const root = layoutTwoRoot();
     const env = { MC_WORK_ROOT: root };
-    // A programme's directory with only its projects in it has no checkout.
-    mkdirSync(join(root, 'programs', 'projects-only', 'proj'), { recursive: true });
-    writeFileSync(join(root, 'programs', 'projects-only', 'proj', 'PLAN.json'), '{}\n');
+    // A programme's directory with only its goals in it has no checkout.
+    mkdirSync(join(root, 'programs', 'goals-only', 'goals', 'g'), { recursive: true });
+    writeFileSync(join(root, 'programs', 'goals-only', 'goals', 'g', 'GOAL.json'), '{}\n');
     mkdirSync(join(root, 'programs', 'planned', 'memoro'), { recursive: true });
     writeFileSync(join(root, 'programs', 'planned', 'memoro', '.git'), 'gitdir: elsewhere\n');
     assert.deepEqual(openPlanAreas(env), ['planned']);
   });
 
-  it('in layout 2 names the programs/ directory and says where the projects are', () => {
+  it('in layout 2 names the programs/ directory and says where the goals are', () => {
     const env = { MC_WORK_ROOT: layoutTwoRoot() };
     const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env });
     assert.match(prompt, /~\/mc\/programs\/msr-core\//u);
-    assert.match(prompt, /Your programme's projects are the directories beside them, each with its PLAN\.json and STATE\.json/u);
+    assert.match(prompt, /Your programme's goals are under `goals\/`, each with its GOAL\.json and LOG\.md/u);
   });
 
-  it('in layout 1 says nothing about projects beside the session', () => {
+  it('in layout 1 says nothing about goals beside the session', () => {
     const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env: { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-layout1-')) } });
     assert.match(prompt, /~\/mc\/plan\/msr-core\//u);
-    assert.doesNotMatch(prompt, /projects are the directories beside them/u);
+    assert.doesNotMatch(prompt, /goals are under `goals\/`/u);
   });
 });
 
@@ -169,14 +168,8 @@ describe('the picker', () => {
   const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-picker-')) };
 
   const read = (repo) => (repo.name === 'memoro'
-    ? {
-      programmes: ['entity-detail', 'msr-core'],
-      plans: [
-        { programme: 'msr-core', project: 'msr-track-1', status: 'ready' },
-        { programme: 'msr-core', project: 'msr-track-3', status: 'done' },
-      ],
-    }
-    : { programmes: ['mc'], plans: [{ programme: 'mc', project: 'mc-cut', status: 'done' }] });
+    ? { programmes: ['entity-detail', 'msr-core'] }
+    : { programmes: ['mc'] });
 
   it('offers every programme on main in either repository', () => {
     const rows = programmeRows({ repos: REPOS, env, read });
@@ -184,20 +177,9 @@ describe('the picker', () => {
     assert.deepEqual(rows.find((r) => r.name === 'mc').repos, ['memoro-cli']);
   });
 
-  // A programme whose projects have all been archived holds only its own
-  // document on main — `listPlans` cannot see it, and it is exactly the one
-  // the next piece of that work belongs under.
-  it('keeps a programme whose projects are all gone', () => {
+  it('labels a programme with the repositories that hold it, and counts no projects', () => {
     const rows = programmeRows({ repos: REPOS, env, read });
-    const empty = rows.find((r) => r.name === 'entity-detail');
-    assert.equal(empty.projects, 0);
-    assert.match(programmeLabel(empty), /no projects on main/u);
-  });
-
-  it('counts what is unfinished, and says when everything is done', () => {
-    const rows = programmeRows({ repos: REPOS, env, read });
-    assert.match(programmeLabel(rows.find((r) => r.name === 'msr-core')), /2 projects, 1 unfinished/u);
-    assert.match(programmeLabel(rows.find((r) => r.name === 'mc')), /1 project, all done/u);
+    assert.equal(programmeLabel(rows.find((r) => r.name === 'msr-core')), 'msr-core  —  memoro');
   });
 });
 
@@ -226,7 +208,7 @@ describe('the prompt', () => {
   });
 
   // The assertion that keeps this prompt from growing back. None of these is
-  // knowable when the session opens: how many projects the programme needs,
+  // knowable when the session opens: how many goals the programme needs,
   // what they are called, whether a plan comes out of it at all, or by what
   // route it reaches main. A prompt that answers them in advance is guessing.
   //
@@ -251,8 +233,8 @@ describe('the prompt', () => {
   });
 
   // A planning session opened its pull request from a branch named after the
-  // project and held it in a scratchpad worktree (`morning-calls`, 2026-10-14).
-  it('names the plan pull request\'s branch `plan/<project>`, never the project\'s', () => {
+  // work and held it in a scratchpad worktree (`morning-calls`, 2026-10-14).
+  it('names the session\'s own branch `plan/<slug>`, never a goal\'s', () => {
     const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE) });
     assert.ok(prompt.split('\n').includes(BRANCH_RULE), prompt);
   });
@@ -270,17 +252,6 @@ describe('the prompt', () => {
     assert.ok(told.includes(shared), told);
     assert.equal(told.split(shared).length - 1, 1, 'the shared text should appear once');
     assert.ok(!launch.prompt.includes(shared), launch.prompt);
-  });
-
-  // The receiving end of the brief's hand-off is the role's to say, not the
-  // prompt's: `canon/roles/plan.md` carries `plan-review`, and the prompt no
-  // longer repeats it (Martin, 2026-09-13 — the intro was inaktuell).
-  it('leaves the plan-review hand-off to the role', () => {
-    const { prompt, overlay } = planLaunch({
-      programme: 'msr-core', repos: ['memoro'], role: readCanonRole(PLAN_ROLE),
-    });
-    assert.ok(!prompt.includes('plan-review'), prompt);
-    assert.match(overlay, /blocked_by:\s*plan-review/u);
   });
 
   it('names only the checkout it actually got', () => {
@@ -476,9 +447,8 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
   it('refuses every recognised session and agent before choosing or creating anything', async () => {
     for (const [cwd, extra, role] of [
       ['/outside', { MC_ROLE: PLAN_ROLE, MC_PROGRAMME: 'mc' }, 'plan session'],
-      ['/outside', { MC_ROLE: 'review-session:project' }, 'review session \\(project\\)'],
+      ['/outside', { MC_ROLE: 'review-session:goal' }, 'review session \\(goal\\)'],
       ['/outside', { MC_GOAL: 'mc/g' }, 'build session \\(goal\\)'],
-      ['/outside', { MC_STEP: 'p:0' }, 'build session \\(project\\)'],
       ['/mc/programs/mc', {}, 'plan session'],
       ['/outside', { CLAUDECODE: '1' }, 'coding-agent session'],
       ['/outside', { CODEX_THREAD_ID: 'thread' }, 'coding-agent session'],
@@ -491,7 +461,7 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
       });
       assert.equal(code, 1);
       assert.match(stderr.out.text, new RegExp(`already in a ${role}`));
-      for (const command of ['mc project new', 'mc project step add', 'mc project send']) assert.ok(stderr.out.text.includes(command));
+      for (const command of ['mc goal new', 'mc goal set', 'mc goal criterion add']) assert.ok(stderr.out.text.includes(command));
     }
   });
 });

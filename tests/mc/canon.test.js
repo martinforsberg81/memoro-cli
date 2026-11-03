@@ -10,12 +10,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { canonRoot } from '../../src/mc/canon.js';
-import { CLAUDE_MODELS, CODEX_MODELS } from '../../src/mc/plan-schema.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -32,33 +30,5 @@ describe('canonRoot', () => {
     // point at <repo>/canon regardless of the test runner's cwd.
     const root = canonRoot();
     assert.equal(root, join(repoRoot, 'canon'));
-  });
-});
-
-describe('canon/roles/project-verb.md names the step models and their tool', () => {
-  const role = readFileSync(new URL('../../canon/roles/project-verb.md', import.meta.url), 'utf8').replace(/\s+/gu, ' ');
-  // The pairing as the role writes it, e.g. "`haiku` and `opus` on claude".
-  const onTool = (models, tool) => `${models.map((model) => `\`${model}\``).join(' and ')} on ${tool}`;
-
-  it('names each tool\'s concrete models as what a step never names', () => {
-    assert.ok(role.includes(onTool(CLAUDE_MODELS, 'claude')), 'the role no longer pairs haiku and opus with claude');
-    assert.ok(role.includes(onTool(CODEX_MODELS, 'codex')), 'the role no longer pairs the Codex names with codex');
-    assert.ok(role.includes('A step never names a concrete model.'), 'the role no longer says a step names a class only');
-  });
-
-  it('states the flag the Codex name goes to and the effort override codex gets', () => {
-    assert.ok(role.includes('`codex exec -m`'), 'the role no longer says the Codex name goes to codex exec -m');
-    assert.ok(role.includes('`-c model_reasoning_effort=<level>`'), 'the role no longer says effort reaches codex as model_reasoning_effort');
-  });
-
-  it('does not call the Codex names replacements, nor say only haiku and opus are valid', () => {
-    assert.doesNotMatch(role, /\breplac\w* (?:for )?`?(?:haiku|opus)/iu);
-    assert.doesNotMatch(role, /\bonly `?haiku`? (?:or|and) `?opus/iu);
-  });
-
-  it('names the work classes fast and large and the review model, and no longer makes Haiku the rule for every step', () => {
-    assert.ok(role.includes('`fast`') && role.includes('`large`'), 'the role no longer names the work classes fast and large');
-    assert.ok(role.includes('`mc model set review`'), 'the role no longer says review is configured with mc model set review');
-    assert.doesNotMatch(role, /Haiku is the first choice/u, 'the role still makes Haiku the first choice for every step');
   });
 });

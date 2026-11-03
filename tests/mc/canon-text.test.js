@@ -32,7 +32,7 @@ const DEFINING = {
   'dev-servers': 'Dev servers start only through mc',
   'asking-martin': 'Never a menu of options.',
   memory: 'A rule about how to work is never a memory.',
-  'writing-a-plan': 'A plan is written through the verbs; the files are mc',
+  'writing-a-goal': 'A goal is written through the verbs; the files are mc',
   'writing-tests': 'A pinned number is a summary of a list, and the list is what to pin.',
 };
 
@@ -75,7 +75,6 @@ describe('one home per rule in canon/', () => {
   const RULES = {
     'publish-and-merge': [/admin override and no gate round/u, /pushes, opens the PR and queues it/u, /queues\s+nothing/u],
     processes: [/not yours to stop/u, /know what it is before you signal it/u],
-    'writing-a-plan': [/mc project step add <project>/u],
     'writing-tests': [/pinned number is a summary/u, /scan reads what git tracks/u],
   };
   for (const [home, rules] of Object.entries(RULES)) {
@@ -117,8 +116,8 @@ describe('one home per rule in canon/', () => {
 });
 
 describe('every role names the skills it needs', () => {
-  const BUILDS = ['build-session:goal', 'build-session:project', 'build-session:worker'];
-  const ROLES = ['brief', ...BUILDS, 'review-session:goal', 'review-session:project', 'helper', 'intake', 'plan-session'];
+  const BUILDS = ['build-session:goal'];
+  const ROLES = ['brief', ...BUILDS, 'review-session:goal', 'helper', 'intake', 'plan-session'];
   const named = (overlay) => [...overlay.matchAll(/^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu)].map((m) => m[1]);
 
   it('names only skills canon ships, and every skill is named by some role', () => {
@@ -144,14 +143,14 @@ describe('every role names the skills it needs', () => {
   });
 
   it('every role that changes code names publish-and-merge, git and scratch-and-probes', () => {
-    for (const role of ['brief', ...BUILDS, 'plan-session', 'review-session:project']) {
+    for (const role of ['brief', ...BUILDS, 'plan-session']) {
       const skills = named(readCanonRole(role).overlay);
       for (const skill of ['publish-and-merge', 'git', 'scratch-and-probes']) assert.ok(skills.includes(skill), `${role} does not name ${skill}`);
     }
   });
 
   it('reaches the session as a pointer to the installed skill, not as its text', () => {
-    const told = instructionsFor('claude-code', readCanonRole('build-session:project').overlay);
+    const told = instructionsFor('claude-code', readCanonRole('build-session:goal').overlay);
     assert.match(told, /Skill `mc-processes` \(/u);
     assert.doesNotMatch(told, /^@skill /mu);
     assert.doesNotMatch(told, phrase(DEFINING.processes));
