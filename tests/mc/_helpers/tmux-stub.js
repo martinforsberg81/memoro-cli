@@ -37,8 +37,108 @@
  * caller is sitting in, which decides whether mc can ask a tool to leave
  * politely or has to replace the pane it is itself running in.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const STUB = `#!/bin/sh
+# Its state is beside the bin it is reached from: \${0%/*}/../tmux-state.
+state="\${0%/*}/../tmux-state"
+. "$state/settings"
+printf '%s\\n' "$*" >> "$state/calls.log"
+case "$1" in
+  has-session)
+    if [ -f "$state/alive-$3" ]; then exit 0; fi
+    exit 1
+    ;;
+  list-clients)
+    cat "$state/clients"
+    exit 0
+    ;;
+  list-windows)
+    printf '%s\n' "$windowIndex"
+    exit 0
+    ;;
+  list-panes)
+    cat "$state/panes"
+    exit 0
+    ;;
+  display-message)
+    printf '%s\n' "$clientSession"
+    exit 0
+    ;;
+  send-keys)
+    if [ "$4" = "-l" ]; then
+      printf '%s' "$5" >> "$state/prompt.txt"
+      exit 0
+    fi
+    if [ "$4" = "C-u" ]; then
+      : > "$state/prompt.txt"
+      exit 0
+    fi
+    if [ "$4" = "BSpace" ]; then
+      current=\`cat "$state/prompt.txt"\`
+      printf '%s' "\${current%?}" > "$state/prompt.txt"
+      exit 0
+    fi
+    # Enter and C-m are the same carriage return to this stub; the real
+    # thing was measured to honour one and not the other in some state.
+    if [ "$4" = "Enter" ] || [ "$4" = "C-m" ]; then
+      mode=\`cat "$state/mode"\`
+      case "$mode" in
+        broken) exit 0 ;;
+        sticky)
+          if [ ! -f "$state/first-enter" ]; then touch "$state/first-enter"; exit 0; fi
+          ;;
+      esac
+      if [ -s "$state/prompt.txt" ]; then
+        printf '> %s\\n' "\`cat "$state/prompt.txt"\`" >> "$state/screen.txt"
+        : > "$state/prompt.txt"
+      fi
+      exit 0
+    fi
+    exit 0
+    ;;
+  capture-pane)
+    seen=\`cat "$state/captures"\`
+    seen=\`expr "$seen" + 1\`
+    printf '%s\\n' "$seen" > "$state/captures"
+    if [ "$seen" -le "$drawAfter" ]; then shown=""; else shown=\`cat "$state/prompt.txt"\`; fi
+    # The ghost (D-0151): an empty input is drawn as an old order, and the
+    # drawing comes back the moment the input is empty again.
+    if [ -z "$shown" ] && [ -n "$ghost" ]; then shown="$ghost"; fi
+    cat "$state/screen.txt"
+    if [ -s "$state/menu" ]; then cat "$state/menu"; exit 0; fi
+    if [ "$seen" -le "$busyFor" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
+    printf '%s\\n' "+------------------------------+"
+    printf '| \\342\\235\\257 %s\\n' "$shown"
+    printf '%s\\n' "+------------------------------+"
+    printf '%s\\n' "  ? for shortcuts"
+    exit 0
+    ;;
+esac
+exit 0
+`;
+
+let shared = null;
+/** The stub, written and executed once in this process, in a root of its own. */
+function sharedStub() {
+  if (shared) return shared;
+  const root = mkdtempSync(join(tmpdir(), 'mc-tmux-stub-'));
+  mkdirSync(join(root, 'bin'));
+  mkdirSync(join(root, 'tmux-state'));
+  writeFileSync(join(root, 'tmux-state', 'settings'), '');
+  writeFileSync(join(root, 'tmux-state', 'calls.log'), '');
+  const path = join(root, 'bin', 'tmux');
+  writeFileSync(path, STUB);
+  chmodSync(path, 0o755);
+  spawnSync(path, ['has-session', '-t', 'warm']);
+  shared = path;
+  return path;
+}
+// While the importing file loads, so no test's time pays the first exec.
+sharedStub();
 
 export function installTmuxStub(root, {
   mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
@@ -68,82 +168,12 @@ export function installTmuxStub(root, {
   writeFileSync(captures, '0\n');
   for (const name of alive) writeFileSync(join(state, `alive-mc-${name}`), '');
 
-  writeFileSync(join(bin, 'tmux'), `#!/bin/sh
-printf '%s\\n' "$*" >> "${log}"
-case "$1" in
-  has-session)
-    if [ -f "${state}/alive-$3" ]; then exit 0; fi
-    exit 1
-    ;;
-  list-clients)
-    cat "${state}/clients"
-    exit 0
-    ;;
-  list-windows)
-    printf '%s\n' "${windowIndex}"
-    exit 0
-    ;;
-  list-panes)
-    cat "${state}/panes"
-    exit 0
-    ;;
-  display-message)
-    printf '%s\n' "${clientSession}"
-    exit 0
-    ;;
-  send-keys)
-    if [ "$4" = "-l" ]; then
-      printf '%s' "$5" >> "${prompt}"
-      exit 0
-    fi
-    if [ "$4" = "C-u" ]; then
-      : > "${prompt}"
-      exit 0
-    fi
-    if [ "$4" = "BSpace" ]; then
-      current=\`cat "${prompt}"\`
-      printf '%s' "\${current%?}" > "${prompt}"
-      exit 0
-    fi
-    # Enter and C-m are the same carriage return to this stub; the real
-    # thing was measured to honour one and not the other in some state.
-    if [ "$4" = "Enter" ] || [ "$4" = "C-m" ]; then
-      mode=\`cat "${modePath}"\`
-      case "$mode" in
-        broken) exit 0 ;;
-        sticky)
-          if [ ! -f "${first}" ]; then touch "${first}"; exit 0; fi
-          ;;
-      esac
-      if [ -s "${prompt}" ]; then
-        printf '> %s\\n' "\`cat "${prompt}"\`" >> "${screen}"
-        : > "${prompt}"
-      fi
-      exit 0
-    fi
-    exit 0
-    ;;
-  capture-pane)
-    seen=\`cat "${captures}"\`
-    seen=\`expr "$seen" + 1\`
-    printf '%s\\n' "$seen" > "${captures}"
-    if [ "$seen" -le "${drawAfter}" ]; then shown=""; else shown=\`cat "${prompt}"\`; fi
-    # The ghost (D-0151): an empty input is drawn as an old order, and the
-    # drawing comes back the moment the input is empty again.
-    if [ -z "$shown" ] && [ -n "${ghost}" ]; then shown="${ghost}"; fi
-    cat "${screen}"
-    if [ -s "${state}/menu" ]; then cat "${state}/menu"; exit 0; fi
-    if [ "$seen" -le "${busyFor}" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
-    printf '%s\\n' "+------------------------------+"
-    printf '| \\342\\235\\257 %s\\n' "$shown"
-    printf '%s\\n' "+------------------------------+"
-    printf '%s\\n' "  ? for shortcuts"
-    exit 0
-    ;;
-esac
-exit 0
-`);
-  chmodSync(join(bin, 'tmux'), 0o755);
+  writeFileSync(join(state, 'settings'), Object.entries({ windowIndex, clientSession, drawAfter, busyFor, ghost })
+    .map(([name, value]) => `${name}='${String(value).replace(/'/gu, "'\\''")}'\n`).join(''));
+  // One script per process, run once, reached by symlink: on macOS a freshly
+  // written script pays 0.3-0.9 s at its first exec (2026-11-03), and a stub
+  // written per test paid it per test.
+  symlinkSync(sharedStub(), join(bin, 'tmux'));
 
   return {
     bin,

@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { installTmuxStub } from './_helpers/tmux-stub.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { runVerb } from './_helpers/mc-verb.js';
 import { parseArgs } from '../../src/mc/commands/work.js';
 import { startInBackground } from '../../src/mc/work-open.js';
 
@@ -164,14 +164,14 @@ describe('what the background actually launches', () => {
  *
  * An id matching nothing became a brand new conversation with the id as its
  * opening words, and the only way to notice was to read the transcript
- * afterwards. Asserted at the command line, because the check has to happen in
+ * afterwards. Asserted at the verb, as `mc` dispatches it (in this process), because the check has to happen in
  * the verb — before anything is started, and before tmux is touched at all.
  */
 describe('an id that matches nothing is an error, not a new conversation', () => {
-  it('refuses before starting anything, and says where to look', () => {
+  it('refuses before starting anything, and says where to look', async () => {
     const fx = cliFixture();
     try {
-      const asked = runMcCli(['work', 'alpha', '--tmux', '--resume', 'deadbeef'], fx.env);
+      const asked = await runVerb(['work', 'alpha', '--tmux', '--resume', 'deadbeef'], fx.env);
       assert.equal(asked.status, 1, asked.stdout);
       assert.match(asked.stderr, /no conversation in alpha starts with deadbeef/u);
       assert.match(asked.stderr, /mc work alpha lists what is there/u);
@@ -181,14 +181,17 @@ describe('an id that matches nothing is an error, not a new conversation', () =>
     } finally { fx.cleanup(); }
   });
 
-  it('and it is the resume that is refused, not the area', () => {
+  it('and it is the resume that is refused, not the area', async () => {
     // Same area, no --resume: it starts, which is what makes the refusal above
     // a statement about the id rather than about anything else being wrong.
     const fx = cliFixture();
     try {
-      const asked = runMcCli(['work', 'alpha', '--tmux', 'do the thing'], fx.env);
+      // The trust dialog's look at the pane, a second apart, on a fake clock.
+      const waits = [];
+      const asked = await runVerb(['work', 'alpha', '--tmux', 'do the thing'], fx.env, { sleep: (ms) => { waits.push(ms); } });
       assert.equal(asked.status, 0, asked.stderr);
       assert.ok(fx.tmux.calls().some((line) => line.startsWith('new-session')));
+      assert.deepEqual(waits, [1000], 'one look at the pane, which shows the prompt');
     } finally { fx.cleanup(); }
   });
 });

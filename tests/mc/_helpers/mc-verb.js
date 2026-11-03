@@ -10,13 +10,14 @@
  * PATH), so `env` is laid over it for the call and taken off afterwards, with
  * the same two pins `runMcCli` sets. Tests in one file run one after another,
  * so no other test sees the overlay; a test that runs concurrently with
- * another must not use this.
+ * another must not use this. `deps` goes to the verb's `run` beside the two
+ * streams: the seams a verb takes (a clock, a sleep).
  */
 import { VERB_MODULES } from '../../../src/mc-verbs.js';
 
 const PINNED = { MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1' };
 
-export async function runVerb([name, ...argv], env = {}) {
+export async function runVerb([name, ...argv], env = {}, deps = {}) {
   const module = await import(new URL(VERB_MODULES[name].replace('./', '../../../src/'), import.meta.url));
   const overlay = { ...PINNED, ...env };
   const saved = {};
@@ -28,6 +29,7 @@ export async function runVerb([name, ...argv], env = {}) {
   const err = [];
   try {
     const status = await module.run(argv, {
+      ...deps,
       stdout: { write: (text) => { out.push(text); } },
       stderr: { write: (text) => { err.push(text); } },
     });
