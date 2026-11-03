@@ -161,6 +161,64 @@ const sessionOf = (fx, id) => JSON.parse(readFileSync(join(fx.sessions, `${id}.j
 const sideLines = (fx) => readFileSync(fx.side, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
 const minutesAgo = (n) => new Date(NOW.getTime() - n * 60_000);
 
+it('receipt: next accepts acted for click and mixed actions, plus legacy clicked for clicks', async () => {
+  const runNext = async (args, answer) => {
+    const fx = fixture();
+    await fakeSession(fx, { id: 's1', answer });
+    return mc(['next', 's1', ...args], fx);
+  };
+  const click = await runNext(['--click', '.save'], (step) => ({
+    ok: true, file: step.out, url: 'http://x/app/', acted: step.actions,
+  }));
+  assert.equal(click.code, 0, click.stderr);
+
+  const legacy = await runNext(['--click', '.save'], (step) => ({
+    ok: true, file: step.out, url: 'http://x/app/', clicked: ['.save'],
+  }));
+  assert.equal(legacy.code, 0, legacy.stderr);
+
+  const mixed = await runNext(['--click', '.save', '--fill', 'input[name=title]=Bank'], (step) => ({
+    ok: true, file: step.out, url: 'http://x/app/', acted: step.actions,
+  }));
+  assert.equal(mixed.code, 0, mixed.stderr);
+});
+
+it('receipt: next refuses partial answers and keeps failed distinct from unsupported', async () => {
+  const runNext = async (answer) => {
+    const fx = fixture();
+    await fakeSession(fx, { id: 's1', answer });
+    return mc(['next', 's1', '--click', '.a', '--click', '.b'], fx);
+  };
+  const partial = await runNext((step) => ({ ok: true, file: step.out, url: 'http://x/app/', acted: [{}] }));
+  assert.equal(partial.code, 1);
+  assert.match(partial.stderr, /does not acknowledge every requested action/u);
+  assert.doesNotMatch(partial.stderr, /not supported|does not understand/u);
+
+  const failed = await runNext((step) => ({
+    ok: true, file: step.out, url: 'http://x/app/',
+    failed: { step: 1, kind: 'click', selector: '.a', error: 'no target' },
+  }));
+  assert.equal(failed.code, 1);
+  assert.match(failed.stdout, /^failed {2}step 1 \(click \.a\): no target$/mu);
+  assert.doesNotMatch(failed.stderr, /not supported|does not understand/u);
+});
+
+it('receipt: next without a receipt reports unsupported and a thrown eval exits 1', async () => {
+  const missingFx = fixture();
+  await fakeSession(missingFx, { id: 's1', answer: (step) => ({ ok: true, file: step.out, url: 'http://x/app/' }) });
+  const missing = await mc(['next', 's1', '--click', '.save'], missingFx);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /this installed mc does not understand the result from .* in .*\/memoro/u);
+
+  const evalFx = fixture();
+  await fakeSession(evalFx, { id: 's1', answer: (step) => ({
+    ok: true, file: step.out, url: 'http://x/app/', acted: step.actions, evaluated: [{ error: 'Error: bad' }],
+  }) });
+  const thrown = await mc(['next', 's1', '--eval', 'throw new Error("bad")'], evalFx);
+  assert.equal(thrown.code, 1);
+  assert.match(thrown.stdout, /^eval 1  threw: Error: bad$/mu);
+});
+
 describe('mc shot --keep', () => {
   it('prints what a shot prints, then the kept line, and writes a session file without secrets', async () => {
     const fx = fixture();
