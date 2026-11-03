@@ -64,17 +64,17 @@ test('a retired manual credits flag cannot override plan-first routing', () => {
   }
 });
 
-test('review is pinned to the catalog review, whatever the usage says', () => {
+test('review takes its first candidate whatever the usage says', () => {
   const unread = choose(empty(), 'review');
   assert.equal(unread.ok, true);
   assert.equal(unread.spec, 'claude:opus:high');
-  assert.equal(unread.basis, 'pinned');
+  assert.equal(unread.basis, 'preferred');
   const nearLimit = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review');
   assert.equal(nearLimit.spec, 'claude:opus:high', 'not outscored by the codex headroom');
   assert.equal(choose(applyRefusal(empty(), 'codex', AHEAD), 'review').spec, 'claude:opus:high', 'the other provider\'s refusal is not review\'s');
 });
 
-test('review uses its pinned plan through 99 % and API reserve at 100 %', () => {
+test('review uses its one candidate\'s plan through 99 % and API reserve at 100 %', () => {
   const nearLimit = choose(claude(empty(), win(0.99)), 'review');
   assert.equal(nearLimit.spec, 'claude:opus:high');
   const full = choose(claude(empty(), win(1)), 'review');
@@ -90,6 +90,56 @@ test('review uses its own provider API reserve on a plan refusal', () => {
   assert.equal(held.spec, 'claude:opus:high');
   assert.equal(held.billing, 'credits');
   assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review').spec, 'claude:opus:high', 'a passed refusal holds nothing');
+});
+
+const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
+const OPUS = Object.freeze({ tool: 'claude', model: 'opus', effort: 'high' });
+const REVIEWS = { ...DEFAULT_CATALOG, review: [SOL, OPUS] };
+const review = (capacity, avoid = null) => chooseCandidate({ cls: 'review', catalog: REVIEWS, capacity, now: NOW, avoid });
+
+test('review passes a candidate whose plan is spent for the next one on plan', () => {
+  const spent = review(codex(claude(empty(), win(0.5)), win(1, LATER)));
+  assert.equal(spent.ok, true);
+  assert.equal(spent.spec, 'claude:opus:high');
+  assert.equal(spent.basis, 'preferred');
+  assert.equal(spent.billing, undefined, 'on the plan, not credits');
+  assert.match(spent.why, /^review candidate 2 — codex:gpt-6.1-sol:high: codex is at 100 % of its plan limit$/u);
+  const refused = review(applyRefusal(codex(empty(), win(0.1)), 'codex', AHEAD));
+  assert.equal(refused.spec, 'claude:opus:high', 'a refused plan is passed too');
+});
+
+test('review passes the model the goal was built on, when both plans have room', () => {
+  const both = codex(claude(empty(), win(0.5)), win(0.5));
+  const built = review(both, { tool: 'codex', model: 'gpt-6.1-sol' });
+  assert.equal(built.spec, 'claude:opus:high');
+  assert.match(built.why, /codex gpt-6.1-sol built it/u);
+  assert.equal(review(both).spec, 'codex:gpt-6.1-sol:high', 'unbuilt, the first is taken');
+});
+
+test('review order is preference, not headroom: the first on plan wins over a roomier second', () => {
+  const roomier = codex(claude(empty(), win(0.05)), win(0.9));
+  const chosen = review(roomier, { tool: 'claude', model: 'haiku' });
+  assert.equal(chosen.spec, 'codex:gpt-6.1-sol:high', 'codex has 10 % headroom, claude 95 %');
+  assert.match(chosen.why, /^review candidate 1, the first$/u);
+});
+
+test('review with no candidate on plan goes to the first one\'s API reserve', () => {
+  const none = review(applyRefusal(codex(empty(), win(1, LATER)), 'claude', AHEAD));
+  assert.equal(none.ok, true);
+  assert.equal(none.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(none.basis, 'api');
+  assert.equal(none.billing, 'credits');
+  const past = review(applyRefusal(codex(empty(), win(1, LATER)), 'claude', AHEAD), { tool: 'codex', model: 'gpt-6.1-sol' });
+  assert.equal(past.spec, 'claude:opus:high', 'never the build model\'s reserve');
+  assert.equal(past.billing, 'credits');
+});
+
+test('review waits when every candidate is the build model', () => {
+  const only = { ...DEFAULT_CATALOG, review: [SOL] };
+  const result = chooseCandidate({ cls: 'review', catalog: only, capacity: codex(empty(), win(0.1)), now: NOW, avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
+  assert.equal(result.ok, false);
+  assert.equal(result.avoided, true);
+  assert.equal(result.reason, 'every review candidate is codex gpt-6.1-sol, the model its last build session ran on');
 });
 
 test('a refusal in force makes its provider ineligible, and a passed one does not', () => {

@@ -251,11 +251,13 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
    role (`canon/roles/build-session.md`, its `goal` and shared build parts), in
    the first repository's worktree, with the goal's class routing, model and
    billing as a step has them. A goal in `review` gets a review session with
-   the `review-session:goal` role instead, on the review class's candidate
-   (`mc model set review`), never routed. It never runs on the model of the
-   goal's last build entry: when the review model is that model, the goal
-   waits until `mc model set review` names another; it is never reviewed by
-   its builder. The models are compared as the catalog spells them, which is
+   the `review-session:goal` role instead, on a review candidate (`mc
+   model`). Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on. It never runs on the model of the goal's last build entry: it
+   takes the next candidate, and when every candidate is that model the goal
+   waits and says so once, until `mc model add review` names another; it is never
+   reviewed by its builder. With no candidate on its plan it uses the API
+   reserve as a class does (`docs/technical/mc-run.md`, *Work classes and
+   capacity*). The models are compared as the catalog spells them, which is
    how `MC_MODEL` writes them into the heading. The review is told its pull
    request and head: the open pull request on `goal/<goal>`, asked of GitHub
    before the launch. With none, the goal is set `blocked` with a runner entry.
@@ -448,7 +450,7 @@ head; that is a person's act, and its landing still sets the goal `done`.
 - **No owner, lease, revision or capability report.** Anyone may work in the
   worktree; the last entry says what was done.
 - **No review by its builder.** The review is a session of its own role on
-  the review model, never the last build entry's.
+  a review candidate, never the last build entry's model.
 - **No merge by a session.** A build session publishes with `--no-merge`; a
   review session publishes nothing. Only a green review, through the runner,
   queues a goal's pull request, and only the head it judged lands.

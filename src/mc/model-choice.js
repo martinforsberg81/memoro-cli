@@ -8,8 +8,13 @@
  * (model-capacity.js). The runner reads this choice at each class launch.
  *
  * Available subscription candidates come first. If all lack plan capacity,
- * the first catalog candidate uses its provider's API reserve. Review keeps
- * its pinned model and uses the same provider's API at 100 %.
+ * the first catalog candidate uses its provider's API reserve.
+ *
+ * Review is an ordered list, and its order is preference, not headroom: it
+ * takes the first candidate that can run on its plan now — not refused, and no
+ * window at its limit — and a later one only when an earlier cannot, or is the
+ * model the goal was built on (`avoid`). When none can run on its plan, the
+ * first candidate it may run on goes to its provider's API reserve.
  *
  * A candidate is judged at `now` as:
  *   - refused: its provider refused and the refusal has not passed. Never chosen.
@@ -71,28 +76,57 @@ function judge(capacity, candidate, now) {
 const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls, candidate, spec: candidateSpec(candidate), basis, headroom, why });
 
 /**
+ * The review candidate: the first in the list, past `avoid`'s model, whose plan
+ * can run it now. Only the refusal and the windows are read, as for review
+ * before it was a list; capacity that is unknown is no reason to pass one by.
+ */
+function chooseReview(cls, catalog, capacity, now, avoid) {
+  const list = catalog.review;
+  const eligible = avoid?.model ? list.filter((value) => value.model !== avoid.model) : list;
+  if (eligible.length === 0) {
+    const names = [...new Set(list.map((value) => `${value.tool} ${value.model}`))].join(', ');
+    return { ok: false, transient: true, class: cls, avoided: true, reason: `every review candidate is ${names}, the model its last build session ran on`, retry_at: null };
+  }
+  const judged = eligible.map((value) => {
+    const standing = providerAt(capacity, value.tool, now);
+    if (standing.refusal_until) return { candidate: value, onPlan: false, why: `${value.tool} plan refused until ${standing.refusal_until}` };
+    const windows = windowStanding(value.tool, standing);
+    return { candidate: value, onPlan: windows.state !== 'exhausted', why: windows.why };
+  });
+  const passed = (entry) => `${candidateSpec(entry.candidate)}: ${entry.why}`;
+  const index = judged.findIndex((entry) => entry.onPlan);
+  if (index >= 0) {
+    const chosen = judged[index];
+    const reasons = [
+      ...(eligible.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []),
+      ...judged.slice(0, index).map(passed),
+    ];
+    const place = `review candidate ${list.indexOf(chosen.candidate) + 1}`;
+    return answer(cls, chosen.candidate, 'preferred', null, reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`);
+  }
+  const [first] = judged;
+  return { ...answer(cls, first.candidate, 'api', null, `${judged.map(passed).join('; ')}; API reserve`), billing: 'credits' };
+}
+
+/**
  * The candidate a class runs on.
  *
  * `{ ok: true, class, candidate, spec, basis, headroom, why }`, where `basis` is
- * `pinned` (review on plan), `known` (the candidate with the most headroom; the
+ * `preferred` (the first review candidate on plan), `known` (the candidate with the most headroom; the
  * first in catalog order on a tie), `bootstrap` (the first claude candidate
  * with unknown capacity when no candidate is known), or `api`.
  *
  * `{ ok: false, transient: true, class, reason, retry_at }` when nothing can take
  * the class now. `retry_at` is the earliest instant that changes an answer (a
  * refusal passing, a window resetting), or null when none is known. Transient:
- * the step waits for it, it is not a block on the project.
+ * the step waits for it, it is not a block on the project. A review whose every
+ * candidate is `avoid`'s model is such an answer, with `avoided: true`.
+ *
+ * `avoid` (`{ tool, model }`, review only) is the model a goal's last build
+ * session ran on: a review never runs on it.
  */
-export function chooseCandidate({ cls, catalog, capacity, now = new Date() }) {
-  if (cls === REVIEW_CLASS) {
-    // Review is pinned to a model, but the plan limit still applies to it.
-    const standing = providerAt(capacity, catalog.review.tool, now);
-    const until = standing.refusal_until;
-    if (until) return { ...answer(cls, catalog.review, 'api', null, `plan refused until ${until}; API reserve`), billing: 'credits' };
-    const capacityNow = windowStanding(catalog.review.tool, standing);
-    if (capacityNow.state === 'exhausted') return { ...answer(cls, catalog.review, 'api', null, `${capacityNow.why}; API reserve`), billing: 'credits' };
-    return answer(cls, catalog.review, 'pinned', null, 'review is the catalog\'s review model, never routed');
-  }
+export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null }) {
+  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid);
   if (!CLASSES.includes(cls)) throw new Error(`"${cls}" is not a class — fast, large or review`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   const known = judged.filter((entry) => entry.state === 'known');

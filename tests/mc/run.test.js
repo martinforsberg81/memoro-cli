@@ -2052,7 +2052,7 @@ test('a review class step runs on the catalog\'s review model whatever the usage
   assert.equal(call.bin, '/bin/claude');
   const at = call.args.indexOf('--model');
   assert.deepEqual(call.args.slice(at, at + 4), ['--model', 'opus', '--effort', 'high']);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: pinned/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: preferred/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\topus\treview\tclaude\thigh\tplan\n/u);
 });
 
@@ -2063,6 +2063,16 @@ test('a review class step keeps its pinned model on API reserve when its plan re
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(f.calls.sessions[0].bin, process.execPath);
   assert.ok(f.calls.sessions[0].args.includes('opus'));
+});
+
+test('a review class step takes the review list in order: a spent first candidate gives the next one', async () => {
+  const f = fixture({ plans: { memoro: { m: reviewPlan() } }, session: okSession(), capacity: capacityWith({ claude: 0.5, codex: 1 }) });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, { tool: 'claude', model: 'opus', effort: 'high' }] });
+  await createRunner({ deps: f.deps }).pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:project');
+  assert.equal(call.bin, '/bin/claude');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: review starting \(claude opus · effort high.*\) · class review: preferred \(review candidate 2 — codex:gpt-6\.1-sol:high: codex is at 100 % of its plan limit\)/u);
 });
 
 test('a codex plan refusal routes the next class step to Codex API', async () => {
@@ -6071,7 +6081,7 @@ test('a goal in review gets a review session: the goal-review role, the review m
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
   assert.equal(call.env.MC_GOAL, 'prog/judged');
-  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review.model);
+  assert.equal(call.env.MC_MODEL, DEFAULT_CATALOG.review[0].model);
   assert.match(call.args.join('\n'), /ROLE review-session:goal/u);
   assert.match(call.prompt, /pull request is #31, at head abc1234def5678/u);
   assert.equal(call.prompt.includes('\n'), false);
@@ -6079,7 +6089,7 @@ test('a goal in review gets a review session: the goal-review role, the review m
 
 test('a review never runs on the model of the goal\'s last build entry: the goal waits, and an open goal behind it runs', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review.model}`, '2026-08-20T10:00Z');
+  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel, goals: { other: { log: goalLog('2026-08-28T10:00Z') } } });
   f.answer = logsItself(f, 'other');
   const runner = createRunner({ deps: f.deps });
@@ -6087,7 +6097,7 @@ test('a review never runs on the model of the goal\'s last build entry: the goal
   assert.equal(r.name, 'goal:prog/other', 'the waiting review does not stand in front');
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(f.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
-  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — the review model is claude opus, the model its last build session ran on/u.test(line)));
+  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — every review candidate is claude opus, the model its last build session ran on \(2026-08-20T10:00Z\); add another with mc model add review/u.test(line)));
   assert.equal(goalStatusOf(f), 'review', 'it waits; it is not reviewed by its builder');
 
   // A review's own entry is no build entry: the one before it is what counts.
@@ -6095,6 +6105,43 @@ test('a review never runs on the model of the goal\'s last build entry: the goal
   const g = reviewFixture({ log: reviewed });
   assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
   assert.equal(g.calls.sessions.length, 0);
+});
+
+const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' };
+const OPUS_REVIEW = { tool: 'claude', model: 'opus', effort: 'high' };
+/** A catalog whose review list is codex sol then claude opus, and a billing whose codex API is `codexApi`. */
+function reviewList(f, { codexApi = false } = {}) {
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [SOL_REVIEW, OPUS_REVIEW] });
+  f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: () => {}, readApi: () => ({ claude: false, codex: codexApi }) };
+  return f;
+}
+
+test('a goal review passes a first candidate at 100 % with its API off for the next on plan', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).name, 'goal:prog/judged');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'review-session:goal');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', 'opus']);
+  assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
+});
+
+test('a goal built on the first review candidate is reviewed by the next one when both have plan left', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('codex gpt-6.1-sol') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.1 }));
+  f.answer = judges(f, `green ${HEAD}`, 'review');
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
+  assert.ok(f.log.some((line) => /review starting .* class large: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
+});
+
+test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
+  const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1, refuse: { claude: '2026-08-29T13:00:00Z' } }));
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — .*codex is at 100 % of its plan limit.*; API reserve; codex API off/u.test(line)));
 });
 
 test('a red review leaves the goal blocked with its entry, wakes plan, and no build starts until it is set open', async () => {

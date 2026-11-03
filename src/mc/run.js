@@ -1134,9 +1134,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${provider} refused until ${until.toISOString()}`);
   }
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
-  function routeClass(cls) {
+  function routeClass(cls, { avoid = null } = {}) {
     try {
-      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now() });
+      const chosen = chooseCandidate({ cls, catalog: deps.catalog(), capacity: capacity.read(), now: deps.now(), avoid });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -2217,21 +2217,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   let lastSettle = -Infinity;
 
   /**
-   * The route a goal's review runs on: the review class's candidate (`mc model
-   * set review`), as `{ ok, route, settings }`, or `{ reason }` when it may not
-   * run now. It never runs on the model of the goal's last build entry — the
-   * heading's `<tool> <model>` — so a goal is not reviewed by its builder: with
-   * no other model, the goal waits.
+   * The route a goal's review runs on: the first review candidate (`mc model`)
+   * that can run on its plan now, as `{ ok, route, settings }`, or `{ reason }`
+   * when it may not run now. It never runs on the model of the goal's last
+   * build entry — the heading's `<tool> <model>` — so a goal is not reviewed by
+   * its builder: it takes the next candidate, and with none other, it waits.
    */
   function reviewRoute(goal) {
-    const route = routeClass(REVIEW_CLASS);
-    if (!route.ok) return { reason: route.reason };
-    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const built = lastBuildEntry(goal.log);
-    if (built?.model && built.model === settings.model) {
-      return { reason: `the review model is ${settings.tool} ${settings.model}, the model its last build session ran on (${built.at}); set another with mc model set review` };
-    }
-    return { ok: true, route, settings };
+    const route = routeClass(REVIEW_CLASS, { avoid: built?.model ? { tool: built.tool, model: built.model } : null });
+    if (route.avoided) return { reason: `${route.reason} (${built.at}); add another with mc model add review` };
+    if (!route.ok) return { reason: route.reason };
+    return { ok: true, route, settings: routedSettings(null, null, { kind: 'goal', candidate: route.candidate }) };
   }
 
   /**

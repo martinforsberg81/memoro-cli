@@ -667,8 +667,7 @@ are `SESSION_DEFAULTS` in `run-plan.js`. They are claude's: a codex plan has
 no row, so a codex step runs on the model it names, and with none named the
 tool picks its own. A class-routed step (ruling 59) takes its
 tool, model and effort from its candidate. `mc project send` gives the review
-step the `review` class, the one review candidate `mc model set review`
-configures, on either tool.
+step the `review` class, whose candidates `mc model` lists, on either tool.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. `codex`
   is the other: the same step, run by `codex exec`. A tool that is not
@@ -1698,25 +1697,32 @@ is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only the plan's
-review step names it, and it always takes the review candidate: its usage is
-not scored against other models. At its provider's plan limit, review
-keeps its pinned model and uses that provider's API reserve.
+review step and a goal's review take it, and it is not scored by headroom.
+Review is an ordered list of candidates: it takes the first that can run on its plan now, and a later one only when an earlier cannot or is the model the goal was built on. A candidate can run on its plan when its provider has not refused it and
+no window in force is at its limit. A goal's review passes over every
+candidate whose model is its last build entry's; with none left it waits and
+says so once. When no candidate it may run on can run on its plan, the first
+of them uses its provider's API reserve, and waits when that API is off: no
+candidate goes to credits while another's plan is free (ruling 59 § 4).
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
-- `mc model [list] [--json]` — the candidates of each class in preference
-  order, and the review candidate, and whether they come from the file or the
-  defaults.
-- `mc model add fast|large <tool>:<model>:<effort>` — appends a candidate.
-- `mc model remove fast|large <tool>:<model>` — removes the candidate with
-  exactly that tool and model.
-- `mc model set review <tool>:<model>:<effort>` — replaces the review candidate.
+- `mc model [list] [--json]` — the candidates of fast, large and review, each
+  a numbered list in preference order, and whether they come from the file or
+  the defaults.
+- `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate.
+- `mc model remove fast|large|review <tool>:<model>` — removes the candidate
+  with exactly that tool and model; a list keeps at least one.
+- `mc model set review <tool>:<model>:<effort>` — replaces the whole review
+  list with that one candidate.
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.1-sol:high`; review, `claude:opus:high`. A file that is there and
-cannot be read is refused, never quietly replaced by the defaults. A catalog
+`codex:gpt-6.1-sol:high`; review, `claude:opus:high` alone. A file whose
+`review` is one candidate object, as files were before review was a list, reads
+as a list of that candidate and is written back as a list the first time `mc
+model` changes it. A file that is there and cannot be read is refused, never quietly replaced by the defaults. A catalog
 edit never rewrites a plan.
 
 **The snapshot** is the runner's, kept apart from the catalog, so an observation
