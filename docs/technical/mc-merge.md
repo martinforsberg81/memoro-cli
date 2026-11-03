@@ -500,6 +500,18 @@ files and a bound gate (`measurementBinding`, `wholeSelection`) defer
 nothing, and neither does a repository that declares `session_whole`
 (memoro-cli, whose whole suite took 128 s in a session's gate on 2026-11-01).
 
+**A session's gate times the tests the change touches.** Every test the run
+reports, at any nesting, comes back from `realTests` with its name, line and
+node's own duration (`testsMeasured` in `src/mc/test-times.js`, from the same
+reporter that writes the per-file times). `mc gate` keeps those whose lines the
+diff against the merge base changed (`changedRanges`; a test runs to the line
+before the next test's, and a new test file counts whole) and prints one line
+each, `test <file> › <name> — 0.xyz s`, slowest first, at most eight. The
+time is information for the session and never changes GREEN or RED. A test
+over 1 s is the writing session's to rebuild before it publishes; the merge
+round still runs every file, so a slow test is red there only under the
+repository's own per-test limit.
+
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
 `MC_WORK_ROOT` and `MC_HOME` (`suiteEnv` in `src/mc/repo-gate.js`): the last two
@@ -836,6 +848,20 @@ not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
 A per-test timeout is not run again by `retry_once`: the verdict says
 `too slow — rebuild` with the test name and timeout duration, so a timed-out
 test is rebuilt by a session rather than consuming another round.
+
+**A test cut at its limit is kept in `~/mc/runner/too-slow/<repo>.tsv`**
+(`recordTooSlow` in `src/mc/test-times.js`). Every run that measures times — a
+session's `mc gate`, `mc test`, `mc publish`'s round and the merger's — reads
+the reporter's lines after the run and writes the tests node cut
+(`test timed out after <n>ms`): one row per test with its file, its name, when
+it was first and last seen, where (the pull request, `full`, or `gate`) and
+the limit. A test already there keeps its first-seen time; one that passes
+under its row's limit in a later run is removed. The file is written whole
+or not at all, and a write that fails never turns a round red. The limit is
+the repository's `--test-timeout` (`pr_tests_flags` in
+`src/mc/repo-gate-table.js`; memoro-cli's is a ratchet on its way from 30 s
+to 1 s, lowered as its slow tests are rebuilt): node cuts the test, not its
+describe block, and the round goes on with the rest.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,

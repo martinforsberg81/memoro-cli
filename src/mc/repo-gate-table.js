@@ -149,13 +149,19 @@ export const SHIPPED = Object.freeze({
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flags its own `test` script gives node, stated rather than parsed.
-    // The per-test ceiling is a ratchet (Martin, 2026-11-01: a test over one
-    // second is misbuilt and is rebuilt). It started at 300 s on 2026-11-01,
-    // when the slowest test measured 151 s alone (~380 git processes); the
-    // autonomy tests went the same day and the slowest left is branch-landed
-    // at 29 s, so 60 s; with git out of the suite the slowest test fits 30 s on a
-    // loaded machine (2026-11-01), so 30 s. Every change that rebuilds a file lowers it, until it
-    // reads 1000.
+    // The per-test ceiling is a ratchet (Martin, 2026-11-01 and 2026-11-03: a
+    // test over one second is misbuilt and is rebuilt, not rerun). It started
+    // at 300 s on 2026-11-01, when the slowest test measured 151 s alone (~380
+    // git processes); the autonomy tests went the same day and the slowest left
+    // is branch-landed at 29 s, so 60 s; with git out of the suite the slowest
+    // test fits 30 s on a loaded machine (2026-11-01), so 30 s. It cannot read
+    // 1000 yet: measured 2026-11-03 at three lanes on a loaded machine, 164
+    // tests in 31 files take over 1 s (the slowest 8.1 s), and a round cuts
+    // each of them red (`too slow — rebuild`, repo-gate.js), so nothing would
+    // land. Goal mc/tests-under-1s rebuilds them file by file and lowers this
+    // as it goes, until it reads 1000. Node cuts the test, not its describe
+    // block, and the round goes on; a test cut is kept in
+    // `~/mc/runner/too-slow/memoro-cli.tsv` (`recordTooSlow`) until it passes.
     pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs', '--test-timeout=30000']),
     // The whole suite took 128 s in a session's gate on 2026-11-01, so nothing
     // here is costly enough to leave to the merge round.

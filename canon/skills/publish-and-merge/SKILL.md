@@ -34,8 +34,9 @@ in it and say why in the reply.
 - Then it queues the pull request for the merger in the same call.
   `--no-merge` pushes and opens and queues nothing; so does `--json`.
 - The body says what changed, why, the user impact, the root cause of a fix,
-  what was run and what was not, and known gaps. Never claim a run you did
-  not make: "suite not run" is an acceptable sentence.
+  what was run and what was not, known gaps, and each new or changed test with
+  its time from your `mc gate` (`test <file> › <name> — 0.xyz s`). Never claim
+  a run you did not make: "suite not run" is an acceptable sentence.
 
 ## `mc merge <repo> <pr>` — the one door to main
 

@@ -220,12 +220,29 @@ export function summarizeGate(output, { exitCode }) {
   return { ok: exitCode === 0, counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
 }
 
+/** How many timed tests are named before the rest are counted. */
+export const TIMED_LINES = 8;
+
+/**
+ * The lines that say how long each test the change touches took:
+ * `test <file> › <name> — 0.xyz s`, the slowest first, at most `TIMED_LINES`
+ * and then how many were left out. Information for the session: the verdict
+ * does not depend on it. `tests` are the touched tests (`touchedTests`).
+ */
+export function timedTestLines(tests) {
+  const ordered = [...(tests || [])].sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file) || a.line - b.line);
+  const lines = ordered.slice(0, TIMED_LINES).map((test) => `test ${test.file} › ${test.name} — ${test.seconds.toFixed(3)} s`);
+  if (ordered.length > TIMED_LINES) lines.push(`… and ${ordered.length - TIMED_LINES} more timed tests (--json has them all)`);
+  return lines;
+}
+
 /**
  * The lines the session reads, capped at `OUTPUT_CAP` bytes. Green is three
  * lines; red names what failed, the re-run line when there are named files,
- * and where the whole output is.
+ * the time of each test the change touches (`timedTestLines`), and where the
+ * whole output is.
  */
-export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null }) {
+export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null, timed = [] }) {
   const c = summary.counts;
   const gates = summary.gates ?? [];
   let counted = c.tests != null
@@ -246,6 +263,7 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null, la
     if (!summary.failures.length && !gates.length) lines.push('the output names no failing test — read the log');
     if (rerun) lines.push(rerun);
   }
+  lines.push(...timed);
   lines.push(`whole output: ${logPath}`);
   let text = lines.join('\n');
   if (Buffer.byteLength(text) > OUTPUT_CAP) {

@@ -63,7 +63,7 @@ import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from '.
 import { runShell as runShellAsync, runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { log } from './logger.js';
-import { mcHome, workGatePath } from './paths.js';
+import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
@@ -72,7 +72,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes, runProgress } from './test-times.js';
+import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -267,7 +267,8 @@ export async function runGate({
   // gate the free cores (`testLanes`). The round record names both.
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = testLanes({ env, load, mode: gateMode });
-  const timesOf = { root, repo: lane, track: (file) => tracked.push(file) };
+  // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
+  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: (file) => tracked.push(file) };
   const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal, times: timesOf }));
   const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal, times: timesOf }));
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
@@ -2371,20 +2372,22 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   let tap = '';
   let stderr = '';
   let code = 0;
+  const tests = [];
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
     const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal, times });
     tap += ran.tap;
     stderr += ran.stderr || '';
-    if (ran.error) return { code: -1, tap, stderr, error: ran.error };
+    tests.push(...(ran.tests || []));
+    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests };
     // A batch with an unknown exit or no summary cannot disappear behind the
     // passing totals of another resource class.
     const totals = tapTotals(ran.tap);
     if (!code && (ran.code !== 0 || !totals.finished || !totals.tests)) code = ran.code || -1;
-    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs };
-    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs };
+    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests };
+    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests };
   }
-  return { code, tap, stderr, timedOut: false, timeoutMs, lanes };
+  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests };
 }
 
 function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
@@ -2413,10 +2416,16 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     const reporters = timesFile
       ? ['--test-reporter=tap', '--test-reporter-destination=stdout', `--test-reporter=${TIMES_REPORTER}`, `--test-reporter-destination=${timesFile}`]
       : ['--test-reporter=tap'];
+    // What the run measured, each test by name (`testsMeasured`), read before the
+    // file goes; the tests cut at their limit go to the too-slow file (`recordTooSlow`).
     const noteTimes = () => {
-      if (!timesFile) return;
-      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      if (!timesFile) return [];
+      let text = '';
+      try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       rmSync(timesFile, { force: true });
+      const tests = testsMeasured(text, cwd);
+      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
+      return tests;
     };
     const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
@@ -2450,7 +2459,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null }); });
+    child.on('close', (code) => { const tests = noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null, tests }); });
   });
 }
 
@@ -2549,8 +2558,10 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
     const noteTimes = () => {
       if (!timesFile) return;
-      try { recordTestTimes({ ...times, cwd, text: readFileSync(timesFile, 'utf8') }); } catch { /* a run that wrote none */ }
+      let text = '';
+      try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       rmSync(timesFile, { force: true });
+      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests: testsMeasured(text, cwd) });
     };
     const child = spawn(command, {
       cwd,
