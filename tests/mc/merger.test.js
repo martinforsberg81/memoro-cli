@@ -1339,15 +1339,15 @@ describe('stacked jobs (ruling 30, A)', () => {
   });
 
   it('restack: a real squash below, and only the stacked step\'s own commit is replayed onto main', async () => {
-    const { base, sh, work, job } = copyOf(SQUASHED_BELOW);
+    const { base, job } = copyOf(SQUASHED_BELOW);
     try {
       const said = [];
       const result = await restack(job, { say: (l) => said.push(l) });
       assert.deepEqual(result, { ok: true, moved: true });
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'one commit: step 2\'s own');
-      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'step 2');
-      assert.equal(sh(work, 'merge-base', 'origin/main', 'origin/mq-2'), sh(work, 'rev-parse', 'origin/main'));
+      const { main, own } = pushed(base);
+      assert.equal(own.length, 1, 'one commit: step 2\'s own');
+      assert.equal(own[0].subject, 'step 2');
+      assert.equal(own[0].parents, main, 'right on main');
       assert.match(said[0], /moved onto main past #9/u);
       // Asked again — a merger that died after the push — it is already moved.
       assert.deepEqual(await restack(job), { ok: true, moved: false });
@@ -1355,6 +1355,19 @@ describe('stacked jobs (ruling 30, A)', () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  /**
+   * What the push left on the origin, read from the bare itself rather than
+   * fetched: main's sha, and every commit on mq-2 that main does not have,
+   * with its parents and subject.
+   */
+  const pushed = (base) => {
+    const origin = join(base, 'origin.git');
+    const own = restackGit(origin, 'log', '--format=%H%x09%P%x09%s', 'main..mq-2').split('\n').filter(Boolean)
+      .map((line) => { const [sha, parents, subject] = line.split('\t'); return { sha, parents, subject }; });
+    const [main, mq2] = restackGit(origin, 'rev-parse', 'main', 'mq-2').split('\n');
+    return { main, mq2, own };
+  };
 
   const restackGit = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
@@ -1384,10 +1397,23 @@ describe('stacked jobs (ruling 30, A)', () => {
   /**
    * Each restack history is built once per file, with real git, and copied
    * per test: building one took twenty-odd git processes a test (2026-11-03).
+   * What the history is before any move — mq-2's tip on the origin, and
+   * whether the old `rebase --onto` conflicts on it (`oldRebase`) — is read
+   * once here too, on the template, which nothing moves.
    */
-  const history = (build) => {
+  const history = (build, { oldRebase = false } = {}) => {
     const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
-    return { base, parentSha: build(base) };
+    const parentSha = build(base);
+    const work = join(base, 'work');
+    let oldRebaseConflicts = null;
+    if (oldRebase) {
+      // What the move fixes: the old move replays the squash the merge brought in.
+      const old = join(tmpdir(), `mc-restack-old-${process.pid}`);
+      restackGit(work, 'worktree', 'add', '-q', '--detach', old, 'origin/mq-2');
+      try { restackGit(old, 'rebase', '-q', '--onto', 'origin/main', parentSha); oldRebaseConflicts = false; } catch { oldRebaseConflicts = true; restackGit(old, 'rebase', '--abort'); }
+      restackGit(work, 'worktree', 'remove', '--force', old);
+    }
+    return { base, parentSha, tip: restackGit(join(base, 'origin.git'), 'rev-parse', 'mq-2'), oldRebaseConflicts };
   };
 
   /** A copy of a history, its clone's origin the copy's own bare. */
@@ -1397,7 +1423,7 @@ describe('stacked jobs (ruling 30, A)', () => {
     const work = join(base, 'work');
     const config = join(work, '.git', 'config');
     writeFileSync(config, readFileSync(config, 'utf8').split(join(template.base, 'origin.git')).join(join(base, 'origin.git')));
-    return { base, sh: restackGit, work, job: { repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: template.parentSha } } };
+    return { base, sh: restackGit, work, template, job: { repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: template.parentSha } } };
   };
 
   // Ruling 38: the child has main merged into it, and main moved on past the
@@ -1435,25 +1461,20 @@ describe('stacked jobs (ruling 30, A)', () => {
   };
 
   const SQUASHED_BELOW = history(squashedBelow);
-  const MERGED_IN = history((base) => stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'two.txt'), '2\n') }));
+  const MERGED_IN = history((base) => stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'two.txt'), '2\n') }), { oldRebase: true });
   const EDITS_MAINS_LINE = history((base) => stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'a.txt'), 'a on the child\n') }));
 
   it('restack: a child with main merged in is moved with exactly its own commit over main, where the old rebase --onto conflicts', async () => {
-    const { base, sh, work, job } = copyOf(MERGED_IN);
+    const { base, job, template } = copyOf(MERGED_IN);
     try {
-      // What it fixes: the old move replays the squash the merge brought in.
-      const old = join(base, 'old');
-      sh(work, 'worktree', 'add', '-q', '--detach', old, 'origin/mq-2');
-      assert.throws(() => sh(old, 'rebase', '-q', '--onto', 'origin/main', job.parent.sha), 'the old rebase --onto conflicts on this fixture');
-      sh(old, 'rebase', '--abort');
-      sh(work, 'worktree', 'remove', '--force', old);
+      assert.equal(template.oldRebaseConflicts, true, 'the old rebase --onto conflicts on this fixture');
 
       const said = [];
       assert.deepEqual(await restack(job, { say: (l) => said.push(l) }), { ok: true, moved: true });
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'exactly C over main');
-      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'C');
-      assert.equal(sh(work, 'rev-parse', 'origin/mq-2^'), sh(work, 'rev-parse', 'origin/main'));
+      const { main, own } = pushed(base);
+      assert.equal(own.length, 1, 'exactly C over main');
+      assert.equal(own[0].subject, 'C');
+      assert.equal(own[0].parents, main);
       assert.equal(said[0], 'r #10: moved onto main past #9');
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -1461,14 +1482,12 @@ describe('stacked jobs (ruling 30, A)', () => {
   });
 
   it('restack: a child whose own commit edits the line main changed is ok: false and names the file', async () => {
-    const { base, sh, work, job } = copyOf(EDITS_MAINS_LINE);
+    const { base, sh, work, job, template } = copyOf(EDITS_MAINS_LINE);
     try {
-      const tipBefore = sh(work, 'rev-parse', 'origin/mq-2');
       const result = await restack(job);
       assert.equal(result.ok, false);
       assert.match(result.reason, /moving #10 onto main after #9 landed conflicts in a\.txt — merge origin\/main into mq-2/u);
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-parse', 'origin/mq-2'), tipBefore, 'nothing pushed');
+      assert.equal(pushed(base).mq2, template.tip, 'nothing pushed');
       assert.equal(sh(work, 'worktree', 'list').split('\n').length, 1, 'the temporary worktree is gone');
     } finally {
       rmSync(base, { recursive: true, force: true });
