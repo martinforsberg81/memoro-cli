@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import { run } from '../../src/mc/commands/hook.js';
 import {
   ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile, TOOLBOX,
-  readClaudeSettings, repoHookDecision,
+  readClaudeSettings, repoHookDecision, reviewStopDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
@@ -363,6 +363,7 @@ describe('mc hook install — mc\'s own registration', () => {
     hooks: {
       PreToolUse: [FOREIGN, { matcher: 'Bash|Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
       SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+      Stop: [{ hooks: [{ type: 'command', command: 'mc hook stop 2>/dev/null || true' }] }],
     },
   };
 
@@ -378,6 +379,7 @@ describe('mc hook install — mc\'s own registration', () => {
       hooks: {
         PreToolUse: [FOREIGN, { matcher: 'Bash|Write|Read|Edit|MultiEdit', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
         SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: 'mc hook stop 2>/dev/null || true' }] }],
       },
     };
     assert.equal(hookDrift(hookRegistration(before)), 'pre-tool on Bash|Write|Read|Edit|MultiEdit, want Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
@@ -388,8 +390,9 @@ describe('mc hook install — mc\'s own registration', () => {
     assert.equal(next.hooks.PreToolUse[1].matcher, 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
   });
 
-  it('names both entries as missing from settings with no hooks', () => {
-    assert.equal(hookDrift(hookRegistration({})), 'session-start not registered, pre-tool not registered');
+  it('names all three entries as missing from settings with no hooks', () => {
+    assert.equal(hookDrift(hookRegistration({})), 'session-start not registered, pre-tool not registered, stop not registered');
+    assert.deepEqual(installHooks({}).hooks.Stop, [{ hooks: [{ type: 'command', command: 'mc hook stop 2>/dev/null || true' }] }]);
   });
 
   it('writes mc\'s entries beside the others, and changes nothing else', () => {
@@ -497,7 +500,50 @@ describe('mc hook — the door', () => {
   it('refuses a form it does not know', async () => {
     const stderr = sink();
     assert.equal(await run(['post-tool'], { stdout: sink(), stderr }), 2);
-    assert.match(stderr.text, /session-start or pre-tool/u);
+    assert.match(stderr.text, /session-start, pre-tool or stop/u);
+  });
+});
+
+describe('mc hook stop: a goal\'s review ends only once it has decided and written its proposal', () => {
+  const HOME = '/p';
+  const STARTED = '2026-11-03T20:00:00.000Z';
+  const REVIEW = { MC_ROLE: 'review-session:goal', MC_GOAL: 'mc/g', MC_SESSION_STARTED: STARTED };
+  /** The deps `reviewStopDecision` reads: the goal in `stage`, and the proposals with their mtimes. */
+  const world = (stage, proposals = {}) => ({
+    home: HOME,
+    read: (path) => { if (path === '/p/mc/goals/g/GOAL.json') return JSON.stringify({ stage, status: 'ready' }); throw new Error('ENOENT'); },
+    list: (path) => { if (path === '/p/mc/proposals') return Object.keys(proposals); throw new Error('ENOENT'); },
+    mtimeMs: (path) => proposals[path.split('/').pop()],
+  });
+  const after = Date.parse(STARTED) + 60_000;
+  const sink = () => { const out = { text: '' }; out.write = (chunk) => { out.text += chunk; }; return out; };
+  const before = Date.parse(STARTED) - 60_000;
+
+  it('refuses the end while the goal is in review, and while no proposal was written since the review began, naming each', () => {
+    const both = reviewStopDecision({ env: REVIEW, ...world('review') });
+    assert.match(both.reason, /^the goal is still in review — mc goal stage merging \(OK to land: it queues the head you judged\) or write REVIEW\.md in the goal's directory and mc goal stage finish \(not OK\); no proposal written — one file in \/p\/mc\/proposals\/ /u);
+    const stage = reviewStopDecision({ env: REVIEW, ...world('review', { '2026-11-03-mc-x.md': after }) });
+    assert.match(stage.reason, /^the goal is still in review/u);
+    assert.doesNotMatch(stage.reason, /proposal/u);
+    const old = reviewStopDecision({ env: REVIEW, ...world('merging', { '2026-11-01-mc-old.md': before, 'notes.txt': after }) });
+    assert.match(old.reason, /^no proposal written/u, 'one from before the review, or no .md, is none');
+  });
+
+  it('lets the review end once it is in merging or finish with a proposal; and holds no other session', () => {
+    for (const stage of ['merging', 'finish']) assert.equal(reviewStopDecision({ env: REVIEW, ...world(stage, { '2026-11-03-mc-x.md': after }) }), null, stage);
+    for (const env of [{ ...REVIEW, MC_ROLE: 'build-session:goal' }, { ...REVIEW, MC_GOAL: undefined }, {}]) {
+      assert.equal(reviewStopDecision({ env, ...world('review') }), null);
+    }
+    assert.equal(reviewStopDecision({ env: REVIEW, ...world('review'), read: () => { throw new Error('gone'); } }), null, 'a goal it cannot read lets go');
+  });
+
+  it('answers Claude Code\'s Stop hook with decision block and the reason, and nothing when the review may end', async () => {
+    const out = sink();
+    assert.equal(await run(['stop'], { stdout: out, stderr: sink(), env: REVIEW, readStdin: async () => '{}', reviewStopDecision: () => ({ reason: 'the goal is still in review' }) }), 0);
+    assert.deepEqual(JSON.parse(out.text), { decision: 'block', reason: 'mc: this review cannot end yet — the goal is still in review' });
+    const quiet = sink();
+    assert.equal(await run(['stop'], { stdout: quiet, stderr: sink(), env: REVIEW, readStdin: async () => '{}', reviewStopDecision: () => null }), 0);
+    assert.equal(quiet.text, '');
   });
 });
 
