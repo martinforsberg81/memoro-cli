@@ -295,7 +295,12 @@ runner's daily apply never does, so there each one is kept with *only a
 person's mc tidy --apply removes one*. The apply hands each checkout back with
 `git worktree remove` without `--force` and `branch -D`, then removes the
 directory; a checkout git refuses keeps the whole area. **S — step areas**
-are the runner's, closed by `closeWorkareas` when the project is done.
+of a project the register knows are the runner's, closed by `closeWorkareas`
+when the project is done. **U — a step area no project explains** (no
+register entry by its name) is never closed by the runner, so tidy judges it
+as W judges a workarea, with the same `person` rule and the kind
+`orphan-step-area`; one left directly under `~/mc` is only listed. A register
+that could not be read explains every step area.
 
 **L — loose transcripts and leftovers.** What P and G leave, by T1–T5, first
 match wins: no cwd, kept; touched within `--days`, kept; its cwd gone,

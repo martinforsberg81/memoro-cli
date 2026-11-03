@@ -414,6 +414,27 @@ function retiredAreas(m) {
   return { at, inspect };
 }
 
+describe('(U) a step area no project explains', () => {
+  it('is listed with its verdict; one of a project the register knows is the runner\'s', () => {
+    const m = machine();
+    try {
+      for (const name of ['orphan', 'dirty-orphan', 'known']) m.write(join(m.work, 'step', name, 'memoro-cli', '.git'), 'gitdir: /fake');
+      m.register({ project: 'known', programme: 'mc', repo: 'memoro-cli', steps: [{ status: 'ready' }] });
+      const dirty = join(m.work, 'step', 'dirty-orphan', 'memoro-cli');
+      const inspect = (path, name) => ({ ...m.inspect(path, name), ...(path === dirty ? { uncommitted: 1 } : {}) });
+      const { list } = runTidy(m.doors({ inspect, person: true }));
+      assert.deepEqual(ruled(list, 'U').map((item) => [item.path, item.kind, item.why]),
+        [[join(m.work, 'step', 'orphan'), 'orphan-step-area', 'a step area no project explains: memoro-cli landed with nothing uncommitted']]);
+      assert.equal(keptOf(list, join(m.work, 'step', 'dirty-orphan')).why, 'no project explains it; memoro-cli: 1 uncommitted');
+      assert.equal(keptOf(list, join(m.work, 'step', 'known')).rule, 'step-area');
+      // The runner's apply takes none of them.
+      const runner = runTidy({ ...m.doors({ inspect }), apply: true });
+      assert.deepEqual(ruled(runner.list, 'U'), []);
+      assert.ok(existsSync(join(m.work, 'step', 'orphan', 'memoro-cli')));
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('(W) what is left under ~/mc/work/', () => {
   it('without --apply lists every one, says why each stays or goes, and removes nothing', () => {
     const m = machine();
