@@ -90,9 +90,10 @@ start to finish, and know when it is done? If not, it is not a step
   met criterion with `mc project criterion met`, never in the file.
 - **Leave out:** the case for the plan, history, what the code already shows.
 - **Validate:** `mc project send` is the validation; it refuses and says why.
-- **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
-  move, name them in your account, and carry into the plan everything it
-  needs from them — nobody reads the archive (ruling 22).
+- **Proposals consumed:** move them to the programme's `proposals/archive/`
+  in the same move, first line `Utfall: <goal or project>`, name them in your
+  account, and carry into the plan everything it needs from them — the
+  archive is read only to judge duplicates (ruling 22).
 - **Decisions:** cite by name, never by path. Record the ruling in
   `docs/project/<programme>/rulings.md`: the question, Martin's answer quoted,
   the plan that carries it.

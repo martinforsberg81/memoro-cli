@@ -74,7 +74,7 @@ import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
-import { intakeDir, proposalsDir } from './helper-collect.js';
+import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
@@ -2054,8 +2054,9 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
  * An intake note for the helper about a test file red on main that a round
  * went on past (ruling 44 § 4) — or null when one is not written.
  *
- * One per file per week: a file at the top of `~/mc/intake/` or
- * `~/mc/proposals/` younger than seven days that names the test path is the
+ * One per file per week: a file at the top of `~/mc/intake/`,
+ * `~/mc/proposals/` or a programme's `proposals/` (not its archive) younger
+ * than seven days that names the test path is the
  * note already, whoever wrote it. The SQL snapshot tests were red in 77 rounds
  * of 43 pull requests; 77 notes would be the noise the round just stopped
  * making. Best effort: a note that cannot be written never changes a verdict.
@@ -2063,7 +2064,8 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
 export function noteRedOnMain({ env = process.env, now = Date.now(), repo, file, names = [], breaks = [], prs = [] }) {
   try {
     const since = now - RED_ON_MAIN_NOTE_DAYS * 24 * 60 * 60 * 1000;
-    for (const dir of [intakeDir(env), proposalsDir(env)]) {
+    const programmes = programmeNames(env).map((programme) => programmeProposalsDir(programme, env));
+    for (const dir of [intakeDir(env), proposalsDir(env), ...programmes]) {
       if (!existsSync(dir)) continue;
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;

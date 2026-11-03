@@ -76,6 +76,21 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.match(sessionStartContext({ cwd: '/x', inside: true, states: [], env: {} }), /session role unknown.*MC_ROLE.*MC_GOAL.*MC_STEP.*cwd \/x/u);
   });
 
+  it('a plan session is told how many proposals wait in its programme, archive not counted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-hook-proposals-'));
+    const dir = join(root, 'programs', 'mc', 'proposals');
+    mkdirSync(join(dir, 'archive'), { recursive: true });
+    const env = { MC_WORK_ROOT: root };
+    const start = () => sessionStartContext({ cwd: join(root, 'programs', 'mc'), inside: true, states: [], env });
+    assert.ok(!/proposals? waits?/u.test(start()), 'none waiting: nothing said');
+    writeFileSync(join(dir, '2026-11-03-mc-a.md'), 'a\n');
+    writeFileSync(join(dir, '2026-11-03-mc-b.md'), 'b\n');
+    writeFileSync(join(dir, 'archive', '2026-11-01-mc-old.md'), 'Utfall: ej aktuellt — x\n');
+    assert.match(start(), /\n2 proposals wait in ~\/mc\/programs\/mc\/proposals\/ — take a stand on each/u);
+    const build = sessionStartContext({ cwd: join(root, 'programs', 'mc', 'goals', 'g'), inside: true, states: [], env });
+    assert.ok(!build.includes('proposals wait'), 'a build session is not told');
+  });
+
   it('finds the worktrees of a workarea, and only those mc knows', () => {
     const area = mkdtempSync(join(tmpdir(), 'mc-hook-area-'));
     for (const name of ['memoro', 'memoro-cli', 'notes']) mkdirSync(join(area, name));
