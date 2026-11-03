@@ -17,8 +17,14 @@
  *     `{ target, why }`; one that throws keeps its item with the error.
  *   - Deletion is node `fs` and `git worktree remove` without `--force`: no
  *     shell, no `find`, no globbing. `memory/` is never opened.
- *   - Work areas and step areas are never targets: `mc work release` /
- *     `discard` and the runner's `closeWorkareas` remove them.
+ *   - Step areas are never targets: the runner's `closeWorkareas` removes them.
+ *   - (W) What is left under `~/mc/work/` — the workareas, retired on
+ *     2026-11-03 (goal mc/no-work) — is listed, every one, with why it stays
+ *     or why it may go. One goes only when every checkout in it is a worktree
+ *     with nothing uncommitted whose branch has landed (`releaseVerdict`), it
+ *     holds nothing else, and no process stands in it — and only when a
+ *     person runs `mc tidy --apply` (`person`): the runner's daily apply
+ *     lists them and removes none.
  *   - (C) `mc shot --compare`'s trees under `~/.memoro/mc/compare/`
  *     (`shot-compare.js`) go when unused for a day — by the directory's
  *     mtime, which `compareTree` touches on every reuse — and no dev server
@@ -67,7 +73,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 5;
+export const RULES_VERSION = 6;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -85,8 +91,10 @@ const TRANSCRIPT = /^(.+)\.jsonl$/u;
 const LIST_FILE = /^\d{8}T\d{6}Z(-\d+)?\.json$/u;
 /** A planning area's own checkouts: never a target. */
 const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
+/** mc's own files in a workarea: never what keeps one, and gone with it. */
+const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'work-area', 'step-area', 'G', 'K', 'A']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'project', 'plan-checkout', 'step-area', 'G', 'K', 'A']);
 
 /** Every root tidy reads, by name. A kind removes only under its own. */
 export function tidyRoots(env = process.env) {
@@ -122,6 +130,7 @@ const KIND_ROOT = {
   leftover: 'claude',
   'plan-checkout': 'plan',
   'plan-worktree': 'plan',
+  'work-area': 'work',
   'compare-worktree': 'compare',
   'gate-cache-slug': 'gate_cache',
   'gate-slug': 'gate',
@@ -328,7 +337,27 @@ export function gatherTidyFacts({
     }
   }
 
-  facts.work_areas = listNames(roots.work).map((name) => ({ path: join(roots.work, name) }));
+  // (W) every directory under `~/mc/work/`: its checkouts as the release
+  // verdict reads them, whatever else it holds, and who stands in it.
+  for (const name of listNames(roots.work)) {
+    const path = join(roots.work, name);
+    const item = { path, name, worktrees: [], others: [], live: null, bytes: 0 };
+    facts.work_areas.push(item);
+    try {
+      if (!running) throw new Error('lsof could not say who stands in it');
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        if (WORK_AREA_OWN.has(entry.name)) continue;
+        const child = join(path, entry.name);
+        if (!entry.isDirectory() || !present(join(child, '.git'))) { item.others.push(entry.name); continue; }
+        const wt = inspect(child, entry.name);
+        if (!wt.is_git) { item.others.push(entry.name); continue; }
+        const pids = [...new Set(processesStandingIn([child], { cwds: running }).map((p) => p.pid))];
+        item.worktrees.push({ path: child, repo: entry.name, wt, verdict: releaseVerdict(wt, { inUse: [...new Set(pids.map(command))], pullAtTip: tip }) });
+      }
+      item.live = [...new Set(processesStandingIn([path], { cwds: running }).map((p) => p.pid))];
+      if (workArea(item, { person: true }).target) item.bytes = treeBytes(path);
+    } catch (error) { item.error = message(error); }
+  }
   facts.step_areas = listStepAreas({ root }).map((area) => ({ path: area.path }));
 
   // (C) `mc shot --compare`'s trees: last used by the directory's mtime,
@@ -551,6 +580,32 @@ export function idlePlanCheckout(item) {
   return { target: true, why: 'its programme has no project that is not done; mc plan adds it back' };
 }
 
+/**
+ * (W) A directory under `~/mc/work/`, left from the retired workareas. It may
+ * go when every checkout in it may (`releaseVerdict`: nothing uncommitted,
+ * its branch's content on main), it holds nothing else, and no process stands
+ * in it — and then only for a person (`person`): the runner's apply keeps it.
+ */
+export function workArea(item, { person = false } = {}) {
+  if (item.error) throw new Error(item.error);
+  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
+  if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in it` };
+  if (item.others.length) {
+    const named = item.others.slice(0, 3).join(', ');
+    return { target: false, why: `it holds more than checkouts: ${named}${item.others.length > 3 ? ` and ${item.others.length - 3} more` : ''}` };
+  }
+  for (const worktree of item.worktrees) {
+    if (!worktree.verdict?.remove || worktree.verdict.what !== 'worktree and branch') {
+      return { target: false, why: `${worktree.repo}: ${worktree.verdict?.why || 'not a git worktree'}` };
+    }
+  }
+  const what = item.worktrees.length
+    ? `${item.worktrees.map((worktree) => worktree.repo).join(', ')} landed with nothing uncommitted`
+    : 'nothing in it';
+  if (!person) return { target: false, why: `a retired workarea that could go (${what}) — only a person's mc tidy --apply removes one` };
+  return { target: true, why: `a retired workarea: ${what}` };
+}
+
 /** (C) A compare tree: unused for a day and no dev server in it. */
 export function compareWorktree(item, now) {
   if (item.error) throw new Error(item.error);
@@ -623,7 +678,7 @@ export function staleGateCacheEntry(item, now) {
  * The list, pure: `{ days, targets: [{ path, kind, rule, why, bytes }],
  * kept: [{ path, rule, why }] }`.
  */
-export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
+export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
   const targets = [];
   const kept = [];
   const root = facts.work_root;
@@ -690,8 +745,12 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
     else keep(item.path, 'X', verdict.why);
   }
 
-  // (W) and (S): never targets.
-  for (const item of facts.work_areas || []) keep(item.path, 'work-area', 'only mc work release or discard removes a work area');
+  // (W) every retired workarea, listed with its verdict; (S) never a target.
+  for (const item of facts.work_areas || []) {
+    const verdict = judge(workArea, item, { person });
+    if (verdict.target) targets.push({ path: item.path, kind: 'work-area', rule: 'W', why: verdict.why, bytes: item.bytes || 0 });
+    else keep(item.path, 'W', verdict.why);
+  }
   for (const item of facts.step_areas || []) keep(item.path, 'step-area', 'the runner closes a step area when its project is done');
   // (R)
   for (const item of facts.foreign || []) keep(item.path, 'foreign-worktree', `a worktree of ${item.repo} outside ${root}`);
@@ -739,7 +798,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
     else keep(item.path, verdict.rule || 'error', verdict.why);
   }
 
-  return { days, targets, kept };
+  return { days, person, targets, kept };
 }
 
 /* ------------------------------------------------------------ executing */
@@ -782,6 +841,7 @@ export function outsideRoots(target, roots) {
     // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
     'plan-checkout': dirname(parent) === base && PLAN_CHECKOUTS.has(name),
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
+    'work-area': parent === base,
     'compare-worktree': parent === base,
     'gate-cache-slug': parent === base,
     'gate-slug': parent === base,
@@ -796,10 +856,12 @@ export function outsideRoots(target, roots) {
  * The whole run: gather, decide, write the list, and with `apply` remove
  * from it. Returns `{ list, listPath, outcome }`; `outcome` is `applyTidy`'s.
  */
-export function runTidy({ apply = false, days = DEFAULT_DAYS, env = process.env, now = Date.now(), write = writeJsonAtomic, ...doors } = {}) {
+export function runTidy({
+  apply = false, days = DEFAULT_DAYS, person = false, env = process.env, now = Date.now(), write = writeJsonAtomic, ...doors
+} = {}) {
   const roots = tidyRoots(env);
-  const plan = tidyPlan(gatherTidyFacts({ env, now, ...doors }), { days });
-  const list = { at: new Date(now).toISOString(), rules_version: RULES_VERSION, days, targets: plan.targets, kept: plan.kept };
+  const plan = tidyPlan(gatherTidyFacts({ env, now, ...doors }), { days, person });
+  const list = { at: new Date(now).toISOString(), rules_version: RULES_VERSION, days, person, targets: plan.targets, kept: plan.kept };
   let listPath = join(roots.tidy, `${listStamp(now)}.json`);
   for (let n = 2; present(listPath); n += 1) listPath = join(roots.tidy, `${listStamp(now)}-${n}.json`);
   write(listPath, list);
@@ -822,10 +884,11 @@ export function applyTidy({
   const list = JSON.parse(readFileSync(listPath, 'utf8'));
   const targets = Array.isArray(list.targets) ? list.targets : [];
   const facts = gatherTidyFacts({ env, now, ...doors });
-  const fresh = tidyPlan(facts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS });
+  const fresh = tidyPlan(facts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS, person: list.person === true });
   const holds = new Map(fresh.targets.map((item) => [item.path, item]));
   const keptNow = new Map(fresh.kept.map((item) => [item.path, item]));
   const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
+  const workAreas = new Map((facts.work_areas || []).map((item) => [item.path, item]));
   const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
 
   const applied = [];
@@ -845,6 +908,13 @@ export function applyTidy({
       if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
+      } else if (target.kind === 'work-area') {
+        // Its checkouts read now, each handed back to git without --force —
+        // git refuses one that changed since — and then the directory.
+        const item = workAreas.get(path);
+        const refused = (item?.worktrees || []).find((worktree) => !release(worktree.wt));
+        if (!item || refused) { applied.push({ path, ok: false, why: `git worktree remove refused${refused ? ` for ${refused.repo}` : ''}` }); continue; }
+        remove(path);
       } else if (target.kind === 'compare-worktree') {
         // The owner read now, never the one the list file names.
         const owner = compares.get(path)?.owner;
