@@ -2174,7 +2174,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The goals a lane could start now, as `pickWork` candidates: open, or due a
-   * review (`reviewDue`), parsing, on one of `repos` (its first repository),
+   * review (`reviewDue`: not while its pull request is in the merger's line),
+   * parsing, on one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
@@ -2195,8 +2196,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (why) reviewWaits.set(name, why); else reviewWaits.delete(name);
       return !why;
     };
+    const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     return goals()
-      .filter((goal) => (goal.status === 'open' || reviewDue(goal) || planDue(goal)) && goal.problems.length === 0
+      .filter((goal) => (goal.status === 'open' || reviewDue(goal, merging) || planDue(goal)) && goal.problems.length === 0
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && may(goal))
       .map((goal) => ({
         name: goalName(goal), repo: goal.repos[0], kind: goalKind(goal), variant: goalKind(goal) === 'plan' ? null : 'goal',

@@ -206,6 +206,14 @@ test('a goal in review is due a review until the runner has queued its green; th
   assert.equal(reviewDue({ status: 'open', log: [] }), false);
 });
 
+test('a goal in review whose pull request a session queued itself waits for the merger, not a review', () => {
+  const goal = { status: 'review', prs: [{ repo: 'memoro-cli', pr: 1244 }], log: [{ at: '2026-11-03T13:32Z', tool: 'claude', model: 'fable', status: 'review', done: 'fixed the red', comment: null, next: null }] };
+  assert.equal(reviewDue(goal, [{ repo: 'memoro-cli', pr: 1244, state: 'queued' }]), false);
+  assert.equal(reviewDue(goal, [{ repo: 'memoro-cli', pr: 1244, state: 'landing' }]), false);
+  assert.equal(reviewDue(goal, [{ repo: 'memoro', pr: 1244, state: 'queued' }]), true, 'another repository\'s #1244 is other work');
+  assert.equal(reviewDue(goal, []), true);
+});
+
 test('nextGoal takes open goals and goals due a review, oldest first, and leaves out what may refuses', () => {
   const goal = (name, status, at) => ({ programme: 'p', goal: name, status, repos: ['memoro'], problems: [], log: [{ at, tool: 'claude', done: 'x' }] });
   const goals = [goal('a', 'open', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'blocked', '2026-11-01T10:00Z')];
