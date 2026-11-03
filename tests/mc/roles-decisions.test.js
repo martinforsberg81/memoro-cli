@@ -151,7 +151,8 @@ describe('the rules every session gets, whichever role it is', () => {
   // — a session that is only told which directory picks the one it saw last.
   it('says why a finding is a proposal and not intake', () => {
     const told = skillText('proposals');
-    assert.match(told, /~\/mc\/proposals\/<date>-<system>-<slug>\.md/u);
+    assert.match(told, /`<date>-<system>-<slug>\.md`, in the programme that\s+owns the question:\s+`~\/mc\/programs\/<programme>\/proposals\/`/u);
+    assert.match(told, /When no programme owns it,\s+it goes in `~\/mc\/proposals\/`/u);
     assert.match(told, phrase('drained one file'));
     assert.match(told, phrase('asks a second session to work it out again'));
   });

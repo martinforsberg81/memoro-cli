@@ -34,7 +34,7 @@ export function renderRepoLines(report, {
   // "no repository here" under a name that matched nothing reads as an answer
   // to the wrong question; the line above already said what happened.
   if (report.repos.length === 0 && !(report.unknown || []).length) {
-    lines.push(c('  no repository — mc work add <name> <repo> puts one here', 'grey'));
+    lines.push(c('  no repository here', 'grey'));
     lines.push('');
     return lines;
   }

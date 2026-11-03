@@ -3,6 +3,13 @@
  * `--apply` carrying it out (layout-migrate.js, ruling 51). Every case builds
  * layout 1 on a temporary work root with real git worktrees and a temporary
  * claude home — never `~/mc` or `~/.claude`.
+ *
+ * git is the repository model (`tests/_fake-git-default.mjs`), `worktree
+ * move` included: real git here was a dozen processes per case before it
+ * began, 1.4–5.6 s a case under load (2026-11-03). The repository the
+ * worktrees belong to is made once per file; each case adds its own three and
+ * takes them away again afterwards (`worktree prune`), so no case sees
+ * another's.
  */
 import { strict as assert } from 'node:assert';
 import {
@@ -10,7 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, test } from 'node:test';
+import { after, afterEach, beforeEach, test } from 'node:test';
 
 import { run } from '../../src/mc/commands/layout.js';
 import { encodePath, listConversations } from '../../src/mc/conversations.js';
@@ -21,7 +28,9 @@ import { parseEntry, readEntry, registerPath } from '../../src/mc/register.js';
 import { releaseWorkArea } from '../../src/mc/work-area.js';
 import { git, makeTempRepo } from './_helpers/git-fixture.js';
 
-let repo;
+const repo = makeTempRepo({ name: 'layout' });
+after(() => repo.cleanup());
+
 let root;
 let claudeDir;
 let env;
@@ -44,7 +53,6 @@ const quiet = (overrides = {}) => ({
 });
 
 beforeEach(() => {
-  repo = makeTempRepo({ name: 'layout' });
   root = mkdtempSync(join(tmpdir(), 'mc-layout-root-'));
   claudeDir = mkdtempSync(join(tmpdir(), 'mc-layout-claude-'));
   env = { ...process.env, MC_WORK_ROOT: root, CLAUDE_CONFIG_DIR: claudeDir };
@@ -66,7 +74,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   rmSync(claudeDir, { recursive: true, force: true });
-  repo.cleanup();
+  // The worktrees went with the root; their records in the shared repository go too.
+  git(repo.dir, 'worktree prune');
 });
 
 const plan = (deps = quiet()) => planLayoutMove(gatherLayoutFacts({ root, env, deps }));
@@ -363,7 +372,12 @@ test('after --apply the areas and the register are where layout 2 looks', async 
   assert.notEqual(before, null);
   assert.deepEqual(readEntry(root, 'x'), before);
   assert.equal(stepAreaName('x', { root }), 'runner/step/x');
-  const release = releaseWorkArea('programs/p', { env, dryRun: true });
+  // Nobody stands in it and GitHub has merged nothing from it, said here
+  // rather than asked: lsof was a second of this case under load, and what a
+  // standing process does to a release is branch-landed's to pin.
+  const release = releaseWorkArea('programs/p', {
+    env, dryRun: true, inUse: () => null, gh: () => ({ ok: true, stdout: '[]' }),
+  });
   assert.deepEqual(release.removed.map((worktree) => worktree.repo), ['memoro']);
   assert.deepEqual(release.kept, []);
   assert.deepEqual(release.held_by, []);

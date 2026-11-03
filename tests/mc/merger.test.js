@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1339,46 +1339,97 @@ describe('stacked jobs (ruling 30, A)', () => {
   });
 
   it('restack: a real squash below, and only the stacked step\'s own commit is replayed onto main', async () => {
-    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
-    const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+    const { base, job } = copyOf(SQUASHED_BELOW);
     try {
-      const origin = join(base, 'origin.git');
-      const work = join(base, 'work');
-      sh(base, 'init', '-q', '--bare', '-b', 'main', origin);
-      sh(base, 'clone', '-q', origin, work);
-      writeFileSync(join(work, 'a.txt'), 'a\n');
-      sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'base'); sh(work, 'push', '-q', 'origin', 'HEAD:main');
-      // Step 1 on mq, step 2 on mq-2 on top of it.
-      sh(work, 'checkout', '-qb', 'mq');
-      writeFileSync(join(work, 'one.txt'), '1\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 1');
-      const parentSha = sh(work, 'rev-parse', 'HEAD');
-      sh(work, 'push', '-q', 'origin', 'mq');
-      sh(work, 'checkout', '-qb', 'mq-2');
-      writeFileSync(join(work, 'two.txt'), '2\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 2');
-      sh(work, 'push', '-q', 'origin', 'mq-2');
-      // Step 1 squash-merged onto main, as GitHub does it.
-      sh(work, 'checkout', '-q', 'main');
-      sh(work, 'merge', '-q', '--squash', 'mq'); sh(work, 'commit', '-qm', 'step 1 (#9)');
-      sh(work, 'push', '-q', 'origin', 'main');
       const said = [];
-      const result = await restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }, { say: (l) => said.push(l) });
+      const result = await restack(job, { say: (l) => said.push(l) });
       assert.deepEqual(result, { ok: true, moved: true });
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'one commit: step 2\'s own');
-      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'step 2');
-      assert.equal(sh(work, 'merge-base', 'origin/main', 'origin/mq-2'), sh(work, 'rev-parse', 'origin/main'));
+      const { main, own } = pushed(base);
+      assert.equal(own.length, 1, 'one commit: step 2\'s own');
+      assert.equal(own[0].subject, 'step 2');
+      assert.equal(own[0].parents, main, 'right on main');
       assert.match(said[0], /moved onto main past #9/u);
       // Asked again — a merger that died after the push — it is already moved.
-      assert.deepEqual(await restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }), { ok: true, moved: false });
+      assert.deepEqual(await restack(job), { ok: true, moved: false });
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
   });
 
+  /**
+   * What the push left on the origin, read from the bare itself rather than
+   * fetched: main's sha, and every commit on mq-2 that main does not have,
+   * with its parents and subject.
+   */
+  const pushed = (base) => {
+    const origin = join(base, 'origin.git');
+    const own = restackGit(origin, 'log', '--format=%H%x09%P%x09%s', 'main..mq-2').split('\n').filter(Boolean)
+      .map((line) => { const [sha, parents, subject] = line.split('\t'); return { sha, parents, subject }; });
+    const [main, mq2] = restackGit(origin, 'rev-parse', 'main', 'mq-2').split('\n');
+    return { main, mq2, own };
+  };
+
+  const restackGit = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+
+  // Step 1 on mq, step 2 on mq-2 on top of it, and step 1 squash-merged onto
+  // main as GitHub does it. Returns step 1's sha.
+  const squashedBelow = (base) => {
+    const sh = restackGit;
+    const origin = join(base, 'origin.git');
+    const work = join(base, 'work');
+    sh(base, 'init', '-q', '--bare', '-b', 'main', origin);
+    sh(base, 'clone', '-q', origin, work);
+    writeFileSync(join(work, 'a.txt'), 'a\n');
+    sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'base'); sh(work, 'push', '-q', 'origin', 'HEAD:main');
+    sh(work, 'checkout', '-qb', 'mq');
+    writeFileSync(join(work, 'one.txt'), '1\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 1');
+    const parentSha = sh(work, 'rev-parse', 'HEAD');
+    sh(work, 'push', '-q', 'origin', 'mq');
+    sh(work, 'checkout', '-qb', 'mq-2');
+    writeFileSync(join(work, 'two.txt'), '2\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 2');
+    sh(work, 'push', '-q', 'origin', 'mq-2');
+    sh(work, 'checkout', '-q', 'main');
+    sh(work, 'merge', '-q', '--squash', 'mq'); sh(work, 'commit', '-qm', 'step 1 (#9)');
+    sh(work, 'push', '-q', 'origin', 'main');
+    return parentSha;
+  };
+
+  /**
+   * Each restack history is built once per file, with real git, and copied
+   * per test: building one took twenty-odd git processes a test (2026-11-03).
+   * What the history is before any move — mq-2's tip on the origin, and
+   * whether the old `rebase --onto` conflicts on it (`oldRebase`) — is read
+   * once here too, on the template, which nothing moves.
+   */
+  const history = (build, { oldRebase = false } = {}) => {
+    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    const parentSha = build(base);
+    const work = join(base, 'work');
+    let oldRebaseConflicts = null;
+    if (oldRebase) {
+      // What the move fixes: the old move replays the squash the merge brought in.
+      const old = join(tmpdir(), `mc-restack-old-${process.pid}`);
+      restackGit(work, 'worktree', 'add', '-q', '--detach', old, 'origin/mq-2');
+      try { restackGit(old, 'rebase', '-q', '--onto', 'origin/main', parentSha); oldRebaseConflicts = false; } catch { oldRebaseConflicts = true; restackGit(old, 'rebase', '--abort'); }
+      restackGit(work, 'worktree', 'remove', '--force', old);
+    }
+    return { base, parentSha, tip: restackGit(join(base, 'origin.git'), 'rev-parse', 'mq-2'), oldRebaseConflicts };
+  };
+
+  /** A copy of a history, its clone's origin the copy's own bare. */
+  const copyOf = (template) => {
+    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    cpSync(template.base, base, { recursive: true });
+    const work = join(base, 'work');
+    const config = join(work, '.git', 'config');
+    writeFileSync(config, readFileSync(config, 'utf8').split(join(template.base, 'origin.git')).join(join(base, 'origin.git')));
+    return { base, sh: restackGit, work, template, job: { repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: template.parentSha } } };
+  };
+
   // Ruling 38: the child has main merged into it, and main moved on past the
   // squash of its parent — the shape of #857 on 2026-10-10.
   const stackedFixture = (base, { childEdits }) => {
-    const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+    const sh = restackGit;
     const origin = join(base, 'origin.git');
     const work = join(base, 'work');
     sh(base, 'init', '-q', '--bare', '-b', 'main', origin);
@@ -1406,26 +1457,24 @@ describe('stacked jobs (ruling 30, A)', () => {
     writeFileSync(join(work, 'one.txt'), '1 later\n');
     writeFileSync(join(work, 'a.txt'), 'a on main\n');
     sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'later on main'); sh(work, 'push', '-q', 'origin', 'main');
-    return { sh, work, job: { repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } } };
+    return parentSha;
   };
 
+  const SQUASHED_BELOW = history(squashedBelow);
+  const MERGED_IN = history((base) => stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'two.txt'), '2\n') }), { oldRebase: true });
+  const EDITS_MAINS_LINE = history((base) => stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'a.txt'), 'a on the child\n') }));
+
   it('restack: a child with main merged in is moved with exactly its own commit over main, where the old rebase --onto conflicts', async () => {
-    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    const { base, job, template } = copyOf(MERGED_IN);
     try {
-      const { sh, work, job } = stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'two.txt'), '2\n') });
-      // What it fixes: the old move replays the squash the merge brought in.
-      const old = join(base, 'old');
-      sh(work, 'worktree', 'add', '-q', '--detach', old, 'origin/mq-2');
-      assert.throws(() => sh(old, 'rebase', '-q', '--onto', 'origin/main', job.parent.sha), 'the old rebase --onto conflicts on this fixture');
-      sh(old, 'rebase', '--abort');
-      sh(work, 'worktree', 'remove', '--force', old);
+      assert.equal(template.oldRebaseConflicts, true, 'the old rebase --onto conflicts on this fixture');
 
       const said = [];
       assert.deepEqual(await restack(job, { say: (l) => said.push(l) }), { ok: true, moved: true });
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'exactly C over main');
-      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'C');
-      assert.equal(sh(work, 'rev-parse', 'origin/mq-2^'), sh(work, 'rev-parse', 'origin/main'));
+      const { main, own } = pushed(base);
+      assert.equal(own.length, 1, 'exactly C over main');
+      assert.equal(own[0].subject, 'C');
+      assert.equal(own[0].parents, main);
       assert.equal(said[0], 'r #10: moved onto main past #9');
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -1433,15 +1482,12 @@ describe('stacked jobs (ruling 30, A)', () => {
   });
 
   it('restack: a child whose own commit edits the line main changed is ok: false and names the file', async () => {
-    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    const { base, sh, work, job, template } = copyOf(EDITS_MAINS_LINE);
     try {
-      const { sh, work, job } = stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'a.txt'), 'a on the child\n') });
-      const tipBefore = sh(work, 'rev-parse', 'origin/mq-2');
       const result = await restack(job);
       assert.equal(result.ok, false);
       assert.match(result.reason, /moving #10 onto main after #9 landed conflicts in a\.txt — merge origin\/main into mq-2/u);
-      sh(work, 'fetch', '-q', 'origin');
-      assert.equal(sh(work, 'rev-parse', 'origin/mq-2'), tipBefore, 'nothing pushed');
+      assert.equal(pushed(base).mq2, template.tip, 'nothing pushed');
       assert.equal(sh(work, 'worktree', 'list').split('\n').length, 1, 'the temporary worktree is gone');
     } finally {
       rmSync(base, { recursive: true, force: true });
@@ -1593,7 +1639,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
 describe('a goal\'s pull request (goals.js): done at landing, blocked on red, review again when its head moved', () => {
   const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
   const GOAL_JOB = { repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 90, branch: 'goal/g', holder: { name: 'goal:mc/g' }, step: null, goal: GOAL, sha: 'aaa111' };
-  /** `setGoal`, recorded: what the merger writes to GOAL.md and LOG.md. */
+  /** `setGoal`, recorded: what the merger writes to GOAL.json and LOG.md. */
   const goalWrites = () => {
     const writes = [];
     return { writes, setGoal: (call) => { writes.push(call); return { goal: {} }; } };
@@ -1722,6 +1768,28 @@ describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is
     await landJob(PLAIN_JOB, m.deps);
     assert.equal(r.sets[0].status, 'blocked');
     assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+  });
+
+  it('a goal with a criterion not met is not landed: no round, red with the criterion named, and the goal waits on plan', async () => {
+    const r = record();
+    const criteria = [{ criterion: 'a', check: 'x', met: true }, { criterion: 'b', check: 'y', met: false }];
+    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => [{ ...goalAt([{ repo: 'memoro', pr: 14761 }])[0], success_criteria: criteria }] });
+    const [answer] = await landJob(PLAIN_JOB, m.deps);
+    assert.equal(m.rounds.length, 0, 'no round spent on it');
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.stopped_at, 'unmet-criteria');
+    assert.match(answer.report.reason, /^criterion 2 is not met — run its check and record it with mc goal criterion met ios\/asc 2$/u);
+    assert.equal(r.sets[0].status, 'blocked');
+    assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+    assert.match(r.sets[0].entry.comment, /^unmet-criteria: criterion 2 is not met/u);
+
+    // Its own branch's job (a green review queued it) is refused the same way; met, it lands.
+    const own = record();
+    const job = { ...PLAIN_JOB, branch: 'goal/asc', goal: { programme: 'ios', goal: 'asc', dir: DIR }, sha: 'aaa111' };
+    const refused = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria }] });
+    assert.equal((await landJob(job, refused.deps))[0].report.stopped_at, 'unmet-criteria');
+    const met = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria.map((item) => ({ ...item, met: true })) }] });
+    assert.equal((await landJob(job, met.deps))[0].landed, true);
   });
 
   it('a pull request no goal carries tells no goal', async () => {

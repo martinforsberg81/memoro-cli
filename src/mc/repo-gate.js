@@ -67,14 +67,14 @@ import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
-import { ensureWorkDeps } from './work-deps.js';
+import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
-import { intakeDir, proposalsDir } from './helper-collect.js';
+import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
@@ -99,7 +99,7 @@ function abortReason(signal) { return String(signal?.reason?.message || signal?.
  * tree is — so the candidate ran the same five-files-short suite every
  * workarea used to, and paid an `npm ci` of its own to stop doing it. The work
  * root is where mc keeps the one tree (`paths.js`, `WORK_GATE` beside
- * `WORK_DEPS`), and a candidate two directories under it resolves that tree by
+ * `SHARED_DEPS`), and a candidate two directories under it resolves that tree by
  * node's own parent walk.
  */
 export function gateRoot(env = process.env) {
@@ -165,6 +165,14 @@ export async function runGate({
   // Stops the round from outside: step 2 of round-abort, the merger's watch.
   signal = null,
   clock = () => Date.now(),
+  // How the round's ceiling is armed: `(fire, ms) => cancel`, a timer of `ms`
+  // by default. A test hands in one it fires itself, at the moment its stuck
+  // child is reached, rather than waiting the ceiling out.
+  armCeiling = (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -435,13 +443,12 @@ export async function runGate({
   // The files the run was asked for, once the selection has said which (none
   // for a whole-suite round, which names no files until its output does).
   let deadlineFiles = [];
-  const timeout = setTimeout(() => {
+  const cancelCeiling = armCeiling(() => {
     timedOut = true;
     // Read before the abort: the runs' files are gone once their processes close.
     ceilingRuns = runProgress(tracked);
     deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
   }, roundTimeoutMs);
-  timeout.unref?.();
 
   // The round's verdict once its ceiling has come: red, and named. The files
   // that did not finish are the red — the ones to rebuild. The slowest files
@@ -496,13 +503,6 @@ export async function runGate({
   for (const signal of caught) process.on(signal, onSignal);
 
   report.declaration = { source: declared.source, ...declared.declaration };
-  // An override that shadows shipped fields does it in silence — it took
-  // extra_gates on 2026-08-22 (D-0135) and pr_tests_flags on 2026-08-24,
-  // one repository, same hole. The table says which fields fell out; the
-  // round says it where somebody is listening.
-  for (const field of declared.shadowed || []) {
-    say(`DECLARATION SHADOWED — the override for ${declared.name} omits ${field}, which the shipped table declares; an override states every field it wants (D-0135)`);
-  }
 
   const workspace = join(gateRoot(env), repoFileSlug(repoPath));
   // One worktree. There was a second, at the base branch, and everything that
@@ -639,7 +639,7 @@ export async function runGate({
 
     // The tree the candidate resolves through, made to match the candidate.
     //
-    // This is `mc work add`'s own mechanism (`work-deps.js`), called on the
+    // This is the workareas' own mechanism (`shared-deps.js`), called on the
     // repository being measured — one `node_modules` at the work root, two
     // directories above the candidate, for the workareas and the gate
     // together. A candidate whose lockfile is the one that tree holds
@@ -658,7 +658,7 @@ export async function runGate({
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = await untilCeiling(ensureWorkDeps({
+    const deps = await untilCeiling(ensureSharedDeps({
       repo: headDir, repoName: repoNameOf(repoPath), env, install: (cwd) => npmCiAsync(cwd, childSignal()), ownTree: headDir,
     }));
     if (deps.state === 'installed-own') say(`the candidate's own dependency tree was installed — ${deps.why}`);
@@ -1287,7 +1287,7 @@ export async function runGate({
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
   } finally {
-    clearTimeout(timeout);
+    cancelCeiling();
     for (const signal of caught) process.off(signal, onSignal);
     // The raw git: the ceiling may have come, and the clean-up must still run.
     await clearWorkspace({ git: askGitRaw, repoPath, workspace });
@@ -1443,9 +1443,10 @@ async function measure({ suite, git, cwd, command, say, is }) {
  * and reports a verdict is a gate that lies about what it checked.
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
+ * `run` is how the command runs, `shell` (a child) unless a test hands one in.
  */
-export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [] }) {
-  const run = await shell(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
+export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [], run: runCommand = shell }) {
+  const run = await runCommand(command, { cwd, env, signal, timeoutMs: suiteTimeoutMs(env) });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
   }
@@ -1542,9 +1543,10 @@ export const DELTA_PATHS_MAX = 4000;
  *    the green at all. Both empty means nothing needs running.
  *
  * The delta's reach is asked of the repository's own selector, the declared
- * `select` with ` --changed-path <p>` per path, read like `selectFiles`.
+ * `select` with ` --changed-path <p>` per path, read like `selectFiles`, and
+ * run by `run` as there.
  */
-export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null }) {
+export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null, run: runCommand = shell }) {
   if (!headSha || !baseCommit) return { kind: 'none' };
   const tree = await git(['rev-parse', `${headSha}^{tree}`], { cwd });
   const headTree = tree?.status === 0 ? trim(tree.stdout) : null;
@@ -1584,7 +1586,7 @@ export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit
 
   const asked = `${command}${paths.map((path) => ` --changed-path ${shellQuote(path)}`).join('')}`;
   let run = null;
-  try { run = await shell(asked, { cwd, env }); } catch (error) {
+  try { run = await runCommand(asked, { cwd, env }); } catch (error) {
     return { kind: 'fallback', reason: `the selector could not be run for the delta (${error.message})` };
   }
   if (run?.status !== 0) {
@@ -2056,8 +2058,9 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
  * An intake note for the helper about a test file red on main that a round
  * went on past (ruling 44 § 4) — or null when one is not written.
  *
- * One per file per week: a file at the top of `~/mc/intake/` or
- * `~/mc/proposals/` younger than seven days that names the test path is the
+ * One per file per week: a file at the top of `~/mc/intake/`,
+ * `~/mc/proposals/` or a programme's `proposals/` (not its archive) younger
+ * than seven days that names the test path is the
  * note already, whoever wrote it. The SQL snapshot tests were red in 77 rounds
  * of 43 pull requests; 77 notes would be the noise the round just stopped
  * making. Best effort: a note that cannot be written never changes a verdict.
@@ -2065,7 +2068,8 @@ export const RED_ON_MAIN_NOTE_DAYS = 7;
 export function noteRedOnMain({ env = process.env, now = Date.now(), repo, file, names = [], breaks = [], prs = [] }) {
   try {
     const since = now - RED_ON_MAIN_NOTE_DAYS * 24 * 60 * 60 * 1000;
-    for (const dir of [intakeDir(env), proposalsDir(env)]) {
+    const programmes = programmeNames(env).map((programme) => programmeProposalsDir(programme, env));
+    for (const dir of [intakeDir(env), proposalsDir(env), ...programmes]) {
       if (!existsSync(dir)) continue;
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile()) continue;
@@ -2486,8 +2490,8 @@ function shell(command, options) {
 export const commandShell = runShellAsync;
 
 /**
- * `npm ci` for the candidate's own dependency tree (`work-deps.js`),
- * without holding the event loop for up to ten minutes. `ensureWorkDeps`
+ * `npm ci` for the candidate's own dependency tree (`shared-deps.js`),
+ * without holding the event loop for up to ten minutes. `ensureSharedDeps`
  * reads a throw as the install failing, with npm's stderr as the reason.
  */
 async function npmCiAsync(cwd, signal = null) {

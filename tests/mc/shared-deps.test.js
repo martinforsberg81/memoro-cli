@@ -4,7 +4,7 @@
  * Five test files in this repository imported `@xterm/addon-serialize`,
  * `@xterm/headless` or `node-pty`, and a workarea mc made had nowhere to
  * resolve them from — so they failed in every workarea and in the gate's
- * candidate, and a session read its own change as the cause. `work-deps.js`
+ * candidate, and a session read its own change as the cause. `shared-deps.js`
  * puts one tree at `~/mc/node_modules`, above every workarea and inside none.
  * (#561 deleted those five with `src/runtime/session-host/` on 2026-09-03;
  * the manifest still declares the packages, and what the gate now checks is
@@ -22,11 +22,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
-import { workDepsLockPath, workDepsManifestPath, workDepsPath } from '../../src/mc/paths.js';
+import { sharedDepsLockPath, sharedDepsManifestPath, sharedDepsPath } from '../../src/mc/paths.js';
 import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
-import { ATTACHED_MARK, INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
+import { ATTACHED_MARK, INSTALLED_MARK, attachRepoDeps, attachRepoDepsAsync, ensureSharedDeps, sharedDepsManifest } from '../../src/mc/shared-deps.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
 
 const MANIFEST = {
@@ -42,7 +42,7 @@ const MANIFEST = {
 
 /** A work root and a "repository" that declares dependencies and a lockfile. */
 function fixture({ name = 'memoro-cli', manifest = MANIFEST, lock = '{"lockfileVersion":3,"one":1}' } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'mc-work-deps-'));
+  const root = mkdtempSync(join(tmpdir(), 'mc-shared-deps-'));
   const work = join(root, 'work');
   const repo = join(root, name);
   mkdirSync(work, { recursive: true });
@@ -57,7 +57,7 @@ function fixture({ name = 'memoro-cli', manifest = MANIFEST, lock = '{"lockfileV
     repo,
     installs,
     env: { MC_WORK_ROOT: work, MC_REPOS_HOME: root },
-    ensure: (extra = {}) => ensureWorkDeps({ repo, env: { MC_WORK_ROOT: work, MC_REPOS_HOME: root }, install, ...extra }),
+    ensure: (extra = {}) => ensureSharedDeps({ repo, env: { MC_WORK_ROOT: work, MC_REPOS_HOME: root }, install, ...extra }),
     cleanup: () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
   };
 }
@@ -70,9 +70,9 @@ describe('the dependency tree above the workareas', () => {
       assert.equal(out.ok, true, out.why);
       assert.equal(out.state, 'installed');
       assert.deepEqual(fx.installs, [fx.work], 'npm is asked in the work root and nowhere else');
-      assert.equal(out.path, workDepsPath(fx.env));
-      assert.equal(existsSync(workDepsPath(fx.env)), true);
-      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), readFileSync(join(fx.repo, 'package-lock.json'), 'utf8'));
+      assert.equal(out.path, sharedDepsPath(fx.env));
+      assert.equal(existsSync(sharedDepsPath(fx.env)), true);
+      assert.equal(readFileSync(sharedDepsLockPath(fx.env), 'utf8'), readFileSync(join(fx.repo, 'package-lock.json'), 'utf8'));
     } finally { fx.cleanup(); }
   });
 
@@ -80,7 +80,7 @@ describe('the dependency tree above the workareas', () => {
     const fx = fixture();
     try {
       fx.ensure();
-      const copied = JSON.parse(readFileSync(workDepsManifestPath(fx.env), 'utf8'));
+      const copied = JSON.parse(readFileSync(sharedDepsManifestPath(fx.env), 'utf8'));
       // `npm ci` would run `node scripts/postinstall.js` from the work root,
       // where that file does not exist, and fail the install.
       assert.equal(copied.scripts, undefined);
@@ -116,7 +116,7 @@ describe('the dependency tree above the workareas', () => {
       writeFileSync(join(fx.repo, 'package-lock.json'), '{"lockfileVersion":3,"one":2}');
       assert.equal(fx.ensure().state, 'installed');
       assert.equal(fx.installs.length, 2);
-      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), '{"lockfileVersion":3,"one":2}');
+      assert.equal(readFileSync(sharedDepsLockPath(fx.env), 'utf8'), '{"lockfileVersion":3,"one":2}');
     } finally { fx.cleanup(); }
   });
 
@@ -124,7 +124,7 @@ describe('the dependency tree above the workareas', () => {
     const fx = fixture();
     try {
       fx.ensure();
-      rmSync(workDepsPath(fx.env), { recursive: true, force: true });
+      rmSync(sharedDepsPath(fx.env), { recursive: true, force: true });
       assert.equal(fx.ensure().state, 'installed');
       assert.equal(fx.installs.length, 2);
     } finally { fx.cleanup(); }
@@ -140,7 +140,7 @@ describe('the dependency tree above the workareas', () => {
       assert.equal(out.ok, true);
       assert.equal(out.state, 'not-shared');
       assert.deepEqual(fx.installs, []);
-      assert.equal(existsSync(workDepsManifestPath(fx.env)), false);
+      assert.equal(existsSync(sharedDepsManifestPath(fx.env)), false);
     } finally { fx.cleanup(); }
   });
 
@@ -185,8 +185,8 @@ describe('installed means installed (2026-10-18)', () => {
       const tries = [];
       assert.equal(fx.ensure({ install: failing(tries) }).state, 'failed');
       // The copies npm ci read are there, and match — what used to make this `current`.
-      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), readFileSync(join(fx.repo, 'package-lock.json'), 'utf8'));
-      assert.equal(existsSync(join(workDepsPath(fx.env), INSTALLED_MARK)), false);
+      assert.equal(readFileSync(sharedDepsLockPath(fx.env), 'utf8'), readFileSync(join(fx.repo, 'package-lock.json'), 'utf8'));
+      assert.equal(existsSync(join(sharedDepsPath(fx.env), INSTALLED_MARK)), false);
       const again = fx.ensure();
       assert.equal(again.state, 'installed');
       assert.deepEqual(fx.installs, [fx.work]);
@@ -207,7 +207,7 @@ describe('installed means installed (2026-10-18)', () => {
     const fx = fixture();
     try {
       fx.ensure();
-      rmSync(join(workDepsPath(fx.env), INSTALLED_MARK));
+      rmSync(join(sharedDepsPath(fx.env), INSTALLED_MARK));
       assert.equal(fx.ensure().state, 'installed');
       assert.equal(fx.ensure().state, 'current');
     } finally { fx.cleanup(); }
@@ -229,14 +229,14 @@ describe('the merge gate never flips the shared tree (ownTree)', () => {
     const fx = fixture();
     try {
       fx.ensure();
-      const before = { lock: readFileSync(workDepsLockPath(fx.env), 'utf8'), mark: readFileSync(join(workDepsPath(fx.env), INSTALLED_MARK), 'utf8') };
+      const before = { lock: readFileSync(sharedDepsLockPath(fx.env), 'utf8'), mark: readFileSync(join(sharedDepsPath(fx.env), INSTALLED_MARK), 'utf8') };
       writeFileSync(join(fx.repo, 'package-lock.json'), '{"lockfileVersion":3,"one":2}');
       const out = await fx.ensure({ ownTree: fx.repo, install: async (cwd) => { fx.installs.push(cwd); } });
       assert.equal(out.state, 'installed-own');
       assert.equal(out.path, join(fx.repo, 'node_modules'));
       assert.deepEqual(fx.installs, [fx.work, fx.repo]);
-      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), before.lock);
-      assert.equal(readFileSync(join(workDepsPath(fx.env), INSTALLED_MARK), 'utf8'), before.mark);
+      assert.equal(readFileSync(sharedDepsLockPath(fx.env), 'utf8'), before.lock);
+      assert.equal(readFileSync(join(sharedDepsPath(fx.env), INSTALLED_MARK), 'utf8'), before.mark);
       // And the next workarea from main's lockfile still finds the tree current.
       writeFileSync(join(fx.repo, 'package-lock.json'), before.lock);
       assert.equal(fx.ensure().state, 'current');
@@ -249,7 +249,7 @@ describe('the merge gate never flips the shared tree (ownTree)', () => {
       const out = await fx.ensure({ ownTree: fx.repo, install: async () => { throw Object.assign(new Error('x'), { stderr: 'npm error boom\n' }); } });
       assert.equal(out.state, 'failed');
       assert.match(out.why, /npm error boom/u);
-      assert.equal(existsSync(workDepsLockPath(fx.env)), false);
+      assert.equal(existsSync(sharedDepsLockPath(fx.env)), false);
     } finally { fx.cleanup(); }
   });
 });
@@ -259,7 +259,7 @@ describe('the tree is not a piece of work', () => {
   // directory under the work root only when it holds a checkout of a
   // repository mc knows, and `node_modules` holds none. Asserted rather than
   // built, so that a future change to either rule is caught here.
-  const root = mkdtempSync(join(tmpdir(), 'mc-work-deps-root-'));
+  const root = mkdtempSync(join(tmpdir(), 'mc-shared-deps-root-'));
   const work = join(root, 'work');
   after(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } });
 
@@ -278,7 +278,7 @@ describe('the tree is not a piece of work', () => {
 });
 
 describe('mc work add, and the tree it leaves the session', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mc-work-deps-add-'));
+  const root = mkdtempSync(join(tmpdir(), 'mc-shared-deps-add-'));
   const repo = join(root, 'memoro-cli');
   const work = join(root, 'work');
   after(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } });
@@ -319,19 +319,19 @@ describe('a bare repository (repos.js, the second layout)', () => {
     try {
       const installs = [];
       const install = (cwd) => { installs.push(cwd); mkdirSync(join(cwd, 'node_modules'), { recursive: true }); };
-      const out = ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install });
+      const out = ensureSharedDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install });
       assert.equal(out.state, 'installed', out.why);
       assert.deepEqual(installs, [fx.env.MC_WORK_ROOT], 'the repository is memoro-cli, not memoro-cli.git');
-      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), lock);
-      assert.equal(readFileSync(workDepsManifestPath(fx.env), 'utf8'), workDepsManifest(JSON.stringify(MANIFEST)));
-      assert.equal(ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install }).state, 'current');
+      assert.equal(readFileSync(sharedDepsLockPath(fx.env), 'utf8'), lock);
+      assert.equal(readFileSync(sharedDepsManifestPath(fx.env), 'utf8'), sharedDepsManifest(JSON.stringify(MANIFEST)));
+      assert.equal(ensureSharedDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install }).state, 'current');
     } finally { fx.cleanup(); }
   });
 
   it('says no-manifest for a main without package.json, rather than failing', () => {
     const fx = makeRepoLayout({ bare: ['memoro-cli'] });
     try {
-      const out = ensureWorkDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install: () => assert.fail('nothing to install') });
+      const out = ensureSharedDeps({ repo: join(fx.home, 'memoro-cli.git'), env: fx.env, install: () => assert.fail('nothing to install') });
       assert.equal(out.state, 'no-manifest');
     } finally { fx.cleanup(); }
   });
@@ -441,9 +441,9 @@ describe('memoro attaches its own (attachRepoDeps)', () => {
   });
 });
 
-describe('workDepsManifest', () => {
+describe('sharedDepsManifest', () => {
   it('leaves everything npm ci has to agree with the lockfile about', () => {
-    const copied = JSON.parse(workDepsManifest(JSON.stringify({
+    const copied = JSON.parse(sharedDepsManifest(JSON.stringify({
       name: 'memoro-cli', version: '1.0.0', scripts: { postinstall: 'x' }, bin: { mc: 'y' },
       dependencies: { a: '^1' }, devDependencies: { b: '^2' }, optionalDependencies: { c: '^3' },
     })));

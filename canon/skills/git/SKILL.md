@@ -34,6 +34,6 @@ and its `index.lock` are every session's at once.
   otherwise), and `git cherry origin/main <branch>` lists nothing, or each `+`
   commit is in a merged pull request. A worktree goes with
   `git worktree remove <path>` (without `--force` when it has edits you have
-  not read). A runner workarea's or a goal's worktree is cheaper to leave to
+  not read). A runner area's or a goal's worktree is cheaper to leave to
   `mc tidy` and `mc goal archive`, which do the same checks. A remote branch
   gone after a merge is the repository's `deleteBranchOnMerge`, not a fault.

@@ -80,7 +80,8 @@ start to finish, and know when it is done? If not, it is not a step
     `send` and `amend` refuse `haiku` and `opus` on claude, `gpt-6.1-sol` and
     `gpt-6-luna` on codex. Never put `model` in the plan's `runner`.
   - Review is not a class a step names: `mc project send` adds the review
-    step, on the model set with `mc model set review`.
+    step, on the review candidates `mc model add|remove review` and
+    `mc model set review` configure.
   - On codex, `effort` reaches the session as
     `-c model_reasoning_effort=<level>` and a model name goes to `codex exec -m`.
 - **Overall:** `goal`; `contract` (what may not change without Martin);
@@ -89,9 +90,10 @@ start to finish, and know when it is done? If not, it is not a step
   met criterion with `mc project criterion met`, never in the file.
 - **Leave out:** the case for the plan, history, what the code already shows.
 - **Validate:** `mc project send` is the validation; it refuses and says why.
-- **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
-  move, name them in your account, and carry into the plan everything it
-  needs from them — nobody reads the archive (ruling 22).
+- **Proposals consumed:** move them to the programme's `proposals/archive/`
+  in the same move, first line `Utfall: <goal or project>`, name them in your
+  account, and carry into the plan everything it needs from them — the
+  archive is read only to judge duplicates (ruling 22).
 - **Decisions:** cite by name, never by path. Record the ruling in
   `docs/project/<programme>/rulings.md`: the question, Martin's answer quoted,
   the plan that carries it.

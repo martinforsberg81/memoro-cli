@@ -1,6 +1,7 @@
 /**
- * A piece of work is a directory under `~/mc` — `work/<name>` for what
- * `mc work` makes, `step/<project>` for the runner's.
+ * An area is a directory under `~/mc` — `step/<project>` for the runner's,
+ * a programme's planning directory, and `work/<name>` for what is left of the
+ * workareas retired on 2026-11-03 (`mc tidy` lists those).
  *
  * Everything about it is derived, never stored: the worktrees it spans are the
  * directories under it, their branches come from git, whether a thing can be
@@ -34,16 +35,16 @@ import { defaultRepos, repoNameOf, repositoryDir } from './repos.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
-import { attachRepoDeps, ensureWorkDeps } from './work-deps.js';
+import { attachRepoDeps, ensureSharedDeps } from './shared-deps.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
 
 /**
- * The areas `mc work` made: every directory under `~/mc/work/`, named
- * `work/<n>` — their path below the work root, which is what `inspectWorkArea`
- * and every verb take. Nothing directly under `~/mc` is listed: an `mc work`
- * area from before `work/` should not exist any more (Martin, 2026-10-11), and
+ * The areas the retired workarea verb made: every directory under
+ * `~/mc/work/`, named `work/<n>` — their path below the work root, which is
+ * what `inspectWorkArea` takes. Nothing directly under `~/mc` is listed: such
+ * an area from before `work/` should not exist any more (Martin, 2026-10-11), and
  * one that does shows as a stray (`listStrays`).
  */
 export function listWorkAreas(env = process.env, options = {}) {
@@ -211,7 +212,7 @@ export function inspectWorktree(path, repo) {
 /**
  * Turn what the user typed into a repository.
  *
- * `mc work add x memoro-cli` means the repository called memoro-cli, not a
+ * `memoro-cli` means the repository called memoro-cli, not a
  * directory of that name below wherever the shell happens to be. Resolving it
  * as a path found nothing and said so in git's words, which is a poor way to
  * learn that mc looked in the wrong place.
@@ -285,7 +286,8 @@ export function dropEmptyArea(path) {
  * what people did because mc had no verb for it, and it is how a shell ends
  * up standing in a directory that no longer exists.
  */
-export function removeWorktree({ name, repo, env = process.env } = {}) {
+// `inUse` as for releaseWorkArea below.
+export function removeWorktree({ name, repo, env = process.env, inUse: standing = directoryInUse } = {}) {
   const area = inspectWorkArea(name, env);
   const worktree = area.worktrees.find((item) => item.repo === repo);
   if (!worktree) return { ok: false, reason: 'no-such-worktree' };
@@ -294,8 +296,8 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
   // the question below is asked. What is still standing there after that —
   // a shell, a session, a server that would not stop — still refuses.
   const servers = stopServersUnder(worktree.path, { reason: 'worktree-removed' });
-  if (servers.stopped.length) waitUntilUnused(worktree.path);
-  const inUse = directoryInUse(worktree.path);
+  if (servers.stopped.length) waitUntilUnused(worktree.path, { standing });
+  const inUse = standing(worktree.path);
   if (inUse) return { ok: false, reason: `in use by ${inUse.join(', ')}`, servers_stopped: servers.stopped };
   if (worktree.uncommitted > 0) return { ok: false, reason: `${worktree.uncommitted} uncommitted` };
   if (!worktree.is_git) {
@@ -324,8 +326,8 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
 }
 
 /** Up to 5 s, every 250 ms, for a stopped server's processes to leave. */
-function waitUntilUnused(path, { totalMs = 5000, stepMs = 250 } = {}) {
-  for (let waited = 0; waited < totalMs && directoryInUse(path); waited += stepMs) {
+function waitUntilUnused(path, { totalMs = 5000, stepMs = 250, standing = directoryInUse } = {}) {
+  for (let waited = 0; waited < totalMs && standing(path); waited += stepMs) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stepMs);
   }
 }
@@ -399,11 +401,11 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   // And so does the dependency tree the checkout's tests will resolve. Both
   // ways to one are reported rather than fatal, and a session with a checkout
   // and no tree can still work: the shared directory above every workarea,
-  // never inside one, for the repository it names (`ensureWorkDeps`, work-deps.js),
+  // never inside one, for the repository it names (`ensureSharedDeps`, shared-deps.js),
   // and the repository's own attach for one that keeps its own (`attachRepoDeps`,
   // memoro's `scripts/ensure-worktree-deps.mjs`). `attach: false` leaves the
   // second to the caller: the runner attaches before every step itself.
-  const dependencies = ensureWorkDeps({ repo, env });
+  const dependencies = ensureSharedDeps({ repo, env });
   const attachment = attach ? attachRepoDeps(target) : null;
   return {
     ok: true,
@@ -496,14 +498,16 @@ export function releaseWorktree(worktree) {
   return removed;
 }
 
-export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null } = {}) {
+// `inUse` is who stands in a directory (`directoryInUse`, one lsof per call);
+// a test that pins what release decides hands in the answer.
+export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null, inUse: standing = directoryInUse } = {}) {
   const area = inspectWorkArea(name, env);
   const removed = [];
   const kept = [];
   const pullAtTip = (wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {});
   for (const worktree of area.worktrees) {
     const verdict = releaseVerdict(worktree, {
-      inUse: worktree.is_git ? directoryInUse(worktree.path) : null,
+      inUse: worktree.is_git ? standing(worktree.path) : null,
       pullAtTip,
     });
     if (!verdict.remove) {
@@ -571,7 +575,7 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = 
     conversations_failed: failedConversations,
     // What keeps the area (and its conversations) in place when nothing
     // above did: the user's own files, named so the dry run and the apply
-    // tell the same story — and so the way forward (mc work discard) has
+    // tell the same story — and so the way forward (`discardWorkArea`) has
     // an object.
     held_by: kept.length === 0 ? heldBy : [],
     dry_run: dryRun,
@@ -660,7 +664,7 @@ export function discardWorkArea(name, { repo = null, env = process.env, dryRun =
 
 /**
  * The repositories mc can see: mc's own (`defaultRepos`, in either layout) and
- * the roots beside the home directory, which is where `mc work add <name>`
+ * the roots beside the home directory, which is where `resolveRepository`
  * already looks. Deriving them here means prune works even when the worktree
  * directory is already gone — which is exactly when a registration is left
  * dangling.

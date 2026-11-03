@@ -1,7 +1,7 @@
 /**
  * Asking, rather than requiring the user to know.
  *
- * mc's verbs grew into a grammar — `mc work add <name> <repo> [branch]` — and a
+ * mc's verbs grew into a grammar — `<verb> add <name> <repo> [branch]` — and a
  * grammar is something you either remember or get wrong. Typing a branch name
  * where a session name belonged silently made a second session, and nothing in
  * the command could have told the difference.

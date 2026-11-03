@@ -1,7 +1,7 @@
 /**
- * The flag grammar the work-world commands share.
+ * The flag grammar the commands share.
  *
- * `mc work` and `mc worker` read the same kinds
+ * The verbs read the same kinds
  * of flags — booleans, value flags, the strict `--model` dance, the
  * `--codex`/`--claude` sugar — and had started growing the same loop each.
  * One scanner, three grammars: each command hands over which flags it knows
@@ -9,7 +9,7 @@
  *
  * Two kinds of value flags, because they have different histories:
  *
- * `values` keeps `mc work`'s original behaviour exactly: the value is the
+ * `values` keeps the workarea verb's original behaviour exactly: the value is the
  * next positional word (flags in between are read first), a value that never
  * arrives is silently dropped, and when several are pending the earliest
  * declared wins the next word. Nothing new may depend on those quirks, but

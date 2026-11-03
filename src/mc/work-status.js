@@ -318,7 +318,7 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
   // both are gathered below for every area at once.
   const areas = (names?.length
     // A holder's name is the name without its kind; the area is the one
-    // `mc work <name>` would open (`workAreaName`).
+    // `workAreaName` names.
     ? names.map((name) => inspectWorkArea(workAreaName(name, { root: workRoot(env) }).name, env, { conversations: false, git: false }))
     : listWorkAreas(env, { conversations: false, git: false })).filter((area) => area.exists);
 
@@ -360,7 +360,7 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // others, never one of them changed: every reader of this page keeps
         // reading exactly what it read before.
         role: areaRoleName(area.path),
-        // `mc work stop` was here, and nobody has opened the area since: who
+        // A stop was here, and nobody has opened the area since: who
         // and when, so a conversation gone from the page reads as stopped
         // rather than as dead (KP-09). Null in every other case.
         stopped: readStopMark(area.path),

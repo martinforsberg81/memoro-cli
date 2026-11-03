@@ -59,12 +59,12 @@ describe('the plan role', () => {
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /full freedom/u);
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
-    assert.match(told, /A goal \(`GOAL\.md`\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
+    assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
     assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
     assert.match(told, /Every status is yours to set/u);
     assert.match(told, /`blocked_by: plan-review`/u);
-    assert.match(told, /not a workarea/u);
+    assert.match(told, /not a runner area/u);
     for (const ban of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u]) {
       assert.doesNotMatch(told, ban);
     }
@@ -216,7 +216,7 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /~\/mc\/plan\/msr-core\//u);
     assert.match(launch.prompt, /`memoro\/` and `memoro-cli\/`/u);
     assert.match(launch.prompt, /branch `plan\/msr-core`/u);
-    assert.match(launch.prompt, /not a workarea/u);
+    assert.match(launch.prompt, /not a runner area/u);
     // No reading list and no report asked for: Martin opens (2026-09-13).
     assert.match(launch.prompt, /Wait for him\./u);
     assert.ok(!launch.prompt.includes('docs/project/'), launch.prompt);
@@ -306,6 +306,9 @@ describe('the launch', () => {
       prompt: launch.prompt,
       defaultModel: 'opus',
       defaultModelTool: 'claude',
+      verb: 'plan',
+      programme: 'x',
+      register: () => () => {},
       env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex') },
       spawn: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; },
     });

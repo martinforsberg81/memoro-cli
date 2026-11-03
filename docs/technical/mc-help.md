@@ -15,7 +15,7 @@ not asking the person a confirmation question (`src/mc/tidy.js`, `runTidy` /
 `applyTidy`).
 
 `src/mc-verbs.js` already answered help anywhere after an ordinary verb. Before
-this change, probes of both `mc work add --help` and `mc run lanes --help`
+this change, probes of both `mc project step add --help` and `mc run lanes --help`
 returned 0, not the 2 reported in the goal's starting brief. The exception
 found by reading the code was the vault capability: only its first argument
 was checked for help. It now uses the same `wantsHelp`, and `src/bin-mc.js`
@@ -89,10 +89,9 @@ The same scan found 101 session occurrences of the removed programme verb,
   lists abandoned rounds. Zero in both measurements. `src/mc/commands/log.js`
   implements it; `src/mc/helper-cli-collect.js` recommends it in digest output
   but does not execute it. Keep documented; troubleshooting can be infrequent.
-- **`mc worker`**: creates/opens a workarea marked with the worker role so its
-  conversations inherit that overlay and default model. Zero in both
-  measurements. Its dispatcher entry, handler, comments and help were found,
-  not a programmatic caller. Retained for Martin to judge.
+- **`mc worker`**: created/opened a workarea marked with the worker role. Zero
+  in both measurements. Retired on 2026-11-03 with the workarea verb
+  ([`mc-work.md`](mc-work.md)).
 - **`mc hook` is not unused** despite zero in these Bash/terminal samples.
   `src/mc/hooks.js`'s `MC_HOOKS` registers `session-start` and `pre-tool` as
   coding-agent hooks; those are callers outside ordinary Bash tool input.
@@ -185,7 +184,7 @@ The existing handler suites were also run, not replaced with text comparisons.
 | `step` reading/failed/blocked/note/ready/done | Kept; missing forms and flags now visible in full | STATES, scanner and special after-deploy handling; json reading, reason/answer, on/on-project/until/after-deploy/hours, pr. Register writes and time/deploy constraints read; only memoro deploys. |
 | `goal` new/log/open/blocked/done/show/list | Kept; descriptions shared | VALUE_FLAGS, VERB_FLAGS, STATUS_VERBS and dispatch; status choices now explicit in long synopsis, log tags/MC_GOAL default, path, fetch-first behavior and show/list output retained. |
 | `status` name/json/offline | Reworded and shared | cli/status.js, commands/status-project.js, collectProject; plan plus register, not PLAN.md frontmatter; missing name points to mc, goals to goal show. |
-| `model` list/add/remove/set review | Kept; mutation forms now explicit in full | Handler dispatch and arity, class/target/candidate parsing; json only for list, no capacity poll. |
+| `model` list/add/remove fast\|large\|review, set review | Kept; mutation forms now explicit in full | Handler dispatch and arity, class/target/candidate parsing; json only for list, no capacity poll. |
 | `helper` desk/collect/intake | Reworded and shared | Scanner, openDesk and collect/drain branches; collect works without intake, one digest per repository, one oldest-first turn per inbox file. Tool/model/new and digest window/limit/threshold forms retained. |
 | Matrix runner `--rounds` | Removed from active syntax | parseLoopArgs explicitly refuses it; the technical runner document already marks it retired. No working flag was removed. |
 | Matrix helper/start/update descriptions | Reworded | Same handler/source readings as above, preserving the role goal's caller labels. |
@@ -252,7 +251,7 @@ usage names anywhere, prose included, must be read by the verb its clause is
 about (`mc test dev --here --url` inside hook's text is mc test's) on at least
 one of its forms; `node --test` and npm's `--package-lock-only` are named as
 other programs' flags. Negative controls that must fail: the three guessed
-verbs, `mc dev archive`, `mc work add <name> <repo> --testflight`,
+verbs, `mc dev archive`, `mc project new <name> --testflight`,
 `mc run start --force` (and `start|stop [--force]`), `--fictional` on a shot
 continuation line and a log one, an invented goal, hook and language
 subcommand, `mc project criterion vanish`, an invented vault verb and page
@@ -299,7 +298,7 @@ negative controls.
 
 What it found, now fixed: `mc vault` revoke-device, change-password and
 destroy-forgotten were routed but missing from the vault row and the matrix;
-`mc work list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
+the workarea verb's `list`, `mc dev open`, `mc dev surfaces`, `mc repo rounds` and
 `mc repo push-check` were routed but absent from IN FULL (the last two also
 from `mc repo --help`). WHAT IS NOT HERE listed dev and deps among removed
 verbs; it now says today's verbs only share the name. The matrix gains

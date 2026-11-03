@@ -29,7 +29,7 @@
  * Two things can be *proved* rather than declared, and both carve-outs are
  * narrow on purpose. A repository with nothing to install has nothing that
  * could be missing. And a repository whose tree mc itself keeps above the
- * candidate — `work-deps.js`, one `node_modules` at the work root that the
+ * candidate — `shared-deps.js`, one `node_modules` at the work root that the
  * gate's worktree and every workarea resolve through — has nothing for the
  * *round* to install: `prepare` says what the round must run, not whether the
  * suite has dependencies. The second one is only safe because it is not taken
@@ -106,7 +106,7 @@ export const SHIPPED = Object.freeze({
   'memoro-cli': Object.freeze({
     // Nothing for the *round* to run, because the tree is the environment's.
     // The candidate stands under the work root (`paths.js`: `WORK_GATE` beside
-    // `WORK_DEPS`), so node's own parent walk finds `~/mc/node_modules` two
+    // `SHARED_DEPS`), so node's own parent walk finds `~/mc/node_modules` two
     // directories above it, the same tree every workarea resolves. The `npm
     // ci` this entry carried from 2026-09-02 was true and was a second copy of
     // a tree the candidate could already see.
@@ -122,7 +122,7 @@ export const SHIPPED = Object.freeze({
     // one does not. The field says what the round must run; the measurement
     // says whether the suite can run at all.
     prepare: null,
-    prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (work-deps.js) and '
+    prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (shared-deps.js) and '
       + 'builds the candidate at <work root>/gate/<repo>/candidate, so the three declared packages '
       + 'resolve by node\'s parent walk with no node_modules inside the checkout. Measured 2026-09-03 '
       + 'on the gate round for #570: the whole suite in such a candidate is 143 files, 1538 tests, '
@@ -233,8 +233,9 @@ export const SHIPPED = Object.freeze({
     // preflight until #13232. Rebuilt after `npm ci`, main never carries a
     // stale copy. The same holds for the generated session validator (ajv and
     // src/schemas/; mc deploy runs build:validators too, and check:validators
-    // is not selected for a lockfile bump) and the TipTap bundle, whose build
-    // is deterministic since #13233. The design-token stylesheets and their
+    // is not selected for a lockfile bump). The TipTap bundle is not here:
+    // memoro's email-compose (#14707) deletes it and its `build:tiptap`
+    // script. The design-token stylesheets and their
     // document are written from `sdk/tokens/*.json` alone (2026-10-12: steps
     // regenerated them by hand, one-window-path 8 among them). The SDK corpus
     // results and `card-html-digests.json` are not here: memoro re-records
@@ -246,10 +247,6 @@ export const SHIPPED = Object.freeze({
         paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
       }),
       Object.freeze({ command: 'npm run build:validators', paths: Object.freeze(['src/tenancy/validators.generated.mjs']) }),
-      Object.freeze({
-        command: 'npm run build:tiptap',
-        paths: Object.freeze(['public/vendor/tiptap.bundle.js', 'public/vendor/tiptap.version.json']),
-      }),
       Object.freeze({
         command: 'npm run tokens:build',
         paths: Object.freeze(['public/css/tokens/', 'public/css/theme/theme-memoro-light.css', 'public/css/theme/theme-memoro-dark.css']),
@@ -351,12 +348,9 @@ function readRepoDeclaration(repoPath) {
 /** Which of the three files each field of a declaration came from. */
 function layerSources({ shipped, own, override }) {
   const sources = {};
-  if (override) {
-    for (const field of Object.keys(override)) sources[field] = 'override';
-    return sources;
-  }
   for (const field of Object.keys(shipped || {})) sources[field] = 'shipped';
   for (const field of Object.keys(own || {})) sources[field] = 'repository';
+  for (const field of Object.keys(override || {})) sources[field] = 'override';
   return sources;
 }
 
@@ -374,13 +368,16 @@ function layerSources({ shipped, own, override }) {
  * operator's file stays the last word — it is how a machine-local fact gets in
  * without a release at all.
  *
- * The two upper layers merge differently on purpose. The repository's file is
- * merged **field by field**: it is written by a repository about itself, and
- * it cannot know facts that are not its own — where its merges are logged is
- * one, and a whole-entry replacement would make a file that says `select` drop
- * `merge_log` in silence, which is the hole D-0135 already cost this table
- * twice. The operator's file keeps replacing the entry whole, as it always
- * has, and the fields it drops are still named in `shadowed`.
+ * Both upper layers merge **field by field**, the same way. A layer states
+ * the fields it changes and keeps the rest of what is below it; `null` is how
+ * it says a field is not wanted. The operator's file used to replace the whole
+ * entry instead, and that is D-0135: an override written to change one fact
+ * dropped every field it did not repeat — `extra_gates` on 2026-08-22,
+ * `pr_tests_flags` on 2026-08-24, both in silence. A warning naming the
+ * dropped fields ("DECLARATION SHADOWED") followed; by 2026-11 it would have
+ * named fourteen, almost everything the shipped entry gained since August.
+ * The rule that cannot drop a field in silence is the one that has no hole to
+ * warn about (2026-11-03).
  */
 export function declarationFor(repoPath, { root = mcHome(), env = process.env } = {}) {
   const name = basenameOf(repoPath);
@@ -399,10 +396,10 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
   const shipped = SHIPPED[name];
   const overrides = readOverrides(root);
   const overridden = overrides[name];
-  // The repository's layer on top of the shipped one, then the operator's
-  // whole entry if there is one.
-  const base = own.entry ? { ...(shipped || {}), ...own.entry } : shipped;
-  const declared = overridden || base;
+  // The repository's layer on top of the shipped one, then the operator's on
+  // top of both — each field by field.
+  const layers = [shipped, own.entry, overridden].filter(Boolean);
+  const declared = layers.length ? Object.assign({}, ...layers) : undefined;
 
   // A repository file can declare a repository mc ships nothing for — and
   // then it has to state its preparation, like any other declaration. Saying
@@ -447,6 +444,9 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
     }
+    // A repository-wide ceiling is safety policy, not an optional selector
+    // field: a layer above can tune it, and one that says `null` is a stop,
+    // never a round without a ceiling.
     if (declared.round_timeout_ms !== undefined
       && (!(Number.isInteger(declared.round_timeout_ms) && declared.round_timeout_ms > 0)
         || typeof declared.round_timeout_why !== 'string' || !declared.round_timeout_why.trim())) {
@@ -465,30 +465,11 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + 'true or false — true says its `select` command takes `--changed-path <path>` (repeatable) in place of its diff.',
       };
     }
-    // Which fields of the layers below it this override silently dropped, if
-    // it is one. A shallow table means an override states every field it
-    // wants — a rule this table's own operator wrote into the memoro entry
-    // after extra_gates fell out (D-0135) — but a rule people must remember is
-    // a hole (pr_tests_flags fell out the same way, 2026-08-24), so the
-    // dropped fields are named to whoever reads the declaration. A repository
-    // that has written its own file is one more layer that can be dropped
-    // that way, so it is counted here too.
-    const shadowed = overridden && base
-      ? Object.keys(base).filter((field) => overridden[field] === undefined
-        && base[field] != null && (!Array.isArray(base[field]) || base[field].length > 0))
-      : [];
     return {
       ok: true,
       name,
-      // A repository-wide ceiling is safety policy, not an optional test
-      // selector field. An operator override can tune it, but cannot drop it.
-      declaration: normalise({
-        ...declared,
-        round_timeout_ms: declared.round_timeout_ms ?? shipped?.round_timeout_ms,
-        round_timeout_why: declared.round_timeout_why ?? shipped?.round_timeout_why,
-      }, env),
+      declaration: normalise(declared, env),
       source: 'declared',
-      shadowed,
       // Which of the three files each field came from. A reader who disagrees
       // with a declaration has to know which one to edit, and "it is declared"
       // does not say that once there are three places it could be declared in.

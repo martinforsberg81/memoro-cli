@@ -26,11 +26,10 @@
  * programmes — one heading per programme with its own counts and its planning
  *              session, and under it one numbered row per project on
  *              `origin/main`: the plan's status, how many of its steps are
- *              done, `next`, the open PR, whether it has a workarea, and what
- *              holds it when it is blocked. The number is the one the menu
- *              opens, whether or not a row is drawn for it. The workareas no
- *              project explains are counted here too, numbered after the
- *              projects.
+ *              done, `next`, the open PR, whether it has a runner area, and
+ *              what holds it when it is blocked. The number is the one the
+ *              menu opens, whether or not a row is drawn for it. What no kind
+ *              explains is `strays`: directories and ownerless sessions.
  * language   — the language side, from files `mc language` leaves: each
  *              cached reading's numbers, the newest run, and the gap a stopped
  *              run left open (`languageState`, language-runs.js).
@@ -59,7 +58,8 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
-import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
+import { criteriaCount } from './criteria.js';
+import { goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -85,9 +85,10 @@ import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, programsHome, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, areaKindOf, mcHome, programsHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
+import { DESKS, ownerOf } from './session-owner.js';
 import { overlayPlans, readEntry, realLock } from './register.js';
 import { gitDirOf } from './repos.js';
 import { readTailEntries } from './conversations.js';
@@ -278,6 +279,10 @@ export function runnerSection({
     const plan = session.goal ? null : byProject.get(session.name);
     session.step = plan?.step ?? null;
     session.steps = plan?.steps ?? null;
+    // Every session has an owner, and a lane's is a programme: the one its
+    // lane file names, else its goal's (`<programme>/<goal>`), else its
+    // project's plan's (goal mc/no-work).
+    session.owner = { kind: 'programme', name: session.programme || session.goal?.split('/')[0] || plan?.programme || null };
   }
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
@@ -385,29 +390,34 @@ function lanesOfRunner(sessions = [], setting = {}) {
 
 /* ------------------------------------------------------------- FOREGROUND */
 
-/** The two singleton desks, drawn whether or not anybody is at them. */
-export const DESKS = Object.freeze(['helper', 'brief']);
+/** The two singleton desks (session-owner.js), re-exported for the page's readers. */
+export { DESKS, ownerOf };
 
 /**
  * Who is sitting where — everything running that the runner did not start.
  *
- * The two desks are singletons and get a fixed row each, drawn open or not:
- * there is one helper and one brief, and *"is the helper running?"* is a
- * question an empty row answers as well as a full one. Everything else is a
- * list, because how many there are is not knowable in advance and their names
- * are the content.
+ * Every session has an owner, and there are two kinds (goal mc/no-work): a
+ * programme — its planning session, or a project of it opened from the page —
+ * or a desk. The two desks are singletons and get a fixed row each, drawn open
+ * or not: there is one helper and one brief, and *"is the helper running?"* is
+ * a question an empty row answers as well as a full one. A programme's
+ * sessions are drawn on its heading in PROGRAMMES.
  *
  * The register is `~/mc/runner/foreground/<pid>.json`, written by the verbs
  * that hold a terminal through `foreground.js`. An entry whose pid is not
  * alive is dropped rather than believed: a session killed with its terminal
  * never gets to remove its own file.
  *
+ * What has no owner is a stray, not a session: a register entry no verb
+ * explains (a `mc plan` from before programmes, a retired verb's), and a tmux
+ * session `mc-<name>` mc did not start for anyone. They are `strays`, drawn
+ * beside the directories under `~/mc` that no kind explains.
+ *
  * **Every session carries its age**, which the page used to throw away. The
  * register has written `started` since it existed and nothing read it, so on
  * 2026-09-02 a `mc plan` opened three days earlier was drawn exactly like one
- * opened twenty minutes ago — seven of them, all alive, all looking current.
- * The age is the whole difference between somebody working here and somebody
- * having left this open.
+ * opened twenty minutes ago. The age is the whole difference between somebody
+ * working here and somebody having left this open.
  */
 export function sessionsSection({
   foreground = [], live = [], now = new Date(), alive = pidAlive,
@@ -419,58 +429,53 @@ export function sessionsSection({
   };
   const open = foreground
     .filter((item) => alive(item.pid))
-    .map((item) => ({ ...item, age_seconds: age(item.started) }));
+    .map((item) => ({ ...item, age_seconds: age(item.started), owner: ownerOf(item) }));
 
   const desks = {};
   for (const verb of DESKS) desks[verb] = open.find((item) => item.verb === verb) || null;
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
-  // that programme's own row rather than among the loose sessions — which is
-  // the whole reason `mc plan` puts one at `planAreaName` (paths.js).
-  // Keyed by programme here, so the section that owns programmes never has to
-  // know how a session's area is spelled.
-  //
-  // A `mc plan` from before that change carries a bare project name, belongs
-  // to no programme, and cannot be started again. It stays in the list below
-  // with everything else nothing explains.
+  // that programme's own heading — which is the whole reason `mc plan` puts
+  // one at `planAreaName` (paths.js). A project opened from the page belongs
+  // to its programme too, and is drawn on the same heading. Keyed by
+  // programme here, so the section that owns programmes never has to know how
+  // a session's area is spelled.
   const planning = {};
   const planningSessions = {};
+  const programmeSessions = {};
   for (const item of open) {
-    if (item.verb !== 'plan') continue;
-    const area = areaKindOf(item.area || '');
-    if (area?.kind === 'plan') {
-      planning[area.name] = item;
-      (planningSessions[area.name] ||= []).push(item);
+    if (item.owner?.kind !== 'programme') continue;
+    if (item.verb === 'plan') {
+      planning[item.owner.name] = item;
+      (planningSessions[item.owner.name] ||= []).push(item);
+    } else {
+      (programmeSessions[item.owner.name] ||= []).push(item);
     }
   }
-  const claimed = new Set(Object.values(planningSessions).flat());
 
-  // A tmux window is a session too, and the only kind mc knows nothing else
-  // about — no verb, no tool, no model, just a name and how long it has been
-  // open. It goes in the same list, so the section is one answer rather than
-  // two lists a reader has to add up.
-  const windows = live.map((area) => ({
-    verb: null,
-    area: area.name,
-    tmux: `mc-${area.name}`,
-    tool: null,
-    model: null,
-    pid: null,
-    age_seconds: area.opened_ms == null ? null : Math.max(0, Math.round((at - area.opened_ms) / 1000)),
-  }));
+  // Oldest first: the one that has been open longest is the one most likely
+  // to have been forgotten.
+  const strays = [
+    ...open.filter((item) => !item.owner).map((item) => ({
+      kind: 'register', name: item.area || item.verb || '?', verb: item.verb || null, pid: item.pid, age_seconds: item.age_seconds,
+    })),
+    ...live.map((area) => ({
+      kind: 'tmux',
+      name: `mc-${area.name}`,
+      verb: null,
+      pid: null,
+      age_seconds: area.opened_ms == null ? null : Math.max(0, Math.round((at - area.opened_ms) / 1000)),
+    })),
+  ].sort((a, b) => (b.age_seconds ?? -1) - (a.age_seconds ?? -1) || String(a.name).localeCompare(String(b.name)));
 
-  // Oldest first: the one that has been open longest is the one most likely to
-  // have been forgotten, and that is the whole reason the age is on the row.
-  const others = [...open.filter((item) => !DESKS.includes(item.verb) && !claimed.has(item)), ...windows]
-    .sort((a, b) => (b.age_seconds ?? -1) - (a.age_seconds ?? -1)
-      || String(a.area).localeCompare(String(b.area)));
-
+  const owned = open.filter((item) => item.owner);
   return {
     desks,
     planning,
     planning_sessions: planningSessions,
-    others,
-    count: DESKS.filter((verb) => desks[verb]).length + claimed.size + others.length,
+    programme_sessions: programmeSessions,
+    strays,
+    count: owned.length,
   };
 }
 
@@ -1158,17 +1163,6 @@ export function mcSection({
 /* ---------------------------------------------------------------- PROJECTS */
 
 /**
- * How many workareas with no project keep a number of their own.
- *
- * They had a row each, and the row never changed: twelve folders, twelve lines,
- * the same twelve every day, and `~/mc/runner/unplanned-workareas.md` holds
- * them whole with what the page could not say anyway — whether the branch has
- * landed. WORK draws one line now, and this is how many of them a number still
- * opens; the file is what the line names for the rest.
- */
-export const UNPLANNED_SHOWN = 12;
-
-/**
  * What holds a blocked project: the `blocked_by` of the step that stopped it.
  *
  * The step is the one `planState` picks — the first that is not done, which is
@@ -1334,21 +1328,18 @@ function collapsedOf(projects) {
  * the one piece of work the page could not show.
  *
  * A project row's `●` means **the runner has a step in flight on it**, and
- * nothing else. It used to mean a live tmux area — a person sitting in the
- * folder — which made the row say two things at once: where the plan stands,
- * and who is standing nearby. `mc work` and `mc run` know nothing about each
- * other now, and neither do their marks. Sessions are WORK's.
+ * nothing else. A session somebody has open is its programme's, drawn on the
+ * heading (`programme_sessions`), never on the row.
  *
- * The workarea has not stopped mattering — it is where a session runs — so
- * every row says whether the project has one, and the folders that no project
- * explains are counted here for WORK to draw. Nothing removes those
- * (close-workarea.js), which is exactly why they are counted where somebody
- * looks; the first `UNPLANNED_SHOWN` keep a number, and WORK draws one line for
- * all of them.
+ * Every row says whether the project has a runner area (`area`) — opening the
+ * project by its number opens a session there (`project-open.js`), and a
+ * project the runner has not started has none yet. Numbering runs through the
+ * projects and then the goals, so every row is reachable by the number beside
+ * it.
  *
- * Numbering runs through the projects and then the drawn folders, so every row
- * is openable by the number beside it. A project with no workarea is numbered
- * like any other: opening it is what creates the folder.
+ * What no kind explains is a stray (`strays`): a directory under `~/mc` that is
+ * no area (`listStrays`), and a session with no owner (`sessionsSection`).
+ * Nothing on the page removes one; `mc tidy` lists what is left.
  *
  * **Every programme carries its own counts, and its blocked projects collapse.**
  * Thirty-three of forty-four projects were `blocked` on 2026-09-06 and the page
@@ -1366,13 +1357,13 @@ function collapsedOf(projects) {
  * and every number openable (`commands/home.js` § `menu`).
  */
 export function programmesSection({
-  plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, planningSessions = {}, goalRows = [], running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
+  plans = [], areas = [], rows = [], openPrs = [],
+  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], running = [], programmes = [], now = new Date(),
+  strays = [], sessionStrays = [],
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
-  // An `mc work` area (`kind: 'work'`) never holds a project, whatever its name.
-  const held = new Set(areas.filter((area) => area?.kind !== 'work').map((area) => (typeof area === 'string' ? area : area.name)));
+  const held = new Set(areas.map((area) => (typeof area === 'string' ? area : area.name)));
   // A project's branches are `<name>` or `<name>-<suffix>`, so the row can say
   // what the project is waiting on rather than only what sits on a branch of
   // its own name: `action-window` had three branches with an open pull request
@@ -1403,9 +1394,9 @@ export function programmesSection({
       legacy: Boolean(plan.legacy),
       steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
       // The runner, and only the runner: a session somebody has open in the
-      // folder is WORK's business and not this row's.
+      // folder is its programme's, on the heading.
       running: running.includes(name),
-      workarea: held.has(name),
+      area: held.has(name),
       last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
       pr: pr ? pr.number : null,
     };
@@ -1414,28 +1405,6 @@ export function programmesSection({
   projects.sort((a, b) => String(a.programme).localeCompare(String(b.programme))
     || a.name.localeCompare(b.name));
 
-  // The folders no project explains, in the order the old WORK list used: live
-  // first — that is where a conversation waits on a person — then by last
-  // activity, the later of the folder's own mtime and its last runner step.
-  const known = new Set(projects.map((project) => project.name));
-  const orphans = areas
-    .map((area) => (typeof area === 'string' ? { name: area } : area))
-    .filter((area) => area.kind === 'work' || !known.has(area.name))
-    .map((area) => {
-      const last = area.kind === 'work' ? null : lastRun[area.name] || null;
-      const ran = last ? Date.parse(last.ts) : NaN;
-      return {
-        name: area.name,
-        repo: (area.repos || [])[0] || null,
-        live: live.includes(area.name),
-        last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
-        activity_ms: Math.max(Number(area.mtime_ms) || 0, Number.isNaN(ran) ? 0 : ran),
-      };
-    })
-    .sort((a, b) => (Number(b.live) - Number(a.live))
-      || (b.activity_ms - a.activity_ms)
-      || a.name.localeCompare(b.name));
-
   let number = 0;
   for (const project of projects) { number += 1; project.number = number; }
   // A goal continues the numbering after every project's, in the order the page
@@ -1443,15 +1412,6 @@ export function programmesSection({
   const goalList = goalRows.map((goal) => ({ ...goal }))
     .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
   for (const goal of goalList) { number += 1; goal.number = number; }
-  const drawn = orphans.slice(0, Math.max(0, shown));
-  // Numbered, and nothing else asked about them. Each used to cost two `git`
-  // calls for how much was uncommitted and when it was last committed to —
-  // 81 folders on 2026-08-30, 15 s of the page's 8 s — and WORK draws one line
-  // for all of them now, so nothing on the page reads that answer. The file the
-  // line names has it, with what the page could never say anyway: whether the
-  // branch has landed (`mc run`, once a round).
-  for (const orphan of drawn) { number += 1; orphan.number = number; }
-
   // Every programme that has a project, plus every one that exists only as an
   // open planning session or as a directory on main with nothing runnable
   // under it yet. `programmes` is the tree's own answer (`listProgrammes`),
@@ -1462,6 +1422,7 @@ export function programmesSection({
     ...projects.map((project) => project.programme),
     ...Object.keys(planning),
     ...Object.keys(planningSessions),
+    ...Object.keys(programmeSessions),
     ...goalList.map((goal) => goal.programme),
     ...programmes,
   ])].filter(Boolean).sort((a, b) => a.localeCompare(b));
@@ -1482,6 +1443,8 @@ export function programmesSection({
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
+      // The programme's other sessions: its projects opened from the page.
+      sessions: programmeSessions[name] || [],
       // The heading's own answer: how many of this programme's projects are
       // ready and how many are stopped. An empty object is a programme with no
       // project yet, which the heading says in words.
@@ -1512,10 +1475,13 @@ export function programmesSection({
     planning: groups.filter((group) => group.planning).length,
     running: projects.filter((project) => project.running).length,
     waiting: projects.filter((project) => project.state === 'waiting').length,
-    no_workarea: projects.filter((project) => !project.workarea).length,
-    // The directories under `~/mc` that are none of the kinds (`listStrays`),
-    // drawn under `not an area mc knows`. Nothing removes one.
-    unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length), strays },
+    // What no kind explains, drawn under `not an area mc knows`: the
+    // directories under `~/mc` that are no area (`listStrays`), then the
+    // sessions with no owner. Nothing removes one.
+    strays: [
+      ...strays.map((stray) => ({ kind: 'directory', ...stray })),
+      ...sessionStrays,
+    ],
   };
 }
 
@@ -1525,8 +1491,8 @@ export function programmesSection({
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
- * `after` is the goals it starts after; `waiting_on` those of them that have
- * not landed, which is what a `waiting` goal waits on.
+ * `phase` is its phase; `held` whether a lower phase of its programme is
+ * still to finish (`phaseOpen`), so the runner does not pick it yet.
  */
 export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
   return goals.map((goal) => ({
@@ -1534,9 +1500,11 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     programme: goal.programme,
     repos: goal.repos,
     status: goal.status,
-    after: goal.after ?? [],
-    waiting_on: afterOf(goal, goals).pending,
+    phase: goal.phase ?? null,
+    held: goal.problems.length === 0 && !['done', 'dropped'].includes(goal.status) && !phaseOpen(goal, goals),
     sessions: goalSessions(goal.log),
+    // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
+    criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
     running: currents.some((current) => current.name === goalName(goal) && alive(current.pid)),
     // Blocked by a red review, a red merge or the runner: it waits on plan,
@@ -1655,22 +1623,14 @@ function dateOf(name) {
 /**
  * The runner's areas that hold a checkout — under `~/mc/step/`, and the ones
  * from before it directly under `~/mc` — each with its project name, its mtime
- * and the repositories it holds. `repoNames` is what makes a directory a
- * workarea at all, and defaults to the two mc knows — mc's own folders under
+ * and the repositories it holds. `repoNames` is what makes a directory an
+ * area at all, and defaults to the two mc knows — mc's own folders under
  * `~/mc` hold neither.
  */
 export function readAreas(root, repoNames) {
   const mtimeOf = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
   const runner = areasWithCheckout(root, repoNames).map(({ name, path, repos }) => ({ name, repos, mtime_ms: mtimeOf(path) }));
-  // And `mc work`'s, under `~/mc/work/`, by the name `mc work <name>` opens.
-  let names = [];
-  try { names = readdirSync(join(root, WORK_HOME)).filter((name) => !name.startsWith('.')); } catch { names = []; }
-  const work = names.map((name) => {
-    const path = join(root, WORK_HOME, name);
-    const repos = (repoNames || REPO_NAMES).filter((repo) => existsSync(join(path, repo, '.git')));
-    return { name, repos, mtime_ms: mtimeOf(path), kind: 'work' };
-  }).filter((area) => area.repos.length);
-  return [...runner, ...work];
+  return runner;
 }
 
 /**
@@ -1842,7 +1802,6 @@ export async function collectPage({
   try { queueText = readFileSync(join(root, 'queue.md'), 'utf8'); } catch { notes.push('no queue.md'); }
 
   const live = liveAreas(run);
-  const liveNames = live.map((item) => item.name);
   const areas = readAreas(root);
 
   // PROGRAMMES reads from both of these — which programme has a planning
@@ -1898,9 +1857,11 @@ export async function collectPage({
     currents, alive, entry: (project) => readEntry(root, project),
   });
   const programmes = programmesSection({
-    plans, areas, rows, openPrs: prs.prs, live: liveNames,
+    plans, areas, rows, openPrs: prs.prs,
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
+    programmeSessions: sessions.programme_sessions,
+    sessionStrays: sessions.strays,
     running: runner.sessions.map((session) => session.name).filter(Boolean),
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),

@@ -1,6 +1,6 @@
 ---
 name: scratch-and-probes
-description: Where files that are not the change go in mc work — probes, output, body files, scripts — and how to run mc's own code from a worktree without writing Martin's state. Use before writing a file outside the change, or running node src/mc-cli.js or an mc function by hand.
+description: Where files that are not the change go in mc — probes, output, body files, scripts — and how to run mc's own code from a worktree without writing Martin's state. Use before writing a file outside the change, or running node src/mc-cli.js or an mc function by hand.
 ---
 # Scratch files and probes
 

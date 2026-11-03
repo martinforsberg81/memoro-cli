@@ -1,7 +1,7 @@
 # mc — the page
 
 `mc`, typed alone, is the page. It is the only thing in mc that lists
-workareas, projects, sessions or queue entries, and there is exactly one
+programmes, projects, sessions or queue entries, and there is exactly one
 only surface. Left open at a terminal it stays true: every 30 seconds the
 rows that changed are rewritten where they stand, and nothing else on the
 screen moves — see [*The live page*](#the-live-page). `mc --watch` existed
@@ -11,8 +11,8 @@ section is the later.
 
 That is a deliberate limit (decision `mc-3`, 2026-08-29). Before it, five
 verbs each printed a list of their own — bare `mc` printed the V1 sessions
-table, `mc status` printed a board, `mc list` printed workareas, bare
-`mc work` printed a menu with its own numbering, and `mc status --sessions`
+table, `mc status` printed a board, `mc list` printed workareas, the bare
+workarea verb printed a menu with its own numbering, and `mc status --sessions`
 printed a second board over 1 417 transcripts. A person had to know which
 one answered their question. **A new verb that prints a list of areas,
 sessions or projects is a regression**, not a feature.
@@ -26,7 +26,10 @@ sessions or projects is a regression**, not a feature.
 | `mc --fresh` | fetch and ask GitHub first, then print |
 | `mc --offline` | skip the fetch and read the plans as they were last fetched |
 | `mc status <name>` | one project — still its own verb |
-| `mc work <name> …` | the workarea verbs — still their own |
+
+There is no workarea verb: it and `mc worker` were retired on 2026-11-03 and
+exit 2 with where each kind of session starts ([`mc-work.md`](mc-work.md)).
+Every session belongs to a programme or a desk.
 
 Without a TTY — a pipe, a subprocess, a session reading it — the page
 prints once and exits 0. Nothing ever prompts where nobody can answer,
@@ -45,10 +48,10 @@ fetched or not.
 
 ## The sections
 
-In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF,
+In this order (Martin, 2026-09-19; WORK went on 2026-11-03): PROGRAMMES, HELPER, BRIEF,
 SESSIONS, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
 still keeps the rule the page had — **what does not move above what does**.
-PROGRAMMES and WORK are the page as a listing; the two desks change when
+PROGRAMMES is the page as a listing; the two desks change when
 somebody sits down; SESSIONS changes with every pick and every frame;
 MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
@@ -84,16 +87,18 @@ below is about.
   the status is about — the first that is not done, the only one the runner
   considers — read off the plan and never parsed back out of the `next`
   sentence.
-- **WORK** — everything running that the runner did not start, oldest first:
-  `mc plan` on a programme is not here (it is on that programme's heading), so
-  what is left is `mc work`, a session from before `mc plan` took a programme,
-  and a tmux window. Then, in **one line**, the workareas no project explains:
-  the numbers that still open them and `~/mc/runner/unplanned-workareas.md`,
-  which has them all with the one fact the page cannot have — whether the branch
-  has landed. They were twelve rows that never changed, and before that the tail
-  of PROGRAMMES, which made that section answer two questions; a folder with
-  nothing to explain it is work in the sense this heading means, and is often
-  the same folder a session is open in.
+- **Strays**, at the foot of PROGRAMMES under *not an area mc knows* —
+  what no kind explains, one line each: a directory under `~/mc` that is no
+  area (`listStrays`), with whether it holds a checkout and how much is
+  uncommitted there; a register entry no verb explains (a `mc plan` from
+  before programmes, a retired verb's); and a tmux session `mc-<name>` mc did
+  not start for anyone, with how long it has been open. Nothing removes one.
+  There is no WORK section (goal `mc/no-work`, 2026-11-03): every session
+  has an `owner` in `mc --json` — `{ kind: 'programme', name }` for a lane,
+  a planning session and a project opened from the page, `{ kind: 'desk',
+  name }` for the brief and the helper — and is drawn where it belongs: a
+  lane under SESSIONS, a programme's own on its heading (`plan claude 1`,
+  `1 open`), a desk on its row.
 - **HELPER** — the desk, drawn open or not, and under it **what is in the
   intake it works from**: one row per repository that has a digest
   (`~/mc/intake/errors-<repo>-<date>.md`) — how many errors are new, how many
@@ -282,8 +287,8 @@ Two rules the sections keep:
   matters — and every count names the verb that expands it, on the right of
   its own heading.
 - **A count is only honest if the section says what it cannot see.** INTAKE
-  says `first digest — no baseline` rather than `0 new errors`; WORK lists no
-  session rather than claiming nothing is running. A zero that
+  says `first digest — no baseline` rather than `0 new errors`; a desk says
+  `not open` rather than claiming nothing is running. A zero that
   looks like health is worse than a gap that says it is one.
 
 ## Where the facts come from
@@ -341,8 +346,8 @@ as nothing running.
 
 ### The foreground register
 
-A session a person opens themselves — `mc brief`, `mc plan <name>`,
-`mc worker <name>`, `mc work <name>` in a terminal — is a child of mc
+A session a person opens themselves — `mc brief`, `mc helper`,
+`mc plan <name>`, a project opened from the page — is a child of mc
 holding the terminal, and leaves no trace on disk. The page would say
 "nothing is running" while the machine was busy, which is the one thing it
 must never do.
@@ -490,10 +495,9 @@ or a workarea, which somebody has to open.
 | `done` | grey |
 | no plan | grey |
 
-A goal's row (`g · <goal>`) uses the same words' colours: `waiting` — its
-`after` has not landed, and the runner opens it when it has
-([mc-goals.md](mc-goals.md)) — is yellow, and so is the `waits on <p>/<g>`
-that leads its tail; `blocked` is red; `review` is green; `open` is green
+A goal's row (`g · <goal>`) uses the same words' colours: a goal in a phase
+its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*) leads its
+tail with `phase <n> — after phase <n-1>` in yellow; `blocked` is red; `review` is green; `open` is green
 while a session is on it and grey otherwise; `done` is grey.
 
 Everything else is structure, and structure is quiet. **plain** in the table
@@ -505,7 +509,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `SESSIONS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `HELPER` `BRIEF` `SESSIONS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | SESSIONS | the heading's `n of N lanes`: not zero, zero, no runner (`not running`) | bold green, grey, bold yellow |
 | SESSIONS | the heading's queued count | grey |
@@ -527,10 +531,6 @@ person set it to.
 | SESSIONS | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
-| WORK | a session's `●` and its area | cyan, bold |
-| WORK | a tmux window's `◆` | yellow |
-| WORK | how long it has been open, under a day, from a day | grey, yellow |
-| WORK | the workareas no project explains: their numbers, the file | grey |
 | MERGES | repository, landing PR and phase, waiting PRs, fixing | plain |
 | MERGES | clocks, queue counts, waiting explanations, fix detail, idle and last landing | grey |
 | MERGES | `N merges in 24 h`: nonzero, zero | green, grey |
@@ -557,7 +557,9 @@ person set it to.
 | PROGRAMMES | the repository a project lives in | grey |
 | PROGRAMMES | the open PR's column after the steps, `#pr` or `#pr+N` | bold cyan |
 | PROGRAMMES | that column when the PR has been quiet a day; when the merger has it | bold yellow, bold green |
-| PROGRAMMES | the number, the steps done, the no-workarea line | grey |
+| PROGRAMMES | the number, the steps done | grey |
+| PROGRAMMES | `not an area mc knows` | yellow |
+| PROGRAMMES | a stray's name, its facts | bold, grey |
 | footer | the cache line, the notes | grey |
 
 Five things hold that table up:
@@ -609,27 +611,23 @@ read rather than coloured.
 
 ## The menu
 
-At a terminal the page ends in a prompt. It is `mc work`'s menu, moved
-rather than rewritten — what a number, a name, `n` and a typed verb do has
-not changed:
+At a terminal the page ends in a prompt:
 
 | | |
 |---|---|
-| a number | opens that project's workarea, making one if it has none — **PROGRAMMES’ number**, not a listing of its own, and it opens a project whose row is inside a collapsed one just the same |
-| a name | opens that workarea |
-| `n` | starts a new one |
+| a number | opens a session in that project's runner area, as a session of its programme (`project-open.js`) — **PROGRAMMES’ number**, not a listing of its own, and it opens a project whose row is inside a collapsed one just the same. A project the runner has not started has no area yet, and says so; nothing makes one |
+| a name | the same, by the project's name |
 | `a` | draws the page again with nothing collapsed — every blocked project back as its own row, under the number it always had. `a` again puts them away |
 | `b` | `mc brief` |
 | `p <name>` | `mc plan <name>` |
 | `s <name>` | `mc status <name>` |
 | `q`, empty | quit |
-| anything else | parsed as an `mc work` command, with or without its first two words |
+| a goal's number | `mc goal show` for it, and the page again |
+| a retired verb (`work …`, `worker …`) | the line the shell gives it, and the page again |
+| anything else | said out loud — *nothing here called …* — and the page again |
 
-The menu asks `inspectWorkArea(name).exists` rather than looking for a
-PROGRAMMES row, because the page draws projects and the folders that hold a
-checkout, and `mc work` offers to make an area with no repository in it.
-Using the rows would have kept the typo guard and stranded the empty area
-under the only name it has.
+A project session refuses a workplace a tool already stands in (D-0154), the
+runner's step included.
 
 The prompt reads `/dev/tty` by design, so a subprocess without a terminal
 never reaches it.
@@ -840,7 +838,7 @@ rather than printed again under itself, a `1` typed before the first refresh
 still at the prompt with the cursor after it, backspace taking it back, `q`
 leaving with exit 0, no alternate screen buffer (`\x1b[?1049` never written),
 and `stty -g` identical before and after. What it does not do is press return
-on that `1`, because that opens a workarea and launches a tool on the machine
+on that `1`, because that opens a project session and launches a tool on the machine
 it is running on. That the reader hands back `1` after a refresh is asserted
 in `page-live.test.js`, and that `1` opens the project PROGRAMMES numbered
 `1` is asserted in `front-door.test.js`; the join between the two is the only
@@ -886,7 +884,8 @@ fix, and the fix is to have it take the same stream.
 
 ## What went, and what did not
 
-Removed with their tests: bare `mc work` (it *is* `mc`), `mc list` and
+Removed with their tests: the bare workarea verb (it was `mc`; the whole verb
+went on 2026-11-03), `mc list` and
 `src/cli/list.js`, `mc sessions list` and `src/mc/session-v1-list.js` — the
 same module and its renderer — bare `mc status`, `--sessions|--watch|--wait`
 on `mc status`, `commands/status-board.js`, `commands/status-page.js`,

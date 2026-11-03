@@ -85,7 +85,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | fact | file | written by |
 |---|---|---|
 | the plan, its state and its steps | `~/mc/programs/<programme>/<name>/PLAN.json`, read as it stands (no `git fetch`) | the build sessions, through `mc run` |
-| the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/programs/`, nor `mc work`, whose areas are under `~/mc/work/` |
+| the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/programs/`, nor the retired workarea verb, whose areas are under `~/mc/work/` |
 | the last three runs | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project, each named by its session kind — `build` or `review`, with `variant` in `--json`; a row from before that says `step` is the build it was (`sessionKind`) | `mc run`, after each session |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 | whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
@@ -114,8 +114,7 @@ only one reading:
 
 A name that has a workarea but no plan anywhere is answered too — with
 `no plan — this is a workarea without a project`. Those are the closure
-candidates `mc run` will not remove by itself; the page lists them and
-`~/mc/runner/unplanned-workareas.md` keeps them.
+candidates `mc run` will not remove by itself; `mc tidy` lists them.
 
 ## The status row says the pair
 

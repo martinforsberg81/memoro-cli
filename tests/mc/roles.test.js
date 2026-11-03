@@ -34,7 +34,6 @@ import {
   selectParts,
   sharedRoleText,
   WORKER_ROLE,
-  withWorkers,
 } from '../../src/mc/roles.js';
 import { PLAN_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
 import { BUILD_ROLES, PROJECT_REVIEW_ROLE } from '../../src/mc/run-plan.js';
@@ -99,7 +98,7 @@ describe('role files', () => {
     assert.equal(role.model, 'opus');
     assert.equal(role.singleton, false);
     assert.equal(role.cache, '5m');
-    assert.match(role.overlay, /You are a plan's review step: headless, one workarea/u);
+    assert.match(role.overlay, /You are a plan's review step: headless, one runner area/u);
   });
 
   it('a CRLF checkout is still a role', () => {
@@ -356,7 +355,7 @@ describe('every canon role has a body', () => {
         assert.ok(role, `${ref} does not parse as a role`);
         assert.equal(typeof role.overlay, 'string', `${ref} has no overlay body`);
         assert.ok(role.overlay.trim().length > 0, `${ref} has an empty overlay body`);
-        assert.doesNotMatch(instructionsFor('claude-code', withWorkers(role, true)), /^@(part|end|include)\b/mu, ref);
+        assert.doesNotMatch(instructionsFor('claude-code', role.overlay), /^@(part|end|include)\b/mu, ref);
       });
     }
   }
@@ -442,13 +441,12 @@ describe('the build role', () => {
     'build-session:project': /You are a build session on one step of a project/u,
     'build-session:worker': /You are a worker on one project/u,
   };
-  const told = (ref, workers = false) => instructionsFor('claude-code', withWorkers(readCanonRole(ref), workers));
+  const told = (ref) => instructionsFor('claude-code', readCanonRole(ref).overlay);
 
   it('each start is told its own part and no other start\'s', () => {
     for (const [ref, own] of Object.entries(OWN)) {
       assert.match(told(ref), own, ref);
       for (const [other, words] of Object.entries(OWN)) if (other !== ref) assert.doesNotMatch(told(ref), words, `${ref} told ${other}'s part`);
-      assert.doesNotMatch(told(ref), /You lead this step; workers write it/u, ref);
     }
   });
 
@@ -459,13 +457,6 @@ describe('the build role', () => {
       assert.match(told(ref), /a finished part that reads well as a first pass is not a\s+reason to stop/u, ref);
     }
     assert.doesNotMatch(told(WORKER_ROLE), ONE_BRANCH);
-  });
-
-  it('a step with workers is told how to lead them, and its own part still', () => {
-    const text = told(BUILD_ROLES.project, true);
-    assert.match(text, /You lead this step; workers write it/u);
-    assert.match(text, OWN['build-session:project']);
-    assert.doesNotMatch(text, OWN['build-session:goal']);
   });
 
   it('write what every build shares once', () => {

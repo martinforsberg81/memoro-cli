@@ -123,7 +123,7 @@ export function assembleQueue(queueText, plans) {
   return [...named, ...rest];
 }
 
-/** What a project may be called — the same shape `mc work` accepts. */
+/** What a project may be called — the shape a directory name under `~/mc` takes. */
 const QUEUE_NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 /** The lines of the queue file that look like a name at all, in order. */
@@ -956,11 +956,20 @@ export function builtPreamble(built) {
 
 
 /**
- * What a goal session is told: where the goal is and where it works. The rest
- * is the build role's (`canon/roles/build-session.md`, its `goal` part) and `GOAL.md`'s.
+ * The goal as text (`renderGoalText`, what `mc goal show` prints), after a
+ * prompt: the brief a goal's build, review and plan session is given.
  */
-export function goalPrompt({ name, dir, worktree, branch }) {
-  return `You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`;
+function withBrief(prompt, brief) {
+  return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
+}
+
+/**
+ * What a goal session is told: where the goal is and where it works, and the
+ * goal itself (`brief`). The rest is the build role's
+ * (`canon/roles/build-session.md`, its `goal` part).
+ */
+export function goalPrompt({ name, dir, worktree, branch, brief = null }) {
+  return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`, brief);
 }
 
 /**
@@ -968,8 +977,8 @@ export function goalPrompt({ name, dir, worktree, branch }) {
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
-  return `You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`;
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null }) {
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`, brief);
 }
 
 /**
@@ -977,12 +986,12 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head }) {
  * blocked (its last log entry), and where its worktree is — which it may take
  * over and finish. The rest is `canon/roles/plan-session.md`'s.
  */
-export function goalPlanPrompt({ name, dir, worktree, branch, why = null }) {
+export function goalPlanPrompt({ name, dir, worktree, branch, why = null, brief = null }) {
   const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
-  return [
+  return withBrief([
     `The goal ${name} is blocked${reason ? `: ${reason}` : ''}. You are the plan session the runner woke for it, headless.`,
-    `Its directory is \`${dir}\`, with GOAL.md and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
-  ].join('\n');
+    `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
+  ].join('\n'), brief);
 }
 
 /** `checkInPrompt` for a plan session on a blocked goal. */
@@ -1017,7 +1026,7 @@ export function goalCheckInPrompt({ minutes, count }) {
  * effort and the advisor through its `effortArgs` and `advisorArgs`, and codex
  * its effort through its own `effortArgs` (`-c model_reasoning_effort`) and no
  * advisor; the instructions
- * (`all-sessions.md` + role overlay) through the same channel `mc work` uses;
+ * (`all-sessions.md` + role overlay) through the same channel an interactive session uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
  * ways (`stream: true`, the step lanes): the prompt is not an
  * argument at all but the first user message `deps.session` writes on stdin,
@@ -1054,57 +1063,16 @@ export function goalCheckInPrompt({ minutes, count }) {
  * step-cost's contract leaves them as they were.
  *
  * Every claude launch gets the `CLAUDE_TOOLS` allowlist and
- * `--strict-mcp-config`. The allowlist replaced `--disallowedTools Agent`
- * on 2026-09-25: a headless session has no use for a subagent — the step is
- * bounded by its plan, the strong model is reached through `--advisor`, and a
- * subagent runs on whatever model the repository's instruction files name,
- * outside the plan's `runner` choice (measured 2026-09-12 over the first 41
- * sonnet step sessions: 19 spawned opus subagents on memoro's `CLAUDE.md`
- * instruction, a quarter of the era's cost) — and it has no use for Skill,
- * Workflow, Cron, Web or Task tools either. Tool definitions ride in every
- * request: claude 2.1.280 measured 18 687 tokens/request with the default
- * set minus Agent, 13 073 with these six, on a context that is re-read ~90
- * times per step session. The six include `Grep` and `Glob`, which the
- * default set omits — until this flag a step searched with `grep` through
- * Bash (2 866 such calls against 466 native reads, 2026-09-15..25).
- * `--strict-mcp-config` keeps a user-level MCP server, with its own tool
- * definitions, out of the lane. Whatever any repository's files say, the
- * session has these tools and no others — except a step whose plan says
- * `subagents: on`, which also gets `Agent` and mc's own `STEP_WORKER_AGENTS`
- * and nothing a repository defines.
+ * `--strict-mcp-config`, including the tool's own Agent without mc-defined
+ * agents. The same adapter session switches enable native Codex delegation,
+ * for every role and for fresh and resumed sessions. Tool definitions ride in
+ * every request, so Claude's allowlist stays narrow; `Grep` and `Glob` keep
+ * searches in native tools rather than Bash. `--strict-mcp-config` keeps
+ * user-level MCP servers and their tool definitions out of the lane.
  */
 export { CLAUDE_TOOLS };
 
-/**
- * The one subagent a step with `runner.subagents: on` may call, passed whole
- * on `--agents` so no repository's `.claude/agents/` decides what it is. The
- * model is named outright — a subagent otherwise inherits the session's, and
- * the point is that it does not. Its brief comes from the step session
- * (`canon/roles/build-session.md`'s `workers` part tells it how to write one); it answers once
- * and only that answer enters the step's context — its own events reach mc's
- * stream marked with `parent_tool_use_id`, and `sessionStanding` and
- * `sessionSpoke` read past them. A trial (Martin, 2026-10-11: two steps with
- * it on, then read them), so off unless a plan or step says otherwise.
- */
-export const STEP_WORKER_AGENTS = Object.freeze({
-  'step-worker': Object.freeze({
-    description: 'Does most of the step: reading, searching, editing code, writing tests to a brief, running them. Brief it for any job of more than a file or two. Answers once, when done.',
-    model: 'claude-haiku-5-5',
-    effort: 'high',
-    tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
-    prompt: [
-      'You are a worker for a build session in mc, headless, in its workarea. The build session leads; you do the work it briefs.',
-      'Do the brief and nothing beside it: read, search, edit, write the tests it describes, run the commands it names.',
-      'Never weaken, skip or delete a test the brief did not name, never touch a threshold or the plan file.',
-      'Never run `mc`, `gh`, or a git command that changes the tree or history (`commit`, `push`, `checkout`, `reset`, `stash`); the workarea is shared.',
-      'Nothing in the background.',
-      'Answer once, at the end, short: what you found or changed with file:line, the reds with their messages (not the log), and what you could not do.',
-      'Say when you are unsure; never guess.',
-    ].join('\n'),
-  }),
-});
-
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const effortArgs = adapter?.effortArgs?.(effort) ?? [];
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
@@ -1122,7 +1090,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // `--resume` keeps the session's id and its whole history; the message on
   // stdin is the next turn of that conversation.
   const resumed = resume ? ['--resume', resume] : [];
-  const tools = subagents ? ['--tools', `${CLAUDE_TOOLS},Agent`, '--agents', JSON.stringify(STEP_WORKER_AGENTS)] : ['--tools', CLAUDE_TOOLS];
+  const tools = ['--tools', CLAUDE_TOOLS];
   return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
 }
 
@@ -1748,9 +1716,6 @@ export function tsvHeader() {
  * mc's guess at what that tool calls its best model. The advisor is claude's
  * flag, so another tool gets none, named or not. Effort is the plan's word on
  * either tool: claude's `--effort`, codex's `model_reasoning_effort`.
- *
- * `subagents` resolves step over plan too, and is `on` only where it says
- * so: off by default, and off on any tool but claude (`STEP_WORKER_AGENTS`).
  */
 export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'step' } = {}) {
   const plan = planRunner || {};
@@ -1768,7 +1733,6 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
     model,
     effort: EFFORT_LEVELS.includes(effort) ? effort : null,
     advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
-    subagents: claude && named('subagents') === 'on',
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
     stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };
@@ -1814,7 +1778,6 @@ export function describeSettings(shortName, settings) {
     `${shortName} ${settings.model || 'own default model'}`,
     settings.effort ? `effort ${settings.effort}` : null,
     settings.advisor ? `advisor ${settings.advisor}` : null,
-    settings.subagents ? 'haiku workers' : null,
   ].filter(Boolean).join(' · ');
 }
 

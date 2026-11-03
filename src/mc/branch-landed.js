@@ -7,7 +7,7 @@
  * 2026-08-24: fourteen MSR areas showed "unmerged" on the board; twelve had
  * merged PRs, nothing uncommitted, and their content verified in main —
  * and the board's arithmetic read as disorder to the person it exists for.
- * `mc work release` refused to clean the same twelve on the same count.
+ * The workarea release refused to clean the same twelve on the same count.
  *
  * So the question is asked of content, locally and without the network:
  * `git merge-tree --write-tree origin/main <branch>`. A branch whose merge
@@ -24,7 +24,7 @@
  * The second question, for a branch whose merge conflicts, is asked of
  * GitHub by `mergedPullAtTip` below — is the branch's tip the head of a
  * merged pull request? Both the runner (`mergedAtTip`, run.js) and
- * `mc work release` (`releaseVerdict`, work-area.js) ask it here. Measured
+ * the release verdict (`releaseVerdict`, work-area.js) ask it here. Measured
  * 2026-09-26: release kept 29 workareas as "cannot tell"; every one had a
  * merged pull request whose head was exactly its tip.
  */

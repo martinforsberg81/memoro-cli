@@ -15,7 +15,10 @@ import {
   renderProject, stepRows, wrap,
 } from '../../src/mc/status-project.js';
 import { run as project } from '../../src/mc/commands/status-project.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
+import { goalJson } from './_helpers/goal-file.js';
+
+await preloadVerbs('status');
 
 /** A plan as the file now is: one step, in the state the test wants. */
 const PLAN = (status, title) => JSON.stringify({
@@ -412,29 +415,29 @@ describe('the project page', () => {
 });
 
 describe('routing', () => {
-  it('a name is the project page; no name says the page is mc', () => {
+  it('a name is the project page; no name says the page is mc', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo(root, 'memoro-cli', PLAN('ready', 'One project')) };
-    const page = runMcCli(['status', 'mc-status', '--offline'], env);
+    const page = (await runVerb(['status', 'mc-status', '--offline'], env));
     assert.equal(page.status, 0, page.stderr);
     assert.match(page.stdout, /^mc-status — memoro-cli · mc\n/u);
     assert.match(page.stdout, /NEXT\n {2}Step 2, One project — done when one project is on one page/u);
 
     // The board and its flags went with decision mc-3: `--sessions` is not a
     // name, so it lands on the same sentence a bare `mc status` does.
-    const moved = runMcCli(['status', '--sessions', 'mc-status'], env);
+    const moved = (await runVerb(['status', '--sessions', 'mc-status'], env));
     assert.equal(moved.status, 2, moved.stdout);
     assert.match(moved.stderr, /--sessions went with the old board/u);
     assert.match(moved.stderr, /mc status is now mc/u);
-    const bare = runMcCli(['status'], env);
+    const bare = (await runVerb(['status'], env));
     assert.equal(bare.status, 2);
     assert.match(bare.stderr, /mc status is now mc/u);
   });
 
-  it('the sentence names only surfaces that run', () => {
+  it('the sentence names only surfaces that run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo(root, 'memoro-cli', PLAN('ready', 'One project')) };
-    const bare = runMcCli(['status'], env);
+    const bare = (await runVerb(['status'], env));
     // `mc --watch` was the page on a timer and was removed the day it landed;
     // pointing at it sent a person to `unknown command "--watch"`.
     assert.doesNotMatch(bare.stderr, /--watch/u);
@@ -444,29 +447,28 @@ describe('routing', () => {
       .map((m) => m[1].replace(' <name>', ' mc-status').split(' ').slice(1).filter(Boolean));
     assert.ok(offered.length >= 2, bare.stderr);
     for (const args of offered) {
-      const result = runMcCli([...args, '--offline'], env);
+      const result = (await runVerb([...args, '--offline'], env));
       assert.equal(result.status, 0, `mc ${args.join(' ')}: ${result.stderr}`);
     }
   });
 });
 
 describe('mc status on a goal', () => {
-  it('says it is a goal, and a waiting one what it waits on', async () => {
+  it('says it is a goal, and one in a later phase which phase it waits on', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-status-goal-'));
-    const goal = (name, status, after = null) => {
+    const goal = (name, status, phase) => {
       mkdirSync(join(root, 'programs', 'mc', 'goals', name), { recursive: true });
-      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.md'),
-        `---\nstatus: ${status}\nrepos: memoro-cli\nclass: large\n${after ? `after: ${after}\n` : ''}---\n# ${name}\n`);
+      writeFileSync(join(root, 'programs', 'mc', 'goals', name, 'GOAL.json'), goalJson({ status, title: name, phase }));
     };
-    goal('headless-plan', 'waiting', 'mc/runner-sessions, mc/goal-waiting');
-    goal('runner-sessions', 'done');
-    goal('goal-waiting', 'review');
+    goal('headless-plan', 'open', 2);
+    goal('runner-sessions', 'done', 1);
+    goal('goal-waiting', 'review', 1);
     const err = [];
     const code = await project(['headless-plan'], {
       env: { MC_WORK_ROOT: root }, collect: async () => null,
       stdout: { write: () => {} }, stderr: { write: (text) => err.push(text) },
     });
     assert.equal(code, 1);
-    assert.equal(err.join(''), 'headless-plan is a goal · waiting on mc/goal-waiting — mc goal show mc/headless-plan\n');
+    assert.equal(err.join(''), 'headless-plan is a goal · open, phase 2 — after phase 1 — mc goal show mc/headless-plan\n');
   });
 });

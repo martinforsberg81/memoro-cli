@@ -862,20 +862,35 @@ describe('SESSIONS', () => {
   // A planning session belongs to its programme, and PROGRAMMES draws it on
   // that programme's own row. It is keyed by programme here so that section
   // never has to know how `mc plan` spells an area.
-  it('keys a planning session by its programme, and keeps it out of the list', () => {
+  it('keys a planning session by its programme, as its owner', () => {
     const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
     assert.equal(s.planning['msr-core'].pid, 100);
-    assert.deepEqual(s.others, []);
+    assert.deepEqual(s.planning['msr-core'].owner, { kind: 'programme', name: 'msr-core' });
+    assert.deepEqual(s.strays, []);
+  });
+
+  // Every session has an owner: a programme or a desk, and no third kind
+  // (goal mc/no-work).
+  it('gives every session an owner that is a programme or a desk', () => {
+    const PROJECT = { verb: 'project', area: 'step/ui', programme: 'mc', tool: 'codex', pid: 101, started: '2026-08-29T11:00:00Z' };
+    const s = sessionsSection({ foreground: [HELPER, PLAN, PROJECT, { verb: 'brief', pid: 102 }], now: NOW, alive: live });
+    assert.deepEqual(s.desks.helper.owner, { kind: 'desk', name: 'helper' });
+    assert.deepEqual(s.desks.brief.owner, { kind: 'desk', name: 'brief' });
+    assert.deepEqual(s.programme_sessions.mc.map((item) => [item.pid, item.owner]), [[101, { kind: 'programme', name: 'mc' }]]);
+    assert.equal(s.count, 4);
+    assert.deepEqual(s.strays, []);
+    assert.equal('others' in s, false);
   });
 
   // A `mc plan` from before the programme change carries a bare project name,
-  // belongs to no programme and cannot be started again.
-  it('leaves a plan session with no programme in the list', () => {
+  // belongs to no programme and cannot be started again: a stray.
+  it('makes a plan session with no programme a stray', () => {
     const s = sessionsSection({
       foreground: [{ ...PLAN, area: 'mc-test' }], now: NOW, alive: live,
     });
     assert.deepEqual(s.planning, {});
-    assert.deepEqual(s.others.map((item) => item.area), ['mc-test']);
+    assert.deepEqual(s.strays.map((item) => [item.kind, item.name, item.verb]), [['register', 'mc-test', 'plan']]);
+    assert.equal(s.count, 0);
   });
 
   // The whole point of the section. `started` has been in the register since
@@ -887,27 +902,26 @@ describe('SESSIONS', () => {
     assert.equal(s.planning['msr-core'].age_seconds, 1800);
   });
 
-  it('carries a tmux window as a session with no verb', () => {
+  it('counts a tmux session mc did not start for anyone as a stray, with its age', () => {
     const s = sessionsSection({
       live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
       now: NOW,
       alive: live,
     });
-    assert.deepEqual(s.others.map((item) => [item.area, item.verb, item.tmux, item.age_seconds]),
-      [['docx-editor', null, 'mc-docx-editor', 3600]]);
+    assert.deepEqual(s.strays.map((item) => [item.kind, item.name, item.age_seconds]),
+      [['tmux', 'mc-docx-editor', 3600]]);
   });
 
   // Oldest first: the one open longest is the one most likely to have been
-  // forgotten, which is why the age is on the row at all.
-  it('puts the oldest session first', () => {
+  // forgotten.
+  it('puts the oldest stray first, and a retired verb\'s entry among them', () => {
     const s = sessionsSection({
       foreground: [PLAN, { ...HELPER, verb: 'work', area: 'red' }],
       live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
       now: NOW,
       alive: live,
     });
-    // The planning session is not here at all — it is on its programme's row.
-    assert.deepEqual(s.others.map((item) => item.area), ['red', 'docx-editor']);
+    assert.deepEqual(s.strays.map((item) => item.name), ['red', 'mc-docx-editor']);
   });
 
   it('drops a registered session whose process is gone', () => {
@@ -917,7 +931,7 @@ describe('SESSIONS', () => {
       alive: (pid) => pid === 100,
     });
     assert.equal(s.desks.brief, null);
-    assert.deepEqual(s.others.map((item) => item.verb), ['plan']);
+    assert.deepEqual(s.strays.map((item) => item.verb), ['plan']);
   });
 });
 
@@ -1617,7 +1631,6 @@ describe('PROJECTS', () => {
     areas: AREAS,
     rows: ROWS,
     openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }, { repo: 'memoro', number: 2, headRefName: 'elsewhere' }],
-    live: ['ui-fixes'],
     ...over,
   });
 
@@ -1674,7 +1687,7 @@ describe('PROJECTS', () => {
   // The mark means the runner, and only the runner. It used to mean a live
   // tmux area, which made one mark answer two questions.
   it('marks a project the runner has a step in flight on, and no other', () => {
-    const projects = projectsFixture({ running: ['mc-ui'], live: ['docx-editor'] });
+    const projects = projectsFixture({ running: ['mc-ui'] });
     const byName = Object.fromEntries(flat(projects).map((p) => [p.name, p]));
     assert.equal(byName['mc-ui'].running, true);
     assert.equal(byName['docx-editor'].running, false);
@@ -1688,7 +1701,7 @@ describe('PROJECTS', () => {
     assert.equal(ui.next, 'The page');
     assert.deepEqual(ui.steps, { done: 0, total: 1 });
     assert.equal(ui.pr, 440);
-    assert.equal(ui.workarea, true);
+    assert.equal(ui.area, true);
     assert.deepEqual(ui.last, { ts: '2026-08-29T10:00:00Z', kind: 'step', pr: '440', note: 'success,merged' });
     assert.deepEqual(projects.statuses, { 'blocked': 1, ready: 2, done: 1 });
   });
@@ -1714,61 +1727,39 @@ describe('PROJECTS', () => {
     assert.equal(by['docx-editor'], null, 'a branch no project explains belongs to nobody');
   });
 
-  // A project is what the work is; a folder is where a session runs. mc-run
-  // has a plan and no folder, and used to be a count at the foot of the
-  // section rather than a row anybody could open.
-  it('lists a project that has no workarea, and says how many are like it', () => {
+  // A project is what the work is; a runner area is where its sessions run.
+  // mc-run has a plan and no area yet, and is a numbered row all the same.
+  it('lists a project that has no runner area yet as a numbered row', () => {
     const projects = projectsFixture();
     const run = flat(projects).find((p) => p.name === 'mc-run');
-    assert.equal(run.workarea, false);
+    assert.equal(run.area, false);
     assert.equal(run.number, 3, 'it is a numbered row, not a footnote');
-    assert.equal(projects.no_workarea, 1);
+    assert.equal('no_workarea' in projects, false);
   });
 
-  /**
-   * A workarea no project explains is not one of the rows above. Nothing
-   * removes it, so it is counted where somebody looks — one line in WORK, with
-   * the numbers that still open them.
-   */
-  it('counts a workarea with no project, numbered after the rest', () => {
+  // A folder no project explains is not a row and has no number: there is no
+  // WORK section any more, and `mc tidy` lists what is left (goal mc/no-work).
+  it('numbers projects only, and has no list of folders no project explains', () => {
     const projects = projectsFixture();
-    assert.deepEqual(projects.unplanned.shown.map((area) => [area.number, area.name]), [[5, 'ui-fixes']]);
-    const orphan = projects.unplanned.shown[0];
-    assert.equal(orphan.live, true, 'live or not, it is still nobody’s project');
-    assert.equal(projects.unplanned.count, 1);
+    assert.deepEqual(flat(projects).map((p) => p.number), [1, 2, 3, 4]);
+    assert.equal('unplanned' in projects, false);
     assert.equal(projects.count, 4, 'the count is projects; a folder is not one');
   });
 
-  // Fifty-seven of them on 2026-08-30, and twelve rows that never changed.
-  // WORK draws one line for all of them; this is how many keep a number.
-  it('numbers the first few orphans and counts the others', () => {
-    const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
-    const projects = programmesSection({ plans: [], areas: many, shown: 3 });
-    assert.deepEqual(projects.unplanned.shown.map((area) => area.name), ['old-00', 'old-01', 'old-02']);
-    assert.equal(projects.unplanned.more, 17);
-    assert.equal(projects.unplanned.count, 20);
+  it('carries the strays: directories first, then sessions with no owner', () => {
+    const projects = programmesSection({
+      plans: [], areas: [],
+      strays: [{ name: 'jobbet', checkout: true, uncommitted: 2 }],
+      sessionStrays: [{ kind: 'tmux', name: 'mc-old', verb: null, pid: null, age_seconds: 60 }],
+    });
+    assert.deepEqual(projects.strays.map((item) => [item.kind, item.name]), [['directory', 'jobbet'], ['tmux', 'mc-old']]);
   });
 
-  // Two `git` calls per folder for how much was uncommitted and when it was
-  // last committed to — 81 folders on 2026-08-30, 15 s of an 8 s page. Nothing
-  // on the page draws that answer now, so nothing asks the question.
-  it('asks git nothing about a workarea no project explains', () => {
-    const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
-    const projects = programmesSection({ plans: [], areas: many, shown: 3 });
-    for (const area of projects.unplanned.shown) {
-      assert.ok(!('uncommitted' in area) && !('last_commit' in area), `${area.name} was asked`);
-    }
-  });
-
-  it('numbers through both lists, so the page has no two rows with one number', () => {
-    const projects = projectsFixture();
-    const numbers = [...flat(projects), ...projects.unplanned.shown].map((area) => area.number);
-    assert.deepEqual(numbers, [1, 2, 3, 4, 5]);
-  });
-
-  it('names the repository an orphan workarea holds', () => {
-    const projects = programmesSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
-    assert.equal(projects.unplanned.shown[0].repo, 'memoro');
+  it('puts a project session on its programme\'s heading', () => {
+    const projects = projectsFixture({ programmeSessions: { mc: [{ pid: 5, verb: 'project', owner: { kind: 'programme', name: 'mc' } }] } });
+    const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
+    assert.deepEqual(byName.mc.sessions.map((item) => item.pid), [5]);
+    assert.deepEqual(byName['assistant-avatar'].sessions, []);
   });
 
   it('counts every programme’s own projects on its own heading', () => {
@@ -1931,8 +1922,8 @@ const DATA = pageData({
     areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
     rows: ROWS,
     openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }],
-    live: [],
     repoOrder: ['memoro', 'memoro-cli'],
+    sessionStrays: [{ kind: 'tmux', name: 'mc-docx-editor', verb: null, pid: null, age_seconds: 3600 }],
   }),
   language: {
     languages: [{
@@ -1963,7 +1954,7 @@ describe('the page', () => {
     // The order itself is Martin's (2026-09-19): the listing, the two desks
     // with what lies on each, what the runner takes next and what it is doing,
     // and the short end of the page — merges, the deploy, mc itself.
-    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
+    const at = ['PROGRAMMES', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
@@ -1980,8 +1971,11 @@ describe('the page', () => {
     assert.match(text, /start takes over now/u);
     assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
-    assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
-    assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
+    // No WORK: every session is a programme's or a desk's, and a tmux session
+    // nobody's is a stray under PROGRAMMES (goal mc/no-work).
+    assert.doesNotMatch(text, /^ {2}WORK/mu);
+    assert.match(text, /^ {7}not an area mc knows$/mu);
+    assert.match(text, /^ {7}mc-docx-editor\s+tmux session · open 60 min$/mu);
     assert.match(text, /SESSIONS {2}1 of 2 lanes · 2 queued\s+mc run/u);
     // Per kind: the two old `step` rows are builds, and the triage row is not a
     // session of the runner's kinds, so it is `other`.
@@ -2008,11 +2002,9 @@ describe('the page', () => {
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
     assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+#440/u);
-    assert.match(text, /3 of them have no workarea yet/u);
-    // The workareas no project explains are one line: the numbers that still
-    // open them, and the file that has them all.
-    assert.match(text, /^ {7}5 {2}· {2}~\/mc\/runner\/unplanned-workareas\.md {2}has them all$/mu);
-    assert.doesNotMatch(text, /ui-fixes/u, 'twelve rows that never change are a count and a file');
+    assert.doesNotMatch(text, /no workarea yet/u);
+    assert.doesNotMatch(text, /unplanned-workareas/u);
+    assert.doesNotMatch(text, /ui-fixes/u, 'a folder no project explains is not a row');
     // mc itself is the last line: how long the runner has been up, on what, and
     // that there is newer code than it runs. How old the PR cache is, which was
     // here, is `--json`'s.
@@ -2041,8 +2033,6 @@ describe('the page', () => {
     const numbers = (lines) => lines.flatMap((line) => (/^ {2}( *\d+) [·●]/u.exec(line) || []).slice(1).map(Number));
     const collapsed = renderPageLines(DATA, { columns: 120, now: NOW });
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
-    // 5 is the orphan workarea, which is a line in WORK rather than a row of
-    // its own either way — `a` is about projects.
     assert.deepEqual(numbers(all), [1, 2, 3, 4]);
     assert.deepEqual(numbers(collapsed), [2, 3, 4], '1 is the `1 blocked` on its programme\'s heading, and still opens');
     assert.match(all.join('\n'), /^ {4}1 · avatar-self-serve\s+memoro\s+blocked/mu);
@@ -2512,7 +2502,9 @@ describe('collectPage', () => {
     assert.equal(data.intake.proposals, 1);
     assert.deepEqual(data.programmes.programmes.flatMap((g) => g.projects).map((p) => p.name), ['avatar-self-serve', 'docx-editor', 'mc-run', 'mc-ui']);
     assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
-    assert.equal(data.programmes.no_workarea, 2);
+    assert.equal('no_workarea' in data.programmes, false);
+    assert.equal('unplanned' in data.programmes, false);
+    assert.equal('work' in data, false);
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
@@ -2790,11 +2782,8 @@ describe('the palette', () => {
     'bold+cyan green grey grey grey grey grey', //     mc  1 ready · 0 waiting · 0 blocked  ·  no plan session
     'grey grey grey grey grey', //                   3 · mc-run  memoro-cli  done  1/1  every step is done
     'grey grey grey green grey cyan+bold', // 4 · mc-ui  memoro-cli  ready  0/1  #440  Step 1, …  08-29 10:00Z step
-    'grey', //                                           3 of them have no workarea yet
-    '',
-    'bold+cyan grey grey', //                          WORK  1 session · 1 workarea with no project
-    'yellow bold cyan grey grey grey grey', //       ◆ docx-editor  tmux · open 60 min · mc-docx-editor
-    'grey grey grey', //                                 5  ·  ~/mc/runner/unplanned-workareas.md  has them all
+    'yellow', //                                         not an area mc knows
+    'bold grey', //                                      mc-docx-editor  tmux session · open 60 min
     '',
     'bold+cyan cyan grey grey grey grey grey grey', // HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
     'red grey green red', //                             memoro  1 new error, 1 loud · 60 min old   ! loud — 41x 500
@@ -2940,10 +2929,7 @@ describe('the palette', () => {
     for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['d-done', 'grey']]) {
       assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
     }
-    // A workarea no project explains is grey through and through, and it is one
-    // line for all of them now: the numbers that still open them, and the file.
-    assert.deepEqual(signature(rowWith(lines, 'unplanned-workareas.md')).split(' '), ['grey', 'grey', 'grey']);
-    assert.ok(!lines.some((line) => strip(line).includes('e-none')), 'a folder is a count, not a row');
+    assert.ok(!lines.some((line) => strip(line).includes('e-none')), 'a folder no project explains is not a row');
     // Collapsed, the count that stands in for those rows is on the programme's
     // heading in the status's own red. So is the rollup line under BRIEF, which
     // is the same word about the same projects and had better not be a second
@@ -3029,17 +3015,6 @@ describe('the palette', () => {
     assert.equal(quota('2026-08-29T02:00:00Z'), 'grey', 'ten hours ago is history');
   });
 
-  it('paints a session in the cyan the verbs are printed in', () => {
-    const data = pageData({
-      sessions: sessionsSection({
-        foreground: [{ verb: 'work', area: 'red', tool: 'claude', model: 'opus', pid: 99, started: '2026-08-29T11:00:00Z' }],
-        now: NOW,
-        alive: live,
-      }),
-    });
-    assert.deepEqual(signature(rowWith(paintedPage(data), '● red')).split(' ').slice(0, 3), ['cyan', 'bold', 'cyan']);
-  });
-
   // The two tables in `docs/technical/mc-ui.md` are the palette written down;
   // a colour changed in one place and not the other is a doc that lies, which
   // is worse than no doc at all.
@@ -3068,13 +3043,9 @@ describe('the palette', () => {
       assert.ok(!/\b(dim|white)\b/u.test(line), `a palette row still says dim or white: ${line}`);
     }
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
-      programmes: programmesSection({
-        plans: [],
-        areas: [{ name: 'unplanned', mtime_ms: 1 }],
-        rows: [{ ts: '2026-08-29T10:00:00Z', name: 'unplanned', kind: 'rebase', pr: '-', note: '' }],
-      }),
-    })), 'unplanned-workareas.md')).split(' '), ['grey', 'grey', 'grey'],
-    'the folders no project explains are the page at its quietest');
+      programmes: programmesSection({ plans: [], areas: [], strays: [{ name: 'jobbet', checkout: false, uncommitted: 0 }] }),
+    })), 'jobbet')).split(' '), ['bold', 'grey'],
+    'a stray is its name and its facts in grey');
   });
 
   it('says nothing about a watch in the header — there is none', () => {

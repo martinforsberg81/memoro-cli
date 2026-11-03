@@ -1,13 +1,13 @@
 /**
  * Who stands where — by prefix, not by exact path.
  *
- * Three mechanisms rest on `lsof -d cwd`: occupation (`mc work <name>` refuses
- * a workplace somebody sits in), addressing (a pane is found by where it
+ * Three mechanisms rest on `lsof -d cwd`: occupation (opening a project from the
+ * page refuses a workplace somebody sits in), addressing (a pane is found by where it
  * stands), and the board (which tools and suites run in which area). All
  * three asked lsof for exact directories, and lsof answers exactly: a process
  * whose cwd is `<area>/memoro-cli/src` is not standing in `<area>/memoro-cli`.
  * Measured 2026-08-23 (KP-08 point 7): a tool started one directory down
- * vanished from all three at once, and none of them could say why. `mc work`
+ * vanished from all three at once, and none of them could say why. mc
  * starts tools at the root, so it bit only hand-started sessions — which is
  * exactly the kind nobody is watching.
  *

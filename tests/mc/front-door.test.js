@@ -7,14 +7,23 @@
  * prompt, exit 0. The menu itself is driven in process with the reading and
  * the opening handed in, so a number can be shown to open the project PROGRAMMES
  * gave that number to without a session ever starting.
+ *
+ * The binary itself runs for what only a process shows — no terminal, no
+ * prompt, an exit, nothing but bytes in a pipe — and for the words it answers
+ * before routing (`--help`, a word nothing routes). Those four runs start
+ * together when the file loads, each on a fixture of its own, and the tests
+ * read what they printed (`RAN`). Everything else is the routing and the
+ * verbs, in this process (`runVerb`): one run of the binary was 0.7–4 s under
+ * load, and a test of four spellings paid it four times (2026-11-03).
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
-import { runMcCli } from './_helpers/mc-cli.js';
+import { runMcCliAsync } from './_helpers/mc-cli.js';
+import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { freshFor, menu, parsePageArgs, runnerOrder } from '../../src/mc/commands/home.js';
 import { plainReader } from '../../src/mc/page-live.js';
 import { programmesSection } from '../../src/mc/page-collect.js';
@@ -25,8 +34,8 @@ function fixture() {
   const workRoot = join(root, 'work');
   mkdirSync(join(workRoot, 'runner', 'log'), { recursive: true });
   writeFileSync(join(workRoot, 'queue.md'), '# the queue\nalpha\n');
-  // A directory under the work root is a workarea when it holds `memoro/` or
-  // `memoro-cli/`; mc's own folders hold neither and are never rows.
+  // Two checkouts directly under the work root that no project in the
+  // register explains: strays. mc's own folders are never one.
   for (const name of ['alpha', 'beta']) mkdirSync(join(workRoot, name, 'memoro-cli', '.git'), { recursive: true });
   mkdirSync(join(workRoot, 'brief'), { recursive: true });
   return {
@@ -50,41 +59,55 @@ function fixture() {
   };
 }
 
+/** The binary's runs this file reads, started together, each on its own fixture. */
+const BINARY_FIXTURES = [];
+const binary = (args, { world = true } = {}) => {
+  const fx = world ? fixture() : null;
+  if (fx) BINARY_FIXTURES.push(fx);
+  return runMcCliAsync(args, fx?.env ?? {});
+};
+const [page, pageJson, nonsense, help] = await Promise.all([
+  binary([]), binary(['--json']), binary(['--nonsense']), binary(['--help'], { world: false }),
+  preloadVerbs('status'),
+]);
+const RAN = { page, pageJson, nonsense, help };
+after(() => { for (const fx of BINARY_FIXTURES) fx.cleanup(); });
+
 describe('bare mc', () => {
   it('prints the page, and without a terminal never prompts', () => {
-    const fx = fixture();
-    try {
-      const result = runMcCli([], fx.env);
+    {
+      const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
-      // The two workareas nothing explains are one line in WORK — the numbers
-      // the menu still opens them by, and the file that names them. Twelve rows
-      // that never change were twelve rows; their names are in `mc --json`.
-      assert.match(result.stdout, /^ +WORK {2}2 workareas with no project\b/mu);
-      assert.match(result.stdout, /^ +1–2 {2}· {2}~\/mc\/runner\/unplanned-workareas\.md/mu);
-    } finally { fx.cleanup(); }
+      // No WORK heading: every session is a programme's or a desk's, and the
+      // two folders nothing explains are strays under PROGRAMMES.
+      assert.doesNotMatch(result.stdout, /^\s+WORK\b/mu);
+      assert.match(result.stdout, /^ +not an area mc knows$/mu);
+      assert.match(result.stdout, /^ +alpha\s+checkout yes · 0 uncommitted$/mu);
+      assert.doesNotMatch(result.stdout, /unplanned-workareas/u);
+    }
   });
 
-  it('--json exits 0 with the object the renderer takes and no prompt', () => {
+  it('--json exits 0 with the object the renderer takes and no prompt', async () => {
     const fx = fixture();
     try {
-      const result = runMcCli(['--json'], fx.env);
+      const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
       assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'next', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
       assert.match(page.billing, /claude \? plan · codex \? plan/u);
-      // No plan on main here, so there are no projects and both folders are
-      // under the heading for the ones nothing explains — numbered from 1,
-      // because the projects above them are none.
+      // No plan on main here, so there are no projects, and both folders are
+      // strays — mc's own brief/ is not one. There is no WORK data anywhere.
       assert.deepEqual(page.programmes.programmes, []);
       assert.equal(page.programmes.count, 0);
-      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.name).sort(), ['alpha', 'beta']);
-      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.number), [1, 2]);
-      assert.equal(page.programmes.unplanned.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
+      assert.deepEqual(page.programmes.strays.map((item) => [item.kind, item.name]), [['directory', 'alpha'], ['directory', 'beta']]);
+      assert.equal('work' in page, false);
+      assert.equal('unplanned' in page.programmes, false);
+      assert.equal('others' in page.sessions, false);
     } finally { fx.cleanup(); }
   });
 
@@ -99,12 +122,11 @@ describe('bare mc', () => {
    * would otherwise get cursor moves in the middle of its input.
    */
   it('piped, both surfaces print once, exit 0 and write no escape byte', () => {
-    const fx = fixture();
-    try {
-      for (const args of [[], ['--json']]) {
-        const started = Date.now();
-        const result = runMcCli(args, fx.env);
-        const elapsed = Date.now() - started;
+    {
+      const printed = {};
+      for (const [args, result] of [[[], RAN.page], [['--json'], RAN.pageJson]]) {
+        printed[args.join(' ')] = result.stdout;
+        const { elapsed } = result;
         const what = `mc ${args.join(' ')}`.trim();
 
         assert.equal(result.signal, null, `${what} had to be killed: it never exited`);
@@ -118,42 +140,56 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      const printed = runMcCli([], fx.env).stdout;
-      for (const section of ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'MC']) {
-        const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
+      for (const section of ['PROGRAMMES', 'HELPER', 'BRIEF', 'SESSIONS', 'MERGES', 'DEPLOY', 'MC']) {
+        const seen = printed[''].match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
       // And --json is one document, not a stream of them.
-      const json = runMcCli(['--json'], fx.env).stdout;
+      const json = printed['--json'];
       assert.equal(json.trimEnd(), JSON.stringify(JSON.parse(json), null, 2));
-    } finally { fx.cleanup(); }
+    }
   });
 
-  it('mc work with no name is the same page', () => {
+  // Every session in `mc --json` has an owner, a programme or a desk: a lane
+  // file's is its programme, a desk's is the desk (goal mc/no-work).
+  it('gives every session in --json an owner: a lane file\'s programme, a desk', async () => {
     const fx = fixture();
     try {
-      const bare = runMcCli([], fx.env);
-      const viaWork = runMcCli(['work'], fx.env);
-      assert.equal(viaWork.status, 0, viaWork.stderr);
-      assert.deepEqual(
-        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
-        JSON.parse(runMcCli(['--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
-      );
-      assert.equal(bare.stdout.split('\n').length, viaWork.stdout.split('\n').length);
+      const runner = join(fx.workRoot, 'runner');
+      const started = new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z');
+      writeFileSync(join(runner, 'current-memoro-cli.json'), JSON.stringify({
+        name: 'alpha', step: 1, kind: 'build', variant: 'project', programme: 'mc', repo: 'memoro-cli', lane: 0,
+        tool: 'claude', model: 'opus', pid: process.pid, started,
+      }));
+      writeFileSync(join(runner, 'current-memoro.json'), JSON.stringify({
+        name: 'goal:msr/fast-path', step: null, kind: 'build', variant: 'goal', repo: 'memoro', lane: 0,
+        tool: 'codex', model: 'gpt', pid: process.pid, started,
+      }));
+      mkdirSync(join(runner, 'foreground'), { recursive: true });
+      writeFileSync(join(runner, 'foreground', `${process.pid}.json`), JSON.stringify({ verb: 'brief', area: null, tool: 'claude', pid: process.pid, started }));
+      const result = await runVerb(['--json'], fx.env);
+      assert.equal(result.status, 0, result.stderr);
+      const page = JSON.parse(result.stdout);
+      assert.deepEqual(page.runner.sessions.map((session) => [session.name, session.owner]), [
+        ['alpha', { kind: 'programme', name: 'mc' }],
+        ['goal:msr/fast-path', { kind: 'programme', name: 'msr' }],
+      ]);
+      assert.deepEqual(page.sessions.desks.brief.owner, { kind: 'desk', name: 'brief' });
+      const all = [...page.runner.sessions, ...Object.values(page.sessions.desks).filter(Boolean),
+        ...Object.values(page.sessions.planning_sessions).flat(), ...Object.values(page.sessions.programme_sessions).flat()];
+      assert.equal(all.length, 3);
+      for (const session of all) assert.ok(['programme', 'desk'].includes(session.owner?.kind) && session.owner.name, JSON.stringify(session));
     } finally { fx.cleanup(); }
   });
 
   it('refuses an argument it does not know, and says the two surfaces', () => {
-    const fx = fixture();
-    try {
-      const result = runMcCli(['--nonsense'], fx.env);
-      assert.equal(result.status, 2);
-      assert.match(result.stderr, /unknown command "--nonsense"/u);
-    } finally { fx.cleanup(); }
+    const result = RAN.nonsense;
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /unknown command "--nonsense"/u);
   });
 
   it('the help leads with the one surface and names no other', () => {
-    const help = runMcCli(['--help']).stdout;
+    const help = RAN.help.stdout;
     assert.match(help, /^ {2}mc {2,}The one page/mu);
     assert.doesNotMatch(help, /mc --watch/u);
     assert.doesNotMatch(help, /mc status --sessions/u);
@@ -161,11 +197,35 @@ describe('bare mc', () => {
   });
 });
 
-describe('the verbs that became mc', () => {
-  it('mc list says where it went', () => {
+describe('the workarea verbs are gone', () => {
+  it('mc work and mc worker, with or without a name, exit 2 and say where things went', async () => {
     const fx = fixture();
     try {
-      const result = runMcCli(['list'], fx.env);
+      for (const args of [['work'], ['work', 'alpha'], ['work', 'list', '--json'], ['work', 'add', 'x', 'memoro-cli'], ['worker', 'x']]) {
+        const result = await runVerb(args, fx.env);
+        const what = `mc ${args.join(' ')}`;
+        assert.equal(result.status, 2, what);
+        assert.equal(result.stdout, '', what);
+        assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — every session belongs to a programme or a desk$`, 'mu'), what);
+        assert.match(result.stderr, /mc plan <programme>/u, what);
+        assert.match(result.stderr, /mc brief · mc helper/u, what);
+      }
+      assert.equal(existsSync(join(fx.workRoot, 'work')), false, 'nothing made ~/mc/work/');
+    } finally { fx.cleanup(); }
+  });
+
+  it('the help has no workarea verb', () => {
+    const help = RAN.help.stdout;
+    assert.doesNotMatch(help, /mc work\b/u);
+    assert.doesNotMatch(help, /mc worker\b/u);
+  });
+});
+
+describe('the verbs that became mc', () => {
+  it('mc list says where it went', async () => {
+    const fx = fixture();
+    try {
+      const result = await runVerb(['list'], fx.env);
       assert.equal(result.status, 2);
       assert.match(result.stderr, /mc list is now mc/u);
       assert.doesNotMatch(result.stderr, /--watch/u);
@@ -173,7 +233,7 @@ describe('the verbs that became mc', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('mc sessions — all of it — says where it went', () => {
+  it('mc sessions — all of it — says where it went', async () => {
     const fx = fixture();
     try {
       // `mc sessions list` was the only spelling answered before; the session
@@ -181,32 +241,32 @@ describe('the verbs that became mc', () => {
       // because somebody typing `mc sessions read` deserves the same sentence
       // as somebody typing `mc sessions list`.
       for (const args of [['sessions'], ['sessions', 'list'], ['sessions', 'read', 'x'], ['sessions', 'send', 'x', 'hi']]) {
-        const result = runMcCli(args, fx.env);
+        const result = await runVerb(args, fx.env);
         assert.equal(result.status, 2, args.join(' '));
         assert.match(result.stderr, /mc sessions is now mc/u, args.join(' '));
       }
     } finally { fx.cleanup(); }
   });
 
-  it('bare mc status says where it went; a name still answers', () => {
+  it('bare mc status says where it went; a name still answers', async () => {
     const fx = fixture();
     try {
-      const bare = runMcCli(['status'], fx.env);
+      const bare = await runVerb(['status'], fx.env);
       assert.equal(bare.status, 2);
       assert.match(bare.stderr, /mc status is now mc/u);
       assert.match(bare.stderr, /mc status <name>/u);
 
-      const named = runMcCli(['status', 'alpha', '--json'], fx.env);
+      const named = await runVerb(['status', 'alpha', '--json'], fx.env);
       assert.equal(named.status, 0, named.stderr);
       assert.equal(JSON.parse(named.stdout).name, 'alpha');
     } finally { fx.cleanup(); }
   });
 
-  it('the board flags are gone — they are a name now, and there is no such project', () => {
+  it('the board flags are gone — they are a name now, and there is no such project', async () => {
     const fx = fixture();
     try {
       for (const flag of ['--sessions', '--watch', '--wait']) {
-        const result = runMcCli(['status', flag], fx.env);
+        const result = await runVerb(['status', flag], fx.env);
         assert.equal(result.status, 2, `${flag} still answers`);
         assert.match(result.stderr, /mc status is now mc/u);
       }
@@ -252,17 +312,18 @@ describe('the menu under the page', () => {
     }),
   };
 
-  // The numbers the page drew are the numbers the menu opens by, and the
-  // orphan folder is numbered after the projects.
-  it('numbers the projects first and the folders after, once each', () => {
+  // The numbers the page drew are the numbers the menu opens by; a folder no
+  // project explains has none.
+  it('numbers the projects, and nothing else', () => {
     assert.deepEqual(DATA.programmes.programmes.flatMap((g) => g.projects).map((p) => [p.number, p.name]),
       [[1, 'docx-editor'], [2, 'mc-ui']]);
-    assert.deepEqual(DATA.programmes.unplanned.shown.map((a) => [a.number, a.name]), [[3, 'msr-track-1']]);
+    assert.equal('unplanned' in DATA.programmes, false);
   });
 
   function drive(answers) {
     const written = [];
     const opened = [];
+    const programmes = [];
     const queue = [...answers];
     // The reader a terminal too narrow for the live page gets, with the line
     // handed in instead of read: the menu has one way of asking, and this is
@@ -270,13 +331,14 @@ describe('the menu under the page', () => {
     const stdout = { columns: 100, write: (text) => written.push(text) };
     return {
       opened,
+      programmes,
       written,
       run: () => menu(DATA, {
         stdout,
         stderr: { write: (text) => written.push(text) },
         page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
         reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
-        open: async (name) => { opened.push(name); return 0; },
+        open: async (name, opts) => { opened.push(name); programmes.push(opts.programme); return 0; },
       }),
     };
   }
@@ -285,6 +347,8 @@ describe('the menu under the page', () => {
     const first = drive(['1']);
     assert.equal(await first.run(), 0);
     assert.deepEqual(first.opened, ['docx-editor']);
+    // Opened as a session of its programme, not a workarea of its own.
+    assert.deepEqual(first.programmes, ['docx-editing-surface']);
 
     const second = drive(['2']);
     assert.equal(await second.run(), 0);
@@ -309,29 +373,29 @@ describe('the menu under the page', () => {
     const typo = drive(['mc-uii', 'q']);
     assert.equal(await typo.run(), 0);
     assert.deepEqual(typo.opened, []);
-    assert.match(typo.written.join(''), /nothing here called "mc-uii" — n starts one/u);
+    assert.match(typo.written.join(''), /nothing here called "mc-uii" — a project's number or name opens it/u);
   });
 
-  it('reads a whole mc work command, with or without its first two words', async () => {
-    const full = drive(['mc work docx-editor']);
-    assert.equal(await full.run(), 0);
-    assert.deepEqual(full.opened, ['docx-editor']);
-
-    const bare = drive(['work mc-ui']);
-    assert.equal(await bare.run(), 0);
-    assert.deepEqual(bare.opened, ['mc-ui']);
+  it('answers a workarea verb typed at the prompt with the line the shell gives, and opens nothing', async () => {
+    const typed = drive(['mc work docx-editor', 'work mc-ui', 'n', 'q']);
+    assert.equal(await typed.run(), 0);
+    assert.deepEqual(typed.opened, []);
+    const text = typed.written.join('');
+    assert.equal(text.match(/mc work is gone — every session belongs to a programme or a desk/gu)?.length, 2);
+    assert.match(text, /nothing here called "n"/u, 'n starts nothing any more');
   });
 
-  it('offers n, a, b, p and s beside the numbers, and no watch', async () => {
+  it('offers a, b, p and s beside the numbers, and no watch or new', async () => {
     const shown = drive(['q']);
     await shown.run();
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['n  start something new', 'a  every project', 'b  brief', 'p  plan a programme', 's <name>', 'q  quit']) {
+    for (const key of ['a  every project', 'b  brief', 'p  plan a programme', 's <name>', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('watch'), 'the menu offers no watch');
+    assert.ok(!keys.includes('start something new'), 'the menu starts no workarea');
   });
 
   /**
@@ -362,7 +426,7 @@ describe('the menu under the page', () => {
     assert.equal(drawn, 5, 'the page is drawn again after each order');
   });
 
-  it('reads only a bare stop as the runner\'s — stop <name> is a workarea\'s', () => {
+  it('reads only a bare stop as the runner\'s', () => {
     assert.deepEqual(runnerOrder('stop'), ['stop']);
     assert.deepEqual(runnerOrder('mc run start --no-merge'), ['start', '--no-merge']);
     assert.equal(runnerOrder('stop mc-ui'), null);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,9 +31,11 @@ import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, realDeps, runLoop } from '../.
 // a whole PLAN.json and has newlines of its own.
 const ARG_SEP = '<<mc-arg>>\n';
 
-const CODEX_STUB = (argvFile) => `#!/bin/sh
-: > "${argvFile}"
-for a in "$@"; do printf '%s<<mc-arg>>\\n' "$a" >> "${argvFile}"; done
+// It writes beside the bin it is reached from: `<base>/codex-argv.txt`.
+const CODEX_STUB = `#!/bin/sh
+argv="\${0%/*}/../codex-argv.txt"
+: > "$argv"
+for a in "$@"; do printf '%s<<mc-arg>>\\n' "$a" >> "$argv"; done
 echo '{"type":"thread.started","thread_id":"codex-thread-42"}'
 echo '{"type":"item.completed","item":{"type":"agent_message"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":900,"output_tokens":340}}'
@@ -81,11 +83,25 @@ function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, '-c', 'user.email=t@example.com', '-c', 'user.name=T', ...args], { encoding: 'utf8' });
 }
 
-function stub(dir, name, body) {
-  const path = join(dir, name);
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
-  return path;
+/**
+ * The three stubs, written and run once per file, and linked into each
+ * world's bin: on macOS a freshly written script pays 0.3-0.9 s at its first
+ * exec (2026-11-03), and each test wrote three.
+ */
+const STUBS = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-run-codex-stubs-'));
+  mkdirSync(join(dir, 'bin'));
+  for (const [name, body] of [['codex', CODEX_STUB], ['gh', '#!/bin/sh\nexit 0\n'], ['tmux', '#!/bin/sh\nexit 1\n']]) {
+    const path = join(dir, 'bin', name);
+    writeFileSync(path, body);
+    chmodSync(path, 0o755);
+    spawnSync(path, [], { stdio: 'ignore' });
+  }
+  return join(dir, 'bin');
+})();
+
+function stub(dir, name) {
+  symlinkSync(join(STUBS, name), join(dir, name));
 }
 
 /**
@@ -104,9 +120,9 @@ function codexWorld(t, plan = PLAN) {
 
   // The three binaries the runner reaches for. `gh` answers nothing, so the
   // step finds no PR and the row's pr column is `-`; `tmux` says no session.
-  stub(bin, 'codex', CODEX_STUB(argvFile));
-  stub(bin, 'gh', '#!/bin/sh\nexit 0\n');
-  stub(bin, 'tmux', '#!/bin/sh\nexit 1\n');
+  stub(bin, 'codex');
+  stub(bin, 'gh');
+  stub(bin, 'tmux');
 
   // A repository with one ready plan on origin/main, and a workarea that is
   // a real worktree of it — so the session's cwd has a `.git` file pointing
@@ -171,6 +187,9 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   // `-c project_doc_max_bytes=0` comes first: the session loads no AGENTS.md.
   const at = argv.indexOf('project_doc_max_bytes=0');
   assert.equal(argv[at - 1], '-c');
+  const delegation = argv.indexOf('features.multi_agent=true');
+  assert.ok(delegation > at);
+  assert.equal(argv[delegation - 1], '-c');
   const instructions = argv.find((arg, i) => argv[i - 1] === '-c' && arg.startsWith('instructions='));
   assert.ok(at < argv.indexOf(instructions), 'the switch rides before the instructions');
   assert.match(instructions, /^instructions="/u);

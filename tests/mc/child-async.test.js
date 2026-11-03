@@ -75,7 +75,9 @@ describe('runTool and runShell resolve what spawnSync returns', () => {
     const quote = (word) => `'${word.replace(/'/gu, "'\\''")}'`;
     writeFileSync(fixture, `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`);
     const controller = new AbortController();
-    const running = runShell(`${quote(process.execPath)} ${quote(fixture)}`, { signal: controller.signal, timeoutMs: 10000 });
+    // SIGKILL 50 ms after the SIGTERM it ignores, rather than the default
+    // second: the escalation is what is asserted, not its length.
+    const running = runShell(`${quote(process.execPath)} ${quote(fixture)}`, { signal: controller.signal, timeoutMs: 10000, graceMs: 50 });
     try {
       for (let i = 0; i < 400 && !existsSync(ready); i++) await delay(20);
       assert.ok(existsSync(ready), 'the descendant reached its signal handler');

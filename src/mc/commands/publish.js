@@ -9,7 +9,7 @@
  *   mc publish --no-merge              push and open it, and queue nothing
  *   mc publish --goal <p>/<g>          the pull request carries that goal
  *
- * A pull request carries a goal (`prs` in its GOAL.md, goals.js) when one is
+ * A pull request carries a goal (`prs` in its GOAL.json, goals.js) when one is
  * named: `--goal`, else MC_GOAL, else the goal whose worktree this is, else
  * the goal of a `goal/<goal>` branch. The merger and the runner set the goal
  * `done` once every pull request it carries has landed (Martin, 2026-11-03:

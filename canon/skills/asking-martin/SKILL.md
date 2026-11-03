@@ -1,6 +1,6 @@
 ---
 name: asking-martin
-description: Asking Martin a question or reporting to him in mc work — a decision only he can make, a blocked step or goal, the end-of-session account. Use before asking a question, blocking on an answer, or writing what you tell him.
+description: Asking Martin a question or reporting to him in mc — a decision only he can make, a blocked step or goal, the end-of-session account. Use before asking a question, blocking on an answer, or writing what you tell him.
 ---
 # Asking Martin, and telling him
 

@@ -747,71 +747,22 @@ function briefLines(lines, c, wide, session, intake, programmes, stale) {
 }
 
 /**
- * WORK — everything running that the runner did not start, oldest first.
- *
- * The age is the point of the section. All of these were on the page before;
- * what was missing was how long each had been there, so on 2026-09-02 seven
- * live sessions — the oldest three days old — read as a busy afternoon. Past
- * a day the age turns yellow, because by then it is the thing on the row.
+ * What no kind explains (`programmes.strays`): a directory under `~/mc` that
+ * is no area (`listStrays`), with whether it holds a checkout and how much is
+ * uncommitted there — the two facts that say whether somebody's work is in it —
+ * and a session with no owner: a register entry no verb explains, or a tmux
+ * session `mc-<name>` mc did not start for anyone, with how long it has been
+ * open. One line each. Nothing removes one, so nothing here offers to.
  */
-function workLines(lines, c, wide, sessions, unplanned) {
-  const others = sessions.others || [];
-  const folders = unplanned || { count: 0, shown: [], more: 0 };
-  const counts = [
-    others.length ? `${others.length} session${others.length === 1 ? '' : 's'}` : '',
-    folders.count ? `${folders.count} workarea${folders.count === 1 ? '' : 's'} with no project` : '',
-  ].filter(Boolean).join(' · ');
-  heading(lines, c, wide, 'WORK', counts || 'nothing open', 'mc work <name>');
-  for (const item of others) {
-    const meta = paint(c, between([
-      { text: item.verb ? `mc ${item.verb}` : 'tmux', styles: ['cyan'] },
-      { text: openFor(item.age_seconds), styles: ageTone(item.age_seconds) },
-      { text: [item.tool, item.model].filter(Boolean).join(' '), styles: ['grey'] },
-      { text: item.pid ? `pid ${item.pid}` : (item.tmux || ''), styles: ['grey'] },
-    ], ' · '), wide - 28);
-    // Cyan for a verb somebody typed, yellow for a tmux window nobody is
-    // necessarily in — the same two meanings those colours carried before.
-    const mark = item.verb ? c(MARK.running, 'cyan') : c(MARK.waiting, 'yellow');
-    lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold')} ${meta}`);
-  }
-
-  // The folders no project explains, under the same heading as the sessions.
-  // They were the tail of PROJECTS, which made that section answer two
-  // questions — where the work stands, and which directories are left over —
-  // and the second is this one's: a workarea with nothing to explain it is
-  // work in exactly the sense WORK means, and often the same folder somebody
-  // has a session open in.
-  //
-  // One line, not one row each. Twelve of them were drawn every time, and the
-  // twelve rows never changed: nothing removes such a folder (close-workarea.js)
-  // and no page can decide whether one should go. The count is on the heading
-  // above, the numbers still open them, and `mc run` writes the whole list —
-  // with the one fact the page could not have, whether the branch has landed —
-  // to `~/mc/runner/unplanned-workareas.md` once a round. It is raised at every
-  // brief besides.
+function strayLines(lines, c, wide, strays) {
+  if (!strays?.length) return;
   const room = wide - 7;
-  strayLines(lines, c, folders.strays || [], room);
-  if (!folders.count) return;
-  const numbers = numberRanges((folders.shown || []).map((area) => area.number));
-  lines.push(`       ${paint(c, fitting([
-    { text: numbers, styles: ['grey'] },
-    { text: `${numbers ? '  ·  ' : ''}~/mc/runner/unplanned-workareas.md`, styles: ['grey'] },
-    { text: '  has them all', styles: ['grey'] },
-  ], room), room)}`);
-}
-
-/**
- * The directories under `~/mc` that are none of the kinds mc knows
- * (`listStrays`): one line each, with whether it holds a checkout and how much
- * is uncommitted there — the two facts that say whether somebody's work is in
- * it. Nothing removes one, so nothing here offers to.
- */
-function strayLines(lines, c, strays, room) {
-  if (!strays.length) return;
   lines.push(`       ${c('not an area mc knows', 'yellow')}`);
   for (const stray of strays) {
-    const facts = [stray.checkout ? 'checkout yes' : 'checkout no'];
-    if (stray.checkout) facts.push(`${stray.uncommitted} uncommitted`);
+    const facts = stray.kind === 'directory' || !stray.kind
+      ? [stray.checkout ? 'checkout yes' : 'checkout no', ...(stray.checkout ? [`${stray.uncommitted} uncommitted`] : [])]
+      : [stray.kind === 'tmux' ? 'tmux session' : `${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme`,
+        openFor(stray.age_seconds), ...(stray.pid ? [`pid ${stray.pid}`] : [])];
     lines.push(`       ${paint(c, fitting([
       { text: pad(clip(stray.name, 21), 22), styles: ['bold'] },
       { text: facts.join(' · '), styles: ['grey'] },
@@ -1131,7 +1082,8 @@ function projectColumns(wide) {
  *
  * The `●` means the runner has a step in flight on this project. It used to
  * mean a live tmux area — somebody sitting in the folder — which made one mark
- * answer two questions. Sessions are WORK's.
+ * answer two questions. A session somebody has open is its programme's, on
+ * the heading.
  */
 function projectLine(c, wide, project) {
   const mark = project.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
@@ -1163,20 +1115,21 @@ function projectLine(c, wide, project) {
 /**
  * One goal, in a project row's columns (Martin, 2026-11-01): its row number, a
  * mark while a session is on it, `g · <name>`, its first repository, its state,
- * and how many sessions it has had. The grey tail after that is what the last
+ * how many sessions it has had, and `criteria <met>/<all>` — green when every
+ * one is met. The grey tail after that is what the last
  * session said is next (or its comment, when it said nothing next). A goal whose
- * GOAL.md does not parse says its first problem in red there instead.
+ * GOAL.json does not parse says its first problem in red there instead.
  *
  * `open` is green while a session is on it and grey otherwise, `review` is
  * green — a review session or the merger moves it by itself — `blocked` is the
  * blocked colour, and `done` and `dropped` are grey: the project rows' colours
- * for the same words. A finished goal's tail is its last `Gjort:`, never a
- * `Nästa:` that is over. A goal blocked by a red review, a red merge or the runner waits on
+ * for the same words. A finished goal's tail is its last `Done:`, never a
+ * `Next:` that is over. A goal blocked by a red review, a red merge or the runner waits on
  * plan, which the runner wakes, and its tail says so first; any other blocked
  * goal — a person's, a build session's question, one plan left blocked —
- * `waits on a person`. Both are in the colour of what waits on a person. A `waiting`
- * goal is yellow, the projects' waiting colour — the runner lets it go when
- * its `after` has landed — and its tail says first what it waits on.
+ * `waits on a person`. Both are in the colour of what waits on a person. A goal
+ * in a phase its programme has not reached (`held`) has the projects' waiting
+ * colour, and its tail says first which phase it waits on.
  */
 function goalLine(c, wide, goal) {
   const column = projectColumns(wide);
@@ -1184,7 +1137,7 @@ function goalLine(c, wide, goal) {
   const word = goal.status ?? '—';
   const tone = goal.status === 'open' ? (goal.running ? ['green'] : ['grey'])
     : goal.status === 'review' ? ['green']
-    : (goal.status === 'blocked' || goal.status === 'waiting' ? statusTone(goal.status) : ['grey']);
+    : (goal.status === 'blocked' ? statusTone(goal.status) : ['grey']);
   const repo = column.repo
     ? `${c(pad(clip(goal.repos[0] || '—', column.repo), column.repo), 'grey')} `
     : '';
@@ -1196,14 +1149,15 @@ function goalLine(c, wide, goal) {
     + `${goal.running ? c(name, 'bold') : name} `
     + repo
     + `${c(pad(clip(word, column.status), column.status), ...tone)} `
-    + c(pad(sessionsWords, column.steps + 1 + PR_CELL), 'grey');
+    + c(pad(sessionsWords, column.steps + 1 + PR_CELL), 'grey')
+    + (goal.criteria ? `${c(`criteria ${goal.criteria.met}/${goal.criteria.all}`, goal.criteria.all && goal.criteria.met === goal.criteria.all ? 'green' : 'grey')} ` : '');
   const room = wide - width(left);
   if (room <= 0) return left;
-  if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.md: ${goal.problems[0]}`), room), 'red')}`;
+  if (goal.problems?.length) return `${left}${c(clip(one(`GOAL.json: ${goal.problems[0]}`), room), 'red')}`;
   // A finished goal has no next action: its tail is what was done last.
   const finished = goal.status === 'done' || goal.status === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
-  const waits = goal.status === 'waiting' && goal.waiting_on?.length ? `waits on ${goal.waiting_on.join(', ')}` : null;
+  const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
   if (goal.plan || goal.person || waits) {
     const head = waits ?? (goal.plan ? 'waits on plan' : 'waits on a person');
     const tail = said && one(said) !== head ? clip(` · ${one(said)}`, Math.max(0, room - head.length)) : '';
@@ -1329,7 +1283,10 @@ function programmeLine(c, wide, group) {
   const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
   const counts = programmeCounts(c, group, column.counts);
   const meta = planSessionWords(group);
-  const detail = meta ? `plan ${meta}` : '·  no plan session';
+  // A project of the programme opened from the page is its session too, and
+  // is said on the same heading (goal mc/no-work).
+  const opened = (group.sessions || []).length;
+  const detail = `${meta ? `plan ${meta}` : '·  no plan session'}${opened ? `  ·  ${opened} open` : ''}`;
   // Provider counts take precedence over the programme's rollup on a narrow
   // terminal; the headline and JSON still carry that rollup.
   const prefix = meta && width(left) + width(counts) + detail.length + 2 > wide
@@ -1468,9 +1425,7 @@ function programmesLines(lines, c, wide, programmes, expand) {
     // A goal is not collapsed: it is work that exists whatever the blocked rows do.
     for (const goal of group.goals || []) lines.push(goalLine(c, wide, goal));
   }
-  if (programmes.no_workarea) {
-    say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
-  }
+  strayLines(lines, c, wide, programmes.strays);
 
 }
 
@@ -1608,17 +1563,15 @@ export function renderPageLines(data, {
   // states: above every section, until `mc language resume` closes it.
   openGapLine(lines, c, wide, data.language?.open_gap);
 
-  const sessions = data.sessions || { desks: {}, others: [] };
+  const sessions = data.sessions || { desks: {} };
   // The order is Martin's (2026-09-19), and it still keeps the rule the page
   // had: **what does not move sits above what does.** The live loop rewrites
   // rows where they stand (page-live.js), and a row near the prompt is one it
-  // can always reach. PROGRAMMES and WORK are the page as a listing; the two
+  // can always reach. PROGRAMMES is the page as a listing; the two
   // desks change when somebody sits down; NEXT changes every round and RUNNER
   // every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
-  lines.push('');
-  workLines(lines, c, wide, sessions, data.programmes?.unplanned);
   lines.push('');
   helperLines(lines, c, wide, sessions.desks?.helper, data.intake);
   lines.push('');

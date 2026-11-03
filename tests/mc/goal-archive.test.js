@@ -15,7 +15,7 @@ const ok = (stdout = '') => ({ ok: true, stdout, stderr: '' });
 
 /** A goal as `programsGoals` gives it, with the fields `archiveGoal` reads. */
 function goal(extra = {}) {
-  return { programme: 'mc', goal: 'g', dir: DIR, status: 'done', repos: ['memoro'], prs: [], log: [], problems: [], after: [], ...extra };
+  return { programme: 'mc', goal: 'g', dir: DIR, status: 'done', repos: ['memoro'], prs: [], log: [], problems: [], phase: 1, ...extra };
 }
 
 /**
@@ -56,7 +56,7 @@ test('a goal is not due when it is not finished, or the log does not say when it
 
 test('archiveGoal of a done goal with nothing open: worktree and branch removed through git, the directory moved, one row written', () => {
   const { ctx, calls } = ctxOf();
-  assert.deepEqual(archiveGoal(goal(), [goal()], ctx), { to: '/w/programs/mc/goals/.archive/g' });
+  assert.deepEqual(archiveGoal(goal(), ctx), { to: '/w/programs/mc/goals/.archive/g', renumbered: [] });
   assert.ok(calls.git.some((call) => call.join(' ') === `/home/memoro worktree remove ${DIR}/memoro`), 'its worktree goes through git');
   assert.ok(calls.git.some((call) => call.join(' ') === '/home/memoro branch -D goal/g'), 'its branch is deleted');
   assert.deepEqual(calls.moved, [[DIR, '/w/programs/mc/goals/.archive/g']]);
@@ -66,19 +66,17 @@ test('archiveGoal of a done goal with nothing open: worktree and branch removed 
 });
 
 test('archiveGoal refuses, and touches nothing, for each reason mc goal archive gives', () => {
-  const waiter = goal({ programme: 'mc', goal: 'other', status: 'waiting', after: ['mc/g'] });
   const cases = [
     { what: 'an open pull request on the branch', goal: goal(), ctx: { gh: (cwd, args) => (args[1] === 'list' ? ok('[{"number":7}]') : ok()) }, pattern: /memoro #7 on goal\/g is open/u },
     { what: 'uncommitted changes in the worktree', goal: goal(), ctx: { git: (cwd, args) => (args[0] === 'status' ? ok(' M a.js') : ok()) }, pattern: /memoro's worktree has uncommitted changes/u },
     { what: 'a pull request the goal carries, open', goal: goal({ prs: [{ repo: 'memoro', pr: 9 }] }), ctx: { gh: (cwd, args) => (args[1] === 'view' ? ok('{"state":"OPEN"}') : ok('[]')) }, pattern: /memoro#9 is open/u },
     { what: 'a repository mc does not know', goal: goal({ repos: ['elsewhere'] }), ctx: {}, pattern: /elsewhere is not a repository mc knows/u },
     { what: 'a goal not finished', goal: goal({ status: 'open' }), ctx: {}, pattern: /it is open; only a done or dropped goal/u },
-    { what: 'a goal that starts after it', goal: goal(), all: [goal(), waiter], ctx: {}, pattern: /mc\/other starts after it/u },
     { what: 'a dropped branch with commits no remote holds', goal: goal({ status: 'dropped' }), ctx: { git: (cwd, args) => (args[0] === 'rev-list' ? ok('2') : ok()) }, pattern: /commits no remote holds/u },
   ];
-  for (const { what, goal: subject, all, ctx: options, pattern } of cases) {
+  for (const { what, goal: subject, ctx: options, pattern } of cases) {
     const { ctx, calls } = ctxOf(options);
-    const result = archiveGoal(subject, all ?? [subject], ctx);
+    const result = archiveGoal(subject, ctx);
     assert.match(result.refused ?? '', pattern, what);
     assert.equal(calls.moved.length, 0, `${what}: nothing moved`);
     assert.equal(calls.git.some((call) => call.includes('remove')), false, `${what}: no worktree removed`);
@@ -88,6 +86,6 @@ test('archiveGoal refuses, and touches nothing, for each reason mc goal archive 
 
 test('archiveGoal says a directory it cannot move, and that its worktrees are gone, rather than throwing', () => {
   const { ctx } = ctxOf({ move: () => { throw new Error('exists'); } });
-  const result = archiveGoal(goal(), [goal()], ctx);
+  const result = archiveGoal(goal(), ctx);
   assert.match(result.refused, /could not be moved .* \(exists\); its worktrees are gone/u);
 });
