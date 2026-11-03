@@ -1,16 +1,18 @@
 # mc goals
 
-**Status:** current · 2026-11-02 · derived from `src/mc/goals.js`,
-`src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
+**Status:** current · 2026-11-03 · derived from `src/mc/goals.js`,
+`src/mc/criteria.js`, `src/mc/goal-convert.js`, `src/mc/commands/goal.js`, `src/mc/run.js` (`goalPass`, `runGoal`,
 `reviewRoute`, `settleReview`, `goalWithoutWord`, `releaseWaiting`, `planRoute`,
-`settlePlan`), `src/mc/merger.js` (`tellGoal`), `canon/roles/build-session.md`
+`settlePlan`), `src/mc/merger.js` (`landJob`, `tellGoal`), `canon/roles/build-session.md`
 (its `goal` part), `canon/roles/review-session.md` (its `goal` part),
 `canon/roles/plan-session.md` and `canon/roles/goal-verb.md`
 
-A goal is two text files and a worktree, beside projects. It has no steps, no
-register and no owner. A build session does the work and publishes its pull
-request; a review session on another model judges it; a green review queues it
-for the merger; the goal is `done` when it lands. A blocked goal wakes a plan
+A goal is two files and a worktree, beside projects: `GOAL.json`, the brief as
+data, and `LOG.md`. It has no steps, no register and no owner. A build session
+does the work, records each criterion it has checked as met, and publishes its
+pull request; a review session on another model runs the checks and judges it;
+a green review queues it for the merger; the goal is `done` when it lands, and
+it lands only with every criterion met. A blocked goal wakes a plan
 session, which reopens it, replaces it or asks Martin. Martin decided the process on
 2026-11-02: *"Ingen review till build. Review skriver i LOG.md; plan öppnar som
 har helhetsförståelsen."* and *"Grön till merge direkt."*
@@ -19,7 +21,7 @@ har helhetsförståelsen."* and *"Grön till merge direkt."*
 waiting  ── every after-goal landed (runner) ──────▶ open
 waiting  ── an after-goal gone without landing ────▶ blocked
 open     ── given an after not landed ─────────────▶ waiting
-open     ── build session holds the criteria met ──▶ review
+open     ── build session, every criterion met ────▶ review
 review   ── review: red, or no verdict ─────────────▶ blocked
 review   ── review: green, head unchanged ──────────▶ review, queued for the merger
 queued   ── merger landed ──────────────────────────▶ done
@@ -34,7 +36,7 @@ blocked  ── a person sets it open ──────────────
 ## Layout
 
 ```
-~/mc/programs/<programme>/goals/<goal>/GOAL.md    the brief and its status
+~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria and its status
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
 ~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner 24 h after done or dropped), its worktrees gone
@@ -46,46 +48,65 @@ a plan session, or the runner's build and review sessions on the goal. `<program
 `~/mc/programs/`; `<programme>` and `<goal>` are lower-case letters, digits and
 hyphens. mc keeps nothing else for a goal.
 
-## GOAL.md
+## GOAL.json
 
-Front matter between two `---` lines, then Markdown:
+One JSON object, written only by the `mc goal` verbs (*The verbs*) and checked
+by `validateGoal` (`goals.js`) at every write: an invalid GOAL.json is never
+written, and a write that would make one is refused with the field named.
 
-```
----
-status: open
-repos: memoro-cli, memoro
-class: fast
-created: 2026-11-01T20:00:00Z
-after: mc/runner-sessions, mc/agent-skills-text
-prs: memoro#14761, memoro-cli#1238
----
-# Title
-
-## Goal
-
-## Criteria
-
-## Out of scope
+```json
+{
+  "schema": "mc-goal",
+  "version": 1,
+  "status": "open",
+  "repos": ["memoro-cli", "memoro"],
+  "class": "fast",
+  "created": "2026-11-01T20:00:00Z",
+  "after": ["mc/runner-sessions"],
+  "prs": ["memoro#14761", "memoro-cli#1238"],
+  "title": "Title",
+  "goal": ["A paragraph.", "Another."],
+  "contract": ["What may not change without Martin."],
+  "out_of_scope": ["What this goal does not do."],
+  "success_criteria": [{ "criterion": "What must be true", "check": "How it is checked", "met": false }],
+  "documents": [{ "label": "What the reader is sent to", "path": "docs/technical/mc-goals.md" }]
+}
 ```
 
 - `status` — `open`, `waiting`, `review`, `blocked`, `done` or `dropped`. A
   goal starts `open`, or `waiting` when its `after` names a goal that has not
   landed.
-- `repos` — comma-separated repository names. The first is where a session
-  starts, and the lane that serves it takes the goal.
+- `repos` — repository names in order. The first is where a session starts,
+  and the lane that serves it takes the goal.
 - `class` — `fast` or `large`, routed as a step's class is (ruling 59).
-- `created` — optional; written by `mc goal new`.
-- `after` — optional; the goals this one starts after, comma-separated
-  `<programme>/<goal>` names. Written by `mc goal new --after` and
-  `mc goal after`; absent is none. A goal waits on goals only — not on a
-  project, a deploy or a time (projects have those).
-- `prs` — optional; the pull requests that carry the goal's work, as
-  `<repo>#<n>`, comma-separated. `mc publish` writes the one it opens or
-  updates (*Done when its work has landed*), and `mc goal pr` names others.
+- `created` — an ISO instant written by `mc goal new`, or null.
+- `after` — the goals this one starts after, as `<programme>/<goal>`. Written
+  by `mc goal new --after` and `mc goal after`. A goal waits on goals only —
+  not on a project, a deploy or a time (projects have those).
+- `prs` — the pull requests that carry the goal's work, as `<repo>#<n>`.
+  `mc publish` writes the one it opens or updates (*Done when its work has
+  landed*), and `mc goal pr` names others.
+- `goal`, `contract`, `out_of_scope` — arrays of paragraphs, as PLAN.json's.
+- `success_criteria` — `[{ criterion, check, met }]`, the same rules as
+  PLAN.json's (`validateCriteria` in `src/mc/criteria.js`, which both schemas
+  call): every criterion a `check`, `met` true or false, no other key, and at
+  least one criterion. `mc goal new`'s skeleton has none yet, and parses as a
+  draft: the runner starts no session on an `open` goal with no criterion, and
+  it cannot go to review.
+- `documents` — `[{ label, path }]`, as PLAN.json's (`validateDocuments`).
 
-The body is Markdown, written by a person or a session. mc rewrites only the
-`status`, `after` and `prs` lines. A GOAL.md whose front matter does not parse is listed by
-`mc goal list` with its problems, and the runner never starts it.
+An unknown key, a wrong schema or version, or a bad field is a problem named
+by its field. A GOAL.json that does not parse is listed by `mc goal list` with
+its problems, and the runner never starts it.
+
+**Seen, not only stored.** `mc goal show` renders a goal as text
+(`renderGoalText`): the title, then GOAL, CONTRACT, OUT OF SCOPE and DOCUMENTS,
+then `CRITERIA <met>/<all>` with each criterion numbered, ✓ or ✗, and its
+check. That text is the brief the runner gives a goal's build, review and plan
+session, after the lines that say where the goal is (`goalPrompt`,
+`goalReviewPrompt`, `goalPlanPrompt` in `run-plan.js`). `mc goal list` and the
+goal rows on the page say `criteria <met>/<all>`; the page's is green when all
+are met.
 
 ## LOG.md
 
@@ -94,41 +115,57 @@ Each session adds one entry, newest last:
 ```
 ## 2026-11-01T21:30Z · claude claude-haiku-5-5 · open
 
-Gjort: what the session did
-Kommentar: what a reader should know
-Nästa: what the next session should do
+Done: what the session did
+Comment: what a reader should know
+Next: what the next session should do
 ```
 
 - The heading is `## <at> · <tool> [<model>] · <status>`: `<at>` is UTC to the
   minute; `<tool>` is `MC_TOOL`, `person` or `runner`; `<model>` is `MC_MODEL`
   when set; `<status>` is the goal's status after the entry.
-- The labels are `Gjort:`, `Kommentar:` and `Nästa:`. A label's text runs on
-  until the next label or heading, so a field may take several paragraphs.
+- The labels are `Done:`, `Comment:` and `Next:`, in English like the rest of
+  the goal. A log written before 2026-11-03 has `Gjort:`, `Kommentar:` and
+  `Nästa:`; the parser reads those as the same fields, so no log is rewritten.
+  A label's text runs on until the next label or heading, so a field may take
+  several paragraphs.
 - A heading that does not match the form is skipped with its lines.
-- `mc goal new` writes the first entry: `person`, `open`, `Gjort: skapat`.
+- `mc goal new` writes the first entry: `person`, `open`, `Done: created`.
 - A session count is every entry whose tool is neither `runner` nor `person`.
-- A review's entry is its verdict: `Gjort:` starts with `green` or `red`, then
+- A review's entry is its verdict: `Done:` starts with `green` or `red`, then
   the head sha it judged (`verdictOf`). The **last build entry** is the last
   entry that is neither the runner's, a person's nor a verdict
   (`lastBuildEntry`); its `<tool> <model>` is the model a review may not run on.
-- The runner writes `Gjort: queued #<pr> at <sha> for the merger` when it
-  queues a green, and the merger `Gjort: landed #<pr> as <sha>` or
-  `Gjort: merger answered red on #<pr>` when it answers.
+- The runner writes `Done: queued #<pr> at <sha> for the merger` when it
+  queues a green, and the merger `Done: landed #<pr> as <sha>` or
+  `Done: merger answered red on #<pr>` when it answers.
 
 ## The verbs
 
-Nine verbs; the status verbs are five words.
+Fifteen verbs; the status verbs are five words.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--after <p>/<g>[,<p>/<g>]]`** — makes a
   goal, refused unless its flags are valid and its names are new. With
   `--after`, every name must be a goal (not the goal itself), and the goal
   starts `waiting` when one of them has not landed — its first entry says
   `waits on …`. Each
-  repository is fetched first; then GOAL.md, LOG.md, and a worktree of each on
+  repository is fetched first; then GOAL.json — a skeleton with the title and
+  no criterion — LOG.md, and a worktree of each on
   `goal/<g>` from `origin/main` (or that branch as it stands, when it exists).
   **One branch, built to the end**: the goal is built on this branch, and
   whether `main` moves meanwhile is not the build's concern — the merger
   brings the candidate up to date when it lands it.
+- **`set <p>/<g> title|goal|contract|out-of-scope --text "…"`** — replaces that
+  field. A prose field takes a paragraph per block between blank lines, and an
+  empty text clears it; an empty title is refused.
+- **`document add <p>/<g> --label "…" --path "…"`** — appends a document.
+- **`criterion add <p>/<g> --criterion "…" --check "…"`** — appends a criterion,
+  not met. Both flags are required: a criterion without a check is refused.
+- **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
+  as holding, after its check was run, or takes it back. A number the goal
+  has no criterion for is refused.
+- **`convert [<p>]`** — turns every goal of the programme (of every programme
+  when none is named) still written as GOAL.md into GOAL.json (*Converting a
+  GOAL.md*).
 - **`after <p>/<g> [<p>/<g>…]`** — replaces the goal's `after`; none given
   clears it. A name that is not a goal, the goal itself, or a ring (a goal
   that already waits, through its own `after`, on this one) is refused, and so
@@ -138,19 +175,19 @@ Nine verbs; the status verbs are five words.
   A `blocked` one with nothing left stays `blocked` — a person or plan blocked
   it, and `mc goal open` opens it; the line says so. `open` itself is refused
   while an `after` has not landed, whatever the goal's status is now.
-  The change is an entry: `Gjort: after <names>` (or `after cleared`). It is a
+  The change is an entry: `Done: after <names>` (or `after cleared`). It is a
   verb of its own, not a flag on `log` or a status verb, because it changes
-  the `after` line and the status follows from it.
+  `after` and the status follows from it.
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--status <s>]`** —
   appends one entry; at least one field is needed. `--status` also sets the
-  status line, except `waiting`: a goal waits by its `after`, never by a
+  status, except `waiting`: a goal waits by its `after`, never by a
   status. The goal is `MC_GOAL`'s when none is named.
 - **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: status
   `dropped`, never `done`, so a goal that starts after it does not start — it
   is blocked for plan, as after a goal that is gone (`afterOf`). The reason is
   required. Only a person or a plan session drops a goal.
 - **`pr <p>/<g> <repo>#<n>…`** — the pull requests named carry the goal: each
-  is added to `prs` once, with an entry `Gjort: carries <repo>#<n>`. For work
+  is added to `prs` once, with an entry `Done: carries <repo>#<n>`. For work
   published before `mc publish` wrote `prs`, or from where it could not tell
   the goal.
 - **`archive <p>/<g>…`** or **`archive <p>`** (every done or dropped goal of the
@@ -162,14 +199,14 @@ Nine verbs; the status verbs are five words.
   each worktree is removed with `git worktree remove` and the local branch
   `goal/<g>` deleted, the directory moves to `goals/.archive/<g>/` (a
   dot-directory, so no reader lists it), and `goals/goal_log.md` gets a row:
-  date, goal, status, pull requests, the last `Gjort:`. The runner does the same
+  date, goal, status, pull requests, the last `Done:`. The runner does the same
   by itself for a goal that has been `done` or `dropped` for 24 hours, the hold
   a project under `~/mc/programs/` has (`ARCHIVE_HOLD_MS`, in the same chore),
   counted from the log entry that set the status. A refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass. A programme is never archived by the runner.
 - **`open|review|blocked|done [<p>/<g>] [--reason "…"]`** — sets the status and
-  logs the reason as the entry's `Kommentar`. Going `open` (by `open` or
+  logs the reason as the entry's `Comment`. Going `open` (by `open` or
   `log --status open`) is refused, with nothing written, while the goal's
   `after` names a goal that has not landed or is gone: `mc: mc/headless-plan
   is not opened — it waits on mc/goal-waiting, not landed; …`.
@@ -188,15 +225,45 @@ Nine verbs; the status verbs are five words.
   itself). Any other session — `MC_GOAL` set and `MC_TOOL` not `person` — is
   refused `done` and `dropped`, by either verb: the merger sets `done` when the
   goal lands. A review session (`MC_ROLE=review-session:goal`) is refused
-  `open` too: plan decides what comes after a red (`refusedStatus`).
-- **`show <p>/<g>`** — the front matter (with `· after <names>` when set), the body, the last three entries, and
+  `open` too: plan decides what comes after a red (`refusedStatus`). And a
+  session other than plan is refused `review` while a criterion is not met, or
+  while the goal has none: `mc: mc/g is not set review — criterion 2 is not
+  met — run its check and record it with mc goal criterion met mc/g 2`
+  (`unmetGoalWords`), with nothing written. A person is not refused; the
+  merger refuses to land it anyway (*The merger*).
+- **`show <p>/<g>`** — a status line (`<p>/<g> · status · repos · class ·
+  criteria <met>/<all> · created …`, with `· after <names>` and `· prs …` when
+  set), the goal as text (*Seen, not only stored*), the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — one line per goal: `programme/goal · repos · status ·
-  n sessions · the last entry's Nästa` — `—` for a `done` or `dropped` goal,
+  criteria <met>/<all> · n sessions · the last entry's Next` — `—` for a `done` or `dropped` goal,
   whose last next action is over. A goal blocked by a red review, a red
   merge or the runner reads `blocked, waits on plan` (`waitsOnPlan`); any other
   blocked goal `blocked, waits on a person` (`waitsOnPerson`); a waiting goal reads
-  `waiting on <p>/<g>, …`, the names in its `after` that have not landed.
+  `waiting on <p>/<g>, …`, the names in its `after` that have not landed; an
+  `open` goal with no criterion `open, no criteria — not started`.
+
+## Converting a GOAL.md
+
+Goals written before 2026-11-03 are a `GOAL.md`: front matter between `---`
+lines, then Markdown. `mc goal convert [<programme>]` (`src/mc/goal-convert.js`,
+the one reader of GOAL.md left) turns each one not under `goals/.archive/` into
+GOAL.json and removes the GOAL.md:
+
+- the front matter's `status`, `repos`, `class`, `created`, `after` and `prs`
+  become fields; the `# ` line is the title;
+- `## Goal` is `goal`, `## Contract` is `contract` and `## Out of scope` is
+  `out_of_scope`, a paragraph per block between blank lines;
+- each top-level bullet of `## Criteria` is a criterion, whose check is the
+  text after its `*Check:*`, or the whole bullet when it has none;
+- any other section is kept as paragraphs of `goal`, after its heading;
+- a goal in `review` or `done` has every criterion `met: true` — a session has
+  judged them — and any other `met: false`.
+
+A GOAL.md whose front matter does not read, or one beside a GOAL.json, is
+left as it is and named on stderr (exit 1). The plan session in `mc` runs the
+conversion for every programme once, then rewrites the checks and translates
+the Swedish prose by hand.
 
 ## Waiting on another goal
 
@@ -211,14 +278,14 @@ every goal's `after` (`releaseWaiting` in `run.js`, `waitingMoves` and
 `afterOf` in `goals.js`), against the goals there are:
 
 - **Landed** is `done`. When every goal in a `waiting` goal's `after` has
-  landed, the runner sets it `open` with an entry `Gjort: <names> landed —
+  landed, the runner sets it `open` with an entry `Done: <names> landed —
   starting`, remakes its branches from `origin/main` as it is now
   (`remakeUnbuiltBranches`), and the goal is a candidate in that same pick.
 - **Pending** is any other status, `blocked` included: an after-goal that is
   blocked may still land, so the goal stays `waiting` and nothing is written.
-- **Gone** is no goal by that name any more — its directory or GOAL.md
+- **Gone** is no goal by that name any more — its directory or GOAL.json
   removed, which is how a goal is discarded or archived without landing. The
-  waiting goal goes `blocked` with the entry `Kommentar: <names> is gone
+  waiting goal goes `blocked` with the entry `Comment: <names> is gone
   without landing — waits on plan to change after`; `waitsOnPlan` counts it,
   so the list and the page say `waits on plan`.
 - An `open` goal whose `after` has not landed — an `after` written by hand,
@@ -239,7 +306,7 @@ waiting for the steps to run out ([mc-run.md](mc-run.md), *What a free lane
 takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
 
 1. **Pick.** After `after` is settled (*Waiting on another goal*), of the
-   goals that parse and are `open` or due a review and
+   goals that parse and are `open` with a criterion, or due a review, and
    that are not held, on any repository (a lane serves them all), the one whose last
    entry is oldest. A goal in `review` is due a review unless its last entry is
    the runner's `queued` one, or one of its pull requests is in the merger's
@@ -269,7 +336,7 @@ takes*). When the pick is a goal, `goalPass` in `src/mc/run.js` takes it:
    `MC_ROLE`, `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set. If the
    role's file is missing on the machine, the goal is skipped.
 4. **Silent exit.** A session that leaves no entry gets one from the runner:
-   tool `runner`, status unchanged, `Kommentar: session ended without a log
+   tool `runner`, status unchanged, `Comment: session ended without a log
    entry (exit <n>, <s> s)`. A worktree that could not be made gets one too.
 5. **Three in a row.** When the last three entries are all the runner's and the
    status is `open` or `review`, the runner sets `blocked` and writes a runner
@@ -317,16 +384,17 @@ nothing; so does a `waiting` goal.
   the goal, the last entry's words and the worktree, which it may take over.
 - **One at a time.** The session is named `goal:<p>/<g>` like the goal's other
   sessions, so the current file that holds a build or a review holds it too.
-- **What it does.** It reads GOAL.md, LOG.md, the pull request and its
-  comments, the programme's README and the code, and does what moves the
-  programme's aim most cheaply: finishes the work itself in the goal's
-  worktree and publishes it (`--status review`), revises GOAL.md and sets it
-  `open` with a `Nästa:`, replaces or drops a wrong goal, or leaves it
+- **What it does.** It reads the goal (its prompt carries it, rendered),
+  LOG.md, the pull request and its comments, the programme's README and the
+  code, and does what moves the programme's aim most cheaply: finishes the
+  work itself in the goal's worktree and publishes it (`--status review`),
+  revises the goal with `mc goal set` and `mc goal criterion add` and sets it
+  `open` with a `Next:`, replaces or drops a wrong goal, or leaves it
   `blocked` with the question for Martin. It never does Martin's acts —
   `mc deploy`, production data, credentials, `--admin`; work that needs one
   waits for an interactive session.
 - **No loop** (`settlePlan`). A goal the session leaves `blocked` — with its
-  own entry or none — gets the runner's entry `Gjort: plan session ended; the
+  own entry or none — gets the runner's entry `Done: plan session ended; the
   goal stays blocked — waits on Martin` (`planHeldText`). A goal whose last
   entry is that one is not `waitsOnPlan`, so it starts nothing until a person
   acts. A goal plan set `open` goes to its next build session; when it goes
@@ -337,31 +405,35 @@ nothing; so does a `waiting` goal.
 
 The role is `canon/roles/build-session.md`, started as `build-session:goal`:
 what every headless build does is written once, in the part the goal and the
-project start share, and the `goal` part keeps only what is a goal's — GOAL.md
-and LOG.md. It works on the branch as it is, never
+project start share, and the `goal` part keeps only what is a goal's — its
+brief, LOG.md and the criterion verbs. It works on the branch as it is, never
 fetching or merging `origin/main` to keep up: a conflict the merger reports
 is the one time a build merges `origin/main`. It works item after item until
 the criteria hold, and ends at a boundary between two only when the work is
 done, when it is blocked, or when its turns cost more than a fresh session
 reading the log would — a finished part that reads well is not a reason to
-stop. It runs `mc gate`, commits, and publishes with `mc publish --no-merge`. It ends with `mc goal log`, adding `--status review`
-when the criteria hold and the pull request carries them, or `--status blocked`
+stop. It runs each criterion's check and records the ones that hold with
+`mc goal criterion met <n>`. It runs `mc gate`, commits, and publishes with
+`mc publish --no-merge`. It ends with `mc goal log`, adding `--status review`
+when every criterion is met and the pull request carries them, or `--status blocked`
 when it cannot go on. A build session publishes, and never merges or sets
 `done`.
 
 ## What a review session does
 
 The role (`canon/roles/review-session.md`, its `goal` part) judges and never builds: it does not
-edit, commit, push or comment-fix. It reads GOAL.md, LOG.md and the pull
-request's diff against `origin/main`, and checks, in order:
+edit, commit, push or comment-fix. It reads the goal (its prompt carries it,
+rendered), LOG.md and the pull request's diff against `origin/main`, and
+checks, in order:
 
-- **Goal** — each criterion, with evidence it saw itself (`mc gate`, `mc`,
-  `mc shot`, the code). A builder's claim is not evidence.
+- **Goal** — each criterion: it runs the criterion's check itself (`mc gate`,
+  `mc`, `mc shot`, the code) and answers red when one does not hold, whatever
+  its `met` says. A builder's claim — `met` included — is not evidence.
 - **Structure** — the change fits where it sits, no duplication, the right
   altitude, readable names, the documents the goal names updated.
 - **Bugs** — edge cases, error paths and regressions in what the diff touches.
 
-It writes one entry — `Gjort:` `green <sha>` or `red <sha>`; `Kommentar:` each
+It writes one entry — `Done:` `green <sha>` or `red <sha>`; `Comment:` each
 criterion met or not met with its evidence, then structure, then bugs — with
 `--status review` for green and `--status blocked` for red, and posts the same
 text on the pull request.
@@ -375,7 +447,7 @@ from other branches — `ios-release/mc-asc` landed in six pull requests across
 memoro and memoro-cli — left the goal for a person to close by hand.
 
 - **A pull request carries its goal.** `mc publish` writes the pull request
-  into the goal's `prs`, with an entry `Gjort: published <repo>#<n>`, when it
+  into the goal's `prs`, with an entry `Done: published <repo>#<n>`, when it
   knows the goal: `--goal <p>/<g>`, else `MC_GOAL`, else the goal whose
   worktree it stands in (`goalOfPath`), else the one goal named as a
   `goal/<g>` branch is. A `--goal` that is no goal is refused before the push;
@@ -405,8 +477,14 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 
 A goal's job carries the goal and the head its review judged (`merge-queue.js`
 `goal`, `sha`); a job without one answers to the goal whose `prs` name it
-(*Done when its work has landed*). The merger (`tellGoal`):
+(*Done when its work has landed*). The merger (`landJob`, `tellGoal`):
 
+- **Lands only a goal whose criteria hold.** Before any round, a job whose goal
+  has a criterion not met — or none — is answered red, `stopped_at:
+  unmet-criteria`, with the criteria named (`unmetGoalWords`), as
+  `criteriaDoor` (`merge-boundary.js`) refuses a plan's last step. The goal is
+  `blocked` as on any red, and waits on plan. A goal the merger cannot read is
+  not checked.
 - **Lands only that head.** It asks GitHub for the head before the round; a
   head that has moved is answered `moved` with no round spent, and a push
   while the round runs is `moved` too. A moved job leaves the queue and the
@@ -428,8 +506,8 @@ head; that is a person's act, and its landing still sets the goal `done`.
   never picked for a session, never woken for plan; `mc goal open` refuses it.
   The runner opens it when every after-goal has landed.
 - `open` — picked for a build session. Only plan or a person sets a blocked
-  goal open again, after reading the entry, revising GOAL.md if needed and
-  writing `Nästa:`.
+  goal open again, after reading the entry, revising the goal if needed and
+  writing `Next:`.
 - `review` — set by a build session; picked for a review session, or waiting
   for the merger once its green is queued.
 - `blocked` — set by a session that cannot go on, by a red review, by the
@@ -449,9 +527,9 @@ head; that is a person's act, and its landing still sets the goal `done`.
 
 ## What a goal does not have
 
-- **No steps.** No `PLAN.json`, no `mc step`, no `mc project`. Criteria are text
-  in GOAL.md.
-- **No register.** mc writes the status line, LOG.md, the current file while a
+- **No steps.** No `PLAN.json`, no `mc step`, no `mc project`. Criteria are
+  data in GOAL.json, met when a session has run the check.
+- **No register.** mc writes GOAL.json, LOG.md, the current file while a
   session runs, and the `runs.tsv` row. Nothing else.
 - **No owner, lease, revision or capability report.** Anyone may work in the
   worktree; the last entry says what was done.

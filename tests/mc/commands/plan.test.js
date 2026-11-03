@@ -59,7 +59,7 @@ describe('the plan role', () => {
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /full freedom/u);
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
-    assert.match(told, /A goal \(`GOAL\.md`\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
+    assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
     assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
     assert.match(told, /Every status is yours to set/u);

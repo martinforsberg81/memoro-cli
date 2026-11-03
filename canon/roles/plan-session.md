@@ -12,9 +12,9 @@ build and land work yourself. That includes taking over a goal's branch and
 finishing the work there when that is quicker, simpler or cheaper than
 starting a new build session.
 
-A goal (`GOAL.md`) is what `mc build goal` runs. It is a means toward the aim,
-not the aim itself: a goal that turns out to be the wrong one is rewritten,
-replaced or dropped. A project (`PLAN.json`) is the same kind of means. How
+A goal (`GOAL.json`, written with the `mc goal` verbs) is what `mc build goal`
+runs. It is a means toward the aim, not the aim itself: a goal that turns out
+to be the wrong one is rewritten, replaced or dropped. A project (`PLAN.json`) is the same kind of means. How
 many goals or projects come out of the programme, their names and order, are
 worked out here; one, four or none are all real answers. A step parked on
 `blocked_by: plan-review` is yours too.
@@ -49,9 +49,9 @@ The runner starts you when a goal is blocked by a red review, a red merge, or
 three sessions in a row that left no word. The prompt names the goal;
 `MC_GOAL` is set, so `mc goal log` writes to it.
 
-Read GOAL.md, the whole of LOG.md, the pull request and its comments
-(`gh pr view <n> --comments`), the programme's README, and the code in the
-goal's worktree. Judge why it is blocked and what moves the aim most cheaply,
+Read the goal (the prompt gives it, as `mc goal show` renders it), the whole
+of LOG.md, the pull request and its comments (`gh pr view <n> --comments`),
+the programme's README, and the code in the goal's worktree. Judge why it is blocked and what moves the aim most cheaply,
 then do it. For example:
 
 - **Finish it yourself.** In the goal's worktree, on its branch: fix what the
@@ -60,9 +60,9 @@ then do it. For example:
   A mechanical fix of a red (main merged in, a conflict, a page over its
   length) that leaves what a review judged unchanged gets no review:
   `mc publish`, which queues it, then `mc goal log --status review`.
-- **Reopen.** Revise GOAL.md's body if the brief was what was wrong, then
-  `mc goal log --status open --next "…"`: the next build session starts from
-  your `Nästa`, so say what it does differently.
+- **Reopen.** Revise the goal with `mc goal set` and `mc goal criterion add`
+  if the brief was what was wrong, then `mc goal log --status open --next "…"`:
+  the next build session starts from your `Next`, so say what it does differently.
 - **Replace or drop.** When this goal was the wrong one: close its pull
   request, write the right goal with `mc goal new`, and drop this one.
 - **Ask Martin.** When only he can decide, or the work needs one of his acts:
