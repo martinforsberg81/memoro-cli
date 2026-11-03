@@ -1682,3 +1682,52 @@ describe('a goal\'s pull request (goals.js): done at landing, blocked on red, re
     assert.deepEqual(queue(), []);
   });
 });
+
+describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is told, whoever queued it', () => {
+  const DIR = '/programs/ios/goals/asc';
+  const goalAt = (prs, status = 'review') => [{ programme: 'ios', goal: 'asc', dir: DIR, status, prs, problems: [] }];
+  const PLAIN_JOB = { repo: 'memoro', repo_path: '/repos/memoro', pr: 14761, branch: 'fix-json', holder: { name: 'person' }, step: null, goal: null, sha: null };
+  const record = () => {
+    const sets = [];
+    const notes = [];
+    return { sets, notes, setGoal: (call) => { sets.push(call); return { goal: {} }; }, noteGoal: (call) => { notes.push(call); } };
+  };
+  const openGh = () => ({ status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: 'aaa111' }) });
+
+  it('landed, and the goal carries nothing else: done', async () => {
+    const r = record();
+    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }]) });
+    const [answer] = await landJob(PLAIN_JOB, m.deps);
+    assert.equal(answer.landed, true);
+    assert.equal(r.sets.length, 1);
+    assert.equal(r.sets[0].dir, DIR);
+    assert.equal(r.sets[0].status, 'done');
+    assert.equal(r.sets[0].entry.done, 'landed #14761 as abc1234def');
+  });
+
+  it('landed, while the goal carries another pull request: the landing is logged, the status left for the runner', async () => {
+    const r = record();
+    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro-cli', pr: 1238 }, { repo: 'memoro', pr: 14761 }]) });
+    await landJob(PLAIN_JOB, m.deps);
+    assert.equal(r.sets.length, 0);
+    assert.equal(r.notes.length, 1);
+    assert.equal(r.notes[0].entry.status, 'review', 'the heading keeps the goal\'s status');
+    assert.match(r.notes[0].entry.done, /^memoro#14761 landed #14761 as abc1234def$/u);
+    assert.match(r.notes[0].entry.comment, /carries memoro-cli#1238 too — done when every one has landed or closed/u);
+  });
+
+  it('red: the goal is blocked and waits on plan, as its own branch\'s red does', async () => {
+    const r = record();
+    const m = machine([red], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }]) });
+    await landJob(PLAIN_JOB, m.deps);
+    assert.equal(r.sets[0].status, 'blocked');
+    assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
+  });
+
+  it('a pull request no goal carries tells no goal', async () => {
+    const r = record();
+    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro-cli', pr: 14761 }]) });
+    await landJob(PLAIN_JOB, m.deps);
+    assert.deepEqual([r.sets.length, r.notes.length], [0, 0]);
+  });
+});

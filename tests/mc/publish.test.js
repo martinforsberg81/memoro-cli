@@ -137,6 +137,55 @@ describe('mc publish', () => {
     assert.match(out.stdout, /GitHub holds ccccccc[^\n]*\nnext: mc merge memoro 9\n$/u);
   });
 
+  describe('the goal a pull request carries (goal-lifecycle)', () => {
+    const HOME = '/programs';
+    const GDIR = `${HOME}/ios/goals/asc`;
+    const GOAL = '---\nstatus: review\nrepos: memoro, memoro-cli\nclass: large\n---\n# asc\n';
+    /** A goal file model beside the publish fixture. */
+    const withGoal = (over = {}) => {
+      const f = fixture(over.fixture);
+      const files = { [`${GDIR}/GOAL.md`]: GOAL, [`${GDIR}/LOG.md`]: '' };
+      Object.assign(f.deps, {
+        home: HOME, now: () => new Date('2026-11-03T09:00:00Z'),
+        readGoal: (path) => files[path] ?? null, writeGoal: (path, text) => { files[path] = text; },
+        listGoals: (path) => (path === HOME ? ['ios'] : path === `${HOME}/ios/goals` ? ['asc'] : []),
+        ...over.deps,
+      });
+      return { ...f, files };
+    };
+
+    it('--goal writes the pull request into the goal\'s prs, with an entry, and still queues it', async () => {
+      const f = withGoal();
+      assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
+      assert.match(f.files[`${GDIR}/GOAL.md`], /\nprs: memoro#9\n---\n/u);
+      assert.match(f.files[`${GDIR}/LOG.md`], /· person · review\n\nGjort: published memoro#9\n/u);
+      assert.match(f.out.stdout, /goal ios\/asc carries memoro#9 — done when every pull request it carries has landed\n/u);
+      assert.deepEqual(f.out.merged, [['memoro', '9']]);
+    });
+
+    it('MC_GOAL, the goal worktree it stands in, or a goal/<g> branch name the goal too', async () => {
+      const byEnv = withGoal({ deps: { env: { MC_GOAL: 'ios/asc' } } });
+      assert.equal(await run([], byEnv.deps), 0, byEnv.out.stderr);
+      assert.match(byEnv.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+      const byPath = withGoal({ deps: { cwd: `${GDIR}/memoro` } });
+      assert.equal(await run([], byPath.deps), 0, byPath.out.stderr);
+      assert.match(byPath.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+      const byBranch = withGoal({ fixture: { branch: 'goal/asc' } });
+      assert.equal(await run([], byBranch.deps), 0, byBranch.out.stderr);
+      assert.match(byBranch.files[`${GDIR}/GOAL.md`], /prs: memoro#9/u);
+    });
+
+    it('no goal named, none written; a --goal that is no goal is refused before the push', async () => {
+      const none = withGoal();
+      assert.equal(await run([], none.deps), 0);
+      assert.doesNotMatch(none.files[`${GDIR}/GOAL.md`], /prs:/u);
+      const wrong = withGoal();
+      assert.equal(await run(['--goal', 'ios/nope'], wrong.deps), 2);
+      assert.match(wrong.out.stderr, /--goal ios\/nope is not a goal/u);
+      assert.deepEqual(wrong.out.pushed, []);
+    });
+  });
+
   it('finds the open pull request rather than opening a second, edits it only when asked, and skips a push the remote already has', async () => {
     const same = fixture({ remote: 'aaaaaaa1111\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: 'Intro\n\n<!-- mc:described aaaaaaa1111 -->' });
     assert.equal(await run([], same.deps), 0);

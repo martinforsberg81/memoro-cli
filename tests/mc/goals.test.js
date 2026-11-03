@@ -72,8 +72,8 @@ test('parseGoal reads the front matter and the title, and keeps the body as it i
 
 test('parseGoal names each problem: no front matter, a status or class unknown, no repository, a bad repository name', () => {
   assert.deepEqual(parseGoal('# no front matter\n').problems, ['GOAL.md has no front matter between --- lines']);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, waiting, not started/u);
-  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, waiting, not missing/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open', 'status: started')).problems.join(), /status is open, review, blocked, done, waiting, dropped, not started/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('status: open\n', '')).problems.join(), /status is open, review, blocked, done, waiting, dropped, not missing/u);
   assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: huge')).problems.join(), /class is fast or large, not huge/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: ')).problems.join(), /repos names no repository/u);
   assert.match(parseGoal(GOAL_TEXT.replace('repos: memoro-cli, memoro', 'repos: Memoro_CLI')).problems.join(), /repo Memoro_CLI is not a repository name/u);
@@ -298,4 +298,59 @@ test('afterCycle finds a ring of goals waiting on each other', () => {
   assert.equal(afterCycle('mc/c', ['mc/a'], goals), 'mc/a');
   assert.equal(afterCycle('mc/c', ['mc/x'], goals), null);
   assert.equal(afterCycle('mc/d', ['mc/a'], goals), null);
+});
+
+/* ------------------------------------------------ prs, done at landing, archive (goal-lifecycle) */
+
+test('prs: <repo>#<n> each once, written back after created and after; a bad one is a problem', async () => {
+  const { prRef } = await import('../../src/mc/goals.js');
+  const text = GOAL_TEXT.replace('class: large', 'class: large\nprs: memoro#14761, memoro-cli#1238, memoro#14761');
+  const goal = parseGoal(text);
+  assert.deepEqual(goal.prs, [{ repo: 'memoro', pr: 14761 }, { repo: 'memoro-cli', pr: 1238 }]);
+  assert.match(renderGoal(goal), /\nprs: memoro#14761, memoro-cli#1238\n---\n/u);
+  assert.deepEqual(parseGoal(GOAL_TEXT).prs, []);
+  assert.doesNotMatch(renderGoal(parseGoal(GOAL_TEXT)), /prs:/u);
+  assert.match(parseGoal(GOAL_TEXT.replace('class: large', 'class: large\nprs: 14761')).problems.join(), /prs 14761 is not <repo>#<number>/u);
+  assert.equal(prRef({ repo: 'memoro', pr: 3 }), 'memoro#3');
+});
+
+test('prsLanded: done when every pull request landed or closed and one landed; open or unknown is not', async () => {
+  const { prsLanded } = await import('../../src/mc/goals.js');
+  const prs = [{ repo: 'memoro', pr: 1 }, { repo: 'memoro-cli', pr: 2 }];
+  const states = (map) => ({ repo, pr }) => map[`${repo}#${pr}`] ?? null;
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'MERGED' })).done, true);
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'CLOSED' })).done, true);
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).done, false);
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED' })).done, false, 'unknown is not done');
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'CLOSED', 'memoro-cli#2': 'CLOSED' })).done, false, 'nothing landed');
+  assert.equal(prsLanded([], () => 'MERGED').done, false);
+  assert.deepEqual(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).open, ['memoro-cli#2']);
+});
+
+test('goalOfPr and goalOfPath find the goal a pull request or a worktree is', async () => {
+  const { goalOfPath, goalOfPr } = await import('../../src/mc/goals.js');
+  const goals = [{ programme: 'mc', goal: 'a', prs: [] }, { programme: 'ios', goal: 'b', prs: [{ repo: 'memoro', pr: 7 }] }];
+  assert.equal(goalOfPr(goals, 'memoro', 7).goal, 'b');
+  assert.equal(goalOfPr(goals, 'memoro-cli', 7), null);
+  assert.deepEqual(goalOfPath('/p/mc/goals/a/memoro-cli/src', '/p'), { programme: 'mc', goal: 'a' });
+  assert.equal(goalOfPath('/p/mc/goals/a', '/p'), null, 'the goal directory is no worktree');
+  assert.equal(goalOfPath('/elsewhere/mc/goals/a/memoro', '/p'), null);
+  assert.equal(goalOfPath('/p/mc/memoro-cli', '/p'), null);
+});
+
+test('addPr writes a pull request into prs once, with its entry', async () => {
+  const { addPr } = await import('../../src/mc/goals.js');
+  const files = { [`/g/${GOAL_FILE}`]: GOAL_TEXT, [`/g/${LOG_FILE}`]: '' };
+  const io = { read: (path) => files[path] ?? null, write: (path, text) => { files[path] = text; } };
+  const entry = { at: '2026-11-03T09:00Z', tool: 'person', model: null, status: 'open', done: 'published memoro#1', comment: null, next: null };
+  assert.equal(addPr({ dir: '/g', repo: 'memoro', pr: 1, entry, ...io }).added, true);
+  assert.equal(addPr({ dir: '/g', repo: 'memoro', pr: 1, entry, ...io }).added, false);
+  assert.deepEqual(parseGoal(files[`/g/${GOAL_FILE}`]).prs, [{ repo: 'memoro', pr: 1 }]);
+  assert.equal(parseLog(files[`/g/${LOG_FILE}`]).length, 1);
+});
+
+test('goalLogRow: one table row, its pipes escaped, the last Gjort', async () => {
+  const { goalLogRow } = await import('../../src/mc/goals.js');
+  const log = [{ done: 'first' }, { done: 'a | b\nc' }, { done: null }];
+  assert.equal(goalLogRow({ date: '2026-11-03', goal: 'g', status: 'done', prs: [{ repo: 'memoro', pr: 1 }], log }), '| 2026-11-03 | g | done | memoro#1 | a \\| b c |');
 });

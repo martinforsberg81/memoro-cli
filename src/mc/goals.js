@@ -15,7 +15,7 @@
  * under it.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
 import { programsHome } from './paths.js';
@@ -28,12 +28,21 @@ export const GOALS_DIR = 'goals';
 /**
  * `status` is one of these; a goal starts `open`, or `waiting` when it names
  * goals in `after` that have not landed. A build session ends a goal it holds
- * met in `review`; the review session sets `blocked` on red; the merger sets
- * `done` when the pull request lands. Only a person sets `done` by hand, and
- * only plan sets a blocked goal `open` again. `waiting` is the runner's to
- * release (`waitingMoves`): no session is started on it and nothing wakes plan.
+ * met in `review`; the review session sets `blocked` on red; the merger or the
+ * runner sets `done` when every pull request the goal carries (`prs`) has
+ * landed. Only a person sets `done` by hand, and only plan sets a blocked goal
+ * `open` again. `waiting` is the runner's to release (`waitingMoves`): no
+ * session is started on it and nothing wakes plan. `dropped` is a goal let go
+ * without landing — a person's or plan's word, never done: a goal that starts
+ * after it does not start (`afterOf` reads it as gone).
  */
-export const STATUSES = ['open', 'review', 'blocked', 'done', 'waiting'];
+export const STATUSES = ['open', 'review', 'blocked', 'done', 'waiting', 'dropped'];
+/** The statuses a goal ends in; only a goal in one of them is archived. */
+export const FINISHED = ['done', 'dropped'];
+/** Where an archived goal goes, under its programme's `goals/`: a dot-directory, so `listDirsOf` leaves it out. */
+export const ARCHIVE_DIR = '.archive';
+/** The file under a programme's `goals/` with one row per archived goal. */
+export const GOAL_LOG_FILE = 'goal_log.md';
 /** The role a goal's review session runs with: `canon/roles/goal-review.md`. */
 export const REVIEW_ROLE = 'goal-review';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
@@ -66,8 +75,21 @@ export function isGoalRef(name) {
   return parts.length === 2 && NAME_RE.test(parts[0]) && NAME_RE.test(parts[1]);
 }
 
+/** `<repo>#<n>`: how a goal's front matter names one of its pull requests. */
+export function prRef({ repo, pr }) {
+  return `${repo}#${pr}`;
+}
+
+const PR_REF = /^([a-z0-9][a-z0-9-]*)#(\d+)$/u;
+
+/** `{ repo, pr }` of `<repo>#<n>`, or null. */
+export function parsePrRef(text) {
+  const match = String(text ?? '').trim().replace(/^#/u, '').match(PR_REF);
+  return match ? { repo: match[1], pr: Number(match[2]) } : null;
+}
+
 /**
- * A GOAL.md, as `{ status, repos, class, created, after, title, body }`, or
+ * A GOAL.md, as `{ status, repos, class, created, after, prs, title, body }`, or
  * `{ problems }` when it does not parse. `body` is everything after the front
  * matter, untouched; `title` is its first `# ` line, or null. `repos` is the
  * comma-separated list in order, the first being where a session starts.
@@ -91,16 +113,25 @@ export function parseGoal(text) {
   for (const repo of repos) if (!NAME_RE.test(repo)) problems.push(`repo ${repo} is not a repository name — lower-case letters, digits and hyphens`);
   const after = [...new Set((fields.after ?? '').split(',').map((name) => name.trim()).filter(Boolean))];
   for (const name of after) if (!isGoalRef(name)) problems.push(`after ${name} is not <programme>/<goal>`);
+  // The pull requests that carry the goal's work (`mc publish`, `mc goal pr`):
+  // the goal is done when every one has landed or closed and one has landed.
+  const prs = [];
+  for (const text of (fields.prs ?? '').split(',').map((item) => item.trim()).filter(Boolean)) {
+    const ref = parsePrRef(text);
+    if (!ref) problems.push(`prs ${text} is not <repo>#<number>`);
+    else if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
+  }
   if (problems.length) return { problems };
   const title = body.match(/^# (.+)$/mu)?.[1].trim() ?? null;
-  return { status: fields.status, repos, class: fields.class, created: fields.created || null, after, title, body };
+  return { status: fields.status, repos, class: fields.class, created: fields.created || null, after, prs, title, body };
 }
 
-/** GOAL.md's text for a goal of the shape `parseGoal` gives. The body is written as it is; no `after`, no line. */
-export function renderGoal({ status, repos, class: cls, created, after = [], body }) {
+/** GOAL.md's text for a goal of the shape `parseGoal` gives. The body is written as it is; no `after` or `prs`, no line. */
+export function renderGoal({ status, repos, class: cls, created, after = [], prs = [], body }) {
   const front = [`status: ${status}`, `repos: ${repos.join(', ')}`, `class: ${cls}`];
   if (created) front.push(`created: ${created}`);
   if (after.length) front.push(`after: ${after.join(', ')}`);
+  if (prs.length) front.push(`prs: ${prs.map(prRef).join(', ')}`);
   return `---\n${front.join('\n')}\n---\n${body}`;
 }
 
@@ -164,7 +195,7 @@ export function sessions(log) {
 
 /**
  * Every goal under every programme, in listing order, each as
- * `{ programme, goal, dir, status, repos, class, created, after, title, log, problems }`.
+ * `{ programme, goal, dir, status, repos, class, created, after, prs, title, log, problems }`.
  * A goal whose GOAL.md does not parse is listed with `problems` and no status.
  * A directory without a GOAL.md is not a goal and is skipped.
  */
@@ -180,9 +211,9 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
       const parsed = parseGoal(text);
       const base = { programme, goal, dir, log };
       if (parsed.problems) {
-        goals.push({ ...base, status: null, repos: [], class: null, created: null, after: [], title: null, problems: parsed.problems });
+        goals.push({ ...base, status: null, repos: [], class: null, created: null, after: [], prs: [], title: null, problems: parsed.problems });
       } else {
-        goals.push({ ...base, status: parsed.status, repos: parsed.repos, class: parsed.class, created: parsed.created, after: parsed.after, title: parsed.title, problems: [] });
+        goals.push({ ...base, status: parsed.status, repos: parsed.repos, class: parsed.class, created: parsed.created, after: parsed.after, prs: parsed.prs, title: parsed.title, problems: [] });
       }
     }
   }
@@ -289,8 +320,9 @@ export function planDue(goal) {
  * Where a goal's `after` stands, against `goals` (`programsGoals`' answer):
  * `{ landed, pending, gone }`, each a list of `<programme>/<goal>`. Landed is
  * `done`; gone is no goal there any more — its directory or GOAL.md removed,
- * which is how a goal is discarded or archived; pending is everything else,
- * a `blocked` or unparsable one included: it may still land.
+ * which is how a goal is discarded or archived — or one `dropped`, which never
+ * lands; pending is everything else, a `blocked` or unparsable one included:
+ * it may still land.
  */
 export function afterOf(goal, goals) {
   const byName = new Map(goals.map((other) => [`${other.programme}/${other.goal}`, other]));
@@ -299,7 +331,7 @@ export function afterOf(goal, goals) {
   const gone = [];
   for (const name of goal.after ?? []) {
     const other = byName.get(name);
-    if (!other) gone.push(name);
+    if (!other || other.status === 'dropped') gone.push(name);
     else if (other.status === 'done') landed.push(name);
     else pending.push(name);
   }
@@ -419,6 +451,80 @@ export function remakeUnbuiltBranches({ git, dir, goal, repos, say }) {
       : `left as it is — ${moved.stderr.trim() || 'git reset --keep refused'}`);
   }
 }
+
+/**
+ * The goal that carries `repo`'s pull request `pr` in its `prs`, of `goals`
+ * (`programsGoals`' answer), or null. A pull request carries one goal; were
+ * two to name it, the first listed is the one.
+ */
+export function goalOfPr(goals, repo, pr) {
+  return goals.find((goal) => (goal.prs ?? []).some((item) => item.repo === repo && item.pr === Number(pr))) ?? null;
+}
+
+/**
+ * Where a goal's pull requests stand, from `stateOf({ repo, pr })` — GitHub's
+ * `OPEN`, `MERGED` or `CLOSED`, or null when it cannot say: `{ landed, open,
+ * closed, unknown }`, each a list of `<repo>#<n>`, and `done` — every one has
+ * landed or closed, at least one landed, none unknown. A goal with no `prs` is
+ * never done here: only the merger's answer on its own branch, or a person, says so.
+ */
+export function prsLanded(prs, stateOf) {
+  const out = { landed: [], open: [], closed: [], unknown: [] };
+  for (const item of prs ?? []) {
+    const state = stateOf(item);
+    const key = state === 'MERGED' ? 'landed' : state === 'OPEN' ? 'open' : state === 'CLOSED' ? 'closed' : 'unknown';
+    out[key].push(prRef(item));
+  }
+  return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.unknown.length === 0 };
+}
+
+/**
+ * The goal whose worktree `cwd` stands in, as `{ programme, goal }`: a path
+ * `<home>/<programme>/goals/<goal>/<repo>/…`. Null anywhere else. How `mc
+ * publish` knows the goal of a session a person opened in a goal's worktree.
+ */
+export function goalOfPath(cwd, home) {
+  const rel = relative(home, cwd);
+  if (!rel || rel.startsWith('..')) return null;
+  const [programme, dir, goal, repo] = rel.split(sep);
+  if (dir !== GOALS_DIR || !repo || !NAME_RE.test(programme ?? '') || !NAME_RE.test(goal ?? '')) return null;
+  return { programme, goal };
+}
+
+/**
+ * The goal's front matter with `repo`'s pull request `pr` added to `prs`, and
+ * `entry` appended to its log; nothing written when it is already there.
+ * Returns `{ added, goal }`, or `{ problems }` when GOAL.md does not parse.
+ */
+export function addPr({ dir, repo, pr, entry, read = readTextOrNull, write = writeFileAtomic }) {
+  const path = join(dir, GOAL_FILE);
+  const parsed = parseGoal(read(path) ?? '');
+  if (parsed.problems) return { problems: parsed.problems };
+  if (parsed.prs.some((item) => item.repo === repo && item.pr === Number(pr))) return { added: false, goal: parsed };
+  const goal = { ...parsed, prs: [...parsed.prs, { repo, pr: Number(pr) }] };
+  write(path, renderGoal(goal));
+  if (entry) appendEntry({ dir, entry, read, write });
+  return { added: true, goal };
+}
+
+/** The archive directory of one programme's goals: `<home>/<programme>/goals/.archive`. */
+export function archiveDirIn(home, programme) {
+  return join(home, programme, GOALS_DIR, ARCHIVE_DIR);
+}
+
+/**
+ * The row `mc goal archive` appends to `goals/goal_log.md`: date, goal,
+ * status, pull requests, and the last `Gjort:` the log has. A `|` in the text
+ * is escaped so the row stays one table row.
+ */
+export function goalLogRow({ date, goal, status, prs, log }) {
+  const cell = (text) => String(text ?? '—').replace(/\s*\n\s*/gu, ' ').replace(/\|/gu, '\\|');
+  const done = [...(log ?? [])].reverse().find((entry) => entry.done)?.done ?? null;
+  return `| ${date} | ${cell(goal)} | ${status} | ${cell((prs ?? []).map(prRef).join(' ') || '—')} | ${cell(done)} |`;
+}
+
+/** `goal_log.md`'s heading and table head, written when the file is new. */
+export const GOAL_LOG_HEAD = '# Archived goals\n\nOne row per goal `mc goal archive` moved to `.archive/`.\n\n| Archived | Goal | Status | Pull requests | Last done |\n|---|---|---|---|---|\n';
 
 /** `2026-11-01T21:30Z`: the minute a log entry is stamped with. */
 export function logStamp(date) {
