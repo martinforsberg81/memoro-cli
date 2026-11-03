@@ -4,8 +4,9 @@
  * The bare verb is **the desk**: a foreground session standing in
  * `~/mc/helper/` — resumed if one is there, fresh with `--new` or when there
  * is none — with Martin in it, whose whole job is to take what he says
- * is broken or should be better and write it down as a proposal in
- * `~/mc/proposals/`. It reads no digest and it does not touch the
+ * is broken or should be better and write it down as a proposal in the
+ * `proposals/` of the programme that owns it, or `~/mc/proposals/` when none
+ * does. It reads no digest and it does not touch the
  * proposals already waiting — adding is all it does.
  *
  * `--intake` is **the eye**: the script that reads the five sources memoro
@@ -26,7 +27,8 @@ import {
   collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, HELPER_REPOS, proposalsDir,
   unreadableSections,
 } from '../helper-collect.js';
-import { describeTurn, drainIntake } from '../helper-turn.js';
+import { describeTurn, drainIntake, NO_DESCRIPTION, programmeRoutes } from '../helper-turn.js';
+import { programsHome } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
@@ -145,7 +147,9 @@ export async function run(argv, deps = {}) {
   if (drained.left) stdout.write(`mc: ${drained.left} more in the inbox — run it again to take the next ${INTAKE_PER_ROUND}\n`);
   // Only when there is something to read. A quiet day that still points at
   // the proposals directory is a line that trains people to ignore the line.
-  if (wrote) stdout.write(`mc: read them at the next brief — ${proposalsDir()}\n`);
+  // Each lands where its programme's plan session reads it; the turn's own
+  // line above already named where each one went.
+  if (wrote) stdout.write(`mc: each programme's plan session reads its own — ${programsHome()}/<programme>/proposals, the rest in ${proposalsDir()}\n`);
   return worst;
 }
 
@@ -179,9 +183,12 @@ async function openDesk({ flags, stdout, stderr, deps }) {
   const mkdir = deps.mkdir || mkdirSync;
   mkdir(dir, { recursive: true });
   mkdir(proposals, { recursive: true });
-  stdout.write(`mc: ${dir} — tell it what is broken; proposals land in ${proposals}\n`);
+  const programs = programsHome();
+  stdout.write(`mc: ${dir} — tell it what is broken; proposals land in ${programs}/<programme>/proposals, or ${proposals} when no programme owns it\n`);
 
-  const launch = helperLaunch({ proposalsPath: proposals, role });
+  const launch = helperLaunch({
+    proposalsPath: proposals, programsPath: programs, programmes: (deps.routes || programmeRoutes)(), role,
+  });
   const opened = await (deps.open || openInWorkArea)({
     areaRoot: dir,
     worktree: { repo: null, path: dir, is_git: false },
@@ -211,15 +218,22 @@ async function openDesk({ flags, stdout, stderr, deps }) {
  * filenames need and the one instruction the role does not already carry:
  * ask first, write after.
  */
-export function helperLaunch({ proposalsPath = proposalsDir(), role = null, now = new Date() } = {}) {
+export function helperLaunch({
+  proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], role = null, now = new Date(),
+} = {}) {
   const date = now.toISOString().slice(0, 10);
-  const prompt = [
+  const lines = [
     `Today is ${date}. Martin is here with something that is broken, or something he wants better.`,
-    'Take his report. Ask only what you cannot read for yourself, then write it into',
-    `\`${proposalsPath}\` as \`${date}-<mc|memoro>-<slug>.md\` in the shape your role gives.`,
+    'Take his report. Ask only what you cannot read for yourself, then write it as',
+    `\`${date}-<mc|memoro>-<slug>.md\` in the shape your role gives, into the programme that owns the question:`,
+    `\`${programsPath}/<programme>/proposals/\`. When no programme owns it, it goes in \`${proposalsPath}\`.`,
     '',
-    'Open by asking what he has. Write nothing until you have it.',
-  ].join('\n');
+    'The programmes, one line each:',
+  ];
+  if (!programmes.length) lines.push('_none_');
+  else for (const p of programmes) lines.push(`- ${p.name} — ${p.line || NO_DESCRIPTION}`);
+  lines.push('', 'Open by asking what he has. Write nothing until you have it.');
+  const prompt = lines.join('\n');
   return { prompt, overlay: role?.overlay || null, model: role?.model || null };
 }
 

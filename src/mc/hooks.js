@@ -165,7 +165,7 @@ export function programmeProposalCount(programme, env = process.env) {
 export function sessionStartContext({ cwd, inside, states, env = process.env, synced = [] }) {
   const identity = sessionIdentity({ cwd, env });
   const lines = [sessionRoleLine(identity, { cwd, env })];
-  const waiting = identity.role === PLAN_ROLE &&identity.programme ? programmeProposalCount(identity.programme, env) : 0;
+  const waiting = identity.role === PLAN_ROLE && identity.programme ? programmeProposalCount(identity.programme, env) : 0;
   if (waiting) {
     lines.push(`${waiting} proposal${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} in ~/mc/programs/${identity.programme}/proposals/ — take a stand on each (your role says how).`);
   }
