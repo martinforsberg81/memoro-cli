@@ -495,10 +495,9 @@ or a workarea, which somebody has to open.
 | `done` | grey |
 | no plan | grey |
 
-A goal's row (`g · <goal>`) uses the same words' colours: `waiting` — its
-`after` has not landed, and the runner opens it when it has
-([mc-goals.md](mc-goals.md)) — is yellow, and so is the `waits on <p>/<g>`
-that leads its tail; `blocked` is red; `review` is green; `open` is green
+A goal's row (`g · <goal>`) uses the same words' colours: a goal in a phase
+its programme has not reached ([mc-goals.md](mc-goals.md), *Phases*) leads its
+tail with `phase <n> — after phase <n-1>` in yellow; `blocked` is red; `review` is green; `open` is green
 while a session is on it and grey otherwise; `done` is grey.
 
 Everything else is structure, and structure is quiet. **plain** in the table

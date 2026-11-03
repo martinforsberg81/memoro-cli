@@ -5,19 +5,22 @@
  * `archiveGoal` refuses what `mc goal archive` refuses, with the reason, and
  * touches nothing when it does; otherwise each worktree is removed through git,
  * the goal's branch deleted, its directory moved to `goals/.archive/`, and one
- * row written to `goals/goal_log.md`. The runner calls it once a goal has been
+ * row written to `goals/goal_log.md`; the programme's phases are then
+ * renumbered (`renumberPhases`), so when the last goal of the lowest phase
+ * leaves, the next phase is phase 1. The runner calls it once a goal has been
  * finished for `ARCHIVE_HOLD_MS`, the hold a project under `~/mc/programs/` has
  * too (`project-archive.js`). A programme is never archived by the runner.
  *
  * The rules take what they need as arguments: `git`, `gh`, `known`, `move`,
- * `appendText`, `read` and `now` come from the caller, as goal.js and run.js
+ * `appendText`, `read`, `list`, `write` and `now` come from the caller, as goal.js and run.js
  * hand them over, so the tests use a file model and no repository.
  */
 import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ARCHIVE_HOLD_MS } from './project-archive.js';
-import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, prRef, statusSince } from './goals.js';
+import { archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalLogRow, listDirsOf, prRef, renumberPhases, statusSince } from './goals.js';
+import { writeFileAtomic } from './atomic-write.js';
 import { repoNameOf } from './repos.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -46,20 +49,20 @@ export function moveDir(from, to) {
 }
 
 /**
- * One goal archived, or why not. `goal` is a goal as `programsGoals` gives it
- * and `all` every goal there is. Returns `{ to }` when it moved, else
+ * One goal archived, or why not. `goal` is a goal as `programsGoals` gives it.
+ * Returns `{ to, renumbered }` when it moved — `renumbered` the phase moves
+ * made (`renumberPhases`) — else
  * `{ refused }` with the reason; a refusal touches nothing. What the context
  * holds: `home` (the programmes home), `git(cwd, args)` and `gh(cwd, args)` as
  * `{ ok, stdout, stderr }`, `known()` (the repositories' paths), `move(from, to)`
- * (throws when it fails), `appendText(path, text)`, `read(path)` and `now`, a Date.
+ * (throws when it fails), `appendText(path, text)`, `read(path)`, `list(path)`,
+ * `write(path, text)` and `now`, a Date.
  */
-export function archiveGoal(goal, all, { home, git, gh, known, move = moveDir, appendText, read, now }) {
+export function archiveGoal(goal, { home, git, gh, known, move = moveDir, appendText, read, list = listDirsOf, write = writeFileAtomic, now }) {
   const refuse = (refused) => ({ refused });
   if (goal.problems.length) return refuse(`its GOAL.json does not parse (${goal.problems[0]})`);
   const name = `${goal.programme}/${goal.goal}`;
   if (!FINISHED.includes(goal.status)) return refuse(`it is ${goal.status}; only a done or dropped goal is archived (mc goal drop ${name} --reason "…" lets it go)`);
-  const waiting = all.filter((other) => !FINISHED.includes(other.status) && (other.after ?? []).includes(name)).map((other) => `${other.programme}/${other.goal}`);
-  if (waiting.length) return refuse(`${waiting.join(', ')} start${waiting.length === 1 ? 's' : ''} after it — mc goal after changes that first`);
   const repos = known();
   const bareOf = (repo) => repos.find((path) => repoNameOf(path) === repo) ?? null;
   const branch = `goal/${goal.goal}`;
@@ -112,5 +115,6 @@ export function archiveGoal(goal, all, { home, git, gh, known, move = moveDir, a
   }
   const logPath = join(home, goal.programme, GOALS_DIR, GOAL_LOG_FILE);
   appendText(logPath, `${read(logPath) === null ? GOAL_LOG_HEAD : ''}${goalLogRow({ date: stamp, goal: goal.goal, status: goal.status, prs: goal.prs, log: goal.log })}\n`);
-  return { to };
+  const renumbered = renumberPhases({ home, programme: goal.programme, list, read, write });
+  return { to, renumbered };
 }

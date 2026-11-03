@@ -59,7 +59,7 @@ import {
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
-import { afterOf, goalName, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
+import { goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson, waitsOnPlan } from './goals.js';
 import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
@@ -1491,8 +1491,8 @@ export function programmesSection({
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
- * `after` is the goals it starts after; `waiting_on` those of them that have
- * not landed, which is what a `waiting` goal waits on.
+ * `phase` is its phase; `held` whether a lower phase of its programme is
+ * still to finish (`phaseOpen`), so the runner does not pick it yet.
  */
 export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
   return goals.map((goal) => ({
@@ -1500,8 +1500,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     programme: goal.programme,
     repos: goal.repos,
     status: goal.status,
-    after: goal.after ?? [],
-    waiting_on: afterOf(goal, goals).pending,
+    phase: goal.phase ?? null,
+    held: goal.problems.length === 0 && !['done', 'dropped'].includes(goal.status) && !phaseOpen(goal, goals),
     sessions: goalSessions(goal.log),
     // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
     criteria: criteriaCount(goal),

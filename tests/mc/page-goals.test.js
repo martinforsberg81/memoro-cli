@@ -223,35 +223,33 @@ describe('a goal in review, and one waiting on plan', () => {
   });
 });
 
-describe('a waiting goal', () => {
-  const log = [{ at: '2026-11-02T11:25Z', tool: 'person', model: null, status: 'waiting', done: 'skapat', comment: 'waits on mc/runner-sessions', next: null }];
+describe('a goal in a phase its programme has not reached', () => {
   const goals = [
-    { programme: 'mc', goal: 'goal-waiting', repos: ['memoro-cli'], status: 'done', after: [], log: [], problems: [] },
-    { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], status: 'open', after: [], log: [], problems: [] },
-    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], status: 'waiting', after: ['mc/runner-sessions', 'mc/goal-waiting'], log, problems: [] },
+    { programme: 'mc', goal: 'landed', repos: ['memoro-cli'], status: 'done', phase: 1, log: [], problems: [] },
+    { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], status: 'open', phase: 2, log: [], problems: [] },
+    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], status: 'open', phase: 3, log: [], problems: [] },
   ];
 
-  it('goalsOf gives its after and what of it has not landed, and the page JSON carries both', () => {
+  it('goalsOf gives its phase and whether it is held, and the page JSON carries both', () => {
     const rows = goalsOf({ goals });
     const row = rows.find((each) => each.name === 'headless-plan');
-    assert.equal(row.status, 'waiting');
-    assert.deepEqual(row.after, ['mc/runner-sessions', 'mc/goal-waiting']);
-    assert.deepEqual(row.waiting_on, ['mc/runner-sessions']);
-    assert.deepEqual(rows.find((each) => each.name === 'runner-sessions').waiting_on, []);
+    assert.equal(row.status, 'open', 'it keeps its status');
+    assert.equal(row.phase, 3);
+    assert.equal(row.held, true);
+    assert.equal(rows.find((each) => each.name === 'runner-sessions').held, false, 'the phase in progress is not held');
 
     const section = programmesSection({ plans: PLANS, areas: [], goalRows: rows, now: NOW });
     const json = JSON.parse(JSON.stringify(section));
     const listed = json.programmes.flatMap((group) => group.goals ?? []).find((goal) => goal.name === 'headless-plan');
-    assert.equal(listed.status, 'waiting');
-    assert.deepEqual(listed.waiting_on, ['mc/runner-sessions']);
+    assert.equal(listed.phase, 3);
+    assert.equal(listed.held, true);
   });
 
-  it('the page draws waiting in the projects\' waiting colour, and what it waits on first', () => {
+  it('the page leads its tail with the phase it waits on, in the projects\' waiting colour', () => {
     const data = pageData({ programmes: programmesSection({ plans: PLANS, areas: [], goalRows: goalsOf({ goals }), now: NOW }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
     const row = lines.find((line) => plain(line).includes('g · headless-plan'));
-    assert.match(plain(row), /waiting .*waits on mc\/runner-sessions$/u, 'a comment saying the same is not said twice');
-    assert.match(row, /\u001b\[33mwaiting/u, 'waiting is yellow');
-    assert.match(row, /\u001b\[33mwaits on mc\/runner-sessions/u, 'what it waits on is yellow');
+    assert.match(plain(row), /open .*phase 3 — after phase 2$/u);
+    assert.match(row, /\u001b\[33mphase 3 — after phase 2/u, 'yellow');
   });
 });
