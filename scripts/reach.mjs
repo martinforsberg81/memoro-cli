@@ -52,6 +52,8 @@ const args = process.argv.slice(2);
 const ROOT = resolve(args.find((a) => !a.startsWith('-')) || '.');
 const SRC = join(ROOT, 'src');
 const LIST = args.includes('--list');
+const ADMIN_ENTRY = join(SRC, 'mc-admin-cli.js');
+const ADMIN_CHILD = join(ROOT, 'scripts', 'admin-dashboard.js');
 
 /**
  * The surface as it stands: the router, and the file nothing imports.
@@ -65,6 +67,8 @@ const LIST = args.includes('--list');
  */
 const LIVE = [
   'mc-cli.js',                      // the router: the page's flags, `moved()`
+  'mc-admin-cli.js',                // the second package binary
+  'mc/admin-dashboard.js',          // imported by scripts/admin-dashboard.js
   'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
 ];
 
@@ -140,9 +144,8 @@ const sum = (fs) => fs.reduce((n, f) => n + lines(f), 0);
 const seed = (names) => names.map((n) => join(SRC, n)).filter((p) => existsSync(p));
 
 // `src/mc-cli.js` falls through to `src/bin-mc.js`, whose whole table is now
-// `mc vault`. So the page's own reach stops at that door: crossing it would
-// fold the contract's cost into the page's number and the two rows below
-// would print the same figure.
+// `mc vault`. Keep that boundary out of the combined mc/mc-admin surface
+// row's own count; crossing it folds the separate contract cost into it.
 const page = reach(seed(LIVE), new Set(seed(['bin-mc.js'])));
 const live = reach(seed(LIVE).concat(seed(KEPT)));
 const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
@@ -157,7 +160,12 @@ const dead = all.filter((f) => !kept.has(f));
 
 const row = (label, files) => `${String(files.length).padStart(4)} filer ${String(sum(files)).padStart(6)} rader  ${label}`;
 console.log(row('src/', all));
-console.log(row('reached by the page and its verbs', [...page]));
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+const adminAccounted = pkg.bin?.['mc-admin'] === 'src/mc-admin-cli.js' && existsSync(ADMIN_ENTRY)
+  && existsSync(ADMIN_CHILD) && readFileSync(ADMIN_ENTRY, 'utf8').includes('../scripts/admin-dashboard.js');
+console.log(`mc-admin binary and fixed child: ${adminAccounted ? 'accounted' : 'MISSING'}`);
+if (!adminAccounted) process.exitCode = 1;
+console.log(row('reached by mc and mc-admin entry surfaces', [...page]));
 console.log(row(`…plus ${KEPT.join(', ')} (kept by contract)`, [...live]));
 console.log(row('…plus src/vault/', [...kept]));
 console.log(row(`NOT reached — ${Math.round((100 * sum(dead)) / sum(all))}% of src/`, dead));

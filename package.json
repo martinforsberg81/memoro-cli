@@ -5,7 +5,8 @@
   "type": "module",
   "private": true,
   "bin": {
-    "mc": "src/mc-cli.js"
+    "mc": "src/mc-cli.js",
+    "mc-admin": "src/mc-admin-cli.js"
   },
   "engines": {
     "node": ">=22"
