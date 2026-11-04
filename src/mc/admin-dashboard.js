@@ -29,8 +29,8 @@ function age(timestamp, now) {
   const delta = Math.floor((now - ms) / 1000);
   return { ageSeconds: Math.max(0, delta), future: delta < 0 };
 }
-function sourceRecord(availability, errorCode, timestamp, data, now) {
-  return { availability, errorCode, timestamp, ...age(timestamp, now), data };
+function sourceRecord(availability, errorCode, timestamp, data) {
+  return { availability, errorCode, timestamp, data };
 }
 function healthProjection(body) {
   if (!body || body.ok !== true || typeof body.status !== 'string' || !body.services || typeof body.services !== 'object' || Array.isArray(body.services)) throw Error('invalid_shape');
@@ -69,23 +69,24 @@ function operationsProjection(body) {
   for (const [status,g] of Object.entries(inc.summary)) groups.push({ status: clean(status, 50), count: numeric(g?.count), occurrences: numeric(g?.occurrences) });
   return { operations, warnings: safeCodes(body.warnings), incidents: { groups, totalGroups: numeric(inc?.totalGroups), totalOccurrences: numeric(inc?.totalOccurrences) } };
 }
-async function readSource(name, token, fetchImpl, now) {
-  if (!token) return sourceRecord('unavailable', 'missing_credentials', null, null, now);
+async function readSource(name, token, fetchImpl) {
+  if (!token) return sourceRecord('unavailable', 'missing_credentials', null, null);
   try {
     const response = await fetchImpl(SOURCES[name], { method:'GET', cache:'no-store', redirect:'error', signal: AbortSignal.timeout(10_000), headers: { 'Cache-Control':'no-store', 'X-Operator-Purpose':'maintenance', Authorization:`Bearer ${token}` } });
-    if (!response.ok) return sourceRecord('unavailable', `http_${response.status}`, null, null, now);
+    if (!response.ok) return sourceRecord('unavailable', `http_${response.status}`, null, null);
     const body = JSON.parse(await bodyText(response));
     const data = name === 'health' ? healthProjection(body) : operationsProjection(body);
     const timestamp = sourceTime(name === 'health' ? body.checkedAt : body.generatedAt);
-    return sourceRecord('available', null, timestamp, data, now);
+    return sourceRecord('available', null, timestamp, data);
   } catch (error) {
     const code = error?.message === 'oversized' ? 'response_too_large' : ['invalid_shape','too_many_items'].includes(error?.message) ? error.message : error instanceof SyntaxError ? 'invalid_json' : error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'timeout' : 'read_failed';
-    return sourceRecord('unavailable', code, null, null, now);
+    return sourceRecord('unavailable', code, null, null);
   }
 }
 export async function collectDashboard({ token, fetch: fetchImpl = globalThis.fetch, clock = () => new Date() } = {}) {
+  const [health, operations] = await Promise.all(['health','operations'].map(n => readSource(n, token, fetchImpl)));
   const nowDate = clock(); const now = nowDate.getTime(); const fetchedAt = nowDate.toISOString();
-  const [health, operations] = await Promise.all(['health','operations'].map(n => readSource(n, token, fetchImpl, now)));
+  for (const source of [health, operations]) Object.assign(source, age(source.timestamp, now));
   const model = { schemaVersion:1, environment:'production', fetchedAt, sources:{ health, operations } };
   return { model, exitCode: health.availability === 'available' && operations.availability === 'available' ? 0 : 1 };
 }

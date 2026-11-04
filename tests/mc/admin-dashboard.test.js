@@ -92,6 +92,21 @@ test('strict response limit, list bounds, unknown timestamps and future source t
   const future={ok:true,status:'healthy',services:{},checkedAt:'2027-01-01T00:00:00Z'};
   result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?future:fixtures().operations)});
   assert.equal(result.model.sources.health.future,true); assert.match(renderDashboard(result.model),/future timestamp/);
+  // Both sources are generated during the request, before collection completes.
+  let current = fixed();
+  const data = fixtures();
+  data.health.checkedAt = '2026-11-04T12:00:01Z';
+  data.operations.generatedAt = '2026-11-04T12:00:02Z';
+  result = await collectDashboard({token:'t', clock:() => current, fetch:async url => {
+    current = new Date('2026-11-04T12:00:03Z');
+    return response(url.endsWith('/health') ? data.health : data.operations);
+  }});
+  assert.equal(result.model.fetchedAt, '2026-11-04T12:00:03.000Z');
+  assert.equal(result.model.sources.health.ageSeconds, 2);
+  assert.equal(result.model.sources.operations.ageSeconds, 1);
+  assert.equal(result.model.sources.health.future, false);
+  assert.equal(result.model.sources.operations.future, false);
+  assert.doesNotMatch(renderDashboard(result.model), /future timestamp/);
 });
 
 test('package maps both binaries and runner failure cannot expose error details', async () => {
