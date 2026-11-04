@@ -37,17 +37,11 @@
  * passing suite carrying an unescalated design decision is exactly the mistake
  * that conflation would license.
  *
- * Main's red is main's (ruling 44 § 4). Until then a change whose reached
- * tests included one already red on main was red, and could not land until
- * that test was green: four SQL snapshot tests red on main were measured red
- * in 77 rounds of 43 pull requests, the JSC start-up budget in 39 of 32,
- * about 700 minutes charged to changes that had not caused it. Now a red
- * round asks the base only after it is red (`selector-miss.js`), and when
- * every red file is red there too and the change touches none of them, the
- * round goes on to the command gates and the pull request's own tests, names
- * them in its verdict as not counted, and leaves the helper an intake note
- * (one per file per week). A change that touches one of them is red as before,
- * and so is any red the probe does not call main's.
+ * Main's health is not investigated on a PR's clock (Martin, 2026-11-04).
+ * Completed main-only runs record exact-SHA standing failures. A PR may read
+ * that evidence for unchanged test files with the same failing names, but never
+ * checks out main, reproduces its failures or walks its history. Missing or stale
+ * evidence fails closed; it is not proof that this PR introduced the failure.
  */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -57,7 +51,7 @@ import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from './tap-red.js';
-import { probeMainRed, redAt } from './selector-miss.js';
+import { readMainRed, recordMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { runShell as runShellAsync, runTool } from './child-async.js';
@@ -71,7 +65,7 @@ import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes, recordTooSlow, runProgress, testsMeasured } from './test-times.js';
+import { TIMES_REPORTER, recordTestTimes, recordTooSlow, progressTracker, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -185,8 +179,8 @@ export async function runGate({
   // flight finish, and a round that exits under it would end them all. With
   // `false` the `finally` below gives both back.
   signals = true,
-  // Whether a red file is red on the base too (selector-miss.js).
-  probeMain = probeMainRed,
+  // Read already-measured exact-base health, without replaying main (2026-11-04).
+  readMainEvidence = readMainRed,
   // Explicit receipt binding for a caller that has one; null is every round today.
   evidence = null,
 } = {}) {
@@ -231,7 +225,11 @@ export async function runGate({
   const ceiling = deadlineController.signal;
   // What the round's runs have written, so the ceiling can name what did not
   // finish (`runProgress`): the times files they track, read when it comes.
-  const tracked = [];
+  const progress = progressTracker();
+  const pendingTestRuns = new Set();
+  let ceilingPending = [];
+  const activePhases = new Set();
+  let ceilingPhases = [];
   let ceilingRuns = null;
   // The signal a child is started with: the caller's and the ceiling's, read
   // when the child starts, which is after `signal` is combined below.
@@ -279,9 +277,20 @@ export async function runGate({
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = testLanes({ env, load, mode: gateMode });
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
-  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: (file) => tracked.push(file) };
+  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete };
   const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal, times: timesOf }));
-  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses, signal, times: timesOf }));
+  const runTests = async (options) => {
+    const ownProgress = progressTracker();
+    const request = { files: options.files || [], progress: ownProgress };
+    pendingTestRuns.add(request);
+    const times = { ...timesOf,
+      track: (file) => { progress.track(file); ownProgress.track(file); },
+      complete: (file) => { progress.complete(file); ownProgress.complete(file); },
+    };
+    const result = await (tests || realTests)({ ...options, env, lanes, classes: fileClasses, signal, times });
+    if (tapTotals(result.tap).finished && !result.aborted && !result.timedOut && !result.error) pendingTestRuns.delete(request);
+    return result;
+  };
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
@@ -320,11 +329,10 @@ export async function runGate({
     // a selection ran instead.
     full_suite: null,
     extra_gates: [],
-    // When a round went red: were the red files red on the base too, and which
-    // landing broke them (`selector-miss.js`). Attribution only — the verdict
-    // is decided before it runs. Null on every round that was not red.
+    // Previously measured exact-base health, read only after a candidate red.
+    // Missing or stale evidence never triggers a main run or attribution walk.
     main_red: null,
-    // The red files the round went on past: red on main by the probe, and
+    // The red files the round went on past: exact-base standing evidence, and
     // untouched by the change (ruling 44 § 4). Named in the verdict as not
     // counted; null when there were none.
     main_red_files: null,
@@ -373,7 +381,9 @@ export async function runGate({
   const timed = async (step, fn) => {
     if (signal?.aborted) throw new RoundAborted(abortReason(signal));
     const from = clock();
+    activePhases.add(step);
     try { return await untilCeiling(fn()); } finally {
+      activePhases.delete(step);
       report.timings[step] = (report.timings[step] || 0) + (clock() - from);
       say(`${step} took ${seconds(report.timings[step])}`);
     }
@@ -439,13 +449,15 @@ export async function runGate({
   signal = externalSignal ? AbortSignal.any([externalSignal, ceiling]) : ceiling;
   const roundTimeoutMs = declared.declaration.round_timeout_ms || suiteTimeoutMs(env);
   let timedOut = false;
-  // The files the run was asked for, once the selection has said which (none
-  // for a whole-suite round, which names no files until its output does).
-  let deadlineFiles = [];
   const cancelCeiling = armCeiling(() => {
     timedOut = true;
     // Read before the abort: the runs' files are gone once their processes close.
-    ceilingRuns = runProgress(tracked);
+    ceilingRuns = progress.read();
+    ceilingPending = [...pendingTestRuns].flatMap((request) => {
+      const done = new Set(request.progress.read().finished.map(one => one.file));
+      return request.files.filter(file => !done.has(join(headDir, file)));
+    });
+    ceilingPhases = [...activePhases];
     deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
   }, roundTimeoutMs);
 
@@ -456,16 +468,17 @@ export async function runGate({
     const headPrefix = `${headDir}/`;
     const rel = (file) => (file.startsWith(headPrefix) ? file.slice(headPrefix.length) : file);
     const runs = ceilingRuns || { unfinished: [], finished: [] };
-    const done = new Set(runs.finished.map((one) => rel(one.file)));
-    const unfinished = [...new Set([...runs.unfinished.map(rel), ...deadlineFiles.filter((file) => !done.has(file))])];
-    const slowest = runs.finished.slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));
+    const unfinished = [...new Set([...runs.unfinished.map(rel), ...ceilingPending])];
+    const slowest = runs.finished.filter(one => !unfinished.includes(rel(one.file))).slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));
     report.red_files = unfinished;
     report.slowest_files = slowest;
     report.candidate = { red_files: unfinished, red_tests: [] };
     const ceilingText = `gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`;
-    const named = unfinished.length ? `unfinished: ${nameSome(unfinished)}` : 'no test file was named as unfinished — the run did not say which one';
+    const named = unfinished.length ? `unfinished: ${nameSome(unfinished)}`
+      : ceilingPhases.includes('suite') ? 'no test file was named as unfinished — the run did not say which one' : 'no unfinished test files';
     const reached = slowest.length ? `; slowest finished: ${slowest.map((one) => `${one.file} (${one.seconds} s)`).join(', ')}` : '';
-    const reason = `${ceilingText} — ${named}${reached}`;
+    report.timeout_phase = ceilingPhases.join(', ') || 'final checks';
+    const reason = `${ceilingText} — phase: ${report.timeout_phase}; ${named}${reached}`;
     say(reason);
     return finish('red', reason);
   };
@@ -742,18 +755,10 @@ export async function runGate({
     // Red files that are main's, and the round goes on past them (ruling
     // 44 § 4): named, noted for the helper, and taken out of the candidate's
     // red so nothing downstream reads a green round as a red one.
-    const mainRedGoesOn = (result, probe) => {
+    const mainRedGoesOn = (result) => {
       const files = result.red_files;
       report.main_red_files = [...new Set([...(report.main_red_files || []), ...files])];
       say(`${files.length} red file${files.length === 1 ? '' : 's'} red on main too, untouched by this change — not this round's red: ${files.join(', ')}`);
-      for (const file of files) {
-        const names = (result.red_tests || []).filter((test) => test.file === file).map((test) => test.name);
-        const note = noteRedOnMain({
-          env, now: clock(), repo: repoNameOf(repoPath), file, names,
-          breaks: (probe?.breaks || []).filter((found) => found.file === file), prs: numbers,
-        });
-        if (note) say(`intake note: ${note}`);
-      }
       result.red = [];
       result.red_files = [];
       result.red_tests = [];
@@ -830,7 +835,11 @@ export async function runGate({
         && (result.red_tests || []).every((test) => files.has(test.file));
       // Main's already, by this round's own probe of the previous red files —
       // and untouched, which that probe's turn checked: not asked twice.
-      if (within(new Set(report.main_red_files || []))) return mainRedGoesOn(result, report.main_red);
+      if (within(new Set(report.main_red_files || [])) && result.red_tests?.length
+        && result.red_tests.every(test => report.main_red?.tests?.some(known => known.file === test.file && known.name === test.name
+            && JSON.stringify(known.error || []) === JSON.stringify(test.error || [])))) {
+        return mainRedGoesOn(result);
+      }
       // Red only in files declared to flip under load (ruling 44 § 5): run
       // once more alone on the candidate. Green, and the round goes on with
       // the flip recorded; whatever stays red goes to the probe as today,
@@ -859,67 +868,30 @@ export async function runGate({
             const kept = new Set(result.red_tests.map((test) => test.name));
             if (kept.size) result.red = result.red.filter((name) => kept.has(name));
             retried = true;
+            report.head_alone = { red: result.red_files };
             say(`red again alone: ${result.red_files.join(', ')}`);
           } else {
             say(`could not run them once more alone: ${ran.reason}`);
           }
         }
       }
-      // Whose red it is. Worth a few seconds on a round that failed, because
-      // the other reading is the one #12107 got: red twice on tests a landed
-      // change had broken.
+      // No main execution callbacks are passed to the evidence reader. Main
+      // health is measured independently, never reproduced or bisected here.
+      if (alone || retried) report.head_alone = { red: result.red_files };
       if (facts.pr && result.red_files?.length) {
-        const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
-        report.main_red = await timed('main red', () => probeMain({
-          git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: result.red_files,
-          flags, say, root, repo: repoPath, foundBy: numbers,
-        }));
-        const probe = report.main_red;
-        // Every red file red on main too, and none of them changed by this
-        // pull request: not this round's red (ruling 44 § 4). The probe moved
-        // the candidate to older commits; it is put back before anything else
-        // runs there. One red file the change touches, and it is red as before.
-        if (headCommit && probe && !probe.stopped && within(new Set(probe.red_on_main || []))) {
-          const back = await askGit(['checkout', '--detach', '--force', headCommit], { cwd: headDir });
-          if (back?.status !== 0) return finish('worktree', `could not put the candidate back at ${headCommit.slice(0, 7)} after the main-red probe`);
+        report.main_red = await readMainEvidence({
+          baseCommit: report.base.commit, files: result.red_files, root, repo: repoPath,
+        });
+        const proof = report.main_red;
+        if (proof?.stopped) say(proof.stopped);
+        const sameFailures = proof?.cached && result.red_tests?.length && result.red_tests.every((test) =>
+          proof.tests.some((known) => known.file === test.file && known.name === test.name
+            && JSON.stringify(known.error || []) === JSON.stringify(test.error || [])));
+        if (sameFailures && within(new Set(proof.red_on_main || []))) {
           const touched = await touchedPaths();
-          if (touched && !result.red_files.some((file) => touched.has(file))) return mainRedGoesOn(result, probe);
+          if (touched && !result.red_files.some((file) => touched.has(file))) return mainRedGoesOn(result);
           say(touched ? 'this change touches a red file that is red on main — red as before'
             : 'could not read what this change touches — red as before');
-        }
-        // Green on the base is one sample on a quieter machine. #891 (a role
-        // text) and #872 (docs only) were blamed on it and went green
-        // unchanged, so the same files are run alone on the candidate too:
-        // red there is the change's, green there is the round's load.
-        if (headCommit && probe && !probe.stopped && !probe.red_on_main?.length) {
-          if (alone || retried) {
-            report.head_alone = { red: result.red_files };
-            say('red alone on the candidate — this change broke them');
-          } else {
-            const ran = await timed('main red', () => redAt({
-              git: askGit, tests: runTests, cwd: headDir, commit: headCommit, files: result.red_files, flags,
-            }));
-            report.head_alone = ran.ok ? { red: ran.red } : { stopped: ran.reason };
-            if (ran.ok && !ran.red.length) {
-              say('green alone on the candidate too — red only under load');
-              report.under_load_files = [...result.red_files, ...cancelled];
-              // Green alone on both commits is the verdict the round exists
-              // for: the change did not break them (Martin, 2026-10-19). Up to
-              // GREEN_ALONE_MAX files they count green and the round goes on;
-              // more than that is a round that measured nothing, and stops.
-              if (report.under_load_files.length <= GREEN_ALONE_MAX) {
-                report.green_alone = { files: report.under_load_files, names: [...result.red] };
-                say(`counted green — ${report.under_load_files.join(', ')} passed alone on the base and the candidate`);
-                result.red = [];
-                result.red_files = [];
-                result.red_tests = [];
-                return null;
-              }
-              return finish('red-under-load', underLoadReason({ alone: result.red_files, cancelled }));
-            }
-            say(ran.ok ? 'red alone on the candidate too — this change broke them'
-              : `could not run the red files alone on the candidate: ${ran.reason}`);
-          }
         }
       }
       return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${mainRedClause(report.main_red)}`);
@@ -1068,7 +1040,6 @@ export async function runGate({
     // What the run below measures: the whole selection, or the delta's part.
     const runFiles = rerun ? rerun.files : selection?.files;
     const runCommands = rerun ? rerun.commands : selection?.commands;
-    deadlineFiles = runFiles || [];
     // A delta that reaches command gates and no test file: the files half is
     // the recorded green, not an empty run (which reports no tests and stops).
     const greenFiles = rerun && !rerun.files.length ? {
@@ -1149,6 +1120,7 @@ export async function runGate({
     // stop is the suite's, as it was.
     if (!after.ok) return finish('suite', `the run ${after.reason}`);
     report.candidate = after.result;
+    if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result });
     // The measured tree's own hash, so a landing can later prove — not
     // assume — that main became exactly what was measured (track 3's
     // correction, 2026-08-23: "verified together" and "landed one at a
@@ -2417,6 +2389,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
       if (!timesFile) return [];
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
+      times.complete?.(timesFile);
       rmSync(timesFile, { force: true });
       const tests = testsMeasured(text, cwd);
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
@@ -2555,6 +2528,7 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
       if (!timesFile) return;
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
+      times.complete?.(timesFile);
       rmSync(timesFile, { force: true });
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests: testsMeasured(text, cwd) });
     };

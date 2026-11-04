@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { mainRedClause } from '../../src/mc/repo-gate.js';
-import { classify, docsOnly, probeMainRed, readSelectorMisses, selectorMissReading } from '../../src/mc/selector-miss.js';
+import { classify, docsOnly, probeMainRed, readMainRed, recordMainRed, readSelectorMisses, selectorMissReading } from '../../src/mc/selector-miss.js';
 import { redFiles } from '../../src/mc/tap-red.js';
 
 function located(files) {
@@ -274,4 +274,24 @@ describe('red files are read from where node says the failure is', () => {
       ['tests/a.test.js', 'tests/c.test.js'],
     );
   });
+});
+
+it('only completed exact-SHA main evidence can classify standing failures, without any execution', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-main-red-evidence-'));
+  try {
+    const query = { root, repo: 'memoro', baseCommit: 'base-sha', files: ['tests/a.test.js'] };
+    assert.ok(readMainRed(query).stopped);
+    const result = { totals: { finished: true }, red_files: query.files,
+      red_tests: [{ file: 'tests/a.test.js', name: 'existing failure' }] };
+    assert.equal(recordMainRed({ root, repo: 'memoro.git', commit: 'base-sha', result }), true);
+    const evidence = readMainRed(query);
+    assert.deepEqual(evidence.red_on_main, query.files);
+    assert.deepEqual(evidence.tests, result.red_tests);
+    assert.equal(evidence.cached, true);
+    assert.ok(readMainRed({ ...query, baseCommit: 'new-sha' }).stopped);
+    assert.equal(recordMainRed({ root, repo: 'memoro', commit: 'base-sha', result: { totals: { finished: false } } }), false);
+    assert.deepEqual(readMainRed(query), evidence, 'incomplete health runs cannot replace known evidence');
+    assert.equal(recordMainRed({ root, repo: 'memoro', commit: 'base-sha', result: { totals: { finished: true } } }), true);
+    assert.ok(readMainRed(query).stopped, 'a completed green run clears standing-red evidence');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { measuredSeconds, runProgress } from '../../src/mc/test-times.js';
+import { measuredSeconds, runProgress, progressTracker } from '../../src/mc/test-times.js';
 
 const lines = (entries) => `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
 
@@ -44,4 +44,46 @@ describe('what a run that has not ended says about its files', () => {
     const text = lines([{ file: '/w/a.js', started: true }, { file: '/w/a.js', done: true, ms: 500 }, { file: '/w/b.js', done: true }]);
     assert.deepEqual(measuredSeconds(text, '/w'), { 'a.js': 0.5 });
   });
+});
+
+it('completed reporter snapshots survive deletion and retain earlier batch timings', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-progress-completed-'));
+  try {
+    const tracker = progressTracker();
+    const earlier = join(dir, 'earlier.jsonl');
+    const later = join(dir, 'later.jsonl');
+    tracker.track(earlier);
+    writeFileSync(earlier, lines([
+      { file: '/w/slow.test.js', started: true },
+      { file: '/w/slow.test.js', done: true, ms: 12000 },
+    ]));
+    tracker.complete(earlier);
+    tracker.complete(earlier); // Completion is idempotent.
+    rmSync(earlier);
+    tracker.track(later);
+    writeFileSync(later, lines([
+      { file: '/w/fast.test.js', started: true },
+      { file: '/w/fast.test.js', done: true, ms: 200 },
+      { file: '/w/hang.test.js', started: true },
+    ]));
+    assert.deepEqual(tracker.read(), {
+      unfinished: ['/w/hang.test.js'],
+      finished: [{ file: '/w/slow.test.js', seconds: 12 }, { file: '/w/fast.test.js', seconds: 0.2 }],
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it('a later unfinished rerun is not hidden by an earlier completed run of the same file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-progress-rerun-'));
+  try {
+    const tracker = progressTracker();
+    const path = join(dir, 'times.jsonl');
+    tracker.track(path);
+    writeFileSync(path, lines([{ file: '/w/a.test.js', started: true }, { file: '/w/a.test.js', done: true, ms: 400 }]));
+    tracker.complete(path);
+    rmSync(path);
+    tracker.track(path);
+    writeFileSync(path, lines([{ file: '/w/a.test.js', started: true }]));
+    assert.deepEqual(tracker.read(), { unfinished: ['/w/a.test.js'], finished: [] });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

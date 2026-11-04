@@ -212,6 +212,34 @@ export function runProgress(paths) {
   return { unfinished: unfinished.sort(), finished };
 }
 
+/** Keep compact snapshots before reporter files are deleted at batch completion.
+ * A timeout in a later batch or command must not forget the earlier evidence. */
+export function progressTracker() {
+  const active = new Set();
+  const completed = [];
+  return {
+    track: (file) => active.add(file),
+    complete: (file) => {
+      if (!active.delete(file)) return;
+      completed.push(runProgress([file]));
+    },
+    read: () => {
+      const snapshots = [...completed, runProgress(active)];
+      const unfinished = new Set(snapshots.flatMap((one) => one.unfinished));
+      const seconds = new Map();
+      for (const one of snapshots.flatMap((snapshot) => snapshot.finished)) {
+        seconds.set(one.file, (seconds.get(one.file) || 0) + one.seconds);
+      }
+      return {
+        unfinished: [...unfinished].sort(),
+        finished: [...seconds].filter(([file]) => !unfinished.has(file))
+          .map(([file, seconds]) => ({ file, seconds: Math.round(seconds * 10) / 10 }))
+          .sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file)),
+      };
+    },
+  };
+}
+
 /** A courtesy: a table that cannot be written costs the next gate its estimate, never this run its verdict. */
 export function recordTestTimes({ root, repo, cwd, text }) {
   try {

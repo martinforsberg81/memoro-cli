@@ -219,7 +219,7 @@ it('a ceiling names the file that did not finish, and the slowest file that did,
     assert.equal(result.stopped_at, 'timeout');
     assert.deepEqual(result.red_files, ['tests/hangs.test.js']);
     assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 2 }]);
-    assert.match(output, /RED — gate round reached its 1 s ceiling; unfinished: tests\/hangs\.test\.js; slowest finished: tests\/done\.test\.js \(2 s\)/u);
+    assert.match(output, /RED — gate round reached its 1 s ceiling; phase: tests; unfinished: tests\/hangs\.test\.js; slowest finished: tests\/done\.test\.js \(2 s\)/u);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -243,4 +243,30 @@ it('unknown exits and zero-test summaries are not completed green tests', async 
     });
     assert.equal(result.ok, false);
   }
+});
+
+it('a timeout in a command retains completed reporter evidence without naming those files unfinished', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-session-command-ceiling-'));
+  try {
+    const result = await runSessionGate({ cwd: '/work', select: 'selector', round_timeout_ms: 30, gate: { root: dir, repo: 'work' } }, {
+      write: () => {},
+      select: async () => ({ ok: true, files: ['tests/done.test.js'], commands: [{ packageScript: 'lint:x' }] }),
+      tests: async ({ times }) => {
+        const path = join(dir, 'times.jsonl');
+        times.track(path);
+        writeFileSync(path, [
+          { file: '/work/tests/done.test.js', started: true },
+          { file: '/work/tests/done.test.js', done: true, ms: 1500 },
+        ].map(line => JSON.stringify(line)).join('\n'));
+        times.complete(path);
+        rmSync(path);
+        return { code: 0, tap: GREEN };
+      },
+      shell: () => new Promise(() => {}),
+    });
+    assert.equal(result.stopped_at, 'timeout');
+    assert.deepEqual(result.red_files, []);
+    assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 1.5 }]);
+    assert.equal(result.timeout_phase, 'command lint:x');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

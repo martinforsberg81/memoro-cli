@@ -93,6 +93,12 @@ exceeds its own time limit is `too slow — rebuild` and is not run again. `mc
 gate` and the gate a session reaches through `mc publish` use this same
 repository ceiling; a caller's wait budget cannot extend it.
 
+Timeout reports name the active phase. Completed reporter snapshots survive
+batch cleanup, so the slowest completed files remain visible. Only the active
+incomplete test requests contribute unfinished files: a command-gate timeout
+cannot relabel the already-completed selection as unfinished. Own-test
+requests are tracked separately and name their own pending files.
+
 ## The door
 
 Before the wait and before the gate, the door refuses a pull request GitHub
@@ -475,23 +481,22 @@ second `npm ci` and four modules of machinery (`repo-baseline-cache.js`,
 `compareRed`, the red ratchet) to answer a question a merge does not ask. All of
 it is gone.
 
-**Main's red is main's** (ruling 44 § 4). From 2026-08-31 a test the change
-reached that was already red on main made the round red: four SQL snapshot
-tests red on main were measured red in 77 rounds of 43 PRs, about 700 minutes in
-all charged to changes that had not caused them. Now, when every red file a
-round is left with is `red_on_main` by the base probe (below) and the change's
-own diff against the base — a batch's is the union of its PRs' — touches none of
-them, the round is not red on them: it puts the candidate back at its head, sets
-`main_red_files`, says `N red file(s) red on main too, untouched by this change —
-not this round's red`, and goes on to the command gates and the PR's own tests as
-a green suite would. A green verdict's headline then ends `— N test file(s) red
-on main, not counted`, and each such file gets an intake note
-(`~/mc/intake/<date>-red-on-main-<name>.md`: repo, file, red names, the landing
-the probe blamed, the PR whose round found it) unless a file at the top of
-`~/mc/intake/` or `~/mc/proposals/` younger than seven days already names it
-(`noteRedOnMain` in [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). One red
-file the change touches, any red the probe does not call main's, or a diff that
-cannot be read, and the round is red as before.
+**Main's red is not investigated on a PR's clock** (Martin, 2026-11-04).
+A completed main-only run records its base SHA, failing test files, names and
+diagnostics under `<mc home>/main-red/<repo>.json`. A PR round may read that
+already-measured evidence for its exact base SHA. Every candidate failure must
+match the recorded file, name and diagnostic, and the PR must leave those test
+files unchanged; otherwise the round remains red. Matching standing failures
+are named in `main_red_files` and excluded from the candidate's red, while
+command gates and the PR's own tests still run. This is a standing-assertion
+exemption, not proof that unchanged failing assertions cannot hide another
+cause. Unknown, stale or malformed evidence never becomes green by assumption.
+
+PR rounds do not check out main, reproduce its failures, bisect its history or
+write repeated intake notes for an already-known failure. Main-only health
+runs own that work. Missing exact-base evidence leaves an explicitly
+unclassified red; the round does not blame the PR without evidence and does
+not spend additional time obtaining a baseline. No timeout is raised.
 
 **A declared timing test gets one more run** (ruling 44 § 5). Since 2026-10-07
 memoro's JSC start-up budget, `sql:pr-ci`, dead-CSS and build-bundle went red
@@ -500,11 +505,11 @@ caught them. A declaration's `retry_once` names such test files and selected
 command gates (`{ "files": […], "gates": […] }`, shipped for memoro in
 [`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js), overridable in
 `.mc/test.json` like any field). After the killed and cancelled files are taken
-out and before the base probe, a red whose every file is in `files` is run once
+out and before reading standing evidence, a red whose every file is in `files` is run once
 more alone on the candidate: green, and the round sets `flipped: { files, names
 }`, says `green alone — … flipped under load`, and goes on as a green suite
-would; still red, the files that stayed red go to the probe as today, and that
-run counts as their sample alone on the candidate. Likewise a round whose every
+would; still red, only existing standing evidence may exempt the remaining
+failures, without replaying main. Likewise a round whose every
 failed selected command gate is in `gates` runs those once more after the suite;
 all green sets `flipped.gates` and goes on, any still failing is `selected-gate`
 as today. A red outside the lists is red as before. Every flip is in the round's
@@ -702,66 +707,36 @@ headline still never says approved), and *"this run was asked to check only"*,
 which was true of `mc test`, whose name says it. A merge round still says
 plainly that nothing was merged.
 
-### The base probe: whose red it is
+### Standing main evidence, not a live base probe
 
-A red round runs its red files once more on the base
-([`src/mc/selector-miss.js`](../../src/mc/selector-miss.js)). Green there, and
-the change broke them. Red there too, and the files are walked back along
-`main`'s first parents to the first commit where they pass; the landing after it
-is recorded, with the paths it changed (`git diff-tree --name-only`), and the red
-reason says `— N of the red files are red on main too, broken by #M`. The walk
-only names the landing; whether the round goes on is decided by `red_on_main`
-and the change's diff (*Main's red is main's*, above).
-
-A landing whose every path is under `docs/` is measured again before it is
-named (`remeasure`). Both ways have happened. On 2026-10-06 (`mc merge memoro
-12720`) the walk blamed memoro #12727, six files under `docs/project/staff/`,
-for a wall-clock budget test that was red under load at both commits and green
-alone — the walk had found where a flaky test happened to pass. On 2026-10-10
-it reached #13310, an archive that deleted skill texts a test reads, and ruling
-docs-only out by path (the rule from 10-06 to 10-10) left that red unexplained.
-So the red file is run once more at the landing and once more at its parent:
-red at the landing and green at the parent, both times, is the landing's —
-`kind: 'docs-only-landing'`, written to `selector-misses.jsonl` and counted on
-the page as a miss beside `not-selected`, and the reason says `— N of the red
-files are red on main too, broken by #M (#M changed only docs/ and landed
-without the suite)`. Anything else is `flaky`: it names nobody, is not
-recorded, is left in the probe's `unresolved`, and the reason ends `— N flaky
-under load`. A landing whose paths could not be read is named as before,
-without the second measure.
+The former live reproduction and first-parent attribution walk are no longer
+called by `runGate`. `readMainRed` in
+[`src/mc/selector-miss.js`](../../src/mc/selector-miss.js) only reads an
+exact-SHA record from a completed main-only run. The historical diagnostic
+helpers and old `selector-misses.jsonl` entries remain available; they are not
+work a PR round performs. See *Main's red is not investigated*, above.
 
 **A file killed from outside the round is no verdict** (ruling 38, since
 deleted). When something outside the round ends a test file's process,
 `node --test` writes one failing entry for that file with `signal: 'SIGTERM'`
 (or another signal) and `exitCode: ~` in its TAP block. `killedFiles(tap,
 files)` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js) names every file
-whose failing block has a non-null `signal:`. Before the base probe,
+whose failing block has a non-null `signal:`. Before reading standing evidence,
 `runGate` takes those files' red names out of the red set: when nothing is
 left the round stops `stopped_at: 'file-killed'`, `<files> ended by <signal>
-from outside the round — not a verdict on this change`, and the base probe
-does not run — the base would pass the file and the probe would say the change
-broke it, which is what memoro #13337 was told on 2026-10-10 after a session's
-`kill 75754`. With other reds beside it the round is `red` over those alone,
+from outside the round — not a verdict on this change`. A killed process is
+not classified as a test regression. With other reds beside it the round is `red` over those alone,
 and `report.killed_files` lists the killed ones; they are never counted green.
 The merger (`landJob`) runs a round that stopped `file-killed` once more,
 saying `<files> was killed from outside the round — measuring again`. A second
 `file-killed` is answered red with that reason: there is nothing in the change
 to fix.
 
-**A red that passes alone is measured again** (`red-under-load`). When the
-base probe finds every red file green on the base, `runGate` runs the same
-files alone on the candidate head (`redAt` in
-[`src/mc/selector-miss.js`](../../src/mc/selector-miss.js), with the round's
-own runner and flags). Red there, and the round is `red` as before, with the
-line `red alone on the candidate too — this change broke them`. Green there
-too, and the files count green (Martin, 2026-10-19): with at most three of them
-(`GREEN_ALONE_MAX`) the round goes on as for a `retry_once` flip, saying
-`counted green — <files> passed alone on the base and the candidate`, with
-`report.green_alone` (`{ files, names }`, also on the round's line) and
-`report.under_load_files` naming them; a genuinely order-dependent test is the
-nightly full run's to catch. With more than three, the round stops
-`stopped_at: 'red-under-load'`, `<files> red in the round, green alone on the
-base and on the candidate — measured again`. A red file whose own entries are
+**Cancelled tests are not attributed to the PR** (`red-under-load`).
+The former base-then-candidate replay and `green_alone` exemption are retired:
+without existing exact-base evidence a failure remains red, not silently
+subtracted. Explicit `retry_once` on the candidate remains as described above.
+A red file whose own entries are
 cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
 hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
 taken out of the red without any re-run, as if it had passed alone; with
@@ -1088,7 +1063,7 @@ stops, so a reader of the report's top finds them.
 `gate-rounds.jsonl` line ended `red` with `red_files`, the next single round
 runs those files alone on the prepared candidate in a timed phase
 `previous red` before the selection: still red stops it `red` there, with the
-main-red probe as for any red, and all green says `previous red files green —
+standing-evidence lookup as for any red, and all green says `previous red files green —
 measuring the selection` and goes on as before (`previousRedFiles` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)); a batch skips it.
 
