@@ -4,7 +4,7 @@ Command-line glue between external coding tools (Claude Code, Cursor, Codex, Win
 
 ## What it does
 
-One binary, `mc`. Nothing on this machine reports sessions into Memoro any more (ruling 24).
+Two binaries, `mc` and the read-only `mc-admin`. Nothing on this machine reports sessions into Memoro any more (ruling 24).
 
 - **Roles → tools.** A session mc starts in a role is handed that role's instructions (`canon/roles/`) through the selected adapter at launch, and nothing else — the Coding Profile it once fetched from Memoro was removed by ruling 24. Repo-owned instruction files such as `CLAUDE.md` and `AGENTS.md` remain static contracts.
 
@@ -49,6 +49,10 @@ mc sessions send <id|label> "<msg>"
 Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped transparently to and from it. A WebSocket to Memoro delivers remote dispatches by writing into the tool's PTY stdin — they land as real user turns. No tmux, no Claude Code modifications, terminal-native scrollback works.
 
 ## Commands
+
+### `mc-admin` — read-only production operations snapshot
+
+`mc-admin` reads the fixed admin health and operations token routes once and exits; rerun to refresh. `mc-admin --json` prints the safe versioned aggregate projection. It delegates credentials only to the fixed trusted child through `mc keys run`; live reads refuse in `MC_HEADLESS=1`. No writes, polling, or other admin dashboards are connected. See [mc-admin](docs/technical/mc-admin.md).
 
 ### `mc` — coordinator + worktree lifecycle
 

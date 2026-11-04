@@ -1,0 +1,94 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { run, HELP } from '../../src/mc-admin-cli.js';
+import { collectDashboard, renderDashboard } from '../../src/mc/admin-dashboard.js';
+
+const fixed = () => new Date('2026-11-04T12:00:00.000Z');
+function response(body, status = 200) { return { ok: status >= 200 && status < 300, status, text: async () => typeof body === 'string' ? body : JSON.stringify(body) }; }
+function fixtures() {
+  return {
+    health: { ok:true, status:'degraded', checkedAt:'2026-11-04T11:59:00Z', services:{ secrets:{status:'not_configured', present:0,total:2}, d1:{status:'healthy',latency:0}, queues:{status:'healthy',note:'Binding available'}, universeVectors:{status:'healthy',vectorCount:0} }, secret:'health-secret' },
+    operations: { ok:true, generatedAt:'2026-11-04T11:58:00Z', warnings:['warn_code'], operations:[
+      { key:'z.ok',label:'Okay',state:'success',conclusion:{level:'ok',reasonCodes:[]},counts:{zero:0,unknown:null,secret:'ops-secret'},latestRun:{startedAt:'2026-11-04T11:00:00Z',finishedAt:'2026-11-04T11:01:00Z'},payload:{password:'payload-secret'} },
+      { key:'a.watch',label:'Watch\u001b[31m red',state:'warning',conclusion:{level:'watch',reasonCodes:['watch_code']},warnings:['op_warn'] },
+      { key:'b.action',label:'Action',state:'error',conclusion:{level:'action',reasonCodes:['action_code']} },
+      { key:'c.noverdict',label:'No verdict',state:'success',latestRun:{status:'success'} },
+    ], incidents:{summary:{new:{count:2,occurrences:3},acknowledged:{count:0,occurrences:0}},totalGroups:2,totalOccurrences:3,raw:'incident-secret'}, error:'raw error secret' },
+  };
+}
+
+test('entry validates before delegation, supports offline help, and sends only fixed child plus validated flag', async () => {
+  let calls=[];
+  assert.equal(await run(['--help'], { stdout:{write:s=>calls.push(s)}, env:{MC_HEADLESS:'1'} }),0);
+  assert.match(calls[0],/read-only/);
+  assert.equal(await run(['--oops'], { stderr:{write:s=>calls.push(s)}, env:{} }),1);
+  assert.equal(await run(['--json','--json'], { stderr:{write:s=>calls.push(s)}, env:{} }),1);
+  assert.equal(await run(['--json'], { env:{MC_HEADLESS:'1'}, stderr:{write:s=>calls.push(s)} }),1);
+  assert.equal(await run([], { env:{}, cwd:'/tmp', stdout:{write(){}}, stderr:{write(){}}, runScriptWithKeys:async (...args)=>{calls.push(args);return 0;} }),0);
+  assert.deepEqual(calls.at(-1).slice(1,2), [[]]);
+  assert.match(calls.at(-1)[0],/scripts\/admin-dashboard\.js$/u);
+  assert.equal(await run(['--json'], { env:{}, stdout:{write(){}}, stderr:{write(){}}, runScriptWithKeys:async (...args)=>{calls.push(args);return 0;} }),0);
+  assert.deepEqual(calls.at(-1)[1],['--json']);
+  assert.equal(await run([], {env:{}, stdout:{write(){}}, stderr:{write(){}}, runScriptWithKeys:async()=>17}),1);
+});
+
+test('collector requests only fixed bounded GET destinations and produces safe text and JSON projection', async () => {
+  const data=fixtures(), calls=[];
+  const fetch=async (url,options)=>{calls.push([url,options]); return response(url.endsWith('/health')?data.health:data.operations);};
+  const {model,exitCode}=await collectDashboard({token:'test-token',fetch,clock:fixed});
+  assert.equal(exitCode,0);
+  assert.deepEqual(calls.map(c=>c[0]).sort(),['https://meetmemoro.app/admin/health','https://meetmemoro.app/admin/operations/status']);
+  for(const [,o] of calls){ assert.equal(o.method,'GET'); assert.equal(o.redirect,'error'); assert.equal(o.cache,'no-store'); assert.equal(o.headers['Cache-Control'],'no-store'); assert.equal(o.headers['X-Operator-Purpose'],'maintenance'); assert.equal(o.headers.Authorization,'Bearer test-token'); assert.ok(o.signal); }
+  assert.equal(model.schemaVersion,1); assert.equal(model.sources.health.ageSeconds,60); assert.equal(model.sources.operations.ageSeconds,120);
+  assert.equal(model.sources.health.data.services.find(s=>s.name==='d1').latency,0);
+  assert.equal(model.sources.health.data.services.find(s=>s.name==='universeVectors').counts.vectorCount,0);
+  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.zero,0);
+  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.unknown,undefined);
+  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='c.noverdict').level,'unknown');
+  const ordered=renderDashboard(model).split('\n').filter(s=>/^([a-z]\.|[a-z]\.noverdict)/u.test(s));
+  assert.deepEqual(ordered.map(s=>s.split(' ')[0]),['b.action','a.watch','c.noverdict','z.ok']);
+  const text=renderDashboard(model), json=JSON.stringify(model);
+  for(const secret of ['health-secret','ops-secret','payload-secret','incident-secret','raw error secret']) { assert.equal(text.includes(secret),false); assert.equal(json.includes(secret),false); }
+  assert.ok(!text.includes('\u001b')); assert.match(text,/Stored incident aggregates/); assert.match(text,/not delivery health or backlog/); assert.match(text,/not connected yet/); assert.match(text,/incidents acknowledged: 0 groups \/ 0 occurrences/); assert.match(text,/a.watch warning op_warn/);
+  assert.equal(model.sources.health.data.services.find(s=>s.name==='secrets').status,'not_configured');
+});
+
+test('missing token, partial failures and invalid source never become zero or erase the other source', async () => {
+  let count=0;
+  let result=await collectDashboard({clock:fixed,token:null,fetch:async()=>{count++;}});
+  assert.equal(count,0); assert.equal(result.exitCode,1); assert.equal(result.model.sources.health.errorCode,'missing_credentials');
+  const good=fixtures().health;
+  for(const bad of [response('{}'),response('{bad'),response(fixtures().operations,401),response(fixtures().operations,403),response(fixtures().operations,500),response({ok:false,error:'do not leak'}),response({ok:true,operations:Array(201).fill({key:'x'}),incidents:{}})]) {
+    result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>url.endsWith('/health')?response(good):bad});
+    assert.equal(result.exitCode,1); assert.equal(result.model.sources.health.availability,'available'); assert.equal(result.model.sources.operations.availability,'unavailable');
+    assert.equal(result.model.sources.operations.data,null);
+  }
+  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>url.endsWith('/health')?response(good):Promise.reject(new TypeError('redirect blocked'))});
+  assert.equal(result.model.sources.operations.availability,'unavailable');
+  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>url.endsWith('/health')?response(good):Promise.reject(Object.assign(Error('secret'),{name:'TimeoutError'}))});
+  assert.equal(result.model.sources.operations.errorCode,'timeout'); assert.equal(result.model.sources.health.data.services[0].counts.present,0);
+});
+
+test('strict response limit, list bounds, unknown timestamps and future source time are explicit', async () => {
+  const huge={ok:true,operations:[], padding:'x'.repeat(1024*1024)};
+  let result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?fixtures().health:huge)});
+  assert.equal(result.model.sources.operations.errorCode,'response_too_large');
+  const over={ok:true,operations:[{key:'x',warnings:Array(51).fill('x')}],incidents:{summary:{}}};
+  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?{ok:true,services:{},checkedAt:'nope'}:over)});
+  assert.equal(result.model.sources.operations.errorCode,'too_many_items');
+  assert.equal(result.model.sources.health.timestamp,null); assert.equal(result.model.sources.health.ageSeconds,null);
+  const future={ok:true,status:'healthy',services:{},checkedAt:'2027-01-01T00:00:00Z'};
+  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?future:fixtures().operations)});
+  assert.equal(result.model.sources.health.future,true); assert.match(renderDashboard(result.model),/future timestamp/);
+});
+
+test('package maps both binaries and runner failure cannot expose error details', async () => {
+  const pkg=JSON.parse(readFileSync(new URL('../../package.json',import.meta.url)));
+  const lock=JSON.parse(readFileSync(new URL('../../package-lock.json',import.meta.url)));
+  assert.equal(pkg.bin['mc-admin'],'src/mc-admin-cli.js'); assert.equal(lock.packages[''].bin['mc-admin'],pkg.bin['mc-admin']);
+  assert.match(HELP,/credentials/); assert.match(HELP,/Exit codes/);
+  let output=''; await run([], {env:{},stdout:{write(){}},stderr:{write:s=>output+=s},runScriptWithKeys:async()=>1});
+  assert.doesNotMatch(output,/ADMIN_TOKEN|secret/);
+});

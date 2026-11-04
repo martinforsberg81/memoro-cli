@@ -24,9 +24,11 @@ survives that no verb reaches, and why, is [mc-cut.md](mc-cut.md). Do not
 assume a module is live because it exists: `npm run reach` answers that, and
 its last row should read `0%`.
 
-- One command (`package.json` `bin`): `mc` → `src/mc-cli.js`, the page and its
-  verbs, falling through to `src/bin-mc.js`, whose whole table is `mc vault`.
-  The `memoro` and `memoro-cli` binaries went with ruling 24.
+- Two commands (`package.json` `bin`): `mc` → `src/mc-cli.js`, the page and its
+  verbs, falling through to `src/bin-mc.js`, whose whole table is `mc vault`;
+  and read-only `mc-admin` → `src/mc-admin-cli.js`, which delegates its fixed
+  dashboard child through `mc keys run` (see [mc-admin](mc-admin.md)). The
+  `memoro` and `memoro-cli` binaries went with ruling 24.
 - `docs/plans/` holds only the custody design `mc vault` still implements
   ([mc-custody.md](../plans/mc-custody.md), [vault-import.md](../plans/vault-import.md)).
   Nothing there is an instruction.
