@@ -17,18 +17,18 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
   goal. The next session starts from the last entry's `Next`.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `plan → build
-  → review → finish → merging → done` (or `dropped`), status `ready` or
+  → review → finish → merge → done` (or `dropped`), status `ready` or
   `blocked`. The stage only moves forward, each stage with one owner: a plan
   session writes it in `plan` and moves it to `build`; a build session moves
-  it to `review` or sets `blocked`; a review session moves it to `merging`
-  (`mc goal stage merging` queues the head it judged) or `finish` (with
-  REVIEW.md); a plan session finishes it to `merging`; the merger sets `done`.
+  it to `review` or sets `blocked`; a review session moves it to `merge`
+  (`mc goal stage merge` sends all registered PRs to merge) or `finish` (with
+  REVIEW.md); a plan session finishes it to `merge`; the merger sets `done`.
   `blocked`, in any stage, waits on a person; `mc goal ready` keeps the stage.
 - **Refused.** mc refuses every session a backward move, naming both stages
   — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
   logged. It refuses `done` and `dropped` from a build or review session,
   any move but `build → review` from a build session, any but `review →
-  merging|finish` from a review, `finish` without REVIEW.md, and `review` from
+  merge|finish` from a review, `finish` without REVIEW.md, and `review` from
   a session other than plan while a criterion is not met. The runner starts no
   session on `plan`, on `blocked`, or on a goal with no criterion, and the
   merger does not land a goal with one unmet.

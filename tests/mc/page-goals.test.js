@@ -197,26 +197,26 @@ describe('a goal\'s stage and status on the page, and one waiting on a person', 
       goals: [
         { programme: 'mc', goal: 'asked', repos: ['memoro-cli'], stage: 'build', status: 'blocked', log: [asked], problems: [] },
         { programme: 'mc', goal: 'died', repos: ['memoro-cli'], stage: 'review', status: 'blocked', log: [died], problems: [] },
-        { programme: 'mc', goal: 'judged', repos: ['memoro-cli'], stage: 'merging', status: 'ready', log: [], problems: [] },
+        { programme: 'mc', goal: 'judged', repos: ['memoro-cli'], stage: 'merge', status: 'ready', log: [], problems: [] },
       ],
     });
     assert.deepEqual([byQuestion.stage, byQuestion.status, byQuestion.person, byQuestion.question], ['build', 'blocked', true, 'which table?']);
     assert.deepEqual([byRunner.person, byRunner.question], [true, died.comment]);
-    assert.deepEqual([judged.stage, judged.status, judged.person, judged.question], ['merging', 'ready', false, null]);
+    assert.deepEqual([judged.stage, judged.status, judged.person, judged.question], ['merge', 'ready', false, null]);
     assert.equal('plan' in judged, false, 'nothing waits on plan any more');
   });
 
-  it('the page draws review and merging green, and a blocked goal in the colour of what waits on a person', () => {
+  it('the page draws review and merge green, and a blocked goal in the colour of what waits on a person', () => {
     const rows = [
       { name: 'judged', programme: 'mc', repos: ['memoro-cli'], stage: 'review', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
-      { name: 'landing', programme: 'mc', repos: ['memoro-cli'], stage: 'merging', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
+      { name: 'landing', programme: 'mc', repos: ['memoro-cli'], stage: 'merge', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
       { name: 'stuck', programme: 'mc', repos: ['memoro-cli'], stage: 'finish', status: 'blocked', sessions: 2, last: { next: null, comment: 'split it?' }, running: false, person: true, question: 'split the goal in two?', problems: [] },
     ];
     const data = pageData({ programmes: programmesSection({ goalRows: rows.map(goalRow), programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 140, now: NOW, colour: true }));
     const line = (name) => goalLineOf(lines, name);
     assert.match(line('judged'), /\u001b\[32mreview/u, 'review is green');
-    assert.match(line('landing'), /\u001b\[32mmerging/u, 'merging is green');
+    assert.match(line('landing'), /\u001b\[32mmerge/u, 'merge is green');
     assert.match(plain(line('stuck')), /finish .*blocked · waits on a person · split the goal in two\?/u);
     assert.match(line('stuck'), /\u001b\[31mfinish/u, 'a blocked goal\'s stage is red');
     assert.match(line('stuck'), /\u001b\[31mwaits on a person/u, 'waits on a person is red');

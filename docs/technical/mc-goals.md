@@ -2,7 +2,7 @@
 
 **Status:** current · 2026-11-03 · derived from `src/mc/goals.js`,
 `src/mc/criteria.js`, `src/mc/goal-convert.js`, `src/mc/project-convert.js`, `src/mc/commands/goal.js` (`refusedMove`,
-`queueJudged`), `src/mc/run.js` (`goalPass`, `runGoal`, `goalWork`,
+`queueGoal`), `src/mc/run.js` (`goalPass`, `runGoal`, `goalWork`,
 `reviewRoute`, `afterReview`, `afterPlan`, `goalWithoutWord`, `convertAfter`,
 `planRoute`), `src/mc/goal-archive.js`, `src/mc/merger.js` (`landJob`, `tellGoal`),
 `src/mc/hooks.js` (`reviewStopDecision`), `canon/roles/build-session.md`
@@ -26,23 +26,23 @@ at most one plan, any number of builds while they write their word (three
 silent ones move it on), two reviews, one finish and one plan session on a red.
 
 ```
-stage:  plan → build → review → finish → merging → done      (and dropped, from any)
+stage:  plan → build → review → finish → merge → done      (and dropped, from any)
 status: ready | blocked
 
 plan     ── a plan session moves it ──────────────────────────▶ build
 build    ── build session: done with the task ────────────────▶ review
 build    ── build session: cannot solve it ───────────────────▶ build · blocked
 build    ── three sessions without a word (runner) ───────────▶ finish
-review   ── review: OK, mc goal stage merging (queues its head) ▶ merging
+review   ── review: OK, mc goal stage merge (queues its head) ▶ merge
 review   ── review: not OK, REVIEW.md, mc goal stage finish ──▶ finish
 review   ── no open pull request (runner) ────────────────────▶ finish
 review   ── the review died (runner) ─────────────────────────▶ review · ready, reviewed again
 review   ── a second review died (runner) ────────────────────▶ review · blocked
-finish   ── plan session: fixed, published ───────────────────▶ merging
+finish   ── plan session: fixed, published ───────────────────▶ merge
 finish   ── plan session ended still in finish (runner) ──────▶ finish · blocked
-merging  ── merger landed ────────────────────────────────────▶ done
-merging  ── merger red, or the head moved ────────────────────▶ merging · ready, one plan session
-merging  ── the next red, or the head moved again ────────────▶ merging · blocked
+merge  ── merger landed ────────────────────────────────────▶ done
+merge  ── merger red, or the head moved ────────────────────▶ merge · ready, one plan session
+merge  ── the next red, or the head moved again ────────────▶ merge · blocked
 any      ── blocked waits on a person; ready keeps the stage ─▶ the same stage
 any      ── only a person moves a stage backward, logged ─────▶ an earlier stage
 ```
@@ -89,7 +89,7 @@ written, and a write that would make one is refused with the field named.
 }
 ```
 
-- `stage` — `plan`, `build`, `review`, `finish`, `merging`, `done` or
+- `stage` — `plan`, `build`, `review`, `finish`, `merge`, `done` or
   `dropped` (*Stages*). A goal starts in `plan`, or `build` with `mc goal new
   --stage build`.
 - `status` — `ready` or `blocked`. An unknown stage or status is refused with
@@ -153,7 +153,7 @@ Next: what the next session should do
 - A session count is every entry whose tool is neither `runner` nor `person`.
 - The **last build entry** is the last entry a session wrote in `build`, or
   the one that moved the goal to `review` (`lastBuildEntry`); a review's own
-  entry names `merging` or `finish`. Its `<tool> <model>` is the model a
+  entry names `merge` or `finish`. Its `<tool> <model>` is the model a
   review may not run on.
 - A review's entry is one line, naming the stage and the files it wrote.
   The merger writes `Done: landed #<pr> as <sha>`, or `Done: merger answered
@@ -199,13 +199,12 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--stage <s>] [--status ready|blocked]`** —
   appends one entry; at least one field is needed. `--stage` and `--status`
   also set them. The goal is `MC_GOAL`'s when none is named.
-- **`stage [<p>/<g>] <stage> [--reason "…"] [--sha <sha>]`** — moves the stage
+- **`stage [<p>/<g>] <stage> [--reason "…"]`** — moves the stage
   (`log --stage <stage> --comment <reason>`); a stage moved to is `ready`.
-  From a review session, `merging` first queues the goal's open pull request
-  on `goal/<g>` for the merger as `mc merge` does, at the head the review
-  judged (`MC_REVIEW_HEAD`, which the runner sets, or `--sha`), with the goal
-  and that sha on the job (`queueJudged`); no head, no pull request or a
-  queue that fails writes nothing.
+  `merge` records the review or plan session's decision and queues every
+  registered PR, without head or criteria checks. A queue failure preserves
+  the decision for retry and runner recovery. Existing `merging` records and
+  log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
@@ -247,20 +246,19 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   here fails the move (`remakeUnbuiltBranches`, `goals.js`).
 - **Forward only, each stage its owner** (`refusedMove`). A session is a
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. No session moves a
-  stage backward: `mc: a session does not move a goal back — merging → review;
+  stage backward: `mc: a session does not move a goal back — merge → review;
   only a person does (mc goal stage <programme>/<goal> review, MC_TOOL=person)`,
   with nothing written. A person may, and the entry says `moved back from
-  merging to review by a person`. A plan session (`MC_ROLE=plan-session`)
+  merge to review by a person`. A plan session (`MC_ROLE=plan-session`)
   makes any forward move and sets any status. A build session
   (`build-session:goal`) moves `build` to `review` or sets `blocked`, and is
   refused anything else — `done`, `dropped`, `ready`, another stage. A review
-  session (`review-session:goal`) moves a goal in `review` to `merging` or
+  session (`review-session:goal`) moves a goal in `review` to `merge` or
   `finish` and sets no status; `finish` is refused until `REVIEW.md` is in
   the goal's directory. A session other than plan is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
-  criterion met mc/g 2` (`unmetGoalWords`). The merger refuses to land it anyway
-  (*The merger*).
+  criterion met mc/g 2` (`unmetGoalWords`). The session decides when to merge.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
   criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
@@ -332,7 +330,7 @@ turns a live project into goals:
   that branch — the local one, or a local branch of that name from origin's —
   so its pull request stays the goal's; any other goal's worktree is
   `goal/<name>` from `origin/main`. The runner's review, `mc goal stage
-  merging` and `mc goal archive` read a goal's branch from its worktree
+  merge` and `mc goal archive` read a goal's branch from its worktree
   (`goalBranch`), and the page finds its pull request by the ones GOAL.json
   says carry it as well as by `goal/<name>`;
 - a branch-flow project — its last step `kind: review` — is one goal, named
@@ -396,11 +394,11 @@ A goal written before stages has one `status`. The same pass (`phaseGoals`,
 status and its log, with an entry `Done: <stage> · <status>, from <old>`:
 
 - `open` and `waiting` → `build · ready`;
-- `review` → `review · ready`, or `merging · ready` when the runner's last word
+- `review` → `review · ready`, or `merge · ready` when the runner's last word
   was `queued #<pr> at <sha> for the merger`;
 - `blocked` → the stage its log says it was blocked in, `· blocked`: a red
   review's verdict is `finish`; the merger's red or a queued green is
-  `merging`; the runner's word on a review (no verdict, no pull request, a
+  `merge`; the runner's word on a review (no verdict, no pull request, a
   moved head) or an entry in `review` is `review`; anything else — a build
   session's question, three sessions without a word, an entry in `open` — is
   `build`. The runner's `plan session ended …` entry and a person's block are
@@ -417,7 +415,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    (*Converting …*), of the goals the runner starts a session on
    (`goalSession`, `goals.js`) — `build · ready` with a criterion (a build),
    `review · ready` (a review), `finish · ready` (a plan session), and
-   `merging · ready` whose last entry is the merger's red and none of whose
+   `merge · ready` whose last entry is the merger's red and none of whose
    pull requests is in the merger's line (a plan session) — never `plan`,
    never `blocked`, in the phase their programme is in or an earlier one
    (*Phases*), and not held, on any repository (a lane serves them all), the
@@ -447,7 +445,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    request and head: the open pull request on `goal/<goal>`, asked of GitHub
    before the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
    `MC_SESSION_STARTED` are set for it. With none, the goal goes to
-   `finish · ready` with a runner entry. A goal in `finish`, or in `merging`
+   `finish · ready` with a runner entry. A goal in `finish`, or in `merge`
    after a red, gets a headless plan session (*Finish and a red merge: a plan
    session*). `MC_ROLE`, `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are
    set. If the role's file is missing on the machine, the goal is skipped.
@@ -459,17 +457,17 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    That is the guard against a session that fails the same way every time;
    there is no attempt counter.
 5. **After a review** (`afterReview`). The review decides, with `mc goal stage
-   merging` or `finish`; the runner reads neither its words nor REVIEW.md nor
+   merge` or `finish`; the runner reads neither its words nor REVIEW.md nor
    any verdict, and queues nothing. A review that ended with the goal still in
    `review` died (a crash, a limit): the runner writes `the review ended with
    the goal still in review — a review runs again`, and the goal stays
    `review · ready`. A second that dies in the same `review` sets `review ·
    blocked`, waiting on a person.
 6. **After a plan session** (`afterPlan`). In `finish`: one that ends with the
-   goal still `finish · ready` sets it `finish · blocked`. In `merging`: one
+   goal still `finish · ready` sets it `finish · blocked`. In `merge`: one
    whose pull request is in the merger's line again gets the runner's entry
    `plan session took the red; the pull request is in the merger's line
-   again`, so the red wakes nothing again; one whose is not sets `merging ·
+   again`, so the red wakes nothing again; one whose is not sets `merge ·
    blocked`.
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
@@ -483,12 +481,12 @@ free lane; a plan session ranks with the reviews
 
 A goal in `finish · ready` — a review found it not OK and wrote REVIEW.md,
 three build sessions left no word, or its review found no pull request — and
-one in `merging · ready` after the merger's red or a moved head get one
+one in `merge · ready` after the merger's red or a moved head get one
 headless plan session. It finishes the goal itself; nothing goes back to a
 build session or a second review.
 
 - **Where and on what.** The `plan-session` role (`canon/roles/plan-session.md`,
-  its section *Headless, on a goal in finish or merging*), on opus — the role's
+  its section *Headless, on a goal in finish or merge*), on opus — the role's
   `fable` (ruling 6) until 2026-11-03, when the headless plan moved to opus — on
   claude at high effort, pinned as a review is (`planRoute`), with the billing
   any session has. It stands in the programme's directory
@@ -501,14 +499,14 @@ build session or a second review.
   sessions, so the current file that holds a build or a review holds it too.
 - **What it does.** In `finish` it reads REVIEW.md when there is one and
   LOG.md, fixes in the goal's worktree, `mc gate`, commits, `mc publish` (which
-  queues it), and moves the goal to `merging`; it is not reviewed again. In
-  `merging` it takes the red — main merged in, a conflict, the test named —
+  queues it), and moves the goal to `merge`; it is not reviewed again. In
+  `merge` it takes the red — main merged in, a conflict, the test named —
   and publishes, which queues it again. It may drop a wrong goal, or set it
   blocked with the question for Martin. It never does Martin's acts —
   `mc deploy`, production data, credentials, `--admin`.
 - **Bounded.** Each runs once: `finish` left as it was is `finish · blocked`,
-  a `merging` red not queued again is `merging · blocked`, and the next red in
-  `merging` blocks it by itself (*The merger*).
+  a `merge` red not queued again is `merge · blocked`, and the next red in
+  `merge` blocks it by itself (*The merger*).
 
 ## What a build session does
 
@@ -516,7 +514,7 @@ The role is `canon/roles/build-session.md`, started as `build-session:goal`:
 what every headless build does is written once, in the shared part, and the
 `goal` part keeps only what is a goal's — its
 brief, LOG.md and the criterion verbs. It works on the branch as it is, never
-fetching or merging `origin/main` to keep up: a conflict the merger reports
+fetching or merge `origin/main` to keep up: a conflict the merger reports
 is the one time a build merges `origin/main`. It works item after item until
 the criteria hold, and ends at a boundary between two only when the work is
 done, when it is blocked, or when its turns cost more than a fresh session
@@ -545,10 +543,10 @@ checks, in order:
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
 output som ingen läser."* Its output is exactly three things:
 
-- **The stage, always one of two.** OK: `mc goal stage merging`, which queues
-  the pull request at the head it judged (*The verbs*). Not OK: `REVIEW.md` in
+- **The stage, always one of two.** OK: `mc goal stage merge`, which queues
+  all registered pull requests (*The verbs*). Not OK: `REVIEW.md` in
   the goal's directory — the head sha judged, what is wrong and where — then
-  `mc goal stage finish`. Nobody reads a review that went to `merging`, so it
+  `mc goal stage finish`. Nobody reads a review that went to `merge`, so it
   writes no REVIEW.md then.
 - **One proposal, always** — whichever stage, one file in
   `~/mc/programs/<programme>/proposals/` with what it noticed beyond the goal.
@@ -580,7 +578,7 @@ memoro and memoro-cli — left the goal for a person to close by hand.
   found any other way, a goal that is not there is none. `mc goal pr` adds one
   by hand.
 - **The merger tells the goal whoever queued it.** A job's goal is its own
-  (`job.goal`, the review's `mc goal stage merging`), else the goal whose `prs` name it
+  (`job.goal`, the review's `mc goal stage merge`), else the goal whose `prs` name it
   (`goalOfJob`, merger.js, over `programsGoals`). So a pull request a person
   queues with `mc merge`, or one `mc publish` queued, is the goal's too.
 - **Done when all have landed.** Landed, and the goal carries no other pull
@@ -589,7 +587,7 @@ memoro and memoro-cli — left the goal for a person to close by hand.
   landed or closed`). The runner's `settleLanded` pass (run.js), at most every
   five minutes, asks GitHub for the state of each pull request of every goal
   that is not finished and carries any, and sets `done` when every
-  one is merged or closed and at least one merged (`prsLanded`) — however each
+  one is merged (`prsLanded`) — however each
   landed: the merger, `mc merge --docs`, `--admin`, or on GitHub. A pull
   request GitHub cannot say about leaves the goal as it is.
 - **Review stays on the first repository.** A goal's review session is told
@@ -601,31 +599,13 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 
 ## The merger
 
-A goal's job carries the goal and the head its review judged (`merge-queue.js`
-`goal`, `sha`); a job without one answers to the goal whose `prs` name it
-(*Done when its work has landed*). The merger (`landJob`, `tellGoal`):
-
-- **Lands only a goal whose criteria hold.** Before any round, a job whose goal
-  has a criterion not met — or none — is answered red, `stopped_at:
-  unmet-criteria`, with the criteria named (`unmetGoalWords`). It is a
-  red like any other (below). A goal the merger cannot read is not checked.
-- **Lands only that head.** It asks GitHub for the head before the round; a
-  head that has moved is answered `moved` with no round spent, and a push
-  while the round runs is `moved` too. A moved job leaves the queue; the goal
-  never goes back to `review`.
-- **Landed:** stage `done`, with a runner entry naming the pull request and the
-  landed sha — when the goal carries no other pull request; else the landing
-  is an entry and the runner sets `done` once the rest has landed.
-- **Red or moved, in `merging`:** the goal stays in `merging`, with a runner
-  entry `merger answered red on #<pr>` (or `moved`) and the round's reason.
-  The first in its `merging` is `merging · ready`, for one plan session; the
-  next is `merging · blocked`, waiting on a person. A goal in another stage
-  (a person queued its pull request) gets the entry and does not move. A red
-  only under load is requeued as any job's is, and says nothing to the goal
-  until it is answered.
-
-`mc merge` on a goal's pull request queues it again as the goal's, with no
-reviewed head; that is a person's act, and its landing still sets the goal `done`.
+A session sends a goal to `merge`. Every registered PR is merged directly,
+without another gate, criterion check or reviewed-head check. Each landing is
+recorded in LOG.md under the shared lock; when the last PR lands the goal is
+`done`. A conflict is reported to a plan session for resolution, and a second
+failure blocks it for a person. The merger does not resolve content conflicts.
+The runner recovers missing queue entries after interruption; it executes the
+existing decision and does not move a goal to `merge` on its own.
 
 ## Stages
 
@@ -636,9 +616,9 @@ Each stage has one owner, and a goal passes each once:
   ready to be built.
 - `build` — the runner's build sessions, while it is `ready`.
 - `review` — one review session decides; one that dies is run again once.
-- `finish` — one headless plan session finishes it to `merging`.
-- `merging` — the merger's; the runner starts no session, except one plan
-  session after its first red or moved head.
+- `finish` — one headless plan session finishes it to `merge`.
+- `merge` — the merger's; the runner starts no session, except one plan
+  session after its first merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
 - `dropped` — let go without landing (`mc goal drop`), by a person or plan,
@@ -666,11 +646,10 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
   candidate can run on its plan.
 - **No merge by a build session.** A build session publishes with
   `--no-merge`; a review session publishes nothing. A review's `mc goal stage
-  merging` queues the goal's pull request at the head it judged, and only that
-  head lands; a finish or merging plan session queues with `mc publish`.
+  merge` executes its decision for all registered PRs; plan uses the same verb.
 - **No close-out document.** `mc goal archive` moves a finished goal aside
   and writes one row; nothing is written into a repository.
 
 Programme-level goals are not built, and a headless plan session is started
-only on a goal in `finish`, or in `merging` after a red: not by a goal that
+only on a goal in `finish`, or in `merge` after a red: not by a goal that
 landed.

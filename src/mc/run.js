@@ -13,7 +13,7 @@
  * Where a goal stands is its own GOAL.json and LOG.md (goals.js). A session
  * writes its entry with `mc goal log`; one that ends without a word gets a
  * runner entry, and three of those in a row block the goal (`goalWithoutWord`).
- * A green review queues the head it judged for the merger (`settleReview`);
+ * A review or plan session sends its goal to merge;
  * a goal whose pull requests have all landed is set done (`settleLanded`); a
  * goal waiting on `after` is opened when those have landed (`releaseWaiting`).
  *
@@ -66,7 +66,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1224,7 +1224,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The goals a lane could start now, as `pickWork` candidates: those the
    * runner starts a session on (`goalSession`: `build · ready`, `review ·
-   * ready`, `finish · ready`, and `merging · ready` after a red while its pull
+   * ready`, `finish · ready`, and `merge · ready` after a red while its pull
    * request is out of the merger's line), on one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
@@ -1248,25 +1248,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (why) reviewWaits.set(name, why); else reviewWaits.delete(name);
       return !why;
     };
-    const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
+    const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const all = goals();
     return all
-      .filter((goal) => goalSession(goal, merging) !== null
+      .filter((goal) => goalSession(goal, merge) !== null
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
       .map((goal) => {
-        const kind = goalSession(goal, merging);
+        const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: kind === 'plan' ? null : 'goal', since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
       });
   }
 
   /**
    * The session a goal gets, by its stage (`goalSession`): `review` in
-   * review, `plan` in finish or merging, else `build`. Only a candidate of
+   * review, `plan` in finish or merge, else `build`. Only a candidate of
    * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
     if (goal.stage === 'review') return 'review';
-    return goal.stage === 'finish' || goal.stage === 'merging' ? 'plan' : 'build';
+    return goal.stage === 'finish' || goal.stage === 'merge' ? 'plan' : 'build';
   }
 
   /**
@@ -1353,7 +1353,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * Goals whose every pull request (`prs`) has landed or closed, one landed,
+   * Goals whose every pull request (`prs`) has landed,
    * set `done` — however each landed: the merger, `mc merge --docs`, `--admin`,
    * or on GitHub by hand. The merger sets done itself when the pull request it
    * lands is the goal's last; this pass is for the rest, and asks GitHub at
@@ -1374,6 +1374,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (!asked.ok) return null;
         try { return JSON.parse(asked.stdout || 'null')?.state ?? null; } catch { return null; }
       };
+      // Recover the execution of an existing merge decision, including a
+      // process that stopped after saving the stage but before queueing all PRs.
+      // Red jobs belong to a session and are never reset here.
+      if (goal.stage === 'merge' && goal.status === 'ready' && !mergeAnswered(goal.log.at(-1))) {
+        const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+        for (const item of goal.prs) {
+          if (pending.some((job) => job.repo === item.repo && Number(job.pr) === Number(item.pr))) continue;
+          if (goal.log.some((entry) => String(entry.done ?? '').startsWith(`${item.repo}#${item.pr} landed `))) continue;
+          const repo = repos.find((entry) => entry.name === item.repo);
+          try {
+            deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.pr,
+              holder: { name: `goal:${goalName(goal)}` },
+              goal: { programme: goal.programme, goal: goal.goal, dir: goal.dir }, now: deps.now() });
+          } catch (error) { say(`${goalName(goal)}: ${item.repo}#${item.pr} could not be queued (${error.message})`); }
+        }
+      }
       const settled = prsLanded(goal.prs, stateOf);
       if (!settled.done) continue;
       goalState(goal, goalName(goal), { stage: 'done' }, {
@@ -1399,7 +1415,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * After a review session. The review decides (`canon/roles/review-session.md`):
-   * its verb moved the goal to `merging`, queued at the head it judged, or to
+   * its verb moved the goal to `merge`, all registered PRs sent to merge, or to
    * `finish`; the runner reads neither its words nor any file. A review that
    * ended with the goal still in `review` died (a crash, a limit): the goal
    * stays `review · ready` with the runner's entry, and the next review runs;
@@ -1418,13 +1434,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * After a headless plan session on `finish` or on a red in `merging`. In
-   * `finish` it publishes and moves the goal to `merging`, drops it, or sets
+   * After a headless plan session on `finish` or on a red in `merge`. In
+   * `finish` it publishes and moves the goal to `merge`, drops it, or sets
    * it blocked; one that ends with the goal still `finish · ready` sets it
-   * `finish · blocked`, so no second one starts. In `merging` it takes the
+   * `finish · blocked`, so no second one starts. In `merge` it takes the
    * red and queues the pull request again: one in the merger's line gets the
    * runner's entry (the red is taken, so it wakes no session again); one not
-   * in line sets `merging · blocked`.
+   * in line sets `merge · blocked`.
    */
   function afterPlan(goal, name, { stage }) {
     const now = stateNow(goal);
@@ -1433,8 +1449,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — waits on a person' });
       return;
     }
-    const merging = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const queued = (goal.prs ?? []).some((item) => merging.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
+    const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
+    const queued = (goal.prs ?? []).some((item) => merge.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
     if (queued) goalState(goal, name, {}, { done: 'plan session took the red; the pull request is in the merger\'s line again' });
     else goalState(goal, name, { status: 'blocked' }, { comment: 'the plan session on the red ended with nothing in the merger\'s line — waits on a person' });
   }
@@ -1479,9 +1495,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * billing, in the goal's worktree with the goal role. Returns 'ran', 'stop'
    * or a `skipped` word. A goal in `review` gets a review
    * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
-   * with its pull request and head (MC_REVIEW_HEAD, which its `mc goal stage
-   * merging` queues), and `afterReview` after it. A goal in `finish`, or in
-   * `merging` after a red, gets a headless plan session and `afterPlan`.
+   * with its pull request and head (MC_REVIEW_HEAD), and `mc goal stage
+   * merge` executes its decision, with `afterReview` after it. A goal in `finish`, or in
+   * `merge` after a red, gets a headless plan session and `afterPlan`.
    *
    * A session cut off by the API is not resumed: it ends, its goal is picked
    * again, and the next session reads `LOG.md` and the branch. The worktree
@@ -1593,7 +1609,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
           // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
           MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
-          // A review queues the head it judged (`mc goal stage merging`); the Stop hook reads when it began.
+          // The review uses this head as context; the Stop hook reads when it began.
           ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
           ...scratchEnv,

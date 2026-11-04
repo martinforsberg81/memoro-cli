@@ -314,15 +314,15 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
 /**
  * What a headless plan session on a goal is told: the goal, the stage it
  * takes it in — `finish` (a review found it not OK, or the build could not
- * end it) or `merging` (the merger answered red, or its head moved) — the
+ * end it) or `merge` (the merger answered red, or its head moved) — the
  * runner's last word on it, and where its worktree is, which it works in
  * itself. The rest is `canon/roles/plan-session.md`'s.
  */
 export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', why = null, brief = null }) {
   const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
-  const task = stage === 'merging'
-    ? 'it is in merging and the merger did not land it: take the red in its worktree, publish, and queue it again'
-    : 'it is in finish: read its REVIEW.md, when there is one, and LOG.md, fix it in its worktree, publish, and move it to merging';
+  const task = stage === 'merge'
+    ? 'it is in merge and the merger did not land it: take the red in its worktree, publish, and queue it again'
+    : 'it is in finish: read its REVIEW.md, when there is one, and LOG.md, fix it in its worktree, publish, and move it to merge';
   return withBrief([
     `The goal ${name} is yours to finish, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,

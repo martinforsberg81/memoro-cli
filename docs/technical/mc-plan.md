@@ -50,7 +50,7 @@ write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. Interactive, Martin is at the
 terminal. Headless, it never performs his acts: deploy, production data,
 credentials or an admin merge. The runner starts a headless plan session
-only for a goal in `finish`, or in `merging` after its first red or moved head.
+only for a goal in `finish`, or in `merge` after its first red or moved head.
 That session starts in the programme directory and can enter the goal's
 worktree to finish it; the runner does not place it in a programme checkout.
 See [mc-goals.md](mc-goals.md).

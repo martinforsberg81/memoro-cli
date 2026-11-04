@@ -59,9 +59,9 @@ test('parseGoal reads GOAL.json: its fields, prose as paragraphs, criteria and d
 
 test('parseGoal names each problem by its field: not JSON, a stage, status or class unknown, no repository, a bad repository name', () => {
   assert.match(parseGoal('# no json\n').problems.join(), /^GOAL\.json is not JSON/u);
-  assert.deepEqual(STAGES, ['plan', 'build', 'review', 'finish', 'merging', 'done', 'dropped']);
+  assert.deepEqual(STAGES, ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped']);
   assert.deepEqual(STATUSES, ['ready', 'blocked']);
-  assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: 'started' })).problems.join(), /^stage: one of plan, build, review, finish, merging, done, dropped, not started$/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: 'started' })).problems.join(), /^stage: one of plan, build, review, finish, merge, done, dropped, not started$/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'started' })).problems.join(), /^status: one of ready, blocked, not started$/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { status: undefined })).problems.join(), /status: .*not missing/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: undefined })).problems.join(), /stage: .*not missing/u);
@@ -226,7 +226,7 @@ test('setGoalState rewrites the stage or status and appends the entry with both,
   assert.equal(parseLog(store[`${dir}/${LOG_FILE}`]).at(-1).stage, 'review');
 
   const before = { ...store };
-  assert.deepEqual(setGoalState({ dir, stage: 'open', entry, read, write }).problems, ['stage: one of plan, build, review, finish, merging, done, dropped, not open']);
+  assert.deepEqual(setGoalState({ dir, stage: 'open', entry, read, write }).problems, ['stage: one of plan, build, review, finish, merge, done, dropped, not open']);
   assert.deepEqual(setGoalState({ dir, status: 'waiting', entry, read, write }).problems, ['status: one of ready, blocked, not waiting']);
   assert.deepEqual(store, before, 'nothing written');
   const refused = model({ [`${dir}/${GOAL_FILE}`]: 'nothing here' });
@@ -237,11 +237,11 @@ test('setGoalState rewrites the stage or status and appends the entry with both,
 
 test('backward: an earlier stage, or out of done or dropped; staying, forward and dropping are not', () => {
   assert.equal(backward('review', 'build'), true);
-  assert.equal(backward('merging', 'review'), true);
+  assert.equal(backward('merge', 'review'), true);
   assert.equal(backward('finish', 'plan'), true);
-  assert.equal(backward('done', 'merging'), true);
+  assert.equal(backward('done', 'merge'), true);
   assert.equal(backward('dropped', 'done'), true);
-  for (const [from, to] of [['plan', 'build'], ['build', 'review'], ['review', 'finish'], ['review', 'merging'], ['finish', 'merging'], ['merging', 'done'], ['build', 'dropped'], ['build', 'build'], ['plan', 'merging']]) {
+  for (const [from, to] of [['plan', 'build'], ['build', 'review'], ['review', 'finish'], ['review', 'merge'], ['finish', 'merge'], ['merge', 'done'], ['build', 'dropped'], ['build', 'build'], ['plan', 'merge']]) {
     assert.equal(backward(from, to), false, `${from} → ${to}`);
   }
 });
@@ -270,13 +270,13 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
 const staged = (stage, status = 'ready', log = [], extra = {}) => ({ programme: 'p', goal: 'g', stage, status, repos: ['memoro'], problems: [], prs: [], log, success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra });
 const said = (tool, stage, done, comment = null) => ({ at: '2026-11-02T10:00Z', tool, model: null, stage, status: 'ready', done, comment, next: null });
 
-test('goalSession: build · ready is a build, review · ready a review, finish · ready a plan, merging · ready after a red a plan; never plan, never blocked', () => {
+test('goalSession: build · ready is a build, review · ready a review, finish · ready a plan, merge · ready after a red a plan; never plan, never blocked', () => {
   assert.equal(goalSession(staged('build')), 'build');
   assert.equal(goalSession(staged('build', 'ready', [], { success_criteria: [] })), null, 'no criterion yet: not started');
   assert.equal(goalSession(staged('review')), 'review');
   assert.equal(goalSession(staged('finish')), 'plan');
-  assert.equal(goalSession(staged('merging')), null, 'in the merger\'s hands');
-  const red = (kind) => staged('merging', 'ready', [said('runner', 'merging', redMergeText(12, kind))], { prs: [{ repo: 'memoro', pr: 12 }] });
+  assert.equal(goalSession(staged('merge')), null, 'in the merger\'s hands');
+  const red = (kind) => staged('merge', 'ready', [said('runner', 'merge', redMergeText(12, kind))], { prs: [{ repo: 'memoro', pr: 12 }] });
   assert.equal(goalSession(red('red')), 'plan');
   assert.equal(goalSession(red('moved')), 'plan', 'a moved head the same');
   assert.equal(goalSession(red('red'), [{ repo: 'memoro', pr: 12, state: 'queued' }]), null, 'queued again: the merger\'s');
@@ -287,14 +287,14 @@ test('goalSession: build · ready is a build, review · ready a review, finish �
 
 test('the merger\'s red, inStage and a review that died before', () => {
   assert.equal(redMergeText(31), 'merger answered red on #31');
-  assert.equal(mergeAnswered(said('runner', 'merging', redMergeText(31))), true);
-  assert.equal(mergeAnswered(said('claude', 'merging', redMergeText(31))), false, 'only the runner\'s');
+  assert.equal(mergeAnswered(said('runner', 'merge', redMergeText(31))), true);
+  assert.equal(mergeAnswered(said('claude', 'merge', redMergeText(31))), false, 'only the runner\'s');
   const log = [said('claude', 'build', 'x'), said('runner', 'review', null, `${REVIEW_DIED_TEXT} — a review runs again`), said('runner', 'review', null, 'y')];
   assert.equal(inStage(log, 'review').length, 2);
   assert.equal(inStage(log, 'build').length, 0, 'only the entries at the end');
   assert.equal(reviewDiedBefore(log), true);
   assert.equal(reviewDiedBefore(log.slice(0, 1)), false);
-  assert.equal(mergeRetryDue(staged('merging', 'blocked', [said('runner', 'merging', redMergeText(1))])), false);
+  assert.equal(mergeRetryDue(staged('merge', 'blocked', [said('runner', 'merge', redMergeText(1))])), false);
 });
 
 test('nextGoal takes the goals the runner starts, oldest first, and leaves out what may refuses', () => {
@@ -307,7 +307,7 @@ test('nextGoal takes the goals the runner starts, oldest first, and leaves out w
 });
 
 test('waitsOnPerson: blocked, in any stage that is not finished', () => {
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merging']) assert.equal(waitsOnPerson(staged(stage, 'blocked')), true, stage);
+  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) assert.equal(waitsOnPerson(staged(stage, 'blocked')), true, stage);
   assert.equal(waitsOnPerson(staged('build')), false);
   assert.equal(waitsOnPerson(staged('done', 'blocked')), false);
 });
@@ -343,8 +343,8 @@ test('the phase a programme is in is the lowest of its unfinished goals; done an
   assert.equal(currentPhase([listed('mc/a', 'build'), { ...listed('mc/broken', null, null), problems: ['x'] }], 'mc'), 1, 'a goal that does not parse holds nothing back');
 });
 
-test('a goal in phase 2 is not picked while a goal in phase 1 is in build, review, finish or merging; it is when all are done or dropped; one phase runs side by side', () => {
-  for (const status of ['build', 'review', 'finish', 'merging']) {
+test('a goal in phase 2 is not picked while a goal in phase 1 is in build, review, finish or merge; it is when all are done or dropped; one phase runs side by side', () => {
+  for (const status of ['build', 'review', 'finish', 'merge']) {
     const goals = [listed('mc/first', status, 1, { repos: ['memoro'] }), listed('mc/second', 'build', 2)];
     assert.equal(phaseOpen(goals[1], goals), false, status);
     assert.equal(nextGoal(goals, { repos: ['memoro-cli'] }), null, `not picked while phase 1 is ${status}`);
@@ -391,12 +391,12 @@ test('prs: <repo>#<n> each once, written back as strings; a bad one is a problem
   assert.equal(prRef({ repo: 'memoro', pr: 3 }), 'memoro#3');
 });
 
-test('prsLanded: done when every pull request landed or closed and one landed; open or unknown is not', async () => {
+test('prsLanded: done when every pull request landed; closed, open or unknown is not', async () => {
   const { prsLanded } = await import('../../src/mc/goals.js');
   const prs = [{ repo: 'memoro', pr: 1 }, { repo: 'memoro-cli', pr: 2 }];
   const states = (map) => ({ repo, pr }) => map[`${repo}#${pr}`] ?? null;
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'MERGED' })).done, true);
-  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'CLOSED' })).done, true);
+  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'CLOSED' })).done, false);
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).done, false);
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED' })).done, false, 'unknown is not done');
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'CLOSED', 'memoro-cli#2': 'CLOSED' })).done, false, 'nothing landed');
@@ -435,13 +435,23 @@ test('goalLogRow: one table row, its pipes escaped, the last Done', async () => 
 test('stageSince is the entry that set the current stage, not a later entry that kept it; an entry from before stages counts by its done or dropped', async () => {
   const { stageSince } = await import('../../src/mc/goals.js');
   const log = [
-    { at: '2026-11-01T10:00Z', stage: 'merging', status: 'ready' },
+    { at: '2026-11-01T10:00Z', stage: 'merge', status: 'ready' },
     { at: '2026-11-02T10:00Z', stage: 'done', status: 'ready' },
     { at: '2026-11-03T10:00Z', stage: 'done', status: 'ready' },
   ];
   assert.equal(stageSince({ stage: 'done', log }), '2026-11-02T10:00Z');
   assert.equal(stageSince({ stage: 'dropped', log }), null, 'a stage the log does not hold');
   assert.equal(stageSince({ stage: 'done', log: [] }), null);
-  assert.equal(stageSince({ stage: 'merging', log }), null, 'the last entry is another stage: none began it');
+  assert.equal(stageSince({ stage: 'merge', log }), null, 'the last entry is another stage: none began it');
   assert.equal(stageSince({ stage: 'done', log: [{ at: '2026-10-01T10:00Z', stage: null, status: 'done' }] }), '2026-10-01T10:00Z');
+});
+
+// Existing goals must remain runnable after the public stage is renamed.
+test('legacy merging records and log headings read as merge and write the new stage', () => {
+  const goal = parseGoal(withGoal(GOAL_TEXT, { stage: 'merging' }));
+  assert.equal(goal.stage, 'merge');
+  assert.equal(JSON.parse(renderGoal(goal)).stage, 'merge');
+  const log = parseLog('## 2026-11-01T20:00Z · runner · merging · ready\n\nDone: merger answered red on #31\n');
+  assert.equal(log[0].stage, 'merge');
+  assert.equal(mergeRetryDue({ ...goal, log }), true);
 });

@@ -375,8 +375,8 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     } finally { m.cleanup(); }
   });
 
-  it('a goal in review, in merging or blocked keeps both; only done and dropped are finished', () => {
-    for (const [stage, status] of [['review', 'ready'], ['merging', 'ready'], ['build', 'blocked']]) {
+  it('a goal in review, in merge or blocked keeps both; only done and dropped are finished', () => {
+    for (const [stage, status] of [['review', 'ready'], ['merge', 'ready'], ['build', 'blocked']]) {
       const m = machine();
       try {
         const area = checkoutsOf(m);

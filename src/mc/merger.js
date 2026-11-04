@@ -38,7 +38,8 @@ import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
-import { appendEntry, goalOfPr, inStage, logStamp, mergeAnswered, prRef, redMergeText, setGoalState, unmetGoalWords } from './goals.js';
+import { runAsync as runGitAsync } from './git.js';
+import { appendEntry, goalOfPr, inStage, logStamp, mergeAnswered, prRef, redMergeText, setGoalState } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -51,7 +52,7 @@ import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
 import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
-import { runMergeRound } from './repo-merge.js';
+import { deployPull, runMergeRound } from './repo-merge.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { tsvHeader, tsvRow } from './run-plan.js';
@@ -433,12 +434,13 @@ export async function landJob(batch, {
   goalsOf = null,
   // A goal entry with no status change (goals.js `appendEntry`).
   noteGoal = appendEntry,
+  afterLanding = null,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
   const answer = async (job, landed, report) => {
     // A goal's head moved past the one its review judged: not OK any more.
-    // It leaves the queue, and the goal stays in merging for one plan session (`tellGoal`).
+    // It leaves the queue, and the goal stays in merge for one plan session (`tellGoal`).
     const moved = !landed && Boolean(job.goal) && (report?.stopped_at === 'pushed' || report?.stopped_at === 'moved');
     // A round the watch stopped for a new push: back in line at its place.
     const back = !landed && !moved && report?.stopped_at === 'pushed';
@@ -459,10 +461,30 @@ export async function landJob(batch, {
     }
   };
   const jobs = [].concat(batch);
+  // A session already decided that a goal should merge. Execute that decision
+  // directly: no criteria, reviewed-head check, gate or automatic conflict fix.
+  const ask = gh || realGh;
+  for (const one of [...jobs]) {
+    const goal = goalOfJob(one, goalsOf);
+    if (!one.goal && goal?.stage !== 'merge') continue;
+    let merged;
+    try {
+      merged = await ask(['pr', 'merge', String(one.pr), '--squash'], { cwd: one.repo_path });
+    } catch (error) { merged = { status: 1, stderr: error.message }; }
+    // Read the result, also covering a retry after the previous process landed
+    // the PR but died before recording its answer.
+    const facts = await prStateOf(one, ask);
+    const report = facts?.state === 'MERGED' ? { ...alreadyMerged(facts), already_merged: merged?.status !== 0 }
+      : { ok: false, merged: false, stopped_at: 'merge', reason: String(merged?.stderr || 'GitHub did not confirm the merge').trim() };
+    if (report.ok && afterLanding) {
+      try { await afterLanding(one); } catch (error) { say(`${one.repo}: could not pull the installation (${error.message})`); }
+    }
+    await answer(one, report.ok, report);
+    jobs.splice(jobs.indexOf(one), 1);
+  }
   // Asked first: a pull request somebody merged or closed on GitHub is
   // answered by itself and leaves the batch, rather than stopping the round
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
-  const ask = gh || realGh;
   for (const one of [...jobs]) {
     const facts = await prStateOf(one, ask);
     if (facts?.state === 'MERGED') {
@@ -470,27 +492,6 @@ export async function landJob(batch, {
       await answer(one, report.ok, report);
     } else if (facts?.state === 'CLOSED') await answer(one, false, closedOnGitHub(one));
     else continue;
-    jobs.splice(jobs.indexOf(one), 1);
-  }
-  // A goal's job lands only the head its review judged: one that has moved
-  // since is answered `moved` here, before any round is spent on it.
-  for (const one of [...jobs]) {
-    if (!one.goal || !one.sha) continue;
-    const head = await headOf(one, ask);
-    if (!head || head === one.sha) continue;
-    await answer(one, false, { ok: false, merged: false, stopped_at: 'moved', reason: `#${one.pr} is at ${head.slice(0, 12)}, not ${one.sha.slice(0, 12)}, the head its review judged` });
-    jobs.splice(jobs.indexOf(one), 1);
-  }
-  // Done means the goal's criteria hold: a goal's pull request with one not
-  // met — or with none — is answered red before any round is spent on it
-  // (`criteriaDoor` is the same door for a plan). A goal the merger cannot
-  // read (`success_criteria` null) is not checked.
-  for (const one of [...jobs]) {
-    const goal = goalOfJob(one, goalsOf);
-    if (!goal || !Array.isArray(goal.success_criteria)) continue;
-    const unmet = unmetGoalWords(goal, `${goal.programme}/${goal.goal}`);
-    if (!unmet) continue;
-    await answer(one, false, { ok: false, merged: false, stopped_at: 'unmet-criteria', reason: unmet });
     jobs.splice(jobs.indexOf(one), 1);
   }
   if (!jobs.length) return answers;
@@ -614,7 +615,10 @@ function keepRed(report, { root, repo, pr, batch, now }) {
  * on the heavy lane's round.
  */
 export function landerFor(deps) {
-  return (batch, lane, extra = {}) => landJob(batch, { ...deps, lane, ...extra });
+  return (batch, lane, extra = {}) => landJob(batch, {
+    afterLanding: (job) => deployPull({ git: (args, options) => runGitAsync(options.cwd, args), repoPath: job.repo_path, env: process.env, say: deps.say || (() => {}), installs: sourceLinkedInstallations }),
+    ...deps, lane, ...extra,
+  });
 }
 
 /**
@@ -666,8 +670,8 @@ export function goalOfJob(job, goalsOf) {
  * (`prs`) than this one, when the landing is written with no change and the
  * runner sets `done` once the rest has landed (`settleLanded`, run.js). Not
  * landed — red, or moved past the head its review judged — a goal in
- * `merging` stays there: the first time `merging · ready`, for one plan
- * session (`mergeRetryDue`), a second time in `merging` `merging ·
+ * `merge` stays there: the first time `merge · ready`, for one plan
+ * session (`mergeRetryDue`), a second time in `merge` `merge ·
  * blocked`, waiting on a person. A goal in another stage (a person queued it)
  * gets the answer written and does not move. A requeue says nothing yet: the
  * next round answers it.
@@ -679,26 +683,27 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
   const at = logStamp(now());
   const entry = (done, comment = null) => ({ at, tool: 'runner', model: null, done, comment, next: null });
   const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
-  const others = (goal.prs ?? []).filter((item) => !(item.repo === job.repo && item.pr === Number(job.pr)));
+  const others = (goal.prs ?? []).filter((item) => !(item.repo === job.repo && item.pr === Number(job.pr)))
+    .filter((item) => !(goal.log ?? []).some((entry) => String(entry.done ?? '').startsWith(`${prRef(item)} landed `)));
   const landedText = `landed #${job.pr} as ${report?.merge_commit || 'an unknown sha'}`;
-  const kept = { stage: goal.stage || 'merging', status: goal.status || 'ready' };
+  const kept = { stage: goal.stage || 'merge', status: goal.status || 'ready' };
   try {
     if (landed && others.length) {
-      noteGoal({ dir: goal.dir, entry: { ...entry(`${prRef({ repo: job.repo, pr: job.pr })} ${landedText}`, `the goal carries ${others.map(prRef).join(', ')} too — done when every one has landed or closed`), ...kept } });
+      noteGoal({ dir: goal.dir, entry: { ...entry(`${prRef({ repo: job.repo, pr: job.pr })} ${landedText}`, `the goal carries ${others.map(prRef).join(', ')} too — done when every one has landed`), ...kept } });
       say(`${label}: goal ${name} — landed; ${others.map(prRef).join(', ')} still to settle`);
       return;
     }
     const red = redMergeText(job.pr, moved ? 'moved' : 'red');
     const why = moved ? (report?.reason || 'the branch moved past the reviewed head') : reason;
-    if (!landed && goal.stage && goal.stage !== 'merging') {
-      noteGoal({ dir: goal.dir, entry: { ...entry(red, `${why} — the goal is in ${goal.stage}, not merging; it stays there`), ...kept } });
+    if (!landed && goal.stage && goal.stage !== 'merge') {
+      noteGoal({ dir: goal.dir, entry: { ...entry(red, `${why} — the goal is in ${goal.stage}, not merge; it stays there`), ...kept } });
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
     }
-    const again = !landed && inStage(goal.log ?? [], 'merging').some(mergeAnswered);
-    const change = landed ? { stage: 'done', entry: entry(landedText) }
-      : again ? { stage: 'merging', status: 'blocked', entry: entry(red, `${why} — the second in merging: waits on a person`) }
-      : { stage: 'merging', status: 'ready', entry: entry(red, `${why} — one plan session takes it and queues it again`) };
+    const again = !landed && inStage(goal.log ?? [], 'merge').some(mergeAnswered);
+    const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
+      : again ? { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — the second in merge: waits on a person`) }
+      : { stage: 'merge', status: 'ready', entry: entry(red, `${why} — one plan session takes it and queues it again`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);
@@ -711,7 +716,7 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
 /** One job's answer, said and written: the page's cache, the goal, the runs.tsv row. */
 async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
   const label = `${job.repo} #${job.pr}`;
-  say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merging`
+  say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
     : requeued
     ? `${label}: ${report?.stopped_at}: ${report?.reason || 'red only under load'} — back in line in ${Math.round(REQUEUE_DELAY_MS / 60_000)} min (requeue ${(job.requeues || 0) + 1} of ${MAX_REQUEUES}), no session started`
@@ -727,8 +732,12 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // Its last red is nobody's to read any more.
   if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
-  const goal = back ? null : goalOfJob(job, goalsOf);
-  if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
+  // Re-read and record under the shared lock: two repositories can finish
+  // the same goal concurrently, and both landings must survive in its log.
+  if (!back) lock(root, () => {
+    const goal = goalOfJob(job, goalsOf);
+    if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
+  });
 
   if (appendRun) {
     try {

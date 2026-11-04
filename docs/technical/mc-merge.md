@@ -105,18 +105,15 @@ Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-**A goal lands only with its criteria met.** `landJob` in `src/mc/merger.js`
-finds the goal carried by the job or by its `prs`. Before spending a round it
-uses `unmetGoalWords` to refuse a goal with an unmet criterion or no criteria,
-with `stopped_at: unmet-criteria`. An unreadable goal is not checked.
-A build records each check with `mc goal criterion met` and publishes without
-queueing. A review's `mc goal stage merging` queues the head it judged;
-only that head may land. A moved head leaves the queue and stays in merging
-for a plan session. See [mc-goals.md](mc-goals.md#the-merger).
+**A session decides when a goal merges.** `mc goal stage merge` records that
+review or plan decision and queues every PR registered on the goal. `landJob`
+executes it with `gh pr merge --squash`, without a gate, criteria check,
+reviewed-head check or automatic conflict resolution. It reads GitHub's merge
+result for bookkeeping; each landed PR is recorded under the shared lock, and
+the final landing sets `done`. A failed merge goes to a session. The runner
+recovers missing queue entries for goals already in `merge`; it does not make
+the merge decision. Existing `merging` records are read as `merge`.
 
-This check is in the merger, not a second plan-reading door on the command.
-The direct docs and admin paths are separate; the runner's settlement pass
-recognises their landed PRs too.
 
 ### Watching a merge
 
@@ -184,7 +181,7 @@ whole of it. It takes a repository path and a number and:
    and this form runs no gate (memoro #12534 landed an instrument `.mjs` this
    way on 2026-10-04 and turned `main` red);
 3. waits for GitHub's mergeability, up to twelve five-second turns, because
-   `UNKNOWN` for a few seconds after a push is normal and merging then fails for
+   `UNKNOWN` for a few seconds after a push is normal and merge then fails for
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
    then it reads the head again, and a head that moved since step 1 is `drift`:
    not merged, because the files checked are not the files that would land;
@@ -272,10 +269,10 @@ opened memoro #11039 and landed it in the same session
 
 ## Known defect — the round does not converge under concurrent landings
 
-Measured 2026-08-29 in memoro, four sessions merging — before the baseline
+Measured 2026-08-29 in memoro, four sessions merge — before the baseline
 side was removed, so the window is roughly half that now and the shape of the
 defect is unchanged. The gate round measures a candidate for 20–35 minutes and
-then, before merging, requires
+then, before merge, requires
 that `origin/main` is still the commit it fetched (`repo-merge.js`,
 "origin/main moved … measured again rather than merged on"). Any landing
 from another session during the round voids the verdict. With several
@@ -805,7 +802,7 @@ A round has exactly one subject: the pull request (or the batch) named on the
 command line. It touches no other branch.
 
 Until 2026-08-30 a green round ended by freshening **every open pull request on
-the repository** — merging the new main into each, pushing, and writing a line
+the repository** — merge the new main into each, pushing, and writing a line
 into its owner's inbox (A6). It came from a real measurement and it was still
 the wrong shape. Every round reported that two unrelated six-day-old pull
 requests conflicted with main; the fact was true and it was about those
@@ -941,8 +938,8 @@ current round's name, mode and phase come from — `runningMerge` in
 `src/mc/merges-collect.js` joins the lock to the repository's name and its
 lease's holder, so the page reads a sentence rather than a slug and a pid.
 
-**Goals, not an execution register.** A review queues one goal's pull request
-at its reviewed head. Phases hold later goals back until lower phases are done
+**Goals, not an execution register.** A review or plan session sends all of a goal's
+registered pull requests to merge. Phases hold later goals back until lower phases are done
 or dropped; there is no chain of execution branches for the merger to restack.
 The queue orders runnable jobs by arrival within each repository lane.
 
@@ -1013,11 +1010,11 @@ The block after the round writes only what `onAnswer` did not: a round that
 threw.
 
 **Where a red goes.** A red answer is red at once, whatever stopped the
-round. On a goal's pull request the goal stays in `merging` with the runner's `merger
-answered red on #<pr>` entry (`tellGoal`): the first red in `merging` is
-`merging · ready`, and the runner starts one plan session for it; the next is
-`merging · blocked` ([`mc-goals.md`](mc-goals.md) § *Finish and a red merge: a plan session*).
-A pull request is a goal's when the job carries the goal (its review's `mc goal stage merging`
+round. On a goal's pull request the goal stays in `merge` with the runner's `merger
+answered red on #<pr>` entry (`tellGoal`): the first red in `merge` is
+`merge · ready`, and the runner starts one plan session for it; the next is
+`merge · blocked` ([`mc-goals.md`](mc-goals.md) § *Finish and a red merge: a plan session*).
+A pull request is a goal's when the job carries the goal (its review's `mc goal stage merge`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal
 `done` only when the goal carries no other pull request; otherwise the landing
