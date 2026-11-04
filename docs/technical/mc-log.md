@@ -129,7 +129,7 @@ one would do, deliberately: the filter is the rule, and the list is the
 admission that the filter is not tight enough on its own. A one-word message
 would pass the filter.
 
-`mc project send <name> --note "<message>"` must never put a person's words in a file that
+`mc goal log --comment "<message>"` must never put a person's words in a file that
 lives forever. Neither must an environment value, a token, or transcript text.
 
 ## It only reads

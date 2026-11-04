@@ -1,5 +1,7 @@
 # docs/project — active plan work in memoro-cli
 
+Projects went on 2026-11-03; this document is kept as history. Goals are now mc's one unit of work, with phases and stages; see [the goal model](../technical/mc-goals.md), including § From a project for migration.
+
 Plans are not kept here: they live under `~/mc/programs/<programme>/<project>/`, as in memoro (ruling 48),
 and each project's `PLAN.json` there is what the runner acts on. Programme documents and rulings stay in `docs/project/`. The
 `<project>` name is what `mc run` will call that project's branch and its
@@ -42,7 +44,7 @@ audits the authorization and changes only the contract, remaining step
 instructions/model/checks and success criteria. Completed steps and the
 register are untouched; active sessions and open PRs refuse the write. It
 does not release the project: `mc step ready` remains a separate action.
-See [the amendment contract](../technical/mc-project-amend.md) for the input
+See the amendment contract in git history for the input
 shape, evidence invalidation and failure behavior.
 
 A plan is instructions for a headless session that has read nothing else, with

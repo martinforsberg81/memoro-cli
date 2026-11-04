@@ -121,7 +121,7 @@ What the verbs refuse, at the write, so that an invalid plan never exists:
 - a dependency on another project written anywhere but `--after`. `--after` names `<repo>:<project>` across
   repositories, and mc resolves it over every project at once, archived ones included;
 - an ordinary edit to a frozen field of a started project. The explicit
-  `amend` exception is described in [the amendment contract](../../technical/mc-project-amend.md):
+  `amend` exception is described in the amendment contract in git history:
   authorized contract/instruction/check changes, validated together while
   the first unfinished step stays blocked, with no active session or open PR.
 

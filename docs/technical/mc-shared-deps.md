@@ -11,7 +11,7 @@ outlived them unchanged.
 
 **`~/mc/node_modules`. One directory, above every area and inside none of
 them.** Node resolves a bare specifier by walking `node_modules` up every
-parent of the importing file, so a checkout at `~/mc/step/<project>/<repo>/src/…`
+parent of the importing file, so a checkout at `~/mc/programs/<programme>/goals/<goal>/<repo>/src/…`
 reaches this one with nothing in the checkout at all. The name lives in
 [`src/mc/paths.js`](../../src/mc/paths.js) (`SHARED_DEPS`) with the rest of the
 work root's shape; [`src/mc/shared-deps.js`](../../src/mc/shared-deps.js) builds it.
@@ -94,7 +94,7 @@ without the script gets `state: 'no-attach-script'` and nothing runs. The attach
 is reported, never fatal: a failure is one line from the verb that made the
 worktree, and the worktree is still the deliverable. `mc plan` and
 `mc deps bump` attach through `addWorktree`; the runner passes `attach: false` because it
-attaches before each step itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
+attaches before each goal build or review itself. `mc plan` also re-attaches a planning checkout that already stands each time its programme is opened, since that checkout is reused and its lockfile can move on main.
 
 An exit of 0 is not taken for an attachment: `attachRepoDeps` reports
 `attached` only when the script left `node_modules/.memoro-deps.json`, which
@@ -107,11 +107,9 @@ attached and had no `node_modules` at all).
 
 ## It is not an area, and nothing had to be taught that
 
-Both listings that matter — `mc status`'s `areasWithCheckout` and the runner's
-`workareas()` — name a directory under the work root only when it holds a
-checkout of a repository mc knows, and this one holds none. So the page and
-the runner already skipped it and no filter was written; what the project owed
-was the assertion, and
+The area's shared readers name a directory under the work root only when it
+holds a checkout of a known repository, and this dependency root holds none.
+It is not a programme or goal. The assertion is in
 [`tests/mc/shared-deps.test.js`](../../tests/mc/shared-deps.test.js) makes it
 against a real work root rather than trusting the reasoning. `mc --json` and
 `mc repo --json` were run with the tree in place and neither mentions it.

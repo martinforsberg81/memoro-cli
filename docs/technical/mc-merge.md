@@ -29,18 +29,11 @@ mc merge* and exits 2, and it is in neither `mc repo`'s usage nor `mc --help`
 
 ## Why the second form exists
 
-A docs pull request is the deliverable of `mc plan` for a programme's documents,
-and of the programme archive. It touches
-only `docs/project/`, so the gate would build a worktree and run a suite to
-learn nothing. Before `--docs` it did not even do that — it waited for Martin
-to click Merge, and until it merged the runner could not see the plan at all,
-because the runner then read plans from `origin/main`. Martin, 2026-08-26: *"inte
-tillräckligt smidigt"*.
-
-So `--docs` lets the session that opened the plan PR land it, seconds later,
-itself. Merge authority is unchanged by this: docs-only-lands-directly is a
-standing rule Martin gave, written once into the roles, and everything else is
-still the gate.
+A docs-only pull request needs the tests that read documents, not every code
+gate. The docs form measures those tests on a candidate before landing, and
+is also used for a programme archive. Goal records themselves live outside
+the repositories; creating or changing a goal needs no docs pull request.
+Build sessions publish with `--no-merge`; their review owns the landing hand-off.
 
 ## The grammar, in one place
 
@@ -106,49 +99,18 @@ Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-**The plan's last step lands only with its criteria met.** A plan is done when
-every step is done and every success criterion is `met: true` (Martin,
-2026-10-18), and the last step is where it becomes done. So
-`criteriaDoor({ repoPath, pr, gh, step })` in
-[`src/mc/merge-boundary.js`](../../src/mc/merge-boundary.js) reads the project's
-plan under `~/mc/programs/` with the register's criteria laid over it, and
-refuses the pull request of the plan's last step while a criterion there is not
-`met: true`: `mc: unmet-criteria — <problem>` on stderr, exit 1, nothing queued.
-`mc merge` records it in `gate-rounds.jsonl` with `stopped_at:
-'unmet-criteria'`. It covers a docs-only pull request too, the usual close-out:
-`mc merge --docs` (and a docs-only pull request routed there) asks
-`criteriaDoor` before it merges, finding the step as `stepForMerge` does. The
-runner's own queueing of a session's open pull request (`landForSession`) asks
-it too, and a refusal there is the step's red, `ready` again with reason
-`unmet-criteria — …`. A pull request that is nobody's step, or any step but the
-last, passes; so does a project with no plan under `~/mc/programs/`. The door
-fails open on anything it cannot read — `gh` or the plan failing to answer is
-not a refusal. The session measures each criterion's `check` and records it
-with `mc project criterion met`, or ends with `mc step failed` naming what it
-could not measure.
+**A goal lands only with its criteria met.** `landJob` in `src/mc/merger.js`
+finds the goal carried by the job or by its `prs`. Before spending a round it
+uses `unmetGoalWords` to refuse a goal with an unmet criterion or no criteria,
+with `stopped_at: unmet-criteria`. An unreadable goal is not checked.
+A build records each check with `mc goal criterion met` and publishes without
+queueing. A review's `mc goal stage merging` queues the head it judged;
+only that head may land. A moved head leaves the queue and stays in merging
+for a plan session. See [mc-goals.md](mc-goals.md#the-merger).
 
-**Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
-<pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
-believed-safe case.
-
-**A branch flow lands once, at its review** (ruling 58, 2026-10-25). In a plan
-whose last step is `kind: review`, `criteriaDoor` refuses the pull request of
-any step before it with `stop: 'before-review'`: `mc: … step n is built on the
-project's branch and does not land by itself`, on stderr, exit 1, nothing
-queued. The step's pull request is the project's one, and the review's landing
-is what lands it. The refusal is the same for `mc merge` and `mc merge --docs`.
-Two paths book such a step `built` instead of asking the door: `mc publish` from
-the step's own session (`publish.js`, `builtPatch`), which pushes, records
-`built` with the head it pushed, and queues nothing; and the runner's queueing
-of a session that ended `success` without publishing (`landForSession`).
-
-The review's own pull request passes the door as the last step's does: every
-criterion `met` in the register, or it is refused as `unmet-criteria`. Its
-landing, from the merger's round, from the docs form or from `--admin`, books
-every `built` step of the project `done` with the same landed sha and no body of
-their own (`bookBuilt`, `merge-step.js`; the register's `built` is what names
-them). A `built` step counts as done when the merger orders jobs (`stepsDone`,
-`merge-queue.js`), so the review is not held behind the steps it lands.
+This check is in the merger, not a second plan-reading door on the command.
+The direct docs and admin paths are separate; the runner's settlement pass
+recognises their landed PRs too.
 
 ### Watching a merge
 
@@ -182,14 +144,13 @@ merge_commit, reason, place, seconds }`. With `--watch` the queueing's own
 lines come first, and with `--watch --json` the queueing says nothing, so the
 watch's object is the only output.
 
-**Opt-in and read-only.** Nothing starts a watch, and the step-session prompt
-does not mention it: a build session queues and ends, because the next step
-stacks on top. The watch never writes `merges.json`, the register or
+**Opt-in and read-only.** Nothing starts a watch. A build session publishes
+and ends without watching the merger. The watch never writes `merges.json` or
 `merger.json`, never starts a merger and never cancels or re-queues a job — a
 3 or a 4 leaves everything where it was. `--watch` is refused with `--docs`
 (it lands in the call; there is nothing to watch), with `--check`, with several
 numbers (one call per pull request), and by `mc test`. A queueing that is refused at
-the door — an unmet criterion, say — is returned as it is, with no watch.
+the door — a conflict, say — is returned as it is, with no watch.
 
 **GitHub is asked once.** The queue is a local file, read every
 `WATCH_POLL_MS` (10 s) for nothing. A job that leaves the queue has either
@@ -215,9 +176,7 @@ whole of it. It takes a repository path and a number and:
    land it through the gate (`mc merge <repo> <pr>`): a script under `docs/` is
    not a document, because a tree-wide check in the repository's gate reads it
    and this form runs no gate (memoro #12534 landed an instrument `.mjs` this
-   way on 2026-10-04 and turned `main` red); and one that adds a line to a repository plan file
-   (`isRepoPlanPath`), stopped as `plan`: plans live under `~/mc/programs/` and no
-   repository holds one any more (ruling 48);
+   way on 2026-10-04 and turned `main` red);
 3. waits for GitHub's mergeability, up to twelve five-second turns, because
    `UNKNOWN` for a few seconds after a push is normal and merging then fails for
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
@@ -243,7 +202,7 @@ whole of it. It takes a repository path and a number and:
 
 **Why it measures.** Four documents-only landings turned memoro's `main` red
 between 2026-10-20 and 2026-10-24 (#13980, #13995, #14138, #14188):
-`tests/docs/doc-links.test.js` found dead relative links that a document it had
+the repository's document-reading tests found dead relative links that a document it had
 not read introduced, and this form ran no test at all. The selector draws eight
 files for #14188's paths, and `doc-links.test.js` is red on its commit, so the
 measurement in point 4 refuses that landing instead of letting `main` go red.
@@ -275,11 +234,10 @@ in order:
 1. reads the pull request with `gh pr view --json number,title,state,headRefOid,headRefName,baseRefName,body,mergeCommit`. Unreadable is refused; a closed one is refused as nothing to land; a merged one is booked without a merge call;
 2. squash-merges an open one with `gh pr merge --squash --admin --subject "<title> (#<n>)" --match-head-commit <head>`: GitHub's admin override, pinned to the head it read. No round is formed: no candidate, no suite, no gate;
 3. reads the state back. Anything but `MERGED` is `NOT merged`, with the last line of gh's error, exit 1, and nothing booked;
-4. takes its queue entry out under the register's lock. An entry the merger is landing (`landing`) is left as it is, for the merger;
-5. books the step — the entry's own, else the one the pull request's branch stands on — `done`, with its landing, unless the step is already `done` or `blocked`;
-6. drops the pull request from the page's cached list. A page that cannot be written costs nothing;
-7. writes one round-log line with `mode: admin`;
-8. prints what landed, into what, as which commit, and the step it booked. `--json` gives the same as one object. Exit 0.
+4. takes its queue entry out under the runner's queue lock. An entry the merger is landing (`landing`) is left as it is, for the merger;
+5. drops the pull request from the page's cached list. A page that cannot be written costs nothing;
+6. writes one round-log line with `mode: admin`;
+7. prints what landed, into what, as which commit. `--json` gives the same as one object. Exit 0.
 
 It never stops a round itself. A round in flight on the pull request is the
 merger's to stop: its watch (`watchSubject` in
@@ -295,21 +253,6 @@ there is nothing to watch).
 2026-10-17 and 2026-10-24 left the merger's round for each pull request
 running, and nothing was booked until the merger noticed. The verb does the
 merge and the booking together, and the merger's watch does the rest.
-
-## The three places that say it
-
-A role is not the last word a session hears, which is what step 2 of this
-project cost a session to learn. All three now end with the merge:
-
-- `canon/roles/plan.md` (now `plan-session.md` and `project-verb.md`) — *when the PR is open, land it yourself*;
-- `planLaunch()` in [`src/mc/commands/plan.js`](../../src/mc/commands/plan.js) —
-  `mc plan` builds its own first prompt, and that prompt used to end with "open
-  a PR … and stop", which is the most recent instruction a session reads and
-  contradicted the role two screens above it. It now ends with the merge, and
-  names the repository so `<repo>` is filled in rather than guessed;
-- the triage prompt in `~/mc/bin/runner.sh`, which is not in this repository and
-  no test can reach; the repository's half is locked by assertions on the role
-  overlay and on `planLaunch()`'s last line.
 
 ## What it has done
 
@@ -466,7 +409,7 @@ PATH. Off macOS, or when no link can be made, PATH is unchanged.
 name a concurrency. A session's `mc gate` takes the free cores,
 `cores - 1 - round(loadavg()[0])`, between 2 and `cores - 1`. A merge, check or
 full round takes `max(4, the free cores)`, never above `cores - 1`
-(`MERGE_LANES_MIN`), because the free cores were two all day: with four step
+(`MERGE_LANES_MIN`), because the free cores were two all day: with four build
 sessions the load sits at 10–16 on eight cores, and at two lanes the standard
 batch took 178 s at the median (p90 377 s) over 159 suite runs from 2026-10-20 to
 24. The floor is four and not seven because seven lanes beside the sessions are
@@ -828,13 +771,10 @@ saying `<files> red only under load — measuring again`. A second one — and a
 second `file-killed` — is put back in line rather than answered
 (`REQUEUE_STOPS`, `mayRequeue` in `merger.js`): the entry is `queued` again with
 its place kept, `requeues` one higher and `not_before` fifteen minutes on
-(`markRequeued`, `merge-queue.js`), the step stays `landing`, no attempt is
-counted and no session is started — the merger says `back in line in 15 min
+(`markRequeued`, `merge-queue.js`), the goal keeps its stage, no retry session is
+started — the merger says `back in line in 15 min
 (requeue n of 2), no session started`. After two requeues it is answered red
-with its reason and `red under load in two rounds running`, as before. Until
-2026-10-19 the second one was answered red at once, the step went back to
-`ready`, and the runner started a session to fix the pull request that found
-nothing to fix (note-steps #13897 paid two). It is never counted green, and it
+with its reason and `red under load in two rounds running`, as before. It is never counted green, and it
 is not the change's red. Its failures are kept under
 `runner/merge-red/<repo>-<pr>-<stop>-<time>.txt` (`loadRedPath`), which a
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
@@ -870,7 +810,7 @@ with `stopped_at: 'project-log'` — a red, the change's to fix — and the reas
 `project_log.md carries the same row twice: <date> <programme> <project> —
 delete the copy and push`. memoro's `.gitattributes` merges that file
 `merge=union`, which keeps both sides of a conflicting hunk: on 2026-10-10
-memoro's main carried one row five times, each copy from a step branch that
+memoro's main carried one row five times, each copy from an execution branch that
 merged main in. A batch that stops this way falls back to single rounds
 (`FALLBACK_STOPS`), so the pull request that brought the copy is the one turned
 red. The archive's `appendRow` is the other half: given a log that already has
@@ -975,16 +915,16 @@ after its pull request had been merged on GitHub; the minute of asking is what
 ends such a round now.
 
 **`mc merge` waits for neither — the merger does** (ruling 30, 2026-10-09).
-`mc merge <repo> <pr>` checks the plan's criteria (*The door*), writes the job
+`mc merge <repo> <pr>` writes the job
 into `~/mc/runner/merges.json` (`repo`, `repo_path`, `pr`, `branch`,
-`holder`, `step`, `since`, `state`) and returns at once, saying its place in
+`holder`, `goal`, `sha`, `since`, `state`) and returns at once, saying its place in
 line. One process lands the jobs, oldest first, one at a time: the merger
 ([`src/mc/merger.js`](../../src/mc/merger.js), started detached by the first
 `mc merge` that finds none, its pid in `~/mc/runner/merger.json`, its output
 in `~/mc/runner/log/merger.log`). It marks a job `landing`, waits while the
 gate lock or the job's repository lease is somebody else's (an orphaned lease
 is nobody's: the round's own claim reaps it), runs the round as the holder
-who asked, records it, writes the register, drops the job, and takes the
+who asked, records it, notifies the goal, drops the job, and takes the
 next; with the queue empty it leaves. Since 2026-10-24 (ruling 55) it lands one
 job a round: `MERGE_BATCH_MAX` is 1, because a batch of four cost about 430 s per
 landed pull request against 210 s alone on memoro's merge rounds of 2026-10-17
@@ -1022,60 +962,16 @@ current round's name, mode and phase come from — `runningMerge` in
 `src/mc/merges-collect.js` joins the lock to the repository's name and its
 lease's holder, so the page reads a sentence rather than a slug and a pid.
 
-**And the register** (rulings 21 and 30). For a pull request that is a
-step's — `MC_STEP=<project>:<index>` in the calling session's environment, or
-a branch a register entry stands on (`stepForMerge`,
-[`src/mc/merge-step.js`](../../src/mc/merge-step.js)) — `mc merge` makes the
-step `landing` with its pull request, and the job names the step. The
-session's part is over there: it ends. The merger writes the outcome. On green
-the step is `done` with the pull request and the commit it landed as. On red
-the attempt is counted and the gate's reason kept, the pull request stays
-open, and the step is `ready` again (`redPatch`): the runner's next session
-for it is told the reason and the pull request and goes on with the same
-branch (`retryPreamble` in `run-plan.js`) — its own open pull request does not
-hold the project (`holdingPrs`). At `MAX_MERGE_ATTEMPTS` (3), or a round that
-cannot say whether it merged, the step is `failed` and a person's. A step
-somebody made `done` or `blocked` meanwhile is left as it is.
-
-**The next step does not wait** (ruling 30, A). A step `landing` is passed
-over by the picker (`planState`), and its open pull request does not hold the
-project (`holdingPrs`): the runner starts the next step at once on a new branch
-on top of the landing step's (`placeBranch` in `run.js`) and writes
-`stacked_on: { index, pr, sha }` on it. Its `mc merge` queues it with that as
-`parent`, and the door reads the plan from the parent's tip. The merger takes a
-job with a parent only once the parent is out of the queue and its step is
-`done` (`nextJob`), then moves the branch onto main past `sha` (`restack` in
-[`src/mc/merger.js`](../../src/mc/merger.js), in a temporary worktree, pushed
-with a lease on the tip it had) — the one below was squash-merged, so its
-commits are in the branch under other names. The move replays only the
-branch's own commits: `git rev-list --reverse --no-merges <tip> ^<sha>
-^origin/main`, cherry-picked one by one onto `origin/main`; a pick that comes
-out empty, because main already has it as a squash, is skipped. Until
-2026-10-10 it was `rebase --onto origin/main <sha>`, which also replays the
-main commits a session had merged into its branch — already on main, they
-conflicted with themselves, and #857 and memoro #13375 came back `restack: …
-conflicts` though their own commit picked clean (ruling 38, since deleted). When
-a pick conflicts, the move starts again from the tip and runs `git merge
---no-edit origin/main`; the log line then reads `moved onto main past #<n>
-(merged main in)`. Only when that merge conflicts too is it a red,
-`stopped_at: restack`, naming the conflicted paths. When the one below comes
-back red the job on top stays in the queue and waits; that step is the
-project's next session's first, on its own branch.
-
-**The runner queues what the session published and did not** (ruling 25,
-2026-10-07). When a build session's process is gone, the register still says
-`running`, the session ended `success`, and a pull request is open on the
-step's branch, the runner asks for that merge itself (`landForSession` in
-[`src/mc/run.js`](../../src/mc/run.js)) through the same door: the plan's
-criteria, then `queueMerge` as the step's workarea. The row's note is
-`success,queued-by-runner`; a refusal at the door is a red like any other,
-note `success,red`.
+**Goals, not an execution register.** A review queues one goal's pull request
+at its reviewed head. Phases hold later goals back until lower phases are done
+or dropped; there is no chain of execution branches for the merger to restack.
+The queue orders runnable jobs by arrival within each repository lane.
 
 **The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
 spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
 (`installedMergerRun`), never from the caller's own tree, and the first line
 of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
-2026-10-10 the merger that served 17:47-18:00 had been started by a step
+2026-10-10 the merger that served 17:47-18:00 had been started by a build
 session from its workarea and ran that branch's code, with batches and
 without lanes.
 
@@ -1120,36 +1016,25 @@ that passes the signal is the next step of round-abort.
 **Already merged on GitHub.** Before a round, `landJob` asks GitHub for each
 job's state (`prStateOf`). A MERGED one is answered landed by itself with
 GitHub's merge commit (`memoro #13372: already merged on GitHub as <sha> —
-answered landed`), dequeued and its step `done`; a CLOSED one is red by itself
+answered landed`), dequeued and its goal notified; a CLOSED one is red by itself
 (`closed on GitHub`). Both leave the batch, and the rest are measured without
 them. Red rows are looked at too, at start and then every `SWEEP_MS` by an
 idle loop (`sweepMergedReds`): a red whose pull request has since merged is
-dequeued and its step `done`; a closed one leaves the queue. On 2026-10-10 a
+dequeued and its goal notified; a closed one leaves the queue. On 2026-10-10 a
 hand-merged #13372 turned #13373 and #13374 red with its reason, and #13370
 stayed red in `merges.json` after its `--admin` merge.
 
-A job answered before the round — merged, closed, or a restack refused — is
+A job answered before the round — merged, closed, or a reviewed head moved — is
 written to `merges.json` the moment it is answered (`landJob` tells `serve`'s
-`writeAnswer` through `onAnswer`, after the register is written and outside
+`writeAnswer` through `onAnswer`, after the goal is notified and outside
 any lock), so the page and `mc merge watch` never draw it as landing while
 the others' round runs. On 2026-10-10 #13400 (closed) and #13397 (a restack
 conflict) read `landing` for the whole 9-minute round of #13375 and #13405.
 The block after the round writes only what `onAnswer` did not: a round that
 threw.
 
-**A plan's steps land in order.** A job for step n goes only once every
-earlier step of its plan is `done` in the register (`stepsDone` in
-[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), read by `nextJob` and
-`nextBatch`), whether or not it names a `parent`. A `landing` job a restarted
-merger would resume while an earlier step is no longer `done` is put back in
-line (`heldLanding`). `waitingOn` says what each held job waits for; the page
-and `mc merge watch` read it as `waits for <project> step <n>`.
-
 **Where a red goes.** A red answer is red at once, whatever stopped the
-round. On a project's pull request the step goes through `redPatch` to its
-next session (ruling 30), which reads the reason and the red round's file
-(below) in its retry preamble and fixes it on the same pull request. On a
-goal's pull request the goal stays in `merging` with the runner's `merger
+round. On a goal's pull request the goal stays in `merging` with the runner's `merger
 answered red on #<pr>` entry (`tellGoal`): the first red in `merging` is
 `merging · ready`, and the runner starts one plan session for it; the next is
 `merging · blocked` ([`mc-goals.md`](mc-goals.md) § *Finish and a red merge: a plan session*).
@@ -1178,8 +1063,8 @@ calls `handover` at once, between rounds: `merger-run.js` starts its successor
 through `startMerger` while jobs remain in line (`succeed`), and this merger
 takes nothing more. The rounds it holds finish, and the successor takes every
 other job in both lanes. A SIGTERM starts none; it
-finishes what it holds, as before. The runner's `sweepLanding` and the next
-`mc merge` still start one when none lives. `mc merge watch` adds
+finishes what it holds, as before. The next
+`mc merge` starts one when none lives. `mc merge watch` adds
 `merger on <commit> · main <commit>` to its line while the merger's commit
 and the installed checkout's HEAD differ.
 
@@ -1193,11 +1078,9 @@ gate cuts these blocks out of the suite's TAP and out of the selected files'
 TAP (`redTests` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js)) after the
 killed and cancelled files are taken out of the red. The path is on the report
 as `red_detail`, and it goes into the round's `gate-rounds.jsonl` line with
-`red_files`. The step's next session gets it through the register's `red` and
-the retry preamble, as three lines: `Red files: …`, `The failures, as the
-round saw them: <path>`, and `Re-run just those: mc gate <files>
---test-name-pattern '<names>'` (at most five names, regex-escaped) — never the
-whole suite (ruling 52). A merge round keeps the gate's verdict under `gate`;
+`red_files`. The goal's plan session reads the merger's reason and this red file, then
+reruns the named files with `mc gate <files> --test-name-pattern '<names>'`,
+not the whole suite (ruling 52). A merge round keeps the gate's verdict under `gate`;
 `runMergeRound` lifts `red_files` and `main_red` up to the top when the gate
 stops, so a reader of the report's top finds them.
 

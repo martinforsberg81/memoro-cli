@@ -100,19 +100,18 @@ written, and a write that would make one is refused with the field named.
   phase 1; `renderGoal` always writes it.
 - `repos` — repository names in order. The first is where a session starts,
   and the lane that serves it takes the goal.
-- `class` — `fast` or `large`, routed as a step's class is (ruling 59).
+- `class` — `fast` or `large`, routed through the model catalog (ruling 59).
 - `created` — an ISO instant written by `mc goal new`, or null.
 - `prs` — the pull requests that carry the goal's work, as `<repo>#<n>`.
   `mc publish` writes the one it opens or updates (*Done when its work has
   landed*), and `mc goal pr` names others.
-- `goal`, `contract`, `out_of_scope` — arrays of paragraphs, as PLAN.json's.
-- `success_criteria` — `[{ criterion, check, met }]`, the same rules as
-  PLAN.json's (`validateCriteria` in `src/mc/criteria.js`, which both schemas
-  call): every criterion a `check`, `met` true or false, no other key, and at
+- `goal`, `contract`, `out_of_scope` — arrays of paragraphs.
+- `success_criteria` — `[{ criterion, check, met }]` (`validateCriteria` in
+  `src/mc/criteria.js`): every criterion a `check`, `met` true or false, no other key, and at
   least one criterion. `mc goal new`'s skeleton has none yet, and parses as a
   draft: the runner starts no session on a goal in `build` with no criterion,
   and it cannot go to review.
-- `documents` — `[{ label, path }]`, as PLAN.json's (`validateDocuments`).
+- `documents` — `[{ label, path }]` (`validateDocuments`).
 
 An unknown key, a wrong schema or version, or a bad field is a problem named
 by its field; an `after` (from before phases) is named with `mc goal convert`,
@@ -435,7 +434,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
 3. **Launch.** A goal in `build` gets a build session with the `build-session:goal`
    role (`canon/roles/build-session.md`, its `goal` and shared build parts), in
    the first repository's worktree, with the goal's class routing, model and
-   billing as a step has them. A goal in `review` gets a review session with
+   billing as any headless session has them. A goal in `review` gets a review session with
    the `review-session:goal` role instead, on a review candidate (`mc
    model`). Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. The model of the goal's last build entry
    is passed over while another candidate can run on its plan, and taken on its
@@ -608,8 +607,7 @@ A goal's job carries the goal and the head its review judged (`merge-queue.js`
 
 - **Lands only a goal whose criteria hold.** Before any round, a job whose goal
   has a criterion not met — or none — is answered red, `stopped_at:
-  unmet-criteria`, with the criteria named (`unmetGoalWords`), as
-  `criteriaDoor` (`merge-boundary.js`) refuses a plan's last step. It is a
+  unmet-criteria`, with the criteria named (`unmetGoalWords`). It is a
   red like any other (below). A goal the merger cannot read is not checked.
 - **Lands only that head.** It asks GitHub for the head before the round; a
   head that has moved is answered `moved` with no round spent, and a push
@@ -657,8 +655,8 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
 
 ## What a goal does not have
 
-- **No steps.** No `PLAN.json`, no `mc step`, no `mc project`. Criteria are
-  data in GOAL.json, met when a session has run the check.
+- **Criteria, not tasks inside the goal.** Criteria are data in GOAL.json,
+  met when a session has run the check. Split ordered work into goals in phases.
 - **No register.** mc writes GOAL.json, LOG.md, the current file while a
   session runs, and the `runs.tsv` row. Nothing else.
 - **No owner, lease, revision or capability report.** Anyone may work in the

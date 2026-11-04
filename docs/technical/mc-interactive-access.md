@@ -1,6 +1,6 @@
 # One execution boundary for interactive mc sessions
 
-`mc plan`, `mc brief`, `mc helper`, a project opened from the page, and other interactive roles use `src/mc/work-open.js`
+`mc plan`, `mc brief`, `mc helper` and other interactive roles use `src/mc/work-open.js`
 for foreground, background, resumed and replaced conversations. All paths pass
 through `interactiveAccessOptions` in `src/mc/interactive-access.js` and the
 tool's `launchSpec().args()`.

@@ -21,7 +21,7 @@ by name: somebody who types `mc helper --since` is asking for a digest
 window, and opening a session that ignores them would answer a question they
 did not ask.
 
-Nothing here writes `~/mc/queue.md`. A proposal is read at the next brief and
+Nothing here changes a goal. A proposal is read at the next brief and
 Martin queues it or drops it — that is the arrangement that lets the eye run
 unattended every day, and it is why the desk can hand him something without
 having decided anything.
@@ -52,28 +52,12 @@ wrote down what should happen about it. A session that has done the judging and
 drops its finding in the inbox asks a second session to work it out again from
 less than it had.
 
-### What left it, and why it was never an inbox item
+### Runner records are not inbox items
 
-`mc run` writes two tables about its own work — `undocumented-closures.md`
-and `unreadable-plans.md` (a third, of the areas no project explains, went on
-2026-11-03; `mc tidy` lists those). They sat in `~/mc/intake/`
-until 2026-09-05 and now live in `~/mc/runner/`, beside
-`runner.json` and `log/`. `RUNNER_HOME` and the three filenames are in
-`src/mc/paths.js`, with `runnerTablePath` for the runner that writes them and
-`runnerTableLabel` for the brief role that names them to a session, so the writer and
-the label cannot drift.
-
-Two of them are rewritten **whole every chore pass**, which is the property that
-made the old room wrong the moment the inbox was asked to drain: a turn that read
-one and filed it away would find it back next pass, and the pass after, forever.
-They are the runner's own output about its own work, read by exactly one
-reader — the brief session, which the role sends to each file — and they
-belong beside the rest of the runner's state. The three files were moved by
-hand: a migration for three files that are rewritten every pass is more code
-than it saves.
-
-`~/mc/intake/decisions-archive/` is skipped rather than drained. It is a
-directory and an archive already; the drain lists files.
+The runner's current files, logs and per-goal LOG.md entries stay beside the
+work they describe. Repeated machine output is not a file somebody dropped
+in an inbox. The drain lists files, not directories, so an archive directory
+inside intake is not itself drained.
 
 ## The desk
 
@@ -98,8 +82,8 @@ reading a week later. The repositories are elsewhere on the disk and open to
 it; the one directory it writes to is `proposals/`.
 
 Two things it nearly always has to ask, because they cannot be read out of
-anything: which repository, and whether this is a new project or a step in
-one that already exists. Both are frontmatter keys — a habit of the desk's proposals, not something mc
+anything: which repository, and whether this is a new goal or work already covered
+by an existing goal. Both are frontmatter keys — a habit of the desk's proposals, not something mc
 reads.
 
 Both directories — the room and `proposals/` — are made by the verb before
@@ -272,7 +256,7 @@ memoro-cli has a production. It is this machine, and mc records what happens
 there in four files: `logs/mc.log` (every invocation and how it ended),
 `gate-rounds.jsonl` (every round, including the ones that started and never
 finished), `repo-leases/leases.log` (claims, releases, reaps) and
-`runner/log/runs.tsv` (every step). The eye now reads both.
+`runner/log/runs.tsv` (every session). The eye now reads both.
 
 The second half reads no network and holds no credential, which is why it can
 run every day without asking anybody for a token — and why a memoro collect
@@ -288,9 +272,9 @@ fingerprint seen twice. Without that the digest could never say "sixteen".
 A `runs.tsv` row is a finding unless its note says `success` and its exit is
 `0` or `143`. 143 is the runner's own SIGTERM: a session that lingers
 `resultGraceMs` after answering is killed with its result standing, and since
-that grace came in on 2026-09-25 about three quarters of all step rows end
-that way. Counting them made every newly started project a new fingerprint and
-buried the steps that did fail. A `success` row with any other exit is still
+that grace came in on 2026-09-25 about three quarters of all session rows end
+that way. Counting them made every newly started goal a new fingerprint and
+buried the sessions that did fail. A `success` row with any other exit is still
 named, exit code and all.
 
 One turn per digest, not one over both: `repo:` is the frontmatter key
@@ -330,7 +314,8 @@ two want opposite things: the desk asks Martin, and the turn is told there is
 nobody to ask. One file trying to be both is how a role stops being either.
 
 **The file is named; the ground is given.** The prompt carries the filename and
-then what the turn judges it against — every plan under `~/mc/programs/`, with its `status` and `next:`, the project log,
+then what the turn judges it against — every unfinished goal under `~/mc/programs/`, with its stage, status and
+last Next, the historical repository log,
 and the proposals already waiting. Its cwd is the intake directory and the
 repositories are elsewhere on the disk: a turn that cannot reach them cannot
 accidentally write in them either, which is cheaper than trusting it not to. The
@@ -375,21 +360,22 @@ proposal** — `listProposals` returns filenames and never opens one.
 
 The role's judgement rules are in the role file, and
 three of them matter enough to repeat: what was already there yesterday has
-already been seen; a proposal that duplicates a live plan is noise; **zero
+already been seen; a proposal that duplicates a live goal is noise; **zero
 proposals is a good answer** — a quiet day should cost Martin nothing to
 read.
 
-The role forbids, in the same words: `queue.md`, any plan, any decision
-file, anything outside `~/mc/proposals/`, production, a deploy, a
-credential, a PR, a session, and a question — there is nobody to answer one.
+The turn writes only a proposal in its owning programme's proposals directory
+(or `~/mc/proposals/` when no programme owns it). It changes no goal, code,
+production data or credential, opens no PR or session, and asks no question:
+there is nobody to answer one.
 
 ## When the two halves run
 
 Two gates, because they answer two different questions. `mc run` runs both at
-the top of every chore pass — its loop beside the lanes that take steps, one
+the top of every chore pass — its loop beside the lanes that take goals, one
 pass every `--idle-sleep` ([`mc-run.md`](mc-run.md) § *The pick, in order*) —
 and calls `collectHelper` and `drainIntake` directly rather than the verb.
-Neither is a step: no worktree, no branch, no PR.
+Neither is a goal build: no worktree, no branch, no PR.
 
 **The collect is a day.** It runs once per calendar day, at the top of
 the first chore pass after 05:00Z, and writes one digest per repository. `helperDue`
@@ -412,7 +398,7 @@ sorts last, which is arrival order too.
 Three is what a pass can afford: a turn is capped at ten minutes and measured
 at 39–193 s on files Martin dropped in and 115–691 s on a digest, so a pass's
 drain is bounded at half an hour and usually far under it, beside a lane's
-ninety-minute step. One a pass would take thirteen passes to clear a backlog of
+ninety-minute session. One a pass would take thirteen passes to clear a backlog of
 thirteen; the whole inbox in one pass has no bound at all and would stop the
 chores for a morning after Martin drops forty screenshots in. The constant is
 still called `INTAKE_PER_ROUND`, from when the chores ran inside the runner's
@@ -440,17 +426,16 @@ read `memoro,success,0-proposals` — so the brief and the page had counted ever
 helper day as a failed run since the row existed.
 
 The turn's tokens go in the same `input`/`output`/`cache_read`/`cache_write`
-columns a step uses, so the page can price the day honestly. `run.js`'s header
+columns a goal session uses, so the page can price the day honestly. `run.js`'s header
 used to say the runner never calls a model; it does now, up to three times a
 chore pass.
 
-**`mc run --once` runs neither.** That flag exists to watch one step, and
+**`mc run --once` runs neither.** That flag exists to watch one goal session, and
 production reads plus model turns are not what somebody typing it asked for. The
 real runner never passes `--once`, so this costs nothing.
 
 A `~/mc/runner/STOP` file stops both. The drain checks it between files, never
-inside one, and a turn that hit the quota pauses the runner the way a step's
-does.
+inside one, and a turn that hit the quota pauses the runner through its shared quota pause.
 
 `mc helper --intake` at a terminal goes through the same `drainIntake`, the same
 cap and the same archive — one drain, not two. The desk has no schedule at all:
@@ -461,14 +446,15 @@ it runs when Martin has something to say.
 Nobody automatic. That is the point.
 
 - **`mc brief`** — the session lists the waiting proposals (`ls ~/mc/proposals/`)
-  and opens each one. At the brief Martin has one become a project, or
+  and opens each one. At the brief Martin has one become a goal, or
   archived to `~/mc/proposals/archive/`. It reads the desk's proposals and the
   eye's the same way, because they are the same file.
 - **`mc plan <programme>`** is the other way in: open the programme the
   proposal belongs to, with the proposal in front of you. Nothing automatic
   carries one across — `mc plan` takes a programme, not a file, and a proposal
-  is a candidate for a project rather than a project.
-- **The page (`mc`)** has an INTAKE section: the newest digest and its age,
+  is a candidate for a goal rather than runnable work.
+- **The page (`mc`)** puts digests under HELPER and proposals under BRIEF.
+  The digest view shows its age,
   what is new in it, how many proposals are waiting — and the `!` lines
   themselves, first, three named and the rest counted. A count is a number
   somebody has to go and look up; the line is the thing that makes them look.
@@ -483,7 +469,7 @@ Nobody automatic. That is the point.
   change on an error, no deploy, not even `/ping-kv`'s probe key.
 - The desk never reads the digest, and neither half lists, edits or deletes a
   proposal that is already waiting. Both only add.
-- Neither writes `queue.md` or any plan. Proposals are the only output.
+- Neither changes a goal. Proposals are the only output.
 - The desk changes no code and opens no PR. A report becomes a proposal, and
   the work happens later, elsewhere.
 - No resident session, no watcher, no pulse. The eye runs when the runner
@@ -499,7 +485,7 @@ Nobody automatic. That is the point.
 | `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the same drain the runner uses |
 | `canon/roles/helper.md` | the desk: what it takes, what it writes, what it never touches |
 | `src/mc/helper-collect.js` | the eight sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
-| `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground: the plans under `~/mc/programs/` and each checkout's project log, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
+| `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground: the unfinished goals under `~/mc/programs/` and each checkout's historical log, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
 | `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |
 | `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every chore pass |

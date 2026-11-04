@@ -15,8 +15,8 @@ The work is split between the two repositories, and they meet in one place:
   [`src/mc/shot.js`](../../src/mc/shot.js) holds the parts.
 - **memoro owns the app**: `.mc/shot.json` in memoro names the capture script,
   the targets, the shells and the viewports, and the script drives the browser.
-  It was built by memoro's `shot-capture` project
-  (archived: its row of 2026-09-26 in memoro's `docs/project/project_log.md`). mc knows
+  It was introduced by memoro's `shot-capture` change
+  (recorded on 2026-09-26 in memoro's `docs/project/project_log.md`). mc knows
   no selector, and this document does not repeat the targets: read
   `.mc/shot.json`, or run `mc shot dev --list`.
 
@@ -283,7 +283,7 @@ exits. Every read has a timeout — a step's as `runCapture`'s, from
 without an answer, prints one line and exits 1: `mc: <id> has ended (<the last
 line of its log>) — start again with mc shot <where> <target> --keep`, and the
 session's files go. A script ends itself when it has been idle long enough; how
-long is memoro's capture script's to say (project shot-session-capture), and mc
+long is memoro's capture script's to say (introduced by shot-session-capture), and mc
 meets it as a dead session.
 
 ### Rebasing after an edit
@@ -407,7 +407,7 @@ from the script's environment, so a token exported in your shell reaches the
 script only through the request file. Capture mode sends `mode`, `base_url`,
 `account`, `sign_in`, `target`, `element`, `shell`, `full_page`, `viewport`,
 `theme`, `locale` and `out`. Login mode sends `mode`, `base_url`, `account` and
-`profile_dir`. The shape is fixed in the `mc-shot` project's contract (its row of 2026-09-26 in `docs/project/project_log.md`).
+`profile_dir`. The request shape is the capture protocol described here.
 
 Capture mode also sends `click` and `actions`. `actions` is every acting flag in
 the order given, one object each: `{ kind, selector }`, with `text` on a `fill`
@@ -432,7 +432,7 @@ a full `acted`: the steps after the failed one were not done, and the `failed`
 line says so. An eval whose `evaluated` entry has `error` keeps its `eval <n>
 threw:` line and makes the command exit 1. A failure result (`ok: false`) may
 carry `errors` too. The
-capture script performing these is memoro's project `shot-report-capture`.
+capture implementation lives in memoro, not in this repository.
 
 The script's stderr goes straight to your terminal, so you see its progress.
 mc reads stdout, and the last non-empty line there must be the one result

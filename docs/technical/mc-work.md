@@ -14,8 +14,8 @@ What took each part's place:
   programme and no desk is refused with what it should belong to.
 - **The verbs.** `mc work …` and `mc worker …` exit 2 with a line that says
   where each kind of session starts (`RETIRED_VERBS`, `src/mc-verbs.js`).
-- **Opening a project from the page.** Gone with projects (goal
-  mc/projects-to-goals): a number at the page's menu shows a goal.
+- **A number on the page.** Projects went on 2026-11-03; a number now shows
+  a goal. See [mc-goals.md § From a project](mc-goals.md#from-a-project).
 - **The page's WORK section.** Gone, and from `mc --json`. Every session there
   has an `owner`; one with none, and an `mc-<name>` tmux session nobody
   started, is a stray under PROGRAMMES ([`mc-ui.md`](mc-ui.md)).

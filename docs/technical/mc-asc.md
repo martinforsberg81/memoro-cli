@@ -77,7 +77,7 @@ declaration names (`info_plist_commit_key`, `MemoroBuildCommit`). memoro's
 sync script writes it there from the environment variable `env.build_commit`.
 
 memoro is read only through its declaration, `.mc/ios.json` on memoro's
-`origin/main` (memoro project `ios-build-declaration`). It is read from
+`origin/main` (introduced by `ios-build-declaration`). It is read from
 `origin/main` rather than the working tree, so a stale or dirty checkout
 cannot change what is built. No memoro path, bundle id or team id is written
 in mc's code.
