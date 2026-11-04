@@ -685,6 +685,8 @@ export function checksSection({ repos = [], now = new Date() } = {}) {
             short: deps.sha ? String(deps.sha).slice(0, 7) : null,
             critical: deps.audit?.counts?.critical || 0,
             high: deps.audit?.counts?.high || 0,
+            moderate: deps.audit?.counts?.moderate || 0,
+            low: deps.audit?.counts?.low || 0,
           }
           : null,
       };
@@ -839,6 +841,10 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
       // why the section showed no date at all once the prefix landed.
       date: dateOf(digest.name) || null,
       age_seconds: age,
+      // Count the complete fingerprint table, never the delta as a total.
+      errors_total: /_(?:no fingerprints|nothing failed) in the window_/u.test(digest.text) && !/_could not read:/u.test(digest.text) ? 0
+        : /^fingerprint /mu.test(digest.text)
+          ? [...digest.text.matchAll(/^fingerprint \S+ \d+\s*$/gmu)].length : null,
       new_errors: lines.length,
       loud: loud.length,
       // The `!` lines themselves, not just how many. A count of loud errors is

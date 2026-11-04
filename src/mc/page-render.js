@@ -560,102 +560,47 @@ const STALE_SESSION_S = 24 * 60 * 60;
 const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
 const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
 
-/**
- * One desk — HELPER or BRIEF — as a heading with its state beside it, and
- * under it what is lying on that desk.
- *
- * Drawn whether or not anybody is at it. There is exactly one of each, so
- * *"is the helper running?"* is a question a row answers either way, and a
- * section that vanishes when nothing is open answers nothing at all.
- */
-function deskLine(lines, c, wide, title, session, verb) {
-  if (!session) {
-    heading(lines, c, wide, title, [{ text: `${MARK.quiet}  not open`, styles: ['grey'] }], verb);
-    return;
-  }
-  heading(lines, c, wide, title, [
-    { text: `${MARK.running} `, styles: ['cyan'] },
-    ...between([
-      { text: openFor(session.age_seconds), styles: ageTone(session.age_seconds) },
-      { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
-      { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
-    ], ' · '),
-  ], verb);
-}
-
-/** The width of the repository cell on a digest row. */
+/** The repository column shared by maintenance and checks. */
 const DIGEST_REPO = 11;
 
-/**
- * HELPER — the desk, and what is in the intake it works from: one row per
- * repository that has a digest.
- *
- * This was INTAKE, a section of its own with up to four `!` lines under each
- * digest, and it was the tallest thing on the page that nobody acts on from
- * the page: the helper is who reads a digest. One row each now — how many
- * errors are new, how many of them loud, how old the reading is — and the
- * loudest message in what is left of the row, because a count of loud errors
- * is a number somebody has to go and look up and the message is what makes
- * them look. The rest are in the digest, and in `mc --json`.
- *
- * One row each rather than the newest of the two: showing the newer silently
- * hid whichever was collected first — in practice memoro-cli's, the digest
- * about this machine.
- */
-function helperLines(lines, c, wide, session, intake) {
-  deskLine(lines, c, wide, 'HELPER', session, 'mc helper');
-  const repos = intake?.repos || [];
-  if (!repos.length) {
-    say(lines, c, wide, 7, 'no digest yet — mc helper --intake has not run');
-    return;
+/** Repository readings side by side; missing measurements stay unknown. */
+function maintenanceLines(lines, c, wide, sessions, intake, checks) {
+  heading(lines, c, wide, 'MAINTENANCE', '', 'mc helper · mc brief');
+  const compact = wide < 100;
+  const columns = [
+    ['REPO', 11], ['ERRORS', 7], ['NEW', 5], ['LOUD', 5],
+    [compact ? 'C' : 'DEP CRIT', compact ? 3 : 9],
+    [compact ? 'H' : 'HIGH', compact ? 3 : 6],
+    ...(!compact ? [['MOD', 5], ['LOW', 5]] : []),
+    [compact ? 'PROP' : 'PROPOSALS', compact ? 5 : 10],
+  ];
+  const cells = (values) => columns.map(([, size], i) => pad(clip(String(values[i]), size - 1), size)).join('');
+  lines.push(`    ${c(`${cells(columns.map(([label]) => label))}STATUS`, 'grey')}`);
+  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map((r) => r.repo), ...(checks?.repos || []).map((r) => r.repo)])];
+  for (const name of repos) {
+    const digest = intake?.repos?.find((r) => r.repo === name);
+    const deps = checks?.repos?.find((r) => r.repo === name)?.deps;
+    const proposals = intake?.by_system?.[name === 'memoro-cli' ? 'mc' : name] ?? 0;
+    const status = !digest ? 'no digest' : digest.first ? 'no baseline'
+      : digest.age_seconds == null ? (digest.date || 'age unknown') : `${ageWords(digest.age_seconds)} old`;
+    const values = [name, digest?.errors_total ?? '?', digest && !digest.first ? digest.new_errors : '?',
+      digest && !digest.first ? digest.loud : '?', deps?.critical ?? '?', deps?.high ?? '?',
+      ...(!compact ? [deps?.moderate ?? '?', deps?.low ?? '?'] : []), proposals];
+    const tone = digest?.loud || deps?.critical ? 'red'
+      : !digest || !deps || digest.first || digest.age_seconds == null || digest.age_seconds >= STALE_SESSION_S || deps.high ? 'yellow' : 'green';
+    lines.push(`  ${c('●', tone)} ${cells(values)}${c(clip(status, wide - 4 - width(cells(values))), 'grey')}`);
   }
-  for (const repo of repos) {
-    const fresh = repo.age_seconds != null && repo.age_seconds < 24 * 60 * 60;
-    const errors = repo.first
-      ? 'first digest — no baseline'
-      : `${repo.new_errors} new error${repo.new_errors === 1 ? '' : 's'}${repo.loud ? `, ${repo.loud} loud` : ''}`;
-    const left = `       ${pad(clip(repo.repo, DIGEST_REPO - 1), DIGEST_REPO)} ${paint(c, between([
-      { text: errors, styles: !repo.first && repo.new_errors ? ['red'] : ['grey'] },
-      // A digest under a day old is green because somebody has looked; older,
-      // and the age itself is the thing to see.
-      { text: repo.age_seconds == null ? (repo.date || '') : `${ageWords(repo.age_seconds)} old`, styles: repo.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
-    ], ' · '))}`;
-    // Only where there is room to read it: a message clipped to eight columns
-    // says less than the count beside it already has.
-    const loudest = wide - width(left) >= 24 ? (repo.loud_lines || [])[0] : null;
-    const middle = loudest ? `   ${c('!', 'red')} ` : '';
-    const message = loudest ? [one(loudest.message), loudest.count].filter(Boolean).join(' — ') : '';
-    lines.push(loudest ? row(c, wide, `${left}${middle}`, message, null) : left);
+  if (compact) say(lines, c, wide, 2, 'C/H: dependency critical/high · errors: fingerprints', ['grey']);
+  else say(lines, c, wide, 2, 'errors: fingerprints · DEP: dependency vulnerabilities', ['grey']);
+  const untagged = intake?.by_system?.untagged || 0;
+  if (untagged) say(lines, c, wide, 7, `${untagged} proposal${untagged === 1 ? '' : 's'} · untagged ${untagged}`, ['yellow']);
+  for (const verb of ['helper', 'brief']) {
+    const session = sessions?.desks?.[verb];
+    if (!session) continue;
+    say(lines, c, wide, 7, `${verb} ${MARK.running} ${openFor(session.age_seconds)} · ${[session.tool, session.model].filter(Boolean).join(' ')}${session.pid ? ` · pid ${session.pid}` : ''}`, ['cyan']);
   }
 }
 
-/**
- * BRIEF — the desk, and what is waiting for it: the proposals nobody has
- * queued or dropped; this count is only the root pile, without a programme.
- *
- * The proposals are a count, how far back the pile reaches, and the newest few
- * by name — enough to see whether anything arrived since the last look. The count
- * is split by the system in each filename, and `untagged` is drawn yellow.
- */
-function briefLines(lines, c, wide, session, intake) {
-  deskLine(lines, c, wide, 'BRIEF', session, 'mc brief');
-  const count = intake?.proposals || 0;
-  const files = intake?.proposal_files || {};
-  const room = wide - 7;
-  if (count) {
-    const span = files.oldest && files.newest
-      ? (files.oldest === files.newest ? when(files.newest) : `${when(files.oldest)} – ${when(files.newest)}`)
-      : '';
-    lines.push(`       ${paint(c, fitting(trailing([
-      { text: `${count} proposal${count === 1 ? '' : 's'} without a programme`, styles: ['yellow'] },
-      ...[['mc', intake?.by_system?.mc], ['memoro', intake?.by_system?.memoro], ['untagged', intake?.by_system?.untagged]].filter(([, n]) => n > 0).map(([label, n]) => ({ text: `${label} ${n}`, styles: [label === 'untagged' ? 'yellow' : 'grey'] })),
-      { text: span, styles: ['grey'] },
-      ...(files.newest_names || []).map((name, index) => ({ text: `${index ? '' : 'newest '}${name}`, styles: ['grey'] })),
-    ]), room), room)}`);
-  } else {
-    say(lines, c, wide, 7, 'no unassigned proposals waiting');
-  }
-}
 
 /**
  * What no kind explains (`programmes.strays`): a directory under `~/mc` that
@@ -716,9 +661,8 @@ function worktreeWords(path) {
  * the tail. A session that has ended says so first in the tail, in yellow.
  */
 function devServerLine(c, wide, server) {
-  const leased = server.state === 'leased';
   return gridRow(c, wide, {
-    mark: leased ? { text: MARK.running, styles: ['green'] } : { text: MARK.quiet, styles: ['grey'] },
+    mark: { text: MARK.running, styles: server.holder_gone || server.state === 'starting' ? ['yellow'] : stateTone(server.state) },
     kind: { text: String(server.kind || 'slot').toUpperCase(), styles: ['grey'] },
     name: { text: server.name || '—', styles: server.name && !server.holder_gone ? [] : ['grey'] },
     repo: { text: server.repo || '', styles: ['grey'] },
@@ -757,7 +701,7 @@ function devLines(lines, c, wide, dev) {
   if (dev.queued) {
     const first = dev.queue?.[0]?.name;
     const x = gridColumns(wide).kind.x;
-    lines.push(`${' '.repeat(x)}${c(clipCell(`${dev.queued} queued${first ? ` · ${first} first` : ''}`, wide - x), 'yellow')}`);
+    lines.push(`  ${c('●', 'yellow')}${' '.repeat(x - 3)}${c(clipCell(`${dev.queued} queued${first ? ` · ${first} first` : ''}`, wide - x), 'yellow')}`);
   }
 }
 
@@ -778,14 +722,6 @@ function mergeQueueLabel(repo, compact = false, stopped = false) {
   ].filter(Boolean);
 }
 
-/** A merge row's mark: a round in hand, a red, or a queue that waits. */
-const MERGE_MARK = {
-  gate: { text: MARK.running, styles: ['green'] },
-  red: { text: MARK.red, styles: ['red'] },
-  wait: { text: MARK.quiet, styles: ['grey'] },
-  idle: { text: MARK.quiet, styles: ['grey'] },
-};
-
 /**
  * What a merge row's tail says, after its cells: the round it is batched
  * with, how long it has been queued, or why it is red, and the pull
@@ -804,7 +740,7 @@ function mergeTail(item) {
 /** One queue item of MERGES, in the page's grid. */
 function mergeItemLine(c, wide, repo, item, first) {
   return gridRow(c, wide, {
-    mark: MERGE_MARK[item.kind] || MERGE_MARK.wait,
+    mark: { text: MARK.running, styles: stateTone(item.state) },
     kind: { text: String(item.kind).toUpperCase(), styles: kindTone(item.kind) },
     name: { text: item.name || '—' },
     repo: { text: repo.repo, styles: ['grey'] },
@@ -828,7 +764,7 @@ function mergeRepoLines(c, wide, repo) {
   const items = [...(repo.landings || []), ...(repo.reds || []), ...(repo.waiting || [])];
   if (!items.length) {
     return [gridRow(c, wide, {
-      mark: MERGE_MARK.idle,
+      mark: { text: MARK.running, styles: stateTone(repo.state) },
       kind: { text: 'IDLE', styles: kindTone('idle') },
       name: { text: repo.name ?? repo.repo, styles: ['grey'] },
       repo: { text: repo.repo, styles: ['grey'] },
@@ -971,7 +907,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * One goal, in the page's grid (Martin, 2026-11-03): its row number, a mark while a session is on it,
+ * One goal, in the page's grid: a status circle in the left margin,
  * `goal` in the kind column, its name, its first repository, its stage in the
  * state column, how many sessions it has had, its open pull request
  * (`goal/<goal>`). The grey tail after that starts with `criteria <met>/<all>`
@@ -1012,8 +948,7 @@ function goalLine(c, wide, goal) {
   }
   if (criteria && !goal.problems?.length) tail = [criteria, ...tail];
   return gridRow(c, wide, {
-    nr: goal.number,
-    mark: goal.running ? { text: MARK.running, styles: ['green'] } : { text: MARK.quiet, styles: ['grey'] },
+    mark: { text: MARK.running, styles: goal.problems?.length ? ['red'] : goal.held ? stateTone('waiting') : tone },
     kind: { text: goal.kind || 'goal', styles: kindTone('goal') },
     name: { text: goal.name, styles: goal.running ? ['bold'] : [] },
     repo: { text: goal.repo ?? goal.repos?.[0] ?? '—', styles: ['grey'] },
@@ -1276,17 +1211,15 @@ export function renderPageLines(data, {
   // The order is Martin's (2026-09-19), and it still keeps the rule the page
   // had: **what does not move sits above what does.** The live loop rewrites
   // rows where they stand (page-live.js), and a row near the prompt is one it
-  // can always reach. PROGRAMMES is the page as a listing; the two
-  // desks change when somebody sits down; SESSIONS and DEV every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // can always reach. PROGRAMMES is the page as a listing; MAINTENANCE
+  // changes with its readings; SESSIONS and DEV every frame;
+  // MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
-  helperLines(lines, c, wide, sessions.desks?.helper, data.intake);
-  lines.push('');
-  briefLines(lines, c, wide, sessions.desks?.brief, data.intake);
+  maintenanceLines(lines, c, wide, sessions, data.intake, data.checks);
   lines.push('');
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
-  if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
   // DEV changes as often as the sessions do, so it stands right under them.
   if (data.dev) {
@@ -1306,6 +1239,7 @@ export function renderPageLines(data, {
   lines.push('');
   dockerLine(lines, c, wide, data.docker);
   mcLine(lines, c, wide, data.mc, data.caches, version);
+  if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   for (const note of data.notes || []) {
     // How old the PR cache is was the page's last line, every time, and it was
     // never what anybody came for; `mc --json` has it under `caches`.
