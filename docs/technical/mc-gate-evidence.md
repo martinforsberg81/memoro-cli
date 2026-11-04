@@ -26,6 +26,25 @@ unavailable command may retain its existing v1 gate verdict, but cannot mint a
 green receipt. An interrupted worker may leave no receipt; absence is not green.
 A command reporting `RUNNING` does not create a receipt on the worker's behalf.
 
+After selection, the local session gate starts its test run and its selected
+command sequence together. Commands remain serial, in selector order, and each
+receives the frozen base when requested. A normal verdict waits for both
+sequences to settle; a test or command failure/throw cannot hide the other
+half's result, and a thrown half is caught while the collaborating work settles.
+An abort starts no later command and propagates the same signal to the active
+test and command children. This removes additive command waiting; command
+execution evidence is available while tests are still running.
+
+At the repository ceiling the worker returns a red snapshot rather than
+waiting beyond its bound. It reports every active phase, retains finished test
+and command evidence, lists unfinished files, and identifies running and
+pending commands separately. A command phase change does not discard the test
+file selection. Such a partial execution is not a reusable green receipt: the
+receipt constructor requires every selected command and the test half, when
+selected, to have completed successfully with known exits and unchanged
+content. The ceiling does not make a selected test set smaller or claim to
+solve the study selector's test-selection ceiling.
+
 ## Waiting and recovery
 
 The command's budget includes lane waiting. Budget expiry returns `RUNNING`

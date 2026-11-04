@@ -223,6 +223,30 @@ it('running, empty, unknown-exit, interrupted and red attempts never mint green'
   await pending;
 });
 
+it('a concurrent ceiling receipt retains active evidence and cannot be reused as green', async (t) => {
+  const { request } = fixture(t);
+  const req = { ...request(), files: null, select: 'selector', round_timeout_ms: 20 };
+  const result = await runSessionGate(req, { ...quiet,
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [
+      { packageScript: 'first' }, { packageScript: 'second' },
+    ] }),
+    tests: ({ signal }) => new Promise((resolve) => signal.addEventListener('abort', () => resolve({ code: null, tap: '', aborted: true }), { once: true })),
+    shell: (_command, { signal }) => new Promise((resolve) => signal.addEventListener('abort', () => resolve({ status: null, signal: 'SIGTERM' }), { once: true })),
+  });
+  const receipt = receiptOf(result);
+  assert.equal(result.stopped_at, 'timeout');
+  assert.equal(result.timeout_phase, 'tests, command first');
+  assert.deepEqual(result.red_files, ['a.test.js']);
+  assert.deepEqual(result.running_commands, ["npm run 'first'"]);
+  assert.deepEqual(result.pending_commands, ["npm run 'second'"]);
+  assert.deepEqual(receipt.coverage.files, ['a.test.js']);
+  assert.equal(receipt.execution.tests.finished, false);
+  assert.deepEqual(receipt.execution.commands.map((entry) => entry.state), ['running', 'pending']);
+  assert.equal(receipt.outcome, 'red');
+  assert.equal(findGreen({ root: req.gate.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(receipt.coverage) }), null);
+  assert.equal(findGreenForHead({ root: req.gate.root, repo: 'repo', headTree: receipt.tree }), null);
+});
+
 it('an empty selection and an aborted command sequence cannot mint green', async (t) => {
   for (const mode of ['empty', 'interrupted', 'unknown', 'unavailable']) {
     const { request } = fixture(t);

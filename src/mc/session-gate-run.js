@@ -35,14 +35,21 @@ export async function runSessionGate(request, {
     const timeoutMs = Number(request.round_timeout_ms) > 0 ? Number(request.round_timeout_ms) : 60 * 60_000;
     // The runs' times files, tracked as the runs start (`runProgress`).
     const tracker = progressTracker();
-    let phase = 'selection';
+    const activePhases = new Set(['selection']);
     let pendingFiles = request.files || [];
+    let live = null;
     let timedOut = false;
     let progress = { unfinished: [], finished: [] };
+    let ceilingLive = null;
+    let ceilingPhases = [];
+    let ceilingFiles = null;
     const timeout = setTimeout(() => {
       timedOut = true;
       // Read before the abort: the run's files are gone once its process closes.
       progress = tracker.read();
+      ceilingLive = live ? JSON.parse(JSON.stringify(live)) : null;
+      ceilingPhases = [...activePhases];
+      ceilingFiles = [...pendingFiles];
       controller.abort(new Error(`repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s`));
     }, timeoutMs);
     timeout.unref?.();
@@ -55,22 +62,34 @@ export async function runSessionGate(request, {
       });
       const result = await Promise.race([
         executeSessionGate(request, { ...deps, signal, track: tracker.track, complete: tracker.complete,
-          onPhase: (next, files = []) => { phase = next; pendingFiles = files; } }), cut,
+          onPhase: (next, active, files = []) => {
+            if (active) activePhases.add(next); else activePhases.delete(next);
+            if (files.length) pendingFiles = files;
+          }, onProgress: (next) => { live = next; } }), cut,
       ]);
-      if (!timedOut) return result ?? { ok: false, code: 1, stopped_at: 'interrupted' };
+      if (!timedOut) return result ?? { ...live, ok: false, code: 1, stopped_at: 'interrupted' };
       // What did not finish is the red, and is named; the slowest files that did
       // finish are for the reader. Asked files that never started are unfinished too.
       const prefix = `${request.cwd}/`;
       const rel = (file) => (file.startsWith(prefix) ? file.slice(prefix.length) : file);
-      const asked = pendingFiles;
+      const asked = ceilingFiles || pendingFiles;
       const done = new Set(progress.finished.map((one) => rel(one.file)));
       const unfinished = [...new Set([...progress.unfinished.map(rel), ...asked.filter((file) => !done.has(file))])];
       const slowest = progress.finished.slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));
       const reached = slowest.length ? `; slowest finished: ${slowest.map((one) => `${one.file} (${one.seconds} s)`).join(', ')}` : '';
       const named = unfinished.length ? `; unfinished: ${unfinished.join(', ')}` : '';
-      const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s; phase: ${phase}${named}${reached}`;
-      (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}\n`);
-      return { ...result, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest, timeout_phase: phase };
+      const phases = ceilingPhases;
+      const phase = phases.join(', ') || 'settling';
+      const timedOutSnapshot = ceilingLive || live;
+      const commands = timedOutSnapshot?.execution?.commands || [];
+      const pendingCommands = commands.filter((entry) => entry.state === 'pending').map((entry) => entry.command);
+      const runningCommands = commands.filter((entry) => entry.state === 'running').map((entry) => entry.command);
+      const commandProgress = [...(runningCommands.length ? [`running commands: ${runningCommands.join(', ')}`] : []),
+        ...(pendingCommands.length ? [`pending commands: ${pendingCommands.join(', ')}`] : [])];
+      const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}`;
+      (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}\n`);
+      return { ...timedOutSnapshot, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest,
+        timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands };
     } finally { clearTimeout(timeout); }
   };
   if (!request.measurement) return execute();
@@ -103,7 +122,7 @@ export async function runSessionGate(request, {
 
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
-  write = (text) => process.stdout.write(text), signal, track = null, complete = null, onPhase = () => {},
+  write = (text) => process.stdout.write(text), signal, track = null, complete = null, onPhase = () => {}, onProgress = () => {},
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
@@ -121,56 +140,87 @@ async function executeSessionGate(request, {
   const { run: files, deferred } = request.defer
     ? sessionFiles(selected, { times: readTestTimes(request.gate), keep: request.addedTests })
     : { run: selected, deferred: [] };
+  onPhase('selection', false);
   if (deferred.length) write(`deferred to the merge round, too costly here (${deferred.length}): ${deferred.join(' ')}\n`);
   if (!files.length && !selection.commands?.length) {
     write('NOTHING RUN — the repository selector selected no checks\n');
     return { ok: false, code: 2, stopped_at: 'no-checks', files };
   }
+  const selectedCommands = selection.commands || [];
   let code = 0;
   let details = [];
   let testResult = null;
   let timed = [];
-  if (files.length) {
-    onPhase('tests', files);
-    const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
-    write(`${run.tap || ''}\n${run.stderr || ''}`);
-    // The tests this change touches and how long node says each took: information, not a verdict.
-    timed = touchedTests(run.tests || [], request.timed || {});
-    details = redTests(run.tap, files, { cwd });
-    const totals = tapTotals(run.tap);
-    if (totals.finished && !run.aborted && !run.timedOut && !run.error) onPhase('command gates');
-    for (const key of ['tests', 'pass', 'fail', 'skipped']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
-    testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted, totals };
-    if (run.error || run.timedOut || run.aborted || !totals.finished || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
+  const commands = selectedCommands.map((command) => ({
+    command: `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`,
+    exit: null, ok: false, state: 'pending',
+  }));
+  const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selectedCommands,
+    flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
+  const snapshot = () => ({ ok: code === 0, code, files, deferred, commands, red_tests: details, timed_tests: timed,
+    coverage, execution: { tests: testResult, commands } });
+  const progress = () => onProgress(snapshot());
+  progress();
+
+  const runTests = async () => {
+    if (!files.length) return;
+    onPhase('tests', true, files);
+    testResult = { exit: null, finished: false, totals: {} };
+    progress();
+    try {
+      const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
+      write(`${run.tap || ''}\n${run.stderr || ''}`);
+      timed = touchedTests(run.tests || [], request.timed || {});
+      details = redTests(run.tap, files, { cwd });
+      const totals = tapTotals(run.tap);
+      for (const key of ['tests', 'pass', 'fail', 'skipped']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
+      testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted, totals };
+      if (run.error || run.timedOut || run.aborted || !totals.finished || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
+        code = 1;
+        const reason = run.error || (run.timedOut ? 'tests exceeded their time limit' : run.aborted ? 'tests interrupted'
+          : !totals.finished ? 'tests did not finish' : !totals.tests || !totals.pass ? 'no passing tests executed'
+            : run.code == null ? 'test exit is unknown' : null);
+        if (reason) write(`Error: ${reason}\n`);
+      }
+      for (const test of details) write(`✖ ${test.name}\n${test.at ? `    at ${test.at}\n` : ''}${test.error.map((line) => `    ${line}\n`).join('')}`);
+    } catch (error) {
       code = 1;
-      const reason = run.error || (run.timedOut ? 'tests exceeded their time limit' : run.aborted ? 'tests interrupted'
-        : !totals.finished ? 'tests did not finish' : !totals.tests || !totals.pass ? 'no passing tests executed'
-          : run.code == null ? 'test exit is unknown' : null);
-      if (reason) write(`Error: ${reason}\n`);
+      testResult = { exit: null, finished: false, totals: {}, error: error.message };
+      write(`Error: tests threw: ${error.message}\n`);
+    } finally {
+      onPhase('tests', false, files);
+      progress();
     }
-    for (const test of details) {
-      write(`✖ ${test.name}\n${test.at ? `    at ${test.at}\n` : ''}${test.error.map((line) => `    ${line}\n`).join('')}`);
-    }
-  }
-  const commands = [];
-  for (const command of selection.commands || []) {
-    if (signal?.aborted) { code = 1; break; }
-    onPhase(`command ${command.packageScript}`);
-    const invocation = `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`;
-    const result = await shell(invocation, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
-    write(`${result.stdout || ''}${result.stderr || ''}`);
-    const ok = !result.error && !result.signal && (result.status === 0 || (command.unavailableExitCode != null && result.status === command.unavailableExitCode));
-    commands.push({ command: invocation, exit: result.status ?? null, ok, ...(result.error ? { error: result.error.code || result.error.message } : {}) });
-    write(`command ${command.id || command.packageScript}: ${ok ? 'pass' : 'fail'}\n`);
-    if (!ok) code = 1;
-  }
-  if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
-  return { ok: code === 0, code, files, deferred, commands, red_tests: details, timed_tests: timed,
-    // `partial` is never reusable evidence: the merge round measures the whole selection.
-    coverage: { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
-      flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null },
-    execution: { tests: testResult, commands },
   };
+  const runCommands = async () => {
+    for (let index = 0; index < selectedCommands.length; index++) {
+      const command = selectedCommands[index];
+      const evidence = commands[index];
+      if (signal?.aborted) { code = 1; break; }
+      evidence.state = 'running';
+      const phase = `command ${command.packageScript}`;
+      onPhase(phase, true);
+      progress();
+      try {
+        const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
+        write(`${result.stdout || ''}${result.stderr || ''}`);
+        const ok = !result.error && !result.signal && (result.status === 0 || (command.unavailableExitCode != null && result.status === command.unavailableExitCode));
+        Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(result.error ? { error: result.error.code || result.error.message } : {}) });
+        write(`command ${command.id || command.packageScript}: ${ok ? 'pass' : 'fail'}\n`);
+        if (!ok) code = 1;
+      } catch (error) {
+        Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
+        code = 1;
+        write(`command ${command.id || command.packageScript}: fail (${error.message})\n`);
+      } finally {
+        onPhase(phase, false);
+        progress();
+      }
+    }
+  };
+  await Promise.all([runTests(), runCommands()]);
+  if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
+  return snapshot();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

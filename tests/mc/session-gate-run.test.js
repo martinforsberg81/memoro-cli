@@ -150,6 +150,121 @@ it('the automatic gate runs affected tests and command gates, including a projec
   assert.equal(result.ok, false);
 });
 
+it('starts the serial command sequence beside tests without waiting additively', async () => {
+  const started = [];
+  let releaseCommand;
+  let releaseTestsAfterCommand;
+  let testFinished = false;
+  let markTestsFinished;
+  let releaseTests;
+  const commandStarted = new Promise((resolve) => { releaseCommand = resolve; });
+  const commandFinished = new Promise((resolve) => { releaseTestsAfterCommand = resolve; });
+  const testStarted = new Promise((resolve) => { releaseTests = resolve; });
+  const testsDone = new Promise((resolve) => { markTestsFinished = resolve; });
+  const bounded = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('not-started'), 300))]);
+  const result = await runSessionGate({ cwd: '/work', select: 'selector', base: 'frozen-base' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [
+      { packageScript: 'first', passBaseRef: true }, { packageScript: 'second' },
+    ] }),
+    tests: async () => {
+      started.push('tests');
+      releaseTests();
+      assert.notEqual(await bounded(commandStarted), 'not-started', 'command sequence starts before tests complete');
+      assert.notEqual(await bounded(commandFinished), 'not-started', 'command and tests both remain active until released');
+      testFinished = true;
+      markTestsFinished();
+      return { tap: GREEN, code: 0 };
+    },
+    shell: async (invocation) => {
+      started.push(invocation);
+      if (invocation.includes('first')) {
+        releaseCommand();
+        assert.equal(await bounded(testStarted), undefined, 'test sequence has started');
+        assert.equal(testFinished, false);
+        releaseTestsAfterCommand();
+        return { status: 0 };
+      }
+      assert.notEqual(await bounded(testsDone), 'not-started');
+      assert.equal(testFinished, true);
+      return { status: 0 };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(started, ['tests', "npm run 'first' -- --base-ref 'frozen-base'", "npm run 'second'"]);
+  assert.deepEqual(result.execution.commands.map((entry) => entry.exit), [0, 0]);
+});
+
+it('both concurrent halves contribute failures and thrown failures settle the collaborator', async () => {
+  const calls = [];
+  const failed = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+    tests: async () => { calls.push('tests'); return { tap: '# tests 1\\n# pass 0\\n# fail 1\\n', code: 1 }; },
+    shell: async () => { calls.push('command'); return { status: 2 }; },
+  });
+  assert.equal(failed.ok, false);
+  assert.deepEqual(calls, ['tests', 'command']);
+  assert.equal(failed.execution.tests.exit, 1);
+  assert.equal(failed.execution.commands[0].exit, 2);
+
+  // Each half throws while the other is held pending: no verdict may arrive
+  // before the held half is released, and its final evidence must be in it.
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+  const bounded = (promise, what) => Promise.race([promise, sleep(2_000).then(() => { throw new Error(`${what} within 2 s`); })]);
+  const turns = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  for (const thrower of ['tests', 'command']) {
+    const heldStarted = deferred();
+    const release = deferred();
+    const threw = deferred();
+    let verdict = false;
+    const gate = runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: () => {},
+      select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+      tests: async () => {
+        if (thrower === 'tests') { await bounded(heldStarted.promise, 'held command started'); threw.resolve(); throw new Error('test half threw'); }
+        heldStarted.resolve();
+        await release.promise;
+        return { tap: GREEN, code: 0 };
+      },
+      shell: async () => {
+        if (thrower === 'command') { await bounded(heldStarted.promise, 'held tests started'); threw.resolve(); throw new Error('command half threw'); }
+        heldStarted.resolve();
+        await release.promise;
+        return { status: 0 };
+      },
+    }).then((result) => { verdict = true; return result; });
+    try {
+      await bounded(threw.promise, `${thrower} half threw`);
+      await turns();
+      assert.equal(verdict, false, `no verdict while the collaborator of a thrown ${thrower} half is pending`);
+    } finally { release.resolve(); }
+    const result = await bounded(gate, 'verdict after release');
+    assert.equal(result.ok, false);
+    if (thrower === 'tests') {
+      assert.match(result.execution.tests.error, /test half threw/u);
+      assert.deepEqual(result.execution.commands.map(({ state, exit, ok }) => ({ state, exit, ok })), [{ state: 'completed', exit: 0, ok: true }]);
+    } else {
+      assert.match(result.execution.commands[0].error, /command half threw/u);
+      assert.equal(result.execution.tests.exit, 0);
+      assert.equal(result.execution.tests.finished, true);
+    }
+  }
+});
+
+it('an abort stops the serial sequence before the next selected command', async () => {
+  const controller = new AbortController();
+  const invoked = [];
+  const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {}, signal: controller.signal,
+    select: async () => ({ ok: true, files: [], commands: [{ packageScript: 'first' }, { packageScript: 'second' }] }),
+    shell: async (command) => { invoked.push(command); controller.abort(); return { status: 0 }; },
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(invoked, ["npm run 'first'"]);
+  assert.deepEqual(result.execution.commands.map((entry) => entry.state), ['completed', 'pending']);
+});
+
 it('an empty, failed or invalid selection never reports green', async () => {
   for (const selected of [{ ok: true, files: [] }, { ok: false, reason: 'unmapped path' }, { ok: true, files: ['../outside.test.js'] }]) {
     const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
@@ -268,5 +383,7 @@ it('a timeout in a command retains completed reporter evidence without naming th
     assert.deepEqual(result.red_files, []);
     assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 1.5 }]);
     assert.equal(result.timeout_phase, 'command lint:x');
+    assert.deepEqual(result.running_commands, ["npm run 'lint:x'"]);
+    assert.equal(result.execution.commands[0].state, 'running');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
