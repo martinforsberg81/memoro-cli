@@ -58,6 +58,7 @@ export function programmesListing({ section, homes = {} }) {
       ...(group.goals || []).flatMap((goal) => goal.repos || []),
     ].filter(Boolean))].sort(),
     goals: (group.goals || []).length,
+    proposals: group.proposals || 0,
     statuses: Object.fromEntries(statusRollup(group.statuses)),
     plan_sessions: planProviders(group),
   })).sort((a, b) => a.name.localeCompare(b.name));
@@ -77,6 +78,7 @@ function cells(item) {
     item.state,
     item.repos.join(',') || '—',
     item.goals ? `${plural(item.goals, 'goal')}${rollup ? ` · ${rollup}` : ''}` : 'no goal',
+    plural(item.proposals, 'proposal'),
     meta ? `plan ${meta}` : 'no plan session',
   ];
 }

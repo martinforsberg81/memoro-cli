@@ -36,6 +36,7 @@ import {
   admit, isMainServer, KEPT_HOLD_SECONDS, keptHolds, lastUsedAt, listServers, mainIdleSecondsOf, processCwd, refusalText,
   stopServer, strayCwd, touchServer, waitingLine,
 } from './dev-servers.js';
+import { leaseHolder } from './dev-holder.js';
 import { log } from './logger.js';
 import { pidAlive } from './status-collect.js';
 
@@ -410,13 +411,15 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   // Otherwise, when idle, it is fast-forwarded to origin/main (clean and on main only), and the stale
   // check below restarts it if its HEAD has moved.
   const env = deps.env || process.env;
+  // Who takes it: written on every use below, and on the queue ticket while it waits (dev-holder.js).
+  const holder = deps.holder !== undefined ? deps.holder : leaseHolder({ env, verb: deps.holderVerb || 'mc', ...(deps.ps ? { ps: deps.ps } : {}) });
   const main = deps.main !== undefined ? deps.main : mainCheckout(env);
   const isMain = isMainServer({ worktree_path: worktree, service }, main);
   const idleMs = mainIdleSecondsOf(env) * 1000;
   if (isMain && running) {
     const hold = mainHold(running, { now: now(), idleMs, dir: deps.sessionsDir });
     if (hold) {
-      (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
+      (deps.touchServer || touchServer)(running.instance_id, { ...(root ? { root } : {}), holder });
       return {
         ok: true, server: running, started: false, held: { reason: hold, stale: builtFromMoved(running, worktree, deps), idle_seconds: idleMs / 1000 },
       };
@@ -445,7 +448,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   } else if (running) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
     if (!stale) {
-      (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
+      (deps.touchServer || touchServer)(running.instance_id, { ...(root ? { root } : {}), holder });
       return { ok: true, server: running, started: false, followed, unfollowed };
     }
     // The server is alive and it is this worktree's, and it is serving a tree
@@ -486,6 +489,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
       main,
       sessionsDir: deps.sessionsDir,
+      session: holder,
     });
     if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   }
@@ -535,7 +539,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const readyBy = now() + readyMs;
   while (now() < readyBy) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
-      (deps.touchServer || touchServer)(server.instance_id, root ? { root } : {});
+      (deps.touchServer || touchServer)(server.instance_id, { ...(root ? { root } : {}), holder });
       return {
         ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
       };

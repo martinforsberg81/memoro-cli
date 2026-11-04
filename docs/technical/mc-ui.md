@@ -25,20 +25,33 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 ## The sections
 
 `renderPageLines` in `src/mc/page-render.js` draws PROGRAMMES, HELPER, BRIEF,
-SESSIONS and BILLING, MERGES, PULL REQUESTS, DEPLOY, LANGUAGE, CHECKS, the
-optional Docker line, and MC. A stopped language run inside an open gap
-puts its red warning above them all. Optional sections with nothing to say
-are not drawn. What changes less sits above what changes more, so activity
-stays within reach of the prompt.
+SESSIONS and BILLING, DEV (2026-11-04), MERGES, PULL REQUESTS, DEPLOY,
+LANGUAGE, CHECKS, the optional Docker line, and MC. A stopped language run
+inside an open gap puts its red warning above them all. Optional sections
+with nothing to say are not drawn. What changes less sits above what changes
+more, so activity stays within reach of the prompt; DEV changes as often as
+the sessions do, so it stands right under them.
 
 ### PROGRAMMES
 
 `programmesSection` and `goalsOf` (`page-collect.js`) group goals by programme,
-sort by programme then goal name, and number every goal. Each active programme
-has a heading with ready and blocked counts and planning sessions by provider
-(`plan claude 1 · codex 2`, or `no plan session`). Its other open sessions are
-counted there too. Dormant programmes have no goals and fold into one count;
-`a` draws them all. An open planning session alone does not make one active.
+sort by programme then goal name, and number every goal. The PROGRAMMES
+heading carries the whole page's counts: `N active · N dormant · N goals`,
+then every goal status by count, biggest first (`blocked 1 · ready 1`), each
+in its status colour (`statusRollup`, `page-render.js`).
+
+Each active programme has a heading line of its own (`programmeLine`): its
+name, its goal count (`2 goals`, or `no goal yet`) — not its statuses, which
+are on its goal rows — then, in grey, the number of files directly in its
+`proposals/` directory (`N proposal(s)`; subdirectories such as `archive/`
+are not counted, and zero is not drawn), its planning sessions by provider
+(`plan claude 1 · codex 2`, or `no plan session`) and its other open sessions
+(`1 open`). On a narrow line the proposal count gives way first, then —
+when it has plan sessions — the goal count; the planning-session words stay. Dormant programmes have no goals
+and fold into one line under the heading, which says how many of them have a
+plan session and how many have proposals; `a` draws them all, and `mc
+programs list` gives each programme's goal and proposal counts. An open
+planning session alone does not make one active.
 
 Every goal has a row in the grid: number and mark, `goal`, name, first
 repository, stage, `N sess`, and open PRs. A live current file gives it `●`
@@ -63,8 +76,10 @@ the page removes them.
 Each desk is drawn open or not. HELPER includes one row per repository digest:
 new error count, loud count, age and the loudest message if there is room.
 The remaining lines and fingerprints stay in the digest and JSON. BRIEF shows
-waiting proposal counts by system (`mc`, `memoro`, `untagged`), their date span
-and newest names. It reads filenames, not proposal contents. The desk rows
+the root proposals in `~/mc/proposals/` — the ones without a programme;
+a programme's own are counted on its heading line — as `N proposals without
+a programme`, by system (`mc`, `memoro`, `untagged`), their date span and
+newest names. It reads filenames, not proposal contents. The desk rows
 carry their own session ownership; every session belongs to a programme or
 a desk, not a free-standing work area.
 
@@ -84,6 +99,45 @@ outcomes by session kind and list-price estimate. JSON carries
 plan, build and review; builds and reviews carry variant `goal`. The tool
 and pid stay in JSON, not on the row. BILLING is a line showing both providers'
 plan usage and next billing route.
+
+### DEV
+
+The dev servers, and the session that holds each (goal `mc/dev-section`,
+Martin 2026-11-03). The heading is `DEV  3 running · 1 leased · 2 queued`
+with `mc dev list` on the right: `running` is the servers that answer (not
+`starting`), bold green while not zero; `starting` is said only when one is,
+and `queued` only while somebody waits, in yellow. No server at all: `DEV
+none running`, grey.
+
+Under it one grid row per live server: a green mark while leased, grey
+otherwise; `MAIN` for the shared checkout's standing server (`mainCheckout`),
+`SLOT` for one lent to a worktree; the holder in the name column —
+`BUILD mc/no-work`, `REVIEW mc/email-compose`, `plan mc`, `brief`, or the
+verb (`shot`, `test`, `open`) when no session ran it; the repository;
+`leased`, `idle` or `starting`; how long since mc used it; the port in the PR
+column; the branch and the worktree in the tail. A holder that is a session
+whose pid is gone says `holder gone`, yellow, first in the tail, and its
+server is `idle`. A bare verb's holder never does: it was over when it
+answered. The waiters are one yellow row under the servers, `2 queued · BUILD
+hero-detail-objects first`.
+
+**Who holds a server is written when it is taken**, never guessed from the
+worktree: `ensureDevServer` — under `mc shot dev`, `mc test dev` and `mc dev
+open` — writes `holder: { kind, owner, name, pid }` (`leaseHolder`,
+`dev-holder.js`) and `held_since` into mc's copy of the registration on
+every use, and a waiter's queue ticket carries the same as `session`. The
+pid is the coding agent's, found by walking up from the verb
+(`MC_SESSION_PID` overrides); a bare verb's is its own. `leased` is a living
+holder that used the server within `MC_DEV_HOLDER_STALE_MINUTES` (5).
+
+JSON carries `dev`: `{ running, starting, leased, queued, servers: [{ kind,
+holder, holder_alive, holder_gone, name, repo, state, idle_seconds, progress,
+port, url, worktree, branch, instance_id, service }], queue: [{ holder, name,
+worktree, service, gate, waited_seconds }] }`, read through one function,
+`readPool` (`dev-pool.js`), which reads the registry and the queue without
+sweeping or rewriting either. The page draws from `dev` and nothing else. The
+Docker line's `N leases` are leases on the container runtime (`mc docker
+ensure`), not on a dev server, and DEV does not say them.
 
 ### MERGES
 
@@ -150,18 +204,18 @@ visible without pretending they are tmux sessions.
 ## The grid
 
 `page-grid.js` defines `GRID`, `gridColumns` and `gridRow` once for PROGRAMMES,
-SESSIONS and MERGES. The same kind of fact begins at the same column.
+SESSIONS, DEV and MERGES. The same kind of fact begins at the same column.
 
-| column | width ≥ 90 / < 90 | PROGRAMMES | SESSIONS | MERGES |
-|---|---|---|---|---|
-| nr + mark | 6 | goal number and mark | lane number and mark | round, red or quiet mark |
-| kind | 8 | `goal` | `PLAN` `BUILD` `REVIEW` | `GATE` `WAIT` `RED` `IDLE` |
-| name | 28 / 20, floor 10 | goal name | programme/goal | branch or repository |
-| repo | 12 / 0 | first repository | repository | repository |
-| state | 9 | stage | running or idle | round phase or queue state |
-| progress | 10 | N sess | elapsed | state age |
-| PR | 9 | open PRs | goal's open PRs | queue item or last landing |
-| tail | remainder | criteria and last words | model and check-ins | reason and title |
+| column | width ≥ 90 / < 90 | PROGRAMMES | SESSIONS | DEV | MERGES |
+|---|---|---|---|---|---|
+| nr + mark | 6 | goal number and mark | lane number and mark | leased mark | round, red or quiet mark |
+| kind | 8 | `goal` | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
+| name | 28 / 20, floor 10 | goal name | programme/goal | holder | branch or repository |
+| repo | 12 / 0 | first repository | repository | repository | repository |
+| state | 9 | stage | running or idle | leased, idle or starting | round phase or queue state |
+| progress | 10 | N sess | elapsed | time since used | state age |
+| PR | 9 | open PRs | goal's open PRs | port | queue item or last landing |
+| tail | remainder | criteria and last words | model and check-ins | branch and worktree | reason and title |
 
 The tail gives way first, then the repository below 90 columns, then the
 name. The state, progress and PR widths hold. `clipCell` clips with `…`
@@ -460,6 +514,8 @@ checks that routing without opening a coding tool.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
 - `src/mc/page-render.js` and `src/mc/page-grid.js`: drawing, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
+- `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
+- `src/mc/dev-holder.js`: who holds a dev server — `leaseHolder`, written when a verb takes one, and `holderLabel`.
 - `src/mc/merges-collect.js`: running rounds joined to repositories and holders.
 - `src/mc/page-frame.js` and `src/mc/page-live.js`: frame differences and live reader.
 - `src/mc/status-collect.js`, `status-render.js`, `foreground.js`: shared readers,

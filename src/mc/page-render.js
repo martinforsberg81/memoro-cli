@@ -631,7 +631,7 @@ function helperLines(lines, c, wide, session, intake) {
 
 /**
  * BRIEF — the desk, and what is waiting for it: the proposals nobody has
- * queued or dropped.
+ * queued or dropped; this count is only the root pile, without a programme.
  *
  * The proposals are a count, how far back the pile reaches, and the newest few
  * by name — enough to see whether anything arrived since the last look. The count
@@ -647,13 +647,13 @@ function briefLines(lines, c, wide, session, intake) {
       ? (files.oldest === files.newest ? when(files.newest) : `${when(files.oldest)} – ${when(files.newest)}`)
       : '';
     lines.push(`       ${paint(c, fitting(trailing([
-      { text: `${count} proposal${count === 1 ? '' : 's'}`, styles: ['yellow'] },
+      { text: `${count} proposal${count === 1 ? '' : 's'} without a programme`, styles: ['yellow'] },
       ...[['mc', intake?.by_system?.mc], ['memoro', intake?.by_system?.memoro], ['untagged', intake?.by_system?.untagged]].filter(([, n]) => n > 0).map(([label, n]) => ({ text: `${label} ${n}`, styles: [label === 'untagged' ? 'yellow' : 'grey'] })),
       { text: span, styles: ['grey'] },
       ...(files.newest_names || []).map((name, index) => ({ text: `${index ? '' : 'newest '}${name}`, styles: ['grey'] })),
     ]), room), room)}`);
   } else {
-    say(lines, c, wide, 7, 'no proposals waiting');
+    say(lines, c, wide, 7, 'no unassigned proposals waiting');
   }
 }
 
@@ -696,6 +696,70 @@ function elapsedTone(step) {
 
 /** How many queued pull requests a repository row names before counting the rest. */
 export const QUEUED_DRAWN = 6;
+
+/**
+ * A worktree as the tail has room for it: `~/…` under the home directory, and
+ * a programme's goal worktree from the programme on (`mc/goals/no-work/memoro`).
+ */
+function worktreeWords(path) {
+  return String(path || '')
+    .replace(/^\/(?:Users|home)\/[^/]+/u, '~')
+    .replace(/^~\/mc\/programs\//u, '');
+}
+
+/**
+ * One dev server, in the page's grid: `MAIN` for the shared checkout's
+ * standing server, `SLOT` for one lent to a worktree; the session that holds
+ * it in the name column (`BUILD mc/no-work`, `plan mc`, `shot`); the
+ * repository; `leased`, `idle` or `starting`; how long since mc used it; the
+ * port where a pull request stands elsewhere; and the worktree and branch in
+ * the tail. A session that has ended says so first in the tail, in yellow.
+ */
+function devServerLine(c, wide, server) {
+  const leased = server.state === 'leased';
+  return gridRow(c, wide, {
+    mark: leased ? { text: MARK.running, styles: ['green'] } : { text: MARK.quiet, styles: ['grey'] },
+    kind: { text: String(server.kind || 'slot').toUpperCase(), styles: ['grey'] },
+    name: { text: server.name || '—', styles: server.name && !server.holder_gone ? [] : ['grey'] },
+    repo: { text: server.repo || '', styles: ['grey'] },
+    state: { text: server.state, styles: stateTone(server.state) },
+    progress: { text: server.progress || '', styles: ['grey'] },
+    pr: { text: server.port ? `:${server.port}` : '', styles: ['grey'] },
+    tail: [
+      server.holder_gone ? { text: 'holder gone', styles: ['yellow'] } : null,
+      // The branch before the worktree: it is the shorter, and the worktree gives way first.
+      server.branch ? { text: server.branch, styles: ['grey'] } : null,
+      server.worktree ? { text: worktreeWords(server.worktree), styles: ['grey'] } : null,
+    ],
+  });
+}
+
+/**
+ * DEV — the dev servers, and who holds each (goal mc/dev-section). The heading
+ * counts the servers that answer, the leased ones, and the waiters when there
+ * are any; one row per server; and one yellow row for the queue, naming who is
+ * first. Drawn from `mc --json`'s `dev` and nothing else.
+ */
+function devLines(lines, c, wide, dev) {
+  const servers = dev?.servers || [];
+  if (!servers.length && !dev?.queued) {
+    heading(lines, c, wide, 'DEV', [{ text: 'none running', styles: ['grey'] }], 'mc dev list');
+    return;
+  }
+  const counts = [
+    { text: `${dev.running} running`, styles: dev.running ? ['green', 'bold'] : ['grey'] },
+    { text: `${dev.leased} leased`, styles: ['grey'] },
+    dev.starting ? { text: `${dev.starting} starting`, styles: ['grey'] } : null,
+    dev.queued ? { text: `${dev.queued} queued`, styles: ['yellow'] } : null,
+  ].filter(Boolean);
+  heading(lines, c, wide, 'DEV', between(counts, ' · '), 'mc dev list');
+  for (const server of servers) lines.push(devServerLine(c, wide, server));
+  if (dev.queued) {
+    const first = dev.queue?.[0]?.name;
+    const x = gridColumns(wide).kind.x;
+    lines.push(`${' '.repeat(x)}${c(clipCell(`${dev.queued} queued${first ? ` · ${first} first` : ''}`, wide - x), 'yellow')}`);
+  }
+}
 
 /** Queue labels never contain PR numbers: those belong on their repository row. */
 function mergeQueueLabel(repo, compact = false, stopped = false) {
@@ -1016,16 +1080,23 @@ export function statusRollup(statuses = {}) {
 function programmeLine(c, wide, group) {
   const column = programmeColumns(wide);
   const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
-  const counts = programmeCounts(c, group, column.counts);
+  let counts = programmeCounts(c, group, column.counts);
+  const proposalCount = group.proposals > 0
+    ? `${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : '';
   const meta = planSessionWords(group);
   // A session somebody opened in one of the programme's rooms is said on the
   // same heading (goal mc/no-work).
   const opened = (group.sessions || []).length;
-  const detail = `${meta ? `plan ${meta}` : '·  no plan session'}${opened ? `  ·  ${opened} open` : ''}`;
+  const plan = meta ? `plan ${meta}` : 'no plan session';
+  const suffix = opened ? `  ·  ${opened} open` : '';
+  let detail = `${proposalCount ? `${proposalCount} · ${plan}` : (meta ? plan : `·  ${plan}`)}${suffix}`;
+  // Proposal metadata is optional on the narrow line; lose it before the
+  // programme count, and keep the planning-session words as the rollup does.
+  if (proposalCount && width(left) + width(counts) + detail.length + 2 > wide) detail = `${meta ? plan : `·  ${plan}`}${suffix}`;
   // Provider counts take precedence over the programme's rollup on a narrow
   // terminal; the headline and JSON still carry that rollup.
-  const prefix = meta && width(left) + width(counts) + detail.length + 2 > wide
-    ? `${left} ` : `${left} ${counts} `;
+  if (meta && width(left) + width(counts) + detail.length + 2 > wide) counts = '';
+  const prefix = counts ? `${left} ${counts} ` : `${left} `;
   return `${prefix}${c(clip(detail, Math.max(0, wide - width(prefix))), 'grey')}`.trimEnd();
 }
 
@@ -1051,9 +1122,11 @@ function programmesLines(lines, c, wide, programmes, expand) {
   // Expanded (`a`), every programme is drawn and the line is not needed.
   if (!expand && asleep.length) {
     const planned = asleep.filter((group) => planSessionWords(group)).length;
+    const withProposals = asleep.filter((group) => group.proposals > 0).length;
     say(lines, c, wide, 2, [
       `${asleep.length} dormant`,
       planned ? `${planned} with a plan session` : '',
+      withProposals ? `${withProposals} with proposals` : '',
       'mc programs list',
     ].filter(Boolean).join(' · '));
   }
@@ -1204,7 +1277,7 @@ export function renderPageLines(data, {
   // had: **what does not move sits above what does.** The live loop rewrites
   // rows where they stand (page-live.js), and a row near the prompt is one it
   // can always reach. PROGRAMMES is the page as a listing; the two
-  // desks change when somebody sits down; SESSIONS every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // desks change when somebody sits down; SESSIONS and DEV every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
@@ -1215,6 +1288,11 @@ export function renderPageLines(data, {
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
+  // DEV changes as often as the sessions do, so it stands right under them.
+  if (data.dev) {
+    devLines(lines, c, wide, data.dev);
+    lines.push('');
+  }
   mergesLines(lines, c, wide, data.merges);
   lines.push('');
   if (data.prs) {

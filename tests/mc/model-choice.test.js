@@ -116,11 +116,11 @@ test('review passes the model the goal was built on, when both plans have room',
   assert.equal(review(both).spec, 'codex:gpt-6.1-sol:high', 'unbuilt, the first is taken');
 });
 
-test('review order is preference, not headroom: the first on plan wins over a roomier second', () => {
+test('review chooses the roomier plan before catalog order or build-model avoidance', () => {
   const roomier = codex(claude(empty(), win(0.05)), win(0.9));
-  const chosen = review(roomier, { tool: 'claude', model: 'haiku' });
-  assert.equal(chosen.spec, 'codex:gpt-6.1-sol:high', 'codex has 10 % headroom, claude 95 %');
-  assert.match(chosen.why, /^review candidate 1, the first$/u);
+  const chosen = review(roomier, { tool: 'claude', model: 'opus' });
+  assert.equal(chosen.spec, 'claude:opus:high', 'codex has 10 % headroom, claude 95 %, even though Claude built it');
+  assert.match(chosen.why, /review candidate 2/u);
 });
 
 test('review with no candidate on plan goes to the first one\'s API reserve', () => {
