@@ -36,6 +36,14 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    its replacement or the residual risk accepted in planning. Green alone is
    not evidence that a test is worth keeping. Use the test-writing skill.
 
+   When the commissioned criterion requires a source mutation, use the bounded
+   [independent fault replay procedure](../tasks/scratch-and-probes.md#independent-fault-replay).
+   The reviewed worktree remains read-only; replay on an exact-HEAD disposable
+   scratch worktree (or use only its guarded invocation-local loader alternative).
+   Require the relevant assertion to fail, then restore the fault and verify
+   the normal check on the clean judged head. This changes neither reviewer
+   authority nor the requirement to independently run each criterion.
+
 **OK** is every criterion met with evidence and nothing in structure or bugs
 that should stop it landing. Anything else is **not OK**. You decide; the
 runner reads neither your words nor your files.
