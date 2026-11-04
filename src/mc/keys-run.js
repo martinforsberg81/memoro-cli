@@ -22,7 +22,7 @@ function childEnvironment(env, values) {
   for (const name of Object.keys(next)) {
     if (EXECUTOR_PREFIX.test(name) || EXECUTOR_CONTROLS.has(name)) delete next[name];
   }
-  return { ...next, ...values };
+  return { ...next, ...values, MC_KEYS_NAMES: JSON.stringify(Object.keys(values).sort()) };
 }
 
 export async function listScriptKeys({ cwd = process.cwd(), env = process.env, stdout = process.stdout,
@@ -39,8 +39,17 @@ export async function listScriptKeys({ cwd = process.cwd(), env = process.env, s
   }
 }
 
-export async function runScriptWithKeys(script, args = [], { cwd = process.cwd(), env = process.env,
-  stdout = process.stdout, stderr = process.stderr, home = process.env.HOME } = {}) {
+export function runScriptWithKeys(script, args = [], options = {}) {
+  return runWithKeys(script, args, options, true);
+}
+
+/** Long-lived servers use the same source, isolation, audit and output filters. */
+export function serveWithKeys(command, args = [], options = {}) {
+  return runWithKeys(command, args, options, false);
+}
+
+async function runWithKeys(script, args = [], { cwd = process.cwd(), env = process.env,
+  stdout = process.stdout, stderr = process.stderr, home = process.env.HOME } = {}, nodeScript) {
   const record = { run: randomUUID(), script, content_hash: null, names: [], time: new Date().toISOString(), exit: null };
   let audit;
   let values = null;
@@ -52,10 +61,10 @@ export async function runScriptWithKeys(script, args = [], { cwd = process.cwd()
     values = loaded.values;
     record.names = Object.keys(values).sort();
     rememberRuntimeSecretNames(record.names, env);
-    const entry = resolve(cwd, script);
-    if (!['.js', '.mjs', '.cjs'].includes(extname(entry))) throw new KeysDotenvError('only Node .js, .mjs and .cjs scripts are supported');
+    const entry = nodeScript ? resolve(cwd, script) : script;
+    if (nodeScript && !['.js', '.mjs', '.cjs'].includes(extname(entry))) throw new KeysDotenvError('only Node .js, .mjs and .cjs scripts are supported');
     writeSync(audit, `${JSON.stringify({ ...record, event: 'start' })}\n`);
-    const child = spawn(process.execPath, [entry, ...args], {
+    const child = spawn(nodeScript ? process.execPath : entry, nodeScript ? [entry, ...args] : args, {
       cwd, env: childEnvironment(env, values), stdio: ['ignore', 'pipe', 'pipe'],
     });
     const completion = new Promise(resolveCompletion => {

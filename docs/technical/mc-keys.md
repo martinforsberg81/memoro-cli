@@ -7,6 +7,20 @@ from the host's `HOME`, not the working directory. Set `MC_KEYS_FILE` to use
 an alternate source (for example, an isolated test fixture). There is no
 implicit search or fallback to other dotenv files.
 
+`mc keys serve <command> [args…]` supervises a trusted server command through
+the same runner. It launches argv directly with `shell: false`, using the
+same dotenv parsing, environment scrubbing, audit, output filtering, exit
+status and signal forwarding as `run`. Every dev server mc starts, including
+the static tier, goes through `serve`; measuring and taking screenshots are
+activities against that dev server. Server commands and their dependencies
+are trusted with all delivered entries, just as Node scripts are.
+
+The runner also supplies `MC_KEYS_NAMES`, a JSON array of delivered names,
+never values. A server adapter can use those names to map its inherited
+values into Worker bindings without discovering, parsing or copying a dotenv
+file. The source cannot set this runtime control. Existing servers retain
+their startup environment; restart them to receive source changes.
+
 The runner reads and parses the source as data; it never sources or evaluates
 shell text. Blank lines, comments, `export NAME=value`, quoted values,
 backslash escapes (including `\n` in double quotes), and unquoted inline
@@ -22,8 +36,8 @@ through `process.env`. There are no manifests, allowlists, source-closure
 checks, origin/main requirements, or preload restrictions. Modified,
 untracked and ordinary local or npm imports work. Missing names have normal
 Node behavior (`process.env.NAME` is `undefined`); scripts must diagnose their
-own required names. Only Node scripts are supported, not arbitrary
-interpreters or shell files.
+own required names. `run` supports Node scripts; `serve` accepts the trusted
+server's executable and arguments, without evaluating shell text.
 
 The child's inherited environment is copied after mc's runtime-secret
 scrubbing; source values are added to that fresh copy. Runtime and executor

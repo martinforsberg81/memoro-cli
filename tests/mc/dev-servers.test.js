@@ -314,7 +314,7 @@ describe('the verb memoro calls', () => {
 describe('admission — may one more server start', () => {
   const live = (id, worktree, overrides = {}) => ({
     instance_id: id,
-    service: 'memoro-measure',
+    service: 'memoro-worker',
     worktree_path: worktree,
     started_at: '2026-09-26T08:00:00.000Z',
     url: 'http://127.0.0.1:8921',
@@ -323,7 +323,7 @@ describe('admission — may one more server start', () => {
     ...overrides,
   });
   const ask = (servers, overrides = {}) => admission({
-    servers, service: 'memoro-measure', worktree: '/w/third', cap: 2, minFreePercent: 15, freePercent: 40, ...overrides,
+    servers, service: 'memoro-worker', worktree: '/w/third', cap: 2, minFreePercent: 15, freePercent: 40, ...overrides,
   });
 
   it('refuses a third with both holders named', () => {
@@ -382,7 +382,7 @@ describe('admit — waiting for a slot', () => {
 
   function register(root, worktree, id) {
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure' })));
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-worker' })));
   }
 
   it('waits while two are live and is admitted when one leaves, saying so once', async () => {
@@ -394,7 +394,7 @@ describe('admit — waiting for a slot', () => {
     const waiting = [];
     const events = [];
     const verdict = await admit({
-      service: 'memoro-measure',
+      service: 'memoro-worker',
       worktree: '/w/third',
       waitSeconds: 900,
       env: TWO_SLOTS,
@@ -413,7 +413,7 @@ describe('admit — waiting for a slot', () => {
     assert.equal(waiting.length, 1);
     assert.deepEqual(waiting[0].holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
     assert.deepEqual(events, [{
-      event: 'dev-server-admitted', fields: { service: 'memoro-measure', worktree_path: '/w/third', waited_s: 20, place_at_join: 1 },
+      event: 'dev-server-admitted', fields: { service: 'memoro-worker', worktree_path: '/w/third', waited_s: 20, place_at_join: 1 },
     }]);
     rmSync(root, { recursive: true, force: true });
   });
@@ -426,7 +426,7 @@ describe('admit — waiting for a slot', () => {
     const events = [];
     const waiting = [];
     const verdict = await admit({
-      service: 'memoro-measure',
+      service: 'memoro-worker',
       worktree: '/w/third',
       waitSeconds: 130,
       env: { MC_DEV_MAX_SERVERS: '2' },
@@ -442,7 +442,7 @@ describe('admit — waiting for a slot', () => {
     assert.deepEqual(events, [{
       event: 'dev-server-refused',
       fields: {
-        service: 'memoro-measure', worktree_path: '/w/third', reason: 'cap', holders: ['measure-a', 'measure-b'], free_percent: null, place: 1,
+        service: 'memoro-worker', worktree_path: '/w/third', reason: 'cap', holders: ['measure-a', 'measure-b'], free_percent: null, place: 1,
       },
     }]);
     rmSync(root, { recursive: true, force: true });
@@ -458,7 +458,7 @@ describe('admit — waiting for a slot', () => {
     const events = [];
     let t = Date.parse('2026-10-19T20:00:00Z');
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 900, env: TWO_SLOTS, root, evict: true,
+      service: 'memoro-worker', worktree: '/w/third', waitSeconds: 900, env: TWO_SLOTS, root, evict: true,
       now: () => t,
       sleep: async (ms) => { t += ms; },
       freeMemory: () => 50,
@@ -481,7 +481,7 @@ describe('admit — waiting for a slot', () => {
     const stopped = [];
     const events = [];
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 60, env: TWO_SLOTS, root, evict: true,
+      service: 'memoro-worker', worktree: '/w/third', waitSeconds: 60, env: TWO_SLOTS, root, evict: true,
       now: () => t,
       sleep: async (ms) => { t += ms; },
       freeMemory: () => 50,
@@ -500,7 +500,7 @@ describe('admit — waiting for a slot', () => {
     register(root, '/w/b', 'measure-b');
     let t = Date.parse('2026-10-19T20:00:00Z');
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 0, env: TWO_SLOTS, root,
+      service: 'memoro-worker', worktree: '/w/third', waitSeconds: 0, env: TWO_SLOTS, root,
       now: () => t, sleep: async (ms) => { t += ms; }, freeMemory: () => 50,
       stop: () => { throw new Error('must not stop'); }, logEvent: () => {},
     });
@@ -515,7 +515,7 @@ describe('admit — waiting for a slot', () => {
     const root = scratch();
     for (const id of ['a', 'b', 'c']) register(root, `/w/${id}`, `measure-${id}`);
     const ask = () => admit({
-      service: 'memoro-measure', worktree: '/w/fifth', waitSeconds: 0, env: {}, root,
+      service: 'memoro-worker', worktree: '/w/fifth', waitSeconds: 0, env: {}, root,
       now: () => 0, sleep: async () => {}, freeMemory: () => 50, logEvent: () => {},
     });
     assert.deepEqual(await ask(), { ok: true }, 'three live: a fourth is admitted');
@@ -545,7 +545,7 @@ describe('admit — waiting for a slot', () => {
     register(root, '/w/a', 'measure-a');
     register(root, '/w/b', 'measure-b');
     const out = capture();
-    const code = await run(['admit', 'memoro-measure', '--worktree', '/w/third', '--wait', '0', '--json'], {
+    const code = await run(['admit', 'memoro-worker', '--worktree', '/w/third', '--wait', '0', '--json'], {
       root, stdout: out, stderr: capture(), env: TWO_SLOTS, freeMemory: () => 40,
     });
     assert.equal(code, 75);
@@ -555,13 +555,13 @@ describe('admit — waiting for a slot', () => {
 
     rmSync(join(root, 'measure-b.json'));
     const text = capture();
-    assert.equal(await run(['admit', 'memoro-measure', '--worktree', '/w/third'], {
+    assert.equal(await run(['admit', 'memoro-worker', '--worktree', '/w/third'], {
       root, stdout: text, stderr: capture(), env: TWO_SLOTS, freeMemory: () => 40,
     }), 0);
     assert.equal(text.text(), 'mc: admitted\n');
 
     const low = capture();
-    assert.equal(await run(['admit', 'memoro-measure', '--worktree', '/w/third'], {
+    assert.equal(await run(['admit', 'memoro-worker', '--worktree', '/w/third'], {
       root, stdout: low, stderr: capture(), env: { MC_DEV_MIN_FREE_PERCENT: '101' }, freeMemory: () => 40,
     }), 75);
     assert.equal(low.text(), 'mc: only 40% memory free (floor 101%)\n');
@@ -579,19 +579,19 @@ describe('admit — waiting for a slot', () => {
 });
 
 describe('main: the main server is not evicted or counted, and a kept browser holds its server', () => {
-  const MAIN = { worktree: '/w/main', service: 'memoro-measure' };
+  const MAIN = { worktree: '/w/main', service: 'memoro-worker' };
   const STOP = { control: { stop: { argv: ['node', 'dev.mjs', '--stop'] } } };
   const at = Date.parse('2026-10-19T12:00:00Z');
   const live = (id, worktree) => ({
-    instance_id: id, service: 'memoro-measure', worktree_path: worktree, started_at: '2026-10-19T07:00:00.000Z',
+    instance_id: id, service: 'memoro-worker', worktree_path: worktree, started_at: '2026-10-19T07:00:00.000Z',
     url: 'http://127.0.0.1:8921', resource_class: 'standard', live: true,
   });
   function register(root, worktree, id, overrides = {}) {
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure', ...overrides })));
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-worker', ...overrides })));
   }
   const askOpts = (root, extra = {}) => ({
-    service: 'memoro-measure',
+    service: 'memoro-worker',
     worktree: '/w/third',
     waitSeconds: 0,
     env: { MC_DEV_MAX_SERVERS: '1', MC_DEV_HOLDER_STALE_MINUTES: '30' },
@@ -608,11 +608,11 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
   it('main: a main server is not counted against the cap, so it never refuses a worktree', () => {
     const servers = [live('main-a', '/w/main')];
     const ask = (main) => admission({
-      servers, service: 'memoro-measure', worktree: '/w/third', cap: 1, minFreePercent: 15, freePercent: 40, main,
+      servers, service: 'memoro-worker', worktree: '/w/third', cap: 1, minFreePercent: 15, freePercent: 40, main,
     });
     assert.deepEqual(ask(MAIN), { ok: true });
     assert.equal(ask(null).reason, 'cap', 'named as nothing, the same server counts');
-    assert.deepEqual(holdersOf(servers, { service: 'memoro-measure', worktree: '/w/third', main: MAIN }), []);
+    assert.deepEqual(holdersOf(servers, { service: 'memoro-worker', worktree: '/w/third', main: MAIN }), []);
   });
 
   it('main: a main server is never stopped as a stale holder, however long it goes unused', async () => {
@@ -653,7 +653,7 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
     register(root, '/w/b', 'measure-b');
     const queue = devQueuePath(root);
     const ahead = {
-      id: 'ahead', pid: LIVE_PID, worktree_path: '/w/c', service: 'memoro-measure', holder: 'step:ahead', gate: false,
+      id: 'ahead', pid: LIVE_PID, worktree_path: '/w/c', service: 'memoro-worker', holder: 'step:ahead', gate: false,
       joined_at: new Date(at - 5 * 60_000).toISOString(),
     };
     writeFileSync(queue, JSON.stringify({ schema_version: 1, tickets: [ahead] }));
@@ -694,7 +694,7 @@ describe('queue: admission in order', () => {
   const T0 = Date.parse('2026-11-03T10:00:00Z');
   const MIN = 60_000;
   const ticket = (id, joinedAt, overrides = {}) => ({
-    id, pid: LIVE_PID, worktree_path: `/w/${id}`, service: 'memoro-measure', holder: `step:${id}`, gate: false,
+    id, pid: LIVE_PID, worktree_path: `/w/${id}`, service: 'memoro-worker', holder: `step:${id}`, gate: false,
     joined_at: new Date(joinedAt).toISOString(), ...overrides,
   });
   /** A registry root of its own, so its queue file (beside it) is the test's alone. */
@@ -705,7 +705,7 @@ describe('queue: admission in order', () => {
     return { base, root, queue: devQueuePath(root) };
   }
   function register(root, worktree, id, overrides = {}) {
-    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure', ...overrides })));
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-worker', ...overrides })));
   }
   function writeQueue(file, tickets) {
     writeFileSync(file, JSON.stringify({ schema_version: 1, tickets }));
@@ -733,7 +733,7 @@ describe('queue: admission in order', () => {
     const waiting = [];
     const events = [];
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/later', waitSeconds: 900, env: { MC_DEV_MAX_SERVERS: '2' }, root,
+      service: 'memoro-worker', worktree: '/w/later', waitSeconds: 900, env: { MC_DEV_MAX_SERVERS: '2' }, root,
       now: () => t,
       sleep: async (ms) => {
         t += ms;
@@ -754,7 +754,7 @@ describe('queue: admission in order', () => {
     assert.deepEqual(waiting[0].queue.map((item) => item.holder), ['step:earlier', null]);
     assert.deepEqual(events, [{
       event: 'dev-server-admitted',
-      fields: { service: 'memoro-measure', worktree_path: '/w/later', waited_s: 30, place_at_join: 2 },
+      fields: { service: 'memoro-worker', worktree_path: '/w/later', waited_s: 30, place_at_join: 2 },
     }]);
     assert.deepEqual(queued(queue), [], 'the ticket leaves the queue when it is admitted');
     rmSync(base, { recursive: true, force: true });
@@ -767,7 +767,7 @@ describe('queue: admission in order', () => {
     assert.deepEqual(queued(queue).map((item) => item.id), ['live'], 'written back without it');
     writeQueue(queue, [ticket('dead', T0 - 10 * MIN, { pid: DEAD_PID })]);
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/new', waitSeconds: 0, env: {}, root, now: () => T0, freeMemory: () => 50, logEvent: () => {},
+      service: 'memoro-worker', worktree: '/w/new', waitSeconds: 0, env: {}, root, now: () => T0, freeMemory: () => 50, logEvent: () => {},
     });
     assert.deepEqual(verdict, { ok: true });
     rmSync(base, { recursive: true, force: true });
@@ -793,9 +793,9 @@ describe('queue: admission in order', () => {
 
   it('queue: a ticket says who holds it and whether it is a gate round', () => {
     const { base, queue } = place();
-    const gate = joinQueue({ file: queue, worktree: '/w/g', service: 'memoro-measure', env: { MC_GATE_ROUND: 'gate-1' }, now: T0 });
-    const step = joinQueue({ file: queue, worktree: '/w/s', service: 'memoro-measure', env: { MC_STEP: 'dev-queue:0', MC_GATE_ROUND: 'gate-2' }, now: T0 });
-    const session = joinQueue({ file: queue, worktree: '/w/c', service: 'memoro-measure', env: { CLAUDE_CODE_SESSION_ID: 'sess-1' }, now: T0 });
+    const gate = joinQueue({ file: queue, worktree: '/w/g', service: 'memoro-worker', env: { MC_GATE_ROUND: 'gate-1' }, now: T0 });
+    const step = joinQueue({ file: queue, worktree: '/w/s', service: 'memoro-worker', env: { MC_STEP: 'dev-queue:0', MC_GATE_ROUND: 'gate-2' }, now: T0 });
+    const session = joinQueue({ file: queue, worktree: '/w/c', service: 'memoro-worker', env: { CLAUDE_CODE_SESSION_ID: 'sess-1' }, now: T0 });
     assert.deepEqual([gate, step, session].map((item) => [item.holder, item.gate, item.pid]),
       [['gate-1', true, process.pid], ['dev-queue:0', true, process.pid], ['sess-1', false, process.pid]]);
     leaveQueue(step.id, { file: queue });
@@ -808,7 +808,7 @@ describe('queue: admission in order', () => {
     register(root, '/w/mine', 'measure-mine');
     writeQueue(queue, [ticket('ahead', T0 - MIN)]);
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/mine', waitSeconds: 900, env: {}, root, now: () => T0,
+      service: 'memoro-worker', worktree: '/w/mine', waitSeconds: 900, env: {}, root, now: () => T0,
       sleep: async () => { throw new Error('must not wait'); }, freeMemory: () => 50, logEvent: () => {},
     });
     assert.deepEqual(verdict, { ok: true });
@@ -820,7 +820,7 @@ describe('queue: admission in order', () => {
     const { base, root, queue } = place();
     writeQueue(queue, [ticket('ahead', T0 - MIN)]);
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/new', waitSeconds: 0, env: {}, root, now: () => T0, freeMemory: () => 50, logEvent: () => {},
+      service: 'memoro-worker', worktree: '/w/new', waitSeconds: 0, env: {}, root, now: () => T0, freeMemory: () => 50, logEvent: () => {},
     });
     assert.equal(verdict.ok, false);
     assert.equal(verdict.reason, 'queue');
@@ -835,7 +835,7 @@ describe('queue: admission in order', () => {
     writeQueue(queue, [ticket('ahead', T0 - 10 * MIN)]);
     let t = T0;
     const verdict = await admit({
-      service: 'memoro-measure', worktree: '/w/gate', waitSeconds: 30, env: { MC_DEV_MAX_SERVERS: '1', MC_GATE_ROUND: 'gate-9' }, root, evict: true,
+      service: 'memoro-worker', worktree: '/w/gate', waitSeconds: 30, env: { MC_DEV_MAX_SERVERS: '1', MC_GATE_ROUND: 'gate-9' }, root, evict: true,
       now: () => t, sleep: async (ms) => { t += ms; }, freeMemory: () => 50,
       stop: () => { throw new Error('must not stop'); }, logEvent: () => {},
     });
@@ -852,7 +852,7 @@ describe('queue: admission in order', () => {
     let t = T0;
     const out = capture();
     const err = capture();
-    const code = await run(['admit', 'memoro-measure', '--worktree', '/w/third', '--wait', '30', '--json'], {
+    const code = await run(['admit', 'memoro-worker', '--worktree', '/w/third', '--wait', '30', '--json'], {
       root, stdout: out, stderr: err, env: { MC_DEV_MAX_SERVERS: '1' }, freeMemory: () => 40,
       now: () => t, sleep: async (ms) => { t += ms; },
     });
@@ -881,10 +881,10 @@ describe('queue: admission in order', () => {
     assert.equal(await run(['status'], { root, stdout: out, stderr: capture(), env: {}, freeMemory: () => 38, now: () => T0 }), 0);
     assert.equal(out.text(), [
       'mc: 1 of 4 app servers · 38% memory free (floor 15%)',
-      '  measure-x  memoro-measure  /w/x  used 4 min ago',
+      '  measure-x  memoro-worker  /w/x  used 4 min ago',
       'mc: 2 waiting, in the order they will be admitted',
-      '  1. gate-7 (gate)  memoro-measure  /w/gate  joined 3 min ago',
-      '  2. step:shot  memoro-measure  /w/shot  joined 5 min ago',
+      '  1. gate-7 (gate)  memoro-worker  /w/gate  joined 3 min ago',
+      '  2. step:shot  memoro-worker  /w/shot  joined 5 min ago',
       '',
     ].join('\n'));
     const json = capture();

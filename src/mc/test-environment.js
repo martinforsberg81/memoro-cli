@@ -28,6 +28,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
@@ -494,9 +495,10 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   }
 
-  const [command, ...args] = start.argv;
-  const child = (deps.spawn || spawn)(command, args, {
-    cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...process.env, MC_DEV_ADMITTED: '1' },
+  const child = (deps.spawn || spawn)(process.execPath, [
+    fileURLToPath(new URL('../mc-cli.js', import.meta.url)), 'keys', 'serve', ...start.argv,
+  ], {
+    cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...env, MC_DEV_ADMITTED: '1' },
   });
   child.unref?.();
 

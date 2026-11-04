@@ -28,12 +28,12 @@ const DEAD = 2_147_483_646;
 const alive = (pid) => Number(pid) !== DEAD;
 const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 const ago = (seconds) => new Date(NOW.getTime() - seconds * 1000).toISOString();
-const MAIN = { worktree: '/Users/martin/mc/self/memoro', service: 'memoro-measure' };
+const MAIN = { worktree: '/Users/martin/mc/self/memoro', service: 'memoro-worker' };
 
 /** A registry record as `registerManifest` and `touchServer` leave it. */
 function server(port, worktree, { holder = null, used = 60, registered = 3600 } = {}) {
   return {
-    schema_version: 1, instance_id: `dev-${port}`, service: 'memoro-measure', session_name: 's', worktree_path: worktree,
+    schema_version: 1, instance_id: `dev-${port}`, service: 'memoro-worker', session_name: 's', worktree_path: worktree,
     pid: 4000 + port, url: `http://127.0.0.1:${port}`, registered_at: ago(registered),
     ...(used == null ? {} : { last_used_at: ago(used) }),
     ...(holder ? { holder, held_since: ago(used ?? 0) } : {}),
@@ -89,8 +89,8 @@ function toneOf(line, text) {
 }
 
 const QUEUE = [
-  { id: 'b', pid: 601, worktree_path: '/w/two', service: 'memoro-measure', joined_at: ago(60), session: { kind: 'review', owner: 'mc', name: 'mc/email', pid: 601 } },
-  { id: 'a', pid: 600, worktree_path: '/w/one', service: 'memoro-measure', joined_at: ago(200), session: { kind: 'build', owner: 'memoro', name: 'hero-detail-objects', pid: 600 } },
+  { id: 'b', pid: 601, worktree_path: '/w/two', service: 'memoro-worker', joined_at: ago(60), session: { kind: 'review', owner: 'mc', name: 'mc/email', pid: 601 } },
+  { id: 'a', pid: 600, worktree_path: '/w/one', service: 'memoro-worker', joined_at: ago(200), session: { kind: 'build', owner: 'memoro', name: 'hero-detail-objects', pid: 600 } },
 ];
 
 describe('DEV — the dev servers and who holds each', () => {
@@ -215,7 +215,7 @@ describe('mc --json carries dev', () => {
     assert.deepEqual([dev.servers[0].name, dev.servers[1].holder_gone], ['BUILD mc/no-work', true]);
     assert.deepEqual(dev.queue, [{
       holder: { kind: 'build', owner: 'memoro', name: 'hero-detail-objects', pid: 600 }, name: 'BUILD hero-detail-objects',
-      worktree: '/w/one', service: 'memoro-measure', gate: false, waited_seconds: 200,
+      worktree: '/w/one', service: 'memoro-worker', gate: false, waited_seconds: 200,
     }]);
   });
 });

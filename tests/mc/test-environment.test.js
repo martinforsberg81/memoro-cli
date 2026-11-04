@@ -1005,7 +1005,7 @@ describe('two tiers', () => {
 
     assert.equal(servingWorktree(worktree, { root, service: 'memoro-worker' }).port ?? 8900, 8900);
     assert.equal(servingWorktree(worktree, { root, service: 'memoro-static' }).instance_id, 'static-8910');
-    assert.equal(servingWorktree(worktree, { root, service: 'memoro-measure' }), null, 'a service nobody runs');
+    assert.equal(servingWorktree(worktree, { root, service: 'unknown-service' }), null, 'a service nobody runs');
     assert.equal(serversFor(worktree, { root }).length, 2, 'and both are the worktree\'s');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -1043,7 +1043,9 @@ describe('two tiers', () => {
     });
     assert.equal(ensured.ok, true, ensured.error);
     assert.equal(ensured.started, true, 'the Worker being up is not the file server being up');
-    assert.deepEqual(started, [['node', 'scripts/testing/static-server.mjs']]);
+    assert.equal(started[0][0], process.execPath);
+    assert.match(started[0][1], /mc-cli\.js$/u);
+    assert.deepEqual(started[0].slice(2), ['keys', 'serve', 'node', 'scripts/testing/static-server.mjs']);
     assert.equal(ensured.server.service, 'memoro-static');
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
@@ -1334,6 +1336,7 @@ describe('admission before a start', () => {
     const worktree = worktreeWith();
     let asked = null;
     let env = null;
+    let launch = null;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
       processCwd: () => null,
@@ -1342,6 +1345,7 @@ describe('admission before a start', () => {
       admit: async (question) => { asked = question; return { ok: true }; },
       spawn: (command, args, options) => {
         env = options.env;
+        launch = [command, ...args];
         registerServer(root, worktree, { port: 8900 });
         return { unref() {} };
       },
@@ -1349,6 +1353,9 @@ describe('admission before a start', () => {
     });
     assert.equal(ensured.ok, true, ensured.error);
     assert.equal(env.MC_DEV_ADMITTED, '1');
+    assert.equal(launch[0], process.execPath);
+    assert.match(launch[1], /mc-cli\.js$/u);
+    assert.deepEqual(launch.slice(2, 4), ['keys', 'serve']);
     assert.equal(asked.service, 'memoro-worker');
     assert.equal(asked.worktree, worktree);
     assert.equal(asked.waitSeconds, 900);

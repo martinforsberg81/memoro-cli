@@ -18,7 +18,7 @@ import { setLogPath } from '../../src/mc/logger.js';
 
 const WT = '/Users/me/mc/area/memoro';
 const STATIC = `node ${WT}/scripts/testing/static-server.mjs`;
-const MEASURE = `node ${WT}/scripts/testing/measure-server.mjs`;
+const AGENT = `node ${WT}/scripts/dev-server.mjs`;
 const DEV = `node ${WT}/scripts/dev.mjs --skip-containers`;
 const ESBUILD = `${WT}/node_modules/@esbuild/darwin-arm64/bin/esbuild --service=0.21.5 --ping`;
 const WORKERD = `${WT}/node_modules/@cloudflare/workerd-darwin-arm64/bin/workerd serve --binary --experimental`;
@@ -55,11 +55,11 @@ describe('parsePs', () => {
 });
 
 describe('rule 1 — an unregistered server whose parent is gone', () => {
-  it('reaps an old static-server, measure-server and scripts/dev.mjs with ppid 1', () => {
-    const got = plan([proc(10, 1, 6 * 86_400, STATIC), proc(11, 1, HOUR, MEASURE), proc(12, 1, HOUR, DEV)]);
+  it('reaps an old static-server, dev-server and scripts/dev.mjs with ppid 1', () => {
+    const got = plan([proc(10, 1, 6 * 86_400, STATIC), proc(11, 1, HOUR, AGENT), proc(12, 1, HOUR, DEV)]);
     assert.deepEqual(got.map(({ pid, kind, why }) => ({ pid, kind, why })), [
       { pid: 10, kind: 'server', why: 'orphaned static-server' },
-      { pid: 11, kind: 'server', why: 'orphaned measure-server' },
+      { pid: 11, kind: 'server', why: 'orphaned dev-server' },
       { pid: 12, kind: 'server', why: 'orphaned dev' },
     ]);
   });
@@ -79,6 +79,13 @@ describe('rule 1 — an unregistered server whose parent is gone', () => {
   it('leaves a registered static-server with ppid 1', () => {
     const servers = [{ instance_id: 'dev-1', pid: 10, worktree_path: WT }];
     assert.deepEqual(plan([proc(10, 1, 6 * 86_400, STATIC)], { servers }), []);
+  });
+
+  it('keeps a keys supervisor while its server is registered and reaps it after registration is gone', () => {
+    const supervisor = proc(10, 1, HOUR, `node /mc/src/mc-cli.js keys serve node ${WT}/scripts/dev-server.mjs`);
+    const servers = [{ instance_id: 'dev-1', pid: 11, process_group_id: 10, worktree_path: WT }];
+    assert.deepEqual(plan([supervisor], { servers }), []);
+    assert.deepEqual(plan([supervisor]).map(({ pid, why }) => ({ pid, why })), [{ pid: 10, why: 'orphaned dev-server' }]);
   });
 
   it('leaves any other node script with ppid 1', () => {

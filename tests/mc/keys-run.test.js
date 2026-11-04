@@ -64,6 +64,25 @@ test('shared dotenv execution runs an untracked script with local imports from a
   assert.equal(f.records().filter(row => row.event === 'start').length, 1);
 });
 
+test('shared dotenv server command receives keys and names with filtered output and isolated argv', async t => {
+  const f = await fixture(t, `TOKEN_ENCRYPTION_KEY=${SECRET}\nNEW_CONFIG=fixture-config\n`);
+  const script = write(f.cwd, 'server-adapter.mjs', `
+    process.stdout.write(JSON.stringify({ key: process.env.TOKEN_ENCRYPTION_KEY === ${JSON.stringify(SECRET)}, names: JSON.parse(process.env.MC_KEYS_NAMES), args: process.argv.slice(2) }));
+    process.stderr.write(process.env.TOKEN_ENCRYPTION_KEY);`);
+  const stdout = capture(); const stderr = capture();
+  const before = { ...f.env };
+  const exit = await keysCommand(['serve', process.execPath, script, '--help', ';literal'], {
+    cwd: f.cwd, env: f.env, stdout: stdout.stream, stderr: stderr.stream,
+  });
+  assert.deepEqual(JSON.parse(stdout.text()), { key: true, names: ['NEW_CONFIG', 'TOKEN_ENCRYPTION_KEY'], args: ['--help', ';literal'] });
+  assert.equal(exit, 0);
+  assert.equal(stderr.text(), '[key:TOKEN_ENCRYPTION_KEY]');
+  assert.deepEqual(f.env, before);
+  absent(JSON.stringify(f.records()), SECRET, ';literal');
+  assert.ok(handlesHelp(['serve', process.execPath, '--help']));
+  assert.deepEqual(invocationShape(['keys', 'serve', 'node', script]), { verb: 'keys', sub: 'serve', args: [], flags: [], argc: 4 });
+});
+
 test('shared dotenv freshness reparses additions and changes, parses quotes and exports, and leaves absent names undefined', async t => {
   const f = await fixture(t, 'export QUOTED="first\\nsecond" # comment\nPLAIN=old # trailing comment\n');
   const script = write(f.cwd, 'inspect.mjs', "const first=process.env.QUOTED==='first\\nsecond'&&process.env.PLAIN==='old'&&process.env.ADDED===undefined&&process.env.CONFIG_ID===undefined; const changed=process.env.QUOTED==='changed value'&&process.env.PLAIN===undefined&&process.env.ADDED===undefined&&process.env.CONFIG_ID==='account-7'; process.stdout.write(JSON.stringify({first,changed}));");

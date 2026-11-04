@@ -401,8 +401,8 @@ signals only what one of exactly three rules proves orphaned:
 
 1. **An unregistered server whose parent is gone.** Parent pid 1, at least
    `--min-age-seconds` old (600 by default), a command matching
-   `node … scripts/testing/static-server.mjs`, `scripts/testing/measure-server.mjs`
-   or `scripts/dev.mjs`, and no registration with that pid. The age floor is
+   `node … scripts/testing/static-server.mjs`, `scripts/dev-server.mjs`
+   or `scripts/dev.mjs`, and no registration with that pid or process-group leader. A keys supervisor is owned while its server is registered. The age floor is
    there because mc itself starts servers detached — parent pid 1 from their
    first second — and they have up to 180 s to register.
 2. **A runtime helper whose parent is gone.** Parent pid 1, at least 120 s

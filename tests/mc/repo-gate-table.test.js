@@ -459,7 +459,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
     try {
       const own = {
         schema_version: 1,
-        environments: { dev: { service: 'memoro-measure', profile: 'measure' }, prod: { base_url: 'https://meetmemoro.app' } },
+        environments: { dev: { service: 'memoro-worker', profile: 'agent' }, prod: { base_url: 'https://meetmemoro.app' } },
         base_url_env: 'MEMORO_BASE_URL',
         skip_exit_code: 78,
         suites: [{ name: 'write-smoke', argv: ['npm', 'run', 'test:environment-smoke'], server: 'app', needs_account: true }],

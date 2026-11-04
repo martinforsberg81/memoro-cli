@@ -211,7 +211,7 @@ const SHOT_JSON = {
 };
 const TEST_JSON = {
   schema_version: 1,
-  environments: { dev: { service: 'memoro-measure' }, prod: { base_url: 'https://meetmemoro.app/' } },
+  environments: { dev: { service: 'memoro-worker' }, prod: { base_url: 'https://meetmemoro.app/' } },
   suites: [{ name: 'smoke', argv: ['true'] }],
 };
 
@@ -245,7 +245,7 @@ async function compare(argv, {
     stopServer: () => ({ ok: true }),
     serversUnder: () => running.map((sha) => ({
       instance_id: `srv-${sha}`,
-      service: 'memoro-measure',
+      service: 'memoro-worker',
       worktree_path: join(home, 'compare', `memoro-${sha}`),
       url: 'http://127.0.0.1:8930',
       resource_class: 'standard',
@@ -297,14 +297,14 @@ describe('a superseded compare server', () => {
     utimesSync(join(root, 'memoro-2222222222'), ago(5), ago(5));
     const servers = ['1111111111', '2222222222', '5555555555'].map((sha) => ({
       instance_id: `srv-${sha}`,
-      service: 'memoro-measure',
+      service: 'memoro-worker',
       worktree_path: join(root, `memoro-${sha}`),
       url: `http://127.0.0.1:89${sha[0]}0`,
       resource_class: sha === '5555555555' ? 'light' : 'standard',
       live: true,
     })).concat([{
       instance_id: 'srv-other',
-      service: 'memoro-measure',
+      service: 'memoro-worker',
       worktree_path: join(root, 'other-4444444444'),
       url: 'http://127.0.0.1:8944',
       resource_class: 'standard',

@@ -197,6 +197,7 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   keys: [
     "usage — mc keys run <script> [args…]   run a trusted Node script with shared dotenv entries\n",
+    "        mc keys serve <command> [args…] supervise a trusted server through the same keys runner\n",
     "        mc keys list                   names in the shared dotenv source, never values\n",
     "        Reads ~/mc/self/memoro/.dev.vars (or MC_KEYS_FILE); scripts receive all entries.\n",
   ].join(''),

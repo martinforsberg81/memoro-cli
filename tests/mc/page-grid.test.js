@@ -79,7 +79,7 @@ function threeRows({ long = false } = {}) {
   // One dev server, leased to the lane's session: DEV's row in the same grid.
   const dev = devSection({
     servers: [{
-      instance_id: 'dev-8920', service: 'memoro-measure', worktree_path: `/Users/martin/mc/programs/mc/goals/${laneGoal}/memoro-cli`,
+      instance_id: 'dev-8920', service: 'memoro-worker', worktree_path: `/Users/martin/mc/programs/mc/goals/${laneGoal}/memoro-cli`,
       pid: 7, url: 'http://127.0.0.1:8920', registered_at: '2026-11-03T11:00:00Z', last_used_at: '2026-11-03T11:58:00Z',
       holder: { kind: 'build', owner: 'mc', name: `mc/${laneGoal}`, pid: 7 },
     }],

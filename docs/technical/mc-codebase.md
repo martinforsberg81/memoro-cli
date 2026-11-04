@@ -107,8 +107,9 @@ session-directed executors.
 - `0600`, hooks, redaction, environment scrubbing, TTLs and shredding are
   defence in depth, never the boundary. The boundary is enforced separation of
   principals, namespaces, mounts, process inspection, sockets, IPC and egress.
-- Script credentials reach project code only through `mc keys run`, using the
-  shared dotenv source and a trusted Node script. The script and its imports
+- Script and dev-server credentials reach project code through `mc keys run`
+  or `mc keys serve`, using the shared dotenv source and trusted project code.
+  The script or server and its imports
   receive all entries in their child environment; there are no per-script
   declarations or source-closure checks. Output filtering is accidental-output
   protection, not a sandbox, and same-user processes are not isolated. Values
