@@ -80,6 +80,41 @@ describe('which tests a change reaches', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('keeps a direct importer selected when its imported source is deleted', () => {
+    const fx = repo({
+      base: {
+        'src/missing.js': 'export const value = 1;\n',
+        'tests/direct.test.js': "import { value } from '../src/missing.js';\nexport default value;\n",
+        'tests/unrelated.test.js': "export default 'unrelated';\n",
+      },
+      remove: ['src/missing.js'],
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'full-suite');
+      assert.deepEqual(files, ['tests/direct.test.js', 'tests/unrelated.test.js']);
+      assert.deepEqual(why.unexplained, ['src/missing.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('selects conservatively when a wrapper imports a deleted extensionless target', () => {
+    const fx = repo({
+      base: {
+        'src/missing.js': 'export const value = 1;\n',
+        'src/wrapper.js': "import { value } from './missing';\nexport const wrapped = value;\n",
+        'tests/wrapper.test.js': "import { wrapped } from '../src/wrapper.js';\nexport default wrapped;\n",
+        'tests/unrelated.test.js': "export default 'unrelated';\n",
+      },
+      remove: ['src/missing.js'],
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.deepEqual(files, ['tests/unrelated.test.js', 'tests/wrapper.test.js']);
+      assert.equal(why.reason, 'full-suite');
+      assert.deepEqual(why.unexplained, ['src/missing.js']);
+    } finally { fx.cleanup(); }
+  });
+
   it('follows a source a test reads as text, which no import graph can see', () => {
     // This repository really does this: `merge-doc.test.js` asserts against
     // `repo-gate.js`'s own source that no merge call is in it. That test

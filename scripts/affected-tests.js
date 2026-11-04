@@ -301,7 +301,13 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [], roo
   // one.
   const unexplained = changed.filter((path) => {
     if (SOURCE_FILE.test(path)
-      && (path.startsWith('src/') || path.startsWith('tests/') || path.startsWith('scripts/'))) return false;
+      && (path.startsWith('src/') || path.startsWith('tests/') || path.startsWith('scripts/'))) {
+      // A deleted source can break an importer even when its spelling cannot
+      // be recovered as a text pin (for example, an extensionless import in a
+      // wrapper). Without a parser or the old file contents, the safe answer
+      // is the whole suite rather than an empty affected set.
+      return gone(path);
+    }
     if (DATA_DIRS.some((dir) => path.startsWith(dir)) && readersOf(path).size > 0) return false;
     // A file that is **gone**, and that nothing names. The fallback above asks
     // "does anything read this?" and treats no answer as no knowledge — right
