@@ -364,11 +364,11 @@ diff.**
 
 | Command | Does |
 |---|---|
-| `mc keys run <script> [args…]` | **Session / person**: Runs a declared Node script only with its origin/main-matching fixed source closure, releasing exactly its declared envelope keys to the child and filtering its output. |
-| `mc keys list` | **Session / person**: Shows declared names and whether each is held; never exports a value. |
+| `mc keys run <script> [args…]` | **Session / person**: Runs a trusted Node script with all eligible shared-dotenv entries in its child environment; filters output. |
+| `mc keys list` | **Session / person**: Shows names from the shared dotenv source; never exports a value. |
 
-The committed manifest, custody, audit and same-OS-user boundary are documented
-in [mc-keys.md](technical/mc-keys.md).
+The shared source, trusted-script contract, audit and same-OS-user boundary are
+documented in [mc-keys.md](technical/mc-keys.md).
 
 ## The one capability
 
@@ -473,7 +473,7 @@ grouped by task. IN FULL retains the less-used forms; moving one off the
 first screen is not removing its command. `mc <verb> [<subcommand>] --help`
 and `-h` print usage and exit 0, including vault subcommands, before an
 operation or authentication. After `mc keys run <script>`, flags belong to
-the declared script instead, including its `--help`.
+the trusted script instead, including its `--help`.
 
 The ongoing help/handler audit and usage measurements are recorded in
 [`mc-help.md`](technical/mc-help.md). This first pass does not yet replace
