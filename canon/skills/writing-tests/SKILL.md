@@ -1,8 +1,30 @@
 ---
 name: writing-tests
-description: Writing or changing a test or gate in an mc repository — what a count pins, what a repository scan reads. Use before adding an assertion on a number or a test that walks the repository's files.
+description: Designing, adding, changing or retiring a test or gate in memoro or memoro-cli. Load before any test work, including planning protection and reviewing test value.
 ---
 # Writing tests
+
+Protect a consequential behaviour, not the shape of its implementation.
+Read [the test strategy](references/test-strategy.md) before test work. It
+covers risk selection, levels, evidence and retirement; authority is in roles.
+
+## Admission and evidence
+
+For each addition or change, name the concrete fault and consequence, the gap
+in existing protection, the cheapest credible test level, fault-sensitive
+proof, and execution/maintenance cost. Record this in the goal, PR or log,
+not a new registry or one policy file per test. No coverage or count targets.
+Demonstrate the relevant test fails with the fault and passes without it;
+use the pre-fix behaviour or a small, deliberate fault. Revert injected faults
+before publication. Record exactly what ran; absent proof remains a gap.
+Do not manufacture permanent wording tests to prove this strategy exists.
+
+## Construction
+
+Assert observable results through the real mechanism under test. Substitute
+external dependencies at their boundaries, not the mechanism being proved.
+Use small, isolated fixtures and deterministic clocks; avoid real waits,
+network, repeated process launches and whole-system setup for local decisions.
 
 - **A pinned number is a summary of a list, and the list is what to pin.**
   Where a test asserts a count, assert the members beside it. A sum can be
@@ -12,10 +34,18 @@ description: Writing or changing a test or gate in an mc repository — what a c
   never a disk walk: a walk once picked up ignored probe scripts and made
   tests green locally and red on the merge candidate. Use the repository's
   helper where it has one (memoro: `scripts/lib/tracked-source-files.mjs`).
-- Add a regression test for a fix; keep validation proportional to risk.
-- **Time what you write.** Run a test you write or change with `mc gate <file>`:
-  each test it names prints as `test <file> › <name> — 0.xyz s`. Over 1 s it is
-  yours to rebuild before you publish (a smaller set-up, no replay of
-  migrations, no git processes, no wait for real time); a rerun is no fix.
-  A test cut at the repository's per-test limit is red, and every run keeps it
-  in `~/mc/runner/too-slow/<repo>.tsv` until it passes under the limit.
+
+## Cost and retirement
+
+Run each new or changed test through `mc gate <file>` and record its printed
+`test <file> › <name> — 0.xyz s` timings. Over 1 s, rebuild it before publishing;
+rerunning is no fix. A per-test timeout is red; mc retains cut tests in
+`~/mc/runner/too-slow/<repo>.tsv` until they pass under the limit. Also measure
+file/fixture startup and the affected round: moving work outside the timed
+callback does not make the suite cheaper. Preserve existing gate thresholds.
+
+Classify existing checks as keep, rebuild, consolidate or retire using the
+same admission criteria. For retirement, name lost protection and its
+replacement or the residual risk recorded in planning. Slowness, age and a
+red result alone are not reasons to delete. Follow the publish-and-merge skill
+for gate and publication mechanics.

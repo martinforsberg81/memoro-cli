@@ -468,7 +468,8 @@ describe('the review role', () => {
     const goal = instructionsFor('claude-code', readCanonRole(REVIEW_ROLE).overlay);
     assert.match(goal, /You review one goal/u);
     assert.equal(readCanonRole('review-session:project'), null);
-    // The goal review never builds.
-    assert.doesNotMatch(goal, /Skill `mc-writing-tests`/u);
+    // Reviewing test value needs the same design guidance as writing tests;
+    // receiving the skill does not grant permission to build.
+    assert.match(goal, /Skill `mc-writing-tests`/u);
   });
 });

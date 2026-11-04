@@ -32,6 +32,8 @@ that belongs to one programme goes in that programme's skill.
 | `measure-the-app` | `mc shot`, measuring, proving which tree is served |
 | `dev-servers` | servers only through mc, at most two |
 | `asking-martin` | a question answerable in a word; what to tell him; what a headless session leaves waiting |
+| `writing-tests` | risk-based protection, credible test levels, fault evidence, cost and retirement; includes the strategy reference |
+| `writing-a-goal` | executable briefs with explicit protection scope |
 | `memory` | what a memory may hold; a rule about how to work goes in `canon/` |
 
 Each rule has one home: `tests/mc/canon-text.test.js` asserts a defining
