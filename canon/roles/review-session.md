@@ -68,14 +68,3 @@ You cannot end in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what
 is missing. Then end the session, in the turn the stage is set.
 @end
-
-Skills this role uses:
-
-@skill publish-and-merge
-@skill writing-tests
-@skill git
-@skill proposals
-@skill processes
-@skill scratch-and-probes
-@skill measure-the-app
-@skill dev-servers

@@ -1,94 +1,66 @@
-# Skills — task guidance every session reaches
+# mc context on demand
 
-A role ([mc-roles.md](mc-roles.md)) reaches only a session mc launches: it
-rides on `--append-system-prompt` or `-c instructions=`. A session opened by
-hand in a repository sees that repository's `AGENTS.md`/`CLAUDE.md` and nothing
-of mc's, and the two have said different things. A skill is the one channel
-both kinds of session have: Claude Code and Codex each read user-level skills
-from a directory in the home, show the model every skill's `name` and
-`description`, and load the body when the description says it applies.
+mc installs one discoverable skill for both tools. Its source is
+[`canon/SKILL.md`](../../canon/SKILL.md); its installer is
+[`src/mc/skills.js`](../../src/mc/skills.js).
 
-The code is [`src/mc/skills.js`](../../src/mc/skills.js); the verb is
-[`src/mc/commands/skills.js`](../../src/mc/commands/skills.js).
+```
+mc/
+  SKILL.md                 short entrypoint: when to read which reference
+  roles/                   shared essentials and session roles
+  verbs/goal.md            goal command semantics
+  tasks/*.md               operation-specific guidance
+  tasks/references/        details such as the test strategy
+  programmes/<name>.md     only programmes with a source SKILL.md
+```
 
-## The catalogue
+The tool sees one name and description at discovery. When mc applies, the
+model reads the short entrypoint, then the reference required by the operation.
+There are no nested SKILL.md files. Grouping sixteen entrypoints under a new
+parent would still expose sixteen descriptions to recursive discovery.
 
-`canon/skills/<name>/SKILL.md`, in the package beside `canon/roles/`. The format
-both tools read: frontmatter with `name` (the directory's name, lowercase
-letters, digits and `-`) and `description` (one line: what it covers and when
-to use it), then a markdown body. Other files in the directory are installed
-with it. A skill without `name` or `description` is not installed, and
-`mc skills` and `mc roles check` name it. One skill per task, short; detail
-that belongs to one programme goes in that programme's skill.
+A session mc launches receives shared essentials and its selected role/part
+through the existing launch channel. `@mc` becomes one pointer to the root
+entrypoint; `@verb goal` becomes a pointer to the goal reference. Neither task
+catalogues nor verb manuals are pasted into role instructions. The role's
+purpose and authority remain present. A session opened by hand discovers the
+same mc skill and follows the same routing without acquiring a role.
 
-| Skill | What it covers |
+Programme sources stay at `~/mc/programs/<programme>/SKILL.md`. Sync copies
+their bodies into `mc/programmes/<programme>.md`; the entrypoint tells the
+model to read only the named programme, once when work there begins. It does
+not list all programmes or embed their details.
+
+## Install and migration
+
+| Tool | Bundle |
 | --- | --- |
-| `publish-and-merge` | `mc gate`, `mc publish`, `mc merge` as the code has them, and the test rules; not who approves a merge |
-| `merge-conflicts` | keeping both intents, separate merge and commit, generated files |
-| `git` | the shared git directory: no stash, one command at a time, commits, branches, pushing |
-| `proposals` | a finding that is not your job: `~/mc/proposals/`, not `~/mc/intake/` |
-| `processes` | never signal a process you did not start |
-| `scratch-and-probes` | `$MC_SCRATCH`, and `MC_HOME`/`MC_WORK_ROOT` for a probe of mc's own code |
-| `measure-the-app` | `mc shot`, measuring, proving which tree is served |
-| `dev-servers` | servers only through mc, at most two |
-| `asking-martin` | a question answerable in a word; what to tell him; what a headless session leaves waiting |
-| `writing-tests` | risk-based protection, credible test levels, fault evidence, cost and retirement; includes the strategy reference |
-| `writing-a-goal` | executable briefs with explicit protection scope |
-| `memory` | what a memory may hold; a rule about how to work goes in `canon/` |
+| Claude Code | `~/.claude/skills/mc/`, or `$CLAUDE_CONFIG_DIR/skills/mc/` |
+| Codex | `~/.agents/skills/mc/` |
 
-Each rule has one home: `tests/mc/canon-text.test.js` asserts a defining
-sentence of each skill is in that skill's file and no other canon file, that no
-role file repeats a skill's sentence, and that each role names what it needs.
+`mc skills` and `mc roles check` report bundle drift and marked legacy entries.
+`mc skills sync` builds and validates the source bundle before writing, stages
+all files outside the discovery directory, swaps in the completed bundle, and
+then removes old `mc-*` directories bearing mc's installed-source marker.
+Unmarked skills and symlinks are left alone. An existing unowned `mc/` is
+refused. An invalid source or failed replacement leaves legacy guidance intact.
+A second sync without source changes writes nothing. Removed programme sources
+and obsolete resources disappear with the next bundle replacement.
 
-## The programme skill
+Sync also runs on `mc hook install` and Claude's `mc hook session-start`.
+Edit the canon source, not generated installs. A worktree's sync can temporarily
+install that worktree's canon; the next hook uses the installed mc. For probes,
+use isolated HOME, CLAUDE_CONFIG_DIR, MC_HOME and MC_WORK_ROOT as described in
+[the scratch reference](../../canon/tasks/scratch-and-probes.md).
 
-`~/mc/programs/<programme>/SKILL.md`, when the file is there, is installed as
-`mc-programme-<programme>`. Its description begins with the programme's name
-and directory, so a tool applies it to work there; a `description` in the
-file's own frontmatter follows it. A programme without the file has no skill,
-and nothing is generated for it. Removing the file removes the install.
+Existing conversations retain instructions already in their history. Smaller
+discovery and launch contexts take effect in fresh conversations; files are
+loaded when requested by the model, not forcibly evicted afterwards.
 
-## The install
+## Protection
 
-| Tool | Directory |
-| --- | --- |
-| Claude Code | `~/.claude/skills/` (`$CLAUDE_CONFIG_DIR/skills/` when set) |
-| Codex | `~/.agents/skills/` — the user scope in Codex's skills documentation (developers.openai.com/codex/skills, read 2026-11-02; codex-cli 0.166 scans it) |
-
-Each skill is installed as `mc-<name>`, its `name` rewritten to match and a
-comment under the frontmatter naming the source. The prefix is the ownership
-line: the sync makes every `mc-*` entry exactly what the sources render — a
-missing one is installed, one that differs is rewritten whole, one no source
-ships any more is removed — and never reads, writes or removes an entry
-without the prefix.
-
-It runs in three places:
-
-- **`mc hook session-start`**, first. Every Claude Code session runs it,
-  launched by mc or opened by hand, so the skills are current before any
-  session reads them, without a person doing anything. It costs a read of a few
-  small files and writes only what differs. This is where hooks differ: a hook
-  cannot install itself, so `mc hook install` stays a person's verb and the page
-  names drift; once the hook is there, it can keep the skills current.
-- **`mc hook install`**, once, so a machine has the skills from the moment the
-  hooks are registered.
-- **`mc skills sync`**, by hand — for a machine where only Codex runs (mc
-  registers no Codex hook) and after editing a programme's `SKILL.md`.
-
-`mc skills` shows the state without writing. `mc roles check` ends with the
-same report: per tool, a tally, and a line for each entry that is `missing`,
-`drift` (installed, not what the source renders today) or `stale` (an `mc-*`
-entry no source ships).
-
-The installed mc's canon is what the hook installs. A session that runs a
-worktree's `mc skills sync` installs that worktree's canon until the next
-session start puts the installed one back.
-
-## How it is tested
-
-`tests/mc/skills.test.js`, against a temporary home: the canon skill parses and
-a skill without `name` or `description` is refused; the sync installs for both
-tools, rewrites a changed install, removes a stale `mc-*` one and leaves an
-unprefixed one alone; a programme with `SKILL.md` gets
-`mc-programme-<programme>` and one without gets nothing; `@skill` resolves and
-an unknown name stays; `mc roles check` names drift.
+`tests/mc/skills.test.js` exercises real fixture directories: one entrypoint,
+legacy migration, unrelated-file preservation, drift repair, idempotence,
+programme removal, invalid-source preservation, and installed reference paths.
+Role and launch tests check that manuals are reached by reference without
+preloading them. These deterministic checks need no live model or network.

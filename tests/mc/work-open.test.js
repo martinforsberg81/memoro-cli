@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 
 import { sessionArgs, toolArgs } from '../../src/adapters/claude-code.js';
 import { SESSION_IDENTITY_ENV } from '../../src/mc/session-role.js';
-import { readCanonRole, sharedRoleText, textDigest } from '../../src/mc/roles.js';
+import { expandRoleIncludes, readCanonRole, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyRefusal, writeCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
 import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
@@ -226,7 +226,7 @@ describe('openInWorkArea in a role area', () => {
     });
     assert.equal(result.ok, true);
     assert.deepEqual(calls[0].args, [
-      '--model', 'fable', '--append-system-prompt', `${sharedRoleText()}\n\n---\n\nOVERLAY`, ...SETTINGS,
+      '--model', 'fable', '--append-system-prompt', `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nOVERLAY`, ...SETTINGS,
     ]);
   });
 
@@ -323,7 +323,7 @@ describe('openInWorkArea and the foreground register', () => {
       roleName: 'brief', roleSource: 'canon', register, ...options,
     });
     const handed = calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1];
-    assert.equal(handed, `${sharedRoleText()}\n\n---\n\nOVERLAY`);
+    assert.equal(handed, `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nOVERLAY`);
     assert.deepEqual(events[0].role, {
       name: 'brief',
       source: 'canon',
@@ -445,7 +445,7 @@ describe('startInBackground and --model', () => {
       name: 'x', areaRoot, worktree, tool: 'claude', model: 'opus', overlay: 'THE\nOVERLAY', env, run,
     });
     assert.equal(started.ok, true);
-    const quoted = `${sharedRoleText()}\n\n---\n\nTHE\nOVERLAY`.replace(/'/gu, "'\\''");
+    const quoted = `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nTHE\nOVERLAY`.replace(/'/gu, "'\\''");
     assert.equal(creation(calls), `${QUOTED_IDENTITY} 'claude' '--model' 'opus' '--append-system-prompt' '${quoted}' ${QUOTED_SETTINGS}`);
   });
 

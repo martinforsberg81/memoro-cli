@@ -171,8 +171,8 @@ describe('the helper role', () => {
     assert.match(role.overlay, /do not fix it/u);
     // Not touching the proposals already waiting is the proposals skill's rule
     // now, for every role that writes one.
-    assert.match(role.overlay, /^@skill proposals$/mu);
-    assert.match(readFileSync(join(canonSkillsDir(), 'proposals', 'SKILL.md'), 'utf8'), /Never touch a proposal already waiting/u);
+    assert.doesNotMatch(role.overlay, /^@skill /mu);
+    assert.match(readFileSync(join(canonSkillsDir(), 'proposals.md'), 'utf8'), /Never touch a proposal already waiting/u);
     assert.doesNotMatch(role.overlay, /You are not the intake turn/u);
   });
 
@@ -189,8 +189,8 @@ describe('the helper role', () => {
   // Both are the proposals skill's, which the helper names.
   it('names where a proposal goes and what it is called, and dictates no format', () => {
     const { overlay } = readCanonRole('helper');
-    assert.match(overlay, /^@skill proposals$/mu);
-    const skill = readFileSync(join(canonSkillsDir(), 'proposals', 'SKILL.md'), 'utf8');
+    assert.doesNotMatch(overlay, /^@skill /mu);
+    const skill = readFileSync(join(canonSkillsDir(), 'proposals.md'), 'utf8');
     assert.match(skill, /~\/mc\/proposals\//u);
     assert.match(skill, /<date>-<system>-<slug>\.md/u);
   });

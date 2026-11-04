@@ -20,7 +20,7 @@ import {
   BRANCH_LINE, ensurePlanArea, openPlanAreas, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
-import { instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
+import { expandRoleIncludes, instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
 import { PLAN_ROLE } from '../../../src/mc/goals.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
@@ -73,10 +73,11 @@ describe('the plan role', () => {
   // verb file `canon/roles/brief.md` carries too, pulled in at assembly.
   it('carries the goal-writing rules by reference, not by copy', () => {
     const { overlay } = readCanonRole(PLAN_ROLE);
-    assert.match(overlay, /^@include goal-verb\.md$/mu);
+    assert.match(overlay, /^@verb goal$/mu);
     assert.doesNotMatch(overlay, /\*\*Written by verbs\.\*\*/u);
     const told = instructionsFor('claude-code', overlay);
-    assert.match(told, /\*\*Written by verbs\.\*\*/u);
+    assert.match(told, /mc\/verbs\/goal\.md/u);
+    assert.doesNotMatch(told, /\*\*Written by verbs\.\*\*/u);
     assert.doesNotMatch(told, /@include/u);
   });
 
@@ -248,7 +249,7 @@ describe('the prompt', () => {
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole(PLAN_ROLE),
     });
     const told = instructionsFor('claude-code', launch.overlay);
-    const shared = sharedRoleText();
+    const shared = expandRoleIncludes(sharedRoleText());
     assert.ok(told.includes(shared), told);
     assert.equal(told.split(shared).length - 1, 1, 'the shared text should appear once');
     assert.ok(!launch.prompt.includes(shared), launch.prompt);
@@ -291,7 +292,7 @@ describe('the launch', () => {
     // assembly every other role session gets, which this one did not have
     // until `canon/roles/plan.md` grew one.
     assert.equal(call.args[3], instructionsFor('claude-code', launch.overlay));
-    assert.ok(call.args[3].startsWith(sharedRoleText()), 'nothing in front of the shared text');
+    assert.ok(call.args[3].startsWith(expandRoleIncludes(sharedRoleText())), 'nothing in front of the shared text');
     assert.match(call.args[3], /You are the plan session for one programme/u);
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
@@ -310,7 +311,7 @@ describe('the launch', () => {
     // role names: `~/.agents/skills/` for codex, `~/.claude/skills/` for claude.
     const told = JSON.parse(args[1].slice('instructions='.length));
     assert.equal(told, instructionsFor('codex', launch.overlay));
-    assert.match(told, /~\/\.agents\/skills\/mc-publish-and-merge\/SKILL\.md/u);
+    assert.match(told, /~\/\.agents\/skills\/mc\/SKILL\.md/u);
     assert.equal(told.replaceAll('~/.agents/skills/', '~/.claude/skills/'), instructionsFor('claude-code', launch.overlay));
   });
 

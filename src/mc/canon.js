@@ -4,8 +4,8 @@
  * `canon/` ships inside the mc package (`package.json` `files`), so what it
  * holds travels with every install — global, `npx`, or a cloned checkout —
  * and is resolvable even when the session's cwd is an unrelated, empty repo.
- * Today it holds one thing: `canon/roles/`, the verbs' own roles, read by
- * `roles.js`.
+ * It holds the mc skill entrypoint and its roles, verbs and task references.
+ * `roles.js` assembles the selected role; `skills.js` installs the bundle.
  *
  * It also held three flat files — the coding-agent protocol, the coordination
  * skill and the be-coordinator command — with a reader (`readPackageCanon`), a

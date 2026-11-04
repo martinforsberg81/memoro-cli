@@ -6,11 +6,10 @@ work lands through. Node 22+, ESM, `node --test`.
 
 How to work here is mc's, not this file's:
 
-- **Task skills** — test and publish, merge conflicts, git in a shared git
-  directory, proposals, processes, scratch files, measuring the app, dev
-  servers, asking Martin, memory — are installed as `mc-*` in
-  `~/.claude/skills/` and `~/.agents/skills/`. Their source is
-  `canon/skills/`; see `docs/technical/mc-skills.md`.
+- **mc guidance** — one skill, `mc`, installed in `~/.agents/skills/mc/`
+  and `~/.claude/skills/mc/`. Read its short `SKILL.md` and only the task or
+  verb reference needed now. Source: `canon/SKILL.md`, `canon/tasks/`,
+  `canon/verbs/`; see `docs/technical/mc-skills.md`.
 - **A session mc launches** is told its role from `canon/roles/`
   (`docs/technical/mc-roles.md`) and needs nothing from this file.
 - **This repository's code** — conventions, the credential boundary, critical

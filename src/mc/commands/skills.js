@@ -1,16 +1,7 @@
 /**
- * `mc skills` — the task skills mc installs for Claude Code and Codex.
- *
- *   mc skills [--json]          what canon and the programmes ship, against what
- *                               each tool's skills directory holds
- *   mc skills sync [--json]     make the `mc-*` entries there exactly that:
- *                               install, rewrite, remove a stale one; nothing
- *                               without the prefix is touched
- *
- * The same sync runs in `mc hook session-start` and `mc hook install`, so a
- * person rarely needs this verb; it is the door for a machine with no Claude
- * hook (Codex only) and for seeing what would change. The logic is
- * `../skills.js`.
+ * mc skills reports the single mc bundle and marked legacy installs.
+ * mc skills sync stages the bundle, then removes legacy copies.
+ * The same sync runs on Claude session-start and hook install.
  */
 import { skillReport } from './roles.js';
 import { skillStatus, syncSkills } from '../skills.js';

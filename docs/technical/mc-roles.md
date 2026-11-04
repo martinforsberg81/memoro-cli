@@ -17,10 +17,10 @@ session to find, and nothing has to be cleaned up after one.
 
 The code is [`src/mc/roles.js`](../../src/mc/roles.js).
 
-A role reaches only a session mc launches. The guidance every session reaches —
-launched by mc or opened by hand — is a task skill, installed where Claude Code
-and Codex look for skills: [mc-skills.md](mc-skills.md). A role names one with
-`@skill <name>` instead of repeating it (below).
+A role reaches only a session mc launches. Other mc guidance is reached through
+one installed skill, `mc`: [mc-skills.md](mc-skills.md). Its short entrypoint
+routes to task, verb and programme references when the operation needs them.
+Roles do not repeat the task catalogue.
 
 ## The catalogue
 
@@ -103,15 +103,11 @@ creation, never acquired.
 
 ## The shared file
 
-`canon/roles/all-sessions.md` is the text every role session is told, whichever role
-it is. It holds only what is true of any session and is not a task: what a turn
-costs, that you are already a session, that you read the code before deciding
-and say what you actually ran, that task rules are skills the role names, and
-what is written in English. Everything that is a task — the gate, publishing
-and merge, conflicts, the shared git directory, proposals, processes, scratch
-files and probes, `mc shot`, dev servers, asking Martin, memory — is a skill in
-`canon/skills/` (goal `agent-skills-text`, 2026-11-02), and a role file that
-needs one names it with `@skill`.
+`canon/roles/all-sessions.md` is the text every role session is told. It holds
+shared essentials and one `@mc` marker. Assembly resolves that marker to the
+installed `mc/SKILL.md` path for the session's tool. The role's own text says
+purpose, authority and completion; task procedures live in `canon/tasks/`.
+No task descriptions or bodies are copied into the launch context.
 
 It began as the turn-cost paragraph, which was byte-identical in four role
 files with two variants in two more — six places for one rule to drift, and the
@@ -148,7 +144,9 @@ with no instructions for what it is doing.
 ```js
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
-  return [shared, expandRoleIncludes(overlay)].filter(Boolean).join('\n\n---\n\n') || null;
+  const options = { tool: toolId };
+  return [shared, overlay].map((text) => expandRoleIncludes(text, options))
+    .filter(Boolean).join('\n\n---\n\n') || null;
 }
 ```
 
@@ -174,38 +172,18 @@ Each of them used to write the join out by hand.
 
 ## The verb files
 
-`all-sessions.md` is what every role session is told. How a goal is written
-belongs only to roles that write goals. They include the verb passage:
+`canon/verbs/goal.md` holds the goal manual. The plan and brief role files name
+it with `@verb goal`. `expandRoleIncludes`, called by `instructionsFor`, turns
+that line into a short instruction to read the installed `mc/verbs/goal.md`
+before using `mc goal`. It never pastes the manual into the launch context.
+`parseRole` leaves the marker in the role's own overlay.
 
-```
-@include goal-verb.md
-```
-
-| file | what it says | included by |
-|---|---|---|
-| `goal-verb.md` | goal text, criteria, phases, stages and log verbs | `plan-session`, `brief` |
-
-
-`expandRoleIncludes` replaces that line with the file's text **in
-`instructionsFor`** — the same door, for the same reason a second one was never
-opened. It is deliberately not expanded in `parseRole`: `overlay` stays the
-role's own words, which is what `run.js`'s installed-or-not check and
-`mc roles show` read.
-
-Three properties are mechanical rather than tidy. Only a `*-verb.md` name in
-`canon/roles/` can be included, so a role cannot include a role and there is no
-recursion to bound. The marker has to be a line of its own — a mention inside a
-sentence is left alone. And a name that resolves to nothing is left standing in
-the text rather than dropped: a visible `@include` line in a session's
-instructions is a broken install somebody can see, and a rule that quietly
-vanished is not.
-
-A role names a task skill the same way: `@skill publish-and-merge` on a line of
-its own becomes, in `instructionsFor`, a pointer to the installed
-`mc-publish-and-merge` — its description and its path for the session's tool
-(`~/.claude/skills/…` or `~/.agents/skills/…`) — not its text; the tool loads
-the skill as it loads any. A name `canon/skills/` does not ship is left standing,
-as an unknown `@include` is. See [mc-skills.md](mc-skills.md).
+Markers occupy a whole line, names cannot escape the reference directory,
+and an unknown name stays visible rather than silently losing guidance.
+For existing user catalogue roles, `@include goal-verb.md` and `@skill <task>`
+still resolve, now to verb and task reference paths under the one mc skill.
+`@mc` resolves to the root entrypoint path. Support files are ordinary `.md`
+files; only `mc/SKILL.md` participates in skill discovery.
 
 The build and review roles each have a `goal` part. A build is headless,
 on one branch built to the end: it does not merge main to keep up, and it
@@ -266,7 +244,7 @@ from outside it, was removed by ruling 24.
 `source` is there because `areaRole` prefers the user's catalogue over canon on
 purpose. A session running a catalogue role is not automatically running a stale copy
 of canon; it is running that rulebook, and it is compared against the file it
-actually came from. (An `@include` always resolves in canon, whichever
+actually came from. (A reference always resolves in canon, whichever
 catalogue the role itself came from.)
 
 A launch that assembled nothing records the role and no digests. That is the

@@ -2,7 +2,7 @@
 
 Facts about this repository's own code that hold whoever works on it. How to
 work — test, publish, merge, resolve a conflict, write a proposal — is not
-here: it is mc's task skills, `canon/skills/` ([mc-skills.md](mc-skills.md)),
+here: it is the mc skill, `canon/SKILL.md` ([mc-skills.md](mc-skills.md)),
 and what a role session is told is `canon/roles/` ([mc-roles.md](mc-roles.md)).
 This file replaced `docs/coding-agent-protocol.md` on 2026-11-02 (goal
 `agent-skills-text`), keeping its facts about the code and moving its working
@@ -39,8 +39,8 @@ its last row should read `0%`.
   subsystem kept without a verb reaching all of it.
 - Cold start matters: `mc` is typed constantly, so a verb's module is imported
   when it is routed to, never at load.
-- Test strategy and construction: load `mc-writing-tests` (source:
-  [`canon/skills/writing-tests/SKILL.md`](../../canon/skills/writing-tests/SKILL.md)).
+- Test strategy and construction: read the mc task reference (source:
+  [`canon/tasks/writing-tests.md`](../../canon/tasks/writing-tests.md)).
   Test authority is assigned by the canonical session roles.
 - Tests mirror `src/` under `tests/`. `tests/_isolate-home.mjs` answers every
   git a test spawns from the model in `tests/mc/_helpers/fake-git.js`; a file

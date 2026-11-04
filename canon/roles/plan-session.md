@@ -102,19 +102,4 @@ while the brief is being written — nothing happens to a goal in `plan` — and
 `mc goal stage <p>/<g> build` once it is ready to be built, or `--stage
 build` at once.
 
-@include goal-verb.md
-
-Skills this role uses:
-
-@skill publish-and-merge
-@skill merge-conflicts
-@skill git
-@skill proposals
-@skill processes
-@skill scratch-and-probes
-@skill writing-tests
-@skill measure-the-app
-@skill dev-servers
-@skill asking-martin
-@skill memory
-@skill writing-a-goal
+@verb goal

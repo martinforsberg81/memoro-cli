@@ -19,7 +19,7 @@ import {
 import {
   describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
 } from '../../src/mc/helper-turn.js';
-import { sharedRoleText } from '../../src/mc/roles.js';
+import { expandRoleIncludes, sharedRoleText } from '../../src/mc/roles.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
 const FILE = 'errors-memoro-2026-08-29.md';
@@ -104,7 +104,7 @@ describe('the helper turn', () => {
     const { seen } = await turn();
     const at = seen.args.indexOf('--append-system-prompt');
     assert.ok(at > 0, 'claude takes instructions on --append-system-prompt');
-    assert.equal(seen.args[at + 1], `${sharedRoleText()}\n\n---\n\nYou are the helper turn.`);
+    assert.equal(seen.args[at + 1], `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nYou are the helper turn.`);
   });
 
   it('names the one file and leaves the reading to the turn', async () => {

@@ -20,5 +20,5 @@ not a separate server service.
   waits: `mc dev status`.
 - What runs where: `mc dev list`, `mc prs`, `mc goal show <programme>/<goal>`.
 - One browser at a time.
-- Stopping one: skill `mc-processes`.
+- Stopping one: [processes.md](processes.md).
 - Start one only when the work asks for something seen or measured.
