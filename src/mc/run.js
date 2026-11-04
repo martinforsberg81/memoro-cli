@@ -112,7 +112,7 @@ export const SETTLE_EVERY_MS = 5 * 60_000;
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
-/** The model a headless plan session runs on, at high effort (Martin, 2026-11-03). */
+/** The model a headless plan session runs on, at medium effort (Martin, 2026-11-04). */
 export const HEADLESS_PLAN_MODEL = 'opus';
 
 /**
@@ -1269,17 +1269,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return goal.stage === 'finish' || goal.stage === 'merge' ? 'plan' : 'build';
   }
 
-  /**
-   * The route a headless plan session runs on: opus on claude at high effort,
-   * pinned as a review is. Until 2026-11-03 it was the plan role's model
-   * (ruling 6, `fable`); Martin moved the headless plan to opus high that day.
-   * The role's model still chooses for a plan session a person opens with
-   * `mc plan`. The billing is the session's as for any other (`billingFor`).
-   */
+  /** Planning uses Opus at medium effort, including merge repair. */
   function planRoute() {
     return {
-      ok: true, class: 'plan', candidate: { tool: 'claude', model: HEADLESS_PLAN_MODEL, effort: 'high' },
-      basis: 'pinned', headroom: null, why: 'a headless plan session runs on opus at high effort (2026-11-03)',
+      ok: true, class: 'plan', candidate: { tool: 'claude', model: HEADLESS_PLAN_MODEL, effort: 'medium' },
+      basis: 'pinned', headroom: null, why: 'a headless plan session runs on opus at medium effort (2026-11-04)',
     };
   }
 

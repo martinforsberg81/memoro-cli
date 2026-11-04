@@ -105,13 +105,16 @@ export async function openInWorkArea({
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
-  const chosenModel = chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
+  const planning = verb === 'plan';
+  const chosenModel = planning
+    ? (model || (launch.id === 'codex' ? 'gpt-6.1-sol' : 'opus'))
+    : chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
   const instructions = resuming ? null : instructionsFor(toolId, overlay);
   const handed = resuming ? [] : profileArgs(toolId, instructions);
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
   // where only the role text is left off.
-  const session = sessionSwitches(launch, cache);
+  const session = [...sessionSwitches(launch, cache), ...(planning ? launch.adapter?.effortArgs?.('medium') ?? [] : [])];
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
   const baseArgs = resuming
     ? [...resumeWith(toolId, resumed, session), ...(resumePrompt ? [resumePrompt] : [])]

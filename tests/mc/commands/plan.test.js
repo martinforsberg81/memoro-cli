@@ -39,10 +39,8 @@ describe('the plan role', () => {
   it('is the model and the tools, and a body of its own', () => {
     const role = readCanonRole(PLAN_ROLE);
     assert.equal(role.name, 'plan-session');
-    // `fable`, not `opus` (Martin, 2026-09-04). mc passes `--model` through
-    // unvalidated, so the word has to be one the tool accepts: `claude --model
-    // fable` was run and resolved to `claude-fable-5-1`.
-    assert.equal(role.model, 'fable');
+    // Planning defaults to Opus medium (Martin, 2026-11-04).
+    assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);
     assert.ok(role.overlay, 'the plan role has no overlay body');
   });
@@ -203,7 +201,7 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /Wait for him\./u);
     assert.ok(!launch.prompt.includes('docs/project/'), launch.prompt);
     assert.ok(!/say what\s+you found/u.test(launch.prompt), launch.prompt);
-    assert.equal(launch.model, 'fable');
+    assert.equal(launch.model, 'opus');
     assert.equal(launch.overlay, readCanonRole(PLAN_ROLE).overlay);
   });
 

@@ -1,6 +1,6 @@
 ---
 name: plan-session
-model: fable
+model: opus
 singleton: false
 tools: claude, codex
 ---
