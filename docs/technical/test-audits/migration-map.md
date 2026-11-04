@@ -27,6 +27,20 @@ At this revision npm run test:affected -- --why reported 0 of 171 test files sel
 | test | node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 'tests/**/*.test.js' |
 | test:affected | node scripts/affected-tests.js --why |
 | smoke:mc | node scripts/mc-release-smoke.js |
+| security:credential-boundary | node scripts/security/credential-boundary-probe.mjs |
+
+### Existing evidence lanes and per-subject accounting
+
+Finish reconciliation at document head `1c866e4e00161143793bdb1eac19ac572f7834d2` inspected `package.json`, `scripts/affected-tests.js` and the tracked subject inventory. These inputs have not changed from the snapshot above. Every one of the 171 subject rows is linked to the existing package `test` command (Node test runner with `tests/_isolate-home.mjs` and the existing 30,000 ms timeout); `test:affected` chooses change-dependent members of this same inventory through import, pin and data edges with conservative fallback. There is no Memoro-style runtime/resource/profile registry in this repository: no hermetic, browser, SQLite or heavy classification is invented from a subject's name or domain. The isolated-home preload is a declared setup boundary, not proof that a test uses no other resources.
+
+| Existing execution surface | Membership and boundary |
+| --- | --- |
+| package test | All 171 exact subject paths below; Node runner and isolated-home preload. |
+| package test:affected | Dynamic subset of those subjects; not a separate static classification. The reviewed document head selected 5/171; the earlier 0/171 clean-tree observation above remains historical. |
+| package smoke:mc | Packaged CLI smoke driver listed below; separate opt-in execution, NOT RUN. |
+| package security:credential-boundary | Credential-boundary probe listed below; separate opt-in execution, NOT RUN. Its Node test subject remains in the 171-row inventory. |
+
+Each domain batch can therefore be grouped by these existing boundaries using its execution-metadata column. More detailed mechanism/resource grouping requires the later body/fixture audit; this map neither asserts that all 171 are cheap unit tests nor promotes opt-in evidence into an ordinary gate. All unreviewed statuses and the six historical recommendations across both reports are retained.
 
 ### Other discovered executable lanes
 
@@ -58,11 +72,11 @@ Every suffix-matched path appears exactly once. UNREVIEWED means no value-audit 
 
 ### Prior audit subjects
 
-| Path | Recommendation only | Status |
-| --- | --- | --- |
-| tests/mc/canon-text.test.js | REBUILD, retaining structural delivery checks | Prior bounded audit subject; no migration decision or protection change. |
-| tests/mc/roles-decisions.test.js | CONSOLIDATE, preserving unique guidance | Prior bounded audit subject; no migration decision or protection change. |
-| tests/mc/branch-landed.test.js | REBUILD cost hotspots; keep real Git evidence | Prior bounded audit subject; no migration decision or protection change. |
+| Path | Recommendation only | Status | Existing execution metadata |
+| --- | --- | --- | --- |
+| tests/mc/canon-text.test.js | REBUILD, retaining structural delivery checks | Prior bounded audit subject; no migration decision or protection change. | package test; affected selection dynamic; isolated home |
+| tests/mc/roles-decisions.test.js | CONSOLIDATE, preserving unique guidance | Prior bounded audit subject; no migration decision or protection change. | package test; affected selection dynamic; isolated home |
+| tests/mc/branch-landed.test.js | REBUILD cost hotspots; keep real Git evidence | Prior bounded audit subject; no migration decision or protection change. | package test; affected selection dynamic; isolated home |
 
 ### First three risk-prioritised follow-up batches
 
@@ -79,256 +93,256 @@ Sequencing context from the prior bounded audit: the `branch-landed.test.js` cal
 
 #### CLI-tests-adapters-001 · tests/adapters · 5 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/adapters/codex-hooks.test.js | UNREVIEWED |
-| tests/adapters/get-status-contract.test.js | UNREVIEWED |
-| tests/adapters/managed-runtime/claude-managed-custody.test.js | UNREVIEWED |
-| tests/adapters/materialise.test.js | UNREVIEWED |
-| tests/adapters/model-args.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/adapters/codex-hooks.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/adapters/get-status-contract.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/adapters/managed-runtime/claude-managed-custody.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/adapters/materialise.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/adapters/model-args.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-lib-001 · tests/lib · 2 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/lib/device-flow.test.js | UNREVIEWED |
-| tests/lib/keychain.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/lib/device-flow.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/lib/keychain.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-001 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/affected-tests.test.js | UNREVIEWED |
-| tests/mc/archive-plan.test.js | UNREVIEWED |
-| tests/mc/archive-programme.test.js | UNREVIEWED |
-| tests/mc/asc-build-device.test.js | UNREVIEWED |
-| tests/mc/asc-build-testflight.test.js | UNREVIEWED |
-| tests/mc/asc-build.test.js | UNREVIEWED |
-| tests/mc/asc.test.js | UNREVIEWED |
-| tests/mc/await-deploy.test.js | UNREVIEWED |
-| tests/mc/billing-gateway-session.test.js | UNREVIEWED |
-| tests/mc/billing-gateway.test.js | UNREVIEWED |
-| tests/mc/billing.test.js | UNREVIEWED |
-| tests/mc/brief-collect.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/affected-tests.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/archive-plan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/archive-programme.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build-device.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build-testflight.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/asc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/await-deploy.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/billing-gateway-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/billing-gateway.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/billing.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/brief-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-002 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/canon.test.js | UNREVIEWED |
-| tests/mc/child-async.test.js | UNREVIEWED |
-| tests/mc/commands/brief.test.js | UNREVIEWED |
-| tests/mc/commands/deploy.test.js | UNREVIEWED |
-| tests/mc/commands/deps.test.js | UNREVIEWED |
-| tests/mc/commands/gate-verdict.test.js | UNREVIEWED |
-| tests/mc/commands/goal.test.js | UNREVIEWED |
-| tests/mc/commands/helper.test.js | UNREVIEWED |
-| tests/mc/commands/hook-install.test.js | UNREVIEWED |
-| tests/mc/commands/language.test.js | UNREVIEWED |
-| tests/mc/commands/log.test.js | UNREVIEWED |
-| tests/mc/commands/plan.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/canon.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/child-async.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/brief.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/deploy.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/deps.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/gate-verdict.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/goal.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/helper.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/hook-install.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/language.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/log.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/plan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-003 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/commands/roles-cli.test.js | UNREVIEWED |
-| tests/mc/commands/run-billing.test.js | UNREVIEWED |
-| tests/mc/commands/run-lanes.test.js | UNREVIEWED |
-| tests/mc/commands/test-url.test.js | UNREVIEWED |
-| tests/mc/context-fill.test.js | UNREVIEWED |
-| tests/mc/conversations-delete.test.js | UNREVIEWED |
-| tests/mc/conversations-model.test.js | UNREVIEWED |
-| tests/mc/deploy-gate-wait.test.js | UNREVIEWED |
-| tests/mc/deps.test.js | UNREVIEWED |
-| tests/mc/dev-lease.test.js | UNREVIEWED |
-| tests/mc/dev-open.test.js | UNREVIEWED |
-| tests/mc/dev-reap.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/commands/roles-cli.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/run-billing.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/run-lanes.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/commands/test-url.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/context-fill.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/conversations-delete.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/conversations-model.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/deploy-gate-wait.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/deps.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/dev-lease.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/dev-open.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/dev-reap.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-004 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/dev-servers.test.js | UNREVIEWED |
-| tests/mc/docker-command.test.js | UNREVIEWED |
-| tests/mc/docker.test.js | UNREVIEWED |
-| tests/mc/docs-measure.test.js | UNREVIEWED |
-| tests/mc/docs-merge.test.js | UNREVIEWED |
-| tests/mc/fake-git-default.test.js | UNREVIEWED |
-| tests/mc/fake-git.test.js | UNREVIEWED |
-| tests/mc/foreground.test.js | UNREVIEWED |
-| tests/mc/front-door.test.js | UNREVIEWED |
-| tests/mc/gate-command.test.js | UNREVIEWED |
-| tests/mc/gate-fast.test.js | UNREVIEWED |
-| tests/mc/gate-lane-wait.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/dev-servers.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/docker-command.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/docker.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/docs-measure.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/docs-merge.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/fake-git-default.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/fake-git.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/foreground.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/front-door.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/gate-command.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/gate-fast.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/gate-lane-wait.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-005 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/gate-local.test.js | UNREVIEWED |
-| tests/mc/gate-lock.test.js | UNREVIEWED |
-| tests/mc/git.test.js | UNREVIEWED |
-| tests/mc/goal-archive.test.js | UNREVIEWED |
-| tests/mc/goals.test.js | UNREVIEWED |
-| tests/mc/help-routes.test.js | UNREVIEWED |
-| tests/mc/help-shared.test.js | UNREVIEWED |
-| tests/mc/help-subcommands.test.js | UNREVIEWED |
-| tests/mc/help.test.js | UNREVIEWED |
-| tests/mc/helper-cli-collect.test.js | UNREVIEWED |
-| tests/mc/helper-collect.test.js | UNREVIEWED |
-| tests/mc/helper-doc.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/gate-local.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/gate-lock.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/git.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/goal-archive.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/goals.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/help-routes.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/help-shared.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/help-subcommands.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/help.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/helper-cli-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/helper-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/helper-doc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-006 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/helper-turn.test.js | UNREVIEWED |
-| tests/mc/hooks.test.js | UNREVIEWED |
-| tests/mc/interactive-workspace.test.js | UNREVIEWED |
-| tests/mc/keys-filter.test.js | UNREVIEWED |
-| tests/mc/keys-run.test.js | UNREVIEWED |
-| tests/mc/lane-count.test.js | UNREVIEWED |
-| tests/mc/lane-pick.test.js | UNREVIEWED |
-| tests/mc/layout.test.js | UNREVIEWED |
-| tests/mc/lease-liveness.test.js | UNREVIEWED |
-| tests/mc/lease-owner.test.js | UNREVIEWED |
-| tests/mc/log-doc.test.js | UNREVIEWED |
-| tests/mc/log-read.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/helper-turn.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/hooks.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/interactive-workspace.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/keys-filter.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/keys-run.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/lane-count.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/lane-pick.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/layout.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/lease-liveness.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/lease-owner.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/log-doc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/log-read.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-007 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/logger.test.js | UNREVIEWED |
-| tests/mc/merge-command.test.js | UNREVIEWED |
-| tests/mc/merge-doc.test.js | UNREVIEWED |
-| tests/mc/merge-queue.test.js | UNREVIEWED |
-| tests/mc/merge-watch.test.js | UNREVIEWED |
-| tests/mc/merger.test.js | UNREVIEWED |
-| tests/mc/merges-collect.test.js | UNREVIEWED |
-| tests/mc/model-choice.test.js | UNREVIEWED |
-| tests/mc/model-config.test.js | UNREVIEWED |
-| tests/mc/nightly-history.test.js | UNREVIEWED |
-| tests/mc/nightly.test.js | UNREVIEWED |
-| tests/mc/page-cache.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/logger.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merge-command.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merge-doc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merge-queue.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merge-watch.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merger.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/merges-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/model-choice.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/model-config.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/nightly-history.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/nightly.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page-cache.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-008 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/page-dev.test.js | UNREVIEWED |
-| tests/mc/page-frame.test.js | UNREVIEWED |
-| tests/mc/page-goals.test.js | UNREVIEWED |
-| tests/mc/page-grid.test.js | UNREVIEWED |
-| tests/mc/page-live.test.js | UNREVIEWED |
-| tests/mc/page.test.js | UNREVIEWED |
-| tests/mc/paths-layout.test.js | UNREVIEWED |
-| tests/mc/prepare-cache.test.js | UNREVIEWED |
-| tests/mc/programmes-dormant.test.js | UNREVIEWED |
-| tests/mc/project-convert.test.js | UNREVIEWED |
-| tests/mc/publish.test.js | UNREVIEWED |
-| tests/mc/push-guard.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/page-dev.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page-frame.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page-goals.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page-grid.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page-live.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/page.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/paths-layout.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/prepare-cache.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/programmes-dormant.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/project-convert.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/publish.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/push-guard.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-009 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/repo-freshen.test.js | UNREVIEWED |
-| tests/mc/repo-gate-table.test.js | UNREVIEWED |
-| tests/mc/repo-gate.test.js | UNREVIEWED |
-| tests/mc/repo-lease.test.js | UNREVIEWED |
-| tests/mc/repo-merge-live.test.js | UNREVIEWED |
-| tests/mc/repo-merge.test.js | UNREVIEWED |
-| tests/mc/repo-render.test.js | UNREVIEWED |
-| tests/mc/repo-round-log.test.js | UNREVIEWED |
-| tests/mc/repo-status.test.js | UNREVIEWED |
-| tests/mc/repo-watch.test.js | UNREVIEWED |
-| tests/mc/repos.test.js | UNREVIEWED |
-| tests/mc/resource-claim.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/repo-freshen.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-gate-table.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-gate.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-lease.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-merge-live.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-merge.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-render.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-round-log.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-status.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repo-watch.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/repos.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/resource-claim.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-010 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/roles.test.js | UNREVIEWED |
-| tests/mc/run-codex.test.js | UNREVIEWED |
-| tests/mc/run-control.test.js | UNREVIEWED |
-| tests/mc/run-doc.test.js | UNREVIEWED |
-| tests/mc/run-plan.test.js | UNREVIEWED |
-| tests/mc/run-session.test.js | UNREVIEWED |
-| tests/mc/run.test.js | UNREVIEWED |
-| tests/mc/runner-lock.test.js | UNREVIEWED |
-| tests/mc/runtime-secret-names.test.js | UNREVIEWED |
-| tests/mc/selector-miss.test.js | UNREVIEWED |
-| tests/mc/session-address.test.js | UNREVIEWED |
-| tests/mc/session-gate-evidence.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/roles.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run-codex.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run-control.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run-doc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run-plan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/run.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/runner-lock.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/runtime-secret-names.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/selector-miss.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/session-address.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/session-gate-evidence.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-011 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/session-gate-run.test.js | UNREVIEWED |
-| tests/mc/session-role.test.js | UNREVIEWED |
-| tests/mc/shared-deps.test.js | UNREVIEWED |
-| tests/mc/shot-compare.test.js | UNREVIEWED |
-| tests/mc/shot-session.test.js | UNREVIEWED |
-| tests/mc/shot.test.js | UNREVIEWED |
-| tests/mc/skills.test.js | UNREVIEWED |
-| tests/mc/status-collect.test.js | UNREVIEWED |
-| tests/mc/status-doc.test.js | UNREVIEWED |
-| tests/mc/status-roles.test.js | UNREVIEWED |
-| tests/mc/tap-red.test.js | UNREVIEWED |
-| tests/mc/test-environment.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/session-gate-run.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/session-role.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/shared-deps.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/shot-compare.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/shot-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/shot.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/skills.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/status-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/status-doc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/status-roles.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/tap-red.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/test-environment.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-012 · tests/mc · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/mc/test-progress.test.js | UNREVIEWED |
-| tests/mc/test-timing.test.js | UNREVIEWED |
-| tests/mc/tidy.test.js | UNREVIEWED |
-| tests/mc/tmux-ux.test.js | UNREVIEWED |
-| tests/mc/verb-epipe.test.js | UNREVIEWED |
-| tests/mc/work-area-add.test.js | UNREVIEWED |
-| tests/mc/work-identity.test.js | UNREVIEWED |
-| tests/mc/work-layout.test.js | UNREVIEWED |
-| tests/mc/work-open.test.js | UNREVIEWED |
-| tests/mc/work-release-dryrun.test.js | UNREVIEWED |
-| tests/mc/work-release-verdict.test.js | UNREVIEWED |
-| tests/mc/work-stop.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/mc/test-progress.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/test-timing.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/tidy.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/tmux-ux.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/verb-epipe.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-area-add.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-identity.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-layout.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-open.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-release-dryrun.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-release-verdict.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/work-stop.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-security-001 · tests/security · 1 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/security/credential-boundary-probe.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/security/credential-boundary-probe.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-vault-001 · tests/vault · 12 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/vault/engine/audit.test.js | UNREVIEWED |
-| tests/vault/engine/bindings.test.js | UNREVIEWED |
-| tests/vault/engine/c1-claude-lease.test.js | UNREVIEWED |
-| tests/vault/engine/crypto-port.test.js | UNREVIEWED |
-| tests/vault/engine/custody-crypto.test.js | UNREVIEWED |
-| tests/vault/engine/custody-session.test.js | UNREVIEWED |
-| tests/vault/engine/device-unlock.test.js | UNREVIEWED |
-| tests/vault/engine/import-scan.test.js | UNREVIEWED |
-| tests/vault/engine/key-cache.test.js | UNREVIEWED |
-| tests/vault/engine/local-codex-revision.test.js | UNREVIEWED |
-| tests/vault/engine/startup.test.js | UNREVIEWED |
-| tests/vault/engine/step-credit-key.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/vault/engine/audit.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/bindings.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/c1-claude-lease.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/crypto-port.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/custody-crypto.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/custody-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/device-unlock.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/import-scan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/key-cache.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/local-codex-revision.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/startup.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/step-credit-key.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-vault-002 · tests/vault · 4 subject(s)
 
-| Path | Status |
-| --- | --- |
-| tests/vault/engine/tool-auth.test.js | UNREVIEWED |
-| tests/vault/engine/types.test.js | UNREVIEWED |
-| tests/vault/engine/vault-cli.test.js | UNREVIEWED |
-| tests/vault/engine/vault-commands.test.js | UNREVIEWED |
+| Path | Status | Existing execution metadata |
+| --- | --- | --- |
+| tests/vault/engine/tool-auth.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/types.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/vault-cli.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/vault-commands.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
 
 ## Subsequent work and source-state limits
 
