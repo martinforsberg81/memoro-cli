@@ -24,9 +24,9 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` in `src/mc/page-render.js` draws PROGRAMMES, HELPER, BRIEF,
-SESSIONS and BILLING, DEV (2026-11-04), MERGES, PULL REQUESTS, DEPLOY,
-LANGUAGE, CHECKS, the optional Docker line, and MC. A stopped language run
+`renderPageLines` in `src/mc/page-render.js` draws PROGRAMMES, MAINTENANCE,
+SESSIONS, DEV, MERGES, PULL REQUESTS, DEPLOY, LANGUAGE, CHECKS, the optional
+Docker line, MC, and BILLING directly below MC. A stopped language run
 inside an open gap puts its red warning above them all. Optional sections
 with nothing to say are not drawn. What changes less sits above what changes
 more, so activity stays within reach of the prompt; DEV changes as often as
@@ -35,7 +35,8 @@ the sessions do, so it stands right under them.
 ### PROGRAMMES
 
 `programmesSection` and `goalsOf` (`page-collect.js`) group goals by programme,
-sort by programme then goal name, and number every goal. The PROGRAMMES
+sort by programme then goal name. Goal numbers remain in JSON and the menu
+lookup; the page omits them. The PROGRAMMES
 heading carries the whole page's counts: `N active · N dormant · N goals`,
 then every goal status by count, biggest first (`blocked 1 · ready 1`), each
 in its status colour (`statusRollup`, `page-render.js`).
@@ -53,9 +54,9 @@ plan session and how many have proposals; `a` draws them all, and `mc
 programs list` gives each programme's goal and proposal counts. An open
 planning session alone does not make one active.
 
-Every goal has a row in the grid: number and mark, `goal`, name, first
-repository, stage, `N sess`, and open PRs. A live current file gives it `●`
-and a bold name. The tail begins with `criteria <met>/<all>` (green when all
+Every goal has a row in the grid: a large `●` in the left margin, `goal`,
+name, first repository, stage, `N sess`, and open PRs. Its circle uses its
+status colour; a live current file also gives it a bold name. The tail begins with `criteria <met>/<all>` (green when all
 hold), then what it waits on or the last session's words:
 
 - a higher phase: yellow `phase <n> — after phase <n-1>`;
@@ -71,17 +72,19 @@ Strays follow under `not an area mc knows`: unexplained directories and
 sessions with no owner, with the facts needed to inspect them. Nothing on
 the page removes them.
 
-### HELPER and BRIEF
+### MAINTENANCE
 
-Each desk is drawn open or not. HELPER includes one row per repository digest:
-new error count, loud count, age and the loudest message if there is room.
-The remaining lines and fingerprints stay in the digest and JSON. BRIEF shows
-the root proposals in `~/mc/proposals/` — the ones without a programme;
-a programme's own are counted on its heading line — as `N proposals without
-a programme`, by system (`mc`, `memoro`, `untagged`), their date span and
-newest names. It reads filenames, not proposal contents. The desk rows
-carry their own session ownership; every session belongs to a programme or
-a desk, not a free-standing work area.
+One row per repository, always including memoro and memoro-cli. Each starts
+with a large `●`: red for loud errors or critical dependencies, yellow for
+missing or old readings or high vulnerabilities, green for a current reading
+without those findings. Columns show total error fingerprints in the digest,
+new and loud errors, dependency vulnerabilities by severity, root proposals
+by system (`mc` belongs to memoro-cli), and the digest's age or missing state.
+Unknown measurements are `?`, including new counts before a baseline exists.
+Below 100 columns, dependency critical/high become C/H and moderate/low give
+way. Untagged root proposals and open helper/brief sessions follow the table.
+Programme-owned proposals remain on their programme headings. Full error
+messages and proposal filenames remain in JSON and the digest.
 
 ### SESSIONS and BILLING
 
@@ -98,7 +101,7 @@ outcomes by session kind and list-price estimate. JSON carries
 `runner.sessions`, `runner.lanes` and `runner.day.by_kind`. Session kinds are
 plan, build and review; builds and reviews carry variant `goal`. The tool
 and pid stay in JSON, not on the row. BILLING is a line showing both providers'
-plan usage and next billing route.
+plan usage and next billing route, directly below MC at the foot of the page.
 
 ### DEV
 
@@ -109,8 +112,9 @@ with `mc dev list` on the right: `running` is the servers that answer (not
 and `queued` only while somebody waits, in yellow. No server at all: `DEV
 none running`, grey.
 
-Under it one grid row per live server: a green mark while leased, grey
-otherwise; `MAIN` for the shared checkout's standing server (`mainCheckout`),
+Under it one grid row per live server: a large status circle at the left
+margin, green while leased, yellow while starting or when its holder is gone,
+grey while idle; `MAIN` for the shared checkout's standing server (`mainCheckout`),
 `SLOT` for one lent to a worktree; the holder in the name column —
 `BUILD mc/no-work`, `REVIEW mc/email-compose`, `plan mc`, `brief`, or the
 verb (`shot`, `test`, `open`) when no session ran it; the repository;
@@ -208,7 +212,7 @@ SESSIONS, DEV and MERGES. The same kind of fact begins at the same column.
 
 | column | width ≥ 90 / < 90 | PROGRAMMES | SESSIONS | DEV | MERGES |
 |---|---|---|---|---|---|
-| nr + mark | 6 | goal number and mark | lane number and mark | leased mark | round, red or quiet mark |
+| mark + nr | 6 | status circle, no number | status circle and lane number | status circle | status circle |
 | kind | 8 | `goal` | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
 | name | 28 / 20, floor 10 | goal name | programme/goal | holder | branch or repository |
 | repo | 12 / 0 | first repository | repository | repository | repository |

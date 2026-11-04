@@ -78,15 +78,15 @@ function programmesOf(lines) {
 }
 
 describe('goal rows on the page', () => {
-  it('goal rows are drawn under their programme, numbered in name order', () => {
+  it('goal rows are drawn under their programme, without visible numbering', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
     const at = (re) => lines.findIndex((line) => re.test(line));
 
 
     const mcHeading = at(/^ {2}mc\s/u);
-    const cleanup = at(/^ +1 · goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+waits on Martin$/u);
-    const rollout = at(/^ +2 ● goal +rollout\s+memoro-cli\s+build\s+3 sess\s+the second repository$/u);
+    const cleanup = at(/^  ● {5}goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+waits on Martin$/u);
+    const rollout = at(/^  ● {5}goal +rollout\s+memoro-cli\s+build\s+3 sess\s+the second repository$/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
     assert.equal(rollout, cleanup + 1, 'rollout is drawn after cleanup, in name order');
   });
@@ -95,7 +95,7 @@ describe('goal rows on the page', () => {
     const rows = [{ ...GOALS[1], criteria: { met: 1, all: 2 } }, { ...GOALS[0], criteria: { met: 2, all: 2 } }];
     const data = pageData({ programmes: programmesSection({ goalRows: rows, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^ +1 · goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+criteria 1\/2 · waits on Martin$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^  ● {5}goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+criteria 1\/2 · waits on Martin$/u.test(line)), lines.join('\n'));
     const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
     assert.match(goalLineOf(painted, 'rollout'), /\u001b\[[0-9;]*32mcriteria 2\/2/u);
     assert.doesNotMatch(goalLineOf(painted, 'cleanup'), /\u001b\[[0-9;]*32mcriteria/u);
@@ -109,7 +109,7 @@ describe('goal rows on the page', () => {
     // green for `build` while a session is on it, red for any stage of a blocked goal
     assert.match(rollout, /\u001b\[[0-9;]*32m\s*build/u);
     assert.doesNotMatch(plain(rollout), /g · /u, 'no `g ·` before the name');
-    assert.match(plain(rollout), /^ +2 ● goal {4}rollout/u, '`goal` in the kind column');
+    assert.match(plain(rollout), /^  ● {5}goal {4}rollout/u, '`goal` in the kind column');
     assert.match(cleanup, /\u001b\[[0-9;]*31m\s*build/u);
   });
 

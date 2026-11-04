@@ -39,7 +39,7 @@ export const GRID_ROOMY = 90;
 /** The fixed widths. Each includes the one space that separates it from the next cell. */
 export const GRID = Object.freeze({
   indent: 2,
-  // `` 12 ● `` — the row's number, right-aligned in three, and its mark.
+  // ``●  12 `` — a status circle, then the optional lane number.
   nr: 6,
   // `project`, `goal`, `BUILD`, `REVIEW`, `GATE`: the longest is seven.
   kind: 8,
@@ -257,9 +257,9 @@ function tailOf(c, parts = [], room) {
 export function gridRow(c, wide, row) {
   const col = gridColumns(wide);
   const nr = row.nr == null ? '   ' : String(row.nr).padStart(3).slice(-3);
-  const mark = row.mark?.text || ' ';
-  const head = `${' '.repeat(GRID.indent)}${row.nr == null ? nr : c(nr, 'grey')} `
-    + `${row.mark?.styles?.length ? c(mark, ...row.mark.styles) : mark} `;
+  const mark = '●';
+  const head = `${' '.repeat(GRID.indent)}${row.mark?.styles?.length ? c(mark, ...row.mark.styles) : mark} `
+    + `${row.nr == null ? nr : c(nr, 'grey')} `;
   const cells = head
     + cellOf(c, row.kind, col.kind.width)
     + cellOf(c, row.name, col.name.width)

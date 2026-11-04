@@ -146,7 +146,7 @@ describe('DEV — the dev servers and who holds each', () => {
     const block = devBlock(renderPageLines(pageData({ dev }), { columns: 100, now: NOW, colour: true }));
     assert.match(plain(block[0]), /3 running · 1 leased · 2 queued/u);
     const last = block.at(-1);
-    assert.equal(plain(last).trim(), '2 queued · BUILD hero-detail-objects first');
+    assert.equal(plain(last).trim(), '●     2 queued · BUILD hero-detail-objects first');
     assert.deepEqual(toneOf(last, '2 queued'), ['yellow']);
   });
 
