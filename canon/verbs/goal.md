@@ -24,6 +24,20 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   (`mc goal stage merge` sends all registered PRs to merge) or `finish` (with
   REVIEW.md); a plan session finishes it to `merge`; the merger sets `done`.
   `blocked`, in any stage, waits on a person; `mc goal ready` keeps the stage.
+- **Taking over a blocked goal.** In an interactive session, always read the
+  goal's current stage, its blocking reason in LOG.md (and REVIEW.md when
+  present), and the instructions for that stage before acting: `plan` and
+  `finish` use [plan-session](../roles/plan-session.md), `build` uses
+  [build-session](../roles/build-session.md), and `review` uses
+  [review-session](../roles/review-session.md). For `merge`, read
+  [publish-and-merge](../tasks/publish-and-merge.md). Do this on every takeover,
+  even in an existing conversation. Resolve the blocker yourself within the
+  current stage, including implementation, checks and publication when needed;
+  then follow that stage's normal transition. Merely clearing `blocked` or
+  moving the goal back to hand the work to the runner does not resolve it.
+  In a headless session, follow the assigned role; if resolving the blocker
+  requires a person's decision or an act outside that role's authority, leave
+  the goal blocked in its current stage and record exactly what is needed.
 - **Refused.** mc refuses every session a backward move, naming both stages
   — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
   logged. It refuses `done` and `dropped` from a build or review session,
