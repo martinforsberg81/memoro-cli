@@ -804,10 +804,10 @@ describe('lanes (merge-throughput step 2)', () => {
 
 describe('a round watches its pull request (round-abort)', () => {
   const PR = { repo: 'memoro', repo_path: '/repos/memoro', pr: 14169 };
-  const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
   const MERGED = { state: 'MERGED', mergeCommit: { oid: 'feed1234beef' }, baseRefName: 'main', headRefOid: 'aaa' };
   const CLOSED = { state: 'CLOSED', mergeCommit: null, baseRefName: 'main', headRefOid: 'aaa' };
   const OPEN = { state: 'OPEN', mergeCommit: null, baseRefName: 'main', headRefOid: 'aaa' };
+  const REQUEST = { args: ['pr', 'view', '14169', '--json', 'state,headRefOid,mergeCommit,baseRefName'], cwd: '/repos/memoro' };
 
   /** A fake `gh` answering `pr view` with `facts`, or failing when `facts` is undefined; every call is recorded. */
   function viewing(facts) {
@@ -819,6 +819,25 @@ describe('a round watches its pull request (round-abort)', () => {
     return { gh, asked };
   }
 
+  // Drive the real watch callback explicitly. Wall-clock sleeps can expire
+  // before a second interval fires when the merge gate's event loop is busy.
+  function watching(options) {
+    let check;
+    let active = false;
+    const stop = watchSubject({
+      ...options,
+      setTimer: (callback) => { check = callback; active = true; return 1; },
+      clearTimer: () => { active = false; },
+    });
+    return {
+      stop,
+      // Also permit a dispatched callback after cancellation, to exercise
+      // the watcher's own stop guard rather than hiding it in this fixture.
+      tick: () => check(),
+      get active() { return active; },
+    };
+  }
+
   it('SUBJECT_POLL_MS is a minute', () => {
     assert.equal(SUBJECT_POLL_MS, 60_000);
   });
@@ -826,8 +845,10 @@ describe('a round watches its pull request (round-abort)', () => {
   it('MERGED: one onGone of kind merged with the commit and the base, and no check after it', async () => {
     const { gh, asked } = viewing(MERGED);
     const gone = [];
-    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
-    await wait(30);
+    const watch = watching({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await watch.tick();
+    await watch.tick();
+    assert.equal(watch.active, false);
     assert.equal(gone.length, 1);
     assert.equal(gone[0].kind, 'merged');
     assert.equal(gone[0].sha, 'feed1234beef');
@@ -840,8 +861,10 @@ describe('a round watches its pull request (round-abort)', () => {
   it('CLOSED: one onGone of kind closed', async () => {
     const { gh } = viewing(CLOSED);
     const gone = [];
-    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
-    await wait(30);
+    const watch = watching({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await watch.tick();
+    await watch.tick();
+    assert.equal(watch.active, false);
     assert.equal(gone.length, 1);
     assert.equal(gone[0].kind, 'closed');
     assert.equal(gone[0].reason, '#14169 was closed on GitHub while its round ran — the round is stopped');
@@ -850,8 +873,10 @@ describe('a round watches its pull request (round-abort)', () => {
   it('OPEN with a head other than the start one: one onGone of kind pushed, with the new head', async () => {
     const { gh } = viewing({ ...OPEN, headRefOid: 'bbb1111222' });
     const gone = [];
-    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
-    await wait(30);
+    const watch = watching({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await watch.tick();
+    await watch.tick();
+    assert.equal(watch.active, false);
     assert.equal(gone.length, 1);
     assert.equal(gone[0].kind, 'pushed');
     assert.equal(gone[0].sha, 'bbb1111222');
@@ -862,44 +887,57 @@ describe('a round watches its pull request (round-abort)', () => {
     const same = viewing(OPEN);
     const none = viewing({ ...OPEN, headRefOid: 'bbb' });
     const gone = [];
-    const stops = [
-      watchSubject({ job: PR, gh: same.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) }),
-      watchSubject({ job: PR, gh: none.gh, startHead: null, every: 5, onGone: (facts) => gone.push(facts) }),
+    const watches = [
+      watching({ job: PR, gh: same.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) }),
+      watching({ job: PR, gh: none.gh, startHead: null, every: 5, onGone: (facts) => gone.push(facts) }),
     ];
-    await wait(30);
-    stops.forEach((stop) => stop());
+    for (const watch of watches) {
+      await watch.tick();
+      assert.equal(watch.active, true);
+      await watch.tick();
+      assert.equal(watch.active, true);
+      watch.stop();
+      assert.equal(watch.active, false);
+    }
     assert.deepEqual(gone, []);
-    assert.ok(same.asked.length > 1);
-    assert.ok(none.asked.length > 1);
+    assert.deepEqual(same.asked, [REQUEST, REQUEST]);
+    assert.deepEqual(none.asked, [REQUEST, REQUEST]);
   });
 
   it('a gh that fails or says nothing sensible: no call, and the checks go on', async () => {
     const failing = viewing(undefined);
     const gone = [];
-    const stop = watchSubject({ job: PR, gh: failing.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
-    await wait(30);
-    stop();
+    const watch = watching({ job: PR, gh: failing.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await watch.tick();
+    assert.equal(watch.active, true);
+    await watch.tick();
+    assert.equal(watch.active, true);
+    watch.stop();
+    assert.equal(watch.active, false);
     assert.deepEqual(gone, []);
-    assert.ok(failing.asked.length > 1);
+    assert.deepEqual(failing.asked, [REQUEST, REQUEST]);
   });
 
   it('onGone is not called twice, though the checks would say so again', async () => {
     const { gh, asked } = viewing(MERGED);
     const gone = [];
-    const stop = watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
-    await wait(30);
-    stop();
+    const watch = watching({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await watch.tick();
+    await watch.tick();
+    watch.stop();
+    assert.equal(watch.active, false);
     assert.equal(gone.length, 1);
     assert.equal(asked.length, 1);
   });
 
   it('after stop() no further gh call is made', async () => {
     const { gh, asked } = viewing(OPEN);
-    const stop = watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: () => assert.fail('not gone') });
-    await wait(12);
-    stop();
+    const watch = watching({ job: PR, gh, startHead: 'aaa', every: 5, onGone: () => assert.fail('not gone') });
+    await watch.tick();
+    watch.stop();
+    assert.equal(watch.active, false);
     const count = asked.length;
-    await wait(30);
+    await watch.tick();
     assert.equal(asked.length, count);
   });
 
