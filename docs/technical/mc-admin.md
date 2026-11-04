@@ -24,8 +24,10 @@ new aggregate fields require explicit admission. Service vectorCount is shown
 in both output modes, including zero.
 
 The page shows server-owned operation conclusions, source availability and
-age, incident group/occurrence aggregates and service statuses. Queue health
-means binding availability only, not delivery health or backlog. Financial,
+age, incident group/occurrence aggregates and service statuses. Fetch time and
+source ages use the clock after both responses have been collected, so time
+spent waiting for responses does not mark fresh source timestamps as future.
+Queue health means binding availability only, not delivery health or backlog. Financial,
 user, content, identity and security dashboards are not connected. The web
 links are fallback detail pages. Current production schema/token admission
 and terminal appearance remain unverified; fixtures do not establish
