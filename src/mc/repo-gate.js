@@ -465,8 +465,13 @@ export async function runGate({
   // that did not finish are the red — the ones to rebuild. The slowest files
   // that did finish are for the reader only, and are kept apart from them.
   const atCeiling = () => {
-    const headPrefix = `${headDir}/`;
-    const rel = (file) => (file.startsWith(headPrefix) ? file.slice(headPrefix.length) : file);
+    // Fetch/PR timeouts happen before the candidate exists. There are no
+    // candidate paths to canonicalise then, but the verdict must still return.
+    const headPrefixes = [...new Set([headDir, ...(existsSync(headDir) ? [realpathSync(headDir)] : [])])].map(dir => `${dir}/`);
+    const rel = (file) => {
+      const prefix = headPrefixes.find(prefix => file.startsWith(prefix));
+      return prefix ? file.slice(prefix.length) : file;
+    };
     const runs = ceilingRuns || { unfinished: [], finished: [] };
     const unfinished = [...new Set([...runs.unfinished.map(rel), ...ceilingPending])];
     const slowest = runs.finished.filter(one => !unfinished.includes(rel(one.file))).slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));

@@ -72,6 +72,21 @@ function opening(overrides = {}) {
 }
 
 describe('openInWorkArea and --model', () => {
+  it('planning uses medium effort and its provider model, also on resume', async () => {
+    for (const tool of ['claude']) {
+      for (const resume of [false, true]) {
+        const { areaRoot, worktree, env } = fixture(resume ? {
+          entries: [{ type: 'assistant', message: { model: 'claude-fable-5', content: [] } }],
+        } : {});
+        const { calls, options } = opening({ verb: 'plan', programme: 'x', tool });
+        const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
+        assert.equal(result.ok, true);
+        assert.ok(calls[0].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.1-sol'));
+        if (tool === 'claude') assert.deepEqual(calls[0].args.slice(-2), ['--effort', 'medium']);
+        else assert.ok(calls[0].args.includes('model_reasoning_effort="medium"'));
+      }
+    }
+  });
   it('does not pass ambient provider API keys to a plan session', async () => {
     const { areaRoot, worktree, env } = fixture();
     env.ANTHROPIC_API_KEY = 'ambient-anthropic-key';

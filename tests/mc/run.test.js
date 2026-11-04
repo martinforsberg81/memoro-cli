@@ -1,3 +1,4 @@
+import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -2563,6 +2564,35 @@ const plans = (f, name, stage, status = 'ready', inner = okSession()) => (call) 
 const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one plan session takes it and queues it again\n`;
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
+test('headless planning chooses Opus or Sol by capacity, always at medium, for finish and red merge', async () => {
+  for (const stage of ['finish', 'merge']) {
+    for (const tool of ['claude', 'codex']) {
+      const f = goalFixture({ stuck: { stage, ...(stage === 'merge' ? { log: redMerge } : {}) } });
+      let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
+      capacity = applyObservation(capacity, 'codex', {
+        windows: { primary: windowAt(tool === 'codex' ? 0.1 : 0.9) },
+        models: [{ id: 'gpt-6.1-sol', efforts: ['medium'] }],
+      }, ROUTING_NOW);
+      f.deps.capacity.write(capacity);
+      const launch = f.deps.launch;
+      f.deps.launch = (tool) => {
+        const selected = launch(tool);
+        if (tool === 'codex') selected.adapter.effortArgs = codexEffortArgs;
+        return selected;
+      };
+      f.answer = plans(f, 'stuck', stage, 'blocked');
+      const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+      assert.equal(result.ran, 1);
+      const [call] = f.calls.sessions;
+      assert.equal(call.env.MC_ROLE, 'plan-session');
+      assert.equal(call.env.MC_MODEL, tool === 'claude' ? 'opus' : 'gpt-6.1-sol');
+      assert.equal(call.env.MC_TOOL, tool);
+      if (tool === 'claude') assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
+      else assert.ok(call.args.includes('model_reasoning_effort=medium'));
+    }
+  }
+});
+
 test('a goal in finish starts one plan session: the plan role, opus, the programme directory, no worktree, told to finish it', async () => {
   const f = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: REVIEW.md\n' } });
   f.answer = plans(f, 'stuck', 'finish', 'blocked');
@@ -2574,7 +2604,8 @@ test('a goal in finish starts one plan session: the plan role, opus, the program
   assert.equal(call.env.MC_ROLE, 'plan-session');
   assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
-  assert.equal(call.env.MC_MODEL, 'opus', 'a headless plan runs on opus high (2026-11-03), not the role\'s fable');
+  assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
+  assert.equal(call.env.MC_MODEL, 'opus', 'a headless plan runs on opus medium (2026-11-04), not the role\'s fable');
   assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
   assert.equal('MC_WORKAREA' in call.env, false);
   assert.equal('MC_REVIEW_HEAD' in call.env, false);
