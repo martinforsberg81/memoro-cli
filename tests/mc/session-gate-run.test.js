@@ -208,25 +208,48 @@ it('both concurrent halves contribute failures and thrown failures settle the co
   assert.equal(failed.execution.tests.exit, 1);
   assert.equal(failed.execution.commands[0].exit, 2);
 
-  let commandSettled = false;
-  const thrownTest = await runSessionGate({ cwd: '/work', select: 'selector' }, {
-    write: () => {},
-    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
-    tests: async () => { throw new Error('test half threw'); },
-    shell: async () => { commandSettled = true; return { status: 0 }; },
-  });
-  assert.equal(commandSettled, true);
-  assert.equal(thrownTest.ok, false);
-  assert.match(thrownTest.execution.tests.error, /test half threw/u);
-
-  const thrownCommand = await runSessionGate({ cwd: '/work', select: 'selector' }, {
-    write: () => {},
-    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
-    tests: async () => ({ tap: GREEN, code: 0 }),
-    shell: async () => { throw new Error('command half threw'); },
-  });
-  assert.equal(thrownCommand.ok, false);
-  assert.match(thrownCommand.execution.commands[0].error, /command half threw/u);
+  // Each half throws while the other is held pending: no verdict may arrive
+  // before the held half is released, and its final evidence must be in it.
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+  const bounded = (promise, what) => Promise.race([promise, sleep(2_000).then(() => { throw new Error(`${what} within 2 s`); })]);
+  const turns = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+  for (const thrower of ['tests', 'command']) {
+    const heldStarted = deferred();
+    const release = deferred();
+    const threw = deferred();
+    let verdict = false;
+    const gate = runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: () => {},
+      select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+      tests: async () => {
+        if (thrower === 'tests') { await bounded(heldStarted.promise, 'held command started'); threw.resolve(); throw new Error('test half threw'); }
+        heldStarted.resolve();
+        await release.promise;
+        return { tap: GREEN, code: 0 };
+      },
+      shell: async () => {
+        if (thrower === 'command') { await bounded(heldStarted.promise, 'held tests started'); threw.resolve(); throw new Error('command half threw'); }
+        heldStarted.resolve();
+        await release.promise;
+        return { status: 0 };
+      },
+    }).then((result) => { verdict = true; return result; });
+    try {
+      await bounded(threw.promise, `${thrower} half threw`);
+      await turns();
+      assert.equal(verdict, false, `no verdict while the collaborator of a thrown ${thrower} half is pending`);
+    } finally { release.resolve(); }
+    const result = await bounded(gate, 'verdict after release');
+    assert.equal(result.ok, false);
+    if (thrower === 'tests') {
+      assert.match(result.execution.tests.error, /test half threw/u);
+      assert.deepEqual(result.execution.commands.map(({ state, exit, ok }) => ({ state, exit, ok })), [{ state: 'completed', exit: 0, ok: true }]);
+    } else {
+      assert.match(result.execution.commands[0].error, /command half threw/u);
+      assert.equal(result.execution.tests.exit, 0);
+      assert.equal(result.execution.tests.finished, true);
+    }
+  }
 });
 
 it('an abort stops the serial sequence before the next selected command', async () => {
