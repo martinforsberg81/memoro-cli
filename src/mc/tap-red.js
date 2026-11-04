@@ -23,6 +23,8 @@
  * own reporter emits, and it is this small.
  */
 
+import { createHash } from 'node:crypto';
+
 const SUBTEST = /^(\s*)# Subtest: (.*)$/u;
 const RESULT = /^(\s*)not ok \d+ - (.*)$/u;
 
@@ -325,7 +327,10 @@ export function redTests(tap, files, { cwd = null } = {}) {
     seen.add(block.name);
     const named = files == null ? [block.own, block.top].filter((path) => TEST_FILE.test(path)) : [block.own, block.top];
     const file = relative([...block.locations, ...named].map(owner).find(Boolean) || null);
-    tests.push({ file, name: block.name, own: block.own, at: placeOf(block, file, relative), error: errorLines(block.error) });
+    tests.push({
+      file, name: block.name, own: block.own, at: placeOf(block, file, relative),
+      error: errorLines(block.error), diagnostic: diagnosticOf(block.error),
+    });
   }
   return tests;
 }
@@ -342,6 +347,28 @@ function placeOf(block, file, relative) {
   if (!block.at) return file;
   const at = /^(.*?)(:\d+:\d+)?$/u.exec(block.at);
   return file && (at[1] === file || at[1].endsWith(`/${file}`)) ? `${file}${at[2] || ''}` : relative(block.at);
+}
+
+/**
+ * The whole error, blank lines dropped, as one digest: what identifies a
+ * failure. `error` above is cut to its first lines for a person to read, and a
+ * deep-equality diff that differs only below that cut would look the same in
+ * it. Standing-main matching compares this, never the cut lines.
+ */
+function diagnosticOf(lines) {
+  const whole = lines.map((line) => line.trimEnd()).filter((line) => line.trim());
+  return createHash('sha256').update(JSON.stringify(whole)).digest('hex');
+}
+
+/**
+ * Whether two red tests are the same failure: one file, one name and one
+ * whole diagnostic. A record without the diagnostic — evidence written before
+ * it was kept — is never the same: an exemption is not granted on less.
+ */
+export function sameFailure(known, test) {
+  return Boolean(known && test) && known.file === test.file && known.name === test.name
+    && typeof known.diagnostic === 'string' && known.diagnostic.length > 0
+    && known.diagnostic === test.diagnostic;
 }
 
 /** The first lines of an error, blank ones dropped. */

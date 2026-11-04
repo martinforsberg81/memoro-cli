@@ -1,50 +1,14 @@
 /**
- * A test that landed red because the selection did not reach it.
- *
- * A merge round runs the test files the repository's selector says a change
- * reaches, and nothing else — which is the whole saving, and also the one way
- * a change can land and turn `main` red: the selector did not name a test the
- * change broke. #12106 did exactly that on 2026-09-25. It touched
- * `public/js/assistant/`, three whole-repository scanners went red, none of
- * them was in its selection, and the next pull request's round (#12107) was
- * the first thing to run them. It went red twice on tests it had nothing to
- * do with, and nothing said so.
- *
- * So when a round goes red, the red files are run once more on the base the
- * candidate was built on. Green there, and they are run alone on the candidate
- * too (repo-gate.js): red there, and the change broke them; green there as well,
- * and the red was the machine's load — the round stops `red-under-load` and the
- * merger measures it again. Red there too, and `main` is
- * red, and a pull request that already landed broke it without its round
- * running the test. The files are walked back along `main`'s first parents,
- * one landing at a time, to the first commit where they pass; the landing
- * after it is the one that broke them, and the round log says whether that
- * landing's selection named the file.
- *
- * ## Not a baseline
- *
- * The 2026-08-31 ruling took "was main already red?" off the round, and this
- * does not put it back: the verdict is decided before any of this runs and
- * nothing here can change it. What it adds is attribution, and only on a red
- * round, and only over the files that were red — seconds on a round that has
- * already failed, against a morning of guessing whose change it was.
- *
- * ## What is kept
- *
- * One line per break in `selector-misses.jsonl` under mc's home — the test
- * file, the landing that broke it, and whether that landing's selection named
- * it. `not-selected` is the selector miss; `selected` is a test that was run
- * and landed red anyway (a flake, or a tree that differed from the measured
- * one); `no-round` is a landing mc never gated; `docs-only-landing` is a
- * landing that changed nothing outside `docs/`, ran no suite, and broke the
- * file all the same, measured twice to be sure — a miss the page counts. A
- * docs-only landing whose second measure disagrees is `flaky`: said in the
- * round's reason, never written here. The same break found by a second round
- * is written once.
+ * Existing exact-base main-health evidence, plus historical attribution helpers.
+ * PR rounds use readMainRed only: no reproduction or history walk. Completed
+ * main-only runs write standing failures through recordMainRed. The older
+ * probeMainRed algorithm remains an explicit diagnostic helper and its prior
+ * selector-misses.jsonl records remain readable; runGate never calls it.
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
+import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
 import { readRounds } from './repo-round-log.js';
 import { redFiles, tapTotals } from './tap-red.js';
@@ -286,4 +250,35 @@ export function selectorMissReading(repoPath, { root = mcHome(), now = Date.now(
     .filter((line) => line.repo === repo && MISS_KINDS.has(line.kind) && Date.parse(line.at) >= since)
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return { days, misses: recent.length, recent: recent.slice(0, 5) };
+}
+
+// Standing-red evidence is written only by a completed run of main itself.
+// PR rounds read an exact base SHA; they never reproduce or bisect main.
+const mainRedPath = (root, repo) => join(root, 'main-red', `${basename(repo).replace(/\.git$/u, '')}.json`);
+
+export function recordMainRed({ root = mcHome(), repo, commit, result }) {
+  if (!commit || !result?.totals?.finished) return false;
+  try {
+    const path = mainRedPath(root, repo);
+    mkdirSync(join(root, 'main-red'), { recursive: true });
+    const tests = result.red_tests || [];
+    const files = result.red_files || [...new Set(tests.map(test => test.file).filter(Boolean))];
+    writeJsonAtomic(path, { commit, files, tests }, { mode: 0o600 });
+    return true;
+  } catch { return false; }
+}
+
+export function readMainRed({ root = mcHome(), repo, baseCommit, files }) {
+  const unknown = { base: baseCommit, red_on_main: [], breaks: [], stopped: 'no exact main evidence; no main replay in PR rounds' };
+  try {
+    const evidence = JSON.parse(readFileSync(mainRedPath(root, repo), 'utf8'));
+    if (evidence.commit !== baseCommit || !Array.isArray(evidence.files) || !Array.isArray(evidence.tests)
+      || !evidence.files.every(file => typeof file === 'string')
+      || !evidence.tests.every(test => test && typeof test.file === 'string' && typeof test.name === 'string'
+        && (test.error === undefined || (Array.isArray(test.error) && test.error.every(line => typeof line === 'string')))
+        && (test.diagnostic === undefined || typeof test.diagnostic === 'string'))) return unknown;
+    const red = evidence.files.filter((file) => files.includes(file));
+    if (!red.length) return unknown; // No base/candidate-alone fallback either.
+    return { base: baseCommit, red_on_main: red, tests: evidence.tests, breaks: [], cached: true };
+  } catch { return unknown; }
 }

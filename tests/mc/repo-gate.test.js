@@ -5,8 +5,8 @@
  * The verdict half: ONE tree, the candidate with the current base merged into
  * it, and what went red in it named at every level. There is no baseline and
  * no comparison — ruled by Martin on 2026-08-31. The one exception is ruling
- * 44 § 4: a red only in files the probe finds red on main, and the change does
- * not touch, goes on and ends green with those files named; a red file the
+ * 44 § 4, revised 2026-11-04: exact-base standing-red evidence for unchanged
+ * test files can exempt the same failures without replaying main; a red file the
  * change touches is red as before, which tests below pin. A run that never finished is still treated as
  * no evidence rather than as a clean sweep: it is the quiet failure worth
  * guarding, and with one side it is the whole verdict.
@@ -32,7 +32,8 @@ import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
-import { redNames, tapTotals } from '../../src/mc/tap-red.js';
+import { redNames, redTests, tapTotals } from '../../src/mc/tap-red.js';
+import { readMainRed, recordMainRed } from '../../src/mc/selector-miss.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, gateConfiguration, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
@@ -1691,14 +1692,16 @@ describe('a repository that selects by diff', () => {
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
 
-  describe('a red round says when the red is main\'s, and which landing broke it', () => {
+  describe('standing main evidence and candidate retry policy', () => {
     const scanner = 'tests/scan.test.js';
     const own = 'tests/own.test.js';
     /** TAP with a located failure in each of `files`, the way node writes it. */
-    function located(files) {
+    function located(files, error = []) {
       const lines = ['TAP version 13'];
       files.forEach((file, index) => {
-        lines.push(`not ok ${index + 1} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`, '  ...');
+        lines.push(`not ok ${index + 1} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`);
+        if (error.length) lines.push('  error: |-', ...error.map((line) => `    ${line}`));
+        lines.push('  ...');
       });
       lines.push(`1..${files.length}`, '# tests 4', `# pass ${4 - files.length}`, `# fail ${files.length}`);
       return lines.join('\n');
@@ -1710,7 +1713,7 @@ describe('a repository that selects by diff', () => {
     // after it reads `redAt` — the files alone, on the base or the candidate
     // (`cand2222`, what the fixture's `rev-parse HEAD` names). `touched` is
     // what the pull request's diff against the base lists.
-    function onMain({ redAt, round = null, touched = [] }) {
+    function onMain({ redAt, round = null, touched = [], error = [] }) {
       let at = 'candidate';
       let first = true;
       const gitAlso = (args) => {
@@ -1726,180 +1729,74 @@ describe('a repository that selects by diff', () => {
         const now = first && round ? round : (redAt[at] || []);
         first = false;
         const red = now.filter((file) => ran.includes(file));
-        return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red) });
+        return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red, error) });
       };
       return { gitAlso, tests };
     }
 
-    it('red on the base too, in a file the change touches: the reason names the landing, and a selector miss is written once', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] }, touched: [scanner] });
-      const fx = selecting({ files: [scanner], gitAlso });
-      try {
-        // The landing's own round, which selected something else.
-        writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({
-          schema: 'mc-gate-round', version: 1, phase: 'end', at: '2026-09-25T20:43:27Z', repo: 'repo',
-          merged: [12106], selected: ['tests/assistant/suggestion-button.test.js'],
-        })}\n`);
-        const report = await fx.report({ tests });
-        assert.equal(report.verdict, 'red', 'a red file the change touches is red as before (ruling 44 § 4)');
-        assert.equal(report.main_red_files, null);
-        assert.deepEqual(report.main_red.red_on_main, [scanner]);
-        assert.equal(report.main_red.breaks[0].pr, 12106);
-        assert.equal(report.main_red.breaks[0].kind, 'not-selected');
-        assert.match(report.reason, /1 of the red files is red on main too, broken by #12106 \(its selection did not reach it: a selector miss\)/u);
-        const misses = readFileSync(join(fx.mcHome, 'selector-misses.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-        assert.equal(misses.length, 1);
-        assert.deepEqual([misses[0].file, misses[0].pr, misses[0].kind, misses[0].found_by], [scanner, 12106, 'not-selected', [7]]);
-        await fx.report({ tests });
-        assert.equal(readFileSync(join(fx.mcHome, 'selector-misses.jsonl'), 'utf8').trim().split('\n').length, 1, 'the same break is written once');
-      } finally { fx.cleanup(); }
-    });
+    // A real deep-equality diff: the first six nonblank lines are all a
+    // display summary keeps, so a second difference further down is only in
+    // the whole diagnostic.
+    const prefix = ['Expected values to be strictly deep-equal:', '+ actual - expected', '  {',
+      "+   a: 'existing regression',", "-   a: 'expected',", "    b: 'stable',"];
+    const onCandidate = [...prefix, "+   z: 'new regression',", "-   z: 'expected',", '  }'];
+    const onBase = [...prefix, "    z: 'expected',", '  }'];
 
-    /** The round's environment with a work root of its own, where intake notes go. */
-    function withWork(fx) {
-      const work = mkdtempSync(join(tmpdir(), 'mc-work-'));
-      return { work, env: { ...process.env, GATE_MARKS: fx.marks, MC_WORK_ROOT: work }, intake: join(work, 'intake') };
+    /** Main's evidence as a completed main-only run writes it: the parsed red tests of its TAP. */
+    function cached(fx, { commit = 'base1111full', files = [scanner], name = null, error = onCandidate, legacy = false } = {}) {
+      const parsed = redTests(located(files, error), files)
+        .map((test) => ({ ...test, name: name || test.name }))
+        .map(({ diagnostic, ...test }) => (legacy ? test : { ...test, diagnostic }));
+      recordMainRed({ root: fx.mcHome, repo: 'repo', commit, result: {
+        totals: { finished: true }, red_files: files, red_tests: parsed,
+      } });
     }
 
-    /**
-     * Ruling 44 § 4: four SQL snapshot tests red on main were measured red in
-     * 77 rounds of 43 pull requests that did not touch them.
-     */
-    it('red only in files red on main and untouched: the gates and the own tests run, and it ends green with them named', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] }, touched: ['src/x.js', own] });
-      const fx = selecting({
-        files: [own, scanner], gitAlso,
-        commands: [{ id: 'css-lint', packageScript: 'css:lint', passBaseRef: false }],
-        scripts: { 'css:lint': marking('css-lint') },
-      });
-      const { work, env, intake } = withWork(fx);
-      const said = [];
-      const runs = [];
+    it('a completed main-only round records evidence without running another tree', async () => {
+      const fx = selecting({ files: [scanner], full: true });
       try {
-        const report = await fx.report({
-          env, onProgress: (line) => said.push(line), tests: (call) => { runs.push([...call.files]); return tests(call); },
-        });
-        assert.equal(report.verdict, 'green', report.reason);
-        assert.equal(report.ok, true);
-        assert.deepEqual(report.main_red_files, [scanner]);
-        assert.deepEqual(report.main_red.red_on_main, [scanner]);
-        assert.ok(said.includes(`1 red file red on main too, untouched by this change — not this round's red: ${scanner}`));
-        assert.equal(fx.mark('css-lint'), '', 'the command gate the selection named ran');
-        assert.ok(report.extra_gates.some((gate) => gate.name === 'css:lint' && gate.ok));
-        assert.deepEqual(report.pr_tests.files, [own], 'the pull request\'s own tests ran');
-        assert.deepEqual(runs.at(-1), [own]);
-        assert.deepEqual(report.candidate.red, [], 'not counted as the candidate\'s red');
-        assert.match(verdictHeadline(report), /^GREEN — the test gate passes — 1 test file red on main, not counted$/u);
-
-        const day = new Date().toISOString().slice(0, 10);
-        const note = join(intake, `${day}-red-on-main-scan.md`);
-        const text = readFileSync(note, 'utf8');
-        for (const part of ['- repo: repo', `\`${scanner}\``, '#7', '#12106', `- a test in ${scanner}`]) assert.ok(text.includes(part), part);
-      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
-    });
-
-    it('an intake note is written once per file per seven days, and a proposal naming it counts', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] } });
-      const fx = selecting({ files: [scanner], gitAlso });
-      const { work, env, intake } = withWork(fx);
-      const notes = () => readdirSync(intake).filter((name) => name.includes('red-on-main')).length;
-      try {
-        assert.equal((await fx.report({ env, tests })).verdict, 'green');
-        assert.equal(notes(), 1);
-        assert.equal((await fx.report({ env, tests })).verdict, 'green');
-        assert.equal(notes(), 1, 'the same file inside seven days: no second note');
-
-        const [first] = readdirSync(intake);
-        const old = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
-        utimesSync(join(intake, first), old, old);
-        mkdirSync(join(work, 'proposals'), { recursive: true });
-        writeFileSync(join(work, 'proposals', '2026-10-17-snapshots.md'), `memoro: ${scanner} is red on main\n`);
-        await fx.report({ env, tests });
-        assert.equal(notes(), 1, 'a proposal younger than seven days names it');
-
-        rmSync(join(work, 'proposals'), { recursive: true, force: true });
-        const owned = join(work, 'programs', 'memoro', 'proposals');
-        mkdirSync(owned, { recursive: true });
-        writeFileSync(join(owned, '2026-10-18-memoro-snapshots.md'), `${scanner} is red on main\n`);
-        await fx.report({ env, tests });
-        assert.equal(notes(), 1, 'a proposal in a programme\'s proposals/ names it');
-
-        rmSync(owned, { recursive: true, force: true });
-        await fx.report({ env, tests });
-        assert.equal(notes(), 2, 'older than seven days, and nothing else names it: a new note');
-      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
-    });
-
-    it('one red file red on main that the change touches stops it red as today, and writes no note', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner, own], base1111full: [scanner, own] }, touched: [own] });
-      const fx = selecting({ files: [own, scanner], gitAlso });
-      const { work, env, intake } = withWork(fx);
-      const said = [];
-      try {
-        const report = await fx.report({ env, tests, onProgress: (line) => said.push(line) });
-        assert.equal(report.stopped_at, 'red');
-        assert.equal(report.verdict, 'red');
-        assert.equal(report.main_red_files, null);
-        assert.deepEqual(report.main_red.red_on_main, [own, scanner]);
-        assert.match(report.reason, /2 of the red files are red on main too/u);
-        assert.equal(report.pr_tests, null, 'the round stopped before the own tests');
-        assert.ok(said.includes('this change touches a red file that is red on main — red as before'));
-        assert.equal(existsSync(intake), false);
-      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
-    });
-
-    it('green on the base: the change broke it, and nothing is written', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [own] } });
-      const fx = selecting({ files: [own], gitAlso });
-      try {
-        const report = await fx.report({ tests });
-        assert.equal(report.verdict, 'red');
-        assert.deepEqual(report.main_red.red_on_main, []);
-        assert.doesNotMatch(report.reason, /red on main/u);
-        assert.equal(existsSync(join(fx.mcHome, 'selector-misses.jsonl')), false);
-      } finally { fx.cleanup(); }
-    });
-
-    /**
-     * #891 on 2026-10-12 (a role text) and #872 on 2026-10-11 (docs only):
-     * red in the round, green on the base, blamed — and green unchanged. One
-     * quiet run on the base is not enough; the files run alone on the
-     * candidate too.
-     */
-    it('red in the round, green alone on the base and on the candidate: counted green, and the round goes on', async () => {
-      const { gitAlso, tests } = onMain({ redAt: {}, round: [own] });
-      const fx = selecting({ files: [own, scanner], gitAlso });
-      const said = [];
-      try {
-        const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
-        assert.equal(report.verdict, 'green', report.reason);
-        assert.deepEqual(report.green_alone, { files: [own], names: [`a test in ${own}`] });
-        assert.deepEqual(report.under_load_files, [own]);
-        assert.deepEqual(report.head_alone, { red: [] });
-        assert.deepEqual(report.candidate.red, [], 'not counted as the candidate\'s red');
-        assert.ok(said.some((line) => /the red files pass on the base — running them alone on the candidate/u.test(line)));
-        assert.ok(said.includes(`counted green — ${own} passed alone on the base and the candidate`));
-        assert.ok(!said.some((line) => /this change broke them/u.test(line)));
-
-        recordRound(report, { root: fx.mcHome });
-        const line = JSON.parse(readFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), 'utf8').trim().split('\n').at(-1));
-        assert.deepEqual(line.green_alone, { files: [own], names: [`a test in ${own}`] });
-      } finally { fx.cleanup(); }
-    });
-
-    it('more than GREEN_ALONE_MAX files red only under load: the round stops red-under-load, as before', async () => {
-      const many = ['tests/m1.test.js', 'tests/m2.test.js', 'tests/m3.test.js', 'tests/m4.test.js'];
-      const { gitAlso, tests } = onMain({ redAt: {}, round: many });
-      const fx = selecting({ files: [...many, scanner], gitAlso });
-      try {
-        const report = await fx.report({ tests });
+        const report = await fx.report({ suite: async ({ cwd }) => ({ code: 1, tap: located([scanner]).replaceAll('/somewhere/candidate', cwd) }) });
         assert.equal(report.ok, false);
-        assert.equal(report.stopped_at, 'red-under-load');
-        assert.equal(report.verdict, 'stopped');
-        assert.deepEqual(report.under_load_files, many);
-        assert.equal(report.green_alone, undefined);
+        const proof = readMainRed({ root: fx.mcHome, repo: 'repo', baseCommit: report.base.commit, files: [scanner] });
+        assert.equal(proof.cached, true);
+        assert.deepEqual(proof.red_on_main, [scanner]);
       } finally { fx.cleanup(); }
     });
+
+    for (const kind of ['missing', 'stale', 'new failure', 'new diagnostic', 'legacy evidence', 'changed test', 'exact']) {
+      it(`standing main evidence is ${kind}: no base replay or history walk`, async () => {
+        const { gitAlso, tests } = onMain({
+          redAt: { candidate: [scanner] }, touched: kind === 'changed test' ? [scanner] : [], error: onCandidate,
+        });
+        const calls = [];
+        const fx = selecting({ files: [scanner], gitAlso: (args, options) => {
+          calls.push(args); return gitAlso(args, options);
+        } });
+        let runs = 0;
+        try {
+          if (kind !== 'missing') cached(fx, {
+            commit: kind === 'stale' ? 'old-main' : 'base1111full',
+            name: kind === 'new failure' ? 'another failure' : null,
+            // Differs only after the sixth nonblank line: same display lines.
+            error: kind === 'new diagnostic' ? onBase : onCandidate,
+            // Written before the whole diagnostic was kept: never an exemption.
+            legacy: kind === 'legacy evidence',
+          });
+          if (kind === 'new diagnostic') {
+            const [base] = redTests(located([scanner], onBase), [scanner]);
+            const [candidate] = redTests(located([scanner], onCandidate), [scanner]);
+            assert.deepEqual(base.error, candidate.error, 'the display lines alone cannot tell them apart');
+          }
+          const report = await fx.report({ tests: (args) => { runs++; return tests(args); } });
+          assert.equal(report.ok, kind === 'exact', report.reason);
+          assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
+          assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), []);
+          assert.equal(report.timings['main red'], undefined);
+          if (kind === 'exact') assert.deepEqual(report.main_red_files, [scanner]);
+          else assert.equal(report.main_red_files, null);
+        } finally { fx.cleanup(); }
+      });
+    }
 
     it('testLanes: the free cores, between 2 and cores - 1, or MC_TEST_LANES', () => {
       assert.equal(testLanes({ cores: 8, load: 0, env: {} }), 7);
@@ -1926,20 +1823,6 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report({ tests });
         assert.equal(typeof report.load, 'number');
         assert.equal(report.lanes, testLanes({ load: report.load, mode: 'merge' }));
-      } finally { fx.cleanup(); }
-    });
-
-    it('red alone on the candidate too: today\'s red, and the line says the change broke them', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [own] } });
-      const fx = selecting({ files: [own, scanner], gitAlso });
-      const said = [];
-      try {
-        const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
-        assert.equal(report.stopped_at, 'red');
-        assert.equal(report.verdict, 'red');
-        assert.equal(report.reason, `1 test red: a test in ${own}`);
-        assert.deepEqual(report.head_alone, { red: [own] });
-        assert.ok(said.some((line) => /red alone on the candidate too — this change broke them/u.test(line)));
       } finally { fx.cleanup(); }
     });
 
@@ -1979,7 +1862,7 @@ describe('a repository that selects by diff', () => {
         try {
           const report = await fx.report({
             tests, onProgress: (line) => said.push(line),
-            probeMain: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
+            readMainEvidence: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
           });
           assert.equal(report.verdict, 'green', report.reason);
           assert.deepEqual(report.flipped, { files: [scanner], names: [`a test in ${scanner}`] });
@@ -2090,7 +1973,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: () => Promise.resolve({ code: 1, tap: hookTimedOut(scanner) }),
-          probeMain: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
+          readMainEvidence: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
         });
         assert.equal(report.stopped_at, 'red-under-load');
         assert.equal(report.verdict, 'stopped');
@@ -2105,7 +1988,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: () => Promise.resolve({ code: 1, tap: hookTimedOut(scanner, { failing: true }) }),
-          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
         });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.cancelled_files, undefined);
@@ -2135,7 +2018,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner] }) }),
-          probeMain: async (args) => { probed.push(args); return null; },
+          readMainEvidence: async (args) => { probed.push(args); return null; },
         });
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'file-killed');
@@ -2152,7 +2035,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }) }),
-          probeMain: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
+          readMainEvidence: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
         });
         assert.equal(report.stopped_at, 'red');
         assert.equal(report.verdict, 'red');
@@ -2183,14 +2066,17 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: () => Promise.resolve({ code: 1, tap }),
-          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
         });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.candidate.red_files, [own]);
-        assert.deepEqual(report.candidate.red_tests, [
+        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, ...test }) => test), [
           { file: own, name: 's › a', own: 'a', at: `${own}:12:12`, error: ['Expected values to be strictly equal:', '1 !== 2'] },
           { file: own, name: 's › b', own: 'b', at: `${own}:22:12`, error: ['boom'] },
         ], 'the leaves, not the suite failing because of them');
+        const [a, b] = report.candidate.red_tests.map((test) => test.diagnostic);
+        assert.match(a, /^[0-9a-f]{64}$/u, 'each red test carries its whole diagnostic');
+        assert.notEqual(a, b);
       } finally { fx.cleanup(); }
     });
 
@@ -2219,7 +2105,7 @@ describe('a repository that selects by diff', () => {
       try {
         lastRound(fx, { prs: [7], ok: false, stopped_at: 'red', red_files: [own] });
         const report = await fx.report({
-          tests, onProgress: (line) => said.push(line), probeMain: async () => ({ red_on_main: [], breaks: [] }),
+          tests, onProgress: (line) => said.push(line), readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
         });
         assert.equal(report.stopped_at, 'red');
         assert.equal(report.verdict, 'red');
@@ -2598,7 +2484,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({
           tests: ({ files: ran }) => Promise.resolve({ code: 1, tap: tapWith(['a moved test'], { tests: ran.length }) }),
-          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
         });
         assert.equal(report.ok, false);
         assert.equal(report.reused.mode, 'delta');
@@ -3143,6 +3029,53 @@ describe('the round ceiling holds in every phase, whatever child is stuck', () =
       } finally { watcher.close(); fx.cleanup(); }
     });
   }
+
+  it('a timeout after the selected tests finish names the command phase, not completed files', async () => {
+    const fx = fixture();
+    const ceiling = ceilingAtTheStuckChild();
+    try {
+      declare(fx, { select: selector([{ packageScript: 'lint:x' }]) });
+      const report = await fx.run({
+        tests: (options) => {
+          const file = join(fx.root, 'completed-times.jsonl');
+          options.times.track(file);
+          writeFileSync(file, [
+            { file: join(options.cwd, 'tests/a.test.js'), started: true },
+            { file: join(options.cwd, 'tests/a.test.js'), done: true, ms: 2400 },
+          ].map(line => JSON.stringify(line)).join('\n'));
+          options.times.complete(file);
+          rmSync(file);
+          return fx.tests(options);
+        },
+        shell: () => { ceiling.reached(); return new Promise(() => {}); },
+        armCeiling: ceiling.armCeiling,
+      });
+      assert.equal(report.ok, false);
+      assert.deepEqual(report.red_files, []);
+      assert.deepEqual(report.slowest_files, [{ file: 'tests/a.test.js', seconds: 2.4 }]);
+      assert.match(report.timeout_phase, /selected gates/u);
+      assert.doesNotMatch(report.reason, /unfinished: tests\/a/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a timeout in own tests does not relabel the completed selection unfinished', async () => {
+    const fx = fixture({ changed: ['tests/own.test.js'] });
+    const ceiling = ceilingAtTheStuckChild();
+    try {
+      declare(fx, { select: selector() });
+      const report = await fx.run({
+        tests: (options) => {
+          if (!options.files.includes('tests/own.test.js')) return fx.tests(options);
+          ceiling.reached(); return new Promise(() => {});
+        },
+        armCeiling: ceiling.armCeiling,
+      });
+      assert.equal(report.ok, false);
+      assert.deepEqual(report.red_files, ['tests/own.test.js']);
+      assert.doesNotMatch(report.reason, /unfinished: tests\/a/u);
+      assert.equal(report.timeout_phase, 'pr tests');
+    } finally { fx.cleanup(); }
+  });
 
   it('a whole-suite round names no file it did not hear of, and says so', async () => {
     const fx = fixture({ changed: ['tests/a.test.js'] });

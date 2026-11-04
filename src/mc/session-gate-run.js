@@ -12,7 +12,7 @@ import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { readTestTimes, runProgress, sessionFiles, touchedTests } from './test-times.js';
+import { readTestTimes, progressTracker, sessionFiles, touchedTests } from './test-times.js';
 import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
@@ -34,13 +34,15 @@ export async function runSessionGate(request, {
     const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
     const timeoutMs = Number(request.round_timeout_ms) > 0 ? Number(request.round_timeout_ms) : 60 * 60_000;
     // The runs' times files, tracked as the runs start (`runProgress`).
-    const tracked = [];
+    const tracker = progressTracker();
+    let phase = 'selection';
+    let pendingFiles = request.files || [];
     let timedOut = false;
     let progress = { unfinished: [], finished: [] };
     const timeout = setTimeout(() => {
       timedOut = true;
       // Read before the abort: the run's files are gone once its process closes.
-      progress = runProgress(tracked);
+      progress = tracker.read();
       controller.abort(new Error(`repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s`));
     }, timeoutMs);
     timeout.unref?.();
@@ -52,22 +54,23 @@ export async function runSessionGate(request, {
         else signal.addEventListener('abort', () => resolve(null), { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, signal, track: (file) => tracked.push(file) }), cut,
+        executeSessionGate(request, { ...deps, signal, track: tracker.track, complete: tracker.complete,
+          onPhase: (next, files = []) => { phase = next; pendingFiles = files; } }), cut,
       ]);
       if (!timedOut) return result ?? { ok: false, code: 1, stopped_at: 'interrupted' };
       // What did not finish is the red, and is named; the slowest files that did
       // finish are for the reader. Asked files that never started are unfinished too.
       const prefix = `${request.cwd}/`;
       const rel = (file) => (file.startsWith(prefix) ? file.slice(prefix.length) : file);
-      const asked = result?.files || request.files || [];
+      const asked = pendingFiles;
       const done = new Set(progress.finished.map((one) => rel(one.file)));
       const unfinished = [...new Set([...progress.unfinished.map(rel), ...asked.filter((file) => !done.has(file))])];
       const slowest = progress.finished.slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));
       const reached = slowest.length ? `; slowest finished: ${slowest.map((one) => `${one.file} (${one.seconds} s)`).join(', ')}` : '';
       const named = unfinished.length ? `; unfinished: ${unfinished.join(', ')}` : '';
-      const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s${named}${reached}`;
-      (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling${named}${reached}\n`);
-      return { ...result, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest };
+      const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s; phase: ${phase}${named}${reached}`;
+      (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}\n`);
+      return { ...result, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest, timeout_phase: phase };
     } finally { clearTimeout(timeout); }
   };
   if (!request.measurement) return execute();
@@ -100,7 +103,7 @@ export async function runSessionGate(request, {
 
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
-  write = (text) => process.stdout.write(text), signal, track = null,
+  write = (text) => process.stdout.write(text), signal, track = null, complete = null, onPhase = () => {},
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
@@ -128,12 +131,14 @@ async function executeSessionGate(request, {
   let testResult = null;
   let timed = [];
   if (files.length) {
-    const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track } : undefined });
+    onPhase('tests', files);
+    const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
     write(`${run.tap || ''}\n${run.stderr || ''}`);
     // The tests this change touches and how long node says each took: information, not a verdict.
     timed = touchedTests(run.tests || [], request.timed || {});
     details = redTests(run.tap, files, { cwd });
     const totals = tapTotals(run.tap);
+    if (totals.finished && !run.aborted && !run.timedOut && !run.error) onPhase('command gates');
     for (const key of ['tests', 'pass', 'fail', 'skipped']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
     testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted, totals };
     if (run.error || run.timedOut || run.aborted || !totals.finished || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
@@ -150,6 +155,7 @@ async function executeSessionGate(request, {
   const commands = [];
   for (const command of selection.commands || []) {
     if (signal?.aborted) { code = 1; break; }
+    onPhase(`command ${command.packageScript}`);
     const invocation = `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`;
     const result = await shell(invocation, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
     write(`${result.stdout || ''}${result.stderr || ''}`);
