@@ -10,8 +10,16 @@ import { collectDashboard, renderDashboard } from '../../src/mc/admin-dashboard.
 
 const fixed = () => new Date('2026-11-04T12:00:00.000Z');
 function response(body, status = 200) { return { ok: status >= 200 && status < 300, status, text: async () => typeof body === 'string' ? body : JSON.stringify(body) }; }
+function sourceFor(url, data) { return url.endsWith('/health') ? data.health : url.endsWith('/usage-summary') ? data.usage : url.endsWith('/costs/summary') ? data.costs : data.operations; }
 function fixtures() {
   return {
+    usage: { ok:true, generatedAt:'2026-11-04T11:59:00Z', timezone:'UTC', activityBasis:'active_session_last_seen',
+      windows:{yesterdayStart:'2026-11-03T00:00:00Z',todayStart:'2026-11-04T00:00:00Z',sevenDaysStart:'2026-10-28T12:00:00Z',end:'2026-11-04T12:00:00Z'},
+      groups:['regular','test','review','admin','otherManaged'].map(kind => ({kind,total:2,activeYesterday:0,activeLastSevenDays:1,userId:123456789})) },
+    costs: {ok:true, generatedAt:'2026-11-04T11:59:00Z',month:'2026-11',cards:{
+      thisMonth:{usd:12,source:'actual',scope:'external_vendor',vendorRows:4,vendorDays:3,throughDate:'2026-11-03'},
+      aiThisMonth:{usd:5,source:'partial',scope:'ai_rollup'},today:{usd:0,source:'estimate'},
+      projected:{usd:999,secret:'excluded-cost-sentinel'} }},
     health: { ok:true, status:'degraded', checkedAt:'2026-11-04T11:59:00Z', services:{ secrets:{status:'not_configured', present:0,total:2}, d1:{status:'healthy',latency:0}, queues:{status:'healthy',note:'Binding available'}, universeVectors:{status:'healthy',vectorCount:0} }, secret:'health-secret' },
     operations: { ok:true, generatedAt:'2026-11-04T11:58:00Z', warnings:['warn_code'], operations:[
       { key:'z.ok',label:'Okay',state:'success',conclusion:{level:'ok',reasonCodes:[]},counts:{jobs:0,requests:null,userId:123456789,supportTicketId:654321,secret:'ops-secret'},latestRun:{startedAt:'2026-11-04T11:00:00Z',finishedAt:'2026-11-04T11:01:00Z'},payload:{password:'payload-secret'} },
@@ -39,12 +47,12 @@ test('entry validates before delegation, supports offline help, and sends only f
 
 test('collector requests only fixed bounded GET destinations and produces safe text and JSON projection', async () => {
   const data=fixtures(), calls=[];
-  const fetch=async (url,options)=>{calls.push([url,options]); return response(url.endsWith('/health')?data.health:data.operations);};
+  const fetch=async (url,options)=>{calls.push([url,options]); return response(sourceFor(url,data));};
   const {model,exitCode}=await collectDashboard({token:'test-token',fetch,clock:fixed});
   assert.equal(exitCode,0);
-  assert.deepEqual(calls.map(c=>c[0]).sort(),['https://meetmemoro.app/admin/health','https://meetmemoro.app/admin/operations/status']);
+  assert.deepEqual(calls.map(c=>c[0]).sort(),['https://meetmemoro.app/admin/costs/summary','https://meetmemoro.app/admin/health','https://meetmemoro.app/admin/operations/status','https://meetmemoro.app/admin/usage-summary']);
   for(const [,o] of calls){ assert.equal(o.method,'GET'); assert.equal(o.redirect,'error'); assert.equal(o.cache,'no-store'); assert.equal(o.headers['Cache-Control'],'no-store'); assert.equal(o.headers['X-Operator-Purpose'],'maintenance'); assert.equal(o.headers.Authorization,'Bearer test-token'); assert.ok(o.signal); }
-  assert.equal(model.schemaVersion,1); assert.equal(model.sources.health.ageSeconds,60); assert.equal(model.sources.operations.ageSeconds,120);
+  assert.equal(model.schemaVersion,2); assert.equal(model.sources.health.ageSeconds,60); assert.equal(model.sources.operations.ageSeconds,120);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='d1').latency,0);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='universeVectors').counts.vectorCount,0);
   assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.jobs,0);
@@ -60,7 +68,7 @@ test('collector requests only fixed bounded GET destinations and produces safe t
   assert.match(text,/universeVectors: healthy; vectorCount=0/);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='queues').status,'healthy');
   assert.match(text,/queues: healthy; Binding available \(binding availability only; not delivery health or backlog\)/);
-  assert.ok(!text.includes('\u001b')); assert.match(text,/Stored incident aggregates/); assert.match(text,/not delivery health or backlog/); assert.match(text,/not connected yet/); assert.match(text,/incidents acknowledged: 0 groups \/ 0 occurrences/); assert.match(text,/a.watch warning op_warn/);
+  assert.ok(!text.includes('\u001b')); assert.match(text,/Stored incident aggregates/); assert.match(text,/not delivery health or backlog/); assert.match(text,/support detail are not connected yet/); assert.match(text,/incidents acknowledged: 0 groups \/ 0 occurrences/); assert.match(text,/a.watch warning op_warn/);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='secrets').status,'not_configured');
 });
 
@@ -99,7 +107,7 @@ test('strict response limit, list bounds, unknown timestamps and future source t
   data.operations.generatedAt = '2026-11-04T12:00:02Z';
   result = await collectDashboard({token:'t', clock:() => current, fetch:async url => {
     current = new Date('2026-11-04T12:00:03Z');
-    return response(url.endsWith('/health') ? data.health : data.operations);
+    return response(sourceFor(url,data));
   }});
   assert.equal(result.model.fetchedAt, '2026-11-04T12:00:03.000Z');
   assert.equal(result.model.sources.health.ageSeconds, 2);
@@ -128,4 +136,50 @@ test('package maps both binaries and runner failure cannot expose error details'
     assert.match(result.stdout,/Usage: mc-admin/);
     assert.equal(result.stderr,'');
   } finally { rmSync(scratch,{recursive:true,force:true}); }
+});
+
+test('usage and costs retain periods, account groups and quality without sensitive or legacy detail', async () => {
+  const data = fixtures();
+  const { model, exitCode } = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(exitCode,0);
+  assert.deepEqual(model.sources.usage.data.groups, ['regular','test','review','admin','otherManaged'].map(kind=>({kind,total:2,activeYesterday:0,activeLastSevenDays:1})));
+  assert.deepEqual(model.sources.usage.data.windows, data.usage.windows);
+  assert.deepEqual(model.sources.costs.data, {month:'2026-11',vendor:{usd:12,source:'actual',throughDate:'2026-11-03',days:3},aiMonth:{usd:5,source:'partial'},aiToday:{usd:0,source:'estimate'}});
+  const text = renderDashboard(model), json = JSON.stringify(model);
+  assert.match(text,/regular: 2 accounts; active yesterday 0; active 7d 1/);
+  assert.match(text,/External vendors 2026-11 \(UTC\): USD 12.00; actual; recorded through 2026-11-03; 3 days represented/);
+  assert.match(text,/AI metered 2026-11 to date \(UTC\): USD 5.00; partial/);
+  assert.match(text,/AI metered today \(UTC\): USD 0.00; estimate/);
+  assert.match(text,/overlaps vendor costs; do not add/);
+  assert.doesNotMatch(text+json,/excluded-cost-sentinel|123456789|userId|projected|999/);
+});
+
+test('missing vendor imports remain unknown and invalid or unavailable new sources preserve operations', async () => {
+  const data = fixtures();
+  data.costs.cards.thisMonth = {...data.costs.cards.thisMonth,usd:0,source:'estimate',vendorRows:0,vendorDays:0,throughDate:null};
+  let result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(result.exitCode,0);
+  assert.equal(result.model.sources.costs.data.vendor.usd,null);
+  assert.match(renderDashboard(result.model),/External vendors 2026-11 \(UTC\): unknown; unknown/);
+  assert.match(renderDashboard(result.model),/Vendor cost data unavailable/);
+  data.costs = fixtures().costs;
+  data.costs.cards.thisMonth.usd = 0;
+  result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(result.model.sources.costs.data.vendor.usd,0);
+  for (const name of ['usage','costs']) {
+    for (const failure of ['http','shape']) {
+      result = await collectDashboard({token:'t',clock:fixed,fetch:async url=> {
+        if (url.endsWith(name === 'usage' ? '/usage-summary' : '/costs/summary')) return failure === 'http' ? response({error:'private provider error'},403) : response({ok:true});
+        return response(sourceFor(url,data));
+      }});
+      assert.equal(result.exitCode,1);
+      assert.equal(result.model.sources[name].availability,'unavailable');
+      assert.equal(result.model.sources[name].data,null);
+      assert.equal(result.model.sources.operations.availability,'available');
+      assert.doesNotMatch(JSON.stringify(result.model),/private provider error/);
+    }
+  }
+  data.usage.groups[0].kind = 'admin';
+  result = await collectDashboard({token:'t',clock:fixed,fetch:async url=>response(sourceFor(url,data))});
+  assert.equal(result.model.sources.usage.errorCode,'invalid_shape');
 });

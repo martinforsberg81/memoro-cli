@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { runScriptWithKeys } from './mc/keys-run.js';
 
 const CHILD = fileURLToPath(new URL('../scripts/admin-dashboard.js', import.meta.url));
-export const HELP = `mc-admin — read-only Memoro production operations snapshot\n\nUsage: mc-admin [--json]\n\nReads service health and operational aggregates once; rerun to refresh. No writes, polling, or interactive session. Credentials are supplied only to the fixed trusted child by mc keys run.\n\nExit codes: 0 both sources accepted (warnings may be present); 1 usage, missing credentials, refused headless access, runner failure, or unavailable source.`;
+export const HELP = `mc-admin — read-only Memoro production admin snapshot\n\nUsage: mc-admin [--json]\n\nReads service health, operations, account usage and costs once; rerun to refresh. No writes, polling, or interactive session. Credentials are supplied only to the fixed trusted child by mc keys run.\n\nExit codes: 0 all four sources accepted (warnings may be present); 1 usage, missing credentials, refused headless access, runner failure, or unavailable source.`;
 
 export async function run(argv = process.argv.slice(2), deps = {}) {
   const stdout = deps.stdout || process.stdout;
