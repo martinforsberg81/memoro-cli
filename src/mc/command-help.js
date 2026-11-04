@@ -442,8 +442,8 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   programs: [
     "usage — mc programs list [--json]   every programme, one line each: active or dormant, its\n",
-    "                                    repositories, projects with their states, goals and open\n",
-    "                                    plan sessions\n",
+    "                                    repositories, projects with their states, goals, proposals\n",
+    "                                    and open plan sessions\n",
     "\n",
     "A programme is active with at least one project or goal, of any status; every other is dormant.\n",
     "The page draws the active ones and one line for the dormant; --json prints this list as data.\n",
