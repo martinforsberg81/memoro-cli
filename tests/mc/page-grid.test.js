@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import {
   attachPrs, goalsOf, intakeSection, mergesSection, programmesSection, prsSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
+import { devSection } from '../../src/mc/dev-pool.js';
 import { GRID_ROOMY, clipCell, gridColumns, prText } from '../../src/mc/page-grid.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -75,7 +76,16 @@ function threeRows({ long = false } = {}) {
   const merges = mergesSection({ queued, prs: open, now: NOW, merger: { pid: 7 } });
   const pulls = prsSection({ prs: open, merges, fetched: NOW.toISOString(), now: NOW });
   attachPrs({ programmes, runner, pulls });
-  return pageData({ programmes, runner, merges });
+  // One dev server, leased to the lane's session: DEV's row in the same grid.
+  const dev = devSection({
+    servers: [{
+      instance_id: 'dev-8920', service: 'memoro-measure', worktree_path: `/Users/martin/mc/programs/mc/goals/${laneGoal}/memoro-cli`,
+      pid: 7, url: 'http://127.0.0.1:8920', registered_at: '2026-11-03T11:00:00Z', last_used_at: '2026-11-03T11:58:00Z',
+      holder: { kind: 'build', owner: 'mc', name: `mc/${laneGoal}`, pid: 7 },
+    }],
+    now: NOW, alive: () => true, branchOf: () => `goal/${laneGoal}`,
+  });
+  return pageData({ programmes, runner, merges, dev });
 }
 
 /** The three rows, found by their pull request: goal, lane, merge. */
@@ -88,7 +98,7 @@ function rowsOf(lines) {
 }
 
 describe('the grid', () => {
-  it('draws a goal, a lane and a merge with the repository and the PR at the same x, at 80, 100 and 140', () => {
+  it('draws a goal, a lane, a merge and a dev server with the repository and the PR at the same x, at 80, 100 and 140', () => {
     for (const columns of [80, 100, 140]) {
       const col = gridColumns(columns);
       const rows = rowsOf(renderPageLines(threeRows(), { columns, now: NOW }));
@@ -102,6 +112,14 @@ describe('the grid', () => {
         assert.equal(col.repo.width, 0);
         for (const line of rows) assert.doesNotMatch(line, / memoro-cli /u, `${columns}: ${line}`);
       }
+      // DEV's row: its repository where the others' stands, its port where their PR does.
+      const devRow = renderPageLines(threeRows(), { columns, now: NOW }).map(plain).find((line) => line.includes(':8920'));
+      assert.ok(devRow, `a DEV row at ${columns}`);
+      assert.equal(devRow.search(/:8920/u), col.pr.x, `${columns}: the port in the PR column\n${devRow}`);
+      if (columns >= GRID_ROOMY) assert.equal(devRow.indexOf(' memoro-cli ') + 1, col.repo.x, `${columns}: the repo column\n${devRow}`);
+      else assert.doesNotMatch(devRow, / memoro-cli /u);
+      assert.deepEqual([devRow.slice(col.kind.x, col.kind.x + col.kind.width).trim(), devRow.slice(col.state.x, col.state.x + col.state.width).trim(),
+        devRow.slice(col.progress.x, col.progress.x + col.progress.width).trim()], ['SLOT', 'leased', '2 min']);
       // The same kind of fact in the same column: the state and the progress too.
       const cells = rows.map((line) => [line.slice(col.kind.x, col.kind.x + col.kind.width).trim(),
         line.slice(col.state.x, col.state.x + col.state.width).trim(),

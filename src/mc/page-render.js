@@ -697,9 +697,14 @@ function elapsedTone(step) {
 /** How many queued pull requests a repository row names before counting the rest. */
 export const QUEUED_DRAWN = 6;
 
-/** `~/…` for a path under the home directory: the tail has no room for `/Users/<name>`. */
-function homePath(path) {
-  return String(path || '').replace(/^\/Users\/[^/]+/u, '~').replace(/^\/home\/[^/]+/u, '~');
+/**
+ * A worktree as the tail has room for it: `~/…` under the home directory, and
+ * a programme's goal worktree from the programme on (`mc/goals/no-work/memoro`).
+ */
+function worktreeWords(path) {
+  return String(path || '')
+    .replace(/^\/(?:Users|home)\/[^/]+/u, '~')
+    .replace(/^~\/mc\/programs\//u, '');
 }
 
 /**
@@ -722,8 +727,9 @@ function devServerLine(c, wide, server) {
     pr: { text: server.port ? `:${server.port}` : '', styles: ['grey'] },
     tail: [
       server.holder_gone ? { text: 'holder gone', styles: ['yellow'] } : null,
-      server.worktree ? { text: homePath(server.worktree), styles: ['grey'] } : null,
+      // The branch before the worktree: it is the shorter, and the worktree gives way first.
       server.branch ? { text: server.branch, styles: ['grey'] } : null,
+      server.worktree ? { text: worktreeWords(server.worktree), styles: ['grey'] } : null,
     ],
   });
 }
