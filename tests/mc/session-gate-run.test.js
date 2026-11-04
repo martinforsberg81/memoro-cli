@@ -150,6 +150,98 @@ it('the automatic gate runs affected tests and command gates, including a projec
   assert.equal(result.ok, false);
 });
 
+it('starts the serial command sequence beside tests without waiting additively', async () => {
+  const started = [];
+  let releaseCommand;
+  let releaseTestsAfterCommand;
+  let testFinished = false;
+  let markTestsFinished;
+  let releaseTests;
+  const commandStarted = new Promise((resolve) => { releaseCommand = resolve; });
+  const commandFinished = new Promise((resolve) => { releaseTestsAfterCommand = resolve; });
+  const testStarted = new Promise((resolve) => { releaseTests = resolve; });
+  const testsDone = new Promise((resolve) => { markTestsFinished = resolve; });
+  const bounded = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('not-started'), 300))]);
+  const result = await runSessionGate({ cwd: '/work', select: 'selector', base: 'frozen-base' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [
+      { packageScript: 'first', passBaseRef: true }, { packageScript: 'second' },
+    ] }),
+    tests: async () => {
+      started.push('tests');
+      releaseTests();
+      assert.notEqual(await bounded(commandStarted), 'not-started', 'command sequence starts before tests complete');
+      assert.notEqual(await bounded(commandFinished), 'not-started', 'command and tests both remain active until released');
+      testFinished = true;
+      markTestsFinished();
+      return { tap: GREEN, code: 0 };
+    },
+    shell: async (invocation) => {
+      started.push(invocation);
+      if (invocation.includes('first')) {
+        releaseCommand();
+        assert.equal(await bounded(testStarted), undefined, 'test sequence has started');
+        assert.equal(testFinished, false);
+        releaseTestsAfterCommand();
+        return { status: 0 };
+      }
+      assert.notEqual(await bounded(testsDone), 'not-started');
+      assert.equal(testFinished, true);
+      return { status: 0 };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(started, ['tests', "npm run 'first' -- --base-ref 'frozen-base'", "npm run 'second'"]);
+  assert.deepEqual(result.execution.commands.map((entry) => entry.exit), [0, 0]);
+});
+
+it('both concurrent halves contribute failures and thrown failures settle the collaborator', async () => {
+  const calls = [];
+  const failed = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+    tests: async () => { calls.push('tests'); return { tap: '# tests 1\\n# pass 0\\n# fail 1\\n', code: 1 }; },
+    shell: async () => { calls.push('command'); return { status: 2 }; },
+  });
+  assert.equal(failed.ok, false);
+  assert.deepEqual(calls, ['tests', 'command']);
+  assert.equal(failed.execution.tests.exit, 1);
+  assert.equal(failed.execution.commands[0].exit, 2);
+
+  let commandSettled = false;
+  const thrownTest = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+    tests: async () => { throw new Error('test half threw'); },
+    shell: async () => { commandSettled = true; return { status: 0 }; },
+  });
+  assert.equal(commandSettled, true);
+  assert.equal(thrownTest.ok, false);
+  assert.match(thrownTest.execution.tests.error, /test half threw/u);
+
+  const thrownCommand = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+    tests: async () => ({ tap: GREEN, code: 0 }),
+    shell: async () => { throw new Error('command half threw'); },
+  });
+  assert.equal(thrownCommand.ok, false);
+  assert.match(thrownCommand.execution.commands[0].error, /command half threw/u);
+});
+
+it('an abort stops the serial sequence before the next selected command', async () => {
+  const controller = new AbortController();
+  const invoked = [];
+  const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {}, signal: controller.signal,
+    select: async () => ({ ok: true, files: [], commands: [{ packageScript: 'first' }, { packageScript: 'second' }] }),
+    shell: async (command) => { invoked.push(command); controller.abort(); return { status: 0 }; },
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(invoked, ["npm run 'first'"]);
+  assert.deepEqual(result.execution.commands.map((entry) => entry.state), ['completed', 'pending']);
+});
+
 it('an empty, failed or invalid selection never reports green', async () => {
   for (const selected of [{ ok: true, files: [] }, { ok: false, reason: 'unmapped path' }, { ok: true, files: ['../outside.test.js'] }]) {
     const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
@@ -268,5 +360,7 @@ it('a timeout in a command retains completed reporter evidence without naming th
     assert.deepEqual(result.red_files, []);
     assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 1.5 }]);
     assert.equal(result.timeout_phase, 'command lint:x');
+    assert.deepEqual(result.running_commands, ["npm run 'lint:x'"]);
+    assert.equal(result.execution.commands[0].state, 'running');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
