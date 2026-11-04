@@ -161,8 +161,8 @@ describe('which tests a change reaches', () => {
     });
     try {
       const { files, why } = fx.select();
-      assert.equal(why.reason, 'full-suite');
       assert.deepEqual(files, ['tests/a.test.js', 'tests/b.test.js']);
+      assert.equal(why.reason, 'full-suite');
       assert.deepEqual(why.unexplained, ['package.json']);
     } finally { fx.cleanup(); }
   });
@@ -281,8 +281,8 @@ describe('which tests a change reaches', () => {
     });
     try {
       const { files, why } = fx.select();
-      assert.equal(why.reason, 'full-suite');
       assert.deepEqual(files, ['tests/a.test.js', 'tests/b.test.js']);
+      assert.equal(why.reason, 'full-suite');
     } finally { fx.cleanup(); }
   });
 
