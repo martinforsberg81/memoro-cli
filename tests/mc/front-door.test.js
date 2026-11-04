@@ -95,10 +95,12 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
       assert.match(page.billing, /claude \? plan · codex \? plan/u);
+      // No dev server on this machine: DEV counts none, and the page says `none running`.
+      assert.deepEqual([page.dev.running, page.dev.servers, page.dev.queue], [0, [], []]);
       // No goal here, so there are no programme rows, and both folders are
       // strays — mc's own brief/ is not one. There is no WORK data anywhere.
       assert.deepEqual(page.programmes.programmes, []);
