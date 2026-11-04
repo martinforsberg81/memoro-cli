@@ -35,7 +35,7 @@ and always carries `schema`, `version` and `at`. Its keys:
 - `leases` — `[{ pid, run, repo, since }]`, the live leases at the last write;
 - `started_by_mc` — true once `ensure` started the runtime itself;
 - `last_release_at` — the last release, an ISO time or null;
-- `inventory` and `idle_stop` — written by later steps.
+- `inventory` and `idle_stop` — written by runtime inspection and idle-stop handling.
 
 A state file that cannot be written is not an error: `writeState` returns
 null.

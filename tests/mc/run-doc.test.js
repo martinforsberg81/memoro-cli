@@ -71,10 +71,10 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
   });
 
-  it('states the tool, model, effort and advisor a session gets when its plan names none', () => {
+  it('states the shared fallback settings separately from a goal catalog route', () => {
     assert.match(DOC, new RegExp(`\\*\\*\`tool:\`\\*\\* — \`${DEFAULT_TOOL}\` by default`, 'u'));
     const { step } = SESSION_DEFAULTS;
-    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${step.model}\` by default for a step`, 'u'));
+    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${step.model}\` by default in shared settings`, 'u'));
     // The table under *The session*, one row per kind, as the code has them.
     const cell = (value) => (value ? `\`${value}\`` : 'none');
     for (const [kind, d] of Object.entries(SESSION_DEFAULTS)) {

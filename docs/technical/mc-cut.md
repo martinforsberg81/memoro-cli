@@ -3,12 +3,12 @@
 `mc` was one page and a dozen verbs sitting on top of a different product: a
 session manager with a registry, a broker, a PTY host, managed providers,
 cloud runtimes and a capability dispatcher. Measured 2026-08-29, 71 % of
-`src/` was unreachable from anything the page or its verbs did. This project
+`src/` was unreachable from anything the page or its verbs did. The cut
 removed it.
 
 Not by grepping for what looked legacy. The rule was **the verb goes first,
 then the code**: a file could only be deleted because a verb had been taken
-off a router in an earlier step and a static reachability run showed nothing
+off a router in an earlier change and a static reachability run showed nothing
 else reached it. That is why the cut is six pull requests in an order and not
 one act of judgement.
 
@@ -26,16 +26,10 @@ one act of judgement.
 
 ## The surface
 
-Two routers, thirteen verbs, and the page.
-
-- **`src/mc-cli.js`** — bare `mc` is the page, and its `modules` map is
-  `status`, `work`, `repo`, `merge`, `test`, `worker`, `brief`, `helper`,
-  `plan`, `run`, `roles`, `log`. Twelve. Anything that used to be a verb and
-  is now part of the page answers through `moved()` — one line saying where it
-  went, never a second list beside the first one.
-- **`src/bin-mc.js`** — `CAPABILITIES` is `vault`, and nothing else.
-  `mc-cli.js` falls through to it, so `mc vault` is reached the way every
-  other verb is.
+The current router is `src/mc-verbs.js`, called by `src/mc-cli.js`; bare
+`mc` reaches the page and `VERB_MODULES` maps each current verb to its
+handler. `src/bin-mc.js` retains the vault capability. The measurements
+below describe the 2026-09-03 cut, not today's module counts or command list.
 
 Fourteen verbs went off those two tables on 2026-09-03: `setup`,
 `install-shell`, `auth`, `tool-auth`, `connections`, `github`,
@@ -72,13 +66,13 @@ By directory, as it stands:
 | `src/capabilities/github/` | 1 | 732 |
 | `src/` (root) | 4 | 417 |
 
-`src/cli/` is two files: `vault.js`, the vault verb, and `status.js`, a
-42-line shim that prints where the page went and hands a named project to
-`mc/commands/status-project.js`. Everything else that lived there is gone.
+The vault's command frontend remains `src/cli/vault.js`. Status is routed
+to the page hint in `src/mc-verbs.js`; one unit of work is read through
+`mc goal show`, not a separate status handler.
 
 ## The three things nothing reaches, and why they are still here
 
-**Keeping `mc vault` cost 9 451 lines of the world this project removed.**
+**Keeping `mc vault` cost 9 451 lines of the world this change removed.**
 The contract kept `src/vault/`, `src/cli/vault.js` and `mc vault` whatever
 reachability said. What it did not say is that
 `src/vault/credential-domain/local-claude.js` and `local-codex.js` — 3 647
@@ -88,17 +82,17 @@ journals at module top level. Deleting those would have left the two files
 the contract keeps unable to load at all. Roughly two and a half times the
 contract's own estimate, and it is a **preserved carcass rather than a
 preserved capability**: two of the path lists inside `local-codex.js` name
-files this project deleted — `MANAGED_GITHUB_RUNTIME_PATHS` names
+files this change deleted — `MANAGED_GITHUB_RUNTIME_PATHS` names
 `src/capabilities/github/github-session.js`, `github-shim.js` and
 `github-write-client.js`, and the launch path `realpathSync`s
 `src/adapters/artifacts/codex.js`. None of those three directories exists any
 more. Read, not run: that code path throws before it does anything. The
 contract kept the files; the capability was already gone.
 
-**`memoro` and `memoro-cli` were the one decision this project left standing,
+**`memoro` and `memoro-cli` were the one decision this change left standing,
 and ruling 24 made it.** They were `package.json`'s other two `bin` entries,
-reaching 20 files no mc verb touched, and this project's contract forbade
-deleting them because no step had removed a `memoro` verb. Ruling 24
+reaching 20 files no mc verb touched, and this change's contract forbade
+deleting them because no prior change had removed a `memoro` verb. Ruling 24
 (`docs/project/mc/rulings.md` § 24) decided that memoro holds nothing about
 mc, so nothing here reports sessions into it; `memoro-client-cut` removed
 both binaries, `main`, `src/commands/` and the 22 files only they reached on
@@ -109,7 +103,7 @@ both binaries, `main`, `src/commands/` and the 22 files only they reached on
 `src/vault/engine/c1-claude-lease.js` spawns `runtime/broker/c1-child.js` by
 path and pins its SHA-256 in its own source, so the child stays.
 `c1-source-closure.js`'s pinned digests for `package.json` and
-`src/mc/paths.js` already did not match `main` before this project touched
+`src/mc/paths.js` already did not match `main` before this change touched
 anything — `verifyInstalledC1SourceClosure()` was returning failure, which is
 why `tests/runtime/broker/c1-source-closure.test.js` has been red on `main`.
 
@@ -175,7 +169,7 @@ router, and the files spawned by path.
 
 ## The measurement
 
-[`scripts/reach.mjs`](../../scripts/reach.mjs) is the evidence this project
+[`scripts/reach.mjs`](../../scripts/reach.mjs) is the evidence this change
 was built on, and it is kept as a guard rather than retired with it:
 
 ```sh
@@ -187,7 +181,7 @@ It seeds the graph **by hand from the surviving router entries**, not by
 parsing the tables, and that is deliberate: while the tables still held the
 verbs being cut, seeding from them reported the whole session manager as
 live. The last row is the one to read — `NOT reached — 0% of src/` is the
-state this project leaves behind, and any number above zero is either new
+state this change leaves behind, and any number above zero is either new
 code nobody wired up yet or a seed the script is missing.
 
 **It is not in `npm test`, on purpose.** A file added in the middle of a
@@ -199,7 +193,7 @@ looks dead.
 ## What is still untrue
 
 Named here rather than left to be rediscovered. None of it is a consequence
-of a step going wrong; all of it is documentation and tooling that outlived
+of a build going wrong; all of it is documentation and tooling that outlived
 its subject.
 
 - **`README.md` describes the deleted product.** Its command table still
@@ -211,13 +205,13 @@ its subject.
 - **`scripts/mc-release-smoke.js` is a smoke test of a product that is
   gone** — it drives `mc auth status`, `mc tool-switch`, `mc new`,
   `mc resume` and `mc fanout` — and `npm run smoke:mc` still points at it.
-  Nothing this project deleted broke it; it was already dead.
+  Nothing this change deleted broke it; it was already dead.
 Not on that list, because the cut fixed it: **`npm test` is green.** Measured
 on the close-out branch, 2026-09-03 — 1 534 tests, 1 525 passing, 9 skipped,
 0 failing, 64 s. The suite was ~2 100 tests and carried a standing red set
-before this project, and the six files still failing after step 4 were tests
+before this change, and the six files still failing after change 4 were tests
 of verbs that had left the router and of a C1 source closure whose pinned
-digests no longer matched `main`; they went with step 5. Ruling `mc-test-1`
+digests no longer matched `main`; they went with change 5. Ruling `mc-test-1`
 still stands on the cause of the load-flakiness — this repository runs
 `node --test` with no `--test-concurrency` cap — but there is no standing red
 set left to attribute to it. One run is evidence of one run; the gate is the
@@ -225,7 +219,7 @@ measurement.
 
 ## What it took
 
-| step | PR |
+| change | PR |
 |---|---|
 | 1 — the handoff concept | [#538](https://github.com/martinforsberg81/memoro-cli/pull/538) |
 | 2 — the inbox channel | [#539](https://github.com/martinforsberg81/memoro-cli/pull/539) |
@@ -234,7 +228,7 @@ measurement.
 | 4 + 5 — the deletion, and the tests that could no longer load | [#561](https://github.com/martinforsberg81/memoro-cli/pull/561) |
 | 6 — `docs/plans/` | [#564](https://github.com/martinforsberg81/memoro-cli/pull/564) |
 
-Step 4 was asked for as one pull request per directory and landed as one
+Change 4 was asked for as one pull request per directory and landed as one
 pull request with a commit per directory instead. That is a property of the
 code, not a shortcut: the unreached set imported across its own directories —
 `cli/cloud-runtime.js` reached the broker, `mc/session-cutover.js` reached the

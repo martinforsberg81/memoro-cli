@@ -126,9 +126,10 @@ session-directed executors.
   through. A bug lands a red tree, or lands it on the wrong base.
 - `src/mc/run.js`, `src/mc/run-plan.js` — the runner, spending unattended
   sessions on what these decide, in two repositories at once.
-- `src/mc/plan-schema.js` — a plan it refuses hands out no step.
-- `src/mc/work-area.js`, `src/mc/close-workarea.js`, `src/mc/archive-plan.js` —
-  destructive worktree, branch and directory work under exact provenance.
+- `src/mc/goals.js`, `src/mc/commands/goal.js` — validated goal records,
+  criteria, phases and forward-only stage moves.
+- `src/mc/work-area.js`, `src/mc/goal-archive.js`, `src/mc/tidy.js` —
+  destructive worktree, branch and directory work under exact checks.
 - `src/mc/push-guard.js`, `src/mc/branch-landed.js` — what stops a push over
   work that has landed.
 - `src/vault/engine/` — the secret store: client-side crypto, custody, the C1

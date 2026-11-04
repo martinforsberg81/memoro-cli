@@ -50,7 +50,7 @@ existing `docx-model` plan. The verb preserves completed steps and execution
 history, refuses active sessions and open PRs, validates the whole result,
 records authorization and does not release the step. Ordinary edit freezes
 are unchanged. Its input and failure contract are in
-[Amending a blocked project](../../technical/mc-project-amend.md).
+Amending a blocked project (in git history).
 
 ## 4 · `mc test` is one measurement with two runs
 
