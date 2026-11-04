@@ -103,7 +103,7 @@ export async function open(opts, { stdout, stderr, deps = {} }) {
 
   const test = readDeclaration(worktree);
   if (!test.ok) { stderr.write(`mc: ${test.error}\n`); return 1; }
-  const app = await (deps.ensureAppServer || ensureAppServer)(worktree, test.declaration, { json: opts.json, stdout: stderr, deps });
+  const app = await (deps.ensureAppServer || ensureAppServer)(worktree, test.declaration, { json: opts.json, stdout: stderr, deps: { holderVerb: 'open', ...deps } });
   if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
   const served = (deps.servedTree || servedTree)(worktree, app.server, deps);
 

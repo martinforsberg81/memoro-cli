@@ -183,7 +183,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     // The file server first: it is up in a second, and a round that is only
     // static suites is done with servers right here.
     if (wantsStatic) {
-      const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, { ...deps, service: staticService });
+      const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, { holderVerb: 'test', ...deps, service: staticService });
       if (!ensured.ok) {
         stderr.write(`mc: ${ensured.error}\n`);
         return 1;
@@ -201,7 +201,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       }
     }
     if (wantsApp) {
-      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout: progress, deps });
+      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout: progress, deps: { holderVerb: 'test', ...deps } });
       if (!app.ok) {
         stderr.write(`mc: ${app.error}\n`);
         return 1;
@@ -255,7 +255,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   // same door that started it; production has nothing mc can start.
   const revive = where === 'dev' ? async (tier) => {
     if (tier === 'static' && staticServer) {
-      const ensured = await ensureDevServer(worktree, declaration, { ...deps, service: staticService });
+      const ensured = await ensureDevServer(worktree, declaration, { holderVerb: 'test', ...deps, service: staticService });
       if (!ensured.ok) return ensured;
       staticServer = ensured.server;
       staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');

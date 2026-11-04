@@ -697,6 +697,64 @@ function elapsedTone(step) {
 /** How many queued pull requests a repository row names before counting the rest. */
 export const QUEUED_DRAWN = 6;
 
+/** `~/…` for a path under the home directory: the tail has no room for `/Users/<name>`. */
+function homePath(path) {
+  return String(path || '').replace(/^\/Users\/[^/]+/u, '~').replace(/^\/home\/[^/]+/u, '~');
+}
+
+/**
+ * One dev server, in the page's grid: `MAIN` for the shared checkout's
+ * standing server, `SLOT` for one lent to a worktree; the session that holds
+ * it in the name column (`BUILD mc/no-work`, `plan mc`, `shot`); the
+ * repository; `leased`, `idle` or `starting`; how long since mc used it; the
+ * port where a pull request stands elsewhere; and the worktree and branch in
+ * the tail. A session that has ended says so first in the tail, in yellow.
+ */
+function devServerLine(c, wide, server) {
+  const leased = server.state === 'leased';
+  return gridRow(c, wide, {
+    mark: leased ? { text: MARK.running, styles: ['green'] } : { text: MARK.quiet, styles: ['grey'] },
+    kind: { text: String(server.kind || 'slot').toUpperCase(), styles: ['grey'] },
+    name: { text: server.name || '—', styles: server.name && !server.holder_gone ? [] : ['grey'] },
+    repo: { text: server.repo || '', styles: ['grey'] },
+    state: { text: server.state, styles: stateTone(server.state) },
+    progress: { text: server.progress || '', styles: ['grey'] },
+    pr: { text: server.port ? `:${server.port}` : '', styles: ['grey'] },
+    tail: [
+      server.holder_gone ? { text: 'holder gone', styles: ['yellow'] } : null,
+      server.worktree ? { text: homePath(server.worktree), styles: ['grey'] } : null,
+      server.branch ? { text: server.branch, styles: ['grey'] } : null,
+    ],
+  });
+}
+
+/**
+ * DEV — the dev servers, and who holds each (goal mc/dev-section). The heading
+ * counts the servers that answer, the leased ones, and the waiters when there
+ * are any; one row per server; and one yellow row for the queue, naming who is
+ * first. Drawn from `mc --json`'s `dev` and nothing else.
+ */
+function devLines(lines, c, wide, dev) {
+  const servers = dev?.servers || [];
+  if (!servers.length && !dev?.queued) {
+    heading(lines, c, wide, 'DEV', [{ text: 'none running', styles: ['grey'] }], 'mc dev list');
+    return;
+  }
+  const counts = [
+    { text: `${dev.running} running`, styles: dev.running ? ['green', 'bold'] : ['grey'] },
+    { text: `${dev.leased} leased`, styles: ['grey'] },
+    dev.starting ? { text: `${dev.starting} starting`, styles: ['grey'] } : null,
+    dev.queued ? { text: `${dev.queued} queued`, styles: ['yellow'] } : null,
+  ].filter(Boolean);
+  heading(lines, c, wide, 'DEV', between(counts, ' · '), 'mc dev list');
+  for (const server of servers) lines.push(devServerLine(c, wide, server));
+  if (dev.queued) {
+    const first = dev.queue?.[0]?.name;
+    const x = gridColumns(wide).kind.x;
+    lines.push(`${' '.repeat(x)}${c(clipCell(`${dev.queued} queued${first ? ` · ${first} first` : ''}`, wide - x), 'yellow')}`);
+  }
+}
+
 /** Queue labels never contain PR numbers: those belong on their repository row. */
 function mergeQueueLabel(repo, compact = false, stopped = false) {
   const counts = [
@@ -1204,7 +1262,7 @@ export function renderPageLines(data, {
   // had: **what does not move sits above what does.** The live loop rewrites
   // rows where they stand (page-live.js), and a row near the prompt is one it
   // can always reach. PROGRAMMES is the page as a listing; the two
-  // desks change when somebody sits down; SESSIONS every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // desks change when somebody sits down; SESSIONS and DEV every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
   // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
@@ -1215,6 +1273,11 @@ export function renderPageLines(data, {
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
   lines.push('');
+  // DEV changes as often as the sessions do, so it stands right under them.
+  if (data.dev) {
+    devLines(lines, c, wide, data.dev);
+    lines.push('');
+  }
   mergesLines(lines, c, wide, data.merges);
   lines.push('');
   if (data.prs) {

@@ -145,7 +145,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   if (session.where === 'dev') {
     const read = readDeclaration(session.worktree);
     if (!read.ok) { stderr.write(`mc: ${read.error}\n`); return 1; }
-    const app = await (deps.ensureAppServer || ensureAppServer)(session.worktree, read.declaration, { json: flags.json, stdout: stderr, deps });
+    const app = await (deps.ensureAppServer || ensureAppServer)(session.worktree, read.declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     served = (deps.servedTree || servedTree)(session.worktree, app.server);
     if (!flags.json) stderr.write(`mc: serving ${served.line}\n`);

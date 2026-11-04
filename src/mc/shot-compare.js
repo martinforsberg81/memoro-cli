@@ -229,7 +229,7 @@ export async function runCompare({
   const freed = (deps.stopSuperseded || stopSuperseded)(worktree, tree.dir, deps);
   for (const line of freed.lines) stderr.write(`mc: ${line}\n`);
   const app = await (deps.ensureAppServer || ensureAppServer)(tree.dir, read.declaration, {
-    json, stdout: stderr, deps: { ...deps, admitWaitSeconds: deps.admitWaitSeconds ?? COMPARE_ADMIT_WAIT_SECONDS },
+    json, stdout: stderr, deps: { holderVerb: 'shot', ...deps, admitWaitSeconds: deps.admitWaitSeconds ?? COMPARE_ADMIT_WAIT_SECONDS },
   });
   if (!app.ok) {
     stderr.write(`mc: ${ref}: ${app.error}\n`);

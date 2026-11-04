@@ -137,9 +137,19 @@ export function readQueue({ file = devQueuePath(), alive = pidAlive } = {}) {
   return update(file, undefined, { alive });
 }
 
+/**
+ * The live tickets as they stand, without writing anything: what a reader that
+ * must not write — the page — sees. A dead waiter's ticket is left for the next
+ * writer to sweep, and not counted here.
+ */
+export function peekQueue({ file = devQueuePath(), alive = pidAlive } = {}) {
+  return readTickets(file).filter((ticket) => alive(ticket.pid));
+}
+
 /** Take a ticket; returns it. */
 export function joinQueue({
   file = devQueuePath(), pid = process.pid, worktree, service, env = process.env, now = Date.now(), alive = pidAlive, id = randomUUID(),
+  session = null,
 } = {}) {
   const ticket = {
     id,
@@ -147,6 +157,8 @@ export function joinQueue({
     worktree_path: worktree,
     service,
     holder: holderOf(env),
+    // Who waits, as the page's DEV section names it (`leaseHolder`, dev-holder.js).
+    ...(session ? { session } : {}),
     gate: Boolean(env.MC_GATE_ROUND),
     joined_at: new Date(now).toISOString(),
   };
