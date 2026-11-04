@@ -16,7 +16,7 @@
  *              and what the runner refuses to land at all.
  * intake     — the helper's newest digest per repository, what is new in it,
  *              the `!` lines split into message, fingerprint and count, and
- *              how many proposals nobody has queued or dropped.
+ *              the root proposals with no owning programme.
  * checks     — per repository, the nightly's last full test and the last
  *              daily `mc deps` reading: when, of which commit, and what each
  *              found. Two file reads each; nothing is run.
@@ -821,7 +821,7 @@ export function countNewErrors(text) {
 
 /**
  * What waits in `~/mc/intake/`: the newest digest with what is new in it, and
- * the proposals nobody has queued or dropped.
+ * the root proposals with no owning programme.
  *
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
@@ -974,7 +974,7 @@ function statusesOf(goals) {
  * Nothing on the page removes one; `mc tidy` lists what is left.
  */
 export function programmesSection({
-  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [],
+  planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
   strays = [], sessionStrays = [],
 } = {}) {
 
@@ -1004,6 +1004,7 @@ export function programmesSection({
       // one line (Martin, 2026-11-02).
       dormant: goals.length === 0,
       goals,
+      proposals: proposalCounts[name] || 0,
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
       planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
@@ -1228,6 +1229,7 @@ export function readProgrammes({
     planningSessions: sessions.planning_sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
     programmes: Object.keys(homes),
+    proposalCounts: readProgrammeProposalCounts(programsHome(env)),
   });
   return { section, homes };
 }
@@ -1382,6 +1384,7 @@ export async function collectPage({
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
+    proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     strays: readStrays(root, { git }),
   });
   const worktrees = Object.fromEntries(present.map((repo) => [
@@ -1475,4 +1478,17 @@ function mcReading(checkout, base, git) {
 /** The proposal files, by name. A count is all mc does with a proposal. */
 function proposalFiles(dir) {
   try { return readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { return []; }
+}
+
+/** Count proposal files directly under each programme's proposals/ directory. */
+function readProgrammeProposalCounts(home) {
+  const counts = {};
+  let programmes = [];
+  try { programmes = readdirSync(home, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return counts; }
+  for (const programme of programmes) {
+    let files = [];
+    try { files = readdirSync(join(home, programme.name, 'proposals'), { withFileTypes: true }); } catch { /* no proposals directory */ }
+    counts[programme.name] = files.filter((entry) => entry.isFile()).length;
+  }
+  return counts;
 }

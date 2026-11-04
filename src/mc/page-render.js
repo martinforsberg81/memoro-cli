@@ -631,7 +631,7 @@ function helperLines(lines, c, wide, session, intake) {
 
 /**
  * BRIEF — the desk, and what is waiting for it: the proposals nobody has
- * queued or dropped.
+ * queued or dropped; this count is only the root pile, without a programme.
  *
  * The proposals are a count, how far back the pile reaches, and the newest few
  * by name — enough to see whether anything arrived since the last look. The count
@@ -647,13 +647,13 @@ function briefLines(lines, c, wide, session, intake) {
       ? (files.oldest === files.newest ? when(files.newest) : `${when(files.oldest)} – ${when(files.newest)}`)
       : '';
     lines.push(`       ${paint(c, fitting(trailing([
-      { text: `${count} proposal${count === 1 ? '' : 's'}`, styles: ['yellow'] },
+      { text: `${count} proposal${count === 1 ? '' : 's'} without a programme`, styles: ['yellow'] },
       ...[['mc', intake?.by_system?.mc], ['memoro', intake?.by_system?.memoro], ['untagged', intake?.by_system?.untagged]].filter(([, n]) => n > 0).map(([label, n]) => ({ text: `${label} ${n}`, styles: [label === 'untagged' ? 'yellow' : 'grey'] })),
       { text: span, styles: ['grey'] },
       ...(files.newest_names || []).map((name, index) => ({ text: `${index ? '' : 'newest '}${name}`, styles: ['grey'] })),
     ]), room), room)}`);
   } else {
-    say(lines, c, wide, 7, 'no proposals waiting');
+    say(lines, c, wide, 7, 'no unassigned proposals waiting');
   }
 }
 
@@ -1080,16 +1080,23 @@ export function statusRollup(statuses = {}) {
 function programmeLine(c, wide, group) {
   const column = programmeColumns(wide);
   const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
-  const counts = programmeCounts(c, group, column.counts);
+  let counts = programmeCounts(c, group, column.counts);
+  const proposalCount = group.proposals > 0
+    ? `${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : '';
   const meta = planSessionWords(group);
   // A session somebody opened in one of the programme's rooms is said on the
   // same heading (goal mc/no-work).
   const opened = (group.sessions || []).length;
-  const detail = `${meta ? `plan ${meta}` : '·  no plan session'}${opened ? `  ·  ${opened} open` : ''}`;
+  const plan = meta ? `plan ${meta}` : 'no plan session';
+  const suffix = opened ? `  ·  ${opened} open` : '';
+  let detail = `${proposalCount ? `${proposalCount} · ${plan}` : (meta ? plan : `·  ${plan}`)}${suffix}`;
+  // Proposal metadata is optional on the narrow line; lose it before the
+  // programme count, and keep the planning-session words as the rollup does.
+  if (proposalCount && width(left) + width(counts) + detail.length + 2 > wide) detail = `${meta ? plan : `·  ${plan}`}${suffix}`;
   // Provider counts take precedence over the programme's rollup on a narrow
   // terminal; the headline and JSON still carry that rollup.
-  const prefix = meta && width(left) + width(counts) + detail.length + 2 > wide
-    ? `${left} ` : `${left} ${counts} `;
+  if (meta && width(left) + width(counts) + detail.length + 2 > wide) counts = '';
+  const prefix = counts ? `${left} ${counts} ` : `${left} `;
   return `${prefix}${c(clip(detail, Math.max(0, wide - width(prefix))), 'grey')}`.trimEnd();
 }
 
@@ -1115,9 +1122,11 @@ function programmesLines(lines, c, wide, programmes, expand) {
   // Expanded (`a`), every programme is drawn and the line is not needed.
   if (!expand && asleep.length) {
     const planned = asleep.filter((group) => planSessionWords(group)).length;
+    const withProposals = asleep.filter((group) => group.proposals > 0).length;
     say(lines, c, wide, 2, [
       `${asleep.length} dormant`,
       planned ? `${planned} with a plan session` : '',
+      withProposals ? `${withProposals} with proposals` : '',
       'mc programs list',
     ].filter(Boolean).join(' · '));
   }

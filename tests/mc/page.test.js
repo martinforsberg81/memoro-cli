@@ -1145,7 +1145,7 @@ describe('INTAKE', () => {
     assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'mc-one'] });
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     const at = lines.findIndex((line) => /^ {2}BRIEF/u.test(line));
-    assert.match(lines[at + 1], /^ {7}2 proposals · mc 1 · untagged 1 · 08-29 · newest two · mc-one$/u);
+    assert.match(lines[at + 1], /^ {7}2 proposals without a programme · mc 1 · untagged 1 · 08-29 · newest two · mc-one$/u);
     assert.match(lines[lines.findIndex((line) => /^ {2}HELPER/u.test(line)) + 1],
       /^ {7}memoro {6}2 new errors, 1 loud · 2 h old/u);
   });
@@ -1376,7 +1376,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
-    assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
+    assert.match(text, /^ {7}1 proposal without a programme · untagged 1$/mu);
     assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}ready 2 · blocked 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+1 goal\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own goals');
@@ -1691,6 +1691,11 @@ describe('collectPage', () => {
     mkdirSync(goal, { recursive: true });
     writeFileSync(join(goal, 'GOAL.json'), goalJson({ title: 'The page' }));
     writeFileSync(join(goal, 'LOG.md'), '');
+    const programmeProposals = join(root, 'programs', 'mc', 'proposals');
+    mkdirSync(join(programmeProposals, 'archive'), { recursive: true });
+    writeFileSync(join(programmeProposals, '2026-08-29-mc-one.md'), 'one');
+    writeFileSync(join(programmeProposals, '2026-08-29-mc-two.md'), 'two');
+    writeFileSync(join(programmeProposals, 'archive', 'old.md'), 'archived');
     return root;
   }
 
@@ -1830,6 +1835,16 @@ describe('collectPage', () => {
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);
+    assert.equal(data.programmes.programmes.find((group) => group.programme === 'mc').proposals, 2,
+      'the programme count includes its direct files, not its archive');
+    let json = '';
+    await page(['--json'], {
+      collect: async () => data,
+      stdout: { write: (text) => { json += text; } },
+      checkAndPrintFreshInstall: async () => {},
+    });
+    assert.equal(JSON.parse(json).programmes.programmes.find((group) => group.programme === 'mc').proposals, 2,
+      'mc --json carries the same programme count');
     assert.deepEqual(data.programmes.programmes.flatMap((g) => g.goals).map((goal) => [goal.programme, goal.name, goal.status]), [['mc', 'mc-ui', 'ready']]);
     assert.equal(data.prs.items.find((pr) => pr.number === 440).branch, 'mc-ui');
     assert.equal('no_workarea' in data.programmes, false);

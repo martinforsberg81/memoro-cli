@@ -66,6 +66,7 @@ const section = () => programmesSection({
   planning: { planned: SESSION },
   planningSessions: { planned: [SESSION] },
   programmes: ['empty', 'mc'],
+  proposalCounts: { empty: 2, mc: 1 },
 });
 
 describe('dormant programmes in the collector', () => {
@@ -89,7 +90,7 @@ describe('dormant programmes on the page', () => {
   it('draws only active programmes, and one line for the dormant ones under the heading', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
     assert.match(lines[0], /^ {2}PROGRAMMES {2}3 active · 2 dormant · 3 goals {2}/u);
-    assert.equal(lines[1], '  2 dormant · 1 with a plan session · mc programs list');
+    assert.equal(lines[1], '  2 dormant · 1 with a plan session · 1 with proposals · mc programs list');
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
     for (const name of ['mc', 'done-only', 'goal-only']) {
       assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
@@ -97,6 +98,23 @@ describe('dormant programmes on the page', () => {
     for (const name of ['empty', 'planned']) {
       assert.ok(!lines.some((line) => line.startsWith(`  ${name} `)), `${name} draws no heading`);
     }
+  });
+
+  it('shows proposal counts on active headings, pluralizes, omits zero and yields on narrow lines', () => {
+    const programmes = programmesSection({
+      goalRows: GOALS.slice(0, 1),
+      programmes: ['empty', 'mc', 'zero'],
+      proposalCounts: { mc: 2, empty: 1 },
+      planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
+    });
+    const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
+    assert.match(wide.find((line) => line.startsWith('  mc ')), /2 proposals · plan codex 1/u);
+    assert.match(wide.find((line) => line.startsWith('  empty ')), /1 proposal · no plan session/u);
+    assert.doesNotMatch(wide.find((line) => line.startsWith('  zero ')), /proposal/u);
+    const narrow = programmesOf(renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, expand: true }));
+    const mc = narrow.find((line) => line.startsWith('  mc '));
+    assert.doesNotMatch(mc, /2 proposals/u);
+    assert.ok(mc.length <= 60, mc);
   });
 
   it('leaves the plan-session count out when no dormant programme has one', () => {
@@ -143,16 +161,18 @@ describe('mc programs', () => {
     assert.ok(!('projects' in byName.mc), 'no project count');
     assert.equal(byName['goal-only'].goals, 1);
     assert.deepEqual(byName.planned.plan_sessions, { claude: 1 });
+    assert.equal(byName.empty.proposals, 2);
+    assert.equal(byName.mc.proposals, 1);
   });
 
   it('says it in the page’s words, one line each', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
     assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
     assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · done 1 +no plan session$/u);
-    assert.match(lines[2], /^ {2}empty +dormant +memoro +no goal +no plan session$/u);
-    assert.match(lines[3], /^ {2}goal-only +active +memoro +1 goal · blocked 1 +no plan session$/u);
-    assert.match(lines[5], /^ {2}planned +dormant +— +no goal +plan claude 1$/u);
+    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · done 1 +0 proposals +no plan session$/u);
+    assert.match(lines[2], /^ {2}empty +dormant +memoro +no goal +2 proposals +no plan session$/u);
+    assert.match(lines[3], /^ {2}goal-only +active +memoro +1 goal · blocked 1 +0 proposals +no plan session$/u);
+    assert.match(lines[5], /^ {2}planned +dormant +— +no goal +0 proposals +plan claude 1$/u);
   });
 
   it('prints the list, or the same as data with --json', async () => {
@@ -186,6 +206,8 @@ describe('mc programs', () => {
       writeFileSync(join(goal, 'LOG.md'), '');
       mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
       writeFileSync(join(root, 'runner', 'foreground', '1.json'), JSON.stringify({ ...SESSION, pid: process.pid }));
+      mkdirSync(join(root, 'programs', 'empty', 'proposals'), { recursive: true });
+      writeFileSync(join(root, 'programs', 'empty', 'proposals', 'first.md'), 'proposal');
       const repo = { name: 'memoro', git: root, path: root };
       const { section: read, homes } = readProgrammes({
         env: { MC_WORK_ROOT: root, MC_HOME: join(root, 'home') },
@@ -197,6 +219,7 @@ describe('mc programs', () => {
       assert.deepEqual(homes, { empty: ['memoro'] });
       const verdict = Object.fromEntries(read.programmes.map((group) => [group.programme, group.dormant]));
       assert.deepEqual(verdict, { empty: true, 'goal-only': false, planned: true });
+      assert.equal(read.programmes.find((group) => group.programme === 'empty').proposals, 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

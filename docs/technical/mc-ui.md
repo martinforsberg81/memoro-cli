@@ -64,10 +64,15 @@ has scrolled off the top cannot be written to — which is what
 [*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
 below is about.
 
-- **PROGRAMMES** — one heading per programme with its own `x ready · y waiting · z blocked`
-  and its open planning-session counts per provider (`plan claude 1 · codex 2`),
-  or `no plan session`; then one numbered row
-  per project under it, then one per goal, both in [the grid](#the-grid):
+- **PROGRAMMES** — one heading per programme with its own `x ready · y waiting · z blocked`,
+  the number of files directly in its `proposals/` directory (excluding subdirectories
+  such as `archive/`), and its open planning-session counts per provider (`plan claude 1 · codex 2`),
+  or `no plan session`;
+  `N proposal(s)` is grey between the status rollup and plan-session words, omitted at zero
+  and before those counts when a narrow heading needs the room. Dormant programmes still
+  fold into one line, which says how many of them have proposals; `mc programs list` exposes
+  each programme's proposal count too.
+  Then one numbered row per project under it, then one per goal, both in [the grid](#the-grid):
   `project` or `goal` in the kind column, the name, the repository, the state
   (one word, one colour — see *The palette*), the progress (`3/7` of a
   project's steps; `5 sess`, a goal's sessions), the open PR, and in the grey
@@ -117,8 +122,9 @@ below is about.
   (`intake.repos[].loud_lines`). Below 24 columns of room the message is not
   drawn at all. One row each rather than the newer of the two, which hid
   memoro-cli's — the digest about this machine.
-- **BRIEF** — the desk, and **what is waiting for it**: the proposals nobody
-  has queued or dropped — how many, split by the system in each filename
+- **BRIEF** — the desk, and **what is waiting for it**: the root proposals in
+  `~/mc/proposals/`, the ones without a programme (programme-owned proposals
+  are counted on their programme's title line) — how many, split by the system in each filename
   (`mc 23 · memoro 81 · untagged 2`, with `untagged` drawn yellow), how far back
   the pile reaches, the newest three by name (what follows the date in
   `<date>-<system>-<slug>.md`; no file is opened for it) —
