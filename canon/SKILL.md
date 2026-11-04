@@ -8,7 +8,9 @@ Read only the reference needed for the current operation, before doing it.
 Paths below are relative to this skill's directory. Do not preload the tree.
 
 - A session launched by mc already has its role. Do not reread it or load
-  other roles; `roles/` is for inspecting or changing role behaviour.
+  other roles, except when taking over a blocked goal interactively.
+  An interactive takeover of a blocked goal must read its current stage's
+  instructions as directed by `verbs/goal.md`.
 - For a named programme, read `~/mc/programs/<programme>/README.md` once
   when work there begins. Do not read the other programmes.
 - Before using `mc goal`, read [verbs/goal.md](verbs/goal.md).
