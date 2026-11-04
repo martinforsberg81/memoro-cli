@@ -31,6 +31,16 @@ refuses them when `MC_HEADLESS=1`, which the runner sets.
 Read the code first. Where only Martin can choose, ask him the one thing, with
 your recommendation.
 
+## Commissioning test protection
+
+Specify the behaviours and risks the goal must protect, the relevant test
+level, existing protection to reuse and the evidence required. A justified
+no-new-test decision is valid; do not order a regression test for every fix.
+Record residual risk when protection is deliberately omitted or retired.
+Keep checks executable by the next session. New protection scope needs a
+planning decision; builders should not have to invent a testing programme.
+Apply this responsibility when you build or finish a goal yourself too.
+
 ## Where you stand
 
 You stand in `~/mc/programs/<programme>/`, with a worktree of each repository

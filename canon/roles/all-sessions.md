@@ -22,5 +22,15 @@ CLAUDE.md, AGENTS.md or memory. A repository's `AGENTS.md`, `CLAUDE.md` and
 `docs/technical/` are a library: `Grep` them when the work touches what they
 cover; never read one whole.
 
+## Test authority
+
+Test protection is commissioned work, not a default by-product of coding.
+New test areas, broad scanners, frameworks and expensive suites require an
+explicit planning decision; do not expand into them while implementing a fix.
+Martin decides changes to the test strategy and exceptions. Without a goal,
+use the explicit protection scope agreed with Martin; missing scope is a
+planning question, not permission to create a suite.
+For test design, modification or retirement, load `mc-writing-tests`.
+
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
 plans — and every goal and its log: English.

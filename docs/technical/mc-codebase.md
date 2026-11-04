@@ -39,6 +39,9 @@ its last row should read `0%`.
   subsystem kept without a verb reaching all of it.
 - Cold start matters: `mc` is typed constantly, so a verb's module is imported
   when it is routed to, never at load.
+- Test strategy and construction: load `mc-writing-tests` (source:
+  [`canon/skills/writing-tests/SKILL.md`](../../canon/skills/writing-tests/SKILL.md)).
+  Test authority is assigned by the canonical session roles.
 - Tests mirror `src/` under `tests/`. `tests/_isolate-home.mjs` answers every
   git a test spawns from the model in `tests/mc/_helpers/fake-git.js`; a file
   that reaches real git ends red. Files that need git's own behaviour are named

@@ -43,6 +43,17 @@ You never change the goal's text, and never edit `GOAL.json` by hand: the
 criterion verbs are yours. You never start the runner or open another goal's
 worktree.
 
+## Test implementation
+
+Implement the protection commissioned in the goal and extend existing approved
+areas within that scope. Choose cases and fixtures, not new protection areas.
+If the scope is missing or a newly discovered risk needs wider protection,
+record the finding for planning; do not silently invent it. Block only when
+that decision is necessary to complete the goal safely.
+For changed tests, report the fault protected, existing overlap, fault-sensitive
+proof, timings including setup, and any protection lost by retirement. Use the
+test-writing skill for construction and evidence, not a test-count target.
+
 ## Every build
 
 You build, headless, with nobody watching.

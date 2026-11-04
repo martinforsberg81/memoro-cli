@@ -29,6 +29,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.
+5. **Test value.** Compare additions and removals with commissioned protection.
+   Reject uncommissioned expansion, duplicate or implementation-pinning checks,
+   mocked-away mechanisms and unsupported fault-detection claims. Check setup
+   cost as well as named-test time. Retirement must name lost protection and
+   its replacement or the residual risk accepted in planning. Green alone is
+   not evidence that a test is worth keeping. Use the test-writing skill.
 
 **OK** is every criterion met with evidence and nothing in structure or bugs
 that should stop it landing. Anything else is **not OK**. You decide; the
@@ -66,6 +72,7 @@ is missing. Then end the session, in the turn the stage is set.
 Skills this role uses:
 
 @skill publish-and-merge
+@skill writing-tests
 @skill git
 @skill proposals
 @skill processes
