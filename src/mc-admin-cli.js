@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { runScriptWithKeys } from './mc/keys-run.js';
 
@@ -25,6 +25,11 @@ export async function run(argv = process.argv.slice(2), deps = {}) {
   } catch { stderr.write('mc-admin: trusted keys runner failed\n'); return 1; }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isEntry(path) {
+  try { return Boolean(path) && realpathSync(path) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+
+if (isEntry(process.argv[1])) {
   process.exitCode = await run();
 }

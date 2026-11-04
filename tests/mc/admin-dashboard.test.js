@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, symlinkSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { run, HELP } from '../../src/mc-admin-cli.js';
 import { collectDashboard, renderDashboard } from '../../src/mc/admin-dashboard.js';
@@ -11,7 +14,7 @@ function fixtures() {
   return {
     health: { ok:true, status:'degraded', checkedAt:'2026-11-04T11:59:00Z', services:{ secrets:{status:'not_configured', present:0,total:2}, d1:{status:'healthy',latency:0}, queues:{status:'healthy',note:'Binding available'}, universeVectors:{status:'healthy',vectorCount:0} }, secret:'health-secret' },
     operations: { ok:true, generatedAt:'2026-11-04T11:58:00Z', warnings:['warn_code'], operations:[
-      { key:'z.ok',label:'Okay',state:'success',conclusion:{level:'ok',reasonCodes:[]},counts:{zero:0,unknown:null,secret:'ops-secret'},latestRun:{startedAt:'2026-11-04T11:00:00Z',finishedAt:'2026-11-04T11:01:00Z'},payload:{password:'payload-secret'} },
+      { key:'z.ok',label:'Okay',state:'success',conclusion:{level:'ok',reasonCodes:[]},counts:{jobs:0,requests:null,userId:123456789,supportTicketId:654321,secret:'ops-secret'},latestRun:{startedAt:'2026-11-04T11:00:00Z',finishedAt:'2026-11-04T11:01:00Z'},payload:{password:'payload-secret'} },
       { key:'a.watch',label:'Watch\u001b[31m red',state:'warning',conclusion:{level:'watch',reasonCodes:['watch_code']},warnings:['op_warn'] },
       { key:'b.action',label:'Action',state:'error',conclusion:{level:'action',reasonCodes:['action_code']} },
       { key:'c.noverdict',label:'No verdict',state:'success',latestRun:{status:'success'} },
@@ -44,13 +47,19 @@ test('collector requests only fixed bounded GET destinations and produces safe t
   assert.equal(model.schemaVersion,1); assert.equal(model.sources.health.ageSeconds,60); assert.equal(model.sources.operations.ageSeconds,120);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='d1').latency,0);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='universeVectors').counts.vectorCount,0);
-  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.zero,0);
-  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.unknown,undefined);
-  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='c.noverdict').level,'unknown');
+  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.jobs,0);
+  assert.equal(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts.requests,undefined);
+  assert.deepEqual(model.sources.operations.data.operations.find(o=>o.key==='z.ok').counts,{jobs:0});
+  assert.deepEqual(model.sources.operations.data.operations.map(o=>[o.key,o.level,o.reasons]),[ ['z.ok','ok',[]], ['a.watch','watch',['watch_code']], ['b.action','action',['action_code']], ['c.noverdict','unknown',[]] ]);
+  assert.deepEqual(model.sources.operations.data.incidents,{groups:[{status:'new',count:2,occurrences:3},{status:'acknowledged',count:0,occurrences:0}],totalGroups:2,totalOccurrences:3});
   const ordered=renderDashboard(model).split('\n').filter(s=>/^([a-z]\.|[a-z]\.noverdict)/u.test(s));
   assert.deepEqual(ordered.map(s=>s.split(' ')[0]),['b.action','a.watch','c.noverdict','z.ok']);
   const text=renderDashboard(model), json=JSON.stringify(model);
   for(const secret of ['health-secret','ops-secret','payload-secret','incident-secret','raw error secret']) { assert.equal(text.includes(secret),false); assert.equal(json.includes(secret),false); }
+  assert.doesNotMatch(text+json,/123456789|654321|userId|supportTicketId/);
+  assert.match(text,/universeVectors: healthy; vectorCount=0/);
+  assert.equal(model.sources.health.data.services.find(s=>s.name==='queues').status,'healthy');
+  assert.match(text,/queues: healthy; Binding available \(binding availability only; not delivery health or backlog\)/);
   assert.ok(!text.includes('\u001b')); assert.match(text,/Stored incident aggregates/); assert.match(text,/not delivery health or backlog/); assert.match(text,/not connected yet/); assert.match(text,/incidents acknowledged: 0 groups \/ 0 occurrences/); assert.match(text,/a.watch warning op_warn/);
   assert.equal(model.sources.health.data.services.find(s=>s.name==='secrets').status,'not_configured');
 });
@@ -76,8 +85,9 @@ test('strict response limit, list bounds, unknown timestamps and future source t
   let result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?fixtures().health:huge)});
   assert.equal(result.model.sources.operations.errorCode,'response_too_large');
   const over={ok:true,operations:[{key:'x',warnings:Array(51).fill('x')}],incidents:{summary:{}}};
-  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?{ok:true,services:{},checkedAt:'nope'}:over)});
+  result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?{ok:true,status:'healthy',services:{},checkedAt:'nope'}:over)});
   assert.equal(result.model.sources.operations.errorCode,'too_many_items');
+  assert.equal(result.model.sources.health.availability,'available');
   assert.equal(result.model.sources.health.timestamp,null); assert.equal(result.model.sources.health.ageSeconds,null);
   const future={ok:true,status:'healthy',services:{},checkedAt:'2027-01-01T00:00:00Z'};
   result=await collectDashboard({clock:fixed,token:'t',fetch:async url=>response(url.endsWith('/health')?future:fixtures().operations)});
@@ -91,4 +101,16 @@ test('package maps both binaries and runner failure cannot expose error details'
   assert.match(HELP,/credentials/); assert.match(HELP,/Exit codes/);
   let output=''; await run([], {env:{},stdout:{write(){}},stderr:{write:s=>output+=s},runScriptWithKeys:async()=>1});
   assert.doesNotMatch(output,/ADMIN_TOKEN|secret/);
+});
+
+ test('package executable follows symlinks and prints offline help', () => {
+  const scratch=mkdtempSync(join(tmpdir(),'mc-admin-entry-'));
+  try {
+    const link=join(scratch,'mc-admin');
+    symlinkSync(fileURLToPath(new URL('../../src/mc-admin-cli.js',import.meta.url)),link);
+    const result=spawnSync(process.execPath,[link,'--help'],{encoding:'utf8',env:{...process.env,MC_HEADLESS:'1',MC_HOME:join(scratch,'home'),MC_WORK_ROOT:join(scratch,'work')}});
+    assert.equal(result.status,0,result.stderr);
+    assert.match(result.stdout,/Usage: mc-admin/);
+    assert.equal(result.stderr,'');
+  } finally { rmSync(scratch,{recursive:true,force:true}); }
 });

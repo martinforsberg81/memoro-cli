@@ -1,6 +1,9 @@
 const BASE = 'https://meetmemoro.app/admin';
 const SOURCES = { health: `${BASE}/health`, operations: `${BASE}/operations/status` };
 const SERVICE_NAMES = ['secrets', 'd1', 'r2', 'kv', 'universeVectors', 'queues'];
+// Explicit aggregate names from the operations status contract. New fields
+// need review before entering either output mode.
+const OPERATION_COUNTS = new Set(['tasksTotal', 'tasksCompleted', 'tasksFailed', 'tasksRunning', 'jobs', 'requests', 'completedRequests', 'failedRequests']);
 const MAX_BYTES = 1024 * 1024;
 const MAX_ITEMS = 200;
 const MAX_CODES = 50;
@@ -53,7 +56,7 @@ function operationsProjection(body) {
     if (op.conclusion?.reasonCodes !== undefined && !Array.isArray(op.conclusion.reasonCodes)) throw Error('invalid_shape');
     if (op.conclusion?.reasonCodes?.length > MAX_CODES) throw Error('too_many_items');
     const counts = {};
-    if (op.counts && typeof op.counts === 'object' && !Array.isArray(op.counts)) for (const [k,v] of Object.entries(op.counts)) if (/^[A-Za-z][A-Za-z0-9]{0,39}$/u.test(k) && numeric(v) !== null) counts[k] = v;
+    if (op.counts && typeof op.counts === 'object' && !Array.isArray(op.counts)) for (const [k,v] of Object.entries(op.counts)) if (OPERATION_COUNTS.has(k) && numeric(v) !== null) counts[k] = v;
     const key = clean(op.key, 100);
     if (!key) throw Error('invalid_shape');
     const level = ['action','watch','ok'].includes(op.conclusion?.level) ? op.conclusion.level : 'unknown';
@@ -110,7 +113,7 @@ export function renderDashboard(model) {
   if (operations.availability === 'available') { const i=operations.data.incidents; out.push(`Stored incident aggregates: ${i.totalGroups ?? 'unknown'} groups; ${i.totalOccurrences ?? 'unknown'} occurrences`); for (const g of i.groups) out.push(`${g.status}: ${g.count ?? 'unknown'} groups / ${g.occurrences ?? 'unknown'} occurrences`); }
   else out.push('unknown (operations source unavailable)');
   out.push('', 'SERVICES');
-  if (health.availability === 'available') for (const s of health.data.services) out.push(`${s.name}: ${s.status}${s.latency === null ? '' : `; ${s.latency} ms`}${s.counts.present !== undefined || s.counts.total !== undefined ? `; ${s.counts.present ?? 'unknown'}/${s.counts.total ?? 'unknown'}` : ''}${s.note ? `; ${s.note}` : ''}${s.name === 'queues' ? ' (binding availability only; not delivery health or backlog)' : ''}`);
+  if (health.availability === 'available') for (const s of health.data.services) out.push(`${s.name}: ${s.status}${s.latency === null ? '' : `; ${s.latency} ms`}${s.counts.present !== undefined || s.counts.total !== undefined ? `; ${s.counts.present ?? 'unknown'}/${s.counts.total ?? 'unknown'}` : ''}${s.counts.vectorCount === undefined ? '' : `; vectorCount=${s.counts.vectorCount ?? 'unknown'}`}${s.note ? `; ${s.note}` : ''}${s.name === 'queues' ? ' (binding availability only; not delivery health or backlog)' : ''}`);
   else out.push('unknown (health source unavailable)');
   out.push('', 'WEB DETAIL', 'https://meetmemoro.app/admin/operations', 'https://meetmemoro.app/admin/', 'Financial, user, content, identity and security dashboards are not connected yet.');
   return out.join('\n');

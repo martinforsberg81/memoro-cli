@@ -18,7 +18,10 @@ Only that trusted child reads `ADMIN_TOKEN` from its inherited environment;
 the parent never reads dotenv or receives a token value. The child admits
 explicit aggregate fields and fixed failure codes; raw responses, errors,
 headers, identities and arbitrary nested metadata are excluded. Rerunning is
-the refresh mechanism.
+the refresh mechanism. Operation counts admit only tasksTotal, tasksCompleted,
+tasksFailed, tasksRunning, jobs, requests, completedRequests and failedRequests;
+new aggregate fields require explicit admission. Service vectorCount is shown
+in both output modes, including zero.
 
 The page shows server-owned operation conclusions, source availability and
 age, incident group/occurrence aggregates and service statuses. Queue health
