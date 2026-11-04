@@ -484,7 +484,7 @@ export const COMMAND_USAGE = Object.freeze({
     "                                          skills against canon\n",
   ].join(''),
   skills: [
-    "usage — mc skills [list] [--json]  mc's single skill bundle, installed vs canon and programme references\n",
+    "usage — mc skills [list] [--json]  mc's single skill bundle, installed vs canon\n",
     "        mc skills sync [--json]    install mc/ for Claude (~/.claude/skills) and Codex (~/.agents/skills),\n",
     "                                   rewrite a changed one, remove a stale mc-* one; nothing else is touched\n",
   ].join(''),

@@ -9,7 +9,6 @@ import { homedir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
 import { canonRoot } from './canon.js';
-import { programsHome } from './paths.js';
 
 export const SKILL_PREFIX = 'mc-'; // Legacy installs, recognised by their source marker too.
 export const SKILL_FILE = 'SKILL.md';
@@ -76,20 +75,6 @@ export function canonSkills({ dir = canonSkillsDir() } = {}) {
   });
 }
 
-/** A programme is a reference, never another globally advertised skill. */
-export function programmeSkills(env = process.env) {
-  const home = programsHome(env);
-  if (!existsSync(home)) return [];
-  return readdirSync(home, { withFileTypes: true }).filter((e) => e.isDirectory() && SKILL_NAME.test(e.name))
-    .sort((a, b) => a.name.localeCompare(b.name)).flatMap(({ name }) => {
-      const path = join(home, name, SKILL_FILE);
-      if (!existsSync(path)) return [];
-      const text = readFileSync(path, 'utf8');
-      if (!text.trim()) return [];
-      return [{ name, path, text: parseSkill(text)?.body || text, source: 'programme' }];
-    });
-}
-
 /** Build and validate everything before inspecting or mutating any install. */
 export function wantedSkills(env = process.env, { root = canonRoot() } = {}) {
   const files = filesUnder(root);
@@ -104,9 +89,6 @@ export function wantedSkills(env = process.env, { root = canonRoot() } = {}) {
   if (invalid.length) throw new Error(invalid.map((s) => s.invalid).join('; '));
   // Retain valid frontmatter at the root, and mark mc's ownership after it.
   files[SKILL_FILE] = `---\n${entry.frontmatter}\n---\n${marked(entry.body, 'canon/SKILL.md')}`;
-  for (const programme of programmeSkills(env)) {
-    files[`programmes/${programme.name}.md`] = marked(programme.text, `~/mc/programs/${programme.name}/SKILL.md`);
-  }
   return [{ name: 'mc', installName: 'mc', source: 'canon', files }];
 }
 

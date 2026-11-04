@@ -101,22 +101,25 @@ describe('the mc bundle', () => {
     assert.equal(existsSync(targets[0]), false);
   });
 
-  it('keeps programme details below mc and updates or removes them with their source', () => {
+  it('routes programme context to its README without copying it into the skill bundle', () => {
     const { env, root, targets } = home();
-    const source = join(root, 'mc/programs/p/SKILL.md');
-    write(source, '---\nname: p\ndescription: Programme P.\n---\nProgramme-only details.\n');
+    const readme = join(root, 'mc/programs/p/README.md');
+    write(readme, 'Current programme context.\n');
+    // An old source must never be installed as another copy of programme context.
+    write(join(root, 'mc/programs/p/SKILL.md'), 'Obsolete programme context.\n');
+    legacy(targets[0], 'mc-programme-p');
     syncSkills(env);
     for (const dir of targets) {
       assert.deepEqual(entries(dir), ['mc/SKILL.md']);
-      assert.match(read(join(dir, 'mc/programmes/p.md')), /Programme-only details/u);
-      assert.doesNotMatch(read(join(dir, 'mc/SKILL.md')), /Programme-only details/u);
+      assert.equal(existsSync(join(dir, 'mc/programmes')), false);
+      assert.equal(existsSync(join(dir, 'mc-programme-p')), false);
+      const router = read(join(dir, 'mc/SKILL.md'));
+      assert.ok(router.includes('~/mc/programs/<programme>/README.md'));
+      assert.doesNotMatch(router, /Current programme context|Obsolete programme context/u);
     }
-    write(source, 'Updated programme.\n');
-    syncSkills(env);
-    assert.match(read(join(targets[0], 'mc/programmes/p.md')), /Updated programme/u);
-    rmSync(source);
-    syncSkills(env);
-    assert.equal(existsSync(join(targets[0], 'mc/programmes/p.md')), false);
+    assert.equal(read(readme), 'Current programme context.\n');
+    write(readme, 'Updated programme context.\n');
+    assert.deepEqual(syncSkills(env), [], 'README edits need no skill regeneration');
   });
 
   it('installs every routed reference, including test details and verb pointers, for either tool', () => {

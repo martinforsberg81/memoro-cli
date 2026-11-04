@@ -11,7 +11,6 @@ mc/
   verbs/goal.md            goal command semantics
   tasks/*.md               operation-specific guidance
   tasks/references/        details such as the test strategy
-  programmes/<name>.md     only programmes with a source SKILL.md
 ```
 
 The tool sees one name and description at discovery. When mc applies, the
@@ -26,10 +25,12 @@ catalogues nor verb manuals are pasted into role instructions. The role's
 purpose and authority remain present. A session opened by hand discovers the
 same mc skill and follows the same routing without acquiring a role.
 
-Programme sources stay at `~/mc/programs/<programme>/SKILL.md`. Sync copies
-their bodies into `mc/programmes/<programme>.md`; the entrypoint tells the
-model to read only the named programme, once when work there begins. It does
-not list all programmes or embed their details.
+Programme context is read directly from
+`~/mc/programs/<programme>/README.md`, once when work in that programme begins.
+The router names this path pattern without listing programmes or embedding
+any programme details. Programme SKILL.md files are not read or installed.
+There is no generated programme copy or separate programme skill. README
+changes need no skill regeneration.
 
 ## Install and migration
 
@@ -44,8 +45,8 @@ all files outside the discovery directory, swaps in the completed bundle, and
 then removes old `mc-*` directories bearing mc's installed-source marker.
 Unmarked skills and symlinks are left alone. An existing unowned `mc/` is
 refused. An invalid source or failed replacement leaves legacy guidance intact.
-A second sync without source changes writes nothing. Removed programme sources
-and obsolete resources disappear with the next bundle replacement.
+A second sync without source changes writes nothing. Obsolete resources
+disappear with the next bundle replacement.
 
 Sync also runs on `mc hook install` and Claude's `mc hook session-start`.
 Edit the canon source, not generated installs. A worktree's sync can temporarily
@@ -61,6 +62,6 @@ loaded when requested by the model, not forcibly evicted afterwards.
 
 `tests/mc/skills.test.js` exercises real fixture directories: one entrypoint,
 legacy migration, unrelated-file preservation, drift repair, idempotence,
-programme removal, invalid-source preservation, and installed reference paths.
+direct programme README routing, invalid-source preservation, and installed reference paths.
 Role and launch tests check that manuals are reached by reference without
 preloading them. These deterministic checks need no live model or network.
