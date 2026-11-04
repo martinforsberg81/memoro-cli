@@ -112,18 +112,18 @@ Sequencing context from the prior bounded audit: the `branch-landed.test.js` cal
 
 | Path | Status | Existing execution metadata |
 | --- | --- | --- |
-| tests/mc/affected-tests.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/archive-plan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/archive-programme.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/asc-build-device.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/asc-build-testflight.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/asc-build.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/asc.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/await-deploy.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/billing-gateway-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/billing-gateway.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/billing.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/mc/brief-collect.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/mc/affected-tests.test.js | [REBUILD recommendation inspected](audit-mc-001.md#1-affected-teststestjs--rebuild-conservative-edge-evidence); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/archive-plan.test.js | [KEEP recommendation inspected](audit-mc-001.md#2-archive-plantestjs--keep-pure-retention-and-history-rules); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/archive-programme.test.js | [REBUILD recommendation inspected](audit-mc-001.md#3-archive-programmetestjs--rebuild-consumer-refusal-evidence); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build-device.test.js | [KEEP recommendation inspected](audit-mc-001.md#4-asc-build-devicetestjs--keep-device-decisions-and-orchestration); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build-testflight.test.js | [KEEP recommendation inspected](audit-mc-001.md#5-asc-build-testflighttestjs--keep-consent-exported-revision-and-upload-checks); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/asc-build.test.js | [KEEP recommendation inspected](audit-mc-001.md#6-asc-buildtestjs--keep-question-declaration-and-seed-decisions); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/asc.test.js | [KEEP recommendation inspected](audit-mc-001.md#7-asctestjs--keep-submitrelease-consent-and-declared-script-routing); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/await-deploy.test.js | [KEEP recommendation inspected](audit-mc-001.md#8-await-deploytestjs--keep-wait-policy-evidence); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/billing-gateway-session.test.js | [REBUILD recommendation inspected](audit-mc-001.md#9-billing-gateway-sessiontestjs--rebuild-bounded-grant-plumbing-evidence); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/billing-gateway.test.js | [REBUILD recommendation inspected](audit-mc-001.md#10-billing-gatewaytestjs--rebuild-expiry-and-shared-budget-evidence); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/billing.test.js | [KEEP recommendation inspected](audit-mc-001.md#11-billingtestjs--keep-live-storageparser-plus-legacy-decision-protection); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
+| tests/mc/brief-collect.test.js | [KEEP recommendation inspected](audit-mc-001.md#12-brief-collecttestjs--keep-small-shared-reader-checks); focused run only, fault proof unrun; no protection change | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-mc-002 · tests/mc · 12 subject(s)
 
@@ -357,3 +357,16 @@ No new measurements were made for this map. First-batch callback, selected-round
 ## Decision boundary
 
 Documentary snapshot only. Test/check files and lanes stay unchanged. No keep/rebuild/consolidate/retire classification is made beyond the earlier non-authoritative recommendations. Batch size is an audit-planning limit, not a runtime/count target. Protection, selection, lane, fixture, timeout or threshold changes require separate planning.
+
+## Audit note — 2026-11-04, audit-mc-001
+
+The twelve unchanged members of CLI-tests-mc-001 now link to the individually
+inspected [audit-mc-001 recommendations](audit-mc-001.md): four REBUILD and eight
+KEEP, not implemented migration decisions. The batch actually covers selector,
+archive, ASC, waiting, billing and shared readers, not canon/role guidance. The
+snapshot revision and inventory above remain historical; all other statuses are
+unchanged. One focused round was green (162 tests, Node 4854.453458 ms, gate 6 s);
+startup attribution and proposed fault proof remain unmeasured/unrun. See the
+report for exact log, model-vs-real Git boundaries, unique protection and gaps.
+No residual risk, retirement, lane or policy change is accepted. This dated note
+supplements, rather than rewrites, the snapshot and historical decision boundary.
