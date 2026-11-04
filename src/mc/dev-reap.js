@@ -28,7 +28,7 @@ export const DEFAULT_MIN_AGE_SECONDS = 600;
 export const HELPER_MIN_AGE_SECONDS = 120;
 const STOP_WAIT_MS = 5_000;
 
-const SERVER = /\bnode\b.*\bscripts\/(testing\/static-server|testing\/measure-server|dev)\.mjs\b/u;
+const SERVER = /\bnode\b.*\bscripts\/(testing\/static-server|dev-server|dev)\.mjs\b/u;
 const ESBUILD = /\/@esbuild\/[^/]+\/bin\/esbuild --service/u;
 const WORKERD = /\/workerd-[^/]+\/bin\/workerd serve\b/u;
 
@@ -56,13 +56,15 @@ export function parsePs(text) {
 /**
  * What the three rules prove orphaned, and nothing else.
  *
- * (1) an unregistered static-server, measure-server or `scripts/dev.mjs` with
+ * (1) an unregistered static-server, dev-server or `scripts/dev.mjs` with
  *     ppid 1, at least `minAgeSeconds` old; (2) an esbuild service or a
  *     workerd with ppid 1, at least 120 s old — both only ever run under a
  *     node parent that is now gone; (3) a registration whose worktree is gone.
  */
 export function reapPlan({ processes, servers, now: _now, exists, minAgeSeconds = DEFAULT_MIN_AGE_SECONDS }) {
-  const registered = new Set(servers.map((server) => Number(server.pid)));
+  // A keys supervisor leads the registered server's process group. It is
+  // deliberately not the manifest pid, but is owned while that server lives.
+  const registered = new Set(servers.flatMap((server) => [Number(server.pid), Number(server.process_group_id)]));
   const plan = [];
   for (const proc of processes) {
     if (proc.ppid !== 1) continue;

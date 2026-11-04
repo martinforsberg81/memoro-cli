@@ -41,7 +41,7 @@ const SHOT_JSON = {
 };
 const TEST_JSON = {
   schema_version: 1,
-  environments: { dev: { service: 'memoro-measure' }, prod: { base_url: 'https://meetmemoro.app/' } },
+  environments: { dev: { service: 'memoro-worker' }, prod: { base_url: 'https://meetmemoro.app/' } },
   account: { token_env: 'TEST_SEEDED_TOKEN', url_env: 'MEMORO_TEST_ACCOUNT_URL', route: '/demo/' },
   base_url_env: 'MEMORO_BASE_URL',
   suites: [{ name: 'smoke', argv: ['true'], server: 'app' }],
@@ -73,7 +73,7 @@ function fixture() {
   mkdirSync(run, { recursive: true });
   const manifest = join(run, 'mc-dev.json');
   writeFileSync(manifest, JSON.stringify({
-    schema_version: 1, instance_id: 'dev-8787', service: 'memoro-measure', session_name: 's', worktree_path: worktree,
+    schema_version: 1, instance_id: 'dev-8787', service: 'memoro-worker', session_name: 's', worktree_path: worktree,
     pid: process.pid, url: 'http://127.0.0.1:8787', health_url: 'http://127.0.0.1:8787/api/version',
   }));
   assert.equal(registerManifest(manifest, { root }).ok, true);
@@ -180,7 +180,7 @@ describe('the lease on the record and the ticket', () => {
   it('a waiter carries who it is on its queue ticket', () => {
     const fx = fixture();
     const file = join(fx.home, 'dev-queue.json');
-    joinQueue({ file, worktree: fx.worktree, service: 'memoro-measure', env: {}, session: EXPECTED, alive: () => true });
+    joinQueue({ file, worktree: fx.worktree, service: 'memoro-worker', env: {}, session: EXPECTED, alive: () => true });
     assert.deepEqual(readQueue({ file, alive: () => true })[0].session, EXPECTED);
   });
 });

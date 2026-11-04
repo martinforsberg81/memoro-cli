@@ -52,7 +52,7 @@ const SHOT_JSON = {
 
 const TEST_JSON = {
   schema_version: 1,
-  environments: { dev: { service: 'memoro-measure' } },
+  environments: { dev: { service: 'memoro-worker' } },
   suites: [{ name: 'smoke', argv: ['true'] }],
 };
 

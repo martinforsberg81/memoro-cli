@@ -64,7 +64,7 @@ const SHOT_JSON = {
 
 const TEST_JSON = {
   schema_version: 1,
-  environments: { dev: { service: 'memoro-measure' }, prod: { base_url: 'https://meetmemoro.app/' } },
+  environments: { dev: { service: 'memoro-worker' }, prod: { base_url: 'https://meetmemoro.app/' } },
   account: { token_env: 'TEST_SEEDED_TOKEN', url_env: 'MEMORO_TEST_ACCOUNT_URL', route: '/demo/' },
   suites: [{ name: 'smoke', argv: ['true'] }],
 };
