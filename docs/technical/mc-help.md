@@ -21,7 +21,7 @@ found by reading the code was the vault capability: only its first argument
 was checked for help. It now uses the same `wantsHelp`, and `src/bin-mc.js`
 answers capability help before device authentication. No non-help vault
 operation or credential boundary changed. The deliberate passthrough of
-`mc keys run <script> --help` to the declared script is unchanged.
+`mc keys run <script> --help` to the trusted Node script is unchanged.
 
 The help regression test walks literal prefixes in both the long help and
 every routed handler's usage, expanding finite alternatives (including nested

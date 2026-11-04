@@ -85,12 +85,17 @@ Treat the coding agent and every model-directed surface as adversarial: the
 model context and tool results; commands and child processes it directs; their
 files, mounts, environment, argv, streams and history; process, socket and
 `/proc` inspection; PTY output; logs, errors, status, transcripts and browser
-payloads; and any helper an agent can repurpose as a credential proxy.
+payloads; and any helper an agent can repurpose as a credential proxy. The
+explicitly approved `mc keys run` interface is a trust exception for scripts
+and dependencies invoked through it, not a sandbox or a trust grant to other
+session-directed executors.
 
 - No raw secret, login artifact, provider token, CRK, DEK, recovery material or
-  reusable credential authority may enter that domain. No command, debug
-  surface, fixture, adapter, environment variable or repo file may make one
-  available there.
+  reusable credential authority may enter the adversarial domain. `mc keys run`
+  is the approved exception that delivers the shared dotenv entries to trusted
+  Node scripts and their dependencies, as documented below. No other command,
+  debug surface, fixture, adapter, environment variable or repo file may make
+  one available to the adversarial domain.
 - `mc vault`, custody administration, device and keychain access and provider
   transports are trusted subsystems outside it. The model gets only opaque
   handles, bounded typed operations and redacted results, and cannot choose an
@@ -99,11 +104,14 @@ payloads; and any helper an agent can repurpose as a credential proxy.
 - `0600`, hooks, redaction, environment scrubbing, TTLs and shredding are
   defence in depth, never the boundary. The boundary is enforced separation of
   principals, namespaces, mounts, process inspection, sockets, IPC and egress.
-- A managed credential reaches project code only through `mc keys run`: a script
-  declared in the committed `.mc-keys.json`, whose source equals `origin/main`,
-  gets its declared keys in its own environment, and its output is filtered.
-  Code a session has edited gets no key until it has landed
-  ([mc-keys.md](mc-keys.md)).
+- Script credentials reach project code only through `mc keys run`, using the
+  shared dotenv source and a trusted Node script. The script and its imports
+  receive all entries in their child environment; there are no per-script
+  declarations or source-closure checks. Output filtering is accidental-output
+  protection, not a sandbox, and same-user processes are not isolated. Values
+  do not enter the parent/session environment or audit records
+  ([mc-keys.md](mc-keys.md)). This is separate from Memoro vault custody and
+  does not weaken C1 or production/admin boundaries.
 - A tool that cannot keep its credential out of the model-directed executor is
   unsupported for managed bootstrap and fails closed: no fallback to
   interactive login, a tool-home auth file, a generic token or dotenv.

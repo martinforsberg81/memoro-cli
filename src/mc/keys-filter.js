@@ -20,6 +20,7 @@ function encodings(plain) {
 export function keyOutputFilter(values) {
   const patterns = [];
   for (const [name, value] of Object.entries(values)) {
+    if (value === '') continue;
     const plain = Buffer.from(value);
     for (const pattern of new Set([value, ...encodings(plain)])) {
       patterns.push({ bytes: Buffer.from(pattern), replacement: Buffer.from(`[key:${name}]`) });
