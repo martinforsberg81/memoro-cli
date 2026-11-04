@@ -15,3 +15,6 @@ output filtering remains accidental-output protection rather than a sandbox.
 The scripts and dependencies are trusted with the delivered entries. This
 ruling keeps mc keys separate from Memoro vault custody and does not alter
 production/admin restrictions or unrelated C1 protections.
+
+Carried by the goal `mc-keys/shared-dotenv` (memoro-cli#1270), which replaced
+the vault-backed runner with the shared-dotenv runner.
