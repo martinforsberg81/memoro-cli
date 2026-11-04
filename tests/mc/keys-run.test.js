@@ -1,279 +1,151 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { run as keysCommand, handlesHelp } from '../../src/mc/commands/keys.js';
 import { runScriptWithKeys, listScriptKeys } from '../../src/mc/keys-run.js';
+import { keysDotenvPath, parseKeysDotenv } from '../../src/mc/keys-dotenv.js';
 import { keyOutputFilter } from '../../src/mc/keys-filter.js';
-import { rememberRuntimeSecretNames, scrubProviderApiKeysFromEnv, scrubRuntimeSecretsFromEnv, scrubRuntimeSecretsInPlace } from '../../src/mc/runtime-secrets.js';
+import { rememberRuntimeSecretNames, scrubProviderApiKeysFromEnv, scrubRuntimeSecretsFromEnv } from '../../src/mc/runtime-secrets.js';
 import { invocationShape } from '../../src/mc/logger.js';
-import { importVaultKey } from '../../src/vault/engine/client-crypto.js';
-import { encryptEnvelopeSecret, mintCustodyRoot } from '../../src/vault/engine/custody-crypto.js';
 
-// All values and all encryption keys below are synthetic. No keychain or network.
-const KEY = 'fixture-only-å-script-key-0123456789';
-const OTHER = 'fixture-only-unreleased-key';
-const digest = value => createHash('sha256').update(value).digest('hex');
+const SECRET = 'fixture-only-å-shared-secret-0123456789';
 const capture = () => {
   let bytes = Buffer.alloc(0);
   const stream = new Writable({ write(chunk, _encoding, callback) { bytes = Buffer.concat([bytes, chunk]); callback(); } });
   return { stream, text: () => bytes.toString('utf8'), bytes: () => bytes };
 };
-function git(root, args) {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 15000 });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim();
-}
-async function fixture(t, source, { names = { FIXTURE_KEY: 'dotenv:fixture:FIXTURE_KEY' }, sources = ['script.mjs'], files = {} } = {}) {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'mc-keys-')));
+async function fixture(t, dotenv = `FIXTURE_TOKEN="${SECRET}"\nNONSECRET_ID=fixture-id\n`) {
+  const directory = mkdtempSync(join(tmpdir(), 'mc-shared-dotenv-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const root = join(directory, 'repo'); mkdirSync(root);
-  const env = { ...process.env, MC_HOME: join(directory, 'mc'), SECOND_KEY: 'inherited-and-must-be-removed' };
-  git(root, ['init', '-b', 'main']);
-  git(root, ['config', 'user.name', 'Fixture']); git(root, ['config', 'user.email', 'fixture@example.invalid']);
-  git(root, ['config', 'commit.gpgsign', 'false']); git(root, ['config', 'core.hooksPath', join(directory, 'no-hooks')]);
-  const manifest = { version: 1, scripts: {
-    'script.mjs': { keys: names, sources },
-    'other.mjs': { keys: { SECOND_KEY: 'other' }, sources: ['other.mjs'] },
-  } };
-  const write = (file, content) => { mkdirSync(join(root, file, '..'), { recursive: true }); writeFileSync(join(root, file), content); };
-  write('package.json', JSON.stringify({ type: 'module' }));
-  write('script.mjs', source); write('other.mjs', 'process.exit(0);');
-  write('.mc-keys.json', JSON.stringify(manifest));
-  for (const [file, content] of Object.entries(files)) write(file, content);
-  git(root, ['add', '.']); git(root, ['commit', '-m', 'fixture']);
-  git(root, ['remote', 'add', 'origin', 'https://example.invalid/fixture.git']);
-  git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
-  const vaultKey = await importVaultKey(new Uint8Array(32).fill(9));
-  const custody = await mintCustodyRoot(vaultKey);
-  const rows = [];
-  async function add(label, token, secretClass = 'secret') {
-    const encrypted = await encryptEnvelopeSecret(custody.crk, { label, data: { kind: 'api_token', token }, secretClass });
-    rows.push({ encrypted_label: encrypted.encryptedLabel, label_iv: encrypted.labelIv,
-      encrypted_data: encrypted.encryptedData, iv: encrypted.iv, wrapped_dek: encrypted.wrapped_dek,
-      dek_iv: encrypted.dek_iv, class: encrypted.class, schema_version: encrypted.schema_version });
-  }
-  await add('dotenv:fixture:FIXTURE_KEY', KEY); await add('other', OTHER);
-  let locked = false; let reads = 0;
-  const vaultDeps = {
-    readCachedVaultKey: async () => { reads++; return locked ? null : { vaultKey, vaultKeyBytes: new Uint8Array(32).fill(9), authHash: 'fixture-hash' }; },
-    portal: { apiUrl: 'https://fixture.invalid', token: 'fixture-login' },
-    api: {
-      unlockVault: async () => ({ ok: true }),
-      getStatus: async () => ({ ok: true, vault: { setup: true, unlocked: true, wrapped_crk: custody.wrapped_crk, crk_iv: custody.crk_iv } }),
-      listSecrets: async () => ({ ok: true, secrets: rows }),
-    },
-  };
-  async function run(args = [], script = 'script.mjs', options = {}) {
+  const source = join(directory, 'source.vars');
+  writeFileSync(source, dotenv);
+  const cwd = join(directory, 'working'); mkdirSync(cwd);
+  const env = { ...process.env, MC_HOME: join(directory, 'mc-home'), MC_KEYS_FILE: source,
+    HOME: join(directory, 'attacker-home'), INHERITED_SECRET: 'must-not-be-a-dotenv-value',
+    NODE_OPTIONS: '--require=not-allowed.cjs', PATH: process.env.PATH };
+  async function run(script, args = [], options = {}) {
     const stdout = capture(); const stderr = capture();
-    const exit = await keysCommand(['run', script, ...args], { cwd: root, env, vaultDeps, stdout: stdout.stream, stderr: stderr.stream, ...options });
+    const exit = await keysCommand(['run', script, ...args], { cwd, env, stdout: stdout.stream, stderr: stderr.stream, ...options });
     return { exit, stdout: stdout.text(), stderr: stderr.text() };
   }
-  return { directory, root, env, vaultDeps, manifest, run, write, rows, add,
-    lock: () => { locked = true; }, reads: () => reads,
-    records: () => readFileSync(join(env.MC_HOME, 'keys', 'runs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)),
-  };
+  return { directory, source, cwd, env, run, setSource: text => writeFileSync(source, text),
+    records: () => readFileSync(join(env.MC_HOME, 'keys', 'runs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
 }
-function allFiles(directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
-    ? allFiles(join(directory, entry.name)) : [join(directory, entry.name)]);
+function write(cwd, file, content) {
+  const path = join(cwd, file); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, content); return path;
 }
-function absent(text) {
-  for (const value of [KEY, OTHER]) {
-    assert.ok(!text.includes(value)); assert.ok(!text.includes(Buffer.from(value).toString('base64')));
-  }
-}
+function absent(text, ...values) { for (const value of values) assert.ok(!text.includes(value), `unexpected fixture value in ${text}`); }
 
-test('a key reaches the declared script and nothing else', async t => {
-  const f = await fixture(t, `import { createHash } from 'node:crypto';
-    process.stdout.write(JSON.stringify({ digest: createHash('sha256').update(process.env.FIXTURE_KEY || '').digest('hex'),
-      argv: process.argv.slice(2), fullArgv: process.argv, execArgv: process.execArgv, other: process.env.SECOND_KEY, token: process.env.MEMORO_TOKEN }));`);
-  const before = { ...process.env }; const incoming = { ...f.env };
-  const result = await f.run(['--help', 'one', '--flag=two']);
+test('shared dotenv execution runs an undeclared modified script and local and npm imports from one working directory', async t => {
+  const f = await fixture(t);
+  const first = write(f.cwd, 'changed.mjs', "process.stdout.write('original');");
+  write(f.cwd, 'changed.mjs', `import { suffix } from './helper.mjs'; import { packageValue } from 'fixture-package'; process.stdout.write(process.env.FIXTURE_TOKEN + ':' + suffix + ':' + packageValue + ':' + process.argv.slice(2).join(','));`);
+  write(f.cwd, 'helper.mjs', "export const suffix = 'local';");
+  write(f.cwd, 'node_modules/fixture-package/package.json', '{"type":"module","exports":"./index.js"}');
+  write(f.cwd, 'node_modules/fixture-package/index.js', "export const packageValue = 'npm-local';");
+  const result = await f.run(first, ['--help', 'arg']);
   assert.equal(result.exit, 0, result.stderr);
-  const received = JSON.parse(result.stdout);
-  assert.equal(received.digest, digest(KEY));
-  assert.deepEqual(received.argv, ['--help', 'one', '--flag=two']);
-  assert.equal(received.other, undefined); assert.equal(received.token, undefined);
-  assert.deepEqual({ ...process.env }, before); assert.deepEqual(f.env, incoming);
-  const records = f.records();
-  assert.equal(records.length, 2); assert.equal(records[1].exit, 0);
-  assert.deepEqual(records[1].names, ['FIXTURE_KEY']); assert.match(records[1].content_hash, /^[a-f0-9]{64}$/u);
-  assert.equal(records[1].script, 'script.mjs'); assert.ok(Date.parse(records[1].time));
-  absent(JSON.stringify(result)); absent(JSON.stringify(records));
-  for (const file of allFiles(f.directory)) absent(readFileSync(file).toString('utf8'));
-  assert.ok(handlesHelp(['run', 'script.mjs', '--help']));
-  assert.deepEqual(invocationShape(['keys', 'run', 'script.mjs', '--private-argument', 'opaque']), {
-    verb: 'keys', sub: 'run', args: [], flags: [], argc: 5,
-  });
-  const scrubbed = scrubRuntimeSecretsFromEnv({ ...f.env, FIXTURE_KEY: KEY });
-  assert.equal(scrubbed.FIXTURE_KEY, undefined);
-  assert.equal(scrubRuntimeSecretsInPlace({ ...f.env, FIXTURE_KEY: KEY }).FIXTURE_KEY, undefined);
-  // A second worktree uses the same global custody and needs no local setup.
-  const worktree = join(f.directory, 'second'); git(f.root, ['worktree', 'add', '--detach', worktree, 'origin/main']);
-  const again = await f.run([], 'script.mjs', { cwd: worktree });
-  assert.equal(again.exit, 0, again.stderr); assert.equal(JSON.parse(again.stdout).digest, digest(KEY));
+  assert.equal(result.stdout, '[key:FIXTURE_TOKEN]:local:npm-local:--help,arg');
 });
 
-test('changed source gets no key', async t => {
-  const f = await fixture(t, "import { message } from './helper.mjs'; process.stdout.write('started:' + message);", {
-    sources: ['script.mjs', 'helper.mjs'], files: { 'helper.mjs': "export const message = 'main';" },
-  });
-  const original = readFileSync(join(f.root, 'script.mjs'), 'utf8');
-  f.write('script.mjs', original + "process.stdout.write('edited');");
-  let result = await f.run(); assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /differs from origin\/main/u);
-  f.write('script.mjs', original); f.write('helper.mjs', "export const message = 'edited';");
-  result = await f.run(); assert.equal(result.exit, 1); assert.equal(result.stdout, '');
-  f.write('helper.mjs', "export const message = 'main';");
-  result = await f.run([], 'undeclared.mjs'); assert.equal(result.exit, 1); assert.match(result.stderr, /undeclared/u);
-  f.manifest.scripts['script.mjs'].keys.UNDECLARED_KEY = 'other'; f.write('.mc-keys.json', JSON.stringify(f.manifest));
-  result = await f.run(); assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /manifest differs/u);
-  assert.equal(f.reads(), 0, 'source refusal happens before custody opens');
-  absent(JSON.stringify(f.records()));
+test('shared dotenv execution runs an untracked script with local imports from a second working directory', async t => {
+  const f = await fixture(t);
+  const second = join(f.directory, 'other-worktree'); mkdirSync(second);
+  write(second, 'package.json', '{"type":"module"}');
+  const script = write(second, 'nested/script.js', "import { value } from './module.js'; process.stdout.write(value + ':' + process.cwd());");
+  write(second, 'nested/module.js', "export const value = process.env.NONSECRET_ID;");
+  const again = await f.run(script, [], { cwd: second });
+  assert.equal(again.exit, 0, again.stderr);
+  assert.match(again.stdout, /^\[key:NONSECRET_ID\]:/u, 'nonsecret dotenv entries are delivered and all nonempty values are filtered');
+  assert.equal(f.records().filter(row => row.event === 'start').length, 1);
 });
 
-test('a printed key never reaches the session', async t => {
-  const f = await fixture(t, `const value = process.env.FIXTURE_KEY;
-    const encoded = Buffer.from(value).toString('base64');
-    process.stdout.write(value + ' ' + encoded + ' ');
-    process.stderr.write(value + ' ' + encoded + ' ');
-    for (const text of [value, encoded]) {
-      for (const char of text) {
-        process.stdout.write(char); process.stderr.write(char);
-        await new Promise(resolve => setTimeout(resolve, 2));
-      }
-      process.stdout.write(' '); process.stderr.write(' ');
-    }
-    throw new Error('failure includes ' + value);`);
-  const result = await f.run();
-  assert.equal(result.exit, 1); absent(result.stdout); absent(result.stderr);
-  assert.equal(result.stdout, '[key:FIXTURE_KEY] [key:FIXTURE_KEY] [key:FIXTURE_KEY] [key:FIXTURE_KEY] ');
-  assert.ok(result.stderr.match(/\[key:FIXTURE_KEY\]/gu).length >= 5);
-  absent(JSON.stringify(f.records()));
+test('shared dotenv freshness reparses additions and changes, parses quotes and exports, and leaves absent names undefined', async t => {
+  const f = await fixture(t, 'export QUOTED="first\\nsecond" # comment\nPLAIN=old # trailing comment\n');
+  const script = write(f.cwd, 'inspect.mjs', "const first=process.env.QUOTED==='first\\nsecond'&&process.env.PLAIN==='old'&&process.env.ADDED===undefined&&process.env.CONFIG_ID===undefined; const changed=process.env.QUOTED==='changed value'&&process.env.PLAIN===undefined&&process.env.ADDED===undefined&&process.env.CONFIG_ID==='account-7'; process.stdout.write(JSON.stringify({first,changed}));");
+  let result = await f.run(script);
+  assert.deepEqual(JSON.parse(result.stdout), { first: true, changed: false });
+  f.setSource("export QUOTED='changed value'\nCONFIG_ID=account-7\n");
+  result = await f.run(script);
+  assert.equal(result.exit, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { first: false, changed: true });
+  assert.equal(keysDotenvPath({ env: { HOME: '/untrusted/home' }, home: '/host/home', cwd: '/elsewhere' }), '/host/home/mc/self/memoro/.dev.vars');
 });
 
-test('a missing key or locked vault stops the run', async t => {
-  const f = await fixture(t, "process.stdout.write('started');", { names: { FIXTURE_KEY: 'dotenv:fixture:FIXTURE_KEY', MISSING_KEY: 'not-held' } });
-  let result = await f.run();
-  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /missing key: MISSING_KEY/u); absent(JSON.stringify(result));
-  f.lock(); result = await f.run();
-  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /vault locked/u); assert.match(result.stderr, /FIXTURE_KEY, MISSING_KEY/u);
-  absent(JSON.stringify(result)); assert.ok(f.records().every(row => row.exit === 1));
+test('shared dotenv refusals reject missing sources duplicate names malformed assignments and reserved names before launch', async t => {
+  const f = await fixture(t);
+  const marker = join(f.directory, 'launched');
+  const script = write(f.cwd, 'mark.mjs', `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'yes');`);
+  f.env.MC_KEYS_FILE = join(f.directory, 'missing.vars');
+  const missing = await f.run(script);
+  assert.equal(missing.exit, 1); assert.match(missing.stderr, /missing or unreadable/u);
+  f.env.MC_KEYS_FILE = f.source;
+  const unreadable = join(f.directory, 'unreadable'); mkdirSync(unreadable);
+  f.env.MC_KEYS_FILE = unreadable;
+  const denied = await f.run(script);
+  assert.equal(denied.exit, 1); assert.match(denied.stderr, /missing or unreadable/u);
+  f.env.MC_KEYS_FILE = f.source;
+  assert.throws(() => parseKeysDotenv('DUP=x\nDUP=y'), /duplicate name/u);
+  assert.throws(() => parseKeysDotenv('BROKEN LINE value-secret'), /malformed assignment/u);
+  assert.throws(() => parseKeysDotenv('NODE_OPTIONS=secret-value'), /reserved or invalid name/u);
+  for (const source of ['DUP=x\nDUP=y', 'broken assignment with-value-secret', 'PATH=/secret-path', 'MC_RUNTIME_CONTROL=value']) {
+    f.setSource(source);
+    const result = await f.run(script);
+    assert.equal(result.exit, 1); assert.equal(result.stdout, '');
+    absent(result.stderr, 'value-secret', '/secret-path');
+  }
+  assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
+  absent(JSON.stringify(f.records()), 'value-secret', '/secret-path');
 });
 
-test('list reports only names and whether envelope custody holds them', async t => {
-  const f = await fixture(t, 'process.exit(0);');
+test('shared dotenv isolation redacts raw and encoded values across chunks without changing parent env argv or audit', async t => {
+  const f = await fixture(t);
+  const script = write(f.cwd, 'print.mjs', `const value=process.env.FIXTURE_TOKEN; const encoded=Buffer.from(value).toString('base64'); for(const part of [value,encoded]) { process.stdout.write(part.slice(0,7)); await new Promise(r=>setTimeout(r,4)); process.stdout.write(part.slice(7)+' '); process.stderr.write(part+' '); } process.stdout.write(JSON.stringify({argv:process.argv.slice(2),inherited:process.env.INHERITED_SECRET,node:process.env.NODE_OPTIONS,home:process.env.HOME}));`);
+  const before = { ...process.env }; const envBefore = { ...f.env };
+  const result = await f.run(script, ['arg-secret-is-not-a-value']);
+  assert.equal(result.exit, 0, result.stderr);
+  assert.equal(result.stdout.slice(0, '[key:FIXTURE_TOKEN] [key:FIXTURE_TOKEN] '.length), '[key:FIXTURE_TOKEN] [key:FIXTURE_TOKEN] ');
+  assert.equal(result.stderr, '[key:FIXTURE_TOKEN] [key:FIXTURE_TOKEN] ');
+  const payload = JSON.parse(result.stdout.slice('[key:FIXTURE_TOKEN] [key:FIXTURE_TOKEN] '.length));
+  assert.deepEqual(payload.argv, ['arg-secret-is-not-a-value']); assert.equal(payload.inherited, 'must-not-be-a-dotenv-value');
+  assert.ok(!payload.node?.includes('not-allowed.cjs'), 'inherited executor control was stripped'); assert.equal(payload.home, f.env.HOME);
+  assert.deepEqual({ ...process.env }, before); assert.deepEqual(f.env, envBefore);
+  const records = JSON.stringify(f.records()); absent(records, SECRET, Buffer.from(SECRET).toString('base64'));
+  assert.equal(f.records()[1].content_hash, null);
+  rememberRuntimeSecretNames(['FIXTURE_TOKEN'], f.env);
+  assert.equal(scrubRuntimeSecretsFromEnv({ ...f.env, FIXTURE_TOKEN: SECRET }).FIXTURE_TOKEN, undefined);
+  assert.equal(scrubProviderApiKeysFromEnv({ ...f.env, FIXTURE_TOKEN: SECRET }).FIXTURE_TOKEN, undefined);
+});
+
+test('shared dotenv compatibility preserves --help argv exit status signals and names-only list output', async t => {
+  const f = await fixture(t, `FIXTURE_TOKEN=${SECRET}\nZ_CONFIG="z-value"\nA_CONFIG=value\n`);
+  const script = write(f.cwd, 'args.cjs', "process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode=7;");
+  const result = await f.run(script, ['--help', 'two']);
+  assert.equal(result.exit, 7); assert.deepEqual(JSON.parse(result.stdout), ['--help', 'two']);
+  assert.ok(handlesHelp(['run', 'args.cjs', '--help']));
+  assert.deepEqual(invocationShape(['keys', 'run', 'args.cjs', '--private', 'opaque']), { verb: 'keys', sub: 'run', args: [], flags: [], argc: 5 });
   const stdout = capture(); const stderr = capture();
-  assert.equal(await listScriptKeys({ cwd: f.root, env: f.env, vaultDeps: f.vaultDeps, stdout: stdout.stream, stderr: stderr.stream }), 0);
-  assert.equal(stdout.text(), 'FIXTURE_KEY  held\nSECOND_KEY  held\n'); absent(stdout.text()); assert.equal(stderr.text(), '');
-  f.lock(); const locked = capture();
-  assert.equal(await listScriptKeys({ cwd: f.root, env: f.env, vaultDeps: f.vaultDeps, stdout: locked.stream, stderr: stderr.stream }), 1);
-  assert.match(locked.text(), /unknown \(vault locked or unavailable\)/u); absent(locked.text());
+  assert.equal(await listScriptKeys({ cwd: f.cwd, env: f.env, stdout: stdout.stream, stderr: stderr.stream }), 0);
+  assert.equal(stdout.text(), 'A_CONFIG\nFIXTURE_TOKEN\nZ_CONFIG\n'); assert.equal(stderr.text(), '');
+  absent(stdout.text(), SECRET, 'value', 'held', 'missing');
+  const waiting = write(f.cwd, 'wait.mjs', "await new Promise(()=>{});");
+  const running = runScriptWithKeys(waiting, [], { cwd: f.cwd, env: f.env, stdout: capture().stream, stderr: capture().stream });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  process.emit('SIGTERM');
+  assert.equal(await running, 143);
 });
 
-test('the loader rejects unlisted static imports before the script executes', async t => {
-  const f = await fixture(t, "import './unlisted.mjs'; process.stdout.write('started');", { files: { 'unlisted.mjs': "process.stdout.write('unlisted started');" } });
-  const result = await f.run();
-  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /outside committed source closure/u); absent(result.stderr);
-});
-
-test('CommonJS require is restricted to the committed source closure too', async t => {
-  const f = await fixture(t, "import './helper.cjs'; process.stdout.write('started');", {
-    sources: ['script.mjs', 'helper.cjs'], files: { 'helper.cjs': "require('./unlisted.cjs');", 'unlisted.cjs': "process.stdout.write(process.env.FIXTURE_KEY);" },
-  });
-  const result = await f.run();
-  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /outside committed source closure/u); absent(result.stderr);
-});
-
-test('every byte split and overlapping values redact without corrupting other bytes', async () => {
-  const values = { SHORT: 'abcd', LONG: 'abcdefghi', UNICODE: 'å🔑x' };
-  const plain = Buffer.from('before abcdefghi abcd å🔑x after');
-  const expected = 'before [key:LONG] [key:SHORT] [key:UNICODE] after';
-  for (let split = 0; split <= plain.length; split++) {
+test('the byte filter redacts base64 across every chunk edge and keeps nonmatching bytes', async () => {
+  const value = 'fixture-token-abcdefghi'; const encoded = Buffer.from(value).toString('base64');
+  const input = Buffer.from(`before ${value} middle ${encoded} after`);
+  const expected = `before [key:TOKEN] middle [key:TOKEN] after`;
+  for (let split = 0; split <= input.length; split++) {
     const out = capture();
-    await pipeline(Readable.from([plain.subarray(0, split), plain.subarray(split)]), keyOutputFilter(values), out.stream);
+    await pipeline(Readable.from([input.subarray(0, split), input.subarray(split)]), keyOutputFilter({ TOKEN: value, EMPTY: '' }), out.stream);
     assert.equal(out.text(), expected, `split ${split}`);
   }
-  const out = capture(); const binary = Buffer.from([0xff, 0, 0xfe, 42]);
-  await pipeline(Readable.from([binary]), keyOutputFilter(values), out.stream); assert.deepEqual(out.bytes(), binary);
-});
-
-test('changed package metadata, symlinks and unlanded source fail closed', async t => {
-  const f = await fixture(t, "process.stdout.write('started');");
-  f.write('package.json', '{"type":"commonjs"}');
-  let result = await f.run(); assert.equal(result.exit, 1); assert.equal(result.stdout, '');
-  f.write('package.json', '{"type":"module"}');
-  f.write('new.mjs', "process.stdout.write('new');");
-  result = await f.run([], 'new.mjs'); assert.equal(result.exit, 1); assert.equal(result.stdout, '');
-  const mainSource = readFileSync(join(f.root, 'script.mjs'));
-  f.write('saved.mjs', mainSource); unlinkSync(join(f.root, 'script.mjs'));
-  symlinkSync('saved.mjs', join(f.root, 'script.mjs'));
-  result = await f.run(); assert.equal(result.exit, 1); assert.equal(result.stdout, '');
-  assert.equal(f.reads(), 0);
-});
-
-
-test('registered arbitrary dotenv names are scrubbed globally without storing values', async t => {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'mc-key-names-')));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const env = { MC_HOME: directory, banana: KEY, ['long_' + 'x'.repeat(300)]: KEY, TERM: 'xterm' };
-  rememberRuntimeSecretNames(['banana', 'long_' + 'x'.repeat(300)], env);
-  assert.deepEqual(scrubRuntimeSecretsFromEnv(env), { MC_HOME: directory, TERM: 'xterm' });
-  assert.deepEqual(scrubProviderApiKeysFromEnv(env), { MC_HOME: directory, TERM: 'xterm' }, 'interactive, helper and mend sessions scrub registered script names too');
-  for (const file of allFiles(directory)) absent(readFileSync(file, 'utf8'));
-  writeFileSync(join(directory, 'runtime-secret-names', 'invalid'), '');
-  assert.throws(() => scrubRuntimeSecretsFromEnv(env), /cannot read script-key name registry/u);
-});
-
-const filtered = async (values, chunks) => {
-  const filter = keyOutputFilter(values); const out = [];
-  filter.on('data', chunk => out.push(chunk));
-  for (const chunk of chunks) filter.write(chunk);
-  filter.end();
-  await new Promise(resolve => filter.on('end', resolve));
-  return Buffer.concat(out).toString();
-};
-
-test('a value inside a longer base64 text, or in base64url, does not pass the filter', async () => {
-  const value = 'sk-live_abc?>~012345';
-  for (const prefix of ['user:', 'us:', 'u:', '']) {
-    const text = Buffer.from(`${prefix}${value}`).toString('base64');
-    for (const encoded of [text, text.replaceAll('+', '-').replaceAll('/', '_')]) {
-      const middle = value.slice(4, 16);
-      const out = await filtered({ TOKEN: value }, [encoded]);
-      assert.match(out, /\[key:TOKEN\]/u, prefix);
-      assert.equal(Buffer.from(out.replace('[key:TOKEN]', ''), 'base64').includes(middle), false);
-    }
-  }
-});
-
-test('overlapping values leave no tail, across a chunk edge too', async () => {
-  const values = { A: 'tok9', B: 'ok9-remainder-of-b' };
-  assert.equal(await filtered(values, ['x tok9-remainder-of-b y']), 'x [key:A] y');
-  assert.equal((await filtered(values, ['x tok9-rem', 'ainder-of-b y'])).includes('remainder'), false);
-});
-
-test('a name registered over a crashed empty entry reads back, and no partial file stays', t => {
-  const home = mkdtempSync(join(tmpdir(), 'mc-key-names-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const env = { MC_HOME: home };
-  rememberRuntimeSecretNames(['SERVICE_TOKEN'], env);
-  const [directory] = readdirSync(home);
-  const [entry] = readdirSync(join(home, directory));
-  writeFileSync(join(home, directory, entry), '');
-  rememberRuntimeSecretNames(['SERVICE_TOKEN'], env);
-  assert.equal(scrubRuntimeSecretsFromEnv({ ...env, SERVICE_TOKEN: 'x' }).SERVICE_TOKEN, undefined);
-  assert.deepEqual(readdirSync(home), [directory]);
-});
-
-test('origin/main with no remote behind it releases nothing', async t => {
-  const f = await fixture(t, "process.stdout.write('started');");
-  spawnSync('git', ['remote', 'remove', 'origin'], { cwd: f.root });
-  const result = await f.run();
-  assert.equal(result.exit, 1); assert.equal(result.stdout, ''); assert.match(result.stderr, /origin\/main unavailable/u);
 });

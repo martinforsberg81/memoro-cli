@@ -196,9 +196,9 @@ export const COMMAND_USAGE = Object.freeze({
     "Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n",
   ].join(''),
   keys: [
-    "usage — mc keys run <script> [args…]   run a main-matching script with its declared vault keys\n",
-    "        mc keys list                   declared names and custody status, never values\n",
-    "        Uses the repository’s committed .mc-keys.json; never exports plaintext.\n",
+    "usage — mc keys run <script> [args…]   run a trusted Node script with shared dotenv entries\n",
+    "        mc keys list                   names in the shared dotenv source, never values\n",
+    "        Reads ~/mc/self/memoro/.dev.vars (or MC_KEYS_FILE); scripts receive all entries.\n",
   ].join(''),
   shot: [
     "usage — mc shot <dev|prod> <target>   a PNG of the running app; prints its path first, alone\n",

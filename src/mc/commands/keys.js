@@ -1,4 +1,4 @@
-/** Script keys are released only through the committed source-closure runner. */
+/** Trusted Node scripts receive the shared dotenv entries in their child environment. */
 import { listScriptKeys, runScriptWithKeys } from '../keys-run.js';
 import { commandUsage } from '../command-help.js';
 
