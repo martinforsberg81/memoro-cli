@@ -32,7 +32,7 @@ import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
-import { redNames, tapTotals } from '../../src/mc/tap-red.js';
+import { redNames, redTests, tapTotals } from '../../src/mc/tap-red.js';
 import { readMainRed, recordMainRed } from '../../src/mc/selector-miss.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
@@ -1696,10 +1696,12 @@ describe('a repository that selects by diff', () => {
     const scanner = 'tests/scan.test.js';
     const own = 'tests/own.test.js';
     /** TAP with a located failure in each of `files`, the way node writes it. */
-    function located(files) {
+    function located(files, error = []) {
       const lines = ['TAP version 13'];
       files.forEach((file, index) => {
-        lines.push(`not ok ${index + 1} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`, '  ...');
+        lines.push(`not ok ${index + 1} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`);
+        if (error.length) lines.push('  error: |-', ...error.map((line) => `    ${line}`));
+        lines.push('  ...');
       });
       lines.push(`1..${files.length}`, '# tests 4', `# pass ${4 - files.length}`, `# fail ${files.length}`);
       return lines.join('\n');
@@ -1711,7 +1713,7 @@ describe('a repository that selects by diff', () => {
     // after it reads `redAt` — the files alone, on the base or the candidate
     // (`cand2222`, what the fixture's `rev-parse HEAD` names). `touched` is
     // what the pull request's diff against the base lists.
-    function onMain({ redAt, round = null, touched = [] }) {
+    function onMain({ redAt, round = null, touched = [], error = [] }) {
       let at = 'candidate';
       let first = true;
       const gitAlso = (args) => {
@@ -1727,15 +1729,26 @@ describe('a repository that selects by diff', () => {
         const now = first && round ? round : (redAt[at] || []);
         first = false;
         const red = now.filter((file) => ran.includes(file));
-        return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red) });
+        return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red, error) });
       };
       return { gitAlso, tests };
     }
 
-    function cached(fx, { commit = 'base1111full', files = [scanner], name = null, error = [] } = {}) {
+    // A real deep-equality diff: the first six nonblank lines are all a
+    // display summary keeps, so a second difference further down is only in
+    // the whole diagnostic.
+    const prefix = ['Expected values to be strictly deep-equal:', '+ actual - expected', '  {',
+      "+   a: 'existing regression',", "-   a: 'expected',", "    b: 'stable',"];
+    const onCandidate = [...prefix, "+   z: 'new regression',", "-   z: 'expected',", '  }'];
+    const onBase = [...prefix, "    z: 'expected',", '  }'];
+
+    /** Main's evidence as a completed main-only run writes it: the parsed red tests of its TAP. */
+    function cached(fx, { commit = 'base1111full', files = [scanner], name = null, error = onCandidate, legacy = false } = {}) {
+      const parsed = redTests(located(files, error), files)
+        .map((test) => ({ ...test, name: name || test.name }))
+        .map(({ diagnostic, ...test }) => (legacy ? test : { ...test, diagnostic }));
       recordMainRed({ root: fx.mcHome, repo: 'repo', commit, result: {
-        totals: { finished: true }, red_files: files,
-        red_tests: files.map(file => ({ file, name: name || `a test in ${file}`, error })),
+        totals: { finished: true }, red_files: files, red_tests: parsed,
       } });
     }
 
@@ -1750,9 +1763,11 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    for (const kind of ['missing', 'stale', 'new failure', 'new diagnostic', 'changed test', 'exact']) {
+    for (const kind of ['missing', 'stale', 'new failure', 'new diagnostic', 'legacy evidence', 'changed test', 'exact']) {
       it(`standing main evidence is ${kind}: no base replay or history walk`, async () => {
-        const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner] }, touched: kind === 'changed test' ? [scanner] : [] });
+        const { gitAlso, tests } = onMain({
+          redAt: { candidate: [scanner] }, touched: kind === 'changed test' ? [scanner] : [], error: onCandidate,
+        });
         const calls = [];
         const fx = selecting({ files: [scanner], gitAlso: (args, options) => {
           calls.push(args); return gitAlso(args, options);
@@ -1762,8 +1777,16 @@ describe('a repository that selects by diff', () => {
           if (kind !== 'missing') cached(fx, {
             commit: kind === 'stale' ? 'old-main' : 'base1111full',
             name: kind === 'new failure' ? 'another failure' : null,
-            error: kind === 'new diagnostic' ? ['different failure'] : [],
+            // Differs only after the sixth nonblank line: same display lines.
+            error: kind === 'new diagnostic' ? onBase : onCandidate,
+            // Written before the whole diagnostic was kept: never an exemption.
+            legacy: kind === 'legacy evidence',
           });
+          if (kind === 'new diagnostic') {
+            const [base] = redTests(located([scanner], onBase), [scanner]);
+            const [candidate] = redTests(located([scanner], onCandidate), [scanner]);
+            assert.deepEqual(base.error, candidate.error, 'the display lines alone cannot tell them apart');
+          }
           const report = await fx.report({ tests: (args) => { runs++; return tests(args); } });
           assert.equal(report.ok, kind === 'exact', report.reason);
           assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
@@ -2047,10 +2070,13 @@ describe('a repository that selects by diff', () => {
         });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.candidate.red_files, [own]);
-        assert.deepEqual(report.candidate.red_tests, [
+        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, ...test }) => test), [
           { file: own, name: 's › a', own: 'a', at: `${own}:12:12`, error: ['Expected values to be strictly equal:', '1 !== 2'] },
           { file: own, name: 's › b', own: 'b', at: `${own}:22:12`, error: ['boom'] },
         ], 'the leaves, not the suite failing because of them');
+        const [a, b] = report.candidate.red_tests.map((test) => test.diagnostic);
+        assert.match(a, /^[0-9a-f]{64}$/u, 'each red test carries its whole diagnostic');
+        assert.notEqual(a, b);
       } finally { fx.cleanup(); }
     });
 

@@ -50,7 +50,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from './tap-red.js';
+import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
 import { readMainRed, recordMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
@@ -836,8 +836,7 @@ export async function runGate({
       // Main's already, by this round's own probe of the previous red files —
       // and untouched, which that probe's turn checked: not asked twice.
       if (within(new Set(report.main_red_files || [])) && result.red_tests?.length
-        && result.red_tests.every(test => report.main_red?.tests?.some(known => known.file === test.file && known.name === test.name
-            && JSON.stringify(known.error || []) === JSON.stringify(test.error || [])))) {
+        && result.red_tests.every(test => report.main_red?.tests?.some(known => sameFailure(known, test)))) {
         return mainRedGoesOn(result);
       }
       // Red only in files declared to flip under load (ruling 44 § 5): run
@@ -885,8 +884,7 @@ export async function runGate({
         const proof = report.main_red;
         if (proof?.stopped) say(proof.stopped);
         const sameFailures = proof?.cached && result.red_tests?.length && result.red_tests.every((test) =>
-          proof.tests.some((known) => known.file === test.file && known.name === test.name
-            && JSON.stringify(known.error || []) === JSON.stringify(test.error || [])));
+          proof.tests.some((known) => sameFailure(known, test)));
         if (sameFailures && within(new Set(proof.red_on_main || []))) {
           const touched = await touchedPaths();
           if (touched && !result.red_files.some((file) => touched.has(file))) return mainRedGoesOn(result);

@@ -486,7 +486,11 @@ A completed main-only run records its base SHA, failing test files, names and
 diagnostics under `<mc home>/main-red/<repo>.json`. A PR round may read that
 already-measured evidence for its exact base SHA. Every candidate failure must
 match the recorded file, name and diagnostic, and the PR must leave those test
-files unchanged; otherwise the round remains red. Matching standing failures
+files unchanged; otherwise the round remains red. The diagnostic compared is a
+digest of the whole error (`diagnostic` in `red_tests`, from `tap-red.js`), not
+the first lines kept for display: a deep-equality diff that differs only below
+that cut is a new failure. Evidence recorded without the digest never
+qualifies. Matching standing failures
 are named in `main_red_files` and excluded from the candidate's red, while
 command gates and the PR's own tests still run. This is a standing-assertion
 exemption, not proof that unchanged failing assertions cannot hide another

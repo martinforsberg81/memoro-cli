@@ -275,7 +275,8 @@ export function readMainRed({ root = mcHome(), repo, baseCommit, files }) {
     if (evidence.commit !== baseCommit || !Array.isArray(evidence.files) || !Array.isArray(evidence.tests)
       || !evidence.files.every(file => typeof file === 'string')
       || !evidence.tests.every(test => test && typeof test.file === 'string' && typeof test.name === 'string'
-        && (test.error === undefined || (Array.isArray(test.error) && test.error.every(line => typeof line === 'string'))))) return unknown;
+        && (test.error === undefined || (Array.isArray(test.error) && test.error.every(line => typeof line === 'string')))
+        && (test.diagnostic === undefined || typeof test.diagnostic === 'string'))) return unknown;
     const red = evidence.files.filter((file) => files.includes(file));
     if (!red.length) return unknown; // No base/candidate-alone fallback either.
     return { base: baseCommit, red_on_main: red, tests: evidence.tests, breaks: [], cached: true };
