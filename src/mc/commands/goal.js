@@ -16,9 +16,9 @@
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
  *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked]
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too
- *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"] [--sha <sha>]   mc goal log --stage <stage> --comment <reason>;
+ *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
- *                                  from a review, merging queues the pull request at the head it judged
+ *                                  merge executes the session decision for all registered pull requests
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
@@ -35,7 +35,7 @@
  * A goal's stage only moves forward (`goals.js` `STAGES`); only a person moves
  * it back (`refusedMove`). A build session moves `build` to `review` — not
  * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
- * review session moves `review` to `merging` or `finish`; a plan session any
+ * review session moves `review` to `merge` or `finish`; a plan session any
  * stage forward.
  *
  * A goal's phase is not its stage: a goal in a later phase keeps the stage
@@ -65,7 +65,7 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--sha', '--done', '--comment', '--next', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--comment', '--next', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
   new: ['--repo', '--class', '--title', '--phase', '--stage'],
@@ -78,7 +78,7 @@ const VERB_FLAGS = {
   convert: [],
   'from-project': [],
   log: ['--done', '--comment', '--next', '--stage', '--status'],
-  stage: ['--reason', '--sha'],
+  stage: ['--reason'],
   status: ['--reason'],
   pr: [],
   archive: [],
@@ -138,7 +138,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'stage') {
     if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
     const stage = rest.pop();
-    return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null, sha: flags.sha }, ctx);
+    return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null }, ctx);
   }
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
@@ -227,9 +227,8 @@ function newGoal(args, flags, ctx) {
  * and so is a move the caller may not make (`refusedMove`): a session's
  * backward one, `review` while a criterion is not met, a review's `finish`
  * without REVIEW.md. A person's backward move is made and logged. A review's
- * `merging` queues the goal's pull request for the merger at the head it
- * judged (`queueJudged`) before anything is written; a queue that fails
- * writes nothing.
+ * `merge` records the session's decision before queueing every registered PR.
+ * A queue failure leaves that decision available for retry and runner recovery.
  */
 function logEntry(args, fields, ctx) {
   const { stdout, stderr, env, read, write } = ctx;
@@ -257,11 +256,6 @@ function logEntry(args, fields, ctx) {
   }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
   let done = fields.done;
-  if (moves && fields.stage === 'merging' && env.MC_ROLE === REVIEW_ROLE && isSession(env)) {
-    const queued = queueJudged(target, goal, fields.sha ?? env.MC_REVIEW_HEAD ?? null, ctx);
-    if (queued.error) { stderr.write(`mc: ${target.name} is not moved to merging — ${queued.error}\n`); return 1; }
-    done = [done, queued.text].filter(Boolean).join('; ');
-  }
   const back = moves && backward(goal.stage, fields.stage);
   const comment = back ? [fields.comment, `moved back from ${goal.stage} to ${fields.stage} by a person`].filter(Boolean).join(' — ') : fields.comment;
   const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, done, comment, next: fields.next };
@@ -276,37 +270,31 @@ function logEntry(args, fields, ctx) {
   } else {
     appendEntry({ dir: target.dir, entry: { ...entry, stage: goal.stage, status: goal.status }, read, write });
   }
+  if (now.stage === 'merge' && fields.stage === 'merge') {
+    const queued = queueGoal(target, now, ctx);
+    if (queued.error) { stderr.write(`mc: ${target.name} · merge — ${queued.error}; run mc goal stage merge again to retry\n`); return 1; }
+    done = queued.text;
+  }
   stdout.write(`mc: ${target.name} · ${stageWords(now)}${back ? ` — moved back from ${goal.stage}` : ''}\n`);
   if (done && done !== fields.done) stdout.write(`mc: ${done}\n`);
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
 }
 
-/**
- * The goal's open pull request queued for the merger at `sha`, the head its
- * review judged, as `mc merge` queues — with the goal and that sha on the
- * job, so the merger lands that head and no other (`merger.js` `landJob`).
- * `{ text }` said into the entry, or `{ error }`: no sha, no pull request on
- * the goal's branch, or a queue that fails.
- */
-function queueJudged(target, goal, sha, ctx) {
-  if (!sha) return { error: 'which head did the review judge? MC_REVIEW_HEAD is not set — --sha <sha>' };
-  const [repoName] = goal.repos;
-  const repoPath = ctx.known().find((path) => repoNameOf(path) === repoName);
-  if (!repoPath) return { error: `${repoName} is not a repository mc knows` };
-  // The goal's own branch, or the project branch it took over (`goalBranch`).
-  const branch = goalBranch({ git: ctx.git, dir: target.dir, goal: target.goal, repo: repoName });
-  const asked = ctx.gh(repoPath, ['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number,headRefOid']);
-  if (!asked.ok) return { error: `its pull request could not be read (${asked.stderr.trim() || 'gh failed'})` };
-  let pr;
-  try { [pr] = JSON.parse(asked.stdout || '[]'); } catch (error) { return { error: `gh answered what is not JSON (${error.message})` }; }
-  if (!pr) return { error: `${branch} has no open pull request` };
-  try {
-    ctx.queue({ repo: repoName, repoPath, pr: pr.number, branch, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, sha, now: ctx.now });
-  } catch (error) {
-    return { error: `#${pr.number} could not be queued (${error?.message || error})` };
+/** Execute the session's merge decision for every PR it registered on the goal. */
+function queueGoal(target, goal, ctx) {
+  const queued = [];
+  for (const item of goal.prs) {
+    const repoPath = ctx.known().find((path) => repoNameOf(path) === item.repo);
+    if (!repoPath) return { error: `${item.repo} is not a repository mc knows` };
+    try {
+      ctx.queue({ repo: item.repo, repoPath, pr: item.pr, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, now: ctx.now });
+      queued.push(prRef(item));
+    } catch (error) {
+      return { error: `${prRef(item)} could not be queued (${error?.message || error})` };
+    }
   }
-  return { text: `queued #${pr.number} at ${sha} for the merger` };
+  return { text: queued.length ? `queued ${queued.join(', ')} for the merger` : 'no pull requests registered on the goal' };
 }
 
 /** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */
@@ -659,7 +647,7 @@ function goalNamed(arg, { env, home }) {
  * a person, who may make any move, backward too (logged by `logEntry`). No
  * session moves a stage backward. A plan session makes any forward move: it
  * writes goals, finishes them and drops them (`canon/roles/plan-session.md`).
- * A review session moves a goal in `review` to `merging` (OK) or `finish`
+ * A review session moves a goal in `review` to `merge` (OK) or `finish`
  * (not OK, REVIEW.md written first), and sets no status. A build session
  * moves `build` to `review` or sets `blocked`, nothing else.
  */
@@ -669,10 +657,10 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
   if (env.MC_ROLE === PLAN_ROLE) return null;
   if (env.MC_ROLE === REVIEW_ROLE) {
-    if (status !== null) return 'a review sets no status — it ends with mc goal stage merging (OK to land) or finish (not OK, with REVIEW.md)';
+    if (status !== null) return 'a review sets no status — it ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
     if (!moves) return null;
     if (from !== 'review') return `a review moves only a goal in review, and this one is ${from}`;
-    if (to !== 'merging' && to !== 'finish') return `a review ends in merging or finish, not ${to}`;
+    if (to !== 'merge' && to !== 'finish') return `a review ends in merge or finish, not ${to}`;
     if (to === 'finish' && !reviewWritten) return `a review sends a goal to finish with ${REVIEW_FILE} — write ${dir}/${REVIEW_FILE} first: the head judged, what is wrong and where`;
     return null;
   }

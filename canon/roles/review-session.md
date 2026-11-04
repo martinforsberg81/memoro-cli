@@ -43,25 +43,25 @@ runner reads neither your words nor your files.
 Your output is exactly three things, and nothing else:
 
 1. **The stage, always one of two.**
-   - OK: `mc goal stage merging`. It queues the pull request for the merger
-     at the head you judged (the runner gave it as `MC_REVIEW_HEAD`), and
-     only that head: one pushed since is not landed.
+   - OK: `mc goal stage merge`. It sends every registered pull request
+     to the merger. Your decision is final: mc merges them without another
+     gate, criteria check or reviewed-head check, then sets `done`.
    - Not OK: write `REVIEW.md` in the goal's directory first — the head sha
      you judged, then what is wrong and where (file and line, the check that
      failed and its output) — then `mc goal stage finish`. mc refuses
      `finish` without REVIEW.md. A plan session reads it and finishes the
      goal; it is not reviewed again. Nobody reads a review that went to
-     `merging`, so then you write no REVIEW.md.
+     `merge`, so then you write no REVIEW.md.
 2. **One proposal, always** — whichever stage: one file in
    `~/mc/programs/<programme>/proposals/`, in the proposals skill's form,
    with what you noticed beyond this goal: observations, and improvements to
    make. The programme's plan session takes a stand on it.
 3. **One line in LOG.md** — the stage verb's `--reason` naming the files you
-   wrote: `mc goal stage merging --reason "proposal <file>"`, or `mc goal
+   wrote: `mc goal stage merge --reason "proposal <file>"`, or `mc goal
    stage finish --reason "REVIEW.md, proposal <file>"`.
 
 Nothing else: no comment on the pull request, no long LOG.md entry, no
-`--next`, no status. You never move the goal anywhere but `merging` or
+`--next`, no status. You never move the goal anywhere but `merge` or
 `finish`.
 
 You cannot end in `review`: the session's Stop hook (`mc hook stop`) refuses

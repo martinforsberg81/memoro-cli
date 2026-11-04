@@ -1181,181 +1181,103 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
 });
 
 
-describe('a goal\'s pull request (goals.js): done at landing; a red or a moved head stays in merging, the second blocked', () => {
+describe('a session decision to merge a goal', () => {
   const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
-  const GOAL_JOB = { repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 90, branch: 'goal/g', holder: { name: 'goal:mc/g' }, goal: GOAL, sha: 'aaa111' };
-  /** `setGoal`, recorded: what the merger writes to GOAL.json and LOG.md. */
-  const goalWrites = () => {
+  const jobs = [
+    { ...JOB, repo: 'memoro-cli', pr: 90, goal: GOAL, sha: 'old-reviewed-head' },
+    { ...JOB, repo: 'memoro', repo_path: '/repos/memoro', pr: 14804, goal: GOAL },
+  ];
+
+  function decision({ conflict = false } = {}) {
+    let goal = { ...GOAL, stage: 'merge', status: 'ready', prs: jobs.map(({ repo, pr }) => ({ repo, pr })),
+      success_criteria: [{ criterion: 'not checked again', check: 'none', met: false }], log: [], problems: [] };
+    const calls = [];
+    const landed = new Set();
     const writes = [];
-    return { writes, setGoal: (call) => { writes.push(call); return { goal: {} }; } };
-  };
-  const headAt = (sha) => (args) => (args.includes('headRefOid') && !args.includes('state,headRefOid,mergeCommit,baseRefName')
-    ? { status: 0, stdout: JSON.stringify({ headRefOid: sha }) }
-    : { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) });
-
-  it('queueMerge keeps the goal and the reviewed head on the job', () => {
-    const { place } = queueMerge({ root, repo: 'memoro-cli', repoPath: '/repos/memoro-cli', pr: 90, branch: 'goal/g', goal: GOAL, sha: 'aaa111', lock, start: () => null });
-    assert.equal(place, 0);
-    const [entry] = queue();
-    assert.deepEqual(entry.goal, GOAL);
-    assert.equal(entry.sha, 'aaa111');
-  });
-
-  it('landed: the goal is done, with a runner entry naming the pull request and the landed sha', async () => {
-    const { writes, setGoal } = goalWrites();
-    const m = machine([green], { gh: headAt('aaa111'), setGoal });
-    const [answer] = await landJob(GOAL_JOB, m.deps);
-    assert.equal(answer.landed, true);
-    assert.equal(writes.length, 1);
-    assert.equal(writes[0].dir, GOAL.dir);
-    assert.equal(writes[0].stage, 'done');
-    assert.equal(writes[0].entry.tool, 'runner');
-    assert.equal(writes[0].entry.done, 'landed #90 as abc1234def');
-    assert.equal(m.rows[0].name, 'goal:mc/g');
-  });
-
-  it('red: the goal stays in merging, ready for one plan session, with a runner entry saying why; a second red in merging blocks it', async () => {
-    const { writes, setGoal } = goalWrites();
-    const m = machine([red], { gh: headAt('aaa111'), setGoal });
-    const [answer] = await landJob(GOAL_JOB, m.deps);
-    assert.equal(answer.landed, false);
-    assert.deepEqual([writes[0].stage, writes[0].status], ['merging', 'ready']);
-    assert.equal(writes[0].entry.done, 'merger answered red on #90');
-    assert.match(writes[0].entry.comment, /^red: 2 tests red: a › b — one plan session takes it and queues it again$/u);
-
-    const second = goalWrites();
-    const log = [{ at: '2026-10-09T12:00Z', tool: 'runner', model: null, stage: 'merging', status: 'ready', done: 'merger answered red on #90', comment: null, next: null },
-      { at: '2026-10-09T12:30Z', tool: 'claude', model: 'opus', stage: 'merging', status: 'ready', done: 'fixed it', comment: null, next: null }];
-    const again = machine([red], { gh: headAt('aaa111'), setGoal: second.setGoal, goalsOf: () => [{ ...GOAL, stage: 'merging', status: 'ready', prs: [], log, problems: [] }] });
-    await landJob(GOAL_JOB, again.deps);
-    assert.deepEqual([second.writes[0].stage, second.writes[0].status], ['merging', 'blocked']);
-    assert.match(second.writes[0].entry.comment, /— the second in merging: waits on a person$/u);
-  });
-
-  it('a head other than the reviewed one is not landed: no round, and the goal stays in merging — never back to review', async () => {
-    const { writes, setGoal } = goalWrites();
-    const m = machine([green], { gh: headAt('bbb222'), setGoal });
-    const [answer] = await landJob(GOAL_JOB, m.deps);
-    assert.equal(m.rounds.length, 0, 'no round spent on it');
-    assert.equal(answer.landed, false);
-    assert.equal(answer.moved, true);
-    assert.equal(answer.back, undefined);
-    assert.deepEqual([writes[0].stage, writes[0].status], ['merging', 'ready']);
-    assert.equal(writes[0].entry.done, 'merger answered moved on #90');
-    assert.match(writes[0].entry.comment, /#90 is at bbb222, not aaa111, the head its review judged — one plan session takes it/u);
-  });
-
-  it('a push while the round runs is moved too, not back in line', async () => {
-    const { writes, setGoal } = goalWrites();
-    const gh = (args) => {
-      if (args.includes('state,headRefOid,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: 'ccc333' }) };
-      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: 'aaa111' }) };
-      return { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) };
+    const pulled = [];
+    const gh = (args, { cwd }) => {
+      calls.push({ args, cwd });
+      const pr = Number(args[2]);
+      if (args[1] === 'merge') {
+        if (landed.has(pr)) return { status: 1, stderr: 'already merged' };
+        if (conflict && pr === 14804) return { status: 1, stderr: 'CONFLICT (content): a.js' };
+        landed.add(pr);
+        return { status: 0, stdout: '' };
+      }
+      return { status: 0, stdout: JSON.stringify(landed.has(pr)
+        ? { state: 'MERGED', mergeCommit: { oid: `commit-${pr}` }, baseRefName: 'main' }
+        : { state: 'OPEN' }) };
     };
     const m = machine([], {
-      gh, watchMs: 5, setGoal,
-      mergeRound: (options) => new Promise((resolve) => {
-        options.signal.addEventListener('abort', () => resolve({ ok: false, merged: false, stopped_at: 'gone', reason: options.signal.reason.message }));
-      }),
-    });
-    const [answer] = await landJob(GOAL_JOB, m.deps);
-    assert.equal(answer.moved, true);
-    assert.equal(answer.back, undefined);
-    assert.equal(writes[0].stage, 'merging');
-  });
-
-  it('serve: a moved goal job leaves the queue', async () => {
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(mergesPath(root), JSON.stringify([{ ...GOAL_JOB, since: '2026-10-09T12:01:00Z' }]));
-    let rounds = 0;
-    await serve({
-      root, lock, take: () => true, release: () => {}, ...ONE_LANE,
-      land: async ([job], lane, { onAnswer }) => {
-        rounds += 1;
-        const answer = { job, landed: false, report: { ok: false, merged: false, stopped_at: 'moved', reason: 'moved' }, moved: true };
-        await onAnswer(answer);
-        return [answer];
+      gh, goalsOf: () => [goal], afterLanding: (job) => { pulled.push(job.pr); },
+      noteGoal: ({ entry }) => { goal.log.push(entry); },
+      setGoal: (change) => {
+        writes.push(change);
+        goal = { ...goal, ...(change.stage ? { stage: change.stage } : {}), ...(change.status ? { status: change.status } : {}), log: [...goal.log, { ...change.entry, stage: change.stage ?? goal.stage, status: change.status ?? goal.status }] };
+        return { goal };
       },
     });
-    assert.equal(rounds, 1);
-    assert.deepEqual(queue(), []);
+    return { m, calls, writes, landed, pulled, goal: () => goal };
+  }
+
+  it('merges both repositories directly and sets done only after the last landing', async () => {
+    const d = decision();
+    assert.equal((await landJob(jobs[0], d.m.deps))[0].landed, true);
+    assert.equal(d.goal().stage, 'merge');
+    assert.equal((await landJob(jobs[1], d.m.deps))[0].landed, true);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['done', 'ready']);
+    assert.deepEqual(d.m.rounds, [], 'no gate round');
+    assert.deepEqual(d.pulled, [90, 14804], 'successful landings still update installations');
+    assert.deepEqual(d.calls.filter(({ args }) => args[1] === 'merge'), [
+      { args: ['pr', 'merge', '90', '--squash'], cwd: '/repos/memoro-cli' },
+      { args: ['pr', 'merge', '14804', '--squash'], cwd: '/repos/memoro' },
+    ]);
+    assert.equal(d.calls.some(({ args }) => args.includes('headRefOid')), false);
+  });
+
+  it('leaves a content conflict to one session, then blocks a second failed attempt', async () => {
+    const d = decision({ conflict: true });
+    await landJob(jobs[0], d.m.deps);
+    const [answer] = await landJob(jobs[1], d.m.deps);
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.reason, 'CONFLICT (content): a.js');
+    assert.deepEqual(d.pulled, [90], 'a failed merge does not update the installation');
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready']);
+    assert.equal(d.goal().log.at(-1).done, 'merger answered red on #14804');
+    await landJob(jobs[1], d.m.deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    assert.deepEqual(d.m.rounds, []);
+  });
+
+  it('recovers a landing made before the previous process recorded its answer', async () => {
+    const d = decision();
+    d.landed.add(90);
+    await landJob(jobs[0], d.m.deps);
+    await landJob(jobs[1], d.m.deps);
+    assert.equal(d.goal().stage, 'done');
+  });
+
+  it('a PR linked to a goal uses its merge decision even without job.goal', async () => {
+    const d = decision();
+    await landJob({ ...jobs[0], goal: null }, d.m.deps);
+    assert.deepEqual(d.m.rounds, []);
+    assert.match(d.goal().log.at(-1).done, /^memoro-cli#90 landed/u);
   });
 });
 
-describe('a pull request a goal carries in its prs (goal-lifecycle): its goal is told, whoever queued it', () => {
-  const DIR = '/programs/ios/goals/asc';
-  const goalAt = (prs, stage = 'merging') => [{ programme: 'ios', goal: 'asc', dir: DIR, stage, status: 'ready', prs, log: [], problems: [] }];
-  const PLAIN_JOB = { repo: 'memoro', repo_path: '/repos/memoro', pr: 14761, branch: 'fix-json', holder: { name: 'person' }, goal: null, sha: null };
-  const record = () => {
-    const sets = [];
-    const notes = [];
-    return { sets, notes, setGoal: (call) => { sets.push(call); return { goal: {} }; }, noteGoal: (call) => { notes.push(call); } };
-  };
-  const openGh = () => ({ status: 0, stdout: JSON.stringify({ state: 'OPEN', headRefOid: 'aaa111' }) });
-
-  it('landed, and the goal carries nothing else: done', async () => {
-    const r = record();
-    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }]) });
-    const [answer] = await landJob(PLAIN_JOB, m.deps);
-    assert.equal(answer.landed, true);
-    assert.equal(r.sets.length, 1);
-    assert.equal(r.sets[0].dir, DIR);
-    assert.equal(r.sets[0].stage, 'done');
-    assert.equal(r.sets[0].entry.done, 'landed #14761 as abc1234def');
-  });
-
-  it('landed, while the goal carries another pull request: the landing is logged, the status left for the runner', async () => {
-    const r = record();
-    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro-cli', pr: 1238 }, { repo: 'memoro', pr: 14761 }]) });
-    await landJob(PLAIN_JOB, m.deps);
-    assert.equal(r.sets.length, 0);
-    assert.equal(r.notes.length, 1);
-    assert.deepEqual([r.notes[0].entry.stage, r.notes[0].entry.status], ['merging', 'ready'], 'the heading keeps the goal\'s stage and status');
-    assert.match(r.notes[0].entry.done, /^memoro#14761 landed #14761 as abc1234def$/u);
-    assert.match(r.notes[0].entry.comment, /carries memoro-cli#1238 too — done when every one has landed or closed/u);
-  });
-
-  it('red: the goal in merging stays there for one plan session, as its own branch\'s red does; one in another stage is told and does not move', async () => {
-    const r = record();
-    const m = machine([red], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }]) });
-    await landJob(PLAIN_JOB, m.deps);
-    assert.deepEqual([r.sets[0].stage, r.sets[0].status], ['merging', 'ready']);
-    assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
-
-    const building = record();
-    const b = machine([red], { gh: openGh, setGoal: building.setGoal, noteGoal: building.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro', pr: 14761 }], 'build') });
-    await landJob(PLAIN_JOB, b.deps);
-    assert.equal(building.sets.length, 0, 'a goal in build is not moved by a red');
-    assert.deepEqual([building.notes[0].entry.stage, building.notes[0].entry.done], ['build', 'merger answered red on #14761']);
-    assert.match(building.notes[0].entry.comment, /the goal is in build, not merging; it stays there$/u);
-  });
-
-  it('a goal with a criterion not met is not landed: no round, red with the criterion named, for one plan session', async () => {
-    const r = record();
-    const criteria = [{ criterion: 'a', check: 'x', met: true }, { criterion: 'b', check: 'y', met: false }];
-    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => [{ ...goalAt([{ repo: 'memoro', pr: 14761 }])[0], success_criteria: criteria }] });
-    const [answer] = await landJob(PLAIN_JOB, m.deps);
-    assert.equal(m.rounds.length, 0, 'no round spent on it');
-    assert.equal(answer.landed, false);
-    assert.equal(answer.report.stopped_at, 'unmet-criteria');
-    assert.match(answer.report.reason, /^criterion 2 is not met — run its check and record it with mc goal criterion met ios\/asc 2$/u);
-    assert.deepEqual([r.sets[0].stage, r.sets[0].status], ['merging', 'ready']);
-    assert.equal(r.sets[0].entry.done, 'merger answered red on #14761');
-    assert.match(r.sets[0].entry.comment, /^unmet-criteria: criterion 2 is not met/u);
-
-    // Its own branch's job (a green review queued it) is refused the same way; met, it lands.
-    const own = record();
-    const job = { ...PLAIN_JOB, branch: 'goal/asc', goal: { programme: 'ios', goal: 'asc', dir: DIR }, sha: 'aaa111' };
-    const refused = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria }] });
-    assert.equal((await landJob(job, refused.deps))[0].report.stopped_at, 'unmet-criteria');
-    const met = machine([green], { gh: openGh, setGoal: own.setGoal, noteGoal: own.noteGoal, goalsOf: () => [{ ...goalAt([])[0], success_criteria: criteria.map((item) => ({ ...item, met: true })) }] });
-    assert.equal((await landJob(job, met.deps))[0].landed, true);
-  });
-
-  it('a pull request no goal carries tells no goal', async () => {
-    const r = record();
-    const m = machine([green], { gh: openGh, setGoal: r.setGoal, noteGoal: r.noteGoal, goalsOf: () => goalAt([{ repo: 'memoro-cli', pr: 14761 }]) });
-    await landJob(PLAIN_JOB, m.deps);
-    assert.deepEqual([r.sets.length, r.notes.length], [0, 0]);
-  });
+// Ordinary PR jobs still use their existing round and goal association.
+it('ordinary PR failure leaves a linked build goal in build, and another repository PR tells no goal', async () => {
+  const goal = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g', stage: 'build', status: 'ready', prs: [{ repo: JOB.repo, pr: JOB.pr }], log: [], problems: [] };
+  const sets = [];
+  const notes = [];
+  const m = machine([red], { goalsOf: () => [goal], setGoal: (call) => sets.push(call), noteGoal: (call) => notes.push(call) });
+  await landJob(JOB, m.deps);
+  assert.equal(m.rounds.length, 1);
+  assert.deepEqual(sets, []);
+  assert.deepEqual(notes.map(({ entry }) => [entry.stage, entry.status]), [['build', 'ready']]);
+  const other = machine([green], { goalsOf: () => [{ ...goal, prs: [{ repo: 'memoro', pr: JOB.pr }] }], setGoal: (call) => sets.push(call), noteGoal: (call) => notes.push(call) });
+  await landJob(JOB, other.deps);
+  assert.equal(other.rounds.length, 1);
+  assert.deepEqual(sets, []);
+  assert.equal(notes.length, 1);
 });

@@ -21,7 +21,7 @@ mc run --billing [<claude|codex> <on|off>]
 
 With no flags it keeps picking. `--once` runs one runnable goal session and
 no chores. `--no-merge` leaves the pull requests open; goal builds already
-publish without merging, and their review owns the hand-off. `--idle-sleep`
+publish without merge, and their review owns the hand-off. `--idle-sleep`
 is the idle delay, 600 s by default, checked in short slices for orders.
 `--rounds <n>` was retired with the round: there is no pass to count.
 
@@ -69,7 +69,7 @@ order without a model call:
    runner's own environment. Convert older goal status/dependency records
    before judging them. An unreadable goal is not runnable.
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
-   or `merging · ready` after its first red or moved head and once it is no
+   or `merge · ready` after its first red or moved head and once it is no
    longer in the merger's line. `plan`, `done`, `dropped` and `blocked` do
    not start a session.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
@@ -116,12 +116,12 @@ role tells the session to read LOG.md first.
   It gates, commits and publishes with `--no-merge`. It ends with `mc goal log`,
   moving to review only once every criterion has been checked and met.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
-  never builds: `mc goal stage merging` queues the head it judged, or it
+  never builds: `mc goal stage merge` sends all registered PRs to merge, or it
   writes REVIEW.md and moves to finish. A review that dies still in review
   is retried once, then blocked if that happens again.
 - A plan session uses `plan-session` on Claude opus at high effort, starting
   in the programme directory with access to the goal's worktree, for finish
-  or a first merger red. It can finish the work and publish it. A subsequent red in merging is blocked for a person.
+  or a first merger red. It can finish the work and publish it. A subsequent red in merge is blocked for a person.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 without writing a log entry, the runner writes one; three such build ends
@@ -206,7 +206,7 @@ plan request, the next launch uses its API key through the local billing gateway
 This applies to every current MC session path: build, review, plan, helper, and
 interactive sessions. An ordinary interactive `mc plan` still lets Martin
 choose the tool and model; billing follows that choice. A headless plan session
-on a goal in finish or merging runs on opus at high effort and is billed as any other
+on a goal in finish or merge runs on opus at high effort and is billed as any other
 session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 

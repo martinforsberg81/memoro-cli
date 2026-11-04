@@ -35,12 +35,12 @@ export const GOALS_DIR = 'goals';
  * moves forward (`backward`). Each stage has one owner
  * (`docs/technical/mc-goals.md`): a plan session writes the goal in `plan`
  * and moves it to `build`; a build session moves it to `review`; a review
- * session to `merging` (OK, queued at the head it judged) or `finish` (not
- * OK, with REVIEW.md); a headless plan session finishes it to `merging`; the
+ * session to `merge` (OK, all registered PRs sent to merge) or `finish` (not
+ * OK, with REVIEW.md); a headless plan session finishes it to `merge`; the
  * merger sets `done` when it lands. `dropped` is a goal let go without
  * landing, from any stage. Only a person moves a stage backward.
  */
-export const STAGES = ['plan', 'build', 'review', 'finish', 'merging', 'done', 'dropped'];
+export const STAGES = ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
 /**
  * Whether a goal's stage can run now: `ready`, or `blocked` — waiting on a
  * person, in any stage, waking nothing. Setting a blocked goal ready keeps its stage.
@@ -153,7 +153,7 @@ export function validateGoal(value, { draft = false } = {}) {
   // A goal written before stages has only a status (`open`, `review`, …): `mc goal convert` (or the runner) gives it its stage.
   if (value.stage === undefined && LEGACY_STATUSES.includes(value.status)) problems.push(`stage: missing — goals have a stage now; mc goal convert gives this ${value.status} goal one`);
   else {
-    if (!STAGES.includes(value.stage)) problems.push(`stage: one of ${STAGES.join(', ')}, not ${value.stage ?? 'missing'}`);
+    if (!STAGES.includes(value.stage) && value.stage !== 'merging') problems.push(`stage: one of ${STAGES.join(', ')}, not ${value.stage ?? 'missing'}`);
     if (!STATUSES.includes(value.status)) problems.push(`status: one of ${STATUSES.join(', ')}, not ${value.status ?? 'missing'}`);
   }
   if (!CLASSES.includes(value.class)) problems.push(`class: ${CLASSES.join(' or ')}, not ${value.class ?? 'missing'}`);
@@ -197,7 +197,7 @@ export function parseGoal(text) {
   const prs = [];
   for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
   return {
-    stage: value.stage, status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
+    stage: value.stage === 'merging' ? 'merge' : value.stage, status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
     prs, title: value.title.trim(),
     goal: value.goal ?? [], contract: value.contract ?? [], out_of_scope: value.out_of_scope ?? [],
     success_criteria: value.success_criteria, documents: value.documents ?? [],
@@ -211,7 +211,7 @@ export function parseGoal(text) {
  */
 export function renderGoal(goal) {
   const value = {
-    schema: GOAL_SCHEMA, version: GOAL_VERSION, stage: goal.stage, status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
+    schema: GOAL_SCHEMA, version: GOAL_VERSION, stage: goal.stage === 'merging' ? 'merge' : goal.stage, status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
     title: goal.title, goal: goal.goal ?? [], contract: goal.contract ?? [], out_of_scope: goal.out_of_scope ?? [],
     success_criteria: goal.success_criteria ?? [], documents: goal.documents ?? [],
@@ -300,7 +300,7 @@ export function parseLog(text) {
     };
     return [{
       at: heading[1], tool: heading[2], model: heading[3] ?? null,
-      stage: heading[5] === undefined ? null : heading[4], status: heading[5] ?? heading[4],
+      stage: heading[5] === undefined ? null : heading[4] === 'merging' ? 'merge' : heading[4], status: heading[5] ?? heading[4],
       done: value('done'), comment: value('comment'), next: value('next'),
     }];
   });
@@ -376,7 +376,7 @@ function buildWrote(entry) {
 /**
  * The last entry a build session wrote: neither the runner's nor a person's,
  * and in `build` or the `review` it moved the goal to — a review's own entry
- * names `merging` or `finish`. Its heading's `<tool> <model>` is the model a
+ * names `merge` or `finish`. Its heading's `<tool> <model>` is the model a
  * review of the goal may not run on. Null when no build session has written one.
  */
 export function lastBuildEntry(log) {
@@ -384,9 +384,9 @@ export function lastBuildEntry(log) {
 }
 
 /**
- * The runner's entry for the merger's answer on a goal in `merging` that did
+ * The runner's entry for the merger's answer on a goal in `merge` that did
  * not land (`merger.js`): `red`, or `moved` — the head is no longer the one
- * its review judged. Either stays in `merging` for one plan session.
+ * its review judged. Either stays in `merge` for one plan session.
  */
 export function redMergeText(pr, kind = 'red') {
   return `merger answered ${kind} on #${pr}`;
@@ -405,14 +405,14 @@ export function inStage(log, stage) {
 }
 
 /**
- * Whether a goal in `merging` has a red (or a moved head) for one plan
- * session: `merging · ready`, the last entry the merger's answer
+ * Whether a goal in `merge` has a red (or a moved head) for one plan
+ * session: `merge · ready`, the last entry the merger's answer
  * (`mergeAnswered`), and none of its pull requests in the merger's line
- * (`inLine`, merge-queue.js). A second red in `merging` is `merging · blocked`
+ * (`inLine`, merge-queue.js). A second red in `merge` is `merge · blocked`
  * (`merger.js`), so this is true at most once per goal.
  */
 export function mergeRetryDue(goal, inLine = []) {
-  if (goal.stage !== 'merging' || goal.status !== 'ready' || !mergeAnswered(goal.log.at(-1))) return false;
+  if (goal.stage !== 'merge' || goal.status !== 'ready' || !mergeAnswered(goal.log.at(-1))) return false;
   return !(goal.prs ?? []).some((item) => inLine.some((entry) => samePr(entry, item)));
 }
 
@@ -448,7 +448,7 @@ export const PLAN_ROLE = 'plan-session';
 /**
  * The session the runner starts on `goal`, or null: a build session on
  * `build · ready` (with a criterion), a review session on `review · ready`, a
- * headless plan session on `finish · ready` and on `merging · ready` after a
+ * headless plan session on `finish · ready` and on `merge · ready` after a
  * red (`mergeRetryDue`). Never on `plan`, never on `blocked`, never on a goal
  * that does not parse. `inLine` is the merger's line.
  */
@@ -617,7 +617,7 @@ export function goalOfPr(goals, repo, pr) {
  * Where a goal's pull requests stand, from `stateOf({ repo, pr })` — GitHub's
  * `OPEN`, `MERGED` or `CLOSED`, or null when it cannot say: `{ landed, open,
  * closed, unknown }`, each a list of `<repo>#<n>`, and `done` — every one has
- * landed or closed, at least one landed, none unknown. A goal with no `prs` is
+ * landed, with none closed, open or unknown. A goal with no `prs` is
  * never done here: only the merger's answer on its own branch, or a person, says so.
  */
 export function prsLanded(prs, stateOf) {
@@ -627,7 +627,7 @@ export function prsLanded(prs, stateOf) {
     const key = state === 'MERGED' ? 'landed' : state === 'OPEN' ? 'open' : state === 'CLOSED' ? 'closed' : 'unknown';
     out[key].push(prRef(item));
   }
-  return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.unknown.length === 0 };
+  return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.closed.length === 0 && out.unknown.length === 0 };
 }
 
 /**

@@ -3,15 +3,12 @@ name: publish-and-merge
 description: How a change in an mc repository (memoro, memoro-cli) is tested and gets from a branch to main with mc gate, mc publish and mc merge. Use before running any test, pushing a branch, opening or editing a pull request, or merging one.
 ---
 # Publish and merge
-
-What the three verbs do today, and what goes wrong without them. The verbs
-replace `node --test`, `npm test`, `npm run ci`,
+The verbs replace `node --test`, `npm test`, `npm run ci`,
 `git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
 
 ## `mc gate` — the tests your change reaches
-
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
@@ -26,7 +23,6 @@ in it and say why in the reply.
 - Never lower a threshold, or skip, weaken or delete a test to turn it green.
 
 ## `mc publish` — push and open the pull request
-
 - Refuses on `main`, on a dirty tree, and when `origin`'s branch has moved; it
   never forces. Then `git push -u` and `gh pr create`, or, for a branch with an
   open pull request, edits only the fields given (`--title`, `--body`,
@@ -39,6 +35,9 @@ in it and say why in the reply.
   a run you did not make: "suite not run" is an acceptable sentence.
 
 ## `mc merge <repo> <pr>` — the one door to main
+`mc goal stage merge` is the session's final decision: merge every registered
+PR directly, without gate, criteria or head checks; done after all land.
+Conflicts go to a session. The rounds below apply to ordinary PR jobs.
 
 - Queues the pull request and returns. The merger takes the queue one at a
   time per repository lane, runs the gate round on a candidate with the

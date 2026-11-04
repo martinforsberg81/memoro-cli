@@ -250,7 +250,7 @@ that every word has a row on today's page.
 | `running` | green |
 | `landing` | green |
 | `review` | green |
-| `merging` | green |
+| `merge` | green |
 | `queued` | green |
 | `gate` | green |
 | `rebase` | green |

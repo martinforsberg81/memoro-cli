@@ -66,7 +66,7 @@ session is for; a verb file says how a verb is used).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merging after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
+| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merge after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `brief` | opus | `brief` | `mc brief`, a foreground session in `~/mc/brief/` |
@@ -108,7 +108,7 @@ it is. It holds only what is true of any session and is not a task: what a turn
 costs, that you are already a session, that you read the code before deciding
 and say what you actually ran, that task rules are skills the role names, and
 what is written in English. Everything that is a task — the gate, publishing
-and merging, conflicts, the shared git directory, proposals, processes, scratch
+and merge, conflicts, the shared git directory, proposals, processes, scratch
 files and probes, `mc shot`, dev servers, asking Martin, memory — is a skill in
 `canon/skills/` (goal `agent-skills-text`, 2026-11-02), and a role file that
 needs one names it with `@skill`.

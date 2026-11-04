@@ -66,12 +66,12 @@ Read `~/mc/programs/<programme>/proposals/archive/` to judge whether one is a
 duplicate of something already taken or declined. Nothing wakes you for a
 proposal: they wait until Martin opens `mc plan`.
 
-## Headless, on a goal in finish or merging
+## Headless, on a goal in finish or merge
 
 The runner starts you on a goal in `finish · ready` — a review found it not
 OK and wrote REVIEW.md, or three build sessions in a row left no word, or its
-review found no pull request — and on a goal in `merging · ready` after the
-merger answered red or its head moved past the one judged. The prompt names
+review found no pull request — and on a goal in `merge · ready` after the
+merger could not merge a PR. The prompt names
 the goal and its stage; `MC_GOAL` is set, so `mc goal` writes to it.
 
 Read the goal (the prompt gives it, as `mc goal show` renders it), REVIEW.md
@@ -81,13 +81,12 @@ yourself — the goal passes each stage once, so nothing goes back to a build
 session or a second review:
 
 - **In finish.** In the goal's worktree, on its branch: fix what REVIEW.md or
-  the log names, `mc gate`, commit, `mc publish` (which queues it for the
-  merger), then `mc goal stage merging`. It is not reviewed again.
-- **In merging, after a red.** Take the red in the worktree — main merged in,
-  a conflict, the test the merger named — `mc gate`, commit, `mc publish`,
-  which queues it again. The runner sees it in the merger's line; one not in
-  the line when you end is `merging · blocked`. The next red in merging is
-  `merging · blocked` by itself.
+  the log names, `mc gate`, commit, `mc publish --no-merge`, then `mc goal stage merge`. It is not reviewed again.
+- **In merge, after a red.** Take the red in the worktree — main merged in,
+  a conflict — `mc gate`, commit, `mc publish --no-merge`,
+  then `mc goal stage merge` to execute your decision again. The runner sees it in the merger's line; one not in
+  the line when you end is `merge · blocked`. The next red in merge is
+  `merge · blocked` by itself.
 - **Drop it.** When this goal was the wrong one: close its pull request, write
   the right goal with `mc goal new … --stage plan|build`, and `mc goal drop
   --reason "…"` this one.

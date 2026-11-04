@@ -31,7 +31,7 @@ const doneLine = (entry) => String(entry?.done ?? '').split('\n')[0];
 /**
  * The stage a goal `blocked` before stages was blocked in, from its log, last
  * entry first: a red review's verdict is `finish`; the merger's red or a
- * green the runner queued is `merging`; the runner's word on a review (no
+ * green the runner queued is `merge`; the runner's word on a review (no
  * verdict, no pull request, a moved head) or an entry in `review` is
  * `review`; anything else — a build session's question, three sessions
  * without a word, an entry in `open` — is `build`. The runner's entry after
@@ -44,7 +44,7 @@ function blockedStage(log) {
     const runner = entry.tool === 'runner';
     if (runner && done.startsWith('plan session ended')) continue;
     if (/^red\b.*\b[0-9a-f]{7,40}\b/u.test(done)) return 'finish';
-    if (runner && (/^merger answered red/u.test(done) || /^queued #\d+/u.test(done))) return 'merging';
+    if (runner && (/^merger answered red/u.test(done) || /^queued #\d+/u.test(done))) return 'merge';
     if (runner && /review left no verdict|^in review, but|^green on/u.test(String(entry.comment ?? ''))) return 'review';
     if (entry.status === 'review') return 'review';
     if (entry.status === 'open' || entry.status === LEGACY_STATUS) return 'build';
@@ -57,7 +57,7 @@ function blockedStage(log) {
 /**
  * A goal's `{ stage, status }` from the one status it had before stages
  * (`LEGACY_STATUSES`) and its log: `open` (and `waiting`) is `build ·
- * ready`; `review` is `review · ready`, or `merging · ready` when the
+ * ready`; `review` is `review · ready`, or `merge · ready` when the
  * runner's last word on it queued it for the merger; `blocked` is the stage
  * its log says it was blocked in (`blockedStage`) · `blocked`; `done` and
  * `dropped` are as they are.
@@ -66,7 +66,7 @@ export function stageOfLegacy(status, log = []) {
   if (FINISHED.includes(status)) return { stage: status, status: 'ready' };
   if (status === 'review') {
     const last = log.findLast((entry) => entry.tool !== 'person');
-    return { stage: last?.tool === 'runner' && /^queued #\d+/u.test(doneLine(last)) ? 'merging' : 'review', status: 'ready' };
+    return { stage: last?.tool === 'runner' && /^queued #\d+/u.test(doneLine(last)) ? 'merge' : 'review', status: 'ready' };
   }
   if (status === 'blocked') return { stage: blockedStage(log), status: 'blocked' };
   return { stage: 'build', status: 'ready' };

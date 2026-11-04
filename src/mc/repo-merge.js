@@ -456,7 +456,7 @@ const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate', 
  * change has landed, and what is left is a machine one commit behind, which the
  * report says plainly so somebody can pull it by hand.
  */
-async function deployPull({ git, repoPath, env, say, installs }) {
+export async function deployPull({ git, repoPath, env, say, installs }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
 

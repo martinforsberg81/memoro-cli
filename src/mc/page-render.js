@@ -980,7 +980,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
  * parse says its first problem in red there instead.
  *
  * The state is the goal's stage. `build` and `finish` are green while a
- * session is on them and grey otherwise; `review` and `merging` are green — a
+ * session is on them and grey otherwise; `review` and `merge` are green — a
  * review session or the merger moves them by itself — and `plan`, `done` and
  * `dropped` are grey (`STATE_TONE`). Its status is the rest of `<stage> ·
  * <status>`: a goal that is `ready` says nothing more, and a `blocked` one, in

@@ -270,7 +270,7 @@ describe('the verb files', () => {
   const VERBS = ['goal-verb.md'];
   // Sentences that define each file, from different parts of it.
   const DEFINING = {
-    'goal-verb.md': [/a plan session finishes it to `merging`/u, /\*\*Written by verbs\.\*\*/u],
+    'goal-verb.md': [/a plan session finishes it to `merge`/u, /\*\*Written by verbs\.\*\*/u],
   };
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 
@@ -457,7 +457,7 @@ describe('the build role', () => {
       const text = told(ref);
       assert.doesNotMatch(text, /Bring it to\s+`origin\/main`/u, ref);
       assert.doesNotMatch(text, /git fetch origin && git merge origin\/main/u, ref);
-      const merges = text.split(/\n\s*\n/u).filter((paragraph) => /merge\s+`?origin\/main`?|merging\s+`origin\/main`/u.test(paragraph) && !/never\s+`git fetch`/u.test(paragraph));
+      const merges = text.split(/\n\s*\n/u).filter((paragraph) => /merge\s+`?origin\/main`?|merge\s+`origin\/main`/u.test(paragraph) && !/never\s+`git fetch`/u.test(paragraph));
       for (const paragraph of merges) assert.match(paragraph, /merger/u, `${ref}: ${paragraph}`);
     }
   });

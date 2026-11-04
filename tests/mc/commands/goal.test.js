@@ -215,7 +215,7 @@ test('mc goal log --status and --stage rewrite GOAL.json and log the entry with 
   assert.deepEqual(['stage', 'status', 'comment'].map((key) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1)[key]), ['build', 'blocked', 'waits for Martin']);
   assert.match(f.out(), /mc: mc\/plain · build · blocked\n/u);
 
-  for (const [flag, value, said] of [['--status', 'open', /^mc: status is ready, blocked, not open\n$/u], ['--stage', 'started', /^mc: stage is plan, build, review, finish, merging, done, dropped, not started\n$/u]]) {
+  for (const [flag, value, said] of [['--status', 'open', /^mc: status is ready, blocked, not open\n$/u], ['--stage', 'started', /^mc: stage is plan, build, review, finish, merge, done, dropped, not started\n$/u]]) {
     const bad = fixture({ files: seededGoal() });
     assert.equal(await run(['log', 'mc/plain', flag, value, '--comment', 'x'], bad.deps), 2);
     assert.match(bad.err(), said);
@@ -232,9 +232,9 @@ test('mc goal blocked, ready, done and drop set their one field and log the reas
     const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
     assert.deepEqual([last.stage, last.status, last.comment], [stage, status, `because ${verb}`]);
   }
-  const held = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'merging', status: 'blocked' }) }) });
+  const held = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'merge', status: 'blocked' }) }) });
   assert.equal(await run(['ready', 'mc/plain', '--reason', 'answered'], held.deps), 0, held.err());
-  assert.deepEqual(['stage', 'status'].map((key) => goalField(held.store[`${DIR}/GOAL.json`], key)), ['merging', 'ready']);
+  assert.deepEqual(['stage', 'status'].map((key) => goalField(held.store[`${DIR}/GOAL.json`], key)), ['merge', 'ready']);
   const f = fixture({ files: seededGoal() });
   assert.equal(await run(['drop', 'mc/plain'], f.deps), 2);
   assert.match(f.err(), /drop needs --reason/u);
@@ -291,10 +291,10 @@ function reviewed({ files, env = REVIEW, pr = { number: 31, headRefOid: 'fff0000
   return f;
 }
 
-test('every move of the order, by its owner: plan → build by plan, build → review by build, review → merging or finish by review, finish → merging by plan, merging → done by a person; dropped from any stage by plan', async () => {
+test('every move of the order, by its owner: plan → build by plan, build → review by build, review → merge or finish by review, finish → merge by plan, merge → done by a person; dropped from any stage by plan', async () => {
   const moves = [
-    ['plan', 'build', PLAN], ['build', 'review', BUILD], ['review', 'merging', REVIEW], ['review', 'finish', REVIEW],
-    ['finish', 'merging', PLAN], ['merging', 'done', {}], ['plan', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
+    ['plan', 'build', PLAN], ['build', 'review', BUILD], ['review', 'merge', REVIEW], ['review', 'finish', REVIEW],
+    ['finish', 'merge', PLAN], ['merge', 'done', {}], ['plan', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
   ];
   for (const [from, to, env] of moves) {
     const f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n' }), env });
@@ -305,19 +305,19 @@ test('every move of the order, by its owner: plan → build by plan, build → r
 });
 
 test('a session\'s backward move is refused naming both stages, whatever its role; a person\'s is made and logged', async () => {
-  for (const [from, to, env] of [['review', 'build', PLAN], ['merging', 'review', PLAN], ['finish', 'build', REVIEW], ['review', 'build', BUILD], ['done', 'merging', PLAN], ['finish', 'plan', SESSION]]) {
+  for (const [from, to, env] of [['review', 'build', PLAN], ['merge', 'review', PLAN], ['finish', 'build', REVIEW], ['review', 'build', BUILD], ['done', 'merge', PLAN], ['finish', 'plan', SESSION]]) {
     const f = fixture({ files: inStage(from), env });
     assert.equal(await run(['stage', to], f.deps), 2, `${from} → ${to}`);
     assert.equal(f.err(), `mc: a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)\n`);
     assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
   }
   for (const env of [{}, { MC_GOAL: 'mc/plain', MC_TOOL: 'person' }]) {
-    const f = fixture({ files: inStage('merging'), env });
+    const f = fixture({ files: inStage('merge'), env });
     assert.equal(await run(['stage', 'mc/plain', 'build', '--reason', 'the plan was wrong'], f.deps), 0, f.err());
     assert.equal(stateOf(f), 'build · ready');
     const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-    assert.deepEqual([last.tool, last.stage, last.comment], ['person', 'build', 'the plan was wrong — moved back from merging to build by a person']);
-    assert.match(f.out(), /mc: mc\/plain · build · ready — moved back from merging\n/u);
+    assert.deepEqual([last.tool, last.stage, last.comment], ['person', 'build', 'the plan was wrong — moved back from merge to build by a person']);
+    assert.match(f.out(), /mc: mc\/plain · build · ready — moved back from merge\n/u);
   }
 });
 
@@ -328,7 +328,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
   for (const [from, argv, said] of [
     ['build', ['stage', 'done'], /a session does not set done — move it to review; the merger sets done/u],
     ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
-    ['build', ['stage', 'merging'], /a build session moves a goal only from build to review, not build → merging/u],
+    ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['plan', ['stage', 'build'], /a build session moves a goal only from build to review, not plan → build/u],
     ['build', ['ready'], /a build session does not set a goal ready — a person does/u],
   ]) {
@@ -362,39 +362,36 @@ test('a build session cannot move to review while a criterion is not met: the re
   }
 });
 
-test('a review\'s merging queues the goal\'s pull request for the merger at the head it judged, with the goal on the job', async () => {
-  const f = reviewed({ files: inStage('review') });
-  assert.equal(await run(['stage', 'merging'], f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'merging · ready');
-  assert.deepEqual(f.gh[0], { cwd: '/home/m/memoro-cli.git', args: ['pr', 'list', '--state', 'open', '--head', 'goal/plain', '--json', 'number,headRefOid'] });
-  assert.equal(f.queued.length, 1);
-  const [job] = f.queued;
-  assert.deepEqual([job.repo, job.repoPath, job.pr, job.branch, job.sha], ['memoro-cli', '/home/m/memoro-cli.git', 31, 'goal/plain', 'abc1234def'], 'the judged head, not the branch\'s head now');
-  assert.deepEqual(job.goal, { programme: 'mc', goal: 'plain', dir: DIR });
-  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-  assert.deepEqual([last.stage, last.done], ['merging', 'queued #31 at abc1234def for the merger']);
-  // --sha names the head when the runner did not.
-  const g = reviewed({ files: inStage('review'), env: { ...REVIEW, MC_REVIEW_HEAD: undefined } });
-  assert.equal(await run(['stage', 'merging', '--sha', 'beef123'], g.deps), 0, g.err());
-  assert.equal(g.queued[0].sha, 'beef123');
-});
-
-test('a review\'s merging writes nothing when it cannot queue: no head judged, no pull request, a queue that fails', async () => {
-  for (const [options, said] of [
-    [{ env: { ...REVIEW, MC_REVIEW_HEAD: undefined } }, /which head did the review judge\? MC_REVIEW_HEAD is not set — --sha <sha>/u],
-    [{ pr: null }, /goal\/plain has no open pull request/u],
-    [{ queue: () => { throw new Error('register locked'); } }, /#31 could not be queued \(register locked\)/u],
-  ]) {
-    const f = reviewed({ files: inStage('review'), ...options });
-    assert.equal(await run(['stage', 'merging'], f.deps), 1);
-    assert.match(f.err(), /mc\/plain is not moved to merging — /u);
-    assert.match(f.err(), said);
-    assert.equal(stateOf(f), 'review · ready');
-    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+test('review and plan execute merge for every registered PR without head, criteria or GitHub checks', async () => {
+  for (const env of [{ ...REVIEW, MC_REVIEW_HEAD: undefined }, PLAN]) {
+    const files = inStage(env.MC_ROLE === PLAN_ROLE ? 'finish' : 'review');
+    files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], {
+      repos: ['memoro-cli', 'memoro'], prs: ['memoro-cli#31', 'memoro#14804'], success_criteria: [],
+    });
+    const f = reviewed({ files, env });
+    assert.equal(await run(['stage', 'merge'], f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'merge · ready');
+    assert.deepEqual(f.gh, []);
+    assert.deepEqual(f.queued.map(({ repo, pr, sha }) => ({ repo, pr, sha })), [
+      { repo: 'memoro-cli', pr: 31, sha: undefined }, { repo: 'memoro', pr: 14804, sha: undefined },
+    ]);
+    assert.deepEqual(f.queued[1].goal, { programme: 'mc', goal: 'plain', dir: DIR });
   }
 });
 
-test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merging or finish', async () => {
+test('a queue failure preserves the merge decision so it can be retried', async () => {
+  const files = inStage('review');
+  files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31'] });
+  const f = reviewed({ files, queue: () => { throw new Error('register locked'); } });
+  assert.equal(await run(['stage', 'merge'], f.deps), 1);
+  assert.equal(stateOf(f), 'merge · ready');
+  assert.match(f.err(), /memoro-cli#31 could not be queued/u);
+  f.deps.queue = (job) => { f.queued.push(job); };
+  assert.equal(await run(['stage', 'merge'], { ...f.deps, env: PLAN }), 0, f.err());
+  assert.deepEqual(f.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
+});
+
+test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merge or finish', async () => {
   const f = reviewed({ files: inStage('review') });
   assert.equal(await run(['stage', 'finish'], f.deps), 2);
   assert.equal(f.err(), `mc: a review sends a goal to finish with REVIEW.md — write ${DIR}/REVIEW.md first: the head judged, what is wrong and where\n`);
@@ -403,9 +400,9 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
   assert.equal(stateOf(f), 'finish · ready');
   assert.equal(f.queued.length, 0, 'nothing queued for a finish');
   for (const [from, argv, said] of [
-    ['review', ['blocked', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merging \(OK to land\) or finish/u],
-    ['review', ['stage', 'done'], /a review ends in merging or finish, not done/u],
-    ['build', ['stage', 'merging'], /a review moves only a goal in review, and this one is build/u],
+    ['review', ['blocked', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merge \(OK to land\) or finish/u],
+    ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
+    ['build', ['stage', 'merge'], /a review moves only a goal in review, and this one is build/u],
   ]) {
     const g = reviewed({ files: inStage(from), env: REVIEW });
     assert.equal(await run(argv, g.deps), 2, argv.join(' '));
@@ -414,11 +411,11 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
 });
 
 test('refusedMove: a person may make any move; a plan session any forward one; nobody else more than their own', () => {
-  for (const to of STAGES) assert.equal(refusedMove({ from: 'merging', to, env: {} }), null, `a person to ${to}`);
-  for (const to of ['build', 'review', 'finish', 'merging', 'done', 'dropped']) assert.equal(refusedMove({ from: 'plan', to, env: PLAN }), null, `plan to ${to}`);
+  for (const to of STAGES) assert.equal(refusedMove({ from: 'merge', to, env: {} }), null, `a person to ${to}`);
+  for (const to of ['build', 'review', 'finish', 'merge', 'done', 'dropped']) assert.equal(refusedMove({ from: 'plan', to, env: PLAN }), null, `plan to ${to}`);
   assert.equal(refusedMove({ from: 'build', status: 'blocked', env: PLAN }), null);
   assert.equal(refusedMove({ from: 'build', to: 'review', env: BUILD }), null);
-  assert.equal(refusedMove({ from: 'review', to: 'merging', env: REVIEW }), null);
+  assert.equal(refusedMove({ from: 'review', to: 'merge', env: REVIEW }), null);
   assert.equal(refusedMove({ from: 'review', to: 'finish', env: REVIEW, reviewWritten: true }), null);
   assert.equal(refusedMove({ from: 'build', env: BUILD }), null, 'an entry alone');
 });
@@ -531,8 +528,8 @@ test('mc goal list shows each goal\'s stage · status, and a blocked one as wait
       [`${HOME}/mc/goals/a/LOG.md`]: '## 2026-11-02T10:00Z · claude opus · review · ready\n\nDone: built\n',
       [`${HOME}/mc/goals/b/GOAL.json`]: goal('finish', 'blocked'),
       [`${HOME}/mc/goals/b/LOG.md`]: '## 2026-11-02T10:00Z · runner · finish · blocked\n\nComment: the finish session ended with the goal still in finish\n',
-      [`${HOME}/mc/goals/c/GOAL.json`]: goal('merging'),
-      [`${HOME}/mc/goals/c/LOG.md`]: '## 2026-11-02T10:00Z · runner · merging · ready\n\nDone: merger answered red on #12\n',
+      [`${HOME}/mc/goals/c/GOAL.json`]: goal('merge'),
+      [`${HOME}/mc/goals/c/LOG.md`]: '## 2026-11-02T10:00Z · runner · merge · ready\n\nDone: merger answered red on #12\n',
       [`${HOME}/mc/goals/d/GOAL.json`]: goal('plan'),
     },
   });
@@ -540,7 +537,7 @@ test('mc goal list shows each goal\'s stage · status, and a blocked one as wait
   assert.deepEqual(f.out().trim().split('\n').slice(1), [
     '  mc/a · memoro-cli · review · ready · criteria 0/1 · 1 sessions · —',
     '  mc/b · memoro-cli · finish · blocked, waits on a person · criteria 0/1 · 0 sessions · —',
-    '  mc/c · memoro-cli · merging · ready · criteria 0/1 · 0 sessions · —',
+    '  mc/c · memoro-cli · merge · ready · criteria 0/1 · 0 sessions · —',
     '  mc/d · memoro-cli · plan · ready · criteria 0/1 · 0 sessions · —',
   ]);
 });
@@ -728,7 +725,7 @@ test('mc goal convert leaves a GOAL.md it cannot read, and one beside a GOAL.jso
   assert.equal(f.store[`${HOME}/mc/goals/both/GOAL.json`], GOAL_TEXT);
 });
 
-test('mc goal convert gives every goal written with one status its stage: open is build, review is review or merging when queued, blocked its stage from the last entry, done and dropped as they are', async () => {
+test('mc goal convert gives every goal written with one status its stage: open is build, review is review or merge when queued, blocked its stage from the last entry, done and dropped as they are', async () => {
   /** A GOAL.json from before stages, with `status` and no stage, and its LOG.md. */
   const legacy = (name, status, log = '') => {
     const { stage: _stage, ...rest } = JSON.parse(withGoal(GOAL_TEXT, { status }));
@@ -755,9 +752,9 @@ test('mc goal convert gives every goal written with one status its stage: open i
   assert.deepEqual(Object.fromEntries(['open', 'judged', 'queued', 'red-review', 'red-merge', 'no-verdict', 'asked', 'mute', 'by-hand', 'landed', 'let-go'].map((name) => [name, where(name)])), {
     open: 'build · ready',
     judged: 'review · ready',
-    queued: 'merging · ready',
+    queued: 'merge · ready',
     'red-review': 'finish · blocked',
-    'red-merge': 'merging · blocked',
+    'red-merge': 'merge · blocked',
     'no-verdict': 'review · blocked',
     asked: 'build · blocked',
     mute: 'build · blocked',
@@ -766,8 +763,8 @@ test('mc goal convert gives every goal written with one status its stage: open i
     'let-go': 'dropped · ready',
   });
   const last = parseLog(f.store[`${HOME}/mc/goals/red-merge/LOG.md`]).at(-1);
-  assert.deepEqual([last.tool, last.stage, last.status, last.done], ['person', 'merging', 'blocked', 'merging · blocked, from blocked; phase 1']);
-  assert.match(f.out(), /mc: mc\/queued · merging · ready \(was review\), phase 1\n/u);
+  assert.deepEqual([last.tool, last.stage, last.status, last.done], ['person', 'merge', 'blocked', 'merge · blocked, from blocked; phase 1']);
+  assert.match(f.out(), /mc: mc\/queued · merge · ready \(was review\), phase 1\n/u);
   assert.equal(await run(['convert', 'mc'], f.deps), 0);
   assert.match(f.out(), /mc: nothing to convert\n$/u, 'once');
 });
