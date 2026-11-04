@@ -48,11 +48,12 @@ fetched or not.
 
 ## The sections
 
-In this order (Martin, 2026-09-19; WORK went on 2026-11-03): PROGRAMMES, HELPER, BRIEF,
-SESSIONS, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
+In this order (Martin, 2026-09-19; WORK went on 2026-11-03; DEV came on 2026-11-04): PROGRAMMES, HELPER, BRIEF,
+SESSIONS, DEV, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
 still keeps the rule the page had — **what does not move above what does**.
 PROGRAMMES is the page as a listing; the two desks change when
-somebody sits down; SESSIONS changes with every pick and every frame;
+somebody sits down; SESSIONS changes with every pick and every frame, and DEV
+as often as the sessions do;
 MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
 of them: while a language run has stopped inside an `opens_gap` window it
@@ -186,6 +187,39 @@ below is about.
   `runner.lanes` (each with its `state` and its `session`) and `runner.day.by_kind` (`plan`, `build`, `review`,
   each `sessions` and its outcomes, and `other`); the page draws from these
   and nothing else.
+- **DEV** — the dev servers, and the session that holds each (goal
+  `mc/dev-section`, Martin 2026-11-03). The heading is `DEV  3 running · 1
+  leased · 2 queued` with `mc dev list` on the right: `running` is the servers
+  that answer (not `starting`), `starting` is said only when one is, and
+  `queued` only while somebody waits. No server at all: `DEV  none running`,
+  grey. Under it **one row per live server**, in [the grid](#the-grid): `MAIN`
+  for the shared checkout's standing server (`mainCheckout`), `SLOT` for one
+  lent to a worktree; the holder in the name column — `BUILD mc/no-work`,
+  `REVIEW mc/email-compose`, `plan mc`, `brief`, or the verb (`shot`, `test`,
+  `open`) when no session ran it; the repository; `leased`, `idle` or
+  `starting`; how long since mc used it; the port in the PR column; the branch
+  and the worktree in the tail. A holder that is a session whose pid is gone
+  says `holder gone`, yellow, first in the tail, and its server is `idle`. A
+  bare verb's holder never does: it was over when it answered. The waiters
+  are one yellow row under the servers, `2 queued · BUILD hero-detail-objects
+  first`.
+  **Who holds a server is written when it is taken**, never guessed from the
+  worktree: `ensureDevServer` — under `mc shot dev`, `mc test dev` and `mc dev
+  open` — writes `holder: { kind, owner, name, pid }` (`leaseHolder`,
+  dev-holder.js) and `held_since` into mc's copy of the registration on every
+  use, and a waiter's queue ticket carries the same as `session`. The pid is
+  the coding agent's, found by walking up from the verb (`MC_SESSION_PID`
+  overrides); a bare verb's is its own. `leased` is a living holder that used
+  the server within `MC_DEV_HOLDER_STALE_MINUTES` (5).
+  **Data**: `mc --json`'s `dev` — `{ running, starting, leased, queued,
+  servers: [{ kind, holder, holder_alive, holder_gone, name, repo, state,
+  idle_seconds, progress, port, url, worktree, branch, instance_id, service }],
+  queue: [{ holder, name, worktree, service, gate, waited_seconds }] }` — read
+  through one function, `readPool` (dev-pool.js), which reads the registry
+  and the queue without sweeping or rewriting either. The page draws from
+  `dev` and nothing else.
+  The docker line's `N leases` stays: those are leases on the container
+  runtime (`mc docker ensure`), not on a dev server, and DEV does not say them.
 - **MERGES** — two queues, one per repository. The heading gives each queue's
   short counts (`memoro 2 waiting · memoro-cli idle`); PR numbers belong on
   the rows, in landing order. A red `paused deploy`, `paused gate round` or
@@ -615,7 +649,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N waiting · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `HELPER` `BRIEF` `SESSIONS` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `HELPER` `BRIEF` `SESSIONS` `DEV` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | SESSIONS | the heading's `n of N lanes`: not zero, zero, no runner (`not running`) | bold green, grey, bold yellow |
 | SESSIONS | the heading's queued count | grey |
@@ -637,6 +671,12 @@ person set it to.
 | SESSIONS | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
+| DEV | the heading's `N running`: not zero, zero; `none running`; `N leased`; `N queued` | bold green, grey; grey; grey; yellow |
+| DEV | a row's mark: leased, not | green, grey |
+| DEV | `MAIN` `SLOT`, the repository, the idle time, the port, the tail | grey |
+| DEV | the holder; a holder that is gone | plain; grey |
+| DEV | its state | the state's colour |
+| DEV | `holder gone`; the queue row | yellow |
 | MERGES | a row's mark: a round or a fix, a red, a queue that waits | green, red, grey |
 | MERGES | its kind, its state | the kind's colour, the state's colour |
 | MERGES | the project or branch | plain |
@@ -955,7 +995,9 @@ part nobody has run.
 | `src/mc/page-collect.js` | the sections, built from read data — one key each, and its module comment names all of them |
 | `src/mc/merges-collect.js` | `runningMerge` — the gate lock joined to a name and a holder |
 | `src/mc/page-render.js` | how they look |
-| `src/mc/page-grid.js` | the one grid every PROGRAMMES, SESSIONS and MERGES row is drawn in, and the palette (`STATE_TONE`, `KIND_TONE`) |
+| `src/mc/page-grid.js` | the one grid every PROGRAMMES, SESSIONS, DEV and MERGES row is drawn in, and the palette (`STATE_TONE`, `KIND_TONE`) |
+| `src/mc/dev-pool.js` | DEV's data: `readPool`, the one reader of the dev-server pool, and `devSection` |
+| `src/mc/dev-holder.js` | who holds a dev server: `leaseHolder`, written when a verb takes one, and `holderLabel` |
 | `src/mc/page-frame.js` | the difference between two frames, as bytes — pure, no terminal |
 | `src/mc/page-live.js` | the loop under the prompt: the 30 s interval, the raw-mode reader, the arithmetic |
 | `src/mc/page-cache.js` | `prs.json` |

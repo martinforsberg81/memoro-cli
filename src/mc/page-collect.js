@@ -28,6 +28,8 @@
  * language   — the language side, from files `mc language` leaves: each
  *              cached reading's numbers, the newest run, and the gap a stopped
  *              run left open (`languageState`, language-runs.js).
+ * dev        — the dev servers and who holds each, and who waits for one
+ *              (`readPool`, `devSection`, dev-pool.js). File reads only.
  * docker     — the runtime, its leases, images and idle stop, from state.json.
  *
  * Plus `caches` (what the two read-through caches did) and `notes` (whatever
@@ -55,6 +57,7 @@ import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.j
 import { criteriaCount } from './criteria.js';
 import { FINISHED, goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
+import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
@@ -1264,6 +1267,8 @@ export async function collectPage({
   checkout = mcCheckout(),
   // Injected so that no test reads the real file; an env without HOME means none is read.
   claudeSettings = () => (env.HOME ? readClaudeSettings(claudeSettingsPath(env.HOME)) : null),
+  // The dev-server pool (dev-pool.js): injected so a test names its own main slot.
+  pool = (args) => readPool(args),
 } = {}) {
   const root = workRoot(env);
   // mc's own home — the gate locks, lanes.json, the dependency and nightly
@@ -1391,6 +1396,14 @@ export async function collectPage({
     runner,
     billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
     sessions,
+    // File reads and a signal 0 per server; one `git branch` per worktree.
+    dev: devSection({
+      ...pool({ env, alive }),
+      now,
+      alive,
+      env,
+      branchOf: (worktree) => (worktree ? (git(worktree, ['branch', '--show-current']) || '').trim() || null : null),
+    }),
     merges: mergesNow,
     prs: pulls,
     checks: checksSection({

@@ -195,13 +195,27 @@ export function registerManifest(sourcePath, { root = devServersRoot(), now = ()
  * 2026-10-19, its own idle clock never ran out, and two step sessions were
  * refused a slot behind it. Quiet when the record is gone: a server that left
  * has nothing to record.
+ *
+ * With `holder` (`leaseHolder`, dev-holder.js) the use is a lease: who took
+ * the server — the session's kind, owner, name and pid — is written beside it,
+ * with `held_since` kept while the same holder goes on using it. The page's
+ * DEV section reads that, and nothing else, to say whose a server is.
  */
-export function touchServer(instanceId, { root = devServersRoot(), now = () => new Date() } = {}) {
+export function touchServer(instanceId, { root = devServersRoot(), now = () => new Date(), holder = null } = {}) {
   const target = registeredPath(instanceId, root);
   const record = readJson(target);
   if (!record) return false;
-  writeJsonAtomic(target, { ...record, last_used_at: now().toISOString() });
+  const at = now().toISOString();
+  const lease = holder ? {
+    holder: { kind: holder.kind ?? null, owner: holder.owner ?? null, name: holder.name ?? null, pid: holder.pid ?? null },
+    held_since: sameHolder(record.holder, holder) && text(record.held_since) ? record.held_since : at,
+  } : {};
+  writeJsonAtomic(target, { ...record, last_used_at: at, ...lease });
   return true;
+}
+
+function sameHolder(a, b) {
+  return Boolean(a && b) && a.kind === b.kind && a.name === b.name && a.pid === b.pid;
 }
 
 /**
@@ -479,7 +493,7 @@ export function freeMemoryPercent(run = spawnSync) {
 export async function admit({
   service, worktree, waitSeconds = 0, env = process.env, root, queueFile, sleep, now, onWaiting,
   freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer, pid = process.pid,
-  main = null, sessionsDir = null,
+  main = null, sessionsDir = null, session = null,
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
@@ -508,11 +522,11 @@ export async function admit({
       // servers for a slot it does not use. The memory floor still applies.
       let standing = null;
       if (!own && !mainRequest) {
-        if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt });
+        if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt, session });
         let tickets = readQueue({ file });
         if (ticket && !tickets.some((item) => item.id === ticket.id)) {
           // Lost to a write that went ahead of a held lock: taken again, in the same place.
-          joinQueue({ file, pid, worktree, service, env, now: startedAt, id: ticket.id });
+          joinQueue({ file, pid, worktree, service, env, now: startedAt, id: ticket.id, session });
           tickets = readQueue({ file });
         }
         const at = clock();
