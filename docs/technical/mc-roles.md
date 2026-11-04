@@ -68,24 +68,18 @@ session is for; a verb file says how a verb is used).
 |---|---|---|---|
 | `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merging after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
-| | | `build-session:project` | `mc run`, one step of a `PLAN.json` |
-| | | `build-session:worker` | an area that already carries the worker mark (`mc worker` went on 2026-11-03) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
-| | | `review-session:project` | `mc run`, the review step of a branch-flow plan: it measures the criteria and lands the project |
 | `brief` | opus | `brief` | `mc brief`, a foreground session in `~/mc/brief/` |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 
 ## Parts: one role, started more than one way
 
-A role started more than one way keeps each start's words in a part:
+The parser can select parts of a role. The build role currently has one:
 
 ```
 @part goal
-…only a goal's build is told this…
-@end
-@part goal project
-…every headless build is told this; a worker is not…
+…the goal build is told this…
 @end
 ```
 
@@ -98,12 +92,11 @@ name wherever one is kept: `MC_ROLE`, the register's role record, and
 so a start never runs on the shared words alone; `readCanonRole` with no part
 gives the shared words and `parts`, which `mc roles show build-session` lists.
 The constants are `PLAN_ROLE` and `REVIEW_ROLE` in `goals.js`,
-`BUILD_ROLES` and `PROJECT_REVIEW_ROLE` in `run-plan.js` and `WORKER_ROLE` in
-`roles.js`. An area marked `worker` before 2026-11-03 still opens as the
-worker part (`MOVED_MARKS`).
+`BUILD_ROLES` in `run-plan.js`. Projects went on 2026-11-03; see
+[mc-goals.md § From a project](mc-goals.md#from-a-project).
 
-`worker` is the one that reaches a session through a work area rather than a
-verb. `markAreaRole` writes `.mc-role` — one file, one word — when the area is
+A custom role can also be stored on an existing area rather than chosen by a
+launcher. `markAreaRole` writes `.mc-role` — one file, one word — when the area is
 created, `areaRole` reads it every time a conversation starts there, and an
 area without the file is an ordinary area and stays one. A role is decided at
 creation, never acquired.
@@ -172,30 +165,26 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc brief`, `mc helper`, `mc plan`, a project opened from the page |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc brief`, `mc helper`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
-| `run.js` (`runStep`) | a runner session: a step |
+| `run.js` (`runGoal`) | a goal build, review or headless plan session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
 
 Each of them used to write the join out by hand.
 
 ## The verb files
 
-`all-sessions.md` is what *every* role session is told. How a verb is used is
-not that: the plan session and the brief write plans and a build session does
-not, and telling a build session how to write a `PLAN.json` it may never write
-is worse than telling it nothing. So each verb is a file of its own, and a role
-that uses the verb names it on a line of its own:
+`all-sessions.md` is what every role session is told. How a goal is written
+belongs only to roles that write goals. They include the verb passage:
 
 ```
-@include project-verb.md
+@include goal-verb.md
 ```
 
 | file | what it says | included by |
 |---|---|---|
-| `project-verb.md` | runner or session; driving work in a session; writing a `PLAN.json` | `plan-session`, `brief` |
-| `step-verb.md` | a step that waits on Martin, and bringing it back with `mc step ready` | `plan-session`, `brief` |
-| `goal-verb.md` | what a goal is, its entries, who sets which status | `plan-session` |
+| `goal-verb.md` | goal text, criteria, phases, stages and log verbs | `plan-session`, `brief` |
+
 
 `expandRoleIncludes` replaces that line with the file's text **in
 `instructionsFor`** — the same door, for the same reason a second one was never
@@ -218,20 +207,11 @@ its own becomes, in `instructionsFor`, a pointer to the installed
 the skill as it loads any. A name `canon/skills/` does not ship is left standing,
 as an unknown `@include` is. See [mc-skills.md](mc-skills.md).
 
-The build role is the first role with parts. A goal's build, a project's step
-and a worker were three files until 2026-11-03 (`build-goal.md`,
-`build-project.md`, `worker.md`, with `_build.md` and `_step-workers.md`
-included); they are `build-session.md` now. What is true of every headless
-build is one part, `@part goal project`: **one branch, built to the end** — a
-build never fetches or merges `origin/main` to keep up, and a conflict the
-merger reports is the one time it does — and **when a session ends**: at a
-boundary between two items, only when the work is done, when it is blocked, or
-when its turns cost more than a fresh session reading the log would. The
-worker, at a person's terminal, is not told it. `roles.test.js` holds that each
-start is told its own part and no other start's, and that no build start tells
-a session to merge `origin/main` otherwise. The review role is the same shape:
-`review-session.md`, a `goal` part (judge, never build) and a `project` part
-(measure, close the gaps, land).
+The build and review roles each have a `goal` part. A build is headless,
+on one branch built to the end: it does not merge main to keep up, and it
+ends at an item boundary only when done, blocked, or cheaper to continue in a
+fresh session. A review judges the goal's criteria and PR head; it never
+builds. `roles.test.js` holds the selected parts and their shared instructions.
 
 **The plan session** (`plan-session.md`) is written around the programme's
 aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). It has, in
@@ -239,8 +219,8 @@ principle, full freedom to move the programme toward it, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. Interactive, it has no restrictions; headless, it never does
 Martin's acts — `mc deploy`, production data, credentials, `--admin`. A goal
-is what `mc build goal` runs, a means toward the aim. `refusedStatus`
-(`commands/goal.js`) refuses a plan session no status. Before 2026-11-03 the
+is what the runner builds, a means toward the aim. `refusedMove`
+(`commands/goal.js`) still enforces forward stage moves for plan sessions. Before 2026-11-03 the
 role was `plan.md`, which forbade a headless plan session code, commits, a
 publish and `review`/`done`, and listed three allowed ends; both are gone.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
@@ -261,7 +241,7 @@ rest of it (`roleRecord`, `roles.js`):
 
 ```json
 "role": {
-  "name": "build-session:project",
+  "name": "build-session:goal",
   "source": "canon",
   "digest": "sha256:345f6ea5956c",
   "text_digest": "sha256:43046c402ec7"
@@ -284,8 +264,8 @@ are files in the repository; the Coding Profile, which could move the first
 from outside it, was removed by ruling 24.
 
 `source` is there because `areaRole` prefers the user's catalogue over canon on
-purpose. A session running the catalogue's `worker` is not running a stale copy
-of canon's; it is running the rulebook, and it is compared against the file it
+purpose. A session running a catalogue role is not automatically running a stale copy
+of canon; it is running that rulebook, and it is compared against the file it
 actually came from. (An `@include` always resolves in canon, whichever
 catalogue the role itself came from.)
 
@@ -296,16 +276,15 @@ today's file would be a claim about it nobody checked.
 `mc roles check [<role>]` is the reader:
 
 ```
-$ mc roles check build-session:project
-build-session:project  (canon)  …/canon/roles/build-session.md
+$ mc roles check build-session:goal
+build-session:goal (canon) …/canon/roles/build-session.md
   role text     sha256:43046c402ec7
   instructions  sha256:345f6ea5956c   all-sessions.md + overlay, as a launch joins them
 
 2 live sessions: 1 ok, 1 drift
-  55012  build the-page-remade    2026-09-06T10:06:46Z  build-session:project  ok
-  55130  build total-lane-cap     2026-09-06T09:34:57Z  build-session:project  drift — started on sha256:9c1…, build-session.md is sha256:430… now
+  55012 build goal:mc/page — ok
+  55130 build goal:mc/lanes — drift
 
------ what a launch would hand a build-session:project session today -----
 …
 ```
 
@@ -366,7 +345,7 @@ what each role is told, read through the path that actually delivers it: the
 assembler for the roles with a body, `planLaunch` for a role without one. It
 walks the canon roles and their starts for the loose-thread and route rules,
 asserts their text exists in exactly one file, and holds the decision shape a
-worker and a project's build are held to.
+goal's build and review are held to.
 
 The delivered text is asserted at each launch path too, against
 `sharedRoleText()` rather than a copy of it:
@@ -397,26 +376,19 @@ verified by opening a real planning session with it (2026-09-05, #614).
 
 ## Session identity is not only an instruction argument
 
-Every launch sets `MC_ROLE` for its own session, including resumed foreground
-sessions and tmux replacements. `MC_PROGRAMME` accompanies plan, step, goal and
-review launches when the programme is known. The intake turn sets `MC_ROLE=intake`, not `helper`.
-An ordinary work conversation sets `MC_ROLE=work`; a worker uses
-`build-session:worker`. Every other launch sets the role it was started on:
-`plan-session`, `build-session:goal`, `build-session:project`,
-`review-session:goal`, `review-session:project`.
-Launchers clear inherited role, programme, goal and step identity first, so a
-child never inherits its caller's job by accident.
+Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
+accompanies programme-owned launches; `MC_GOAL` identifies a goal. Runner
+roles are `build-session:goal`, `review-session:goal` and `plan-session`;
+desks are `brief`, `helper` and `intake`. The launch clears inherited session
+identity first so the child cannot inherit the caller's job by accident.
 
-[`session-role.js`](../../src/mc/session-role.js) is shared by the launchers,
-the SessionStart hook and the `mc plan` refusal. It reads `MC_ROLE` first, then
-older `MC_GOAL` and `MC_STEP` markers, then cwd under the work root. Programme
-directories identify an interactive plan session; their `goals/<goal>/`
-subtrees identify goal sessions instead. Both step layouts, brief, helper and
-intake have cwd fallbacks. An unrecognised directory is
-unknown, not a guessed role. The hook names what it checked in its first line.
+`sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
+MC_GOAL, then cwd. Programme directories identify plan sessions; their
+`goals/<goal>/` subtrees identify goal builds instead. Brief, helper and
+intake directories have their own fallbacks; unknown stays unknown. The
+SessionStart hook prints what it found even outside a repository.
 
-`mc plan` is the person's entrance. It refuses a recognised session, or a
-Claude/Codex session marker, before choosing a programme or creating anything.
-Plan changes inside a session use `mc project new`, `mc project step add` and
-`mc project send`. The plan session is interactive with Martin; a headless plan
-session is not built yet.
+`mc plan` refuses recognised sessions and Claude/Codex agent markers before
+creating anything. A session writes a goal through `mc goal`, not by opening
+another interactive plan session. The runner's headless plan sessions on
+finish and merger reds use the same role, not that person's entrance.

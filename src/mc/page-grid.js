@@ -93,7 +93,6 @@ export const STATE_TONE = Object.freeze({
   queued: ['green'],
   gate: ['green'],
   rebase: ['green'],
-  fixing: ['green'],
   leased: ['green'],
   waiting: ['yellow'],
   // Steps all done, a criterion not met: somebody has to measure.

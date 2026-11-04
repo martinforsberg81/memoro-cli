@@ -134,7 +134,7 @@ deliberate:
 
 It lives under `mcHome()` and never under `~/mc/`: a checkout there is a
 workarea to `listWorkAreas` and to the runner's `closeWorkareas`, and a deploy
-checkout is neither a project nor something the board should draw.
+checkout is not a goal worktree and is not listed as one.
 
 `deploy.mjs` needs nothing from outside the tree it runs in — it resolves its
 own `ROOT` from its file, and `npm run deps:ensure`
@@ -379,9 +379,9 @@ The boundary is a rule, not a judgement call:
   that ran.
 
 What is deliberately not here: **rollback** — a verb that puts a previous sha
-back is a project of its own, now that there is a record to roll back to — and
+back is separate work, now that there is a record to roll back to — and
 memoro's **release race** (`scripts/release-race.mjs`), whose deploy stage could
-one day call this verb; whether it should is a question for after this project.
+one day call this verb; whether it should is a question for after this change.
 
 ## How it is tested, and what has not been measured
 

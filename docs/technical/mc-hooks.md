@@ -26,19 +26,20 @@ warning most.
 ```json
 "hooks": {
   "SessionStart": [{ "hooks": [{ "type": "command", "command": "mc hook session-start 2>/dev/null || true" }] }],
-  "PreToolUse": [{ "matcher": "Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
+  "PreToolUse": [{ "matcher": "Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "command": "mc hook stop 2>/dev/null || true" }] }]
 }
 ```
 
 `mc hook install` writes the block above into that file, changing only the
-entries whose command starts with `mc hook session-start` or `mc hook pre-tool`;
+entries whose command starts with one of those three mc hook forms;
 every other entry is left as it is, and a file that is not JSON is refused and
 left alone. `mc hook install --check` writes nothing and exits 1 when the
 registration has drifted from the block, and the page's MC line names the drift
 as `hooks: … · mc hook install`.
 
 `Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too. `Edit`
-and `MultiEdit` are there so the plan-file refusal below sees them, and
+and `MultiEdit` are there so the goal-file refusal below sees them, and
 `mcp__claude-in-chrome__.*` so the Chrome rule does. When the matcher changes,
 `mc hook install` rewrites mc's entry in place (no second entry), and
 `--check` reports the old matcher as drift until it has run.
@@ -55,10 +56,10 @@ which. A sync that fails is silence, like everything else here. `mc hook
 install` syncs them once too.
 
 Reads the hook JSON (`cwd`) on stdin. Its first line names the session's role
-and programme: `MC_ROLE` first, then older `MC_GOAL`/`MC_STEP` markers, then cwd
+and programme: `MC_ROLE` first, then `MC_GOAL`, then cwd
 under the work root for a session opened by hand. In `~/mc/programs/mc/` it
 names the plan session for `mc`, says `mc plan` is the person's entrance and
-that this session never runs it, and points to `mc project`. A goal subtree is
+that this session never runs it, and points to `mc goal`. A goal subtree is
 never classified as its parent programme's plan session. See
 [session identity](mc-roles.md#session-identity-is-not-only-an-instruction-argument).
 When the role is unknown, the first line names the variables and cwd it checked.
@@ -131,17 +132,14 @@ the page, request, server and dialog errors in the same call. The escape is
 `MC_HOOK_ALLOW=1` anywhere in the tool input — a `#MC_HOOK_ALLOW=1` fragment on
 the URL — with the reason said, so what `mc shot` lacks is what mc learns next.
 
-A `Write`, `Edit` or `MultiEdit` of a `PLAN.json`, `DRAFT.json`, `STATE.json` or
-`CLOSEOUT.json` under `~/mc/programs/` is refused (`plan-file`): a plan changes
-through `mc project`, a step's state through `mc step`, a criterion through
-`mc project criterion met`. A relative `file_path` is resolved against the
-session's `cwd`. This refusal has no escape. A `Bash` command that writes one of
-those names — a `>` or `>>` redirect, `tee`, `sed -i`, or `mv`, `cp`, `rm`,
-`truncate`, `install` of it — is refused the same way, under the `MC_HOOK_ALLOW=1`
-escape like every Bash rule. That rule matches the name alone, so a file of that
-name anywhere is refused too; no repository holds such a file any more. Codex
-sessions are not covered: mc registers no hook for them, so this catches
-mistakes, not intent.
+A `Write`, `Edit` or `MultiEdit` of GOAL.json under `~/mc/programs/` is
+refused (`goal-file`): a goal changes through `mc goal set`, `criterion add`,
+`criterion met`, `document add` and the other goal verbs. A relative
+`file_path` is resolved against the session's cwd. There is no escape for
+these tools. Bash commands writing GOAL.json by redirection, tee, sed -i,
+move, copy, removal, truncate or install are caught by the corresponding
+Bash rule; the usual `MC_HOOK_ALLOW=1` escape applies there. Codex has no
+registered hook, so this catches mistakes, not intent.
 
 The answer is a `deny` with the reason, which names the verb and the escape: a
 command (or a written file) that contains `MC_HOOK_ALLOW=1` passes — a
@@ -150,3 +148,11 @@ the session says why.
 
 The rules are `src/mc/hooks.js`, pure over a git runner and the inputs; the
 door is `src/mc/commands/hook.js`; `tests/mc/hooks.test.js` holds both.
+
+## `mc hook stop`
+
+A goal review (`MC_ROLE=review-session:goal`, with MC_GOAL) cannot end while
+the goal remains in review, or without a proposal written in its programme's
+proposals directory since MC_SESSION_STARTED. It names each missing act. A
+goal that cannot be read does not hold the session, and a missing start time
+disables the proposal-time check. Other sessions are not held.

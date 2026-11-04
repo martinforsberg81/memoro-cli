@@ -25,7 +25,7 @@ What the verb adds is everything around the scripts:
   production at once.
 
 It is Martin's verb, as `mc deploy` is. The runner never calls it, and no role
-tells a session to (`canon/roles/project-verb.md`). Only the verb, its help,
+tells a build session to. Only the verb, its help,
 its record, the page and `mc deploy --dry-run` name its subcommands, and the
 last two name them only as the next thing to type.
 
@@ -246,5 +246,5 @@ Every child is faked:
 - The page and the dry-run lines are covered in `tests/mc/page.test.js` and
   `tests/mc/commands/deploy.test.js`.
 
-**Not measured live:** no step session ran an act against production. The
+**Not measured live:** no build session ran an act against production. The
 first live run is Martin's: `mc language run sv-forms-cutover --dry-run`.

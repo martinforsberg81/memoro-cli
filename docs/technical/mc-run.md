@@ -1,1632 +1,209 @@
 # mc run — the runner
 
-`mc run` is the one thing that lives all day. It takes the next step of the
-next project, in a fresh headless session, and merges the result — and it
-does that in a loop until somebody stops it. It was `~/mc/bin/runner.sh`,
-some 220 lines of bash calling `claude -p` directly; since 2026-08-28 it is a
-verb, so the tool is a per-project choice through the same launch adapter
-every other verb uses, the prompts are role files in `canon/roles/`, and the
-log is something `mc status` can read.
+`mc run` starts fresh headless sessions on goals until stopped. It reads
+GOAL.json and LOG.md, chooses work, launches a coding tool through the shared
+adapter, and records the outcome. The runner itself makes no model turn.
+`src/mc/run.js` owns processes and file boundaries; `src/mc/run-plan.js`
+holds prompts, argument lists, output parsing and chore cadence rules.
 
-**The runner decides nothing with a model.** It reads files, runs `git` and
-`gh`, starts a session through the adapter and waits for it. It is the parent
-of the process it starts, so it needs no inbox, no knock and no watcher to
-know whether that process is alive. The model is the session — `plan`,
-`build` (of a project's step or of a goal) or `review` — and the session is
-the only place a model appears.
-
-The rules that are pure functions of text live in
-[`src/mc/run-plan.js`](../../src/mc/run-plan.js); everything that touches a
-process is [`src/mc/run.js`](../../src/mc/run.js), where every boundary is a
-key on `deps` so a lane's pass can be driven in a test with no network.
+Projects went on 2026-11-03; migration is documented in
+[mc-goals.md § From a project](mc-goals.md#from-a-project). The runner now
+starts goals only. A goal's worktree stays on its one branch until it lands.
 
 ```
 mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]
+mc run start [same flags]
+mc run stop [--force]
+mc run --update [--force]
+mc run lanes [<n>]
+mc run --billing [<claude|codex> <on|off>]
 ```
 
-With no flags it takes the next step of the next project until STOP. `--once`
-takes one step — the first runnable project in the whole order, either
-repository — and exits: the way to watch a single step. `--no-merge`
-leaves the pull requests open; it is a default-on boolean written mc's way,
-not `--merge 0|1`. `--idle-sleep` is how long a lane that could start nothing
-waits before it looks again, 600 s by default. The flag that counted passes is
-gone; the history section at the end says why.
+With no flags it keeps picking. `--once` runs one runnable goal session and
+no chores. `--no-merge` leaves the pull requests open; goal builds already
+publish without merging, and their review owns the hand-off. `--idle-sleep`
+is the idle delay, 600 s by default, checked in short slices for orders.
+`--rounds <n>` was retired with the round: there is no pass to count.
 
 ## The switch
 
-```
-mc run start [same flags]   the runner, detached, logging to runner.log;
-                            on a stopping runner, a new one takes over at once
-mc run stop                 after the step each lane is in
-mc run stop --force         now, and the sessions it is holding with it
-mc run --update             new code, new process at once; the old one finishes
-                            the steps it holds (`mc run update` is the same)
-```
+The person controls the runner with start, stop and update, also accepted at
+the page's prompt. Orders are files under `~/mc/runner/`, read between picks,
+not a message typed into the session being built.
 
-The same three are answers at the `mc` page's prompt — `start`,
-`stop [--force]`, `update [--force]`, with or without `run` / `mc run` in front
-— so the switch needs no second terminal; the verb's answer is printed under
-the page and the page is drawn again. Only a bare `stop` is the runner's.
+- `start` spawns the detached runner and writes runner.json as soon as the pid
+  is known; it removes a previous STOP. A runner already running is refused.
+  On a stopping runner, start takes over: a new runner takes new work while
+  its predecessor finishes only the sessions it already holds.
+- `stop` writes `~/mc/runner/STOP`. It is sticky once seen: every lane finishes
+  its session and takes nothing more. `--force` also terminates the runner's
+  process group and removes its current files. It is not ordinary shutdown.
+- `--update` (`update` is equivalent) writes UPDATE. The first reader
+  fast-forwards the installed checkout and starts its successor with the same
+  arguments and stdio; the old runner finishes its sessions. A requested
+  restart still happens when the checkout cannot fast-forward, with a warning.
+- The runner writes `runner/UPDATE` itself when origin/main has moved and
+  that checkout is clean and fast-forwards, once per origin/main sha.
+  Local work or divergence is said once, not silently discarded. The merger
+  and repository watcher follow changes to their installed checkout too.
 
-**One reading first, in any order.** Every verb starts from where the runner
-stands (`runnerState`): *none*, *running*, *stopping* (STOP written, a runner
-it reaches still alive), *draining* (UPDATE written, not yet read) or
-*finishing* (only the runner a handover replaced is alive). The answers say it
-in the same words as the page: a stop prints
-`stopping since 08:47 (39 min) — waiting on video-window step 1 (memoro#6, 80 min); 11 lanes done`
-(`stopLine`), an update the matching `draining …` line (`drainLine`). Until
-2026-10-10 the shell history held `stop`, `start` (refused), `--update`
-(refused), `start` (refused), `stop --force` — sessions killed mid-step to get a
-runner going again. No sequence of the three needs `--force` now.
-
-All three orders are **files under `~/mc/runner/`, read between two picks**
-— never signals, and never mid-session. A runner ninety minutes into a
-headless step is given the order without that step being interrupted, which is
-the whole reason they are files. `src/mc/run-control.js` writes them and holds
-the rules; each lane reads them before it picks.
-
-- **`start`** spawns `mc run` detached with its stderr appended to
-  `runner.log`, carrying whatever flags follow it, and writes `runner.json`
-  for the child the moment its pid is known — so a second `start`, or a
-  `stop`, in the second the child takes to load sees a runner rather than a
-  gap. It removes the `STOP` the last stop wrote — `start` and `stop` are one
-  switch, and a switch that will not turn back on is not one. A foreground
-  `mc run` does the same. It refuses only on a runner that is running and was
-  not told to stop.
-- **`start` on a runner on its way out** — stopping, or finishing what a
-  handover left it — **takes over** (`takeOver`): a new runner is spawned as
-  its successor (`MC_RUN_SUCCESSOR_OF`), `runner.json` names the new one with
-  the old as `predecessor`, and only then is `STOP` removed. The old runner
-  reads runner.json naming another live pid as a handover already done
-  (`replaced` in run.js): it takes no new step, finishes the ones it holds,
-  and leaves runner.json alone on its way out. A stopping runner that predates
-  `replaced` would not stand down, so it is not taken over — `start` says so
-  and waits for it.
-- **`stop`** writes `STOP`. **`stop --force`** writes it too, and then ends the
-  runner now: `SIGTERM` to its process group, `SIGKILL` to whatever is left of
-  it two seconds later. The group and not the pid, because the headless session
-  is a child of the runner and shares it — kill the runner alone and `claude`
-  carries on for another eighty minutes with nobody left to read its output.
-  A killed runner never reaches its own `finally`, so `--force` removes the
-  `runner.json` and `current-<repo>.json` it would have removed itself;
-  otherwise the page draws a step that is not running. What a killed session
-  leaves in its workarea — a merge of `origin/main` in progress — the next pick
-  aborts (*What the worktree decides*).
-- **`--update`** writes `UPDATE`. The first lane to read it fast-forwards the
-  checkout mc is running from and starts a fresh `mc run` with the same
-  argument list and the same stdio at once (ruling 28); this runner takes no
-  new step and exits when the steps it holds have ended. `runner.json` is
-  written for the successor — its pid and the new commit — the moment it is
-  spawned, so a second `--update` in the second it takes to load is told there
-  is nothing to update rather than ordering a second handover. A checkout that
-  will not fast-forward — local work, or diverged — is said out loud and
-  handed over anyway: the restart was asked for. On a runner that is stopping,
-  `--update` is a take-over as `start` is, after the fast-forward and with the
-  flags the old runner ran with (`args` in runner.json). `--update` prints
-  one line per long-lived process besides the runner: the merger and the
-  repo watcher, each with its pid, the commit it runs on, and when it moves.
-- **The runner writes `runner/UPDATE` itself** between picks (`noticeNewCode`
-  in `chores`) when origin/main of the checkout mc runs from has moved past
-  the commit in `runner.json` and that checkout is clean and fast-forwards —
-  once per origin/main sha, so landing a pull request is enough. A checkout
-  with local work or one that has diverged is said once in `runner.log` and
-  not handed over; `mc run --update` once it is clean. The merger and the
-  repo watcher follow the checkout the same way, once its HEAD has moved: the
-  merger at once, releasing `merger.json` and starting its successor, then
-  finishing only the rounds it holds (*The merge*); the watcher after its
-  refresh, leaving between units of work. Each starts its successor on the new code.
-  `--update` only makes it immediate. Until 2026-09-19 a landing under
-  `src/mc/` or `canon/` wrote the file whatever the checkout looked like, and
-  with most memoro-cli landings touching those trees it drained the lanes
-  after nearly every merge; from then until 2026-10-18 nothing but `--update`
-  wrote it.
-
-**The login agent.** Every `mc run start` that spawns a runner writes
-`~/Library/LaunchAgents/se.memoro.mc-runner.plist` when its text differs
-(`agentPlist`): `RunAtLoad`, no `KeepAlive`, running
-`mc run start --if-was-running` with the node and the mc the last start used,
-the `PATH` and `HOME` that start ran with (launchd gives a login agent neither
-the shell's PATH nor homebrew, where `claude` and `codex` live), and its output
-to `~/mc/runner/log/login-agent.log`. A file there is loaded at the next login
-without `launchctl`. `--if-was-running` starts a runner only when
-`runner.json` names a pid that is gone and no `STOP` is written — what a
-restart leaves, not what `mc run stop` leaves — with the flags the dead runner
-ran with; otherwise it prints why not (`not started — the runner was stopped
-(STOP present)`, `not started — no runner was running`, or the runner already
-running) and exits 0. Measured 2026-10-10: the machine restarted at 11:50 and
-the runner was started by hand at 13:19, every session's one-hour cache gone.
-Removing the plist turns the agent off; the next `mc run start` writes it back.
-
-**Why `--update` has to exist at all.** Node reads its whole module graph at
-process start and never looks at the disk again. The runner merges pull
-requests, including pull requests that change the runner, so a runner that has
-been up all day is running the code it was started with however much of itself
-it has improved since. Measured 2026-08-29, four merged improvements to
-`mc run` sat unused for two hours. Measured 2026-08-30, the process that could
-first have closed a finished workarea ran for eighteen hours having started
-ninety minutes *before* the closing code was merged — so nothing was ever
-closed, and no line anywhere said why. New code needs a new process; this is
-the order that asks for one at the one moment it costs nothing.
-
-**Why it drains rather than hands over at once.** Two wrong versions preceded
-the drain on 2026-09-04. In the morning a lane that read `UPDATE` while idle
-left its loop and *sat*, so the idle lanes took no work for the whole of a busy
-lane's step. Then idle lanes were let keep taking work until a quiet moment —
-and with four lanes in steady work the quiet moment never came: an `UPDATE` the
-runner wrote for itself at 09:30 was still pending two hours later. Martin chose
-the drain over an immediate handover with two runners alive. Ruling 28
-(2026-10-07) took the immediate handover after all: the drain left every idle
-lane idle for up to a step's length on every update.
+`src/mc/run-control.js` implements these orders and the login agent.
+`mc run start` installs a RunAtLoad agent using `start --if-was-running`.
+After login it starts only if runner.json names a dead pid and no STOP is
+present. A runner deliberately stopped stays stopped. Node loads its module
+graph once, so a landed code change needs a new process to use it.
 
 ## Staying awake
 
-A run that is not `--once` holds the machine awake for its whole length, and
-that is the default rather than a flag to remember: this laptop is set to
-sleep after **one minute** of idle on battery (`pmset -g custom`), and a
-lane waiting ten minutes before it looks again is exactly what that setting is
-for. An unattended run would stop without anybody deciding it should.
-
-It is `caffeinate -i -m -s -w <runner pid>`
-([`src/mc/stay-awake.js`](../../src/mc/stay-awake.js)) — tied to the process,
-never to a clock. A timed assertion is wrong at both ends: too short and the
-run sleeps, too long and a laptop is held awake in somebody's bag. Watching
-the pid also means nothing has to clean up, including when the runner is
-killed by a signal that runs no handler.
-
-What it holds, honestly:
-
-| flag | what it actually does |
-|---|---|
-| `-i` | idle system sleep — **the one that matters**, and it holds on battery |
-| `-m` | the disk idling down under a run that is mostly waiting |
-| `-s` | system sleep — caffeinate(8) says this is *valid only on AC power*, so on battery it is asked for and does nothing |
-
-`-d` is deliberately not asked for: display sleep does not stop a process, and
-keeping the screen lit all night costs battery for nothing.
-
-**A closed lid still sleeps the machine.** No assertion suppresses it. On
-Apple Silicon the ways past it are clamshell mode (external display and
-power) or `sudo pmset -a disablesleep 1`, which is machine-wide, persists
-until it is changed back, and is therefore an operator's decision rather than
-something a verb does on somebody's behalf. `mc run` prints which of these it
-got at start, so the limit is read at the beginning rather than discovered as
-an empty log the next morning.
-
-`--no-caffeinate` turns it off.
+A continuous run holds `caffeinate -i -m -s -w <runner pid>` for its lifetime
+(`stay-awake.js`); `--once` does not. Idle sleep is suppressed on battery,
+while `-s` is effective only on AC. Display sleep is not suppressed. A closed
+lid still sleeps the machine. `--no-caffeinate` allows normal sleep.
 
 ## The pick, in order
 
-A **step** is one fresh headless session in one workarea, followed by the
-merge of the pull request that session opened. A **pick** is a lane choosing
-which step that is. There is nothing that walks every project: a lane takes
-the next step, and then the next one (Martin, 2026-09-08 — ruling 17 below, in
-*Blocked by the runner*).
+`goalWork`, `goalSession`, `phaseOpen` and `pickWork` (`lane-pick.js`) decide eligibility and
+order without a model call:
 
-A **lane** is one loop in `runLoop` (`lane`, `run.js`), bound to no
-repository and no kind: each pass reads every repository's world and takes
-the next work of any of them (*What a free lane takes*, below). What it does,
-for as long as the runner runs:
+1. Read the goals under `~/mc/programs/<programme>/goals/`, through the
+   runner's own environment. Convert older goal status/dependency records
+   before judging them. An unreadable goal is not runnable.
+2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
+   or `merging · ready` after its first red or moved head and once it is no
+   longer in the merger's line. `plan`, `done`, `dropped` and `blocked` do
+   not start a session.
+3. Hold any goal whose programme has an unfinished goal in a lower phase.
+   All goals of a phase can run side by side; there is no separate queue file.
+4. Exclude goals already claimed or named by a live current file, and goals
+   whose first repository is not served by the lane. A review without an
+   available route does not stand in front of other work.
+5. Take reviews and plan work before builds, longest waiting first
+   within the rank. Repository fairness first reserves a share for each
+   repository with runnable work or a running session. Waiting begins at the last log entry.
 
-1. **STOP and UPDATE first.** A `STOP` file ends the lane; a pending `UPDATE`
-   makes it take no new step and wait for the drain (*The switch*).
-2. **Read the world** — `queue()`, every repository's:
-   `~/mc/queue.md`, every `PLAN.json` under `~/mc/programs/`, and
-   `gh pr list --state open`, on the same trip to the network. The open list
-   also reconciles the register: a `running` step whose session is gone is failed
-   leaves it.
-3. **Pick** — `pickWork` ([`lane-pick.js`](../../src/mc/lane-pick.js)) over
-   every repository's candidates, a project's by `nextFor`
-   ([`run-plan.js`](../../src/mc/run-plan.js)): the first name in
-   `assembleQueue`'s order (*The queue*)
-   - whose plan under `~/mc/programs/` says its first unfinished step is `ready`
-     (`kindFor`, the same call the page makes). A `landing` or a `built` step is
-     behind the plan, as `planState` reads it, so the step after it is the one
-     picked (a `built` step's work is on the project's branch, *A plan with a
-     review step*),
-   - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
-     that cannot see what is open starts nothing). A failed `gh pr list` is
-     not asked again at once: the repository is left alone for 1, 2, 5 and
-     then 15 minutes per failure in a row, starting nothing meanwhile, and the
-     first answer clears it ([`github-backoff.js`](../../src/mc/github-backoff.js),
-     state in `~/mc/runner/github.json`). Every ask at a locked keychain left
-     a modal and a process behind (2026-09-20). Each failure is diagnosed in
-     two calls of two seconds at most — `security show-keychain-info` (hangs
-     or fails on a locked keychain), then `gh auth status` (fails on a bad
-     token) — and the page's SESSIONS section names the cause and its command,
-     `security unlock-keychain` or `gh auth login -h github.com`,
-   - that has no open pull request (`inFlight`),
-   - that no other lane has claimed (`claims`),
-   - and that this pass has not already been refused on (`passed`).
+The in-process claim is taken in the same tick as the choice, before any
+await, so two lanes cannot choose the same goal before its current file exists.
+The phase rule and the stage transitions are in [mc-goals.md](mc-goals.md).
 
-   A pick costs no git at all: everything it reads is what step 2 fetched.
-4. **Claim it, and say it.** The name goes into `claims` in the same tick it
-   is picked, before anything is awaited, and the lane writes
-   `memoro#2: next — <name> (step 3/8)`.
-5. **Run it** — `runStep`, which asks the machine (*One step*) and gets one of
-   three kinds of answer:
-   - **a step ran** (`ran`, or `merged` when it landed): the pass ends, and the
-     lane picks again **at once** against a freshly read world, because the
-     one it picked from now has a pull request in it and a plan that moved on;
-   - **a fault a person has to fix**: the step is written `blocked`
-     (*Blocked by the runner*), the name joins `passed`, and the lane takes the
-     next name in the same pass;
-   - **a moment's fault** — `WAIT_REFUSALS` in `run.js`: a fetch that failed,
-     GitHub not answering, an UPDATE read while waiting for a slot, a name
-     another lane took between the pick and the run: the pass ends, the lane
-     says `memoro#2: waiting — <word>` and sleeps `--idle-sleep`, then asks the
-     same question again.
+## Lanes
 
-   Anything else — an open pull request that appeared after the world was read,
-   a plan that left `main` mid-pass — is passed over for this pass like a
-   block, and not written anywhere.
-6. **Nothing to pick**: `memoro#2: nothing to run — sleeping`, and a sleep of
-   `--idle-sleep`. An idle lane says that line once and then nothing until what
-   it would say changes; it used to be one line per lane every ten minutes.
+`mc run lanes <n>` sets one total across repositories and session kinds,
+from 1 to 16. It is read live. Raising it starts additional lanes; lowering
+it lets sessions above the new count finish. `memoro` and `memoro-cli` are
+the two repository names the runner serves.
 
-**A step that moved nothing is not picked again at once.** *Pick again at once*
-is a spin if the step changed nothing: a session that opens no pull request and
-leaves its plan exactly as it found it would be restarted the second
-it ended. So a lane carries the `{ name, step }` it just ran, and `pass` skips
-that one name while the plan still shows the same step
-(`<tag>: <name> is on the same step its last session ended on — leaving it for
-the next pass`). A merged step *does* move the plan, so a project whose next step
-is ready is picked again at once — the order does what a lane's stay on a
-project used to.
+A slot is taken at the last moment before launch, with no await between
+checking and taking. Sessions held by a predecessor count too. A held lane
+polls every 15 s; admission is FIFO, with waiters visible in
+`runner/waiting.json`. STOP and UPDATE retire their waiting tickets.
 
-**The chores are not a lane.** They run in a loop of their own beside the lanes
-(`choreLoop` and `chores()`), from the whole queue, with the same
-`--idle-sleep` between two passes of it:
+No new session starts with less than 5 GiB free on the scratch volume or
+memory status below 20 percent. The runner writes disk.json or memory.json
+and removes it when the hold clears. A failed reading is not a hold.
+Sessions already running and the merger go on.
 
-1. **The day's collect**, if it is due: once per calendar day, in the first
-   chore pass after 05:00Z. It is not a step and not a project — it opens no
-   worktree, touches no branch and calls no model; it reads production and
-   writes one digest per repository into `~/mc/intake/`. Its two runs.tsv rows
-   (`kind: helper`) are its whole state, which is why a failed collect stays
-   unretried for the rest of the day. See [`mc-helper.md`](mc-helper.md).
-2. **The inbox, drained**, every chore pass and with no day gate: the oldest
-   files in `~/mc/intake/` — the collector's digests and whatever Martin
-   dropped there — up to three of them, one headless turn each, every one moved
-   to `~/mc/runner/log/intake/<date>/` the moment its turn ends whatever the
-   turn returned. One row per file (`kind: intake`, the file in the name
-   column). The question here is *is there a file?*, not *has today's collect
-   run?*, and the two were one gate until 2026-09-05 — which is how thirteen
-   digests came to be waiting in a directory that is supposed to drain.
-3. **Tidy `queue.md`** against the plans under `~/mc/programs/`, and write
-   `~/mc/runner/unreadable-plans.md` from the same reading.
-4. **Archive** every plan that is done — every step done and every success
-   criterion `met: true`. A plan whose steps are all done with a criterion not
-   met is `unmet`: the runner says so once in `runner.log`
-   (`<project>: every step is done, but success criterion N is not met
-   … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan. The same chore archives a goal under `~/mc/programs/<programme>/goals/` that has been `done` or `dropped` for 24 hours (`archiveGoalsDue`, `goal-archive.js`), by the road `mc goal archive` takes.
-5. **Close** the workareas whose project is finished — whose archive landed
-   in 4, or whose plan an earlier archive already took away, which
-   `CLOSEOUT.json` or `project_log.md` is what still knows.
-6. **Docker, swept** (`sweepDocker`, `docker.js`), every pass: leases whose pid
-   is gone are removed, containers and volumes labelled `mc.holder` with a dead
-   pid are removed, and an OrbStack that `mc docker ensure` started is stopped
-   with `orbctl stop` once 10 minutes have passed since the last release with
-   no lease, no live dev server and no running unlabelled container. While
-   OrbStack is down only `orbctl status` runs; every call has a timeout; a
-   failure is one `docker: sweep failed` line.
+## The session
 
-**No step starts on a disk with no room.** Every pass reads the free space of
-the volume where `MC_SCRATCH` is made (`diskRoom`, `deps.freeBytes` on
-`paths.scratch`) before it picks anything. Under `DISK_MIN_BYTES` — 5 GiB, a
-constant in `run.js` — the pass starts nothing and returns `skipped:disk`; the
-lane says `disk: <n> GiB free, below 5 GiB — no step started` once in
-`runner.log` and writes the same line to `~/mc/runner/disk.json`, which the
-page's SESSIONS section shows in yellow while the runner is alive. The step stays
-`ready` and nothing is written into a plan; the first pass with room removes
-the file and the line goes with it. Sessions already running, their check-ins
-and their landings are not in a pass and go on. A reader that throws, or no
-reader, counts as room: a guess must not stop the runner. On 2026-10-08 the
-volume had 118 MiB free, scratch held 15 GiB, and a step's first shell commands
-failed on ENOSPC; the hold is one answer, the two-day sweep of scratch
-(*What the session is told about itself*) the other.
+`runGoal` works in the first repository's existing goal worktree and keeps its
+branch. An unbuilt branch is remade from origin/main before its first build
+when it has no commits of its own; built work never merges main to keep up.
+A missing worktree is recreated on its goal branch when possible. A missing
+role or tool skips launch; a worktree failure is recorded in LOG.md. The
+prompt includes the rendered goal (goal, contract, boundaries, documents and criteria), and the
+role tells the session to read LOG.md first.
 
-**`--once`** is one pass with one lane over the whole order, both
-repositories: the same pick, the same refusals, and out after the first step
-that ran (`once: exiting`) or when nothing is left (`once: nothing to run`). No
-chores — the flag exists to watch one step, and a model turn
-over production is not what somebody typing it asked for.
+- A build uses `build-session:goal` and the goal's `fast` or `large` class.
+  It gates, commits and publishes with `--no-merge`. It ends with `mc goal log`,
+  moving to review only once every criterion has been checked and met.
+- A review uses `review-session:goal`, the open PR and its head. It judges,
+  never builds: `mc goal stage merging` queues the head it judged, or it
+  writes REVIEW.md and moves to finish. A review that dies still in review
+  is retried once, then blocked if that happens again.
+- A plan session uses `plan-session` on Claude opus at high effort, starting
+  in the programme directory with access to the goal's worktree, for finish
+  or a first merger red. It can finish the work and publish it. A subsequent red in merging is blocked for a person.
 
-**It refuses to start while another runner is alive**, naming the pid that
-holds it and the two ways on — `mc run stop`, `mc run --update` — which is the
-same refusal `mc run start` has always made, from the same `readRunner`, so
-the two cannot disagree about who is running. It has to be here and not only
-in `start`, because on 2026-09-02 two runners were alive in one work root and
-handed the same step to two headless sessions in the same worktree a hundred
-seconds apart: two agents in one working tree share one `git add -A` and one
-branch, and the second session's only safe move was to stand down. `--once` is
-refused too — it is a person watching one step rather than an unattended loop,
-but the collision is identical. A `runner.json` naming a pid that is *gone* is
-a killed runner's leftovers, not a wall: it is cleared, along with the
-`current-<repo>.json` files that runner never got to remove, and the loop says
-so and goes on. The one start that must not be refused is `--update`'s
-successor, and it is not: `runLoop` clears `runner.json` before it hands over,
-so the new process reads no holder.
+These are fresh sessions, not a resumed execution chain. If a session ends
+without writing a log entry, the runner writes one; three such build ends
+in succession send the goal to finish. A normal build end with more work
+leaves it build · ready for the next session.
 
-## The queue
+### Launch settings
 
-What a lane takes from is `assembleQueue`: the names in `~/mc/queue.md` first,
-in the file's order, then every project with a `PLAN.json` under `~/mc/programs/` that the file did not name,
-**alphabetically**. That is the whole of the order. A name with no plan is not in it
-at all — it used to be, and the skip line it produced was read by nobody. Such a
-workarea is surfaced where somebody looks instead: the page's list of
-workareas without a project.
-
-`~/mc/queue.md` is Martin's "these first" and nothing else: project names, one
-per line, no comments and no headings. **A name leaves it when its plan is
-`done` or has left `main`**, and not before. It used to leave the moment one
-step of the project had run, which made sense while every name was tried once
-per pass over the queue; with the order as the only thing a lane goes by, a
-prioritised five-step project would have dropped to alphabetical after its
-first step (2026-09-08). `strictQueue` is the rule and `tidyQueue` in the chore
-loop rewrites the file to that shape, one runner.log line per dropped entry: a
-line that is not a name, a name given twice, a name with no plan, a
-plan still written as `PLAN.md`, and a plan that is `done`. A `blocked` project
-keeps its place — it is first again the moment its step is `ready`.
-
-## One step
-
-A project is asked in two places, and the order is the whole of what a pick
-costs: **the plan under `~/mc/programs/` decides before anything is touched, and the
-worktree decides after.**
-
-What a project's build session has not committed is snapshotted to
-`refs/mc/checkpoint/<project>` (`src/mc/checkpoint.js`): every `CHECKPOINT_MS`
-(ten minutes) while the session runs, and immediately before each
-`git merge --abort` the runner makes in the step's workarea. The snapshot is a
-commit on top of `HEAD` built through a temporary index under the runner's
-scratch directory, so the worktree, its real index and `HEAD` are untouched;
-a clean tree writes nothing, and each snapshot replaces the last. Nothing
-applies it. A fresh session's handover names the ref when it exists, and a
-person restores from it with `git checkout refs/mc/checkpoint/<project> -- .`
-in the workarea (or looks first with `git show --stat refs/mc/checkpoint/<project>`).
-
-### What the plan decides
-
-The pick answers it (step 3 above), from the plans the lane has just read.
-`kindFor` is the reading — the same one the page's NEXT draws from — and a name
-it refuses is never picked and costs no git at all:
-
-| the plan says | the lane |
-|---|---|
-| the first unfinished step is `ready` | may pick it |
-| every step is `done`, or the first unfinished one is `blocked` | does not |
-| the file does not parse | does not — and a row in `~/mc/runner/unreadable-plans.md` |
-| there is no plan | does not — `assembleQueue` has already left the name out |
-
-The first unfinished step is the only step anything looks at. Steps are an
-order, and skipping a stopped one to reach a later `ready` step is how a plan
-gets half-built in an order nobody chose.
-
-What this answer is worth was measured while the runner still walked every
-name: 38 projects in 51 s of git, 36 of which the plan had already
-refused, against 1.2 ms for the same answers read from the plans in hand
-(the history section at the end). The picker is that economy made the only
-path.
-
-### What the worktree decides
-
-Everything that is *not* on any plan is asked by `runStep` of this machine and
-this GitHub at this moment, in this order (`runStepClaimed`):
-
-1. **STOP**, and the quota: a lane that another lane's quota answer has put to
-   sleep waits it out here, before a worktree is touched.
-2. **No workarea** is not a refusal: one is created at
-   `~/mc/step/<project>/<repo>` with `git worktree add` from `origin/main` on
-   branch `<project>` (ruling 39: the path says what an area is). An area left
-   at `~/mc/<project>/` from before `step/` is stepped and closed where it
-   stands and drains away; it is never moved (`stepAreaName`, `paths.js`). In layout 2 the area is `~/mc/runner/step/<project>/<repo>` ([mc-layout.md](mc-layout.md) says which layout holds).
-3. **A merge of `origin/main` left in progress** — `MERGE_HEAD` present — is
-   aborted: `git merge --abort`, and `<name>: a merge of origin/main was left in
-   progress — aborted`. That is what a session killed mid-merge leaves (rc 143,
-   `mc run stop --force`), and the runner's own abort after a session never runs
-   in a process that was killed. The abort returns the tree to the branch's own
-   last commit; nothing a session committed is touched, and what it had not
-   committed went with the session. `REBASE_HEAD` and `CHERRY_PICK_HEAD` are
-   deliberately left alone — the runner starts neither, so one of them is a
-   person's work.
-4. **The worktree is dirty** — uncommitted changes that are not a merge in
-   progress. A step area is the runner's own, so dirt an earlier session left
-   there does not block a step. Uncommitted files on the project's own branch
-   (the register step's branch, the project's name, or `<project>-<n>`) are
-   committed first as one WIP commit with `--no-verify` (`commitLeftovers`),
-   before the step starts: `WIP left by an interrupted session` when the step's
-   last session was cut off (*The register*), `WIP left by an earlier session
-   of step <n>` otherwise. The runner never stashes or discards files. A resume
-   does not look at the tree at all — its conversation knows those files — so
-   it is left exactly as it is. Dirt on any other branch is a person's and
-   blocks the step on `workarea dirty-worktree`, as does a WIP commit git
-   refuses.
-5. **What is open on GitHub could not be read** for this repository.
-6. *(Until 2026-09-12 a held pull request was here: a `repair` session, then
-   the brief's. Ruling 21 removed it; a step that did not land is `failed` in
-   the register — *The register*.)*
-7. **A pull request already in flight** (`inFlight`) — the picker has already
-   passed over every project it saw one on, so this is only a pull request that
-   opened between the pick and the run.
-8. **The branch.** A workarea whose branch has already landed — checked by
-   content (`branch-landed.js`), because the runner squash-merges and "ahead by
-   N" says nothing — is moved to `<name>-<n>` from `origin/main`, the smallest
-   `<n>` no branch local or remote is using, *before* a session starts, because
-   `push-guard.js` would otherwise refuse the push at the end of it. Asked of
-   every workarea under `~/mc` on 2026-09-02, 44 stood on a landed branch. When
-   the merge against `origin/main` conflicts, `branch-landed.js` answers
-   `unknown` and stays local; `freshBranch` then asks GitHub what the push-guard
-   asks — the newest pull request merged from the branch, and whether its head
-   is the branch's tip. It is: nothing came after the landing, and the branch
-   is moved the same way (`step-cost-2` ran on a landed branch on 2026-09-11
-   for want of this). A different tip, no merged pull request or a `gh` that
-   fails leaves it. A branch whose tip is at or behind the newest merged pull
-   request's head counts as landed, with nothing of its own beyond that head and
-   origin/main. The head is read from GitHub and fetched as `refs/pull/<n>/head`
-   when it is missing locally, because the remote branch is deleted on merge and
-   pruned by the fetch (`sql-schema-drift-3`, 2026-10-18). A branch that has *not* landed carries work and is left
-   exactly where it is.
-9. **`git merge origin/main`** — **never** a rebase, which is what nights 1–2
-   of the shell runner cost to learn (`syncMain`, below).
-10. **The role and the tool**: `canon/roles/<kind>.md` must be there, and the
-    launch adapter must find the plan's tool.
-11. **A slot** under the machine's `total` (*Lanes*).
-
-**The answers split in two, and the split is the whole of ruling 17.** A fault
-that nothing the runner does next will change, and that a person has to act on,
-ends with the step `blocked` — *Blocked by the runner* has how. A
-fault that is a moment's, and not the project's, is waited out.
-
-| blocked, as `blocked_by: { kind: "workarea", name }` | the refusal word | when |
-|---|---|---|
-| `dirty-worktree` | `dirty` | 4 — dirt on a branch that is not the project's, or a WIP commit that failed; the comment names up to five of the files |
-| `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
-| `branch-foreign` | `branch-foreign` | 2 — the project's local branch is held by a worktree the runner did not free, or has commits not on origin/main and no register step names it; the holder is named |
-| `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made |
-| `merge-uncommittable` | `sync` | 9 — every conflict resolved and the commit refused; a merge git refused with no conflict at all (unrelated histories, a stale `index.lock`); a `PLAN.json` neither the plan's rule nor `main`'s copy could settle |
-| `role-missing` | `role-missing` | 10 |
-| `tool-missing` | `tool-missing` | 10 — the adapter's hint |
-
-A landed local branch named after the project that no worktree holds and no
-register step names is not a block: it is deleted, the workarea is created from
-origin/main, and runner.log says so in one line (`claimProjectBranch`,
-`plan-branch.js`). Checked out as it stood, its head is the pre-squash commit,
-behind main and without the plan — where `morning-calls` step 1 would have
-started on 2026-10-14 had the planning session's scratchpad not held it.
-
-The names are `WORKAREA_BLOCKS` (`run-plan.js`), keyed by the refusal word so
-the two lists are one. Where a merge is in progress when the fault is met, it is
-aborted first, so the workarea a person opens is the branch's own last commit
-and not a tree with everything staged.
-
-**Waited out, never blocked:** `STOP`; the quota pause; `prs-unknown`; `sync`
-when it was the *fetch* that failed (the same word — `syncMain` says which, and
-the lane keeps the names it blocked in `persistent` to tell them apart); an
-UPDATE read while waiting for a slot. Neither blocked nor waited: `in-flight`,
-because an open pull request is work and not a fault. A step whose session
-ended without landing is not a refusal at all: it is `failed` in the register
-(*The register*), and the plan's own word passes the project over.
-
-A live tmux session is **not** a reason at all. It used to be, and it was a
-second, undeclared way to stop work — whether a step ran depended on which
-terminals happened to be open (Martin, 2026-09-02). A project the runner
-should leave alone says so by being `blocked` in its own plan.
-
-**`syncMain`.** One conflict is resolved without a session: an identical
-`.gitignore` hunk. A plan is in no repository (ruling 48), so no `PLAN.json`
-conflicts with `main` and no rule merges one: `plan-merge.js` went with the
-plans, and the plan the runner obeys is the one under `~/mc/programs/`
-([`docs/project/README.md`](../project/README.md), § *Who writes what*).
-
-Every other conflict is handed to the build session: `stepPrompt` puts a
-preamble above the body naming the conflicting files, saying the merge stopped
-there, and saying it is the first thing the session does and not the job. One
-session resolves the merge and delivers the step, and one pull request carries
-both. If the session leaves the
-merge unfinished, the runner aborts it after the session.
-
-After the merge of `origin/main`, a fresh step with no conflicts re-attaches its workarea's dependency cache (`attachRepoDepsAsync` in [`shared-deps.js`](../../src/mc/shared-deps.js)), since a lockfile that moved on main leaves last round's attachment stale, and a failure is logged and never blocks the step.
-
-**A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
-what lets a pull request be matched back to a project at all, and step 8 is
-what makes it true rather than hoped for: `projectForBranch` takes the longest
-project name the branch equals or begins with followed by a hyphen — longest,
-because `mc`, `mc-cut`, `mc-log` and `mc-test` are all project names and
-`mc-cut-2` must not resolve to `mc`. A pull request on a differently named
-branch is invisible to this, and there is no second rule for a case nobody has
-seen: every open pull request on 2026-09-02 followed the convention. The block
-pull request relies on it too (*Blocked by the runner*).
-
-### Which copy of the plan the runner reads
-
-**One copy.** The pick and `runStep` read the same file, the `PLAN.json` under
-`~/mc/programs/<programme>/<project>/`: the pick to decide *whether to start*,
-`runStep` to decide *what to hand the session*. `planOf` (`run.js`) reads it off
-disk and from nowhere else. No repository holds a plan (ruling 48), so no
-worktree has a copy to disagree with. **What a planning session and the runner
-share is a `PLAN.json` under `~/mc/programs/`, and nothing else.**
-
-A build session does not edit its plan: it is written only through `mc project`
-and `mc step`, and the runner reads what they wrote.
-
-`chooseKind` is the whole of what a project gets from that copy:
-
-| state | kind |
-|---|---|
-| plan says `status: ready` | `step`, or `review` when the step's `kind` is `review` — with the conflicting files in its prompt if a merge is in progress |
-| plan says anything else | nothing, one skip line |
-| the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
-| no plan under `~/mc/programs/` | nothing, silently |
-
-An open pull request is not in the table: the pick answered it.
-
-There is no `triage` and there never will be again: the runner runs plans, it
-does not write them. Planning is `mc plan <programme>`, a session at the
-terminal with Martin in it, and it happens somewhere the runner cannot reach —
-`~/mc/programs/<programme>/`, not a workarea (see [`mc-plan.md`](mc-plan.md)). The
-one thing the runner writes into a plan is a step it could not start, and it
-never writes `ready`. The runner never read decision files, counted them, or
-started a project because one was answered, and there are none to read now. A
-plan comes back by being set `ready`, which is the job of whoever applies the
-answer.
-
-### The two readings, and what each answers
-
-The pick is not the only reader of those two refusals. **There are two readings
-of "can this project be worked on now", they answer different questions, and
-neither can answer the other's:**
-
-| | `planState` / `kindFor` | `machineState` |
-|---|---|---|
-| the question | is this plan ready to be worked on? | would the runner start it now? |
-| what it is a fact about | a file under `~/mc/programs/` — the state of the first step that is not `done` | this machine, at this moment |
-| what it sees | `ready`, `blocked` and what on, `done`, a file that does not parse | the STOP file, a dirty worktree, a merge stopped in one, a held pull request, work in flight, a branch the workarea does not have |
-| what it costs | nothing — the lane has already read the plans | one `git status --porcelain` in the workarea, and only where the plan does not already refuse |
-| where it lives | `plan-schema.js`, flattened by `kindFor` (`run-plan.js`, re-exported by `status-collect.js`) | `machineState` (`status-collect.js`) |
-
-A plan can be `ready` for days while nothing can start it. On 2026-09-05 both
-of memoro-cli's unfinished plans read `ready` in every surface a person uses
-while #612 and #614 were held before merge and the whole queue was stopped; the one
-place that knew was `runner.log`, which carried 9 827 `, skip` lines. That is
-what the second reading is for. Since 2026-09-08 the runner closes most of that
-gap itself: a fault a person has to act on becomes `blocked` in its plan, so the
-*first* reading says it, and `machineState` answers `blocked` from the plan
-before it asks this machine anything. What `machineState` still sees that the
-plan does not is the window between a pick and a landed block, and the faults
-that are not blocks — a held pull request, work in flight.
-
-`machineState` asks the reasons in `runStepClaimed`'s own order, because the
-answer has to be the first thing the runner would hit and not merely some true
-thing. It starts nothing, writes nothing and fetches nothing — its `git` is only
-ever given read-only arguments — and it asks the plan first, so a project the
-plan already refuses costs no git at all.
-
-**The two cannot drift, and that is asserted rather than hoped for.**
-`RUN_REFUSALS` (`run-plan.js`) is the shared vocabulary: every word `runStep`
-refuses on for a reason that is not in the plan, in the order it asks them.
-`runStepClaimed` returns `skipped:<reason>` through one `refuse()` helper — or
-through `block()`, which returns the same word after writing the block — and
-the reading answers in the same words. Tests in `tests/mc/run.test.js` hold
-them together: a table of cases driven through both `runStep` and the reading
-over one fixture, a coverage test asserting every word in `RUN_REFUSALS` has a
-case, one test per `WORKAREA_BLOCKS` name, and a source check that no refusal
-returns a bare `'skipped'` (the lane claim in `runStep` is the one exception,
-and it is a fact about this process rather than about the files).
-
-Four of the words carry `read: false`, and there the reading answers *runnable*
-rather than guessing: `worktree`, `sync`, `role-missing` and `tool-missing` are
-each the outcome of work the runner does and the reading may not do — creating
-a worktree, fetching and merging, reading a role out of a worktree it has just
-synced, spawning a tool. So **`runnable: true` means nothing on this machine is
-standing in the way, not that the step is guaranteed to start**: `mc status`
-cannot know a fetch will fail.
-
-Two things are deliberately absent, and one differs. A **repository lease** is
-not read: a lease held by a gate or a deploy is a reason to wait rather than a
-reason a project cannot run, it is gone within minutes, and reading it would
-make `mc status` flicker. There is no word for a **merge the runner aborted and
-recorded** any more — the `unmergeable` word and its file went when a
-`PLAN.json` conflict started taking main's copy (the history section). And a
-**merge left in progress** in a workarea still reads `dirty` in the reading
-(`a merge stopped in …`), while the lane now aborts it and starts — a
-difference of one idle sleep at most, and a proposal
-(`2026-09-11-reading-calls-a-killed-merge-dirty`).
-
-**Which surface says which**, so that a bare `ready` can be read for what it is
-wherever it is met:
-
-| surface | what it says |
-|---|---|
-| `mc status <name>` | both, on one row — `ready · uncommitted work in ~/mc/connections-section/memoro: probe.mjs (since 09-05 10:03Z)`, `step n is blocked on workarea dirty-worktree` where the runner blocked it, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
-| the page's NEXT (`mc`) | both — a skipped name is counted under its word, a runnable name is drawn as the kind the runner would actually start, and each lane block's head is what that lane picks next ([`mc-ui.md`](mc-ui.md)) |
-| the page's PROGRAMMES rows, `mc status`'s step rows, the page's plan rows | the plan alone, and that is right: they are about what the plan says |
-
-### The session
-
-Fresh, headless, and assembled from the plan's `runner`, the step's own
-`runner`, and the defaults for the session's kind (`sessionSettings`). `model`,
-`effort` and `advisor` resolve **step over plan over default**, one key at a
-time — a step that names only its effort keeps the plan's model. `tool`,
-`check_in_minutes` and `stall_minutes` are the plan's alone.
+Class routing supplies the tool, model and effort. The shared internal
+`SESSION_DEFAULTS` fallback still has these rows (`step` is an internal key,
+not a unit of runnable work):
 
 | kind | `model` | `effort` | `advisor` |
 |---|---|---|---|
 | step | `opus` | `medium` | none |
 | review | `opus` | `high` | none |
 
-A `review` is a plan's step whose `kind` is `review`: the session that
-measures the success criteria and lands the project, with the role
-`canon/roles/review-session.md` (its `project` part). The step row is [ruling 18](../project/mc/rulings.md)'s second addendum
-(2026-09-25): opus 5.5, still at `medium`, and no advisor. From 2026-09-11 a
-step was `sonnet` at `medium` with `opus` as advisor, because opus at high
-effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
-on `claude-opus-5` at this machine's `effortLevel: high` — and the advisor is
-the strong model at the decision points rather than throughout. The defaults
-are `SESSION_DEFAULTS` in `run-plan.js`. They are claude's: a codex plan has
-no row, so a codex step runs on the model it names, and with none named the
-tool picks its own. A class-routed step (ruling 59) takes its
-tool, model and effort from its candidate. `mc project send` gives the review
-step the `review` class, whose candidates `mc model` lists, on either tool.
+- **`tool:`** — `claude` by default in shared settings; class routing selects
+  the candidate's tool. A missing tool is a visible refusal.
+- **`model:`** — `opus` by default in shared settings; a goal's model comes
+  from its catalog candidate, not from a field in its brief.
+- **`effort:`** is passed through the adapter: Claude `--effort`, Codex
+  `-c model_reasoning_effort=<level>`. Codex's model goes to
+  `codex exec -m <name>`. The legacy schema names `haiku` and `opus` on claude,
+  `gpt-6.1-sol` and `gpt-6-luna` on codex; catalog candidates are tool-specific.
+- **`check_in_minutes:`** — 60 minutes by default: Claude receives a prompt
+  asking whether the session is still moving the goal, not an elapsed-time kill.
+- **`stall_minutes:`** — 20 minutes by default: silence is watched separately.
+  A session with background tool tasks is asked before it is treated as hung.
+  Sleep detected on the machine rearms this guard. Codex receives neither
+  stdin check-ins nor this watcher.
 
-- **`tool:`** — `claude` by default, resolved through `resolveLaunch`. `codex`
-  is the other: the same step, run by `codex exec`. A tool that is not
-  installed is a block with the adapter's own hint.
-- **`model:`** — `opus` by default for a step, and
-  that default belongs to claude alone. A class step (`fast` or `large`) names
-  no model: the candidate it is routed to sets its model (*Work classes and
-  capacity*). The names are per tool: `haiku` and
-  `opus` on claude, `gpt-6.1-sol` and `gpt-6-luna` on codex. The schema
-  refuses a name on the other tool (`pairingProblem`), so a claude alias never
-  reaches `codex -m`. A codex name is passed as `codex exec -m <name>`, and
-  whether the installed, signed-in codex CLI has it is codex's to decide. A
-  plan on another tool that names no model gets none, and the tool picks its own.
-- **`effort:`** — `low`, `medium`, `high`, `xhigh` or `max`, the same words on
-  both tools. On claude it is passed as `--effort`. Without it claude falls back
-  to the machine's own `effortLevel`, which is why the step default names one.
-  On codex it is passed as `-c model_reasoning_effort=<level>`, on new and
-  resumed launches alike; codex's own default applies when none is named.
-  Anything else is refused by the schema.
-- **`advisor:`** — a model name passed as `--advisor`, or `off` for none;
-  a step has none by default since 2026-09-25, so a plan back on `sonnet`
-  names one if it wants one. An
-  advisor that is the session's own model is none too: a plan or step on
-  `opus` runs without one unless it names a different advisor (Martin,
-  2026-09-12: *"Om step har opus => advisor = null, inte opus+opus."*). The
-  flag is not in `claude --help`; it is documented at
-  code.claude.com/docs/en/advisor.md and was accepted by claude 2.1.268 on
-  2026-09-11.
-- **`check_in_minutes:`** — 60 minutes by default (`DEFAULT_CHECK_IN_MINUTES`):
-  how often the runner writes a check-in into the running session. The
-  check-in says how long the session has run and asks it to judge whether the
-  step can be finished here; one that cannot commits, sets its step `blocked`
-  on `<project>-check-in`, opens its pull request and stops. Sixty is above the
-  step median (17 minutes over 2026-09-05..12) and the p90 (47.6), so most
-  sessions never see one.
-- **`stall_minutes:`** — 20 minutes by default (`DEFAULT_STALL_MINUTES`): how
-  long a session may go without a byte on stdout before it is killed. The
-  row says `stalled`. Twenty is twice the ten-minute ceiling a single Bash
-  call has in a runner session, so a long test run is not a stall. A session
-  silent while a background task of its own runs is asked about it first,
-  and killed only if the question gets no answer. Nothing is killed for how
-  long it has run ([ruling 18](../project/mc/rulings.md)).
-
-`advisorArgs` is claude's flag alone, so a codex session never gets an advisor.
-Each adapter has its own `effortArgs`: claude's gives `--effort`, codex's gives
-`-c model_reasoning_effort=<level>`, and neither tool is handed the other's. A step's
-`runner` is its author's, like its `instruction`, and nothing in the runner
-checks that a session left it alone.
-
-The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
-this path, do `steps[i]`, its `done_when` is your success criterion, say in the
-PR body how you verified it, what in the plan file you may edit, and — if the
-contract must change — stop with the step `blocked` and say so in the PR. Then
-the ending, since rulings 21 and 30: build it, open the pull request, run
-`mc merge <repo> <pr>` yourself — it queues the pull request for the merger
-and returns — and stop; a red comes back to the step's next session, whose
-prompt opens with the pull request and the gate's reason; giving up is
-`mc step failed --reason "…"`. Below that comes
-**the part of the plan the step needs, not the file**: rendered from the parsed
-plan, each part under a `----- <heading> -----` line the session can search
-for — `goal`, `contract`, `out_of_scope`, `success_criteria` (index, `met`,
-criterion, check), `documents`, `runner` where the plan has one; then
-`Your step: steps[i]` with every field of the step, `instruction` and
-`comments` as paragraphs; then `The other steps`, one line each:
-`steps[i] · <status> · <title> · done when: <done_when>`, and `PR #n` where the
-step has one. Until step-cost (ruling 18) the prompt ended with the whole
-PLAN.json — up to 115k characters for memoro's `sql-w1-universe-closure` — and
-since the prompt is read on every turn, so was every other step's instructions.
-The session still has the whole file in its worktree and edits it there; one
-that needs another step's instructions reads it.
-
-The session's context has a ceiling too: claude gets `--autocompact` at
-`AUTOCOMPACT_TOKENS` (150 000), so it compacts at 150k tokens rather than near
-the model's own limit. Over 2026-09-05..12 the mean context per turn was 112k
-and 36 of 295 sessions averaged over 200k, and every turn pays for all of it.
-The window is a constant in `run-plan.js`, not a plan field — nothing has shown
-a plan needing another, and the measurement after twenty sessions
-(`scripts/measure-steps.py`'s *context per turn* row) is where that would show.
-A step gets it; the helper and intake turns, which share
-`headlessArgs`, do not — and they keep the positional prompt, `--output-format
-json` and their own wall-clock timeout, because step-cost's contract leaves
-them be.
-
-Every claude launch of mc's, foreground, tmux and headless, gets the tool
-allowlist `--tools Bash,Read,Edit,Write,Grep,Glob,Agent` (`CLAUDE_TOOLS`) and
-`--strict-mcp-config`: seven tools, including the tool's own general-purpose
-`Agent`, with no `--agents` definitions supplied by mc. No `Skill`, Cron, Web
-or Task tool, and no user-level MCP server. The allowlist keeps tool
-definitions out of every request unless needed, and includes native `Grep`
-and `Glob` rather than making the session search through Bash.
-
-Every Codex launch gets `-c features.multi_agent=true` through its adapter's
-session switches, before the prompt or resumed session id. Native delegation
-is on even if the machine's config disables it. These switches apply to every
-role — goal build, project step, review, merger and plan — and both fresh and
-resumed launches, including headless launches assembled by `headlessArgs`.
-A session may use its own tool's subagents; mc neither starts nor counts them
-(Martin, 2026-11-03). This enables the tool, not a worker mechanism in mc.
-
-mc defines no subagent of its own and starts none (Martin, 2026-11-02). From
-2026-10-11 a plan's `runner.subagents: on` gave a step `Agent` and one
-Haiku `step-worker`, with `canon/roles/_step-workers.md` in its
-instructions; all of it is gone, and the key is refused by `mc project send`
-and dropped by `mc project amend`. A sent plan that still carries it reads as
-before and the key means nothing. `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`
-(below) stays set because the tool's own agents read it.
-
-Next to that body go `canon/roles/all-sessions.md` and the build role —
-`canon/roles/build-session.md`, its `project` part for a project's step and its
-`goal` part for a goal, both with the part every headless build shares —
-assembled by `instructionsFor` and passed through the
-channel each tool already has, with nothing written into the worktree to carry
-them. How that is found and joined, for every session and not only this one, is
-[`mc-roles.md`](mc-roles.md).
-
-The two argument lists are the only place the tools differ:
+The headless argument shapes include:
 
 ```
-claude  -p [--model …] [--effort …] [--advisor …] \
-        --permission-mode acceptEdits --autocompact 150000 \
-        --tools Bash,Read,Edit,Write,Grep,Glob,Agent --strict-mcp-config \
-        --settings <env> --append-system-prompt <instructions> \
-        --input-format stream-json --output-format stream-json --verbose
-codex   exec --json --sandbox danger-full-access [-m …] [-c model_reasoning_effort=…] \
-        -c project_doc_max_bytes=0 -c features.multi_agent=true \
-        -c instructions=<instructions> <prompt>
+claude -p [--effort …] [--advisor …] --autocompact 150000
+codex exec [-m …] [-c model_reasoning_effort=…]
 ```
 
-`--settings <env>` is a JSON object whose `env` sets
-`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` — the
-session loads no CLAUDE.md and no auto-memory — and
-`CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` to
-the role's TTL; `-c project_doc_max_bytes=0` keeps codex from loading any
-AGENTS.md. The TTL is the role's, never the billing's (ruling 40): `cache: 5m`
-in a role's frontmatter (`step`) gives five minutes, and every other
-role an hour. Both come from the adapters' `sessionArgs`, and every launch
-carries them — headless, foreground and tmux, and a resumed launch too, where
-only the role text is left off.
-
-`danger-full-access` and not `--full-auto`, deliberately. `--full-auto` is
-codex's workspace-write sandbox: no network, so no `git push` and no `gh pr
-create`, and no writes outside the working directory — which takes the commit
-too, because a workarea's `.git` is a file pointing into the main checkout's
-`.git/worktrees/<name>`. A codex step under it could never reach the last
-sentence of its own prompt. The claude lane is `--permission-mode acceptEdits`
-— it was `auto` until 2026-09-03, and auto routed every Bash call through a
-classifier and told the session to work through Bash rather than the native
-tools: over 59 step sessions that was 5 598 Bash calls against 255
-`Read`/`Grep`/`Edit`/`Write`, most of them a screen of a file at a time, and
-about half of every step's turns (`docs/project/mc/step-parallelism/measurements.md`).
-Either way **the workarea is the boundary the runner trusts**, not a sandbox
-inside it, and both tools are given the same. The session's Bash also gets a
-ten-minute ceiling (`BASH_DEFAULT_TIMEOUT_MS`), so a suite run is one call
-rather than a detached job polled in two-minute `sleep` loops.
-
-**What the session is told about itself.** A project's build session's environment carries
-`MC_STEP` (`<project>:<index>`), `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA` (the
-worktree) — and, for every kind of session the runner starts, `MC_SCRATCH`: an
-existing directory `~/mc/runner/scratch/<project>-<stamp>/`, outside the
-worktree, named like the session's log. `canon/roles/all-sessions.md` tells the
-session to put probes and measuring scripts there, because an untracked file in
-the worktree is a dirty worktree and a session that dies leaves it (a
-`*.tmp.mjs` held `mail-window-overlay-integrity` for 31 rounds, 2026-09-04). The
-dirty check is unchanged. A directory that cannot be made is said in
-`runner.log` and the session starts without the variable. The chore pass removes
-every directory under the scratch directory whose mtime is more than two days
-old (`SCRATCH_KEEP_MS`, seven until 2026-10-10), and nothing else.
-
-### The merge
-
-**Since ruling 30 (2026-10-09) the runner lands nothing in its own process.**
-A step's pull request goes to the merger's queue — by the session's own
-`mc merge`, or by `landForSession` when the session ended `success` without
-asking — and the step is `landing` until the merger writes `done`, or sends a
-red back as `ready` (*The register*). A `landing` step does not hold the
-project: the next step starts at once on a branch on top of it (`placeBranch`,
-`stacked_on`), and the merger lands the two in order
-([`mc-merge.md`](mc-merge.md) § *One round at a time*). The exception is a
-close-out (2026-10-12): the plan's last step, or one whose `done_when` asks
-for the steps `done`, waits until every step before it has landed
-(`planState`, `plan-schema.js`), because what it measures is what landed. Nor does a `blocked`
-step (ruling 39, 2026-10-11): its pull request is parked on a question, not
-work in flight, so `holdingPrs` (`run-plan.js`) drops a pull request recorded
-on any of the project's own `landing`, `ready`, `blocked` or `built` steps, and an
-earlier step the merger sent back red is started even while a later one waits
-on a decision. A pull request on none of the project's steps still ends the
-pick (`inFlight`), and a `blocked` step that is the first unfinished one still
-starts nothing (`planState`). The round the merger
-runs is the one below, and so is everything said about what it reads back. A
-session that wants to wait for the answer runs `mc merge watch <repo> <pr>`
-or `mc merge <repo> <pr> --watch`, opt-in and read-only
-([`mc-merge.md`](mc-merge.md) § *Watching a merge*).
-
-Four answers the merger gives without a person (ruling 37,
-[`mc-merge.md`](mc-merge.md) § *The async round, SIGTERM and where a red goes*):
-
-- **Already merged.** A pull request somebody merged on GitHub — before its
-  round, or after it came back red — is answered landed with GitHub's merge
-  commit: dequeued, its step `done`, and the rest of its batch measured
-  without it. One closed on GitHub is red by itself and nobody else's reason.
-- **Step order.** A step's job does not go until every earlier step of its
-  plan is `done` in the register, with or without `stacked_on`, and a
-  restarted merger does not resume a `landing` job whose earlier step is not.
-  The page's queue row and `mc merge watch` say `waits for <project> step
-  <n>`.
-- **A red goes on at once.** A red on a step's pull request goes through
-  `redPatch` to the step's next session (ruling 30); a red on a goal's keeps
-  it in `merging` for one plan session, and the next blocks it. There is no mend (removed
-  2026-11-02, goal `headless-plan`): an entry an older merger left `mending`
-  reads as `queued`.
-- **The page.** MERGES draws one queue per repository, with its counts and
-  red pause/stopped labels on the heading. Each repository keeps one row,
-  landing or idle: PRs, phase and clocks, waiting numbers in landing order,
-  reds and plain-text fixes. Its own green success count is landed PRs
-  in 24 hours, including merges outside runner steps. SESSIONS is the runner's
-  section, still expanded by `mc run`; its day line counts outcomes per kind,
-  not the merged count. See [mc-ui.md](mc-ui.md).
-
-**One job lands in one round** (ruling 55, 2026-10-24). The merger takes the
-next queued job that may go (`nextJob`) and hands it to the round alone:
-`MERGE_BATCH_MAX` in `merge-queue.js` is 1, and `nextBatch` forms no batch
-wider than that. Before ruling 55, up to four jobs of one repository went as
-one batch (ruling 34): one candidate with every head merged in, measured once,
-landed in order. A batch's log says `<repo>: landing a batch of N — #a #b …`. Each job still gets its own
-answer (`answersFor` in `merger.js`): a landed one is dequeued and its step
-`done`; a red one — its own fallback round's red, a restack it could not
-make, or the stop the batch reached before it — is `red` in the queue with
-its own reason, and its step goes through `redPatch` with its own report. A
-batch that stops at a fallback stop is one round per pull request, as before,
-and the answers are those rounds'. A merger that dies under a batch leaves its
-jobs `landing`, and the next one takes all of them again. One, because a batch
-of four cost about 430 s per landed pull request against 210 s alone on memoro's
-merge rounds of 2026-10-17 to 10-24: a red batch falls back to one round per
-member, and 54 % of batch rounds were green against 80 % of single ones.
-
-Measured at close-out (2026-10-10 18:01 – 2026-10-11 07:16 UTC, the first
-merger with all four steps): 87 landings in 71 rounds, 8 of them batches of
-2–4. Seconds per landed pull request, a batch's shared among those it landed,
-were 219.5 s at the median over the first 40, against 176 s for 104 landings
-on 2026-10-09/10 by the same parse — slower, not faster. A batch selects the
-union of its pull requests' reach: memoro's median round selected 560 test
-files, against 236 before, and its suite took 179 s at the median against 91.
-Batches mostly formed while the queue was long; most rounds were still one
-pull request.
-
-**And it serves every repository at once.** The merger is one process with one
-loop per repository: each declared one, and any other a job names. Each loop
-takes only its own repository's jobs, so a memoro-cli round runs while a memoro
-round is in flight and two memoro rounds never do. A loop with nothing to take
-waits for another to answer a job, or `MERGER_POLL_MS`, and the merger leaves
-only when no lane has anything. On new code it does not wait for
-its rounds: it releases `merger.json` and starts its successor as soon as it
-sees the new checkout, finishes only the jobs it holds, and the successor skips
-`landing` entries whose `merger` pid is alive; measured 2026-10-17
-→ 24: 76 handovers stalled the queue 643 minutes in all. A deploy waits for the rounds in
-both lanes and starts none while it runs (ruling 32).
-
-**The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
-`repo-merge.js`'s round, called in this process rather than shelled out to,
-because the runner *is* mc: it takes the repository's lease and holds it across
-the whole round, runs the gate inside it, re-checks that the base has not moved
-between the measurement and the merge, squash-merges, and reports what it
-landed in.
-
-There is no `gh pr merge` left in `run.js`. What it replaces squash-merged
-whatever the branch's pull request was after waiting for `mergeable`, so a step
-landed without the gate at all — and it never read the base it landed on: on
-2026-09-02 at 13:00 that squashed #11250 into `msr-track-3-capture-command`,
-the branch of #11249 the runner had left open eighty minutes earlier, logged
-`success,merged`, and `main` received nothing.
-
-So the two fields the runner reads back are **`merged_into`** and
-**`off_default`**, never its own "the call returned zero":
-
-| what the merge round reported | the row says |
-| --- | --- |
-| merged into `main` | `success,merged` |
-| merged into anything else | `success,off-main` — not a merge this counts |
-| the gate went red | `success,open,gate-red` |
-| the gate round stopped for another reason | `success,open,gate-<why>` |
-
-A red gate is not a failure to find a way past. The pull request stays open, and
-the open-pull-request rule then keeps that project out of every pick until
-somebody has dealt with it.
-
-The gate costs a gate round — 20–35 minutes on memoro — where the old merge
-cost seconds. That is the price of the contract; `land_seconds` in runs.tsv is
-where it shows, kept apart from the session's own `seconds`.
-
-The **archive** pull request is the exception in kind, not in door: an archive
-adds a `project_log.md` row and, for a programme, removes its documents from
-`docs/project/`, so it is documentation by construction and lands through
-`mc merge --docs`, which checks that against GitHub's own file list and refuses
-anything touching a line of code.
-
-**An archive keeps what the code reads.** memoro #13310 (2026-10-10) archived
-four skill texts that `tests/assistant/skills/delivery.test.js` reads verbatim;
-it landed as docs-only, so no test ran, and main stayed red until #13323 put
-them back. The programme archive, `archiveOnMain` in `archive-programme.js`, now asks the
-worktree first (`keptFiles`, `archive-plan.js`): `git grep -l -F` for the
-directory's path over `src`, `tests`, `scripts`, `config` and `package.json`,
-then, in each file that matched, which files under the directory a literal path
-or a template's fixed prefix names. Those files stay where they are, not moved;
-every other file is `git rm`'d, and with nothing named the directory goes whole
-as before. The PR body ends with one `- kept: <file> — named by <path>:<line>`
-per kept file, and `runner.log` says the same. One kept file never refuses the
-archive; only a directory whose every file is named archives nothing, and says
-so.
-A **stack** needs an order rather than a call — `mc merge` refuses a batch
-aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
-the list of open pull requests the lane already fetched: exactly one aimed at
-`main` is the bottom, and every other one must be aimed at the head of exactly
-one of the others. Land the bottom, `gh pr edit --base main` the one above it,
-`git rebase --onto origin/main <where it left its old base>` — a squashed base
-leaves every branch above it conflicting even when its author did nothing
-wrong — and land that. Two aimed at `main`, a fork, a cycle, or a base that is
-nobody's head is not a stack the runner understands: it lands none of them and
-says so. A rebase that conflicts is aborted, the files are named, and the
-landing stops on that project.
-
-Merge direct is the policy for both repositories (Martin, 2026-08-25). The
-runner does not review; `mc brief` is what shows Martin what merged.
-
-**A refused `mc merge` was the runner's, until 2026-09-12.** A round the
-verb could not land wrote the pull request into `~/mc/runner/merges.json`
-and a merge lane in the runner landed it, or gave it one repair. Both went
-with ruling 21. Since ruling 30 (2026-10-09) `merges.json` is the merger's
-queue: every pull request `mc merge` or the runner handed it, landed one at a
-time by one process ([`mc-merge.md`](mc-merge.md) § *One round at a time*),
-which is what the page's MERGES draws. The runner reads it with the world:
-jobs and no live merger starts one (`sweepLanding`), and a step `landing`
-whose job is in no queue is `failed` with that reason. A `ready` or `failed` step
-whose register entry carries `landed` is written `done` before the pick and said
-in runner.log (`log-page` step 1, 2026-10-12).
-
-### A plan with a review step
-
-A plan sent from 2026-10-25 (ruling 58) ends in a step of `kind: review`, which
-`mc project send` appends and no one else writes (*What a PLAN.json is*,
-[`docs/project/README.md`](../project/README.md)). `branchFlow` in
-`plan-schema.js` asks that of the last step, and such a plan is a **branch
-flow**: its steps build on one branch of the project's, and its one pull
-request lands with the review. A plan without one runs as before (*The
-merge*, above), one pull request per step.
-
-- **`built`.** A step before the review whose session ends `success` with its
-  pull request open is not queued: `landForSession` writes it `built` with
-  `builtPatch` (`merge-step.js`) — `pr`, `branch`, and `built: { sha, at }`,
-  where `sha` is the head the session left — and the row's note is
-  `success,built`. `mc publish` from such a step does the same from the
-  session's side (`publish.js`, [`mc-merge.md`](mc-merge.md) § *The door*). Nothing
-  is queued. `built` is behind the plan the way `landing` is: `planState` steps
-  past it, and `holdingPrs` drops its pull request as it drops a `landing`
-  one's, since no session is on it.
-- **`placeBranch`, the built case.** The step after a built one is placed on the
-  highest built step's branch, as pushed, or as the workarea already stands on
-  it, with `origin/main` merged in after (`syncMain`). It is not stacked
-  (`stacked_on` stays null): the work below is on the same branch and the same
-  pull request. The log says `steps 1–N are built on <branch> — step M continues
-  there`.
-- **The built preamble.** `builtPreamble` (`run-plan.js`) is put first in the
-  prompt of a step that continues on a built branch: the branch, the steps built
-  on it and the pull request they are in, that their work is the session's to
-  keep green and to build on, that it runs a bare `mc gate` first, and that
-  `mc publish` records its own step built and ends the session. A resumed session
-  is not told it; its branch did not move.
-- **The review session.** A step of `kind: review` runs as kind `review`
-  (`chooseKind` and `SESSION_DEFAULTS` in `run-plan.js`): its role is
-  `canon/roles/review-session.md` (`review-session:project`), its model and effort are the review's defaults (*The
-  session*, above), and its landing is the only one the project makes. A
-  criterion `met: false` still refuses it at the door (`criteriaDoor`), so the
-  review measures and closes before it can land.
-- **The landing books the built steps.** The review's landing makes every built
-  step of the project `done` with the same `landed` sha and no body of its own
-  (`bookBuilt`, `merge-step.js`): from the merger's round (`merger.js`), the docs
-  path and `mc merge --admin` (`commands/merge.js`). The review step is what
-  makes them done; they are not landed on their own. The merger counts a built
-  step as done when it orders a job, so the review's round is not held behind
-  them (`stepsDone`, [`mc-merge.md`](mc-merge.md) § *The door*).
-
-### Held before merge — history
-
-Until 2026-09-12 a landing that did not land wrote `~/mc/runner/held.json`
-— one entry per pull request the runner would not land, with the gate's
-reason, its red names and its failed gates' output — and the project's next
-round was one `repair` session on that branch, told what the gate saw, after
-which the pull request was the brief's (`heldRepair`, `repairPrompt`,
-`canon/roles/repair.md`, `laneRepair` for a pull request no project's round
-reached). Measured 2026-09-05..12: 22 repair sessions, 156 minutes, median 33
-turns, each re-reading a branch it had never seen. Ruling 21 took all of it
-out: the build session runs `mc merge` itself and fixes its own red with the
-diff in its context, a step that did not land is `failed` in the register
-(*The register*), and there is no second session. `held.json` is gone, and
-the brief's *Held before merge* is *Failed steps*.
-
-## Lanes
-
-**`mc run lanes <n>` is the total** — how many headless sessions the runner
-runs at once, across every repository and every kind of session (Martin,
-2026-11-02: *"Vi har enbart mc run lanes x (som blir totalt antal lanes för
-headless)."*). The runner runs three kinds: `plan` — of a goal in `finish`, or in `merging` after a red
-([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*), with no variant —
-`build` — of a project's step (variant `project`) or of a goal (variant
-`goal`) — and `review`, of a project's review step or of a goal
-(`session-kind.js`). A lane is bound to
-no repository and no kind: n lane loops run at once, `lane 1` to `lane n`,
-each on its own clock, and a lane that frees takes the next work of any
-kind on any repository.
-
-The count lives in `lanes.json` under `MC_HOME` (`~/.memoro/mc/` unless it
-is set; `lane-count.js`), one number, 1 to 16, default 2 — what no file meant before, one lane on each of two
-repositories — read live: a raised count starts the new lanes within one poll
-(`UPDATE_POLL_MS`), a lowered one ends each lane above it after the session
-it is in. Until 2026-11-02 the file held two numbers, `per_repo` (that many
-lanes on each repository) and `--total` (a cap across them), and the machine
-ran the smaller of `per_repo × repositories` and `total`. A file in that
-shape is read once into the one number it actually allowed — `per_repo 8`
-with no total is sixteen, not a clamped eight — and written back, and `mc run
-lanes` says so the first time (`read from the old setting (per_repo 2, total
-3): the 3 it allowed`). Every write keeps `per_repo` and `total` beside
-`lanes`, set so a runner older than the total reads the same number from them
-(up to 8; above it, its widest, 8 on each): through a handover the old runner
-finishes its steps beside the new one, and on 2026-11-02 one read a file with
-`lanes` alone as a single lane per repository.
-
-**A probe never writes the person's file.** Reading the file can write it (the
-migration), so any run of mc's code that is not the person's — a test, a
-review's probe of a branch, `mc` started from a worktree to look at the page —
-sets `MC_HOME` to a directory of its own (`$MC_SCRATCH/mc-home`): `lanes.json`
-and the rest of what lives under `~/.memoro/mc/` are then that directory's.
-`tests/_isolate-home.mjs` does it for every suite; `run-control.js` reads the
-count under the `MC_HOME` of the env it is handed, not the process's. The
-runner's own state under `~/mc/runner/` follows `MC_WORK_ROOT`, the other
-variable a probe that starts a runner sets. `mc run lanes 2 --total 3`, `mc
-run lanes per_repo …` and `--per-repo` are refused with the line that says
-what replaced them. **A count of sessions is a proxy for load, not a
-measurement of it** — memory and quota are the honest measurements; the
-runner holds new starts back while free memory or disk is short
-(`memory.json`, `disk.json`), and the lane count does not.
-
-**The merge lanes are not these lanes.** The merger lands pull requests in
-one merge lane per repository (ruling 61, [mc-merge.md](mc-merge.md)); it is
-its own process, takes no slot here, and `mc run lanes` does not change it.
-
-### What a free lane takes
-
-`pickWork` (`lane-pick.js`) is asked once per pass, with everything that can
-start now on every repository — a project's next step by `nextFor`, a goal
-in `build · ready`, `review · ready`, `finish · ready`, or `merging · ready` after a red
-([mc-goals.md](mc-goals.md) § *How the runner takes a goal*) — already without
-what another lane holds, and it answers one of them:
-
-1. **Finishing comes before starting.** The project the lane has just run
-   goes on: a project holds its lane from its first step to its review, and
-   the slot is kept between the two sessions. Then **a review or a plan
-   session before a build** (a plan session finishes a goal), and **a
-   project's build before a goal's**.
-2. Within one rank, a step the API cut off goes first (its cache is warm,
-   ruling 33), and then **the work that has waited longest**: the oldest
-   `since` — when it last moved, a project's register entry or a goal's
-   last log entry. A tie keeps the order the candidates came in, which is
-   `queue.md`'s and then alphabetical.
-3. **No repository takes every lane while another waits.** Each repository
-   with work or with a session running has a share, `ceil(lanes /
-   repositories)`. While any repository below its share has work that can
-   start, work on a repository at or above its share is not picked —
-   whatever its kind or its wait, and the project a lane would carry on with
-   too. With two repositories and two lanes or more the share is at most
-   `lanes − 1`, so one repository reaches the last lane only when the other
-   has nothing to start, and one that took every lane while the other was
-   idle gives up the next lane that frees as soon as the other has work. With
-   one lane, one repository holds it by necessity, and the two take turns by
-   their wait. `lane-pick.test.js` holds each of these; `run.test.js` runs
-   four lanes over two repositories at once.
-
-What keeps two lanes off one project is **the claim**: `claims` in `run.js`
-is one set for the process, a lane adds the name it picked in the same tick
-it picks it — before its session has opened anything — and the session's
-`finally` releases it however it ends. A claimed name is not offered to the
-picker, so the second lane takes the second piece of work, not the same one.
-`runStep` checks the claim once more as the last guard.
-
-Each lane's session has a current file, `current-<repo>.json` or
-`current-<repo>-<k>.json` with `k` the lane's index, carrying `kind` and
-`variant` (`build`/`project`, `build`/`goal`, `review`/`project`,
-`review`/`goal`, `plan`); the page reads them by name, and a file from before
-that says `step` or `goal` is read as the build it was. runs.tsv's `kind`
-cell is `build-project`, `build-goal`, `review-project`, `review-goal` or
-`plan`; older rows say `step`, `goal` and `review` and are still read
-(`sessionKind`). Rows and runner.log lines are appended whole and prefixed by
-the work's name, so two lanes writing at once interleave by line, never
-within one.
-
-**The slot.** Besides the lane loops there is one counter for the machine:
-`takeSlot` (run.js) takes a slot at the last moment before a lane launches a
-session and drops it in the same `finally` that removes its current file,
-plus the sessions other live runners hold by their lane files — a
-predecessor finishing after a handover. A lane with no slot polls every 15 s,
-says one line when the wait begins (`<name>: 3 of 3 sessions in flight on
-this machine — waiting for a lane`), and gives the wait up on STOP or UPDATE
-— the drain promises that from the moment UPDATE is read no lane starts a
-session. Waiting lanes take slots first come, first served;
-`runner/waiting.json` records the ordered waiters (name, repository, lane,
-runner pid and arrival time).
-
-What the total does not bound is worth knowing before it is trusted as a load
-guard. It counts the runner's sessions: the chores beside the lanes — the
-helper turn, the intake drain — spend sessions of their own and take no slot,
-and neither do `mc test`, `mc merge`, the merger or anything a person starts.
-
-`mc run lanes` with no argument prints the total and how many sessions are in
-flight while it is read — `lanes 3 — 2 of 3 in flight, across every
-repository`.
-
-### Why the session is spawned, not `spawnSync`
-
-`mc run` used to start the headless tool with `spawnSync` and block. Two lanes
-in one process cannot overlap behind a call that holds the event loop for the
-whole session, so the second lane would never have started at all.
-
-`deps.session` is `streamSession` in `run.js`, and it returns a promise. For
-claude it spawns the session with a **stdin pipe**, on `--input-format
-stream-json --output-format stream-json --verbose`: the prompt is the first
-user message written to stdin, and every `check_in_minutes` the runner writes
-one more — the check-in (`checkInPrompt`), naming the minutes run and the
-count, with a line in `runner.log` (`<name>: check-in 1 at 60 min`) and the
-count in `current-<repo>.json`. stdout is scanned line by line; the `result`
-event is the end of the session, so stdin is closed on it and no check-in is
-written after one. That is how claude behaves, measured live 2026-09-11
-(step-cost step 3's comments): a message written mid-turn is folded into the
-running turn, a message written after a `result` starts a new turn with its
-own `result`, and the process exits when stdin closes. So two `result` lines
-are possible — a check-in that crossed the first — and `sessionResult` adds up their turns, wall-clock and usage, which are per turn group, and takes cost, API time and `modelUsage` from the last, which claude prints as running totals (ruling 42; until 2026-10-13 it added the costs too, so an older `.json` with two results overstates its cost).
-
-A `result` is not the end while a **background task** runs. A command longer
-than Bash's ten minutes — memoro's G6 comparison, a full `npm test` — goes in
-the background, and a session waiting on one ends its turn; claude starts the
-next turn by itself when the task finishes. claude reports the set in
-`background_tasks_changed` events, and a `result` that arrives with one alive
-leaves stdin open. The whole line is searched for the `result`: claude writes
-its `type` after the usage, some 2 000 characters in, and until 2026-09-25 the
-scan looked only at the first 200 — so no `result` was ever seen, stdin was
-never closed by it, and the result grace below never ran. Nor is a `result` of
-zero turns. A resumed session whose background shell died with the previous
-process opens with a `task_notification` and a `result` with `num_turns: 0` and
-`origin.kind: task-notification`. On 2026-10-17 the runner took that for the end
-and killed msr-core-finish-measure two minutes into its resume. The scan and
-`sessionResult` skip it. A task-notification result with turns, which is
-claude's own next turn after a background task, is an end like any other.
-
-The only kill is the **stall guard**: a timer re-armed on every byte of
-stdout, and the child `SIGTERM`ed when `stall_minutes` go by without one — the
-row says `stalled`, exit 142. It is armed at spawn and ends at the `result`:
-from that line the process has `RESULT_GRACE_MS` (two minutes, whatever it
-writes meanwhile, whether or not `stall_minutes` is set) to exit, and is then
-`SIGTERM`ed with the result standing — status 0, `stalled` false, the row's
-note the session's own word, and a line in `runner.log`. A step still `running`
-in the register is `failed` by [ruling 21](../project/mc/rulings.md) as ever,
-its reason now saying the session ended `success` without landing it. That is
-what `sql-w2-search-closure` was owed on 2026-09-13: it finished in 72.7
-minutes, hung twenty, and was logged `stalled,failed`.
-
-A session waiting on a background task is silent for as long as the task
-runs, and the stall guard took that for a hang: 2026-09-12..25, 53 of 289
-step sessions were killed `stalled`, most of them with a turn that ended
-"Waiting for background task …" (0 of 180 before the guard existed). So when
-the guard fires with a background task alive it writes `quietPrompt` instead
-— the silence, each task, and that no answer is a kill — with a line in
-`runner.log`, and re-arms. Any byte from the session answers it, and the next
-silence gets its own question; a session that says nothing to it is killed at
-the next `stall_minutes`, `stalled` as before. Nothing is killed for
-how long it has run ([ruling 18](../project/mc/rulings.md)); before step-cost
-a wall-clock budget killed a session that was working because the machine was
-slow or a suite was long. A codex session gets neither: its prompt is an
-argument, stdin is closed, and nothing watches it — `codex exec` reads no
-messages and has no stall guard written for it yet.
-
-On 2026-10-17 two live sessions were killed `stalled` a minute after the Mac
-woke from a 26-minute sleep: Node's timer clock counts sleep on macOS, so the
-stall timer came due while the machine slept and fired at the wake. Now a
-heartbeat every 30 s (`SLEEP_TICK_MS`) reads the wall clock, a gap over three
-minutes (`SLEEP_GAP_MS`) between its ticks is a sleep, and a guard that fires
-with a sleep inside its silence re-arms for a full `stall_minutes`, with the
-line `<name>: machine slept <n> min — stall guard re-armed` in `runner.log`.
-
-stdout and stderr are collected here rather than by `maxBuffer` — capped at
-256 MiB, because a session that floods stdout will not parse either way.
+`AUTOCOMPACT_TOKENS` (150 000) bounds Claude's context; Codex has no equivalent
+flag here. Both use the shared instruction assembler and their native tool
+adapters. Native delegation is the tool's; mc starts and counts no subagents.
+Claude's allowlist stays narrow and strict MCP configuration excludes
+user-level servers.
 
 ## What the runner writes
 
-Everything lives under `~/mc/runner/`, with one exception, which is the one
-thing it writes into a repository: a blocked step (below).
+- **`runner.json`** stays one, naming the runner, its code and arguments.
+- **`current-<repo>.json`**, with `-<lane>` for additional lanes, exists while
+  a session is in flight. It carries kind, goal, tool/model/effort, worktree,
+  pid, start time and check-ins. Removal is paired in a finally.
+- **GOAL.json and LOG.md** hold the goal state and runner entries. The runner
+  never writes its goal text, contract, boundaries or criteria.
+- **Session logs** share a stem under runner/log: `.jsonl` is the stream,
+  `.json` the parsed result or summed usage, `.json.err` stderr.
+- **runs.tsv** appends one row after each session or chore, in this order:
 
-- **`log/runs.tsv`** — one row per step and per drained inbox file, and the
-  history keeps the kinds the runner no longer produces (`repair`, `collect`):
-  `ts name kind exit seconds pr turns input output cache_read cache_write
-  session note land_seconds model class tool effort billing`. `seconds` is the session; `land_seconds` is the
-  gate round that followed it, `-` when there was none. It is appended rather
-  than placed beside `seconds` because the header is written once, when the
-  file is created, and a column inserted would shift `note` one to the left for
-  every reader of the old header. `model` is the model the runner asked for —
-  the resolved `sessionSettings` model, `-` for the helper and intake turns and
-  for a tool left to pick its own — appended last for the same reason, so a
-  row can be read against the effort and advisor its session ran with (step-cost,
-  ruling 18). `class`, `tool`, `effort` and `billing` follow it for the same reason
-  (ruling 59): the work class the step names, `-` for a concrete plan, and the tool,
-  effort and billing the session ran on. For a class step those are the candidate it
-  was routed to, and its billing is `plan` or `credits`. The file on this machine still has the thirteen-column header it
-  was created with, so a reader that keys cells by the header sees neither of
-  the last two; `archive-plan.js` reads by position and stops at `note`. What
-  the session actually ran on is in its own json's `modelUsage`, which is what
-  `scripts/measure-steps.py` groups by. The usage columns come from claude's
-  `result` event (turns and usage summed when there were two, see *Why the session is spawned*)
-  and from codex's `exec --json` event stream; a field the tool does not give
-  is `-`, never a guess. `exit` and `note` are independent and are allowed to
-  disagree — a process can fail after a session that reported success, and
-  both are recorded.
-- **`log/runner.log`** — the line-by-line narration, also on stdout. What a
-  lane picked (`memoro#2: next — <name> (step i/n)`), what it could not start
-  and why, and — once, not every ten minutes — that it has nothing to run.
-  The `starting` line says what the session runs on, leaving out what was not
-  passed, and how it is watched: `<name>: step starting (claude opus · effort
-  medium, check-in every 60 min, killed after 20 min silent)`,
-  `(codex own default model, no check-in, no stall guard)` for a codex
-  plan that names none (`describeSettings`, `describeWatch`). Each check-in is
-  a line too: `<name>: check-in 1 at 60 min`.
-- **`log/<name>-<ts>.jsonl`**, **`.json`** and **`.json.err`** — the stream
-  the session actually printed, kept whole; the one result object read out of
-  it (turns and usage summed when there were two), which is the file
-  `scripts/measure-steps.py` reads; and stderr. A session that printed no
-  result — the ordinary end of a landed step, since `mc merge` ends the
-  process on green (ruling 21) — gets a `.json` read from the stream instead
-  (`streamSummary`: `subtype: 'killed'`, turns as distinct assistant message
-  ids, usage summed over them, a list-price cost), and its `runs.tsv` row
-  keeps its turns, usage and session id the same way. Until 2026-09-25 those
-  rows were dashes and the file was absent: 6 of 220 step rows over
-  2026-09-18..22 had usage, and the cost per landed step could not be read.
-- **`runner.json`** stays one per machine: a runner is here, and this is the
-  pid to test for life. Every start reads it first, so it is a claim that is
-  checked rather than one that is only made.
-- **`current-<repo>.json`** — one file per lane, existing exactly as long as
-  that lane's session does. It carries the project name, kind, repo, tool,
-  model, effort, advisor (`null` where none was passed), `check_in_minutes`
-  (`null` for codex) and `check_ins` so far, start time, the runner's pid and
-  the worktree, and it is
-  written immediately before the session starts, rewritten with the count at
-  each check-in, and removed in a `finally`
-  however that session returns, so a step that throws still clears it. A file
-  whose runner pid is gone is moved to `runner/log/dead-<file>-<pid>.json` by
-  the next runner that reads it, and the drain and stop lines leave it out.
-  Readers — the page's SESSIONS section, `mc status <name>` — glob
-  `current-*.json` rather than opening one fixed path, which is why the block
-  is a list of lines and not a line.
-- **`projects/<project>.json`** — the register: where every step of every
-  project stands (*The register*). Written by the runner and by `mc step` and
-  `mc merge`, never by a pull request.
-- **`merges.json`** — the merger's queue (`mc-merge.md` § *One round at a
-  time*): repository and its path, number, branch, who asked, the step,
-  `since`, and `queued` or `landing`. Written by `mc merge` and the runner,
-  emptied by the merger one job at a time. **`merger.json`** is the merger's
-  pid, **`log/merger.log`** what it said; see *The merge*.
-- **`block/<repo>/`** — the worktree a block is written in, existing only while
-  it is written (below).
-- **`log/closed/<name>/`** — whatever a closed workarea kept beside its
-  checkout. Moved, never deleted.
+```
+ts name kind exit seconds pr turns input output cache_read cache_write session note land_seconds model class tool effort billing
+```
 
-Three more files sit beside them, and are the runner's questions for Martin
-rather than records of what it did — the brief session is their only reader,
-sent to each file by its role. `undocumented-closures.md` is appended when a
-project is archived with `doc: none`; `unreadable-plans.md` is rewritten whole
-every chore pass, so a plan somebody fixed leaves the list by itself. A folder
-no project explains is counted in one `runner.log` line and listed by
-`mc tidy`; its table went on 2026-11-03.
-`unreadable-plans.md` (`plan-intake.js`) is the newest of the three and exists
-for the same reason as the other two: the runner can hand out no step from a
-plan the schema refuses, and what its author meant to say is not mc's to guess.
-It used to be a `runner.log` line, which is where `new-user` sat for a day.
-
-They were written to `~/mc/intake/` until 2026-09-04. That room is an inbox
-somebody drops one file into and a turn drains — and two of these three come
-back whole every chore pass, so a turn that read one and filed it away would
-find it there again the next time, forever. They are the runner's own output
-about its own work, so they live with the rest of it. The path is spelled once,
-in `src/mc/paths.js`, for the runner that writes it and the brief role that names it
-to a session.
-
-### Blocked by the runner
-
-**The runner writes nothing into a plan.** When a fault in the table under
-*What the worktree decides* is met, `blockStep` (`run.js`) writes the
-project's first step that is not `done` **in the register**
-(`~/mc/runner/projects/<project>.json`, [`register.js`](../../src/mc/register.js)):
-
-- `status: "blocked"`,
-- `blocked_by: { "kind": "workarea", "name": <the name from WORKAREA_BLOCKS> }`,
-- `reason`: the detail and the workarea's path,
-- and one paragraph appended to that step's `comments`:
-  `Blocked by mc run on <stamp>: <detail>. The workarea is <path>. mc step ready
-  <project> <n> once it is fixed; the runner does not retry.`
-
-If that step is already `blocked` — another lane, or an earlier pick, wrote it
-from a world this one read a minute ago — nothing is written and the line says
-so. Nothing is opened, committed, pushed or landed for it: until 2026-09-12 a
-block was a docs-only pull request from `~/mc/runner/block/<repo>` on a branch
-named `<name>-blocked-<stamp>`, landed through `mc merge --docs`, because the
-state lived in the plan on main and there was no other way to it. Ruling 21
-moved the state out of the plan (*The register*, below), and the pull request
-went with it.
-
-**The way back is `mc step ready <project> <n>`, from the brief or a person,
-and nothing else.** The brief lists these steps in its *Blocked* section under
-*Waiting on a workarea*, with the comment the runner wrote, and puts them as
-*fix the workarea, then set the step ready* rather than as a decision. The
-runner never writes `ready` over a `workarea` block and never retries on its
-own, because the retry was the fault (the waits it does release are under
-*Blockers that release themselves*):
-
-> "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
-> step. Punkt." … "Vägen tillbaka är via brief eller en plan-session. Om det var
-> något som en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
-> Runner-försöket. Då är det det som är fel. Rätt svar är inte en Runner-runda
-> till." (Martin, 2026-09-08 — ruling 17 of the `mc` programme, carried by the
-> `runner-next-step` project and closed with it)
-
-What the runner *can* settle by itself it settles at the first attempt instead
-of blocking: `main`'s copy of a `PLAN.json` the plan's rule cannot merge, and
-the abort of a merge a killed session left.
-
-### Blockers that release themselves
-
-A `blocked_by` has one of five kinds (`BLOCKER_KINDS`, `plan-schema.js`).
-Two are a person's and come back only by `mc step ready`: `decision` (what
-`mc brief` answers) and `workarea` (the runner's own, above). Three are waits
-nobody has to judge, and since ruling 35 (2026-10-10, the `step-release`
-project) the runner releases them by itself:
-
-| kind | fields | due when | set by |
-|---|---|---|---|
-| `time` | `at`, an ISO instant | the clock has passed `at` | `mc step blocked --until <iso>` — a time already past is refused |
-| `deploy` | `step` (1-based, an earlier step of the same plan), `hours` (0 or more, default 0) | that step is `done` with a `landed.sha` in the register, a `deployed` row in `~/mc/runner/log/deploys.tsv` has a `sha` that contains it (`git merge-base --is-ancestor` in memoro's checkout), and `hours` have passed since the earliest such row's `ended` | `mc step blocked --after-deploy [<n>] [--hours <h>]` — `<n>` defaults to the step before; the step itself or a later one is refused, and so is any step outside memoro, because `mc deploy` deploys memoro's main and nothing else |
-| `project` | `name`, the project | that project's plan under `~/mc/programs/` is `done` | `mc step blocked --on-project <project>` |
-
-A `project` with no plan is never due by itself: it may have been
-abandoned rather than delivered, and only a person can tell which
-(`stale-blockers.js`, which no longer reports a `project` blocker that is
-done — the runner has released it). A step waits on a whole project, never on
-one step of another, and on one thing at a time. A deploy made from another
-machine is not in this machine's `deploys.tsv`; the step waits, and says so.
-
-The verb makes the `name` from the other fields, so it stays a name
-(`NAME_RE`): `until-20261014-0800`, `deploy-step-3-24h`. What the step waits
-for in more words goes in `--reason` and the comments.
-
-**The release is a register write, never a plan edit.** In `queue()`, after
-both repositories' plans are read and memoro's checkout fetched,
-`releaseDue` (`step-release.js`) asks `blockerDue` of every project's current
-step that is `blocked` in the register. One that is due becomes `ready`, its
-`blocked_by` and `reason` are cleared, a comment `Released <now>: <why>` is
-appended, and `runner.log` says `<project> step <n>: released — <why>`. The
-step comes out of the same `queue()` as `ready`, so the pick may start it in
-that pass. Nothing is written to the plan and no pull request is
-made. A record that cannot be read or written is said (`not released — …`)
-and left as it was; a git that cannot answer the ancestor question releases
-no `deploy` blocker.
-
-While they wait, `mc step <project>` and the page's blocked line say how long
-is left, from `describeWait`: `until 2026-10-14 08:00Z — 3d left`,
-`on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not
-deployed yet`.
-
-### The register
-
-A plan is a document — goal, contract, scope, criteria, the steps'
-instructions — written by a person and changed rarely. Where the work
-*stands* is process: it changes at every step boundary and has to be visible
-the second it does. Until 2026-09-12 it lived inside the plan file, so every
-transition was a pull request through the gate, every reader needed a fetch
-not to lie, every session was checked for editing more of the file than its
-own step, and the runner kept `held.json`, `merges.json` and `current-*.json`
-beside the plan for the state the file could not hold between a session
-ending and its pull request landing.
-
-> "Någonting i hela designen av mc/git-integrationen/runner är helt fel. Vi
-> diskuterar detaljer som inte ska behöva diskuteras med rätt design." …
-> "Ok på registret." (Martin, 2026-09-12 — ruling 21)
-
-So the state lives in **the register**: one file per project under
-`~/mc/runner/projects/`, written whole and atomically under one lock
-(`register.js`), one entry per step, matched to the plan by the step's key (`stepKey`: the label before ` — `, a leading ordinal such as `5.` dropped; a re-plan that puts a new step in a slot whose old key is gone keeps the slot's status and clears the replaced step's pull request, branch, stack and red, with a comment) —
-`status` (`ready` · `running` · `done` · `failed` · `blocked` · `built`), `pr`, `branch`,
-`blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
-running), `attempts`, `landed` (sha and time), and `built` (`{ sha, at }`: the
-head a step before a review left on the project's branch — *A plan with a
-review step*). The plan still says what
-a step is; every reader lays the register over it (`overlayPlans`) and sees the
-plan record it always saw, with the register's word for the state — the
-picker, the page, the brief and `mc status` changed their source, not their
-shape. A plan the register has never seen is seeded from its own state fields
-once; after that the file's copies are ignored.
-
-**What the runner writes there.** `running`, with the session's pid the moment
-there is one, before the session (`MC_STEP=<project>:<index>` goes into the
-session's environment so `mc step` and `mc merge` inside it know which step
-they are). After the session: `done` with the pull request and the commit main
-stands at when the landing landed — the step's own fields as the session left
-them in the plan it landed, so a session that set its step `blocked` on a
-decision is `blocked` in the register too; `failed` with the gate's reason when
-the landing held it, or with the session's exit when it left no pull request
-at all; `ready` again after a quota answer, which is no session. A failed step
-is never picked again: `kindFor` answers `skip:failed`, and `mc step ready` is
-the way back. And `blocked` for a fault it met before the session, as above.
-And `ready` for a `time`, `deploy` or `project` blocker whose wait is over,
-with `Released <now>: <why>` in the comments (*Blockers that release
-themselves*). The register keeps a blocker's own fields — `at`, `step`,
-`hours` — beside its `kind` and `name`.
-
-**An interrupted step** is one whose session died under it — the machine
-restarted, the runner was killed, macOS killed the process — rather than one
-that gave up (ruling 33). Until 2026-10-10 it was `failed`, and waited on a
-person for a death that was nobody's decision. Now `sweepRunning`, on the next
-reading of the world, and the post-session path, for a session killed by a
-signal the runner did not send with no answer written, call
-`recordInterrupted`. The step is `ready` again and carries an
-`interrupted` record read off the session's stream log. That log is
-`<stem>.jsonl`, written as the session streams, so a killed session has one.
-The record holds `session_id`, `tool`, `model`, `log`, `last_activity` (the
-log's mtime), `context_tokens`, `branch`, `count` and `at`. No state is added
-to `STEP_STATES`: every reader that draws `ready` draws it unchanged, and the
-page and `mc step <project>` print `interrupted <at> · <tool> session <id> ·
-last activity <ago> · <n> tokens` from the record. Any state but `ready` or
-`running` clears it. Interrupted steps are picked first, warmest first
-(`interruptedFirst`). `recoveryOf` asks `recoveryFor` (`run-plan.js`) and gets
-one of three outcomes:
-
-- **Resume** — the same session id, through the tool's own resume
-  (`claude -p --resume <id>`; for codex, the adapter's `resumeArgs`), with
-  `restartPrompt`.
-  It resumes while the prompt cache is warm: the last activity is within the
-  tool's cache lifetime minus `WARM_MARGIN_MS` (five minutes). Past that, it
-  still resumes when the conversation is at most `COLD_RESUME_MAX_TOKENS`
-  (half the compaction window), or when its size is unknown. The workarea is
-  left exactly as it is: no dirty block, no branch move, no merge of
-  `origin/main`. The log says `<project>: resuming <tool> session <id>
-  (<why>)`. A resume that exits non-zero without a word is marked
-  `resume_failed`, and the next pick starts the step fresh.
-- **Fresh** — no session id, a resume that did not start, a plan whose
-  `runner.tool` is no longer the one the session ran on, or a cold
-  conversation larger than the cap. The leftover files are committed as one
-  `<project>: WIP left by an interrupted session` commit with `--no-verify`
-  (*What the worktree decides*, fault 4). The branch is kept, and
-  `stepPrompt` opens with the handover (`interruptedPreamble`): when and why
-  the session was cut off, the branch's commits past main, the WIP commit,
-  its last assistant text, and `refs/mc/checkpoint/<project>` when there is
-  one.
-- **Failed** — the `INTERRUPT_LIMIT`th (3) interruption in a row:
-  `interrupted 3 times in a row — last session <id>`. A step that keeps
-  dying is a person's.
-
-A session on a branch that carries an earlier session's commits is handed them (`earlierPreamble`: the branch's commits past origin/main, at most 20), and a step answered without a pull request is handed the answer (`answeredPreamble`).
-
-In a plan with a review step, a step before the review whose session ends
-with its pull request open is written `built` (*A plan with a review step*),
-and the review's landing writes every built step `done` with its `landed`.
-
-**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
-(or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
-step set ready over an open pull request would be run again on top of it.
-
-**The register's log.** Every register write also appends one JSON line to
-`~/mc/runner/log/register.log` (`register.js`, `logWrite`): the step that
-moved, its status before and after, the pull request it carries, and the
-process that moved it — pid, the command of its parent, its run id, the shape
-of its arguments (flag names, never their values or free text), its directory
-and `MC_STEP`. A seed and a re-plan that carried a slot are lines too. The file
-rotates at 4 MB into one `.1`, and `mc tidy` keeps it: its per-project rule
-matches `<project>-<timestamp>` files only. It exists because on 2026-10-12 a
-hand-typed `mc step ready log-page 1` moved a landed step back to `ready`, the
-runner ran it twice, and the register that could have said who did it was
-tidied away with its project; until then the only record was `mc.log`, which
-keeps no parent process.
+The page reads these files, not a transcript to infer the goal's state.
+Finished goals are archived through `archiveGoal` after 24 hours, with one
+row in `goals/goal_log.md`; archive refusals are logged once. Every five
+minutes at most, `settleLanded` checks carried PRs and sets done once all are
+merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 
 ## Sleeping and stopping
 
-- **`~/mc/runner/STOP`** — checked by every lane before it picks and at the top
-  of every step, so it ends *every* lane after the step each is in. No lane
-  abandons a session that is already running. Written by `mc run stop`,
-  removed by `mc run start` (and a foreground `mc run`) — except by a
-  successor that finds it: that one was stopped during its own handover and
-  does not start. A lane that leaves on STOP says what the runner still
-  finishes; `runner exit on STOP` is written once, when the process ends. The nightly tick (see *What runs beside it*) is asked the
-  same question before each repository it measures, so it starts no further
-  suite once STOP is there; the suite in flight is not killed.
-- **A restart, end to end** (ruling 33). The machine goes down with sessions
-  running and no `STOP`. At login the agent (*The switch*) runs
-  `mc run start --if-was-running`. `runner.json` names a pid that is gone, so
-  a runner starts with the flags the dead one had. Its first reading of the
-  world finds every `running` step's pid dead, and `sweepRunning` turns each
-  into an interrupted step. The picks take those first. Each is resumed where
-  it stopped when its cache is warm or its conversation small, and otherwise
-  is handed to a fresh session on the same branch, its leftovers committed
-  and a handover in the prompt (*The register*). What a session had not
-  committed is in its checkpoint ref as well, up to ten minutes old. A runner
-  Martin stopped has `STOP` written, and the agent leaves it stopped.
-- **The holds.** A pass starts no step while the scratch volume has under
-  `DISK_MIN_BYTES` (5 GiB) free, or while `kern.memorystatus_level` is under
-  `MEMORY_MIN_FREE_PERCENT` (20). It says `disk: <n> GiB free, below 5 GiB —
-  no step started` or `memory: <n>% free, below 20% — no step started` once
-  per pass and writes `disk.json` or `memory.json`. The file is removed when
-  there is room again. `nowBlock` reads both, so the page's SESSIONS section shows
-  either hold. Sessions already running, their check-ins and landings, go on.
-  No reading is room: a guess must not stop the runner.
-- **`~/mc/runner/UPDATE`** — read between picks only, and answered by a
-  handover rather than an exit. Written by `mc run --update`; see *The switch*.
-- **An idle lane** sleeps `--idle-sleep` — 600 s unless it is given — and then
-  reads the world again. The sleep, and the chore loop's, is taken in 30 s
-  slices with STOP and UPDATE read between them, so an order is seen within
-  half a minute rather than at the end of ten. A lane with a step to run does not sleep at all.
-- **The Claude quota.** The limit is one budget for the whole machine, so a
-  quota answer in one lane pauses all of them. The lane that sees the refusal
-  calls `quotaPause`, which holds one promise; every other lane awaits that
-  same promise in `quotaHold` before it starts anything — before a worktree is
-  touched or a session is spent. One sleep, not one per lane, and no session
-  spent to be told the same thing again. The refusal names its reset —
-  `resets Sep 11 at 3pm (Europe/Stockholm)` — and `quotaResetAt` reads it: the
-  pause lasts until one minute after that time (`quota seen — every lane
-  sleeping until <ISO> (the refusal's reset)`), in slices of at most thirty
-  minutes, and STOP or UPDATE ends it between two slices. A refusal with no
-  readable time, or one more than eight days out, keeps the old
-  `every lane sleeping 30m`. (2026-09-08: a weekly limit that reset three days later cost eight
-  launches, one every thirty minutes.)
-- **What counts as a quota answer** is narrow on purpose: the limit text as
-  the *whole result* of a session of one or two turns. Session prose that
-  merely mentions a quota — a PR body about quota rows, say — is not one. On
-  2026-08-29 the broader test slept 30 minutes and left a finished PR
-  unmerged. The other way in is claude's own mark: a `result` with
-  `terminal_reason: "api_error"` and status 429, or a limit text, is a quota
-  answer however many turns came before it.
-- **A session the API ended is resumed, not failed.** `apiInterruption` reads
-  that same mark — the API, not the session, ended the turn — into three
-  kinds: `quota` (above), `login` (`Not logged in · Please run /login`) and
-  `server` (a 5xx, `529 Overloaded`). The lane waits it out — the quota pause,
-  the same pause for a lost login since every lane is the same login
-  (`claude is not logged in (`claude /login`) — every lane sleeping 30m`), or
-  five minutes in its own lane for a server error — and then launches
-  `claude -p --resume <session id>` in the same workarea with `resumePrompt`:
-  what the API said, and that nothing was touched in between. The two halves
-  are one row, one stream and one register entry. Not resumed: a session
-  whose step the register no longer calls `running`, one with no session id,
-  one where STOP or UPDATE came during the wait, and the fourth interruption
-  in a row (`RESUME_LIMIT`); those end as before, the step `failed` with the
-  API's words in its reason. (2026-09-13..25: ten sessions ended this way,
-  four of them past 280 turns, and every one was a failed step with its work
-  left uncommitted in the worktree.)
+STOP and UPDATE are read between picks and inside idle waits. The helper's
+shared quota pause reports `every lane sleeping 30m` when no reset is named;
+a named reset sleeps until one minute after it. Orders break the pause in
+short slices. A goal's provider refusal instead records that provider's
+unavailability and lets the next goal route past it. API and plan refusals
+are recorded separately for the next launch.
 
 ### Billing
 
 Every MC session starts on its selected provider's subscription. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
-This applies to every current MC session path: step, review, goal, plan, helper, and
+This applies to every current MC session path: build, review, plan, helper, and
 interactive sessions. An ordinary interactive `mc plan` still lets Martin
 choose the tool and model; billing follows that choice. A headless plan session
 on a goal in finish or merging runs on opus at high effort and is billed as any other
@@ -1636,7 +213,7 @@ one billing line.
 The API reserve is switched per provider:
 `mc run --billing <claude|codex> <on|off>`. Off, a spent plan stays the plan —
 the session meets the plan's own refusal and the runner waits it out — and a
-class step routed to the reserve waits instead of starting. The wrapper reads
+class-routed goal routed to the reserve waits instead of starting. The wrapper reads
 the switch again before it opens the key, so a launch decided before the switch
 was turned off never reaches the API. A running session keeps its billing.
 Absent, both are on.
@@ -1645,7 +222,7 @@ The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
 wrapper process. The coding tool receives an expiring, request-limited loopback
 grant, and requests only the chosen model through the provider-specific route.
-An interactive session (`mc plan`, a project opened from the page) is the exception: its grant names
+An interactive session (`mc plan`, `mc brief`, `mc helper`) is the exception: its grant names
 no model, because `/model` inside the session changes it, and a grant on the
 launch model refused every request after the switch.
 The runner never reads or places the key in a session's environment or argv.
@@ -1698,13 +275,12 @@ billing boundaries starts a cold cache context.
 
 ## Work classes and capacity (ruling 59)
 
-A step may name a work class, `fast` or `large`, instead of a model. The route
+A goal names a work class, `fast` or `large`, not a model. The route
 is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by one
-read-only Codex call an hour. `review` is a class too, but only the plan's
-review step and a goal's review take it, and it is not scored by headroom.
+read-only Codex call an hour. `review` is a class too, but only a goal's review takes it, and it is not scored by headroom.
 Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. A candidate can run on its plan when its provider has not refused it and
 no window in force is at its limit. A goal's review passes over every
 candidate whose model is its last build entry's while another can run on its
@@ -1731,7 +307,7 @@ With no file, the defaults are: `fast`, `claude:haiku:high` then
 `review` is one candidate object, as files were before review was a list, reads
 as a list of that candidate and is written back as a list the first time `mc
 model` changes it. A file that is there and cannot be read is refused, never quietly replaced by the defaults. A catalog
-edit never rewrites a plan.
+edit never rewrites a goal.
 
 **The snapshot** is the runner's, kept apart from the catalog, so an observation
 never edits the catalog and an edit never rewrites what was observed. Per
@@ -1783,23 +359,24 @@ available to that provider's API account; MC does not maintain a separate API
 model catalog in this version.
 
 **Refusals and the wait.** A class-routed session is never switched to another
-provider while it runs. If its provider refuses it, the session is interrupted
-and not counted (its row's note ends `,rerouted`), and the next pick routes the
-step again. It resumes on the same tool and model only if that is still the
-route, and starts cold otherwise. If the catalog has no candidate for the class, the
-step is skipped as `no-capacity`: it stays `ready`, it is not blocked on the
-project, and the next pick routes it again. The reason names each candidate and
+provider while it runs. If its provider refuses it, the refusal is recorded for the next launch,
+and the next pick routes the goal again in a fresh session on the same branch. If the catalog has no candidate for the class, the
+goal is skipped as `no-capacity`: it stays `ready`, and the next pick routes it again. The reason names each candidate and
 why. The chooser also returns `retry_at`, the earliest instant an answer can
 change; the runner does not act on it yet.
 
-**Audit.** A class step's `runs.tsv` row carries `class`, `tool`, `effort`, and
+**Audit.** A class-routed goal's `runs.tsv` row carries `class`, `tool`, `effort`, and
 `billing` (`plan` or `credits`), and `model` is the model of the candidate it was
 routed to. The session's `.json` `modelUsage` is the exact record of which models
 ran and what they used.
 
 ## What runs beside it
 
-Nothing of its own, and that is the point. The runner's chore pass — the
+The helper collect runs once per UTC day, on the first chore pass after 05:00Z;
+the inbox drain takes up to three files per pass on its own cadence. Daily
+dependency readings and tidy use their own recorded rows too.
+
+No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
 **nightly tick**: `runNightly` reads `runs.tsv` and, when 24 hours have passed
 since the last `kind: nightly` row (or there is none), runs
@@ -1824,128 +401,7 @@ nothing about it.
 
 ## How it is tested
 
-- `tests/mc/run-plan.test.js` — the rules with no process at all: queue
-  assembly and tidying, `nextFor` (the order, a claimed name, an in-flight
-  name, a blocked plan, one repository at a time),
-  `chooseKind`, the headless argument lists, the reading of a session's output,
-  the runs.tsv row, `sessionSettings`, `helperDue`.
-- `tests/mc/run.test.js` — lane passes and the chores against fake git, gh,
-  tmux and session deps, asserting what only concurrency can produce: two
-  lanes on one repository taking the next two *runnable* names and never the
-  same one, a memoro step and a memoro-cli step in flight at the same moment,
-  exactly one sleep for a quota answer seen in one lane, and STOP ending every
-  lane after one step each. One case per `WORKAREA_BLOCKS` name drives the fault
-  through `runStep` and asserts the block pull request's title and branch, the
-  plan edit (only the status, the blocker and one comment) and that the next
-  pick over the re-read world is the next name; a `PLAN.json` both sides edited
-  starts a step with main's plan in the prompt; a merge left in progress is
-  aborted and the step starts.
-- `tests/mc/run-codex.test.js` — the codex lane on `realDeps`: a real git
-  repository with a real origin, a real worktree whose `.git` points outside
-  it, a real spawned process, and a stub `codex` on PATH answering in codex's
-  `exec --json` event stream. It proves mc's half — the argument list mc
-  builds is the one the process gets, the instructions arrive on
-  `-c instructions=`, the event stream is read into the usage columns, and the
-  row and the launch line are written. It cannot prove the real codex accepts
-  those arguments; codex is not installed on this machine, and that is one
-  live step away from being known.
-- `tests/mc/run-doc.test.js` — this note, pinned: every constant the prose
-  states is read back out of it and compared with the export it describes.
-
-## History: the round
-
-From 2026-08-28 to 2026-09-08 the runner worked in **rounds**, and this is the
-one place the word is kept for it. A round was one pass over the whole queue:
-the day's collect and the inbox, `queue.md`, every plan on both `origin/main`s
-and `gh pr list`, the tidy and the archive, then every name of the queue walked
-in order — the plan on main asked first (`planRefusal`), the worktree second
-(`runStep`) — then the workareas closed, and ten minutes of sleep after a round
-that ran nothing. `mc run --rounds N` ran N of them;
-`--rounds <n>` was retired with the round on 2026-09-08 and is answered by
-name, with exit 2. `--once` kept its meaning: one step.
-
-It was built up in good faith, and each piece is still in the code in another
-shape:
-
-- **One lane per repository (2026-08-29)**, so a round was as slow as the
-  slower repository rather than both together. **Each lane its own rounds
-  (2026-09-03)**: memoro-cli's lane had sat idle for hours while memoro's walked
-  thirty names. **`mc run lanes <n>` (2026-09-04)** put n loops on a repository,
-  and lane `k` of `n` took every `n`th name of the repository's list from
-  position `k` (`splitLanes`, `index % count === lane`) — so lane 2 took the
-  second name whether or not lane 1 could run the first. The claim replaced it.
-- **The plan before git (2026-09-02, `mc-run-one-project`).** A real `mc run
-  --rounds 1` against `~/mc` walked 38 projects in **51 s** and started none of
-  them, roughly 1.3 s of git each — `repoOf`, the worktree's existence, `git
-  status`, the fetch and merge, and only then the plan, and a missing workarea
-  was *created* before anything was read. 36 of those 38 refusals were already
-  on the page. Answered from the plans the round had already read, the same
-  board was **1.2 ms** — `kindFor` over `~/mc/runner/plans.json`, measured
-  2026-09-02T20:03Z. On that board 21 of the 38 waited on `blocked_by: {kind:
-  "decision", name: "plan-review"}` and 7 more behind one blocked project; read
-  the numbers as the shape of that day's board. The live before-and-after of one
-  `mc run --rounds 1 --no-merge` was never taken: the runner was up and holding
-  the session that measured it. Those refusals left **one line per round**,
-  counted by reason — `skipped 36 (blocked 30, unparseable 5, done 1) — the
-  plans that do not parse: …`.
-- **A lane stayed on a project after a merged step**, re-reading the plans and
-  following its next step at once, up to eight times — a six-step plan would
-  otherwise have taken six rounds of twenty projects. The order now does it.
-- **`queue.md` emptied itself**: a name left the file the moment its step had
-  run, so a queue everything ran from was an empty file.
-- **Which copy of the plan (2026-09-05, ruling 10).** While a merge was in
-  progress the round read the plan out of the branch (`git show HEAD:`,
-  `planOf`'s `fromHead`), and the condition was `conflicts.length > 0` while the
-  docstring defended only a conflicted `PLAN.json`. Over the whole of
-  `runner.log` to 2026-09-05, **207 rounds reached a conflict, 180 of them (87 %)
-  with no `PLAN.json` among the conflicting files**, and every one of those 180
-  was handed the branch's plan when main's was on disk beside it: `docx-editor`
-  reported *"step 17 is blocked on decision docx-ime-input-source"* for 13
-  consecutive rounds about a step main had re-planned the evening before, and
-  the only conflicting file was a technical note. Ruling 10 narrowed the
-  predicate to `conflicts.some(isPlanPath)` (`plan-read-from-main`). The case it
-  kept was stale too — HEAD there is the copy that lags, and
-  `sdk-artifact-storage` read `blocked` on a step main said was `done` in 13 of
-  the 27 plan-conflict rounds — so the round aborted such a merge and recorded
-  the workarea in **`~/mc/runner/unmergeable.json`**, because `git merge
-  --abort` leaves the worktree clean and every surface would otherwise have
-  called the project runnable; `machineState` read it as the word
-  `unmergeable`. On 2026-09-08 `main`'s copy started being taken instead, and
-  the predicate, the file, its readers and the word went together.
-
-**Why it went.** Measured 2026-09-08 in `runner.log`: memoro lanes #1 and #2
-each ended every round with `skipped 15 (blocked 15)` or `skipped 16 (blocked
-16)` and `0 ran`; `sql-w3-email-closure` was merged, refused (`PLAN.json is not
-resolvable by the plan's rule — steps: 13 in the merge base, 13 on this branch,
-12 on main`) and aborted every ten minutes from 2026-09-06T18:34Z; and
-`sql-w1-universe-closure` was `dirty worktree (.gitattributes,
-.github/workflows/deploy.yml, .gitignore +1039)` every round — a `git merge
-origin/main` a killed session had left in progress — while nothing on `main`
-said either project was stuck. Tried again every ten minutes, a fault a person
-had to fix was a log line nobody read, for days. Martin's answer is ruling 17,
-quoted under *Blocked by the runner*: take the next step, and write down on
-`main` the step that cannot be taken.
-
-After the switch (the runner restarted on the picker at 2026-09-08T06:48Z),
-`grep -c 'skipped [0-9]* ('` over `runner.log` stood at 930 and has not grown:
-the last such line is 2026-09-08T06:42:08Z, and every lane line since is
-`next —`, `waiting —` or `nothing to run — sleeping`.
-
-## What the era measured
-
-`scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument: per step session, wall-clock against model time, turns, cost, test commands, the tool-time classes, Bash against native calls, and — since 2026-09-04 — the responses (one `message.id`, however many transcript lines claude wrote for it) that carried more than one tool call, and the single-call reads that could have shared a response with the read before them, priced as the cache read they cost — counted per line before 2026-10-12, which always gave 0. Since step-cost (ruling 18) it prints the wall, API time, turns, cost and context-per-turn rows once more per **main model** — the `modelUsage` key in the session's json with the most output, so an advisor or claude's own small calls do not count as what the session ran on — which is the before-and-after that ruling is measured on. The baseline it produced on 2026-09-03 is in `project_log.md` (step-parallelism) and that plan's history.
-
-`mc run` has been the runner since 2026-08-28T23:28Z. Through 2026-08-30 that
-is 115 rows in runs.tsv — 92 `step`, 20 merge-only sessions of a kind this
-era later removed, 2 `helper` and one `triage`, both from before the rules
-changed — with **84 merged and none left
-open**, one quota sleep, and not one `rebase failed, skip`. Every failure mode
-nights 1–2 recorded is gone.
-
-There is no baseline left to compare against: `runner.sh` is deleted, and
-`mc run` has deliberately outgrown it — lanes, archive, workarea close-out, the
-day's helper, no triage, no decisions. What survives of the intent holds: no
-line in the era shows a failure the shell runner handled and this one does not.
-
-Read `~/mc/runner/log/natt-1.md` for what the shell runner learned on nights
-1–2, including why merges failed and why rebase was wrong.
+`tests/mc/run.test.js` drives the runner through injected file, git, GitHub,
+clock and process boundaries. `tests/mc/goals.test.js` covers phase and stage
+eligibility. `tests/mc/run-doc.test.js` compares the documented defaults and
+routing rules with the code. These tests start no real coding session.
