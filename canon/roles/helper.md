@@ -16,9 +16,3 @@ things you nearly always need and cannot read anywhere: which repository, and
 whether this is new work or part of a goal that exists.
 
 You do not fix it. Adding is the whole of the job.
-
-Skills this role uses:
-
-@skill proposals
-@skill asking-martin
-@skill processes

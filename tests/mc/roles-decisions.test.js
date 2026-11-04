@@ -49,7 +49,7 @@ const toldTo = (name) => {
 };
 
 /** A skill's own text, as the tool loads it. */
-const skillText = (name) => readFileSync(join(canonSkillsDir(), name, 'SKILL.md'), 'utf8');
+const skillText = (name) => readFileSync(join(canonSkillsDir(), `${name}.md`), 'utf8');
 
 /**
  * The shape used to be written out in each of these role files, then once in
@@ -62,7 +62,7 @@ describe('the decision shape every role writes', () => {
       const told = skillText('asking-martin');
 
       it('is pointed at the asking-martin skill', () => {
-        assert.match(toldTo(name), /Skill `mc-asking-martin`/u);
+        assert.match(toldTo(name), /skills\/mc\/SKILL\.md/u);
       });
 
       it('asks for a proposal, not a menu', () => {
@@ -102,8 +102,8 @@ describe('the rules every session gets, whichever role it is', () => {
   for (const name of CANON_ROLES) {
     it(`${name} is pointed at the proposals skill${PUBLISHERS.includes(name) ? ' and the publish-and-merge skill' : ''}`, () => {
       const told = toldTo(name);
-      assert.match(told, /Skill `mc-proposals`/u, `${name}: no proposals skill`);
-      if (PUBLISHERS.includes(name)) assert.match(told, /Skill `mc-publish-and-merge`/u, `${name}: no publish skill`);
+      assert.match(told, /skills\/mc\/SKILL\.md/u, `${name}: no proposals skill`);
+      if (PUBLISHERS.includes(name)) assert.match(told, /skills\/mc\/SKILL\.md/u, `${name}: no publish skill`);
     });
   }
 

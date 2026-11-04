@@ -80,17 +80,3 @@ Nothing in the background: no `run_in_background`, no `&`. Verify what the
 work's criteria name and stop: screenshots, dev servers and proof scripts only
 when the criteria ask for them.
 @end
-
-Skills this role uses:
-
-@skill publish-and-merge
-@skill merge-conflicts
-@skill git
-@skill proposals
-@skill processes
-@skill scratch-and-probes
-@skill writing-tests
-@skill measure-the-app
-@skill dev-servers
-@skill asking-martin
-@skill memory

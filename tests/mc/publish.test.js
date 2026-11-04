@@ -1,5 +1,5 @@
 /**
- * `mc publish` — the publication sequence (`canon/skills/publish-and-merge`), each rule a check.
+ * `mc publish` — the publication sequence (`canon/tasks/publish-and-merge.md`), each rule a check.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';

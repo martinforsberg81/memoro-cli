@@ -178,7 +178,7 @@ describe('the mark on an area', () => {
 });
 
 describe('what a conversation is told', () => {
-  const SHARED = sharedRoleText();
+  const SHARED = expandRoleIncludes(sharedRoleText());
 
   it('claude gets the shared text and then the overlay, and nothing in front', () => {
     assert.equal(instructionsFor('claude-code', 'OVERLAY'), `${SHARED}\n\n---\n\nOVERLAY`);
@@ -187,13 +187,13 @@ describe('what a conversation is told', () => {
   it('codex gets the same body, on its own instruction channel', () => {
     assert.equal(
       instructionsFor('codex', 'OVERLAY'),
-      `${SHARED}\n\n---\n\nOVERLAY`,
+      `${expandRoleIncludes(sharedRoleText(), { tool: 'codex' })}\n\n---\n\nOVERLAY`,
     );
   });
 
   it('is one body of text, whichever tool is asked', () => {
     assert.equal(
-      instructionsFor('codex', 'OVERLAY'),
+      instructionsFor('codex', 'OVERLAY').replaceAll('~/.agents/skills/', '~/.claude/skills/'),
       instructionsFor('claude-code', 'OVERLAY'),
     );
   });
@@ -237,8 +237,8 @@ describe('the text every role session shares', () => {
   // and the build session is pointed at it.
   it('points a build session at the rule to know a process before signalling it', () => {
     const told = instructionsFor('claude-code', readCanonRole(BUILD_ROLES.goal).overlay);
-    assert.match(told, /Skill `mc-processes`/u);
-    assert.match(readFileSync(join(canonSkillsDir(), 'processes', 'SKILL.md'), 'utf8'), /know what it is before you signal it/u);
+    assert.match(told, /skills\/mc\/SKILL\.md/u);
+    assert.match(readFileSync(join(canonSkillsDir(), 'processes.md'), 'utf8'), /know what it is before you signal it/u);
   });
 
   // A file named `all-sessions.md` in a catalogue directory is text, not a role:
@@ -267,53 +267,22 @@ describe('the text every role session shares', () => {
  * and a role names it on a line of its own.
  */
 describe('the verb files', () => {
-  const VERBS = ['goal-verb.md'];
-  // Sentences that define each file, from different parts of it.
-  const DEFINING = {
-    'goal-verb.md': [/a plan session finishes it to `merge`/u, /\*\*Written by verbs\.\*\*/u],
-  };
-  const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
-
-  it('each sentence is written in exactly one file, and no role file holds a copy', () => {
-    const carriers = (sentence) => readdirSync(canonRolesDir())
-      .filter((file) => file.endsWith('.md'))
-      .filter((file) => sentence.test(read(file)));
-    for (const [file, sentences] of Object.entries(DEFINING)) {
-      for (const sentence of sentences) assert.deepEqual(carriers(sentence), [file], `${sentence} is not in exactly ${file}`);
-    }
-    for (const file of ['plan-session.md', 'brief.md']) {
-      assert.match(read(file), /^@include goal-verb\.md$/mu, `${file} does not include goal-verb.md`);
-    }
-  });
-
-  // It is not a role, for the same reason `all-sessions.md` is not.
-  it('is text and not a role, even sitting in a catalogue', () => {
-    for (const file of VERBS) {
-      assert.equal(parseRole(read(file)), null, file);
-      assert.equal(isPassageFile(file), true, file);
-    }
-    const { env } = catalogue({ 'worker.md': WORKER_MD, 'goal-verb.md': read('goal-verb.md') });
-    assert.deepEqual(listRoles(env).map((role) => role.name), ['worker']);
-  });
-
-  // Expanded at the one door, and not before it: `run.js` and `mc roles show`
-  // read `overlay` as the role's own words.
-  it('reaches a session through instructionsFor, and the marker does not', () => {
+  it('reaches a session by reference, without preloading the manual', () => {
     for (const name of ['plan-session', 'brief']) {
       const { overlay } = readCanonRole(name);
-      assert.match(overlay, /@include/u, `${name} should carry the marker in its own words`);
-      const told = instructionsFor('claude-code', overlay);
-      assert.doesNotMatch(told, /@include/u, `${name} was told an unexpanded marker`);
-      for (const sentence of DEFINING['goal-verb.md']) assert.match(told, sentence, name);
+      assert.match(overlay, /^@verb goal$/mu);
+      const told = instructionsFor('codex', overlay);
+      assert.match(told, /mc\/verbs\/goal\.md/u);
+      assert.doesNotMatch(told, /^@verb|\*\*Written by verbs\.\*\*/mu);
     }
   });
 
-  it('leaves a marker nobody can resolve standing, rather than dropping the rule', () => {
-    assert.equal(expandRoleIncludes('a\n@include nothing-verb.md\nb'), 'a\n@include nothing-verb.md\nb');
-    // Only a verb file, so a role cannot include a role.
+  it('keeps unknown references visible and supports old catalogue markers', () => {
+    assert.equal(expandRoleIncludes('a\n@verb nothing\nb'), 'a\n@verb nothing\nb');
+    assert.match(expandRoleIncludes('@include goal-verb.md'), /mc\/verbs\/goal\.md/u);
+    assert.match(expandRoleIncludes('@skill git'), /mc\/tasks\/git\.md/u);
     assert.equal(expandRoleIncludes('@include build-session.md'), '@include build-session.md');
-    // A line of its own, not a mention inside a sentence.
-    assert.equal(expandRoleIncludes('see @include goal-verb.md there'), 'see @include goal-verb.md there');
+    assert.equal(expandRoleIncludes('see @verb goal there'), 'see @verb goal there');
   });
 });
 
@@ -331,7 +300,7 @@ describe('every canon role has a body', () => {
 
   it('and the files that are not roles are the shared text and the verb files', () => {
     const passages = files.filter((file) => isPassageFile(file));
-    assert.deepEqual(passages, [SHARED_ROLE_FILE, 'goal-verb.md']);
+    assert.deepEqual(passages, [SHARED_ROLE_FILE]);
     for (const file of passages) assert.equal(parseRole(readFileSync(join(canonRolesDir(), file), 'utf8')), null);
   });
 
@@ -379,7 +348,7 @@ describe('the role catalogue', () => {
   // and the passages verb files, with `plan-session-roles` (2026-11-03).
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'brief.md', 'build-session.md', 'goal-verb.md', 'helper.md', 'intake.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'brief.md', 'build-session.md', 'helper.md', 'intake.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });
@@ -470,6 +439,6 @@ describe('the review role', () => {
     assert.equal(readCanonRole('review-session:project'), null);
     // Reviewing test value needs the same design guidance as writing tests;
     // receiving the skill does not grant permission to build.
-    assert.match(goal, /Skill `mc-writing-tests`/u);
+    assert.match(goal, /skills\/mc\/SKILL\.md/u);
   });
 });

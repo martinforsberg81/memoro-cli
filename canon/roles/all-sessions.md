@@ -15,12 +15,9 @@ Read the code before you decide or ask. Report what you ran and what it said;
 never call something verified that was not. `mc` is the first choice for every
 mechanical step; `mc <verb> --help` is the reference.
 
-How to do a task — test, publish, resolve a conflict, write a proposal, measure
-the app — is a skill, named `mc-<task>`, and your role names the ones it needs.
-Load a skill before the task it covers. Nothing else is loaded for you — no
-CLAUDE.md, AGENTS.md or memory. A repository's `AGENTS.md`, `CLAUDE.md` and
-`docs/technical/` are a library: `Grep` them when the work touches what they
-cover; never read one whole.
+@mc
+A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/` are a library:
+search them when the work touches what they cover; never read one whole.
 
 ## Test authority
 
@@ -30,7 +27,8 @@ explicit planning decision; do not expand into them while implementing a fix.
 Martin decides changes to the test strategy and exceptions. Without a goal,
 use the explicit protection scope agreed with Martin; missing scope is a
 planning question, not permission to create a suite.
-For test design, modification or retirement, load `mc-writing-tests`.
+Before test design, modification or retirement, read `tasks/writing-tests.md`
+in the mc skill.
 
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
 plans — and every goal and its log: English.

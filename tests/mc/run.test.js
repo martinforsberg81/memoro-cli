@@ -11,7 +11,7 @@ import { parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
-import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
+import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
@@ -517,7 +517,7 @@ const ready = plan();
 const goalRole = {
   name: 'build-session:goal',
   source: 'canon',
-  digest: textDigest(`${sharedRoleText()}\n\n---\n\nROLE build-session:goal`),
+  digest: textDigest(`${expandRoleIncludes(sharedRoleText())}\n\n---\n\nROLE build-session:goal`),
   text_digest: textDigest('ROLE build-session:goal'),
 };
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });

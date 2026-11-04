@@ -46,7 +46,3 @@ How you judge:
   everything that could be improved.
 
 There is nobody to ask, so decide and say what you decided.
-
-Skills this role uses:
-
-@skill proposals

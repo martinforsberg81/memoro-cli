@@ -1,14 +1,4 @@
-/**
- * One home per rule (goal `agent-skills-text`, Martin 2026-11-02: "Vad besluten
- * är är inte det viktigaste. Det är var texten är.").
- *
- * A role (`canon/roles/<role>.md`) says what the role is for, what it owns and
- * how it ends. How to do a task — test and publish, resolve a conflict, write a
- * proposal — is a skill (`canon/skills/<task>/SKILL.md`), and a role names it
- * with `@skill` rather than repeating it. These tests hold that placement: a
- * sentence from each skill is in that skill's file and in no other canon file,
- * no role file repeats a skill's sentences, and every role names what it needs.
- */
+/** One home per task rule; role launches route without preloading task text. */
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,7 +27,7 @@ const DEFINING = {
 };
 
 const roleFiles = () => readdirSync(canonRolesDir()).filter((f) => f.endsWith('.md')).map((f) => join(canonRolesDir(), f));
-const skillFiles = () => canonSkills().map((s) => join(canonSkillsDir(), s.name, 'SKILL.md'));
+const skillFiles = () => canonSkills().map((s) => join(canonSkillsDir(), `${s.name}.md`));
 const read = (path) => readFileSync(path, 'utf8');
 const rel = (path) => path.slice(path.indexOf('canon/'));
 const body = (text) => text.replace(/^---\n[\s\S]*?\n---\n/u, '');
@@ -52,7 +42,7 @@ describe('one home per rule in canon/', () => {
     it(`${name}: its defining sentence is in its own SKILL.md and in no other canon file`, () => {
       const re = phrase(sentence);
       const carriers = [...roleFiles(), ...skillFiles()].filter((path) => re.test(read(path))).map(rel);
-      assert.deepEqual(carriers, [`canon/skills/${name}/SKILL.md`]);
+      assert.deepEqual(carriers, [`canon/tasks/${name}.md`]);
     });
   }
 
@@ -81,7 +71,7 @@ describe('one home per rule in canon/', () => {
     it(`${home}: the rules it owns are stated there and nowhere else in canon`, () => {
       for (const rule of rules) {
         const carriers = [...roleFiles(), ...skillFiles()].filter((path) => rule.test(flat(read(path)))).map(rel);
-        assert.deepEqual(carriers, carriers.length ? [`canon/skills/${home}/SKILL.md`] : [], `${rule} in ${carriers.join(', ')}`);
+        assert.deepEqual(carriers, carriers.length ? [`canon/tasks/${home}.md`] : [], `${rule} in ${carriers.join(', ')}`);
       }
     });
   }
@@ -90,7 +80,7 @@ describe('one home per rule in canon/', () => {
   // because a skill said branches were mc's: a skill says how a task is done
   // and what breaks, never who may do it. Who may is the role's; the one hard
   // boundary (a headless session's) is code, HEADLESS_RULES in src/mc/hooks.js.
-  it('no skill says who may act: no permission language in canon/skills', () => {
+  it('no skill says who may act: no permission language in canon/tasks', () => {
     const PERMISSION = [
       /\bthe person's\b/iu, /\ba person's\b/iu, /\bMartin's (verb|act|word|call)/iu,
       /\bon (his|their|Martin's) word\b/iu, /\bstays? (his|theirs|Martin's)\b/iu,
@@ -115,44 +105,13 @@ describe('one home per rule in canon/', () => {
   });
 });
 
-describe('every role names the skills it needs', () => {
-  const BUILDS = ['build-session:goal'];
-  const ROLES = ['brief', ...BUILDS, 'review-session:goal', 'helper', 'intake', 'plan-session'];
-  const named = (overlay) => [...overlay.matchAll(/^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu)].map((m) => m[1]);
-
-  it('names only skills canon ships, and every skill is named by some role', () => {
-    const known = new Set(canonSkills().map((s) => s.name));
-    const used = new Set();
-    for (const role of ROLES) {
-      for (const name of named(readCanonRole(role).overlay)) {
-        assert.ok(known.has(name), `${role} names an unknown skill ${name}`);
-        used.add(name);
-      }
+describe('role context is loaded on demand', () => {
+  it('launches each role without task catalogues or task bodies', () => {
+    for (const ref of ['brief', 'build-session:goal', 'review-session:goal', 'helper', 'intake', 'plan-session']) {
+      const told = instructionsFor('codex', readCanonRole(ref).overlay);
+      assert.match(told, /skills\/mc\/SKILL\.md/u);
+      assert.doesNotMatch(told, /^@skill |Skills this role uses:|mc-publish-and-merge/mu);
+      for (const sentence of Object.values(DEFINING)) assert.doesNotMatch(told, phrase(sentence));
     }
-    assert.deepEqual([...used].sort(), [...known].sort());
-  });
-
-  // The rules that were in every session's text: a finding is a proposal, and
-  // a process you did not start is not yours.
-  it('every role names the proposals skill; every role that runs commands names processes', () => {
-    for (const role of ROLES) {
-      const skills = named(readCanonRole(role).overlay);
-      assert.ok(skills.includes('proposals'), `${role} does not name proposals`);
-      if (role !== 'intake') assert.ok(skills.includes('processes'), `${role} does not name processes`);
-    }
-  });
-
-  it('every role that changes code names publish-and-merge, git and scratch-and-probes', () => {
-    for (const role of ['brief', ...BUILDS, 'plan-session']) {
-      const skills = named(readCanonRole(role).overlay);
-      for (const skill of ['publish-and-merge', 'git', 'scratch-and-probes']) assert.ok(skills.includes(skill), `${role} does not name ${skill}`);
-    }
-  });
-
-  it('reaches the session as a pointer to the installed skill, not as its text', () => {
-    const told = instructionsFor('claude-code', readCanonRole('build-session:goal').overlay);
-    assert.match(told, /Skill `mc-processes` \(/u);
-    assert.doesNotMatch(told, /^@skill /mu);
-    assert.doesNotMatch(told, phrase(DEFINING.processes));
   });
 });

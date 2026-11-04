@@ -34,7 +34,7 @@ goals of one phase run side by side.
 - **Test protection:** name protected behaviours, failure consequences, the
   cheapest credible test level and existing tests to reuse. State the evidence
   the build must produce, or why no new automated test is warranted. Follow
-  `mc-writing-tests`; do not default every fix to a new test.
+  [writing-tests.md](writing-tests.md); do not default every fix to a new test.
 - **Class:** `fast` when the goal says exactly what changes, where and in what
   order; `large` only for work that must choose and that you cannot choose
   for. Never a concrete model.

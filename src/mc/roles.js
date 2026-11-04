@@ -37,7 +37,7 @@ import { join } from 'node:path';
 
 import { canonRoot } from './canon.js';
 import { mcHome } from './paths.js';
-import { expandRoleSkills } from './skills.js';
+import { mcSkillPath } from './skills.js';
 
 /**
  * Reserved as an identity, not as a word: `mc helper` owns `~/mc/helper/`
@@ -187,45 +187,24 @@ export function sharedRoleText() {
 }
 
 /**
- * A verb's own file, carried by reference rather than copied.
- *
- * `all-sessions.md` is what *every* role session is told. How a verb is used —
- * `mc goal` and writing a `GOAL.json` — is not that: the plan session and the
- * brief write goals and a build session does not, and telling a build session
- * how to write a goal it may never write is worse than
- * telling it nothing. So each verb is its own file, `<verb>-verb.md` —
- * `listRoles` skips it, `parseRole` refuses it for want of frontmatter — and a
- * role file names it on a line of its own:
- *
- *   @include goal-verb.md
- *
- * The line is replaced with that file's text at assembly, in `instructionsFor`,
- * which is the one door every launch path goes through. It is deliberately not
- * expanded in `parseRole`: `run.js` and the role commands test `role.overlay`
- * to decide whether a role file is installed at all, and that has to stay the
- * role's *own* words (see `SHARED_ROLE_FILE`).
- *
- * Only a `-verb.md` name in `canon/roles/` can be included — a role cannot
- * include a role, and a verb file includes nothing, so there is no recursion
- * to bound. A name that is not there
- * is left standing in the text rather than silently dropped: a visible
- * `@include` line in a session's instructions is a broken install somebody can
- * see, and a rule that quietly vanished is not.
- *
- * A role names a task skill the same way, `@skill <name>` on a line of its
- * own, and the line becomes a pointer to the installed `mc-<name>` skill — not
- * its text (see `expandRoleSkills` in `skills.js`). An unknown name stands.
+ * Resolve a verb reference to a path, never to its manual's text. Old
+ * catalogue roles may still use @include <name>-verb.md or @skill <name>;
+ * these also resolve to references under mc rather than advertising skills.
+ * Unknown references stay visible so a broken install cannot drop a rule.
  */
-const ROLE_INCLUDE = /^@include[ \t]+([a-z0-9-]+-verb\.md)[ \t]*$/gmu;
+const ROLE_INCLUDE = /^@include[ \t]+([a-z0-9-]+)-verb\.md[ \t]*$/gmu;
 const ROLE_PASSAGE = /^[a-z0-9-]+-verb\.md$/u;
+const ROLE_VERB = /^@verb[ \t]+([a-z0-9-]+)[ \t]*$/gmu;
+const ROLE_TASK = /^@skill[ \t]+([a-z0-9-]+)[ \t]*$/gmu;
 
 export function expandRoleIncludes(text, { tool = 'claude', env = process.env } = {}) {
   if (typeof text !== 'string') return text;
-  const included = text.includes('@include')
-    ? text.replace(ROLE_INCLUDE, (line, file) => readFile(join(canonRolesDir(), file))?.trim() || line)
-    : text;
-  // `@skill <name>` after `@include`, so an included passage can name a skill too.
-  return expandRoleSkills(included, { tool, env });
+  const pointer = (kind) => (line, name) => readFile(join(canonRoot(), kind, `${name}.md`))
+    ? `Before ${kind === 'verbs' ? `using mc ${name}` : `the ${name} task`}, read \`${mcSkillPath(tool, `${kind}/${name}.md`, env)}\`.`
+    : line;
+  return text.replace(ROLE_INCLUDE, pointer('verbs'))
+    .replace(ROLE_VERB, pointer('verbs')).replace(ROLE_TASK, pointer('tasks'))
+    .replace(/^@mc[ \t]*$/gmu, `For mc operations, read \`${mcSkillPath(tool, 'SKILL.md', env)}\` and only the reference needed now.`);
 }
 
 export function readRole(ref, env = process.env) {
@@ -323,7 +302,7 @@ export function areaRole(areaPath, env = process.env) {
  * inherits nothing — it is launched with no instructions at all — which is the
  * whole parallel-operation guarantee.
  *
- * The same text for every tool, because the channel is the same shape for
+ * The same role text, with reference paths for each tool. The channel fits
  * every tool — `profileArgs` already carries a body of markdown to each one
  * at launch, and codex's `-c instructions=` was verified to layer over the
  * base instructions rather than replace them (see `portrait.js`). A tool mc
@@ -337,7 +316,7 @@ export function areaRole(areaPath, env = process.env) {
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
   const body = expandRoleIncludes(overlay, { tool: toolId || 'claude' });
-  const combined = [shared, body].filter(Boolean).join('\n\n---\n\n');
+  const combined = [expandRoleIncludes(shared, { tool: toolId || 'claude' }), body].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }
 

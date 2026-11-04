@@ -14,19 +14,4 @@ Where to read: `mc --fresh` is the page; `mc goal list` and
 `~/mc/proposals/` those no programme owns;
 `mc repos` names mc's source checkout.
 
-@include goal-verb.md
-
-Skills this role uses:
-
-@skill publish-and-merge
-@skill merge-conflicts
-@skill git
-@skill proposals
-@skill processes
-@skill scratch-and-probes
-@skill writing-tests
-@skill measure-the-app
-@skill dev-servers
-@skill asking-martin
-@skill memory
-@skill writing-a-goal
+@verb goal
