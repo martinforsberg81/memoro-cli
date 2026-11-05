@@ -54,7 +54,7 @@
  *     says nothing about whether it is idle.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -80,7 +80,8 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 8;
+export const RULES_VERSION = 9;
+export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -94,6 +95,7 @@ export const PROGRAMME_TRANSCRIPT_KEEP_MS = 72 * 60 * 60 * 1000;
 export const COMPARE_KEEP_MS = 24 * 60 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 const TRANSCRIPT = /^(.+)\.jsonl$/u;
 const LIST_FILE = /^\d{8}T\d{6}Z(-\d+)?\.json$/u;
 /** A planning area's own checkouts: never a target. */
@@ -126,6 +128,9 @@ export function tidyRoots(env = process.env) {
     selection: join(mcHome(env), 'selection'),
     // A runner session's scratch directories (S): `~/mc/runner/scratch/<stem>/`.
     scratch: runnerScratchDir(env),
+    wrangler_logs: join(env.HOME || homedir(), 'Library', 'Preferences', '.wrangler', 'logs'),
+    shots: join(mcHome(env), 'shots'),
+    codex_images: join(env.CODEX_HOME || join(homedir(), '.codex'), 'generated_images'),
   };
 }
 
@@ -144,6 +149,9 @@ const KIND_ROOT = {
   'gate-cache-entry': 'gate_cache',
   'scratch-worktree': 'scratch',
   'scratch-derived': 'scratch',
+  'wrangler-log': 'wrangler_logs',
+  'mc-shot': 'shots',
+  'codex-image': 'codex_images',
 };
 
 /** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
@@ -210,7 +218,7 @@ function realGit(cwd, args) {
  */
 export function gatherTidyFacts({
   env = process.env, now = Date.now(), gh = null, git = realGit, cwds = cwdsOfUser,
-  inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf,
+  inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf, readDir = readdirSync,
   servers = serversFor, openIn = openFilesIn,
 } = {}) {
   const roots = tidyRoots(env);
@@ -219,7 +227,7 @@ export function gatherTidyFacts({
     now, work_root: root, projects_root: roots.claude, roots,
     plan_checkouts: [], plan_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
-    scratch_items: [],
+    scratch_items: [], generated_files: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
@@ -459,7 +467,97 @@ export function gatherTidyFacts({
       }
     }
   }
+  gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir });
   return facts;
+}
+
+const UUID_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const GENERATED_IMAGE = /\.(?:png|jpe?g|webp)$/iu;
+
+function generatedStat(path) {
+  const stat = lstatSync(path);
+  return { mtime_ms: stat.mtimeMs, bytes: stat.size, identity: { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs } };
+}
+
+/** Gather only the three approved file shapes; directory and lsof failures become kept entries. */
+function gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir }) {
+  const addError = (path, kind, error) => facts.generated_files.push({ path, kind, error: message(error) });
+  const walkShots = (dir, active, open) => {
+    let entries;
+    try { entries = readDir(dir, { withFileTypes: true }); }
+    catch (error) { addError(dir, 'mc-shot', error); return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'sessions') continue;
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) { walkShots(path, active, open); continue; }
+      if (!entry.isFile() || !entry.name.endsWith('.png')) continue;
+      try { facts.generated_files.push({ path, kind: 'mc-shot', ...generatedStat(path), active, open }); }
+      catch (error) { addError(path, 'mc-shot', error); }
+    }
+  };
+  const snapshot = (root) => {
+    try { const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('approved root is not a regular directory'); }
+    catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { missing: true }; addError(root, null, error); return { error: true }; }
+    let open;
+    try { open = openIn(root); } catch { open = null; }
+    if (!Array.isArray(open)) open = null;
+    const active = running === null ? null : running.some((process) => typeof process.cwd === 'string' && (process.cwd === root || process.cwd.startsWith(`${root}/`)));
+    return { open, active };
+  };
+  const logs = snapshot(roots.wrangler_logs);
+  if (!logs.missing && !logs.error) {
+    if (logs.open === null || logs.active === null) addError(roots.wrangler_logs, null, new Error('could not establish process/open-file evidence'));
+    else {
+      let entries;
+      try { entries = readDir(roots.wrangler_logs, { withFileTypes: true }); }
+      catch (error) { addError(roots.wrangler_logs, null, error); entries = []; }
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.log')) continue;
+        const path = join(roots.wrangler_logs, entry.name);
+        try { facts.generated_files.push({ path, kind: 'wrangler-log', ...generatedStat(path), active: logs.active, open: logs.open }); }
+        catch (error) { addError(path, 'wrangler-log', error); }
+      }
+    }
+  }
+  const shots = snapshot(roots.shots);
+  if (!shots.missing && !shots.error) {
+    if (shots.open === null || shots.active === null) addError(roots.shots, null, new Error('could not establish process/open-file evidence'));
+    else walkShots(roots.shots, shots.active, shots.open);
+  }
+  let codexRoot = true;
+  try { const stat = lstatSync(roots.codex_images); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('approved root is not a regular directory'); }
+  catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') codexRoot = false; else { addError(roots.codex_images, null, error); codexRoot = false; } }
+  if (codexRoot) {
+    let sessions;
+    try { sessions = readDir(roots.codex_images, { withFileTypes: true }); }
+    catch (error) { addError(roots.codex_images, null, error); sessions = []; }
+    for (const entry of sessions) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !UUID_DIRECTORY.test(entry.name)) continue;
+      const dir = join(roots.codex_images, entry.name);
+      let open;
+      try { open = openIn(dir); } catch { open = null; }
+      if (!Array.isArray(open)) open = null;
+      const active = running === null ? null : running.some((process) => typeof process.cwd === 'string' && (process.cwd === roots.codex_images || process.cwd === dir || process.cwd.startsWith(`${dir}/`)));
+      let children;
+      try { children = readDir(dir, { withFileTypes: true }); }
+      catch (error) { addError(dir, 'codex-image', error); continue; }
+      let groupRecent = false;
+      let groupError = null;
+      try { groupRecent = lstatSync(dir).mtimeMs >= now - GENERATED_KEEP_MS; } catch (error) { groupError = message(error); }
+      const images = [];
+      for (const child of children) {
+        try { if (lstatSync(join(dir, child.name)).mtimeMs >= now - GENERATED_KEEP_MS) groupRecent = true; }
+        catch (error) { groupError = groupError || message(error); }
+        if (!child.isFile() || child.isSymbolicLink() || !GENERATED_IMAGE.test(child.name)) continue;
+        const path = join(dir, child.name);
+        try { const item = { path, kind: 'codex-image', ...generatedStat(path), active, open, group_dir: dir }; images.push(item); if (item.mtime_ms >= now - GENERATED_KEEP_MS) groupRecent = true; }
+        catch (error) { addError(path, 'codex-image', error); groupError = groupError || message(error); }
+      }
+      for (const item of images) facts.generated_files.push({ ...item, group_recent: groupRecent, group_error: groupError });
+      if (open === null || active === null) addError(dir, 'codex-image', new Error('could not establish process/open-file evidence'));
+    }
+  }
 }
 
 /**
@@ -887,6 +985,20 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     else keep(item.path, verdict.rule || 'error', verdict.why);
   }
 
+  // (F) These approved file inventories use an independent 72-hour window.
+  for (const item of facts.generated_files || []) {
+    if (item.error) { keep(item.path, item.kind || 'generated-file', `error: ${item.error}`); continue; }
+    const keepFor = (why) => keep(item.path, item.kind, why);
+    if (item.active === null || item.open === null) { keepFor('error: could not establish process/open-file evidence'); continue; }
+    if (item.active) { keepFor('a process has its cwd in the approved subtree'); continue; }
+    if (item.open.length) { keepFor(`process ${item.open.join(', ')} holds a file open in the approved subtree`); continue; }
+    if (item.group_error) { keepFor(`error: ${item.group_error}`); continue; }
+    if (item.kind === 'codex-image' && item.group_recent) { keepFor('its Codex image session group was touched in the last 72 hours'); continue; }
+    if (typeof item.mtime_ms !== 'number') { keepFor('error: could not tell when it was last touched'); continue; }
+    if (item.mtime_ms >= facts.now - GENERATED_KEEP_MS) { keepFor('touched in the last 72 hours'); continue; }
+    targets.push({ path: item.path, kind: item.kind, rule: 'F', why: `older than 72 hours (${Math.floor((facts.now - item.mtime_ms) / HOUR_MS)} hours)`, bytes: item.bytes || 0, identity: item.identity });
+  }
+
   return { days, person, targets, kept };
 }
 
@@ -915,9 +1027,23 @@ export function outsideRoots(target, roots) {
   const key = KIND_ROOT[target?.kind];
   if (!key || typeof target.path !== 'string') return `not a kind tidy removes: ${target?.kind}`;
   if (!roots[key]) return `no ${key} root in this layout`;
+  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+    const rootStat = lstatSync(roots[key]);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return 'approved root is not a regular directory';
+  }
   const base = realpathSync(roots[key]);
+  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+    const relative = target.path.startsWith(`${roots[key]}/`) ? target.path.slice(roots[key].length + 1) : null;
+    if (relative === null) return `not under ${roots[key]}`;
+    let cursor = roots[key];
+    for (const part of relative.split('/')) {
+      cursor = join(cursor, part);
+      if (lstatSync(cursor).isSymbolicLink()) return 'symbolic link is not a target';
+    }
+  }
   const real = realpathSync(target.path);
   if (!real.startsWith(`${base}/`)) return `not under ${roots[key]}`;
+  if (lstatSync(target.path).isSymbolicLink()) return `symbolic link is not a target`;
   const name = basename(real);
   const parent = dirname(real);
   const shaped = {
@@ -937,6 +1063,10 @@ export function outsideRoots(target, roots) {
     // `<scratch>/<stem>/<worktree>` and `<scratch>/<stem>/DerivedData`.
     'scratch-worktree': dirname(parent) === base,
     'scratch-derived': dirname(parent) === base && name === DERIVED_DATA,
+    'wrangler-log': parent === base && name.endsWith('.log') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
+    'mc-shot': (parent === base || parent.startsWith(`${base}/`)) && name.endsWith('.png') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink()
+      && real.slice(base.length + 1).split('/').every((part) => !part.startsWith('.') && part !== 'sessions'),
+    'codex-image': dirname(parent) === base && UUID_DIRECTORY.test(basename(parent)) && GENERATED_IMAGE.test(name) && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }
@@ -1004,7 +1134,15 @@ export function applyTidy({
         applied.push({ path, ok: false, why: 're-check: its worktree identity, HEAD or runner receipts changed since the list' });
         continue;
       }
-      if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
+      if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+        const stat = lstatSync(path);
+        const identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs };
+        if (!stat.isFile() || stat.isSymbolicLink() || JSON.stringify(identity) !== JSON.stringify(target.identity)
+          || JSON.stringify(identity) !== JSON.stringify(again.identity)) {
+          applied.push({ path, ok: false, why: 're-check: file identity changed since the list' }); continue;
+        }
+        unlinkSync(path);
+      } else if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'work-area' || target.kind === 'orphan-step-area') {

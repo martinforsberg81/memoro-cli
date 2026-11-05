@@ -39,13 +39,35 @@ stays.
 | `~/mc/runner/step/<name>/` | an old execution area | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
+| `~/Library/Preferences/.wrangler/logs/` | Wrangler logs | regular `.log` files directly in the root, older than 72 hours (F) |
+| `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
+| `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
 | `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
-Rule P was removed with projects; rules version 8 reads no execution
-register, and adds S. Old logs, patches and uncertain legacy scratch remain.
+Rule P was removed with projects; rules version 9 reads no execution
+register, adds S, and includes the narrowly approved generated-file rule F.
+Scratch cleanup follows S below; transcripts and logs outside F's exact
+root and shape remain governed by their existing rules.
+
+**F — generated files (72 hours, independent of `--days`).** The approved
+Wrangler root is `~/Library/Preferences/.wrangler/logs/`; only direct regular
+`.log` children qualify. The MC root is `${MC_HOME}/shots/`; it is walked
+recursively without following symlinks, but hidden directories (including
+browser profiles) and `sessions/` are not entered. Only regular `.png` files
+qualify, both directly under `shots/` and in eligible subdirectories. The Codex
+root is `${CODEX_HOME:-~/.codex}/generated_images/`; only
+direct regular `.png`, `.jpg`, `.jpeg` or `.webp` children of UUID-named
+session directories qualify. A Codex session image group stays intact if its
+directory or any child was touched within 72 hours; in an old group only the
+image files are eligible. Metadata, other file types, and session directories
+are never removed. The exact 72-hour cutoff is retained. Unreadable or
+uncertain roots and process/open-file evidence fail closed. A cwd in the
+relevant subtree or an open file keeps candidates; lsof snapshots are bounded
+to the approved inventory root or Codex session group. These rules never read
+image contents or Wrangler log payloads and do not inspect credentials.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
@@ -263,11 +285,13 @@ neither Docker nor any other writer is named as its cause here.
 
 Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`
 with `writeJsonAtomic` before anything is removed:
-`{ at, rules_version, days, person, targets: [{ path, kind, rule, why, bytes }], kept: [{ path, rule, why }] }`.
+`{ at, rules_version, days, person, targets: [{ path, kind, rule, why, bytes, identity? }], kept: [{ path, rule, why }] }`.
 `person` says whose run it was (W); the apply reads it back from the file.
 `--apply` reads that file back and acts on its `targets` only. Each one is
 asked again: its realpath must lie under the root its kind allows, in the
-shape that kind has, and its rule must still say so on facts read now. A
+shape that kind has, and its rule must still say so on facts read now. For F,
+the target must also still be the same regular file (device, inode, size and
+mtime) as the written list. A
 target that fails either, or whose check throws, is kept with the reason.
 What happened is appended to the same file as `applied: [{ path, ok, why }]`,
 and logged as `tidy` with counts. The newest 30 list files are kept.
