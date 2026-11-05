@@ -98,10 +98,12 @@ visible in both modes; long details wrap at narrow terminal widths.
 
 ### DEV
 
-`page-operations.js` groups environments by repository. Each row shows MAIN or
-SLOT, its port/address and the projected state. The holder follows as a child;
-`holder gone` is a separate warning for a recorded session holder whose pid is
-not alive, independent of idle state. `a` adds full URL, service, last-use age,
+`page-operations.js` draws one row per environment: MAIN or SLOT, its
+port/address, projected state, holder stage and programme/goal in separate
+columns, without repository headings. Long holder names are clipped to the
+terminal width. `holder gone` stays visible in yellow on the same row for a
+recorded session holder whose pid is not alive, independent of idle state.
+`a` adds full URL, service, last-use age,
 branch and worktree. Ports no longer occupy a PR column. Queue rows show the
 recorded holder and elapsed wait in queue order, the first three normally and
 all with `a`.

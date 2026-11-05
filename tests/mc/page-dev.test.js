@@ -99,9 +99,8 @@ describe('DEV — the dev servers and who holds each', () => {
     const block = devBlock(lines).map(plain);
     assert.match(block[1], /3 running · 2 leased/u);
     assert.deepEqual(block.filter((line) => /MAIN|SLOT/u.test(line)).map((line) => line.trim()),
-      ['MAIN  :8787    idle', 'SLOT  :8920    leased', 'SLOT  :8930    leased']);
-    assert.ok(block.includes('            BUILD mc/no-work'));
-    assert.ok(block.includes('            plan mc'));
+      ['MAIN  :8787    idle     shot', 'SLOT  :8920    leased   BUILD   mc/no-work', 'SLOT  :8930    leased   plan    mc']);
+    assert.equal(block.length, 5, 'heading, summary and one row per server; no repository heading');
     assert.doesNotMatch(block.join('\n'), /holder gone|goal\/no-work/u);
     const expanded = devBlock(renderPageLines(data, { columns: 120, now: NOW, expand: true })).join('\n');
     assert.match(expanded, /goal\/no-work/u);
