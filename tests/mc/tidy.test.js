@@ -941,19 +941,26 @@ describe('the printout', () => {
     assert.deepEqual(JSON.parse(json.out.join('')), list);
   });
 
-  it('mc tidy begins with the disk as measured — healthy, recovering, short — and --json carries it apart from the list\'s estimates', async () => {
-    const at = { at: '2026-10-12T11:00:00.000Z', trigger: 'monitor', measured_delta_bytes: 3e9, estimate_bytes: 11e9, failed: false };
+  it('mc tidy shows only current disk state while --json keeps named cleanup and refusal history', async () => {
+    const at = { at: '2026-10-12T11:00:00.000Z', trigger: 'monitor', measured_delta_bytes: 3e9, estimate_bytes: 11e9, failed: true };
+    const refusal = { at: '2026-10-12T10:00:00.000Z', available_bytes: 25.3e9, reason: 'below 30 GB' };
     const cases = [
       [45e9, null, ['disk: 45.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']],
-      [33e9, { status: 'healthy', shortfall_bytes: 7e9, last_cleanup: { ...at, outcome: 'above-pressure' } }, [
-        'disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
-        'disk: last pass 2026-10-12T11:00Z (monitor) above-pressure: measured +3.0 GB, estimated 11.0 GB',
-        'disk: 7.0 GB short of the 40.0 GB target; protected data is kept',
+      [39.5e9, { status: 'healthy', shortfall_bytes: 0.5e9, last_cleanup: { ...at, outcome: 'shortfall' }, last_refusal: refusal }, [
+        'disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
       ]],
-      [27e9, { status: 'pressure', shortfall_bytes: 13e9, last_cleanup: { ...at, outcome: 'shortfall' } }, [
+      [30e9, { status: 'healthy', last_cleanup: { ...at, outcome: 'shortfall' }, last_refusal: refusal }, [
+        'disk: 30.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
+      ]],
+      [27e9, { status: 'pressure', cooldown_until: '2026-10-12T12:05:00.000Z', last_cleanup: { ...at, outcome: 'shortfall' }, last_refusal: refusal }, [
         'disk: 27.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
-        'disk: last pass 2026-10-12T11:00Z (monitor) shortfall: measured +3.0 GB, estimated 11.0 GB',
-        'disk: 13.0 GB short of the 40.0 GB target; protected data is kept',
+        'disk: next pass after 2026-10-12T12:05Z',
+      ]],
+      [27e9, { status: 'pressure', cooldown_until: '2026-10-12T11:59:00.000Z', last_cleanup: { ...at, outcome: 'shortfall' }, last_refusal: refusal }, [
+        'disk: 27.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+      ]],
+      [null, { status: 'pressure', last_cleanup: { ...at, outcome: 'shortfall' }, last_refusal: refusal }, [
+        'disk: free space could not be measured — new sessions, deploys and Docker starts are refused',
       ]],
     ];
     for (const [free, state, lines] of cases) {
@@ -961,12 +968,12 @@ describe('the printout', () => {
       const { out, stdout } = capture();
       await tidyCommand({ apply: false, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker, disk });
       const said = out.join('').split('\n').filter((line) => line.startsWith('disk:'));
-      assert.deepEqual(said.slice(0, lines.length), lines);
+      assert.deepEqual(said, lines);
       const json = capture();
       await tidyCommand({ json: true, days: 14 }, { stdout: json.stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker, disk });
       const parsed = JSON.parse(json.out.join(''));
-      assert.deepEqual([parsed.disk.available_bytes, parsed.disk.status, parsed.disk.last_cleanup?.measured_delta_bytes ?? null, parsed.disk.last_cleanup?.estimate_bytes ?? null],
-        [free, free >= 30e9 ? 'healthy' : 'pressure', state ? 3e9 : null, state ? 11e9 : null]);
+      assert.deepEqual([parsed.disk.available_bytes, parsed.disk.status, parsed.disk.last_cleanup?.measured_delta_bytes ?? null, parsed.disk.last_cleanup?.estimate_bytes ?? null, parsed.disk.last_cleanup?.failed ?? null, parsed.disk.last_refusal?.available_bytes ?? null],
+        [free, free == null ? 'unknown' : free >= 30e9 ? 'healthy' : 'pressure', state?.last_cleanup ? 3e9 : null, state?.last_cleanup ? 11e9 : null, state?.last_cleanup ? true : null, state?.last_refusal?.available_bytes ?? null]);
       assert.deepEqual(parsed.targets, list.targets, 'the list is unchanged beside it');
     }
   });

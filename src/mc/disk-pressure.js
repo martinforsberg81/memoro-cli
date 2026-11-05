@@ -408,15 +408,7 @@ export function describe(state, reading, events = [], nowMs = Date.now()) {
     : status === 'healthy'
       ? `disk: ${gb(available)} free (measured) — healthy; pressure below ${gb(PRESSURE_BYTES)}, reserve ${gb(RESERVE_BYTES)}`
       : `disk: ${gb(available)} free (measured) — below ${gb(PRESSURE_BYTES)}: new sessions, deploys and Docker starts wait`);
-  if (last) {
-    const delta = Number.isFinite(last.measured_delta_bytes) ? gb(Math.max(0, last.measured_delta_bytes)) : 'unknown';
-    lines.push(`disk: last pass ${minute(last.at)} (${last.trigger}) ${last.outcome}: measured +${delta}, estimated ${gb(last.estimate_bytes || 0)}${last.failed ? ', a step failed' : ''}`);
-  }
-  if (last && known && available < RECOVERY_BYTES) {
-    lines.push(`disk: ${gb(RECOVERY_BYTES - available)} short of the ${gb(RECOVERY_BYTES)} target; protected data is kept`);
-  }
   if (status !== 'healthy' && cooldownUntil) lines.push(`disk: next pass after ${minute(cooldownUntil)}`);
-  if (status !== 'healthy') lines.push(`disk: ${LIMITATION}`);
   return {
     available_bytes: available, status, pressure: status === 'pressure', cooldown_until: cooldownUntil,
     last_cleanup: last, shortfall_bytes: last && known ? Math.max(0, RECOVERY_BYTES - available) : null, last_refusal: state?.last_refusal || null,

@@ -225,15 +225,21 @@ outcome, shortfall_bytes, admission }`, with at most 20 kept reasons and
 errors per step. The estimate is what the candidates were said to hold; the
 measured delta is what the disk gave back, and the two are never merged. A
 refused admission with no pass is an event too. `disk.json` still carries the
-runner's refusal line for the page.
+runner's refusal as historical diagnostic data; it does not define current
+page state.
 
-**Where it shows.** `mc` draws one grey line with the measured free space;
-the last pass with its measured gain beside its estimate remains visible even
-when admission is restored. Any current shortfall to 40 GB remains visible
-after a cleanup; a fresh measurement at or above 40 GB clears that displayed
-shortfall. Under pressure or unknown, it also shows the next cooldown and the
-limit, in yellow (`diskSummary`: the state file and one statfs, no walk).
-`mc tidy` begins with the same lines, and `--json` carries them as `disk`.
+**Where it shows.** `diskSummary` reads the state file and takes one fresh
+statfs measurement; that reading alone supplies the current disk text in the
+page and `mc tidy`. At 30 GB or more the human output is one concise measured
+line, including the healthy interval from 30 GB to the 40 GB cleanup target.
+It does not repeat a past refusal, cleanup outcome, measured/estimated gain,
+protected-data note, target shortfall or expired cooldown. Under pressure or
+when measurement fails, it shows the current measured value or measurement
+failure, and only a still-future retry time. The page's top-level pause notice
+also follows this fresh summary, never the saved `disk.json` line. `--json`
+keeps `last_refusal` and `last_cleanup` as named diagnostic history alongside
+the current `available_bytes` and `status`; history is not erased to simplify
+the human presentation.
 
 The 18 GB lost in two hours that started this goal has not been attributed:
 neither Docker nor any other writer is named as its cause here.

@@ -231,12 +231,7 @@ function runnerLines(lines, c, wide, runner, expand) {
   }
   for (const line of now.stale || []) detail(lines, c, wide, 4, `${MARK.quiet} stale: ${line}`, ['red']);
   for (const failure of now.github || []) detail(lines, c, wide, 4, githubLine(failure), ['yellow']);
-  // Yellow while the runner holds new starts back for want of disk or memory;
-  // a file left by a runner that is gone says nothing about now.
-  if (now.disk?.line && alive) detail(lines, c, wide, 4, now.disk.line, ['yellow']);
-  // The disk policy (disk-pressure.js): measured free space always, grey when
-  // healthy; under pressure or unknown, the last pass, its shortfall and what
-  // the policy does not promise, in yellow.
+  // disk.json is historical. diskSummary is the only current disk reading.
   pressureLines(lines, c, wide, now.pressure);
   if (now.memory?.line && alive) detail(lines, c, wide, 4, now.memory.line, ['yellow']);
   if (expand && now.day) dayLine(lines, c, wide, now.day);
@@ -821,9 +816,9 @@ export function renderPageLines(data, {
 
   const sessions = data.sessions || { desks: {} };
   const runner = data.runner || {};
-  // Surface the effect of resource holds beside the work, with readings in SYSTEM.
+  // Surface active resource holds beside the work, with current readings in SYSTEM.
   if (runner.process?.alive) {
-    if (runner.disk?.line) detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
+    if (runner.pressure && runner.pressure.status !== 'healthy') detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
     if (runner.memory?.line) detail(lines, c, wide, 2, 'New sessions paused — low memory', ['yellow']);
     if (runner.stop) detail(lines, c, wide, 2, 'New sessions paused — runner stopping', ['yellow']);
   } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);
