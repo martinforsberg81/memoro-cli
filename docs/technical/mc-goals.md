@@ -630,9 +630,8 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
 - **No close-out document.** `mc goal archive` moves a finished goal aside
   and writes one row; nothing is written into a repository.
 
-Programme-level goals are not built, and a headless plan session is started
-only on a goal in `finish`, or in `merge` after a red: not by a goal that
-landed.
+Programme planning runs separately from goal builds: low remaining work and
+daily open proposals can wake a plan session without assigning MC_GOAL.
 
 
 ## Headless planning reasons (2026-11-05)
@@ -647,9 +646,18 @@ sessions. Its canonical file remains `canon/roles/plan-session.md`; the old
   handed back ready by the merger. Diagnose, repair and retry the same stage
   (`mc goal ready`; `mc goal stage merge` re-executes merge). A review may
   report an obstacle with blocked without pretending to have judged the work.
-- `next_step`: every goal of the programme is done. No MC_GOAL is assigned.
-  Read README, proposals and their archive, decide the next work or no work,
-  archive handled/irrelevant proposals and record the decision in PLAN.md.
+- `one_goal_remaining`: prepare follow-up with one unfinished goal.
+- `no_goals_remaining`: reconsider next work and previously unmet dependencies
+  when no unfinished goal remains. Done and dropped both count as finished.
+- `daily_proposals`: review direct open `.md` proposals at most once per rolling
+  24 hours. Nested/archive proposals and directories are not open proposals.
+
+The last three are programme sessions with no MC_GOAL. Their prompt lists all
+simultaneously due triggers, remaining goals and open proposals. Read README,
+PLAN.md, current/completed goal evidence and proposals, inspect dependencies,
+commission justified work within the approved direction and record the decision
+or named waiting condition in PLAN.md. Preserve Martin decisions and existing
+work ownership; do not interpret a top-up as permission to clear them.
 
 `mc goal martin --reason "…"` is plan's escalation to Martin: the exact
 question or reserved act, attempted remedies and recommendation. It is not
@@ -658,16 +666,25 @@ An unresolved recovery waits on Martin; three recoveries in the same stage
 also wait rather than loop. A person's ready resets that recovery budget.
 A finish session left ready first becomes blocked, allowing recovery.
 
-The runner serializes planning per programme. It persists the next_step
-completion identity in `runner/programme-plan/<programme>.json` before
-launch, with the resulting session outcome afterwards. The identity includes
-completed goals and when each entered done; archives retain that identity.
-Repeated picks, restarts and archive moves do not wake it again. A new
-completed goal or a reopened goal completing again yields another decision.
-A failed or interrupted programme invocation remains recorded for manager to
-inspect and handle, rather than spawning an unattended loop. Empty
-programmes, invalid goals, unfinished goals and programmes with dropped
-unarchived goals do not trigger next_step. Archived dropped goals are ignored.
+The runner serializes planning per programme, including live foreground plan
+sessions and draining runners, and uses the ordinary provider, lane and
+admission policy. Programme replenishment/review yields to already commissioned
+recovery, finish, review and build work; it is not blocked recovery.
 
-Proposals, README changes and timers do not independently wake plan.
-Other programme invocations belong to mc manager.
+`runner/programme-plan/<programme>.json` records the low-work identity,
+proposal-review start, trigger list and session outcome. Low-work identity
+includes goal creation identities and finished-stage entries, with active and
+archived goals reconciled together. Archive moves, phase renumbering and ordinary
+unfinished stage/status/log changes do not wake another session. Newly completed
+or dropped work can re-arm the one/zero checkpoint. Empty programmes qualify
+once; invalid goals suppress automatic programme planning. Existing all-done
+`next_step` receipts suppress repeating that same completion after upgrade.
+
+The receipt is written after admission succeeds, immediately before provider
+invocation. Refused admission/capacity leaves the trigger available. Failures
+and interrupted/unknown outcomes stay consumed and inspectable, avoiding an
+immediate unattended retry loop. A later genuinely new low-work event or the
+next due proposal review can still run. Coalesced low-work/proposal reviews
+consume both reasons in one launch. Changing/adding proposals within the
+24-hour period does not bypass the cadence. README changes alone do not wake
+planning. These triggers run programme plan sessions, never Manager sessions.

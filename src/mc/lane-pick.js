@@ -5,7 +5,7 @@
  *
  * - `review` for a goal in review;
  * - `plan` for a blocked goal, a goal in finish or merge after a red, and the
- *   programme wakeup after all its goals are done;
+ *   programme replenishment and daily proposal review;
  * - `build` for a goal in build.
  *
  * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
@@ -16,7 +16,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * Blocked recovery goes first, then finish/merge, review, build and next-step
+ * Blocked recovery goes first, then finish/merge, review, build and programme
  * planning. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
@@ -25,9 +25,11 @@
  * Running sessions are never interrupted.
  */
 
+import { isProgrammePlan } from './programme-plan.js';
+
 /** Finish work already started before commissioning more. Eligibility is the caller's. */
 function rankOf(item) {
-  if (item.goal?.reason === 'next_step') return 5;
+  if (isProgrammePlan(item.goal)) return 5;
   if (item.goal?.status === 'blocked') return 0;
   if (item.kind === 'plan') return 1;
   if (item.kind === 'review') return 2;

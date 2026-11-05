@@ -79,7 +79,7 @@ order without a model call:
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
 5. Take blocked recovery first, then finish/merge, review, build, and finally
-   next-step planning. Within the earliest runnable rank, repository fairness
+   programme replenishment/proposal planning. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -142,9 +142,14 @@ role tells the session to read LOG.md first.
   never builds: `mc goal stage merge` sends all registered PRs to merge, or it
   writes REVIEW.md and moves to finish. A review that dies still in review
   is retried once, then blocked if that happens again.
-- A plan session uses `plan-session` on Claude opus at high effort, starting
-  in the programme directory with access to the goal's worktree, for finish
-  or a first merger red. It can finish the work and publish it. A subsequent red in merge is blocked for a person.
+- A plan session uses `MC_ROLE=plan`, selected with the current unattended
+  provider priority. Goal finish/recovery starts in the programme directory
+  with access to the goal worktree. Programme planning has no MC_GOAL and is
+  triggered by one remaining goal, no remaining goals (done/dropped finished),
+  or open direct proposals due for their rolling 24-hour review. Simultaneous
+  reasons coalesce; durable receipts suppress repeated low-work decisions and
+  immediate failed-session retries. Live interactive/draining plan owners
+  exclude another programme plan. See [headless planning](mc-goals.md#headless-planning-reasons-2026-11-05).
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment

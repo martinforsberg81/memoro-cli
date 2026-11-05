@@ -21,7 +21,8 @@ export const COMMAND_USAGE = Object.freeze({
     "                                    whether that provider uses its API key once its plan is spent\n",
     "\n",
     "The runner runs headless sessions on goals: build, review, and plan for a goal that waits on it.\n",
-    "A free lane takes blocked recovery, finish/merge, review, build, then next-step planning; it starts no project step.\n",
+    "A free lane takes blocked recovery, finish/merge, review, build, then programme planning; it starts no project step.\n",
+    "Programme planning wakes with one or no unfinished goals, or at most once per 24 hours for direct open proposals.\n",
     "The daily digest runs after 05:00Z; inbox turns have their own chore cadence.\n",
     "--once runs one session and skips chores; --no-merge leaves pull requests open.\n",
     "--idle-sleep is the idle wait in seconds (600 by default); --no-caffeinate allows sleep.\n",
@@ -468,7 +469,7 @@ export const COMMAND_USAGE = Object.freeze({
     "A programme is active with at least one project or goal, of any status; every other is dormant.\n",
     "The page draws the active ones and one line for the dormant; --json prints this list as data.\n",
     "Higher priority wins within a scheduling stage; default/reset is 0, a non-negative whole number.\n",
-    "Blocked recovery, finish/merge, review, build, then next-step planning; repository fairness within a rank.\n",
+    "Blocked recovery, finish/merge, review, build, then programme planning; repository fairness within a rank.\n",
     "Stored per programme in PRIORITY.json; read live for the next choice, without interrupting sessions.\n",
   ].join(''),
   prs: [

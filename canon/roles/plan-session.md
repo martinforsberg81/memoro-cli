@@ -63,20 +63,22 @@ start and take a stand on each, with the whole programme as context:
   so in one line; touch nothing else there.
 
 Read `~/mc/programs/<programme>/proposals/archive/` to judge whether one is a
-duplicate of something already taken or declined. Nothing wakes you for a
-proposal: the next plan invocation handles them.
+duplicate of something already taken or declined. Open direct proposals also
+wake programme planning at most once per 24 hours.
 
 You move a stage forward only; mc refuses a session's move back.
 
-## Headless: one role, three reasons
+## Headless: goal recovery and programme planning
 
 Each unattended launch reads `mc model priority` anew. A provider priority wins
 among usable subscriptions before capacity headroom; `auto` keeps the existing
 candidate ranking. Interactive `mc plan` sessions keep their explicit selection.
 
 Every invocation has `MC_ROLE=plan`. `MC_PLAN_REASON` and the prompt say why
-it started: `finish`, `blocked` or `next_step`. Other programme wakeups are
-mc manager's responsibility. Proposals alone and elapsed time start nothing.
+it started: `finish`, `blocked`, `one_goal_remaining`, `no_goals_remaining` or
+`daily_proposals`. Simultaneously due programme triggers share one invocation.
+The runner uses its normal lanes and admits at most one plan session per
+programme, including a live interactive or draining planning owner.
 
 ### finish
 
@@ -113,16 +115,31 @@ A recovery left blocked becomes Martin; three recoveries in the same stage
 without sustained progress also wait on Martin. A person's ready starts a
 fresh recovery budget. These guards prevent automatic retry loops.
 
-### next_step
+### Programme planning
 
-When all programme goals are done, the runner invokes you once for that
-completion, without MC_GOAL. Read README.md, proposals/ and proposals/archive/,
-and the completed goals. Decide what best advances the programme, or decide
-to do nothing now. Create and commission goals only for justified work;
-archive handled, irrelevant or ill-timed proposals with their outcome and
-reason. Record the decision in the programme's PLAN.md. A new proposal or a
-changed README does not re-trigger this invocation; mc manager owns those
-wakeups. The runner records this completion across restarts and goal archives.
+These invocations have no MC_GOAL. Read README.md, PLAN.md, current goals and
+logs, proposals/ and proposals/archive/, and actual prerequisite delivery
+evidence, including relevant cross-programme dependencies.
+
+- `one_goal_remaining`: prepare justified follow-up while one goal remains.
+- `no_goals_remaining`: reconsider the next step and previously unmet dependencies.
+- `daily_proposals`: decide whether open proposals should advance, wait for a
+  named condition, or be archived with a reason. This runs at most once per
+  rolling 24 hours while direct Markdown proposals exist.
+
+Done and dropped goals are finished; plan, blocked and Martin goals remain.
+Preserve existing ownership and Martin decisions. Continue within the approved
+programme direction, complete concrete briefs and executable acceptance, then
+activate build only when prerequisites hold. Do not duplicate active work or
+start another plan or Manager session. Doing nothing now is a valid outcome.
+Record changes, unresolved decisions, named dependencies and the next
+reconsideration condition in PLAN.md. Report assessed, activated, queued and
+started work separately.
+
+Low-work events are recorded across restarts and archive moves; ordinary
+status/log changes do not repeat them. A new delivery can re-arm the event.
+Failed sessions remain recorded rather than retrying immediately. The daily
+proposal cadence can provide a later review if proposals remain open.
 
 ### Letting work go and asking Martin
 

@@ -70,6 +70,9 @@ test('pickWork: with one lane, the repositories take turns by their wait', () =>
 test('pickWork: blocked, finish/merge, review, build, next-step, before programme preference or carry', () => {
   const items = [
     { ...build('new-plan', 'memoro'), kind: 'plan', priority: 99, goal: { reason: 'next_step' } },
+    { ...build('top-up', 'memoro'), kind: 'plan', priority: 100, goal: { reason: 'one_goal_remaining' } },
+    { ...build('empty', 'memoro'), kind: 'plan', priority: 98, goal: { reason: 'no_goals_remaining' } },
+    { ...build('proposals', 'memoro'), kind: 'plan', priority: 97, goal: { reason: 'daily_proposals' } },
     { ...goal('build', 'memoro'), priority: 98 },
     { ...review('review', 'memoro'), priority: 97 },
     { ...build('finish', 'memoro'), kind: 'plan', priority: 1, goal: { stage: 'finish' } },
@@ -82,7 +85,7 @@ test('pickWork: blocked, finish/merge, review, build, next-step, before programm
     taken.push(next.name);
     items.splice(items.indexOf(next), 1);
   }
-  assert.deepEqual(taken, ['blocked', 'finish', 'review', 'build', 'new-plan']);
+  assert.deepEqual(taken, ['blocked', 'finish', 'review', 'build', 'top-up', 'new-plan', 'empty', 'proposals']);
   assert.equal(pickWork({ items: [review('r', 'memoro'), { ...build('merge', 'memoro'), kind: 'plan', goal: { stage: 'merge' } }] }).name, 'merge');
 });
 
