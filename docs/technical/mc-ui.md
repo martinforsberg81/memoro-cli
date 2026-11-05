@@ -70,8 +70,9 @@ Each live runner session is matched by its explicit programme/goal identity
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
 used. A tight rounded frame encloses just this live session data, with green
 borders for build, blue for plan and magenta for review. Long activity wraps
-inside the frame within the terminal width. A check-in and its yellow clock
-remain visible without expansion; repository, advisor, pid and zero check-ins
+inside the frame within the terminal width. Positive check-in counts appear
+at the end of the activity inside the frame, in yellow, and its yellow clock
+remains visible without expansion; repository, advisor, pid and zero check-ins
 are expanded details. A session
 with no matching goal appears under UNASSIGNED ACTIVITY, including its name
 and PR references, so removing SESSIONS cannot hide it. Rendering joins the

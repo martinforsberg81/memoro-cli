@@ -22,6 +22,7 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
     session.check_ins > 0 || (session.check_in_seconds && session.elapsed_seconds >= session.check_in_seconds) ? ['yellow'] : []);
   add([session.tool, session.model].filter(Boolean).join(' · '), ['grey']);
   if (session.billing === 'credits') add('credits', ['grey']);
+  if (session.check_ins > 0) add(`${session.check_ins} check-in${session.check_ins === 1 ? '' : 's'}`, ['yellow']);
   const lines = [];
   let current = ' '.repeat(indent);
   for (const part of parts) {
@@ -41,8 +42,6 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
     ...lines.map((line) => `${prefix}${c('│', ...tone)} ${line.slice(indent)}${' '.repeat(room - (width(line) - indent))} ${c('│', ...tone)}`),
     `${prefix}${c(`╰${rule}╯`, ...tone)}`,
   ];
-  // A check-in remains visible without expanding; elapsed time is not a failure.
-  if (session.check_ins) framed.push(`${' '.repeat(indent + 2)}${c(`${session.check_ins} check-in${session.check_ins === 1 ? '' : 's'}`, 'yellow')}`);
   if (expand) {
     const details = [session.repo, session.advisor && `${session.advisor} advisor`, session.pid && `pid ${session.pid}`,
       session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
