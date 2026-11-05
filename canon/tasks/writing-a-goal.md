@@ -33,15 +33,19 @@ prerequisite goals too. A plan placeholder also holds later phases back.
   A bounded diagnosis is buildable when its subjects, probe budget, deliverable
   and evidence limits are explicit; a negative result can satisfy diagnosis,
   never implementation or performance acceptance.
-- **Criteria:** each states an observable outcome and a pass/fail boundary. Its
-  `check` gives runnable commands, working directory, prerequisites and expected
-  results. For a report, specify the reconciliation and evidence to inspect;
-  file existence, a keyword match or a green gate alone does not prove content.
-  No check waits for Martin. Put policy choices in planning, not acceptance.
-- **Evidence:** distinguish measured, historical and missing proof. Record
-  revision, scope and logs; partial, skipped or unavailable evidence is not
-  green. Mark a criterion met only after its entire check holds. For costs,
-  follow writing-tests.md; moving work between clocks is not a saving.
+- **Criteria:** each states an observable outcome and pass/fail boundary. Its `check` gives
+  runnable commands, working directory, prerequisites and expected results. For reports, specify
+  reconciliation and evidence; a file, keyword or green gate alone does not prove content. No
+  check waits for Martin. Put policy choices in planning, not acceptance.
+- **Evidence:** distinguish measured, historical and missing proof. Record revision, scope and logs;
+  partial, skipped or unavailable evidence is not green. Mark criteria met only after the whole check
+  holds. Follow writing-tests.md for costs; moving work between clocks is not a saving.
+- **Bounded live evidence:** specify total runs, duration/run, serial/concurrency limits,
+  build/review/finish allocations, prerequisites and run consumption (including failed/timeouts).
+  Reserve any required independent-review run before build; build spends only its allocation. An
+  account/binary restores none. With no run left, commission executable offline reconciliation
+  (command/procedure, evidence, expected result, limits). Inspected traces are not reproduced;
+  missing essential proof fails acceptance and goes to finish/plan within authority, without retry.
 - **Test protection:** name protected behaviours, failure consequences, the
   cheapest credible test level and existing tests to reuse. State the evidence
   the build must produce, or why no new automated test is warranted. Follow
@@ -49,9 +53,7 @@ prerequisite goals too. A plan placeholder also holds later phases back.
 - **Class:** `fast` when the goal says exactly what changes, where and in what
   order; `large` only for work that must choose and that you cannot choose
   for. Never a concrete model.
-- **Before writing:** investigate yourself — read the code, measure, try it.
-  Name the file behind every claim, and only files you opened. Leave out the
-  case for the goal, history, and what the code already shows.
-- **Proposals consumed:** move them to the programme's `proposals/archive/`
-  in the same move, first line `Utfall: <the goal>`, and carry into the goal
-  everything it needs from them.
+- **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind
+  every claim, and only files you opened. Leave out the case for the goal, history, and what code shows.
+- **Proposals consumed:** move them to the programme's `proposals/archive/` in the same move,
+  first line `Utfall: <the goal>`, and carry into the goal everything it needs from them.
