@@ -29,6 +29,10 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
     return createHash('sha256').update(authHash, 'utf8').digest('hex');
   }
 
+  function rowRevision(id, version) {
+    return createHash('sha256').update(`${id}:${version}`, 'utf8').digest('hex').slice(0, 32);
+  }
+
   function generateSaltB64() {
     // 32-byte deterministic-ish salt for tests; production uses crypto.
     const bytes = new Uint8Array(32);
@@ -127,7 +131,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       }
       return {
         ok: true,
-        secrets: secrets.map((secret) => ({ ...secret, row_revision: secret.revision })),
+        secrets: secrets.map((secret) => ({ ...secret })),
       };
     }
 
@@ -149,6 +153,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
         class: body.secretClass ?? 'secret',
         schema_version: body.schemaVersion ?? 1,
         revision: 1,
+        row_revision: rowRevision(id, 1),
         refresh_lease_digest: null,
         refresh_lease_expires_at: null,
         created_at: now,
@@ -161,6 +166,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
           id,
           secret_type: body.secretType,
           revision: 1,
+          row_revision: secret.row_revision,
           created_at: now,
           updated_at: now,
         },
@@ -231,6 +237,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (conflictNextWrite) {
         conflictNextWrite = false;
         s.revision += 1;
+        s.row_revision = rowRevision(id, s.revision);
       }
       const leaseDigest = typeof body.refreshLeaseToken === 'string'
         ? createHash('sha256').update(body.refreshLeaseToken).digest('hex')
@@ -246,7 +253,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
         throw err;
       }
       if (body.expectedRevision !== undefined
-        && body.expectedRevision !== s.revision) {
+        && body.expectedRevision !== s.row_revision) {
         const err = new Error('Memoro 409: Vault secret revision is stale');
         err.status = 409;
         err.data = {
@@ -266,10 +273,12 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (body.schemaVersion)  s.schema_version   = body.schemaVersion;
       s.updated_at = `t${++idCounter}`;
       s.revision += 1;
+      s.row_revision = rowRevision(id, s.revision);
       return {
         ok: true,
         secret: {
           revision: s.revision,
+          row_revision: s.row_revision,
           updated_at: s.updated_at,
         },
       };
@@ -287,9 +296,10 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (conflictNextWrite) {
         conflictNextWrite = false;
         s.revision += 1;
+        s.row_revision = rowRevision(id, s.revision);
       }
       if (body?.expectedRevision !== undefined
-        && body.expectedRevision !== s.revision) {
+        && body.expectedRevision !== s.row_revision) {
         const err = new Error('Memoro 409: Vault secret revision is stale');
         err.status = 409;
         err.data = {
@@ -323,7 +333,10 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
     forceNextWriteConflict: () => { conflictNextWrite = true; },
     bumpRevision: (id) => {
       const secret = secrets.find((entry) => entry.id === id);
-      if (secret) secret.revision += 1;
+      if (secret) {
+        secret.revision += 1;
+        secret.row_revision = rowRevision(id, secret.revision);
+      }
     },
     userId,
   };

@@ -50,11 +50,13 @@ async function fixture({ records = 1 } = {}) {
       id: `secret_${index + 1}`,
       ...envelopeToWire(encrypted),
       revision: 1,
+      row_revision: '0123456789abcdef0123456789abcdef',
       updated_at: '2026-07-29T20:00:00.000Z',
     });
   }
   let leaseToken = null;
   let renewalCalls = 0;
+  let updateCalls = 0;
   const api = {
     getStatus: async () => ({
       ok: true,
@@ -93,17 +95,21 @@ async function fixture({ records = 1 } = {}) {
       return { ok: true, released: true };
     },
     updateSecret: async (_portal, secretId, body) => {
+      updateCalls += 1;
       const wire = secrets.find((entry) => entry.id === secretId);
-      assert.equal(body.expectedRevision, wire.revision);
+      assert.equal(body.expectedRevision, wire.row_revision);
       assert.equal(body.refreshLeaseToken, leaseToken);
+      const nextRowRevision = 'fedcba9876543210fedcba9876543210';
       Object.assign(wire, {
         ...envelopeFromWrite(body),
         revision: wire.revision + 1,
+        row_revision: nextRowRevision,
       });
       return {
         ok: true,
         secret: {
           revision: wire.revision,
+          row_revision: nextRowRevision,
           updated_at: '2026-07-29T20:01:00.000Z',
         },
       };
@@ -123,6 +129,7 @@ async function fixture({ records = 1 } = {}) {
     custody,
     deps,
     getRenewalCalls() { return renewalCalls; },
+    getUpdateCalls() { return updateCalls; },
     secrets,
     setLeaseToken(value) { leaseToken = value; },
   };
@@ -133,7 +140,7 @@ test('managed Claude custody selects exactly one revisioned vault record', async
   const loaded = await loadManagedClaudeCustody({ portal, deps: one.deps });
   assert.equal(loaded.ok, true);
   assert.equal(loaded.secretId, 'secret_1');
-  assert.equal(loaded.revision, 1);
+  assert.equal(loaded.revision, '0123456789abcdef0123456789abcdef');
   assert.equal(loaded.grant.refreshToken, 'refresh-old');
 
   const ambiguous = await fixture({ records: 2 });
@@ -164,7 +171,7 @@ test('managed Claude rotation holds the distributed lease through durable CAS', 
   });
   assert.equal(rotated.ok, true);
   assert.equal(rotated.refreshed, true);
-  assert.equal(rotated.revision, 2);
+  assert.equal(rotated.revision, 'fedcba9876543210fedcba9876543210');
   assert.equal(rotated.grant.accessToken, 'access-new');
   assert.equal(state.getRenewalCalls(), 2);
 
@@ -176,17 +183,76 @@ test('managed Claude rotation holds the distributed lease through durable CAS', 
 
 test('managed Claude custody refuses stale writes before encryption leaves the host', async () => {
   const state = await fixture();
-  state.secrets[0].revision = 2;
+  state.secrets[0].row_revision = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const ciphertextBefore = state.secrets[0].encrypted_data;
   const result = await persistManagedClaudeCustody({
     portal,
     secretId: 'secret_1',
-    expectedRevision: 1,
+    expectedRevision: '0123456789abcdef0123456789abcdef',
     refreshLeaseToken: 'E'.repeat(43),
     grant: JSON.parse(authData().body).claudeAiOauth,
     deps: state.deps,
   });
   assert.equal(result.reason, 'managed-claude-custody-revision-conflict');
   assert.equal(result.conflict, true);
+  assert.equal(state.getUpdateCalls(), 0);
+  assert.equal(state.secrets[0].encrypted_data, ciphertextBefore);
+});
+
+test('managed Claude custody surfaces the server row conflict without retry', async () => {
+  const state = await fixture();
+  const ciphertextBefore = state.secrets[0].encrypted_data;
+  let updateCalls = 0;
+  state.api.updateSecret = async () => {
+    updateCalls += 1;
+    const error = new Error('stale row');
+    error.status = 409;
+    error.data = { code: 'VAULT_SECRET_CONFLICT' };
+    throw error;
+  };
+  const result = await persistManagedClaudeCustody({
+    portal,
+    secretId: 'secret_1',
+    expectedRevision: '0123456789abcdef0123456789abcdef',
+    refreshLeaseToken: 'E'.repeat(43),
+    grant: JSON.parse(authData().body).claudeAiOauth,
+    deps: state.deps,
+  });
+  assert.equal(result.reason, 'managed-claude-custody-revision-conflict');
+  assert.equal(result.conflict, true);
+  assert.equal(updateCalls, 1, 'a conflicting write is not retried');
+  assert.equal(state.secrets[0].encrypted_data, ciphertextBefore);
+});
+
+test('managed Claude custody rejects absent and malformed row tokens before OAuth or write', async (t) => {
+  for (const [name, invalid] of [
+    ['missing', undefined],
+    ['empty', ''],
+    ['numeric', 1],
+    ['malformed', 'ABCDEF0123456789ABCDEF0123456789'],
+  ]) {
+    await t.test(name, async () => {
+      const state = await fixture();
+      if (invalid === undefined) delete state.secrets[0].row_revision;
+      else state.secrets[0].row_revision = invalid;
+      const ciphertextBefore = state.secrets[0].encrypted_data;
+      let providerCalls = 0;
+      const result = await rotateManagedClaudeCustody({
+        portal,
+        deps: {
+          ...state.deps,
+          fetchImpl: async () => {
+            providerCalls += 1;
+            throw new Error('OAuth must not run');
+          },
+        },
+      });
+      assert.equal(result.reason, 'managed-claude-custody-revision-required');
+      assert.equal(providerCalls, 0);
+      assert.equal(state.getUpdateCalls(), 0);
+      assert.equal(state.secrets[0].encrypted_data, ciphertextBefore);
+    });
+  }
 });
 
 test('managed Claude rotation surfaces another refresh owner without using OAuth', async () => {

@@ -1056,6 +1056,10 @@ async function cmdRm(argv, opts = {}) {
     emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)}` });
     return 1;
   }
+  if (!hasRowRevision(found.raw.row_revision)) {
+    emit(flags.json, { ok: false, error: revisionRequiredMessage(label) });
+    return 1;
+  }
 
   if (!flags.noConfirm && !flags.json) {
     const ok = await confirm(`Delete secret "${label}" (${found.id})?`, { defaultYes: false });
@@ -1116,6 +1120,10 @@ async function cmdRotate(argv, opts = {}) {
     emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)} to rotate. Use \`mc vault set\` to create.` });
     return 1;
   }
+  if (!hasRowRevision(existing.raw.row_revision)) {
+    emit(flags.json, { ok: false, error: revisionRequiredMessage(label) });
+    return 1;
+  }
   const existingPayload = normaliseSecretPayload(existing.data) || { kind: 'api_token' };
 
   // Preserve metadata from the existing secret unless flags override.
@@ -1142,6 +1150,10 @@ async function cmdRotate(argv, opts = {}) {
   // vault as it found it.
   const prevLabel = `${label}-prev`;
   const prevExisting = await findSecretByLabel(portal, vaultKey, prevLabel, crk);
+  if (prevExisting && !hasRowRevision(prevExisting.raw.row_revision)) {
+    emit(flags.json, { ok: false, error: revisionRequiredMessage(prevLabel) });
+    return 1;
+  }
   const prevEnc = await encryptForWrite({
     vaultKey, crk, label: prevLabel,
     data: normaliseSecretPayload(existing.data) || existing.data,
@@ -1162,7 +1174,7 @@ async function cmdRotate(argv, opts = {}) {
     updRes = await VaultApi.updateSecret(portal, existing.id, {
       secretType: WIRE_SECRET_TYPE,
       ...newEnc,
-      ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
+      expectedRevision: existing.raw.row_revision,
     });
   } catch (error) {
     if (!isSecretRevisionConflict(error)) throw error;
@@ -1526,6 +1538,12 @@ async function cmdMigrate(argv, opts = {}) {
 
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
+  const missingRevision = wire.find((secret) => !isEnvelopeSecret(secret)
+    && !hasRowRevision(secret.row_revision));
+  if (missingRevision) {
+    emit(flags.json, { ok: false, error: revisionRequiredMessage(missingRevision.id) });
+    return 1;
+  }
   let migrated = 0;
   let alreadyEnvelope = 0;
   let failed = 0;
@@ -1538,7 +1556,7 @@ async function cmdMigrate(argv, opts = {}) {
       const res = await VaultApi.updateSecret(portal, s.id, {
         secretType: s.secret_type || WIRE_SECRET_TYPE,
         ...enc,
-        ...(s.row_revision === undefined ? {} : { expectedRevision: s.row_revision }),
+        expectedRevision: s.row_revision,
       });
       if (res?.ok) migrated += 1; else failed += 1;
     } catch (error) {
@@ -1724,6 +1742,12 @@ async function cmdAdopt(argv, opts = {}) {
     if (!yes) { emit(flags.json, { ok: false, error: 'aborted' }); return 1; }
   }
 
+  const existing = await findSecretByLabel(portal, vaultKey, spec.label, crk);
+  if (existing && !hasRowRevision(existing.raw.row_revision)) {
+    emit(flags.json, { ok: false, error: revisionRequiredMessage(existing.id) });
+    return 1;
+  }
+
   const captured = captureToolAuth(spec.id, opts.toolAuthDeps || {});
   if (!captured.ok) {
     emit(flags.json, { ok: false, error: captured.reason });
@@ -1733,12 +1757,11 @@ async function cmdAdopt(argv, opts = {}) {
   const enc = await encryptForWrite({
     vaultKey, crk, label: captured.label, data: captured.payload, secretClass: 'tool-auth',
   });
-  const existing = await findSecretByLabel(portal, vaultKey, captured.label, crk);
   const res = existing
     ? await VaultApi.updateSecret(portal, existing.id, {
       secretType: WIRE_SECRET_TYPE,
       ...enc,
-      ...(existing.raw.row_revision === undefined ? {} : { expectedRevision: existing.raw.row_revision }),
+      expectedRevision: existing.raw.row_revision,
     })
     : await VaultApi.createSecret(portal, { secretType: WIRE_SECRET_TYPE, ...enc });
   if (!res?.ok) {
@@ -1845,20 +1868,28 @@ async function findSecretByLabel(portal, vaultKey, label, crk = null) {
 }
 
 const SECRET_CONFLICT_MESSAGE = 'Vault entry changed since it was read; nothing was written to that entry.';
+const ROW_REVISION_PATTERN = /^[0-9a-f]{32}$/u;
+
+function hasRowRevision(value) {
+  return typeof value === 'string' && ROW_REVISION_PATTERN.test(value);
+}
+
+function revisionRequiredMessage(label) {
+  return `cannot safely write ${JSON.stringify(label)}: the vault API did not return a valid row_revision; update Memoro migration 0386 and use a revision-capable client, then retry.`;
+}
 
 function isSecretRevisionConflict(error) {
   return error?.status === 409
     && ['VAULT_SECRET_CONFLICT', 'VAULT_SECRET_REVISION_CONFLICT'].includes(error?.data?.code);
 }
 
-// Undoes a row this run created. The create answers no revision, so the
-// delete sends the one a fresh list gives, absent on a server before it
-// serves them. Reports whether the row is gone; never throws.
+// Undoes a row this run created. A fresh list supplies its opaque row token.
+// Reports whether the row is gone; never throws.
 async function removeRowThisRunWrote(portal, id) {
   if (!id) return false;
   const listed = await VaultApi.listSecrets(portal).catch(() => null);
   const row = listed?.secrets?.find((entry) => entry?.id === id);
-  if (!row) return false;
+  if (!row || !hasRowRevision(row.row_revision)) return false;
   const res = await VaultApi.deleteSecret(portal, id, {
     expectedRevision: row.row_revision,
   }).catch(() => null);

@@ -94,6 +94,7 @@ export async function createSecret(portal, body) {
 }
 
 export async function updateSecret(portal, id, body) {
+  requireRowRevision(body?.expectedRevision);
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, `/api/vault/secrets/${encodeURIComponent(id)}`, {
     token: p.token, method: 'PUT', body,
@@ -155,11 +156,17 @@ export async function renewSecretRefreshLease(portal, id, {
 }
 
 export async function deleteSecret(portal, id, { expectedRevision } = {}) {
+  requireRowRevision(expectedRevision);
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, `/api/vault/secrets/${encodeURIComponent(id)}`, {
-    token: p.token, method: 'DELETE',
-    ...(expectedRevision === undefined ? {} : { body: { expectedRevision } }),
+    token: p.token, method: 'DELETE', body: { expectedRevision },
   });
+}
+
+function requireRowRevision(value) {
+  if (typeof value !== 'string' || !/^[0-9a-f]{32}$/u.test(value)) {
+    throw new TypeError('a valid opaque row_revision is required for vault secret writes');
+  }
 }
 
 export async function changePassword(portal, { currentAuthHash, newAuthHash, newSalt, wrappedCrk = null, crkIv = null }) {

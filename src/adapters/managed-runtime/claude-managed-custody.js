@@ -59,23 +59,7 @@ export async function loadManagedClaudeCustody({
         : 'managed-claude-custody-missing');
     }
     const wire = matches[0];
-    // TEMPORARY (mc is pre-production): tolerate a vault row that carries no
-    // revision at all.
-    //
-    // `revision` is the server's optimistic-concurrency counter for a vault
-    // secret, and `/api/vault/secrets` does not return one — no row has the
-    // field. So this refused every managed Claude launch, and re-adopting the
-    // sign-in could not help: there was nothing to adopt into. Until Memoro
-    // serves revisions, a missing one is read as 0 rather than treated as a
-    // malformed record. A row that does carry a revision must still carry a
-    // valid one.
-    //
-    // What this gives up: a credential refresh cannot detect that another
-    // device wrote the same secret first, because there is nothing to compare
-    // against. On one machine that is nothing; across devices sharing a vault
-    // it is a real risk of overwriting a newer token.
-    const revisionPresent = wire.revision !== undefined && wire.revision !== null;
-    if (revisionPresent && (!Number.isSafeInteger(wire.revision) || wire.revision < 1)) {
+    if (!isRowRevision(wire.row_revision)) {
       return failure('managed-claude-custody-revision-required');
     }
     let secret;
@@ -90,7 +74,7 @@ export async function loadManagedClaudeCustody({
     return {
       ok: true,
       secretId: wire.id,
-      revision: revisionPresent ? wire.revision : 0,
+      revision: wire.row_revision,
       updatedAt: typeof wire.updated_at === 'string' ? wire.updated_at : null,
       data: structuredClone(secret.data),
       grant: parsed.grant,
@@ -111,8 +95,7 @@ export async function persistManagedClaudeCustody({
 } = {}) {
   if (typeof secretId !== 'string'
     || !secretId
-    || !Number.isSafeInteger(expectedRevision)
-    || expectedRevision < 1
+    || !isRowRevision(expectedRevision)
     || !/^[A-Za-z0-9_-]{43}$/u.test(refreshLeaseToken || '')) {
     return failure('managed-claude-custody-write-invalid');
   }
@@ -123,8 +106,9 @@ export async function persistManagedClaudeCustody({
     if (!wire
       || !isEnvelopeSecret(wire)
       || wire.class !== 'tool-auth'
-      || wire.revision !== expectedRevision) {
-      return wire?.revision !== expectedRevision
+      || !isRowRevision(wire.row_revision)
+      || wire.row_revision !== expectedRevision) {
+      return wire?.row_revision !== expectedRevision
         ? failure('managed-claude-custody-revision-conflict', { conflict: true })
         : failure('managed-claude-custody-record-mismatch');
     }
@@ -154,7 +138,7 @@ export async function persistManagedClaudeCustody({
       });
     } catch (error) {
       if (error?.status === 409
-        && error?.data?.code === 'VAULT_SECRET_REVISION_CONFLICT') {
+        && ['VAULT_SECRET_CONFLICT', 'VAULT_SECRET_REVISION_CONFLICT'].includes(error?.data?.code)) {
         return failure('managed-claude-custody-revision-conflict', { conflict: true });
       }
       if (error?.status === 409
@@ -165,10 +149,11 @@ export async function persistManagedClaudeCustody({
       return failure('managed-claude-custody-write-failed');
     }
     return updated?.ok
-      && updated.secret?.revision === expectedRevision + 1
+      && isRowRevision(updated.secret?.row_revision)
+      && updated.secret.row_revision !== expectedRevision
       ? {
           ok: true,
-          revision: updated.secret.revision,
+          revision: updated.secret.row_revision,
           data: nextData,
           grant: Object.freeze(structuredClone(grant)),
         }
@@ -433,4 +418,8 @@ async function openVault({ portal, deps }) {
 
 function failure(reason, extra = {}) {
   return { ok: false, reason, error: reason, ...extra };
+}
+
+function isRowRevision(value) {
+  return typeof value === 'string' && /^[0-9a-f]{32}$/u.test(value);
 }
