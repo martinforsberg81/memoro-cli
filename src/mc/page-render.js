@@ -541,7 +541,9 @@ function prRow(c, wide, pr, whose) {
  * only what PROGRAMMES and MERGES do not; this draws all of them.
  */
 export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
-  const c = painter(colour);
+  const paintText = painter(colour);
+  // Secondary information must remain readable on dark terminal palettes.
+  const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
   const items = prs?.items || [];
@@ -606,22 +608,15 @@ export function statusRollup(statuses = {}) {
 }
 
 function programmeLine(c, wide, group, expand) {
-  const metadata = expand ? [
-    `${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}`,
-    group.proposals ? `${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : '',
-  ].filter(Boolean).join(' · ') : '';
-  const label = `  ${c(clipCell(group.programme, wide - 2), 'bold')}`;
-  return metadata && wide - width(label) >= 4 ? `${label} · ${c(clipCell(metadata, wide - width(label) - 3), 'grey')}` : label;
+  const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
+  const label = clipCell(`${group.programme}${metadata}`, wide - 8);
+  return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - label.length - 6))}`, 'cyan')}`;
 }
 
 function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []) {
-  const availability = programmes.availability || {};
-  const statuses = [['running', 'running', ['green']], ['ready', 'can start', ['green']],
-    ['waiting', 'waiting for phase', ['yellow']], ['planning', 'need plan', ['cyan']],
-    ['incomplete', 'need criteria', ['yellow']], ['merging', 'await merge', ['green']],
-    ['blocked', 'await plan', ['yellow']], ['Martin', 'Martin', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
-    .filter(([key]) => expand && availability[key])
-    .map(([key, label, styles]) => ({ text: `${availability[key]} ${label}`, styles }));
+  const statuses = ['ready', 'blocked', 'Martin']
+    .filter((status) => expand && programmes.statuses?.[status])
+    .map((status) => ({ text: `${programmes.statuses[status]} ${status}`, styles: status === 'ready' ? ['green'] : ['red'] }));
   const groups = programmes.programmes || [];
   // A page from before the flag has every programme active, as it was drawn.
   const asleep = groups.filter((group) => group.dormant);
@@ -657,6 +652,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     for (const session of group.planning_sessions || []) lines.push(...activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand }));
     for (const session of group.sessions || []) lines.push(...activityLines(c, wide, session, { indent: 4, expand }));
     lines.push(...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }));
+    lines.push(`  ${c('└' + '─'.repeat(wide - 3), 'cyan')}`);
   }
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
   const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)));
@@ -765,7 +761,7 @@ function headerLines(lines, c, wide, data, version) {
   const room = wide - 6;
   const frame = (text) => lines.push(`  ${c('│', 'grey')} ${text}${' '.repeat(Math.max(0, room - width(text)))} ${c('│', 'grey')}`);
   const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
-  const statuses = data.programmes?.availability || data.programmes?.statuses || {};
+  const statuses = data.programmes?.statuses || {};
   const proposals = (data.intake?.proposals || 0) + (data.programmes?.programmes || []).reduce((n, group) => n + (group.proposals || 0), 0);
   const manager = data.sessions?.desks?.manager;
   lines.push('');
@@ -810,7 +806,9 @@ function headerLines(lines, c, wide, data, version) {
 export function renderPageLines(data, {
   columns = 100, colour = false, version = '', now = new Date(), expand = false,
 } = {}) {
-  const c = painter(colour);
+  const paintText = painter(colour);
+  // Secondary information must remain readable on dark terminal palettes.
+  const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
   const wide = Math.max(60, Math.min(columns, 160));
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];

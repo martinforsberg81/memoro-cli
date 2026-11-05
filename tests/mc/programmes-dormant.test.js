@@ -52,7 +52,8 @@ function programmesOf(lines) {
  * session, and `empty` with nothing at all — a directory on main.
  */
 const goalRow = (name, programme, repo, status) => ({
-  name, programme, repos: [repo], status, sessions: 1,
+  name, programme, repos: [repo], stage: status === 'done' ? 'done' : 'build',
+  status: status === 'blocked' ? 'blocked' : 'ready', sessions: 1,
   last: { next: null, comment: null }, running: false, problems: [],
 });
 const GOALS = [
@@ -91,14 +92,14 @@ describe('dormant programmes on the page', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
     assert.match(lines[0], /^ {2}PROGRAMMES/u);
     assert.ok(lines.includes('  ▸ 1 dormant'));
-    assert.ok(lines.includes('  planned'));
+    assert.ok(lines.some((line) => line.startsWith('  ┌─ planned ')));
     assert.ok(lines.some((line) => line.includes('PLAN')));
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
     for (const name of ['mc', 'done-only', 'goal-only']) {
-      assert.ok(lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
+      assert.ok(lines.some((line) => new RegExp(`^  ┌─ ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
     }
     for (const name of ['empty']) {
-      assert.ok(!lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} draws no heading`);
+      assert.ok(!lines.some((line) => new RegExp(`^  ┌─ ${name}(?: |$)`, 'u').test(line)), `${name} draws no heading`);
     }
   });
 
@@ -110,12 +111,12 @@ describe('dormant programmes on the page', () => {
       planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
     });
     const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
-    assert.match(wide.find((line) => line.startsWith('  mc ')), /2 proposals/u);
+    assert.match(wide.find((line) => line.startsWith('  ┌─ mc ')), /2 proposals/u);
     assert.ok(wide.some((line) => /PLAN.*codex/u.test(line)));
-    assert.match(wide.find((line) => line.startsWith('  empty ')), /1 proposal/u);
-    assert.doesNotMatch(wide.find((line) => line.startsWith('  zero ')), /proposal/u);
+    assert.match(wide.find((line) => line.startsWith('  ┌─ empty ')), /1 proposal/u);
+    assert.doesNotMatch(wide.find((line) => line.startsWith('  ┌─ zero ')), /proposal/u);
     const narrow = programmesOf(renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, expand: true }));
-    const mc = narrow.find((line) => line.startsWith('  mc '));
+    const mc = narrow.find((line) => line.startsWith('  ┌─ mc '));
     assert.match(mc, /2 proposals/u);
     assert.ok(mc.length <= 60, mc);
   });
@@ -138,9 +139,9 @@ describe('dormant programmes on the page', () => {
     const data = pageData({ programmes: section() });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
     for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) {
-      assert.ok(lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
+      assert.ok(lines.some((line) => new RegExp(`^  ┌─ ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
     }
-    assert.ok(lines.some((line) => /^ {2}empty · 0 goals/u.test(line)));
+    assert.ok(lines.some((line) => /^ {2}┌─ empty · 0 goals/u.test(line)));
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
     const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
     assert.deepEqual(numbers.sort(), [1, 2, 3]);
@@ -160,7 +161,7 @@ describe('mc programs', () => {
     const byName = Object.fromEntries(listing.programmes.map((item) => [item.name, item]));
     assert.deepEqual(byName.empty.repos, ['memoro'], 'a dormant programme says where it lives');
     assert.deepEqual(byName['goal-only'].repos, ['memoro']);
-    assert.deepEqual(byName['done-only'].statuses, { done: 1 });
+    assert.deepEqual(byName['done-only'].statuses, { ready: 1 });
     assert.ok(!('projects' in byName.mc), 'no project count');
     assert.equal(byName['goal-only'].goals, 1);
     assert.deepEqual(byName.planned.plan_sessions, { claude: 1 });
@@ -172,7 +173,7 @@ describe('mc programs', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
     assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
     assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · done 1 +0 proposals +no plan session$/u);
+    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · ready 1 +0 proposals +no plan session$/u);
     assert.match(lines[2], /^ {2}empty +dormant +memoro +no goal +2 proposals +no plan session$/u);
     assert.match(lines[3], /^ {2}goal-only +active +memoro +1 goal · blocked 1 +0 proposals +no plan session$/u);
     assert.match(lines[5], /^ {2}planned +dormant +— +no goal +0 proposals +plan claude 1$/u);

@@ -110,11 +110,11 @@ describe('DEV — the dev servers and who holds each', () => {
     assert.deepEqual(order, ['PROGRAMMES', 'DEV', 'MERGE']);
   });
 
-  it('says none running, in grey, when there is no server', () => {
+  it('says none running in readable secondary text when there is no server', () => {
     const lines = renderPageLines(pageData({ dev: devSection({ now: NOW }) }), { columns: 100, now: NOW, colour: true });
     const [head, ...rest] = devBlock(lines);
     assert.match(plain(head), /^ {2}DEV {2}none running +mc dev list$/u);
-    assert.deepEqual(toneOf(head, 'none running'), ['grey']);
+    assert.deepEqual(toneOf(head, 'none running'), ['37']);
     assert.deepEqual(rest, []);
   });
 

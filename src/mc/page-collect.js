@@ -1000,16 +1000,6 @@ function phaseSection(goals) {
     const finished = FINISHED.includes(goal.stage ?? goal.status);
     goal.phase = goal.problems?.length ? null : goal.phase ?? 1;
     goal.held = !finished && goal.phase != null && current != null && goal.phase > current;
-    goal.availability = goal.problems?.length ? 'invalid'
-      : finished ? 'finished'
-      : goal.running ? 'running'
-      : goal.status === 'Martin' ? 'Martin'
-      : goal.status === 'blocked' ? 'blocked'
-      : goal.held ? 'waiting'
-      : goal.stage === 'plan' ? 'planning'
-      : goal.stage === 'merge' ? 'merging'
-      : goal.runnable === false ? 'incomplete'
-      : 'ready';
     if (!phases.has(goal.phase)) phases.set(goal.phase, []);
     phases.get(goal.phase).push(goal);
   }
@@ -1017,16 +1007,9 @@ function phaseSection(goals) {
     current_phase: current,
     phases: [...phases].sort(([a], [b]) => a == null ? 1 : b == null ? -1 : a - b)
       .map(([number, own]) => ({ number, state: number == null ? 'invalid'
-        : own.every((goal) => goal.availability === 'finished') ? 'finished'
+        : own.every((goal) => FINISHED.includes(goal.stage)) ? 'finished'
         : number === current ? 'current' : 'waiting', goals: own })),
-    availability: availabilityCounts(goals),
   };
-}
-
-function availabilityCounts(goals) {
-  const counts = { ready: 0, running: 0, waiting: 0, blocked: 0, Martin: 0, invalid: 0, planning: 0, merging: 0, incomplete: 0, finished: 0 };
-  for (const goal of goals) counts[goal.availability] += 1;
-  return counts;
 }
 
 /**
@@ -1079,7 +1062,6 @@ export function programmesSection({
   const dormant = groups.filter((group) => group.dormant).length;
   return {
     count: goalList.length,
-    availability: availabilityCounts(goalList),
     programmes: groups,
     active: groups.length - dormant,
     dormant,
@@ -1118,7 +1100,7 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     stage: goal.stage,
     status: goal.status,
     // Flat fields remain available to JSON consumers. PROGRAMMES draws the
-    // title, stage and availability in its own phase tree; attachPrs fills
+    // title, stage, status and criteria in its own phase tree; attachPrs fills
     // each goal's PR children after both sections have been collected.
     kind: 'goal',
     repo: goal.repos?.[0] ?? null,
