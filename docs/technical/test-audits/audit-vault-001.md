@@ -154,8 +154,7 @@ lstat only for deterministic race scheduling. No database/browser needed.
 `mc gate tests/vault/engine/audit.test.js`. In `src/vault/engine/audit.js`, remove
 the `destinationsStillAbsent` condition: expect the existing revalidation case's
 `cleanup_state === 'uncertain'`/manifest-exists assertion to fail; restoring it
-must pass. Separately changing lstat to follow symlinks must fail the destination
-state assertion. Requires writable temp storage and symlink support; no credential
+must pass. Requires writable temp storage and symlink support; no credential
 or live session. Runtime/fault proof remains UNRUN, not a deletion recommendation.
 
 ## 2. bindings.test.js — REBUILD the value-free fixture, keep metadata behaviour
@@ -494,8 +493,9 @@ integration as cheapest credible level. Source/export restrictions stay until a
 separate reviewed authority-contract decision; no widening seams or label API.
 
 **Executable rebuild contract:** in this file reuse setup and real envelopes;
-supply an unrelated row whose `encrypted_data` access is counted at the API seam
-and assert zero payload accesses while the fixed-label row still yields its key.
+supply an unrelated row whose `encrypted_data` access is counted at the
+`listSecrets` return seam, after the mock's cloning/serialization, and assert
+zero payload accesses while the fixed-label row still yields its key.
 Also pass attempted caller `label`/provider-label override fields alongside the
 normal options and assert they cannot select the unrelated row. Preserve legacy,
 class, ambiguity, redaction and zeroing assertions; do not replace them with a
