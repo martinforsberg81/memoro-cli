@@ -9,8 +9,9 @@ import { join } from 'node:path';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
-import { parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
+import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
+import { programmeWorkKey } from '../../src/mc/programme-plan.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -590,6 +591,13 @@ function goalFixture(goals, options = {}) {
     f.files[`${GOALS}/${name}/GOAL.json`] = after === null ? text : `${JSON.stringify({ ...legacy, status: old, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
     if (worktree) for (const repo of repos.split(',')) f.dirs.add(`${GOALS}/${name}/${repo.trim()}`);
+  }
+  // Goal-lifecycle fixtures already had their initial one-goal planning decision.
+  // Trigger tests opt into an unplanned programme; this keeps goal ownership
+  // assertions about the goal's sessions rather than unrelated replenishment.
+  const parsed = Object.keys(goals).map((name) => ({ ...parseGoal(f.files[`${GOALS}/${name}/GOAL.json`]), goal: name, log: parseLog(f.files[`${GOALS}/${name}/LOG.md`]) }));
+  if (!options.unplanned && parsed.filter((goal) => !['done', 'dropped'].includes(goal.stage)).length === 1) {
+    f.files['/w/runner/programme-plan/prog.json'] = JSON.stringify({ version: 2, work_key: programmeWorkKey(parsed), at: options.now ?? '2026-08-29T10:00:00Z', outcome: 'success' });
   }
   return f;
 }
@@ -2695,8 +2703,9 @@ test('a goal with a current file is not started twice', async () => {
 
   delete f.files[`${GOALS}/free/GOAL.json`];
   const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.ran, 0);
-  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(r.name, 'plan:prog', 'the new one-goal checkpoint can replenish while busy continues');
+  assert.equal(f.calls.sessions.length, 2);
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_GOAL ?? null), ['prog/free', null], 'busy never gets another goal session');
 });
 
 test('two lanes picking in one moment do not start one goal twice', async () => {
@@ -2868,7 +2877,7 @@ test('a goal in finish starts one plan session: the plan role, opus, the program
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
 });
 
-test('one runner applies changed priority to finish, blocked and next_step plan launches', async () => {
+test('one runner applies changed priority to finish, blocked and programme plan launches', async () => {
   const f = goalFixture({ stuck: { stage: 'finish' } });
   let priority = 'codex';
   f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
@@ -2885,7 +2894,7 @@ test('one runner applies changed priority to finish, blocked and next_step plan 
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'done', status: 'ready' });
   priority = 'codex';
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['next_step', 'codex', 'gpt-6.1-sol']);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['no_goals_remaining', 'codex', 'gpt-6.1-sol']);
 });
 
 test('a finish session that moves the goal to merge hands it to the merger: no session starts after it', async () => {
@@ -3389,7 +3398,7 @@ test('repeated blocked recoveries are bounded across restarts, and a person can 
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
 });
 
-test('all goals done invokes next_step once across lanes, restarts and archive moves, without MC_GOAL', async () => {
+test('all goals done invokes programme planning once across lanes, restarts and archive moves, without MC_GOAL', async () => {
   const f = goalFixture({ a: { stage: 'done' }, b: { stage: 'done' } });
   let release;
   f.answer = () => new Promise((resolve) => { release = () => resolve(okSession()()); });
@@ -3400,11 +3409,11 @@ test('all goals done invokes next_step once across lanes, restarts and archive m
   assert.equal(typeof release, 'function');
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'plan');
-  assert.equal(call.env.MC_PLAN_REASON, 'next_step');
+  assert.equal(call.env.MC_PLAN_REASON, 'no_goals_remaining');
   assert.equal(call.cwd, '/w/programs/prog');
   assert.equal('MC_GOAL' in call.env, false);
   const current = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
-  assert.deepEqual([current.name, current.reason], ['plan:prog', 'next_step']);
+  assert.deepEqual([current.name, current.reason], ['plan:prog', 'no_goals_remaining']);
   release();
   assert.equal((await first).ran, 1);
   f.answer = okSession();
@@ -3419,24 +3428,19 @@ test('all goals done invokes next_step once across lanes, restarts and archive m
   f.files[`${GOALS}/c/GOAL.json`] = withGoal(f.files[`${GOALS}/c/GOAL.json`], { stage: 'done' });
   f.answer = okSession();
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'next_step');
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'no_goals_remaining');
 });
 
-test('next_step needs all goals done: empty programmes, proposals, invalid and Martin goals do not qualify', () => {
-  const f = goalFixture({ done: { stage: 'done' }, waiting: { stage: 'plan', status: 'Martin' } });
+test('programme planning suppresses invalid goals and corrupt receipts instead of guessing readiness', () => {
+  const f = goalFixture({ done: { stage: 'done' } });
   const runner = createRunner({ deps: f.deps });
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merge', 'dropped']) {
-    f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage });
-    assert.equal(runner.nextWork(), null, stage);
-  }
-  delete f.files[`${GOALS}/waiting/GOAL.json`];
-  delete f.files[`${GOALS}/done/GOAL.json`];
-  f.files['/w/programs/prog/README.md'] = '# aim';
-  f.files['/w/programs/prog/proposals/new.md'] = '# work';
-  assert.equal(runner.nextWork(), null);
   f.files[`${GOALS}/broken/GOAL.json`] = 'invalid';
-  f.files[`${GOALS}/done/GOAL.json`] = goalJson({ stage: 'done', title: 'done' });
   assert.equal(runner.nextWork(), null);
+  delete f.files[`${GOALS}/broken/GOAL.json`];
+  for (const receipt of ['invalid', '[]', '42']) {
+    f.files['/w/runner/programme-plan/prog.json'] = receipt;
+    assert.equal(runner.nextWork(), null, receipt);
+  }
 });
 
 test('two blocked goals in one programme share one planning session at a time', async () => {
@@ -3483,4 +3487,136 @@ test('next-step planning yields to existing builds even with higher programme pr
   assert.equal(runner.nextWork().name, 'goal:other/build');
   delete f.files['/w/programs/other/goals/build/GOAL.json'];
   assert.equal(runner.nextWork().name, 'plan:prog');
+});
+
+test('programme planning triggers: one remaining goal gets one top-up across restarts and rearms after another delivery', async () => {
+  const f = goalFixture({ waiting: { stage: 'plan', status: 'Martin' } }, { unplanned: true });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'plan');
+  assert.equal(call.env.MC_PLAN_REASON, 'one_goal_remaining');
+  assert.equal('MC_GOAL' in call.env, false);
+  assert.equal(call.cwd, '/w/programs/prog');
+  assert.equal(where(f, 'waiting'), 'plan · Martin', 'top-up never clears a personal decision');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'build', status: 'ready' });
+  f.files[`${GOALS}/waiting/LOG.md`] += '\n## 2026-08-29T11:00Z · claude opus · build · ready\n\nDone: planned\n';
+  assert.equal(createRunner({ deps: f.deps }).nextWork({ passed: new Set(['goal:prog/waiting']) }), null, 'ordinary stage/status/log changes do not re-arm a top-up');
+  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'plan', status: 'Martin' });
+  f.files[`${GOALS}/another/GOAL.json`] = goalJson({ stage: 'plan', title: 'another' });
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null, 'two plans need no top-up');
+  f.files[`${GOALS}/another/GOAL.json`] = withGoal(f.files[`${GOALS}/another/GOAL.json`], { stage: 'done' });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'one_goal_remaining');
+});
+
+test('programme planning triggers: direct proposals have a rolling daily cadence even with multiple unfinished goals', async () => {
+  const f = goalFixture({ a: { stage: 'plan' }, b: { stage: 'plan' } });
+  let now = Date.parse('2026-08-29T10:00:00Z');
+  f.deps.now = () => new Date(now);
+  f.files['/w/programs/prog/proposals/archive/old.md'] = '# old';
+  f.files['/w/programs/prog/proposals/draft.md/inside.txt'] = 'a directory, not a proposal';
+  f.files['/w/programs/prog/proposals/readme.txt'] = 'not Markdown';
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
+  f.files['/w/programs/prog/proposals/new.md'] = '# work';
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'daily_proposals');
+  f.files['/w/programs/prog/proposals/new.md'] += '\nchanged';
+  f.files['/w/programs/prog/proposals/second.md'] = '# more';
+  now += 24 * 60 * 60_000 - 1;
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  now += 1;
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.length, 2);
+  delete f.files['/w/programs/prog/proposals/new.md'];
+  delete f.files['/w/programs/prog/proposals/second.md'];
+  now += 24 * 60 * 60_000;
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
+});
+
+test('programme planning triggers: dropped and empty programmes get the zero-goal checkpoint without repeated archive wakeups', async () => {
+  const f = goalFixture({ dropped: { stage: 'dropped' } });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'no_goals_remaining');
+  for (const file of ['GOAL.json', 'LOG.md']) {
+    f.files[`${GOALS}/.archive/dropped/${file}`] = f.files[`${GOALS}/dropped/${file}`];
+    delete f.files[`${GOALS}/dropped/${file}`];
+  }
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  f.files['/w/programs/empty/README.md'] = '# approved aim';
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PROGRAMME, 'empty');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+});
+
+test('programme planning triggers: coalesced reasons and failed sessions consume one launch, not an immediate retry', async () => {
+  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
+  f.answer = () => ({ status: 1, stdout: '', stderr: 'provider failed', timedOut: false });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  const record = JSON.parse(f.files['/w/runner/programme-plan/prog.json']);
+  assert.deepEqual(record.triggers, ['one_goal_remaining', 'daily_proposals']);
+  assert.equal(record.outcome, 'no-json');
+  assert.equal(record.status, 1);
+  assert.deepEqual(record.remaining, ['waiting']);
+  assert.deepEqual(record.proposals, ['new.md']);
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/programme-plan/prog.json']).triggers, record.triggers);
+  assert.equal(where(f, 'waiting'), 'plan · ready', 'programme failure is not goal recovery');
+});
+
+test('programme planning triggers: foreground and draining plan owners hold all triggers without consuming them', async () => {
+  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true, livePids: [555] });
+  const foreground = '/w/runner/foreground/555.json';
+  f.files[foreground] = JSON.stringify({ verb: 'plan', programme: 'prog', pid: 555 });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
+  delete f.files[foreground];
+  f.files['/w/runner/current-memoro-1.json'] = JSON.stringify({ programme: 'prog', kind: 'plan', name: 'goal:prog/recovery', repo: 'memoro', pid: 555, lane: 1 });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
+  delete f.files['/w/runner/current-memoro-1.json'];
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('programme planning triggers: missing launch prerequisites leave work unconsumed and an interrupted invocation remains recorded', async () => {
+  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  const role = f.deps.role;
+  f.deps.role = () => null;
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
+  f.deps.role = role;
+  f.answer = () => { throw new Error('transport disappeared'); };
+  await assert.rejects(createRunner({ deps: f.deps }).pass(), /transport disappeared/u);
+  assert.equal(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).outcome, 'started');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+});
+
+test('programme planning triggers: a final disk admission refusal does not consume either coalesced trigger', async () => {
+  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
+  let available = 40 * 1e9;
+  f.deps.freeBytes = () => available;
+  const mkdir = f.deps.mkdir;
+  f.deps.mkdir = (path) => { mkdir(path); if (path.includes('/scratch/plan-')) available = null; };
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
+  f.deps.mkdir = mkdir;
+  available = 40 * 1e9;
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.deepEqual(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).triggers, ['one_goal_remaining', 'daily_proposals']);
+});
+
+test('programme planning triggers: legacy completion receipts survive upgrade while a new proposal can still be reviewed', async () => {
+  const f = goalFixture({ done: { stage: 'done' } });
+  const goal = JSON.parse(f.files[`${GOALS}/done/GOAL.json`]);
+  f.files['/w/runner/programme-plan/prog.json'] = JSON.stringify({ key: JSON.stringify([['done', goal.created, null]]), at: '2026-08-29T09:00:00Z', outcome: 'success' });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'daily_proposals');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
 });

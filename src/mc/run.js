@@ -91,6 +91,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { pickWork } from './lane-pick.js';
+import { isProgrammePlan, programmePlanning, programmePlanningReceipt, programmePlanPrompt } from './programme-plan.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
@@ -1290,44 +1291,54 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
-    if (goal.status === 'blocked' || goal.reason === 'next_step') return 'plan';
+    if (goal.status === 'blocked' || isProgrammePlan(goal)) return 'plan';
     if (goal.stage === 'review') return 'review';
     return goal.stage === 'finish' || goal.stage === 'merge' ? 'plan' : 'build';
   }
 
   /** One plan session at a time per programme, including a predecessor runner. */
   function programmePlanHeld(programme) {
-    return claims.has(`plan:${programme}`) || stepsHeld().some((held) => held.programme === programme && held.kind === 'plan');
+    const foreground = join(root, 'runner', 'foreground');
+    const interactive = deps.list(foreground).some((file) => {
+      if (!/^\d+\.json$/u.test(file)) return false;
+      let held;
+      try { held = JSON.parse(deps.read(join(foreground, file)) ?? 'null'); } catch { return false; }
+      return held?.verb === 'plan' && held.programme === programme && Number.isInteger(held.pid) && alive(held.pid);
+    });
+    return interactive || claims.has(`plan:${programme}`) || stepsHeld().some((held) => held.programme === programme && held.kind === 'plan');
   }
 
   const planReceipt = (programme) => join(root, 'runner', 'programme-plan', `${programme}.json`);
 
-  /** Completion is stable across archive moves; proposals and timers do not wake plan. */
+  /** One/zero remaining goals and daily direct proposals share one programme-owned lane. */
   function programmeWork(names, passed) {
     const home = programsHome(deps.env);
     const all = goals();
     const out = [];
     for (const programme of deps.list(home)) {
-      const own = all.filter((goal) => goal.programme === programme);
-      if (own.some((goal) => goal.problems.length || goal.stage !== 'done')) continue;
-      const archive = join(home, programme, 'goals', '.archive');
-      const completed = [...own, ...deps.list(archive).map((name) => {
-        const raw = deps.read(join(archive, name, GOAL_FILE));
-        if (raw === null) return null;
-        const parsed = parseGoal(raw);
-        return { ...parsed, goal: name, log: parseLog(deps.read(join(archive, name, LOG_FILE)) ?? '') };
-      }).filter((goal) => goal && goal.stage !== 'dropped')];
-      if (!completed.length || completed.some((goal) => goal.problems?.length || goal.stage !== 'done')) continue;
       const name = `plan:${programme}`;
       if (passed.has(name) || programmePlanHeld(programme)) continue;
-      const key = JSON.stringify(completed.map((goal) => [goal.goal, goal.created ?? null, stageSince(goal)]).sort(([a], [b]) => a.localeCompare(b)));
+      const own = all.filter((goal) => goal.programme === programme);
+      const archive = join(home, programme, 'goals', '.archive');
+      const completed = deps.list(archive).flatMap((name) => {
+        const raw = deps.read(join(archive, name, GOAL_FILE));
+        if (raw === null) return [];
+        const parsed = parseGoal(raw);
+        return [{ ...parsed, goal: name, log: parseLog(deps.read(join(archive, name, LOG_FILE)) ?? '') }];
+      });
+      const proposals = deps.files(join(home, programme, 'proposals')).filter((file) => file.endsWith('.md')).sort();
+      if (!own.length && !completed.length && !proposals.length && !deps.exists(join(home, programme, 'README.md'))) continue;
       let receipt;
-      try { receipt = JSON.parse(deps.read(planReceipt(programme)) ?? 'null'); } catch { receipt = null; }
-      if (receipt?.key === key) continue;
-      const repo = completed.flatMap((goal) => goal.repos ?? []).find((repo) => names.includes(repo));
+      try { receipt = JSON.parse(deps.read(planReceipt(programme)) ?? 'null'); } catch { continue; }
+      if (receipt !== null && (typeof receipt !== 'object' || Array.isArray(receipt))) continue;
+      const decision = programmePlanning({ goals: [...own, ...completed], proposals, receipt, now: deps.now() });
+      if (!decision) continue;
+      // A proposal-only or empty programme has no repository worktree to choose a lane from.
+      const repo = [...own, ...completed].flatMap((goal) => goal.repos ?? []).find((repo) => names.includes(repo))
+        ?? (!own.length && !completed.length ? names[0] : null);
       if (!repo) continue;
-      const goal = { programme, goal: null, dir: join(home, programme), reason: 'next_step', stage: null, status: 'ready', repos: [repo], class: 'large', log: [], completionKey: key };
-      out.push({ name, repo, kind: 'plan', variant: null, since: '', resumed: false, goal });
+      const goal = { programme, goal: null, dir: join(home, programme), reason: decision.reason, stage: null, status: 'ready', repos: [repo], class: 'large', log: [], planningDecision: decision };
+      out.push({ name, repo, kind: 'plan', variant: null, since: receipt?.at ?? '', resumed: false, goal });
     }
     return out;
   }
@@ -1342,7 +1353,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * or `{ ran: 0 }` when it did not start.
    */
   async function goalPass(goal, { lane, label }) {
-    const name = goal.reason === 'next_step' ? `plan:${goal.programme}` : goalName(goal);
+    const name = isProgrammePlan(goal) ? `plan:${goal.programme}` : goalName(goal);
     const planning = goalKind(goal) === 'plan';
     claims.add(name);
     claimRepos.set(name, goal.repos[0]);
@@ -1574,8 +1585,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * committed here for the same reason.
    */
   async function runGoal(goal, { lane = 0 } = {}) {
-    const programmeTurn = goal.reason === 'next_step';
-    const reason = programmeTurn ? 'next_step' : goal.status === 'blocked' || goal.stage === 'merge' ? 'blocked' : 'finish';
+    const programmeTurn = isProgrammePlan(goal);
+    const reason = programmeTurn ? goal.reason : goal.status === 'blocked' || goal.stage === 'merge' ? 'blocked' : 'finish';
     const name = programmeTurn ? `plan:${goal.programme}` : goalName(goal);
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
@@ -1645,7 +1656,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
       const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
       const prompt = programmeTurn
-        ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
+        ? programmePlanPrompt({ programme: goal.programme, dir: cwd, decision: goal.planningDecision })
         : review
         ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
         : planning
@@ -1655,7 +1666,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const ts = stamp().replace(/[-:]/gu, '');
       // A goal's name holds a `/`, which a file stem may not.
-      const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
+      const stem = programmeTurn ? `plan-${goal.programme}-${reason.replaceAll('_', '-')}-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
       const out = join(paths.log, stem);
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
       say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
@@ -1684,9 +1695,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
       }
       let result;
+      let programmeReceipt;
       try {
         if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
-        if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
         const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
         const rechecked = await admission.recheck?.();
         if (rechecked && !rechecked.admitted) {
@@ -1697,6 +1708,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
         const canHandoff = !programmeTurn && (review || planning) && scratchEnv.MC_SCRATCH;
         if (canHandoff) remove(handoffPath);
+        if (programmeTurn) {
+          const previous = JSON.parse(deps.read(planReceipt(goal.programme)) ?? 'null');
+          programmeReceipt = programmePlanningReceipt(previous, goal.planningDecision, stamp());
+          writeJson(planReceipt(goal.programme), programmeReceipt);
+        }
         const pendingSession = deps.session({
           bin: tool.bin,
           args: tool.args,
@@ -1741,7 +1757,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
-      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
+      if (programmeTurn) writeJson(planReceipt(goal.programme), { ...programmeReceipt, finished: stamp(), outcome: read.note, status: result.status, timed_out: Boolean(result.timedOut) });
       else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
       else if (review) afterReview(goal, name);
