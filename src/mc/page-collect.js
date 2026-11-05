@@ -753,6 +753,30 @@ export function attachPrs({ programmes, runner, pulls }) {
   for (const group of programmes?.programmes || []) {
     for (const goal of group.goals || []) goal.prs = goalPrs(goal);
   }
+  // A goal owns its PR first. The remaining programme-owned PRs need rows
+  // even when the programme has no goals or no planning session left open.
+  if (programmes) {
+    const groups = programmes.programmes;
+    const claimed = new Set(groups.flatMap((group) => (group.goals || []).flatMap((goal) => goal.prs)));
+    for (const group of groups) group.prs = [];
+    for (const pr of pulls.items) {
+      if (claimed.has(pr)) continue;
+      const name = pr.owner?.kind === 'plan'
+        ? pr.owner.name || pr.branch?.match(/^plan[/-](.+)$/u)?.[1] : null;
+      if (!name) continue;
+      let group = groups.find((item) => item.programme === name);
+      if (!group) {
+        group = programmesSection({ programmes: [name] }).programmes[0];
+        group.prs = [];
+        groups.push(group);
+      }
+      group.prs.push(pr);
+      group.dormant = false;
+    }
+    groups.sort((a, b) => a.programme.localeCompare(b.programme));
+    programmes.dormant = groups.filter((group) => group.dormant).length;
+    programmes.active = groups.length - programmes.dormant;
+  }
   // A goal's session's pull request is its branch's, `goal/<goal>`.
   for (const session of runner?.sessions || []) {
     session.prs = session.goal

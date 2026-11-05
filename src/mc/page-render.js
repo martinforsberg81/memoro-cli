@@ -907,24 +907,9 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * One goal, in the page's grid: a status circle in the left margin,
- * `goal` in the kind column, its name, its first repository, its stage in the
- * state column, how many sessions it has had, its open pull request
- * (`goal/<goal>`). The grey tail after that starts with `criteria <met>/<all>`
- * — green when every one is met — then what the last session said is next (or
- * its comment, when it said nothing next). A goal whose GOAL.json does not
- * parse says its first problem in red there instead.
- *
- * The state is the goal's stage. `build` and `finish` are green while a
- * session is on them and grey otherwise; `review` and `merge` are green — a
- * review session or the merger moves them by itself — and `plan`, `done` and
- * `dropped` are grey (`STATE_TONE`). Its status is the rest of `<stage> ·
- * <status>`: a goal that is `ready` says nothing more, and a `blocked` one, in
- * any stage, has its stage red and its tail leads with `blocked · waits on a
- * person`, in the colour of what is blocked. A finished goal's tail is its last
- * `Done:`, never a `Next:` that is over. A goal in a phase its programme has
- * not reached (`held`) has the waiting colour, and its tail says first which
- * phase it waits on.
+ * A goal in the shared grid. Primary text is white while work remains;
+ * finished rows are entirely grey, including their PRs and last words.
+ * Criteria remain available in the goal detail and JSON.
  */
 function goalLine(c, wide, goal) {
   const word = goal.stage ?? goal.state ?? '—';
@@ -934,23 +919,20 @@ function goalLine(c, wide, goal) {
   const finished = goal.stage === 'done' || goal.stage === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
-  const criteria = goal.criteria?.all
-    ? { text: `criteria ${goal.criteria.met}/${goal.criteria.all}`, styles: [goal.criteria.met === goal.criteria.all ? 'green' : 'grey'] }
-    : null;
-  let tail = said ? [{ text: said, styles: ['grey'] }] : [];
+  let tail = said ? [{ text: said, styles: ['white'] }] : [];
   if (goal.problems?.length) tail = [{ text: `GOAL.json: ${goal.problems[0]}`, styles: ['red'] }];
   else if (waits) {
-    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said, styles: ['grey'] } : null];
+    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said, styles: ['white'] } : null];
   } else if (goal.person) {
     const head = 'waits on a person';
     tail = [{ text: 'blocked', styles: stateTone('blocked') }, { text: head, styles: stateTone('blocked') },
-      said && one(said) !== head ? { text: said, styles: ['grey'] } : null];
+      said && one(said) !== head ? { text: said, styles: ['white'] } : null];
   }
-  if (criteria && !goal.problems?.length) tail = [criteria, ...tail];
-  return gridRow(c, wide, {
+  const draw = finished ? (text) => c(text, 'grey') : c;
+  return gridRow(draw, wide, {
     mark: { text: MARK.running, styles: goal.problems?.length ? ['red'] : goal.held ? stateTone('waiting') : tone },
-    kind: { text: goal.kind || 'goal', styles: kindTone('goal') },
-    name: { text: goal.name, styles: goal.running ? ['bold'] : [] },
+    kind: { text: '' },
+    name: { text: goal.name, styles: goal.running ? ['white', 'bold'] : ['white'] },
     repo: { text: goal.repo ?? goal.repos?.[0] ?? '—', styles: ['grey'] },
     state: { text: word, styles: tone },
     progress: { text: goal.progress ?? '', styles: ['grey'] },
@@ -959,35 +941,6 @@ function goalLine(c, wide, goal) {
   });
 }
 
-/**
- * The three columns of a programme heading. The name shortens on a narrow
- * terminal and the counts do not: the counts are the answer, and a programme
- * name is still recognisable at twenty-two columns.
- */
-function programmeColumns(wide) {
-  return { name: wide >= 90 ? 31 : 22, counts: 31 };
-}
-
-/** How many goals a programme has, or that it has none yet, padded to its cell. */
-function programmeCounts(c, group, columns) {
-  const goals = (group.goals || []).length;
-  const words = goals ? `${goals} goal${goals === 1 ? '' : 's'}` : 'no goal yet';
-  return pad(paint(c, [{ text: words, styles: ['grey'] }], columns), columns);
-}
-
-/**
- * One programme heading: its name, its own counts, and the room for its
- * planning session — filled or empty.
- *
- * Empty is the point. `mc plan <programme>` is how new work enters, and a
- * programme with no session open is one nobody is thinking about right now,
- * which is a thing worth being able to see at a glance rather than to work out
- * from an absence (Martin, 2026-09-02).
- *
- * The counts sit between the two because that is where the eye already is: the
- * page's own numbers were all on one heading forty rows above, so a programme's
- * share of them had to be counted off its rows by hand.
- */
 /**
  * A programme's open plan sessions by provider, `claude 1 · codex 2`, or ''
  * when it has none. The heading draws it after `plan`; `mc programs list`
@@ -1013,26 +966,49 @@ export function statusRollup(statuses = {}) {
 }
 
 function programmeLine(c, wide, group) {
-  const column = programmeColumns(wide);
-  const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
-  let counts = programmeCounts(c, group, column.counts);
-  const proposalCount = group.proposals > 0
-    ? `${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : '';
   const meta = planSessionWords(group);
-  // A session somebody opened in one of the programme's rooms is said on the
-  // same heading (goal mc/no-work).
   const opened = (group.sessions || []).length;
-  const plan = meta ? `plan ${meta}` : 'no plan session';
-  const suffix = opened ? `  ·  ${opened} open` : '';
-  let detail = `${proposalCount ? `${proposalCount} · ${plan}` : (meta ? plan : `·  ${plan}`)}${suffix}`;
-  // Proposal metadata is optional on the narrow line; lose it before the
-  // programme count, and keep the planning-session words as the rollup does.
-  if (proposalCount && width(left) + width(counts) + detail.length + 2 > wide) detail = `${meta ? plan : `·  ${plan}`}${suffix}`;
-  // Provider counts take precedence over the programme's rollup on a narrow
-  // terminal; the headline and JSON still carry that rollup.
-  if (meta && width(left) + width(counts) + detail.length + 2 > wide) counts = '';
-  const prefix = counts ? `${left} ${counts} ` : `${left} `;
-  return `${prefix}${c(clip(detail, Math.max(0, wide - width(prefix))), 'grey')}`.trimEnd();
+  const goals = (group.goals || []).length;
+  const parts = [
+    { text: group.programme, styles: ['bold', 'cyan'] },
+    { text: goals ? `${goals} goal${goals === 1 ? '' : 's'}` : 'no goal yet', styles: ['grey'] },
+    (group.prs || []).length ? { text: `${group.prs.length} pr`, styles: ['grey'] } : null,
+    { text: meta ? `● plan ${meta}` : 'no plan session', styles: meta ? ['cyan'] : ['grey'] },
+    opened ? { text: `${opened} open`, styles: ['cyan'] } : null,
+    group.proposals ? { text: `${group.proposals} proposal${group.proposals === 1 ? '' : 's'}`, styles: ['grey'] } : null,
+  ].filter(Boolean);
+  const visible = [];
+  let used = 0;
+  for (const part of parts) {
+    const size = part.text.length + (visible.length ? 3 : 0);
+    if (used + size > wide - 2) break;
+    visible.push(part);
+    used += size;
+  }
+  return `  ${paint(c, between(visible, ' · '), wide - 2)}`;
+}
+
+function programmePrLine(c, wide, pr) {
+  const state = pr.merge_red ? 'red' : pr.merging || (pr.draft ? 'draft' : 'open');
+  return gridRow(c, wide, {
+    mark: { styles: pr.merge_red ? ['red'] : pr.merging ? ['green'] : ['grey'] },
+    kind: { text: 'pr', styles: PR_TONE },
+    name: { text: pr.title || pr.branch || '—', styles: ['white'] },
+    repo: { text: pr.repo, styles: ['grey'] },
+    state: { text: state, styles: stateTone(state) },
+    pr: prCellOf([pr]),
+    tail: [{ text: pr.merge_red || pr.branch || '', styles: ['grey'] }],
+  });
+}
+
+function programmeColumnHead(c, wide) {
+  const col = gridColumns(wide);
+  let line = '';
+  for (const [key, title] of [['name', 'NAME'], ['repo', 'REPOSITORY'], ['state', 'STAGE'], ['progress', 'SESS'], ['pr', 'PR'], ['tail', 'LATEST']]) {
+    if (!col[key].width) continue;
+    line = line.padEnd(col[key].x) + clip(title, col[key].width - 1);
+  }
+  return c(line, 'grey');
 }
 
 function programmesLines(lines, c, wide, programmes, expand) {
@@ -1066,10 +1042,12 @@ function programmesLines(lines, c, wide, programmes, expand) {
     ].filter(Boolean).join(' · '));
   }
 
+  lines.push(programmeColumnHead(c, wide));
   for (const group of groups) {
     if (group.dormant && !expand) continue;
     lines.push(programmeLine(c, wide, group));
     for (const goal of group.goals || []) lines.push(goalLine(c, wide, goal));
+    for (const pr of group.prs || []) lines.push(programmePrLine(c, wide, pr));
   }
   strayLines(lines, c, wide, programmes.strays);
 

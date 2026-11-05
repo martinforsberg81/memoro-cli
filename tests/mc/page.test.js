@@ -1361,13 +1361,13 @@ describe('the page', () => {
     assert.match(text, /^  ● memoro\s+\?\s+1\s+1\s+\?\s+\?\s+\?\s+\?\s+0\s+60 min old$/mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}ready 2 · blocked 1\s+p {2}plan a programme/u);
-    assert.match(text, /^ {2}docx-editing-surface\s+1 goal\s+·\s{2}no plan session$/mu,
+    assert.match(text, /^ {2}docx-editing-surface\s+· 1 goal · no plan session$/mu,
       'the programme is a heading of its own, and it counts its own goals');
     // Every goal is a row under its programme, numbered in programme order,
     // with its repository in a column of its own.
-    assert.match(text, /^  ● {5}goal +avatar-self-serve\s+memoro\s+build\s+1 sess .*blocked · waits on a/mu);
-    assert.match(text, /^  ● {5}goal +docx-editor\s+memoro\s+build/mu, 'the repository is a column on the row');
-    assert.match(text, /^  ● {5}goal +mc-ui\s+memoro-cli\s+build/mu);
+    assert.match(text, /^  ● +avatar-self-serve\s+memoro\s+build\s+1 sess .*blocked · waits on a/mu);
+    assert.match(text, /^  ● +docx-editor\s+memoro\s+build/mu, 'the repository is a column on the row');
+    assert.match(text, /^  ● +mc-ui\s+memoro-cli\s+build/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
     assert.doesNotMatch(text, /unplanned-workareas/u);
     // mc itself is the last line: how long the runner has been up, on what, and
@@ -1394,14 +1394,14 @@ describe('the page', () => {
    * the goals keep their numbers either way.
    */
   it('draws every programme on expand, keeping the same goals without numbers', () => {
-    const names = (lines) => lines.filter((line) => /^  ● {5}goal /u.test(line)).map((line) => cellsOf(line, 120).name);
+    const names = (lines) => lines.filter((line) => /^  ● {13}/u.test(line)).map((line) => cellsOf(line, 120).name);
     const folded = renderPageLines(DATA, { columns: 120, now: NOW });
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
     assert.deepEqual(names(all), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.deepEqual(names(folded), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.ok(folded.some((line) => /^ {2}1 dormant · mc programs list$/u.test(line)), folded.join('\n'));
     assert.ok(!folded.some((line) => /^ {2}dormant-one\s/u.test(line)));
-    assert.ok(all.some((line) => /^ {2}dormant-one\s+no goal yet/u.test(line)), all.join('\n'));
+    assert.ok(all.some((line) => /^ {2}dormant-one · no goal yet/u.test(line)), all.join('\n'));
   });
 
   /**
@@ -1427,7 +1427,7 @@ describe('the page', () => {
     });
     assert.equal(code, 0);
     assert.equal(shown.length, 1, 'one redraw, for the one a');
-    assert.match(shown[0], /^ {2}dormant-one\s+no goal yet/mu);
+    assert.match(shown[0], /^ {2}dormant-one · no goal yet/mu);
   });
 
   /**
@@ -2093,13 +2093,14 @@ describe('the palette', () => {
     'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 1 blocked · ≈$7.28 today
     '',
     'bold+cyan grey green grey red grey', //          PROGRAMMES  3 active · 1 dormant · 3 goals  ready 2 · blocked 1
-    'grey', //                                          1 dormant · mc programs list
-    'bold+cyan grey grey', //                         assistant-avatar  1 goal  ·  no plan session
-    'red grey grey red grey grey grey red grey red', // 1 · goal avatar-self-serve  memoro  build  1 sess  criteria 0/1 · blocked · waits on a person · which one?
-    'bold+cyan grey grey', //                         docx-editing-surface  1 goal  ·  no plan session
-    'green grey bold grey green grey grey grey grey', // 2 ● goal docx-editor  memoro  build  1 sess  criteria 0/1 · the next thing
-    'bold+cyan grey grey', //                         mc  1 goal  ·  no plan session
-    'grey grey grey grey grey grey grey grey', //  3 · goal mc-ui  memoro-cli  build  1 sess  criteria 0/1 · the next thing
+    'grey', // dormant programmes
+    'grey', // column titles
+    'bold+cyan grey grey grey grey', // programme name · goals · plan sessions
+    'red white grey red grey red grey red grey white', // blocked goal, primary text white
+    'bold+cyan grey grey grey grey',
+    'green white+bold grey green grey white', // running goal
+    'bold+cyan grey grey grey grey',
+    'grey white grey grey grey white', // unfinished goal
     'yellow', //                                         not an area mc knows
     'bold grey', //                                      mc-docx-editor  tmux session · open 60 min
     '',
@@ -2139,8 +2140,6 @@ describe('the palette', () => {
     for (const [index, line] of paintedPage(DATA).entries()) {
       assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('dim')),
         `row ${index} is drawn dim: ${strip(line)}`);
-      assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('white')),
-        `row ${index} is drawn in ESC[37m rather than the terminal's foreground: ${strip(line)}`);
     }
   });
 
