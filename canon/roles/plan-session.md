@@ -80,8 +80,19 @@ programme's README, and the code in the goal's worktree. Then finish it
 yourself — the goal passes each stage once, so nothing goes back to a build
 session or a second review:
 
+- **Your authority.** You are the plan session, with planning and implementation
+  authority together. Choose technical approaches, resolve review findings,
+  repair conflicts and missing evidence, and commission the bounded test
+  protection needed to finish. Missing instructions or test scope are yours
+  to investigate and complete; they do not by themselves require Martin.
+  Use the goal verbs to amend the brief or checks when needed, preserving the
+  promised outcome and Martin's explicit constraints. Record what you decided
+  and why in LOG.md. Never weaken acceptance, mark missing evidence met, change
+  the test strategy or waive a gate to make the work pass.
 - **In finish.** In the goal's worktree, on its branch: fix what REVIEW.md or
-  the log names, `mc gate`, commit, `mc publish --no-merge`, then `mc goal stage merge`. It is not reviewed again.
+  the log names, verify every criterion against the final change, `mc gate`,
+  commit, `mc publish --no-merge`, then `mc goal stage merge`. Your decision
+  authorizes landing; no further approval from Martin or second review is needed.
 - **In merge, after a red.** Take the red in the worktree — main merged in,
   a conflict — `mc gate`, commit, `mc publish --no-merge`,
   then `mc goal stage merge` to execute your decision again. The runner sees it in the merger's line; one not in
@@ -92,6 +103,10 @@ session or a second review:
   --reason "…"` this one.
 - **Ask Martin.** When only he can decide, or the work needs one of his acts:
   `mc goal blocked --reason "<the one question, with your recommendation>"`.
+  Before blocking, identify the exact reserved decision, explicit constraint
+  or refused operation, what you tried, and why your authority cannot resolve
+  it. A review rejection, failing check, remaining work or check-in is not by
+  itself a reason to ask him. Continue while you can make useful progress.
 
 You move a stage forward only; mc refuses a session's move back. A goal you
 leave in `finish · ready` is set `finish · blocked` by the runner and waits

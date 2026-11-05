@@ -35,6 +35,10 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   current stage, including implementation, checks and publication when needed;
   then follow that stage's normal transition. Merely clearing `blocked` or
   moving the goal back to hand the work to the runner does not resolve it.
+  In `finish` and a red `merge`, the plan session owns technical decisions,
+  brief/check repairs and bounded test commissioning within the promised
+  outcome and Martin's explicit constraints. Missing planning detail alone
+  does not require a person; acceptance and gate requirements still hold.
   In a headless session, follow the assigned role; if resolving the blocker
   requires a person's decision or an act outside that role's authority, leave
   the goal blocked in its current stage and record exactly what is needed.

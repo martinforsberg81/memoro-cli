@@ -333,9 +333,10 @@ export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', 
 export function goalPlanCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
-    'If you are still finishing the goal, say so in one line and go on.',
+    'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
-    'If you cannot finish it, end now: `mc goal blocked --reason "<the question for Martin>"` (or drop it), and stop.',
+    'You retain planning and implementation authority: resolve technical choices, missing planning detail and bounded test scope yourself within the promised outcome and Martin\'s explicit constraints. Preserve acceptance and gate requirements.',
+    'Block only for a decision or act reserved for Martin: `mc goal blocked --reason "<what only Martin can decide or do, what you tried, and your recommendation>"`. If the goal is wrong, use your role\'s drop/replacement path.',
   ].join('\n');
 }
 
