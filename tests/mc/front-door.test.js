@@ -77,8 +77,8 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'DEV', 'MERGE', 'DEPLOY', 'MC']) {
-        assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
+      for (const section of ['PROGRAMMES', 'MERGE', 'DEV', 'PRODUCTION', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+        assert.match(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} is missing`);
       }
       // No WORK heading: every session is a programme's or a desk's, and the
       // two folders nothing explains are strays under PROGRAMMES.
@@ -141,8 +141,8 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'DEV', 'MERGE', 'DEPLOY', 'MC']) {
-        const seen = printed[''].match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
+      for (const section of ['PROGRAMMES', 'MERGE', 'DEV', 'PRODUCTION', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+        const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
       // And --json is one document, not a stream of them.

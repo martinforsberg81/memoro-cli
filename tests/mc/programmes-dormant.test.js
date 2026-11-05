@@ -42,7 +42,7 @@ function programmesOf(lines) {
   const text = lines.map(plain);
   const head = text.findIndex((line) => line.startsWith('  PROGRAMMES'));
   assert.ok(head >= 0, 'PROGRAMMES is drawn');
-  const end = text.findIndex((line, n) => n > head && line.startsWith('  MAINTENANCE'));
+  const end = text.findIndex((line, n) => n > head && line.startsWith('  ┌─ MERGE '));
   return text.slice(head, end < 0 ? undefined : end);
 }
 

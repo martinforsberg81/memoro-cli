@@ -507,7 +507,7 @@ describe('DEPLOY', () => {
     assert.equal(quiet.filter((row) => strip(row).includes('production')).length, 0,
       'a machine that has never deployed and never collected says nothing about production');
     // The section is there all the same, as the desks are: one of it, always.
-    assert.match(strip(rowWith(quiet, 'DEPLOY')), /^ {2}DEPLOY/u);
+    assert.match(strip(rowWith(quiet, 'PRODUCTION')), /^ {2}┌─ PRODUCTION/u);
   });
 });
 
@@ -544,16 +544,16 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
       open_gap: null,
     });
     const head = rowWith(lines, 'LANGUAGE');
-    assert.match(strip(head), /^ {2}LANGUAGE {2}last run sv-forms-cutover · stopped · 60 min ago +mc language$/u);
+    assert.match(strip(head), /^ {4}LANGUAGE {2}last run sv-forms-cutover · stopped · 60 min ago +mc language$/u);
     assert.deepEqual(signature(head).split(' '), ['bold+cyan', 'yellow', 'white', 'white'],
       'a section title, and a stopped run waits on a person');
-    assert.match(strip(rowWith(lines, 'rows waiting')), /^ {4}sv {2}3 unresolved selectors · 724 rows waiting · mc language promote · read 2 h ago$/u);
-    assert.match(strip(rowWith(lines, ' fr ')), /^ {4}fr {2}read 9 d ago$/u, 'a reading a week old is worth taking again');
-    assert.ok(!lines.some((line) => /^ {4}de /u.test(strip(line))), 'a fresh reading with nothing waiting is not drawn');
-    // Right after DEPLOY, before CHECKS.
+    assert.match(strip(rowWith(lines, 'rows waiting')), /^ {6}sv {2}3 unresolved selectors · 724 rows waiting · mc language promote · read 2 h ago$/u);
+    assert.match(strip(rowWith(lines, ' fr ')), /^ {6}fr {2}read 9 d ago$/u, 'a reading a week old is worth taking again');
+    assert.ok(!lines.some((line) => /^ {6}de /u.test(strip(line))), 'a fresh reading with nothing waiting is not drawn');
+    // Language remains inside PRODUCTION, before MAINTENANCE.
     const text = lines.map(strip).join('\n');
-    assert.ok(text.indexOf('\n  DEPLOY') < text.indexOf('\n  LANGUAGE'));
-    assert.ok(text.indexOf('\n  LANGUAGE') < text.indexOf('\n  CHECKS'));
+    assert.ok(text.indexOf('\n  ┌─ PRODUCTION') < text.indexOf('\n    LANGUAGE'));
+    assert.ok(text.indexOf('\n    LANGUAGE') < text.indexOf('\n  ┌─ MAINTENANCE'));
   });
 
   it('puts one red line above every section while a run is stopped inside a gap', () => {
@@ -1055,7 +1055,7 @@ describe('INTAKE', () => {
       assert.match(header, /mc manager/u);
       assert.match(header, /MANAGER · ● open 60 min/u);
       assert.match(header, /3 proposals/u);
-      assert.match(lines.find((line) => line.startsWith('  MAINTENANCE')), /helper not open · last run 26 h ago failed/u);
+      assert.match(lines.find((line) => line.includes('helper not open')), /helper not open · last run 26 h ago failed/u);
       assert.ok(lines.every((line) => width(line) <= columns), `${columns} columns`);
     }
   });
@@ -1086,8 +1086,12 @@ describe('INTAKE', () => {
     assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'mc-one'] });
     const checks = checksSection({ repos: [{name: 'memoro', deps: {read_at: NOW.toISOString(), audit: {counts: {critical: 2, high: 4, moderate: 6, low: 8}}}}], now: NOW });
     const lines = renderPageLines(pageData({ intake, checks }), { columns: 100 });
-    assert.match(lines.find((line) => /^  ● memoro /u.test(line)), /^  ● memoro\s+3\s+2\s+1\s+2\s+4\s+6\s+8\s+0\s+2 h old$/u);
-    assert.match(lines.find((line) => /^  ● memoro-cli /u.test(line)), /1\s+no digest$/u);
+    const repo = lines.indexOf('    ● memoro');
+    assert.match(lines[repo + 1], /Errors 3 · new 2 · loud 1 · 2 h old/u);
+    assert.ok(lines.some(line => /2 critical · 4 high · 6 moderate · 8 low/u.test(line)));
+    const cli = lines.indexOf('    ● memoro-cli');
+    assert.match(lines[cli + 1], /Errors \? · new \? · loud \? · no digest/u);
+    assert.ok(lines.slice(cli).some(line => /1 proposal waiting/u.test(line)));
     assert.ok(lines.some((line) => /1 proposal · untagged 1/u.test(line)));
   });
 
@@ -1123,7 +1127,7 @@ describe('INTAKE', () => {
     // The table counts the delta; full messages remain available in JSON.
     for (const columns of [60, 100, 160]) {
       const lines = renderPageLines(pageData({ intake }), { columns });
-      assert.match(lines.find((line) => /^  ● memoro /u.test(line)), /^  ● memoro\s+\?\s+5\s+4\s/u);
+      assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 5 · loud 4/u);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
   });
@@ -1134,7 +1138,7 @@ describe('INTAKE', () => {
     });
     assert.deepEqual(intake.repos[0].loud_lines, []);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    assert.match(lines.find((line) => /^  ● memoro /u.test(line)), /^  ● memoro\s+\?\s+0\s+0\s/u);
+    assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 0 · loud 0/u);
   });
 
   it('names today\'s digest with the digests present only in the archive', () => {
@@ -1159,8 +1163,8 @@ describe('INTAKE', () => {
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     assert.ok(!lines.some((line) => /no digest yet/u.test(line)), 'the collect has run');
     // One row each, and neither repository is hidden behind the other.
-    assert.ok(lines.some((line) => /^  ● memoro\s+\?\s+2\s+1\s/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^  ● memoro-cli /u.test(line)), lines.join('\n'));
+    assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 2 · loud 1/u);
+    assert.ok(lines.includes('    ● memoro-cli'));
   });
 
   it('has no digest to name when nothing has been collected at all', () => {
@@ -1174,7 +1178,10 @@ describe('INTAKE', () => {
     assert.equal(intake.digests, 0);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     for (const name of ['memoro', 'memoro-cli']) {
-      assert.match(lines.find((line) => line.startsWith(`  ● ${name} `)), /\?\s+\?\s+\?\s+\?\s+\?\s+\?\s+\?\s+0\s+no digest$/u);
+      const at = lines.indexOf(`    ● ${name}`);
+      assert.ok(at > 0);
+      assert.match(lines[at + 1], /Errors \? · new \? · loud \? · no digest/u);
+      assert.match(lines[at + 3], /deps never read/u);
     }
   });
 });
@@ -1250,6 +1257,47 @@ const DATA = pageData({
   notes: ['PRs from cache, 2 h old — --fresh asks GitHub', 'no runner/log/runs.tsv'],
 });
 
+describe('operational panels', () => {
+  it('groups operational work in orange panels above system details without hiding blockers', () => {
+    const disk = 'disk: 0.1 GiB free, below 5 GiB — no step started';
+    const data = pageData({
+      runner: { ...DATA.runner, process: { alive: true }, disk: { line: disk } },
+      dev: { servers: [], queue: [], running: 0, leased: 0, queued: 0 },
+      billing: 'codex plan available · remaining plan capacity is measured for the next session · claude credits next',
+      language: { languages: [{ lang: 'sv', waiting_rows: 724, read_at: NOW.toISOString() }] },
+      prs: { fetched: NOW.toISOString(), count: 2, items: [
+        { repo: 'memoro', number: 99901, title: 'Loose change', owner: { kind: 'none' } },
+        { repo: 'memoro', number: 99902, title: 'Attached change', programme: 'mc', owner: { kind: 'plan' } },
+      ] },
+      checks: { repos: [{ repo: 'memoro', test: { age_seconds: 3600, short: 'abc1234', red: 2 },
+        deps: { age_seconds: 7200, short: 'def5678', critical: 1, high: 4 } }] },
+    });
+    for (const columns of [60, 80, 100, 120, 160]) for (const expand of [false, true]) {
+      const lines = renderPageLines(data, { columns, expand, now: NOW });
+      const painted = renderPageLines(data, { columns, expand, colour: true, now: NOW });
+      assert.deepEqual(painted.map(strip), lines);
+      assert.ok(lines.every(line => width(line) <= columns), `${columns} columns`);
+      const titles = ['MERGE', 'DEV', 'PRODUCTION', 'MAINTENANCE'];
+      const panels = titles.map(title => lines.findIndex(line => line.startsWith(`  ┌─ ${title} `)));
+      assert.ok(panels.every((at, i) => at >= 0 && (!i || at > panels[i - 1])), 'four panels in work order');
+      for (const at of panels) assert.ok(painted[at].includes('\x1b[38;5;208m┌─ '), 'orange border');
+      const footer = lines.findIndex(line => /^  ── SYSTEM /u.test(line));
+      assert.ok(footer > panels[3]);
+      for (const [text, start, end] of [
+        ['PRs outside goals', panels[0], panels[1]], ['#99901', panels[0], panels[1]],
+        ['724 rows waiting', panels[2], panels[3]], ['full test 60 min', panels[3], footer],
+        ['deps 2 h', panels[3], footer], ['2 red', panels[3], footer],
+        ['codex plan available', footer, lines.length], [disk, footer, lines.length],
+      ]) assert.ok(lines.slice(start, end).some(line => line.includes(text)), text);
+      assert.equal(lines.filter(line => line.includes('#99901')).length, 1);
+      assert.ok(lines.slice(footer).map(line => line.trim()).join(' ').includes(data.billing), 'both provider routes survive billing wrapping');
+      assert.ok(!lines.some(line => line.includes('#99902') || /^  (CHECKS|PULL REQUESTS) /u.test(line)));
+      const programmes = lines.findIndex(line => line.startsWith('  PROGRAMMES'));
+      assert.ok(lines.slice(0, programmes).some(line => line.includes('New sessions paused — low disk space')));
+    }
+  });
+});
+
 describe('the page', () => {
   it('prints the sections in order — what does not move first, what moves nearest the prompt', () => {
     const text = renderPage({
@@ -1257,16 +1305,7 @@ describe('the page', () => {
       billing: 'plan · available',
       mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', main: 'def5678', behind: 2, now: NOW }),
     }, { columns: 120, version: '0.7.11', now: NOW });
-    // The live loop can only rewrite rows still on the screen, so the rows that
-    // change are the ones near the prompt: RUNNER every frame, the desks while
-    // somebody is at them. The listing above them changes when a round lands,
-    // not between two frames — at the top, RUNNER scrolled off under the
-    // listing and never moved again (2026-09-03).
-    //
-    // The order itself is Martin's (2026-09-19): the listing, the two desks
-    // with what lies on each, what the runner takes next and what it is doing,
-    // and the short end of the page — merges, the deploy, mc itself.
-    const at = ['PROGRAMMES', 'MAINTENANCE', 'MERGE', 'DEPLOY', 'LANGUAGE', 'MC  ', 'BILLING'].map((head) => text.indexOf(`\n  ${head}`));
+    const at = ['PROGRAMMES', '┌─ MERGE', '┌─ DEV', '┌─ PRODUCTION', '    LANGUAGE', '┌─ MAINTENANCE', '── SYSTEM', 'MC  ', 'BILLING'].map(head => text.indexOf(`\n${head.startsWith('    ') ? head : `  ${head}`}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
@@ -1281,7 +1320,7 @@ describe('the page', () => {
     assert.match(text, /runner running · 1\/2 lanes/u);
     assert.match(text, /UNASSIGNED ACTIVITY/u);
     assert.match(text, /start takes over now/u);
-    assert.match(text, /MAINTENANCE  helper ● open 60 min · no run recorded · claude sonnet/u);
+    assert.match(text, /helper ● open 60 min · no run recorded · claude sonnet/u);
     assert.doesNotMatch(text, /^  (HELPER|BRIEF)\b/mu);
     // No WORK: every session is a programme's or a desk's, and a tmux session
     // nobody's is a stray under PROGRAMMES (goal mc/no-work).
@@ -1293,7 +1332,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /^  NEXT /mu);
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
     assert.doesNotMatch(text, /DECISIONS/u);
-    assert.match(text, /^  ● memoro\s+\?\s+1\s+1\s+\?\s+\?\s+\?\s+\?\s+0\s+60 min old$/mu);
+    assert.match(text, /^ {6}Errors \? · new 1 · loud 1 · 60 min old$/mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     // Goal titles retain their numbers; canonical metadata follows on a child row.
     assert.match(text, /^ +1 avatar-self-serve$/mu);
@@ -2204,10 +2243,15 @@ describe('CHECKS — the daily full test and deps, per repository', () => {
 
   it('draws one row per repository, above the MC line', () => {
     const lines = renderPageLines(pageData({ checks }), { columns: 120 }).map(strip);
-    const at = lines.findIndex((line) => line.startsWith('  CHECKS'));
+    const at = lines.indexOf('    ● memoro');
     assert.ok(at > 0);
-    assert.match(lines[at + 1], /memoro\s+full test 4 h · bc82e81 · 2 red\s+deps 40 h · 03d63dd · 0 critical, 12 high/u);
-    assert.match(lines[at + 2], /memoro-cli\s+full test never run\s+deps never read/u);
+    assert.match(lines[at + 2], /full test 4 h · bc82e81 · 2 red/u);
+    assert.match(lines[at + 3], /deps 40 h · 03d63dd/u);
+    assert.match(lines[at + 4], /0 critical · 12 high/u);
+    const cli = lines.indexOf('    ● memoro-cli');
+    assert.match(lines[cli + 2], /full test never run/u);
+    assert.match(lines[cli + 3], /deps never read/u);
+    assert.ok(cli < lines.findIndex(line => line.startsWith('  ── SYSTEM ')));
   });
 });
 
@@ -2269,14 +2313,15 @@ describe('PULL REQUESTS', () => {
     const lines = renderPageLines(pageData({ runner, prs: pulls }), { columns: 120, now: AT });
     assert.ok(lines.some((line) => /p\/one-operation · 5 min · claude · opus/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => line.includes('memoro#13048')));
+    assert.equal(lines.filter(line => line.includes('#13048')).length, 1, 'session PR is not repeated among loose PRs');
   });
 
   it('lists every one the merger does not draw, the one nobody holds in yellow with the waiting mark', () => {
     const { pulls, runner } = build();
     const lines = renderPageLines(pageData({ runner, prs: pulls }), { columns: 140, now: AT });
-    assert.ok(lines.some((line) => /PULL REQUESTS {2}4 open · 1 plan · 3 nobody's +mc prs$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}· memoro {6}#13167 {2}Plan: trip-project-detail +plan entity-detail · quiet 15 h$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}◆ memoro {6}#12900 {2}Remove the Adlibris and Bokus site recipes +nobody's · quiet 2 d$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /3 open · 1 plan · 2 nobody's · mc prs$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {4}· memoro {6}#13167 {2}Plan: trip-project-detail +plan entity-detail · quiet 15 h$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {4}◆ memoro {6}#12900 {2}Remove the Adlibris and Bokus site recipes +nobody's · quiet 2 d$/u.test(line)), lines.join('\n'));
     const painted = renderPageLines(pageData({ runner, prs: pulls }), { columns: 140, colour: true, now: AT });
     const nobody = painted.find((line) => line.includes('#12900'));
     assert.ok(nobody.includes('\u001b[33m◆'), nobody);
