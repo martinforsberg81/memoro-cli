@@ -161,7 +161,8 @@ stays with the first that is not:
 A worktree is removed with `git worktree remove` in its own repository,
 without `--force`, after apply rechecks registration, clean state, identity,
 HEAD, any legacy receipts, process/open-file state and retention. A changed
-tree, identity or receipt stays. `DerivedData` uses `rmTree`. Logs, patches,
+tree, session directory identity (device/inode/birth time), worktree identity
+or receipt stays. `DerivedData` uses `rmTree`. Logs, patches,
 receipts, memory, other scratch children and the parent directory stay. Apply
 also requires the canonical target path to remain inside the scratch root and
 have its exact allowed shape. Age and pid absence alone are never proof. This

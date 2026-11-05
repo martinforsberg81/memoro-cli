@@ -1217,7 +1217,7 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     } finally { s.m.cleanup(); }
   });
 
-  it('dry-run creates no retention ref; apply refuses a changed HEAD or replaced receipt', () => {
+  it('dry-run creates no retention ref; apply refuses a changed HEAD, session identity or receipt', () => {
     const s = scratchMachine();
     try {
       const legacy = s.area('legacy', { record: null, worktree: { refs: '' } });
@@ -1239,6 +1239,19 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.equal(staleIdentity.applied[0].ok, false);
       assert.match(staleIdentity.applied[0].why, /identity/u);
       assert.ok(exists(join(legacy, 'replay', 'src.js')));
+
+      const sessionPlan = runTidy(s.doors());
+      const previousSession = legacy + '-old';
+      renameSync(legacy, previousSession);
+      mkdirSync(legacy);
+      renameSync(join(previousSession, 'replay'), join(legacy, 'replay'));
+      const replacedSession = applyTidy({ listPath: sessionPlan.listPath, ...s.doors() });
+      assert.equal(replacedSession.applied[0].ok, false);
+      assert.match(replacedSession.applied[0].why, /identity/u);
+      assert.ok(exists(join(legacy, 'replay', 'src.js')), 'the original replay under a replaced session survives');
+      assert.ok(exists(join(previousSession, 'gate.log')), 'the previous session evidence survives');
+      assert.deepEqual(s.removed, []);
+      assert.deepEqual(s.refs, {}, 'a refused session replacement creates no retention refs');
 
       const refreshed = runTidy(s.doors());
       const receipt = join(s.m.work, 'runner', 'log', 'legacy.json.err');

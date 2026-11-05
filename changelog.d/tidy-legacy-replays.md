@@ -7,3 +7,5 @@ section: Added
   worktree. Detached replay commits are retained under
   `refs/mc/retained-replay/<full-sha>` at apply before `git worktree remove`;
   logs, patches, receipts, memory and other scratch contents stay.
+  Apply refuses replaced session directories even when their original replay
+  checkout and runner receipts survive unchanged.

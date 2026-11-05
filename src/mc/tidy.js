@@ -535,7 +535,14 @@ function worktreeIdentity(path) {
   const gitPath = join(path, '.git');
   const stat = lstatSync(gitPath);
   if (!stat.isFile() && !stat.isDirectory()) throw new Error('worktree identity is not a regular .git entry');
-  return { real, git_real: realpathSync(gitPath), git_dev: stat.dev, git_ino: stat.ino, git_mtimeMs: stat.mtimeMs };
+  const sessionPath = dirname(path);
+  const session = lstatSync(sessionPath);
+  if (!session.isDirectory()) throw new Error('scratch session identity is not a directory');
+  // Directory mtimes change as evidence is written; device/inode/birth time identify the session itself.
+  return {
+    real, git_real: realpathSync(gitPath), git_dev: stat.dev, git_ino: stat.ino, git_mtimeMs: stat.mtimeMs,
+    session_real: realpathSync(sessionPath), session_dev: session.dev, session_ino: session.ino, session_birthtimeMs: session.birthtimeMs,
+  };
 }
 
 /** Keep a detached replay tip before removing its worktree, atomically and without replacing a ref. */
