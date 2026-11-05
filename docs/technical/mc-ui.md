@@ -133,7 +133,8 @@ a writer. These semantics describe the current projection, not server health.
 ### MERGE & DEPLOY
 
 One panel groups both repository merge lanes and memoro deployment evidence.
-Repository names occupy an aligned column; their queue summaries show `queue
+Columns are separated by whitespace; middle dots separate data only within a
+column. Repository names occupy an aligned column; their queue summaries show `queue
 empty` or `4 in queue: #1 #2 #3 #4` in landing order. The normal view shows up
 to six waiting entries, with an explicit remainder; `a` shows all references,
 branches, queue ages and 24-hour landing history. Queued entries without a PR
