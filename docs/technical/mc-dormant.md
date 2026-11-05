@@ -2,7 +2,7 @@
 
 Work is a goal: GOAL.json and LOG.md under a programme, with repository
 worktrees on its branch. `mc run` starts headless build, review and plan
-sessions; `mc plan`, `mc brief` and bare `mc helper` are the person's
+sessions; `mc plan`, `mc manager` and bare `mc helper` are the person's
 interactive entrances. `mc` is the page. No resident model keeps sessions
 moving or invents work for them.
 

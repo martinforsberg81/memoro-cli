@@ -390,12 +390,12 @@ export const STATE_HOMES = new Set([
 ]);
 
 /**
- * `~/mc/brief/` — where the brief session stands. Not the work root: every
- * other session is launched somewhere below that, and a session resumes the
+ * Manager keeps `~/mc/brief/` so both tools resume their conversations.
+ * Not the work root: other sessions launch below it, and a session resumes the
  * newest conversation at or below where it stands, so from the root the brief
  * opened whichever planning session had been used last.
  */
-export function briefDir(env = process.env) {
+export function managerDir(env = process.env) {
   return join(workRoot(env), 'brief');
 }
 

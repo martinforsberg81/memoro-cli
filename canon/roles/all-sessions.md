@@ -8,7 +8,7 @@ A turn is the unit of cost: every turn re-reads the whole context. So:
   for it. Independent `Edit`s, likewise, in one response.
 - No prose between calls. Report once, at the end.
 
-You are already a session. Never run `mc plan`, `mc brief` or the interactive
+You are already a session. Never run `mc plan`, `mc manager` (formerly `mc brief`) or the interactive
 `mc helper` to start yourself: those are the person's entrances.
 
 Read the code before you decide or ask. Report what you ran and what it said;

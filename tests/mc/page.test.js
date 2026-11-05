@@ -724,7 +724,7 @@ describe('SESSIONS', () => {
     assert.equal(s.desks.helper.pid, 99);
     // A desk nobody is at is `null` rather than missing: the page draws the
     // row either way, and "is the helper running?" is answered both ways.
-    assert.equal(s.desks.brief, null);
+    assert.equal(s.desks.manager, null);
     assert.equal(s.count, 2);
   });
 
@@ -744,7 +744,7 @@ describe('SESSIONS', () => {
     const PROJECT = { verb: 'project', area: 'step/ui', programme: 'mc', tool: 'codex', pid: 101, started: '2026-08-29T11:00:00Z' };
     const s = sessionsSection({ foreground: [HELPER, PLAN, PROJECT, { verb: 'brief', pid: 102 }], now: NOW, alive: live });
     assert.deepEqual(s.desks.helper.owner, { kind: 'desk', name: 'helper' });
-    assert.deepEqual(s.desks.brief.owner, { kind: 'desk', name: 'brief' });
+    assert.deepEqual(s.desks.manager.owner, { kind: 'desk', name: 'manager' });
     assert.deepEqual(s.programme_sessions.mc.map((item) => [item.pid, item.owner]), [[101, { kind: 'programme', name: 'mc' }]]);
     assert.equal(s.count, 4);
     assert.deepEqual(s.strays, []);
@@ -799,7 +799,7 @@ describe('SESSIONS', () => {
       now: NOW,
       alive: (pid) => pid === 100,
     });
-    assert.equal(s.desks.brief, null);
+    assert.equal(s.desks.manager, null);
     assert.deepEqual(s.strays.map((item) => item.verb), ['plan']);
   });
 });
@@ -1037,6 +1037,29 @@ describe('INTAKE', () => {
     '- not counted, this is another section',
   ].join('\n');
 
+  it('shows the latest recorded helper run even after a missed day, separately from Manager', () => {
+    const intake = intakeSection({ now: NOW, proposals: ['2026-08-29-mc-one.md'], runs: [
+      { kind: 'helper', ts: '2026-08-27T10:00:00Z', exit: '0' },
+      { kind: 'intake', ts: '2026-08-29T11:00:00Z', exit: '0' },
+      { kind: 'helper', ts: '2026-08-28T10:00:00Z', exit: '1' },
+      { kind: 'helper', ts: '2026-08-26T10:00:00Z', exit: '0' },
+    ] });
+    assert.deepEqual(intake.last_run, { at: '2026-08-28T10:00:00Z', age_seconds: 93600, ok: false });
+    const sessions = sessionsSection({ foreground: [
+      { verb: 'manager', pid: 102, started: '2026-08-29T11:00:00Z', tool: 'claude', model: 'opus' },
+    ], now: NOW, alive: () => true });
+    const programmes = programmesSection({ programmes: ['mc'], proposalCounts: { mc: 2 } });
+    for (const columns of [60, 80, 120, 160]) {
+      const lines = renderPageLines(pageData({ intake, sessions, programmes }), { columns });
+      const header = lines.slice(0, lines.findIndex((line) => line.includes('PROGRAMMES'))).join('\n');
+      assert.match(header, /mc manager/u);
+      assert.match(header, /MANAGER · ● open 60 min/u);
+      assert.match(header, /3 proposals/u);
+      assert.match(lines.find((line) => line.startsWith('  MAINTENANCE')), /helper not open · last run 26 h ago failed/u);
+      assert.ok(lines.every((line) => width(line) <= columns), `${columns} columns`);
+    }
+  });
+
   it('counts the bullets under "New since the last digest", and the loud ones apart', () => {
     assert.deepEqual(countNewErrors(DIGEST), { count: 2, loud: 1, first: false });
     assert.deepEqual(countNewErrors('## New since the last digest\n\n_nothing new_\n'), { count: 0, loud: 0, first: false });
@@ -1246,7 +1269,7 @@ describe('the page', () => {
     const at = ['PROGRAMMES', 'MAINTENANCE', 'MERGE', 'DEPLOY', 'LANGUAGE', 'MC  ', 'BILLING'].map((head) => text.indexOf(`\n  ${head}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
-    assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
+    assert.match(text, /MC {2}0\.7\.11/u);
     // What is true of the work: the session in flight, and the goals
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
     assert.match(text, /1 in flight · 1 ready · 0 blocked · 1 Martin/u);
@@ -1258,7 +1281,7 @@ describe('the page', () => {
     assert.match(text, /runner running · 1\/2 lanes/u);
     assert.match(text, /UNASSIGNED ACTIVITY/u);
     assert.match(text, /start takes over now/u);
-    assert.match(text, /helper ● open 60 min · claude sonnet · pid 99/u);
+    assert.match(text, /MAINTENANCE  helper ● open 60 min · no run recorded · claude sonnet/u);
     assert.doesNotMatch(text, /^  (HELPER|BRIEF)\b/mu);
     // No WORK: every session is a programme's or a desk's, and a tmux session
     // nobody's is a stray under PROGRAMMES (goal mc/no-work).
@@ -1716,7 +1739,7 @@ describe('collectPage', () => {
     assert.deepEqual(asked, ['tmux'], 'the default page runs no fetch and no gh');
     assert.deepEqual(data.runner.sessions.map((step) => step.name), ['docx-editor', 'mc-ui'],
       'one current-<repo>.json per lane, and the page reads every one of them');
-    assert.equal(data.sessions.desks.brief.verb, 'brief');
+    assert.equal(data.sessions.desks.manager.verb, 'brief');
     assert.equal(data.runner.day.steps, 3);
     // The row and the cached version, read from the files and nothing fetched.
     assert.equal(data.runner.production.short, '1a2b3c4');
@@ -2026,7 +2049,7 @@ describe('the palette', () => {
     assert.match(rowWith(lines, 'avatar-self-serve'), /\x1b\[31mMartin/u);
     assert.match(rowWith(lines, 'can start'), /\x1b\[32mcan start/u);
     assert.match(rowWith(lines, 'PROGRAMMES'), /\x1b\[[0-9;]*36mPROGRAMMES/u);
-    assert.ok(!lines.some((line) => strip(line).includes('────')));
+    assert.ok(!lines.slice(lines.findIndex((line) => strip(line).includes('PROGRAMMES'))).some((line) => strip(line).includes('────')));
   });
 
   it('adds every escape outside the width: a coloured row is as wide as its plain twin', () => {

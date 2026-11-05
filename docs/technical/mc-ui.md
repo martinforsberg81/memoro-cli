@@ -82,7 +82,8 @@ new and loud errors, dependency vulnerabilities by severity, root proposals
 by system (`mc` belongs to memoro-cli), and the digest's age or missing state.
 Unknown measurements are `?`, including new counts before a baseline exists.
 Below 100 columns, dependency critical/high become C/H and moderate/low give
-way. Untagged root proposals and open helper/brief sessions follow the table.
+way. Untagged root proposals follow the table. Helper status and its last
+recorded collection appear on the Maintenance title; Manager is in the header.
 Programme-owned proposals remain on their programme headings. Full error
 messages and proposal filenames remain in JSON and the digest.
 
@@ -193,6 +194,7 @@ that every word has a row on today's page.
 | `build` | green |
 | `review` | magenta |
 | `triage` | blue |
+| `manager` | cyan |
 | `brief` | cyan |
 | `plan` | cyan |
 | `gate` | green |
@@ -242,7 +244,7 @@ painted rows occupy the same columns.
 |---|---|
 | a goal's number | `mc goal show` for that numbered goal, then redraw |
 | `a` / `all` | toggle all folded rows and details across every surface |
-| `b` | open brief |
+| `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `start`, `stop [--force]`, `update [--force]`, `lanes [<n>]` | the runner order, then redraw |
@@ -483,3 +485,15 @@ checks that routing without opening a coding tool.
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
 menu routing and piped output. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
+
+## Manager header
+
+The framed MC header contains the global in-flight, ready and blocked counts,
+waiting proposals across programmes and the root, and the daily cost when it
+fits. `mc manager` (or `m` at the page prompt) opens the session for priorities,
+blockers and proposals across all programmes. Manager's open state is shown in
+the header, including foreground records from before the rename.
+
+Maintenance keeps repository measurements in its table. Its title carries the
+interactive helper's open state and the last recorded helper collection from
+runs.tsv, including a failed run or an explicit absence of a record.

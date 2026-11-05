@@ -552,7 +552,8 @@ describe('SessionStart names the session before anything else', () => {
       ['/mc/programs/mc', { MC_GOAL: 'mc/g' }, /^You are the build session \(goal\) for programme `mc`\./u],
       ['/elsewhere', {}, /^mc — session role unknown: checked MC_ROLE, MC_GOAL and cwd \/elsewhere against \/mc\./u],
       ['/mc/programs/mc', { MC_ROLE: 'review-session:goal', MC_PROGRAMME: 'mc' }, /^You are the review session \(goal\) for programme `mc`\./u],
-      ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the brief session\./u],
+      ['/elsewhere', { MC_ROLE: 'brief' }, /^You are the manager session\./u],
+      ['/elsewhere', { MC_ROLE: 'manager' }, /^You are the manager session\./u],
       ['/elsewhere', { MC_ROLE: 'helper' }, /^You are the helper session\./u],
       ['/elsewhere', { MC_ROLE: 'review-session:goal' }, /^You are the review session \(goal\)\./u],
     ]) {

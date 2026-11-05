@@ -46,6 +46,7 @@ export const KIND_TONE = Object.freeze({
   build: ['green'],
   review: ['magenta'],
   triage: ['blue'],
+  manager: ['cyan'],
   brief: ['cyan'],
   plan: ['cyan'],
   gate: ['green'],

@@ -113,7 +113,7 @@ describe('the foreground register', () => {
     const dir = foregroundDir(env);
     const sessions = sessionsSection({ foreground: readForeground(dir), now: NOW });
     // `brief` is one of the two desks, so it is the slot rather than the list.
-    assert.equal(sessions.desks.brief.pid, process.pid);
+    assert.equal(sessions.desks.manager.pid, process.pid);
     release();
     assert.deepEqual(readForeground(dir), []);
   });

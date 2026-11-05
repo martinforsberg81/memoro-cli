@@ -3,7 +3,7 @@
 Two things get noticed about memoro: what production says, and what Martin
 says. `mc helper` is the door for both, and **the only thing either of them
 produces is a proposal** — a file in `~/mc/proposals/` that nobody
-acts on until Martin picks it up at `mc brief` or `mc plan`.
+acts on until Martin picks it up at `mc manager` or `mc plan`.
 
 | | what it does |
 |---|---|
@@ -65,13 +65,13 @@ inside intake is not itself drained.
 never tmux; the conversation already in `~/mc/helper/` resumed with no
 intro, a fresh one when there is none or on `--new` (Martin, 2026-09-13) —
 standing in `~/mc/helper/`, wearing the
-`helper` role (`canon/roles/helper.md`, Sonnet). Its shape is `mc brief`'s:
+`helper` role (`canon/roles/helper.md`, Sonnet). Its shape is `mc manager`'s:
 a room of its own under the work root, no repository, no workarea.
 
 It stands in `~/mc/helper/` and **not** `~/mc/intake/`, which is the eye's
 material and none of the desk's business. The role says so in the same
 words: it does not read the digest, and it does not list, edit or delete a
-proposal that is already waiting. Deciding one is `mc brief`'s job. Adding
+proposal that is already waiting. Deciding one is `mc manager`'s job. Adding
 is all the desk does.
 
 It also does not fix anything — no code change, no branch, no PR, no deploy.
@@ -445,7 +445,7 @@ it runs when Martin has something to say.
 
 Nobody automatic. That is the point.
 
-- **`mc brief`** — the session lists the waiting proposals (`ls ~/mc/proposals/`)
+- **`mc manager`** — the session lists the waiting proposals (`ls ~/mc/proposals/`)
   and opens each one. At the brief Martin has one become a goal, or
   archived to `~/mc/proposals/archive/`. It reads the desk's proposals and the
   eye's the same way, because they are the same file.
@@ -548,5 +548,5 @@ is not the drain's doing, but the drain makes it permanent; proposal
 `scripts/sync-todo.mjs`, the `/improve` command and the `docs/TODO.md`
 production sentinels in `~/memoro` still exist. Decision `mc-2` retires them
 once the helper has run for a week: two systems doing the same thing, and
-this is the one that puts proposals where `mc brief` can see them instead of
+this is the one that puts proposals where `mc manager` can see them instead of
 making a human in a terminal into the queue. The helper has to earn it first.

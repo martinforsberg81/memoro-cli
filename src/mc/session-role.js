@@ -20,7 +20,7 @@ export function withoutSessionIdentity(env) {
 
 /** Environment first; cwd is the fallback for a session opened by hand. */
 export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {}) {
-  if (env.MC_ROLE) return { role: env.MC_ROLE === 'plan-session' ? PLAN_ROLE : env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
+  if (env.MC_ROLE) return { role: env.MC_ROLE === 'brief' ? 'manager' : env.MC_ROLE === 'plan-session' ? PLAN_ROLE : env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
   if (env.MC_GOAL) return { role: BUILD_ROLES.goal, programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
 
   const path = relative(resolve(workRoot(env)), resolve(cwd));
@@ -33,7 +33,8 @@ export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {})
   }
   // Layout 1 remains readable while machines move to programs/.
   if (first === 'plan' && second) return found(PLAN_ROLE, second);
-  if (['brief', 'helper', 'intake'].includes(first)) return found(first);
+  if (first === 'brief') return found('manager');
+  if (['manager', 'helper', 'intake'].includes(first)) return found(first);
   return found(null);
 }
 

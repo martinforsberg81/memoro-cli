@@ -324,10 +324,10 @@ Three readers, and they agree because they read the same row.
   it stopped at, and — when the two sources disagree — the difference, in yellow.
   See [`mc-ui.md`](mc-ui.md).
 - **The brief** — the session reads DEPLOY on the page: the last deploy and
-  what has not shipped. `canon/roles/brief.md` says what to do with it: a
+  what has not shipped. `canon/roles/manager.md` says what to do with it: a
   `main` well ahead of production with a green nightly is a deploy to
   **propose**, one line, for Martin to type. (Until 2026-09-19 the gathered
-  brief carried a *Production* section of its own.) See [`mc-brief.md`](mc-brief.md).
+  brief carried a *Production* section of its own.) See [`mc-manager.md`](mc-manager.md).
 - **The helper** — `deployState` in
   [`src/mc/helper-collect.js`](../../src/mc/helper-collect.js) takes the row
   beside `/api/version`'s build time, and the age is the fresher of the two.

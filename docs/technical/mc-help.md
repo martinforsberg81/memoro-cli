@@ -18,7 +18,7 @@ starts an operation or asks for authentication. A script's own flags after
 ## Current work model
 
 The page is `mc`, and a numbered item shows a goal. `mc goal` writes the
-brief, criteria, phase, stage and log; `mc plan`, `mc brief` and bare
+brief, criteria, phase, stage and log; `mc plan`, `mc manager` and bare
 `mc helper` are the person's interactive entrances. A session already
 running uses the goal verbs, not an entrance that starts another session.
 Projects went on 2026-11-03; migration is described in
