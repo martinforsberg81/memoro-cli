@@ -34,49 +34,49 @@ the sessions do, so it stands right under them.
 
 ### PROGRAMMES
 
-`programmesSection` and `goalsOf` (`page-collect.js`) group goals by programme,
-sort by programme then goal name. Goal numbers remain in JSON and the menu
-lookup; the page omits them. The PROGRAMMES
-heading carries the whole page's counts: `N active · N dormant · N goals`,
-then every goal status by count, biggest first (`blocked 1 · ready 1`), each
-in its status colour (`statusRollup`, `page-render.js`).
+`programmesSection` and `goalsOf` (`page-collect.js`) build a tree:
+programme → phase → goal → PR. `page-programmes.js` draws it with its own
+columns, independent of the lane grid. Each programme carries `current_phase`,
+numeric `phases[]` with their goals, and `availability` counts. The flat
+`goals[]` and raw `statuses` remain in JSON for existing consumers. Goals
+carry their title, phase, stage, status and derived availability.
 
-Each active programme has a heading with ` · ` between its name, goal count,
-standalone PR count, planning sessions by provider, other open sessions and
-proposal count, followed by a cyan rule filling the remaining width. Active
-session metadata is cyan; goal counts use the terminal foreground, while
-absent sessions and secondary counts are grey. Dormant programmes have no
-goals or standalone PRs and fold into one line; `a` draws them all. A planning session alone does not make one active.
-A bold column title row labels the shared grid below PROGRAMMES.
+The lowest unfinished, valid phase is current. All unfinished goals within
+that phase appear together. Quiet future phases collapse into a numbered
+summary; finished goals collapse into a Finished group. `a` expands future
+phases, finished goals, detail rows and dormant programmes, and toggles them
+back. A future phase with a blocker, malformed record, running work, a goal
+awaiting merge or an open PR stays visible. Finished goals with open PRs
+also stay visible. Malformed goals have no inferred phase and appear under
+NEEDS ATTENTION. Collapsed and expanded phases retain numeric order.
 
-Standalone PRs owned by a programme's planning worktree (or `plan/<programme>`
-branch, including one checked out in a scratch directory) appear under that
-programme with `pr` in the kind cell. Goal-owned
-PRs stay with their goal and are never repeated as standalone rows. A programme
-with only a standalone PR remains visible. Attached PRs carry `programme` in
-JSON and are omitted from the loose rows under PULL REQUESTS; unassigned PRs
-remain visible there. The `mc prs` listing still shows every open PR.
+Each goal row has its stable menu number, title (falling back to its name),
+stage and state. Repository is secondary and appears from 100 columns up;
+expanded metadata includes all repositories, the technical name and session
+count. Numbers remain stable in programme/name order across phase grouping
+and folding. `<n>` opens that goal's detail. Latest Next or Comment appears
+only in expanded detail; finished detail shows Done or Comment instead of
+an obsolete Next. Blocker questions and parse errors remain visible by default.
 
-Every goal has a row in the grid: a large `●` in the left margin, name,
-first repository, stage, `N sess`, and open PRs. The kind cell is empty for
-goals; its space keeps columns aligned with SESSIONS and MERGES. Primary text
-uses the terminal foreground for names and repositories, including finished
-goals. Plan stages are cyan; running work is green; waits are yellow and
-blockers red. Done and dropped states and last words are grey. Criteria
-counts remain in JSON and goal detail, and no longer appear in each row. The tail says:
+Availability distinguishes running, can start, waiting for phase, needs plan,
+needs criteria, awaiting merge, blocked, invalid and finished. The summary
+and brand's ready count use phase eligibility, excluding running and finished
+goals, future phases, planning and builds without criteria. This uses
+`goalSession` for eligibility; runtime resource holds remain in SESSIONS.
+Summary parts wrap at terminal width without losing blocker counts or colours.
 
-- a higher phase: yellow `phase <n> — after phase <n-1>`;
-- blocked in any stage: red `blocked · waits on a person`, then its question;
-- otherwise the last Next, falling back to Comment;
-- done or dropped: Done, falling back to Comment, never an obsolete Next;
-- invalid: the first GOAL.json problem, in red, instead of an ordinary tail.
+Every open PR is a child row under its goal, showing the full repository/PR
+reference, title and state. Programme PRs without a goal have their own
+PRs WITHOUT A GOAL group. Explicit `plan/<programme>` branches retain their
+association in scratch worktrees. Attached PRs carry `programme` in JSON and
+are omitted from loose PULL REQUESTS rows. `mc prs` still lists every PR.
 
-No goal is hidden because it is blocked. The state cell is its stage, with
-blocked status red in any stage; a running goal is green, otherwise the
-stage's palette colour applies. `build` and `finish` are grey when not running.
-Strays follow under `not an area mc knows`: unexplained directories and
-sessions with no owner, with the facts needed to inspect them. Nothing on
-the page removes them.
+Programme headings retain plan sessions, goal and proposal counts, and a
+cyan rule. Cyan marks structural headings; running/startable work is green,
+phase waits yellow and blockers red. Names use the terminal foreground.
+Dormant programmes have no goals or standalone PRs and fold into one line;
+a planning session alone does not make one active. Strays follow under
+`not an area mc knows`, with the facts needed to inspect them.
 
 ### MAINTENANCE
 
@@ -213,19 +213,19 @@ visible without pretending they are tmux sessions.
 
 ## The grid
 
-`page-grid.js` defines `GRID`, `gridColumns` and `gridRow` once for PROGRAMMES,
-SESSIONS, DEV and MERGES. The same kind of fact begins at the same column.
+`page-grid.js` defines `GRID`, `gridColumns` and `gridRow` for SESSIONS, DEV
+and MERGES. PROGRAMMES uses the independent phase tree described above.
 
-| column | width ≥ 90 / < 90 | PROGRAMMES | SESSIONS | DEV | MERGES |
-|---|---|---|---|---|---|
-| mark + nr | 6 | status circle, no number | status circle and lane number | status circle | status circle |
-| kind | 8 | empty for goals, `pr` for standalone PRs | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
-| name | 28 / 20, floor 10 | goal name | programme/goal | holder | branch or repository |
-| repo | 12 / 0 | first repository | repository | repository | repository |
-| state | 9 | stage | running or idle | leased, idle or starting | round phase or queue state |
-| progress | 10 | N sess | elapsed | time since used | state age |
-| PR | 9 | open PRs | goal's open PRs | port | queue item or last landing |
-| tail | remainder | last words | model and check-ins | branch and worktree | reason and title |
+| column | width ≥ 90 / < 90 | SESSIONS | DEV | MERGES |
+|---|---|---|---|---|
+| mark + nr | 6 | status circle and lane number | status circle | status circle |
+| kind | 8 | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
+| name | 28 / 20, floor 10 | programme/goal | holder | branch or repository |
+| repo | 12 / 0 | repository | repository | repository |
+| state | 9 | running or idle | leased, idle or starting | round phase or queue state |
+| progress | 10 | elapsed | time since used | state age |
+| PR | 9 | goal's open PRs | port | queue item or last landing |
+| tail | remainder | model and check-ins | branch and worktree | reason and title |
 
 The tail gives way first, then the repository below 90 columns, then the
 name. The state, progress and PR widths hold. `clipCell` clips with `…`
@@ -293,7 +293,7 @@ painted rows occupy the same columns.
 | answer | action |
 |---|---|
 | a goal's number | `mc goal show` for that numbered goal, then redraw |
-| `a` | toggle dormant programmes |
+| `a` | toggle future phases, finished work, detail and dormant programmes |
 | `b` | open brief |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
@@ -303,7 +303,7 @@ painted rows occupy the same columns.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal; it starts no coding session. `pageKey` includes every goal's
-programme, name, stage, status, phase hold, criteria and running mark. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.
@@ -522,7 +522,7 @@ checks that routing without opening a coding tool.
 
 - `src/mc/commands/home.js`: page, arguments, menu, freshness and restart on new code.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
-- `src/mc/page-render.js` and `src/mc/page-grid.js`: drawing, widths and palette.
+- `src/mc/page-render.js`, `src/mc/page-programmes.js` and `src/mc/page-grid.js`: drawing, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
 - `src/mc/dev-holder.js`: who holds a dev server — `leaseHolder`, written when a verb takes one, and `holderLabel`.

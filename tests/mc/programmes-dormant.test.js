@@ -90,7 +90,7 @@ describe('dormant programmes on the page', () => {
   it('draws only active programmes, and one line for the dormant ones under the heading', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
     assert.match(lines[0], /^ {2}PROGRAMMES {2}3 active · 2 dormant · 3 goals {2}/u);
-    assert.equal(lines[1], '  2 dormant · 1 with a plan session · 1 with proposals · mc programs list');
+    assert.equal(lines.find((line) => line.includes('mc programs list')), '  2 dormant · 1 with a plan session · 1 with proposals · mc programs list');
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
     for (const name of ['mc', 'done-only', 'goal-only']) {
       assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
@@ -120,7 +120,7 @@ describe('dormant programmes on the page', () => {
   it('leaves the plan-session count out when no dormant programme has one', () => {
     const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.equal(lines[1], '  1 dormant · mc programs list');
+    assert.equal(lines.find((line) => line.includes('mc programs list')), '  1 dormant · mc programs list');
     assert.match(lines[0], /2 active · 1 dormant · 2 goals/u);
   });
 

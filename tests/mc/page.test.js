@@ -1332,7 +1332,7 @@ describe('the page', () => {
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work: the session in flight, and the goals
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 2 ready · 1 blocked/u);
+    assert.match(text, /1 in flight · 1 ready · 1 blocked/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
@@ -1360,14 +1360,14 @@ describe('the page', () => {
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^  ● memoro\s+\?\s+1\s+1\s+\?\s+\?\s+\?\s+\?\s+0\s+60 min old$/mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
-    assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}ready 2 · blocked 1\s+p {2}plan a programme/u);
+    assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+· 1 goal · no plan session +─+$/mu,
       'the programme is a heading of its own, and it counts its own goals');
     // Every goal is a row under its programme, numbered in programme order,
     // with its repository in a column of its own.
-    assert.match(text, /^  ● +avatar-self-serve\s+memoro\s+build\s+1 sess .*blocked · waits on a/mu);
-    assert.match(text, /^  ● +docx-editor\s+memoro\s+build/mu, 'the repository is a column on the row');
-    assert.match(text, /^  ● +mc-ui\s+memoro-cli\s+build/mu);
+    assert.match(text, /^ +1 avatar-self-serve +build +blocked +memoro$/mu);
+    assert.match(text, /^ +2 docx-editor +build +running +memoro$/mu, 'the repository is a column on the row');
+    assert.match(text, /^ +3 mc-ui +build +can start +memoro-cli$/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
     assert.doesNotMatch(text, /unplanned-workareas/u);
     // mc itself is the last line: how long the runner has been up, on what, and
@@ -1393,8 +1393,8 @@ describe('the page', () => {
    * `expand` draws the dormant programmes too, each on a heading of its own;
    * the goals keep their numbers either way.
    */
-  it('draws every programme on expand, keeping the same goals without numbers', () => {
-    const names = (lines) => lines.filter((line) => /^  ● {13}/u.test(line)).map((line) => cellsOf(line, 120).name);
+  it('draws every programme on expand, keeping the same goal numbers', () => {
+    const names = (lines) => lines.map((line) => /^ +[123] (avatar-self-serve|docx-editor|mc-ui) +build/u.exec(line)?.[1]).filter(Boolean);
     const folded = renderPageLines(DATA, { columns: 120, now: NOW });
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
     assert.deepEqual(names(all), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
@@ -2075,6 +2075,8 @@ describe('MC', () => {
     assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, running: true })) }), 'a goal the runner took is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, stage: 'review', state: 'review' })) }), 'a goal that moved is');
+    assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, phase: 2 })) }), 'a phase move refreshes the tree');
+    assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, title: 'New title' })) }), 'a title change refreshes the tree');
     assert.equal(pageKey({}), '');
   });
 });
@@ -2090,19 +2092,26 @@ describe('the palette', () => {
   // two ways — to nothing, or to plain `grey`.
   const SNAPSHOT = [
     '',
-    'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 1 blocked · ≈$7.28 today
+    'bold grey grey grey grey', // brand
     '',
-    'bold+cyan grey green grey red grey', //          PROGRAMMES  3 active · 1 dormant · 3 goals  ready 2 · blocked 1
-    'grey', // dormant programmes
-    'bold', // column titles
-    'bold+cyan grey grey grey cyan', // programme name · goals · plan sessions
-    'red red grey red grey red grey', // blocked goal, primary text uses the terminal foreground
+    'bold+cyan grey grey', // PROGRAMMES
+    'green grey green grey red', // availability
+    'grey', // dormant
+    'bold+cyan grey grey grey cyan', // programme
+    'cyan+bold', // phase
+    'bold bold bold bold', // GOAL / STAGE / STATE / REPO
+    'grey red red grey', // number / blocked stage / state / repo
+    'red', // blocker question
     'bold+cyan grey grey grey cyan',
-    'green bold green grey', // running goal
+    'cyan+bold',
+    'bold bold bold bold',
+    'grey bold grey green grey', // running goal
     'bold+cyan grey grey grey cyan',
-    'grey grey grey', // unfinished goal
-    'yellow', //                                         not an area mc knows
-    'bold grey', //                                      mc-docx-editor  tmux session · open 60 min
+    'cyan+bold',
+    'bold bold bold bold',
+    'grey grey green grey', // goal that can start
+    'yellow', // unexplained area
+    'bold grey', // stray session
     '',
     'bold+cyan grey', // MAINTENANCE
     'grey', // headings

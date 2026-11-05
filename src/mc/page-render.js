@@ -44,6 +44,7 @@
  * Lines rather than one string, so a test can look
  * at a row without splitting a page apart again.
  */
+import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
@@ -914,40 +915,6 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * A goal in the shared grid. Names and repositories use the terminal foreground;
- * finished rows keep their state and last words quiet without hiding identity.
- * Criteria remain available in the goal detail and JSON.
- */
-function goalLine(c, wide, goal) {
-  const word = goal.stage ?? goal.state ?? '—';
-  const tone = goal.status === 'blocked' ? stateTone('blocked')
-    : goal.running ? ['green']
-    : word === 'plan' ? ['cyan'] : stateTone(word);
-  const finished = goal.stage === 'done' || goal.stage === 'dropped';
-  const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
-  const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
-  let tail = said ? [{ text: said, styles: finished ? ['grey'] : [] }] : [];
-  if (goal.problems?.length) tail = [{ text: `GOAL.json: ${goal.problems[0]}`, styles: ['red'] }];
-  else if (waits) {
-    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said } : null];
-  } else if (goal.person) {
-    const head = 'waits on a person';
-    tail = [{ text: 'blocked', styles: stateTone('blocked') }, { text: head, styles: stateTone('blocked') },
-      said && one(said) !== head ? { text: said } : null];
-  }
-  return gridRow(c, wide, {
-    mark: { text: MARK.running, styles: goal.problems?.length ? ['red'] : goal.held ? stateTone('waiting') : tone },
-    kind: { text: '' },
-    name: { text: goal.name, styles: goal.running ? ['bold'] : [] },
-    repo: { text: goal.repo ?? goal.repos?.[0] ?? '—' },
-    state: { text: word, styles: tone },
-    progress: { text: goal.progress ?? '', styles: ['grey'] },
-    pr: prCellOf(goal.prs),
-    tail,
-  });
-}
-
-/**
  * A programme's open plan sessions by provider, `claude 1 · codex 2`, or ''
  * when it has none. The heading draws it after `plan`; `mc programs list`
  * says it in the same words.
@@ -996,32 +963,14 @@ function programmeLine(c, wide, group) {
   return room >= 3 ? `${label}  ${c('─'.repeat(room), 'cyan')}` : label;
 }
 
-function programmePrLine(c, wide, pr) {
-  const state = pr.merge_red ? 'red' : pr.merging || (pr.draft ? 'draft' : 'open');
-  return gridRow(c, wide, {
-    mark: { styles: pr.merge_red ? ['red'] : pr.merging ? ['green'] : ['grey'] },
-    kind: { text: 'pr', styles: PR_TONE },
-    name: { text: pr.title || pr.branch || '—' },
-    repo: { text: pr.repo, styles: ['grey'] },
-    state: { text: state, styles: stateTone(state) },
-    pr: prCellOf([pr]),
-    tail: [{ text: pr.merge_red || pr.branch || '', styles: ['grey'] }],
-  });
-}
-
-function programmeColumnHead(c, wide) {
-  const col = gridColumns(wide);
-  let line = '';
-  for (const [key, title] of [['name', 'NAME'], ['repo', 'REPOSITORY'], ['state', 'STAGE'], ['progress', 'SESS'], ['pr', 'PR'], ['tail', 'LATEST']]) {
-    if (!col[key].width) continue;
-    line = line.padEnd(col[key].x) + clip(title, col[key].width - 1);
-  }
-  return c(line, 'bold');
-}
-
 function programmesLines(lines, c, wide, programmes, expand) {
-  const statuses = statusRollup(programmes.statuses)
-    .map(([status, n]) => ({ text: `${status} ${n}`, styles: statusTone(status) }));
+  const availability = programmes.availability || {};
+  const statuses = [['running', 'running', ['green']], ['ready', 'can start', ['green']],
+    ['waiting', 'waiting for phase', ['yellow']], ['planning', 'need plan', ['cyan']],
+    ['incomplete', 'need criteria', ['yellow']], ['merging', 'await merge', ['green']],
+    ['blocked', 'blocked', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
+    .filter(([key]) => availability[key])
+    .map(([key, label, styles]) => ({ text: `${availability[key]} ${label}`, styles }));
   const groups = programmes.programmes || [];
   // A page from before the flag has every programme active, as it was drawn.
   const asleep = groups.filter((group) => group.dormant);
@@ -1029,8 +978,16 @@ function programmesLines(lines, c, wide, programmes, expand) {
   const active = programmes.active ?? groups.length - dormant;
   heading(lines, c, wide, 'PROGRAMMES', [
     { text: `${active} active · ${dormant} dormant · ${programmes.count} goal${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
-    ...between(statuses, ' · '),
   ], 'p  plan a programme');
+  let summary = [];
+  for (const part of statuses) {
+    if (summary.length && summary.reduce((n, item) => n + item.text.length, 0) + summary.length * 3 + part.text.length > wide - 2) {
+      lines.push(`  ${paint(c, between(summary, ' · '))}`);
+      summary = [];
+    }
+    summary.push(part);
+  }
+  if (summary.length) lines.push(`  ${paint(c, between(summary, ' · '))}`);
 
   // The dormant programmes — no goal — are this one line and not a
   // heading each: on 2026-11-02 they were 27 of 41 headings, every one saying
@@ -1050,12 +1007,10 @@ function programmesLines(lines, c, wide, programmes, expand) {
     ].filter(Boolean).join(' · '));
   }
 
-  lines.push(programmeColumnHead(c, wide));
   for (const group of groups) {
     if (group.dormant && !expand) continue;
     lines.push(programmeLine(c, wide, group));
-    for (const goal of group.goals || []) lines.push(goalLine(c, wide, goal));
-    for (const pr of group.prs || []) lines.push(programmePrLine(c, wide, pr));
+    lines.push(...programmeTreeLines(c, wide, group, { expand }));
   }
   strayLines(lines, c, wide, programmes.strays);
 
@@ -1170,7 +1125,7 @@ export function renderPageLines(data, {
   // the sessions the runner has in flight (SESSIONS), and the goals that are
   // ready and blocked (PROGRAMMES). The three ride in one part so that a
   // narrow terminal drops the cost rather than half of the answer.
-  const statuses = data.programmes?.statuses || {};
+  const statuses = data.programmes?.availability || data.programmes?.statuses || {};
   const flight = (data.runner?.sessions || []).length;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [

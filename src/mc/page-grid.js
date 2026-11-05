@@ -1,35 +1,11 @@
 /**
- * The page's one grid: the columns every row of PROGRAMMES, SESSIONS and
- * MERGES is drawn in — and DEV's, when it comes (goal mc/dev-section).
+ * The shared grid for SESSIONS, DEV and MERGES. Repository, state, clock and
+ * PR columns align across these operational sections. PROGRAMMES has its own
+ * phase tree in page-programmes.js, with PR children rather than PR cells.
  *
- * Each section had widths of its own: a project row's (`projectColumns`), which
- * a goal borrowed and filled with `g · <name>` and `N sessions`; a lane row's
- * (`LANE_KIND`, `workWidth`, `SESSION_REPO`); and none at all for a merge. So the
- * repository, the state and the pull request stood at a different x in every
- * section (Martin, 2026-11-03: *"vi behöver sätta fast kolumner"*). Here they
- * stand at one:
- *
- *   nr+mark  kind  name  repo  state  progress  pr  tail
- *
- * The same kind of fact in the same column, in every section: a row's name
- * where the name stands, its repository where the repository stands, its pull
- * request in the PR column, and the grey tail last. A row is drawn from the
- * fields `mc --json` carries under the same names in every section — `name`,
- * `repo`, `state`, `progress`, `prs` — and the page computes nothing the JSON
- * lacks.
- *
- * **What gives way, in order** (docs/technical/mc-ui.md § *The grid*): the
- * tail first — it takes what is left — then the repository, which is not drawn
- * under 90 columns, then the name shortens. The state, the progress and the
- * pull request never give way: they are the answer.
- *
- * **A cell is clipped with `…` and never in the middle of a number.** A cell
- * whose cut would fall inside a run of digits is cut before the run, so
- * `#14709` is never `#147…` and `12/30` never `12/3…`.
- *
- * The palette is here too: one colour per state word and one per kind word,
- * wherever the word is printed (`STATE_TONE`, `KIND_TONE`). The table in
- * mc-ui.md § *The palette* is read against them by a test.
+ * Repository gives way below 90 columns, then names shorten; state, progress
+ * and whole PR numbers remain readable. Palette and clipping helpers are also
+ * used by the programme tree.
  */
 import { width } from './status-render.js';
 

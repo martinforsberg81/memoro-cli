@@ -98,15 +98,17 @@ function rowsOf(lines) {
 }
 
 describe('the grid', () => {
-  it('draws a goal, a lane, a merge and a dev server with the repository and the PR at the same x, at 80, 100 and 140', () => {
+  it('keeps lanes, merges and dev servers aligned while programme PRs are children', () => {
     for (const columns of [80, 100, 140]) {
       const col = gridColumns(columns);
-      const rows = rowsOf(renderPageLines(threeRows(), { columns, now: NOW }));
+      const allRows = rowsOf(renderPageLines(threeRows(), { columns, now: NOW }));
+      assert.match(allRows[0], /↳ memoro-cli#1102/u);
+      const rows = allRows.slice(1);
       const prAt = rows.map((line) => line.search(/#11\d\d/u));
-      assert.deepEqual(prAt, [col.pr.x, col.pr.x, col.pr.x], `${columns}: the PR column\n${rows.join('\n')}`);
+      assert.deepEqual(prAt, [col.pr.x, col.pr.x], `${columns}: the PR column\n${rows.join('\n')}`);
       if (columns >= GRID_ROOMY) {
         const repoAt = rows.map((line) => line.indexOf(' memoro-cli ') + 1);
-        assert.deepEqual(repoAt, [col.repo.x, col.repo.x, col.repo.x], `${columns}: the repo column\n${rows.join('\n')}`);
+        assert.deepEqual(repoAt, [col.repo.x, col.repo.x], `${columns}: the repo column\n${rows.join('\n')}`);
       } else {
         // Under 90 columns the repository gives way, in every section alike.
         assert.equal(col.repo.width, 0);
@@ -124,7 +126,7 @@ describe('the grid', () => {
       const cells = rows.map((line) => [line.slice(col.kind.x, col.kind.x + col.kind.width).trim(),
         line.slice(col.state.x, col.state.x + col.state.width).trim(),
         line.slice(col.progress.x, col.progress.x + col.progress.width).trim()]);
-      assert.deepEqual(cells, [['', 'build', '2 sess'], ['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
+      assert.deepEqual(cells, [['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
     }
   });
 
@@ -143,12 +145,11 @@ describe('the grid', () => {
     assert.equal(lane.slice(col.state.x, col.progress.x + col.progress.width).replace(/\s+/gu, ' ').trim(), 'running 40 min');
   });
 
-  it('draws a goal without a repeated kind label, keeping the shared columns', () => {
+  it('draws a numbered goal with its own layout and its PR as a child', () => {
     const lines = renderPageLines(threeRows(), { columns: 120, now: NOW }).map(plain);
-    const row = lines.find((line) => line.includes('#1102'));
-    const col = gridColumns(120);
-    assert.equal(row.slice(col.kind.x, col.kind.x + col.kind.width).trim(), '');
-    assert.equal(row.slice(col.name.x, col.name.x + col.name.width).trim(), 'grid-goal');
+    const index = lines.findIndex((line) => /^ +1 grid-goal +build +can start/u.test(line));
+    assert.ok(index >= 0, lines.join('\n'));
+    assert.match(lines[index + 1], /↳ memoro-cli#1102/u);
     assert.ok(!lines.some((line) => /(?:^| )g · /u.test(line)), 'no row says `g ·`');
   });
 
