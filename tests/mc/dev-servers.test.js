@@ -189,12 +189,36 @@ describe('registering and forgetting', () => {
     registerManifest(source, { root });
     rmSync(source, { force: true });
 
-    const result = unregisterManifest(source, { root });
+    const result = unregisterManifest(source, { root, alive: () => false });
     assert.equal(result.ok, true);
     assert.equal(result.removed, true);
     assert.deepEqual(listServers({ root }).servers, []);
     rmSync(root, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('live unregister retains capacity after source removal until confirmed death', async () => {
+    const root = scratch();
+    const worktree = scratch();
+    try {
+      const source = writeSource(worktree);
+      registerManifest(source, { root });
+      assert.equal(unregisterManifest(source, { root }).reason, 'still-running');
+      rmSync(source);
+      assert.equal(unregisterManifest(source, { root }).removed, false);
+      const refused = await admit({ root, service: 'memoro-worker', worktree: '/w/replacement', env: { MC_DEV_MAX_SERVERS: '1' }, freeMemory: () => 90 });
+      assert.equal(refused.reason, 'cap');
+      assert.deepEqual(refused.holders.map((item) => item.instance_id), ['dev-0123abcd']);
+      const same = await admit({ root, service: 'memoro-worker', worktree, env: {}, freeMemory: () => 90 });
+      assert.equal(same.reuse, 'dev-0123abcd', 'restart cannot reserve while the old pid is live');
+      assert.equal(unregisterManifest(source, { root, alive: () => false }).removed, true);
+      assert.deepEqual(listServers({ root }).servers, []);
+      const next = await admit({ root, service: 'memoro-worker', worktree, env: {}, freeMemory: () => 90 });
+      assert.match(next.reservation, /^res-/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
   });
 
   it('is not an error to unregister what was never registered', () => {
@@ -301,7 +325,8 @@ describe('the verb memoro calls', () => {
 
     const gone = capture();
     assert.equal(await run(['unregister', source, '--json'], { stdout: gone, stderr: capture(), root }), 0);
-    assert.equal(JSON.parse(gone.text()).removed, true);
+    assert.equal(JSON.parse(gone.text()).removed, false);
+    assert.equal(JSON.parse(gone.text()).reason, 'still-running');
 
     rmSync(root, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });

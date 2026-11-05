@@ -250,19 +250,31 @@ function sameHolder(a, b) {
  * asked for either way, and reporting it as a failure would make every
  * double-stop look like a fault.
  */
-export function unregisterManifest(sourcePath, { root = devServersRoot() } = {}) {
+export function unregisterManifest(sourcePath, { root = devServersRoot(), alive = pidAlive, lock = {} } = {}) {
   const path = resolve(sourcePath);
-  const fromSource = readJson(path);
-  const instanceId = text(fromSource?.instance_id)
-    || readRecords(root).find((record) => record.source_manifest_path === path)?.instance_id
-    || null;
-  if (!instanceId || !INSTANCE_ID.test(instanceId)) {
-    return { ok: true, instance_id: null, removed: false, reason: 'not-registered' };
+  try {
+    return updateReservations(devPoolPath(root), () => {
+      const fromSource = readJson(path);
+      const instanceId = text(fromSource?.instance_id)
+        || readRecords(root).find((record) => record.source_manifest_path === path)?.instance_id
+        || null;
+      if (!instanceId || !INSTANCE_ID.test(instanceId)) {
+        return { result: { ok: true, instance_id: null, removed: false, reason: 'not-registered' } };
+      }
+      const target = registeredPath(instanceId, root);
+      const record = readJson(target);
+      if (!record) return { result: { ok: true, instance_id: instanceId, removed: false, reason: 'not-registered' } };
+      // Shutdown asks before exit; SIGKILL also does not prove termination.
+      // Keep the record (even if its source is removed) until the inventory
+      // observes death. It must still occupy capacity and block replacement.
+      if (alive(record.pid)) return { result: { ok: true, instance_id: instanceId, removed: false, reason: 'still-running' } };
+      rmSync(target, { force: true });
+      return { result: { ok: true, instance_id: instanceId, removed: true } };
+    }, { lock });
+  } catch (error) {
+    if (error instanceof LockError || error instanceof PoolStateError) return { ok: false, reason: 'lock', error: error.message };
+    throw error;
   }
-  const target = registeredPath(instanceId, root);
-  if (!existsSync(target)) return { ok: true, instance_id: instanceId, removed: false, reason: 'not-registered' };
-  rmSync(target, { force: true });
-  return { ok: true, instance_id: instanceId, removed: true };
 }
 
 /** Every file in the directory that parses, in a stable order. */

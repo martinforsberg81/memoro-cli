@@ -21,7 +21,7 @@ Six verbs:
 mc dev list [--json]                     what is running, and where
 mc dev status [--json]                   the servers, starting reservations, the queue, cap and memory (see Admission)
 mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
-mc dev unregister <manifest> [--json]    forget it
+mc dev unregister <manifest> [--json]    forget it once its pid is dead
 mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
                                          may one more server start? a reservation, a reuse or a refusal (see Admission)
 mc dev stop <instance_id>                stop it, through its own stop command
@@ -313,10 +313,14 @@ the same refusal, never read as empty.
   service and worktree. Its static server did not ask at all, so a static
   server started by hand from an older checkout is not counted until it
   registers.
-- **New memoro wrapper, older mc.** An mc that answers `{ "ok": true }`
-  without a reservation is obeyed; capacity is then as the old mc counted it.
-  A missing mc, or an answer that is not a verdict, is a refusal: the wrapper
-  does not start.
+- **New memoro wrapper, older mc.** A positive verdict without a valid
+  reservation is refused, as are missing mc and malformed responses. Upgrade
+  mc first, then all checkout wrappers. Old direct static/full starts do not
+  enforce the bound; they are not a supported hard-limit deployment.
+- **Stop/restart.** Unregister under the pool lock retains a live pid's record
+  (`removed: false`, `reason: still-running`), even after source removal.
+  Shutdown cannot free capacity before exit; inventory sweeps after pid death.
+  Wrappers wait for death after SIGKILL too and refuse replacement on failure.
 - **Already over capacity.** Installing this stops nothing. Existing servers
   keep running and keep their slots; new starts queue until enough leave, and
   `mc test dev`/`mc shot dev` reclaim only idle holders as below.
