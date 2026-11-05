@@ -63,9 +63,13 @@ import { resolve } from 'node:path';
 
 import { devServersRoot } from '../paths.js';
 import {
-  admit, agoText, DEFAULT_MAX_SERVERS, freeMemoryPercent, holdersOf, isMainServer, listServers, minFreePercentOf, processCwd, refusalText,
+  admit, agoText, freeMemoryPercent, holdersOf, isMainServer, listServers, minFreePercentOf, pendingOf, processCwd, refusalText,
   registerManifest, stopServer, strayCwd, unregisterManifest, waitingLine,
 } from '../dev-servers.js';
+import {
+  adoptReservation, devPoolPath, LockError, peekReservations, PoolStateError, RESERVATION_ID, slotCapOf,
+} from '../dev-reservations.js';
+import { pidAlive } from '../status-collect.js';
 import { devQueuePath, queueOrder, readQueue, ticketView } from '../dev-queue.js';
 import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-reap.js';
 import { open as openSurface, surfaces } from '../dev-open.js';
@@ -143,26 +147,36 @@ function status(opts, { stdout, root, deps }) {
   const env = deps.env || process.env;
   const at = (deps.now || Date.now)();
   const { servers } = listServers({ root });
-  // The main server is listed, marked, and counts for none of the cap.
+  // MAIN is listed, marked, and takes none of the slots; every other live server takes one.
   const main = deps.main !== undefined ? deps.main : mainCheckout(env);
   const app = holdersOf(servers).map((server) => ({ ...server, main: isMainServer(server, main) }));
   const counted = holdersOf(servers, { main }).length;
-  const queue = queueOrder(readQueue({ file: deps.queueFile || devQueuePath(root) }), at).map((ticket) => ticketView(ticket, at));
-  const cap = Number(env.MC_DEV_MAX_SERVERS) || DEFAULT_MAX_SERVERS;
+  const pending = pendingOf(servers, peekReservations(devPoolPath(root)), { main });
+  let queue = [];
+  try {
+    queue = queueOrder(readQueue({ file: deps.queueFile || devQueuePath(root) }), at).map((ticket) => ticketView(ticket, at));
+  } catch (error) {
+    stdout.write(`mc: the queue could not be read — ${error.message}\n`);
+  }
+  const cap = slotCapOf(env);
   const free = (deps.freeMemory || freeMemoryPercent)();
   const freePercent = Number.isFinite(free) ? free : null;
   const floor = minFreePercentOf(env);
   if (opts.json) {
     stdout.write(`${JSON.stringify({
-      schema_version: 1, cap, free_percent: freePercent, min_free_percent: floor, servers: app, queue,
+      schema_version: 1, cap, free_percent: freePercent, min_free_percent: floor, servers: app, pending, queue,
     }, null, 2)}\n`);
     return 0;
   }
   const memory = freePercent === null ? 'free memory unknown' : `${freePercent}% memory free (floor ${floor}%)`;
-  stdout.write(`mc: ${counted} of ${cap} app servers · ${memory}\n`);
+  const starting = pending.length ? ` + ${pending.length} starting` : '';
+  stdout.write(`mc: ${counted}${starting} of ${cap} dev-server slots · ${memory}\n`);
   for (const server of app) {
     const used = Date.parse(server.last_used_at ?? '');
     stdout.write(`  ${server.instance_id}  ${server.service}  ${server.worktree_path}  ${Number.isFinite(used) ? `used ${agoText(used, at)}` : 'never used by mc'}${server.main ? '  (main)' : ''}\n`);
+  }
+  for (const item of pending) {
+    stdout.write(`  ${item.reservation}  ${item.service}  ${item.worktree_path}  starting since ${agoText(Date.parse(item.created_at), at)}\n`);
   }
   if (!queue.length) {
     stdout.write('mc: nobody is waiting\n');
@@ -177,20 +191,45 @@ function status(opts, { stdout, root, deps }) {
 }
 
 /**
- * May one more server start? `{ ok: true }` or the refusal, and the exit says
- * the same thing for a caller that reads only that. Waiting lines go to stderr
- * with `--json`, so stdout stays one JSON document.
+ * May one more server start? `{ ok: true, reservation }`, `{ ok: true, reuse }`
+ * or the refusal, and the exit says the same thing for a caller that reads only
+ * that. Waiting lines go to stderr with `--json`, so stdout stays one JSON
+ * document.
+ *
+ * This process exits as soon as it answers, so the reservation it writes is
+ * held by its owner: `MC_DEV_OWNER_PID` when the wrapper names itself, else
+ * the parent that ran it. When `MC_DEV_ADMITTED` carries a reservation mc made
+ * for this service and worktree, the owner adopts that one instead of asking
+ * for another slot (`adoptReservation`); anything else in it — the `1` an older
+ * mc wrote — is not a pass, and the request is asked like any other.
  */
 async function askAdmission(opts, { stdout, root, deps }) {
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const say = opts.json ? stderr : stdout;
-  const verdict = await (deps.admit || admit)({
+  const alive = deps.pidAlive || pidAlive;
+  const owner = ownerPid(env, { alive, parent: deps.ppid ?? process.ppid });
+  let verdict = null;
+  const handed = String(env.MC_DEV_ADMITTED || '').trim();
+  if (RESERVATION_ID.test(handed)) {
+    try {
+      const adopted = adoptReservation({
+        file: devPoolPath(root), id: handed, service: opts.service, worktree: opts.worktree, pid: owner, alive,
+      });
+      if (adopted.ok) verdict = { ok: true, reservation: handed, adopted: true };
+      else log('dev-reservation-not-adopted', { reservation: handed, reason: adopted.reason, service: opts.service, worktree_path: opts.worktree });
+    } catch (error) {
+      if (!(error instanceof LockError || error instanceof PoolStateError)) throw error;
+      verdict = { ok: false, reason: 'lock', error: error.message, holders: [], pending: [], free_percent: null, cap: slotCapOf(env) };
+    }
+  }
+  verdict ||= await (deps.admit || admit)({
     service: opts.service,
     worktree: opts.worktree,
     waitSeconds: opts.wait,
     env,
     root,
+    pid: owner,
     ...(deps.queueFile ? { queueFile: deps.queueFile } : {}),
     main: deps.main !== undefined ? deps.main : mainCheckout(env),
     sleep: deps.sleep,
@@ -199,8 +238,16 @@ async function askAdmission(opts, { stdout, root, deps }) {
     onWaiting: (waiting) => say.write(`${waitingLine(waiting, { now: (deps.now || Date.now)() })}\n`),
   });
   if (opts.json) stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  else stdout.write(verdict.ok ? 'mc: admitted\n' : `mc: ${refusalText(verdict, { env })}\n`);
+  else if (verdict.ok) stdout.write(verdict.reuse ? `mc: already running — ${verdict.reuse}\n` : `mc: admitted — ${verdict.reservation}\n`);
+  else stdout.write(`mc: ${refusalText(verdict, { env })}\n`);
   return verdict.ok ? 0 : REFUSED_EXIT;
+}
+
+/** Who holds what this process reserves: `MC_DEV_OWNER_PID` when it names a live process, else the parent. */
+export function ownerPid(env, { alive = pidAlive, parent = process.ppid } = {}) {
+  const named = Number(env.MC_DEV_OWNER_PID);
+  if (Number.isInteger(named) && named > 1 && alive(named)) return named;
+  return parent;
 }
 
 function register(opts, { stdout, stderr, root }) {

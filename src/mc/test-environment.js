@@ -38,7 +38,9 @@ import {
   stopServer, strayCwd, touchServer, waitingLine,
 } from './dev-servers.js';
 import { leaseHolder } from './dev-holder.js';
+import { addReservationPid, devPoolPath, disownReservation } from './dev-reservations.js';
 import { log } from './logger.js';
+import { devServersRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
 /** Where a repository says what it may be measured with. */
@@ -470,68 +472,110 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   if (!start.ok) return start;
   const registerMs = deps.registerTimeoutMs ?? start.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
 
-  // Admission before the start, never after: at most four app servers on the
-  // machine and none while memory is short (`mc dev admit`). A profile that
-  // says it is `light` does not count as a holder, so it does not ask either.
-  // The child is told it was admitted, so a wrapper that would ask for itself
-  // when started by hand does not ask a second time.
-  if (start.resourceClass !== 'light') {
-    const admitted = await (deps.admit || admit)({
-      service: start.service,
-      worktree,
-      waitSeconds: deps.admitWaitSeconds ?? 900,
-      // mc's own shot or suite may stop a holder mc has not used for half an
-      // hour (`admit`); a server started by hand asks through `mc dev admit`, which never does.
-      evict: true,
-      root,
-      sleep,
-      now,
-      onWaiting: deps.onWaiting,
-      ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
-      main,
-      sessionsDir: deps.sessionsDir,
-      session: holder,
-    });
-    if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
-  }
-
-  const child = (deps.spawn || spawn)(process.execPath, [
-    fileURLToPath(new URL('../mc-cli.js', import.meta.url)), 'keys', 'serve', ...start.argv,
-  ], {
-    cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...env, MC_DEV_ADMITTED: '1' },
+  // Admission before the start, never after: at most three servers besides
+  // MAIN, running or starting, light ones included, and none while memory is
+  // short (`mc dev admit`). A yes is a reservation this process holds until
+  // the server registers; the child is told it in MC_DEV_ADMITTED, so the
+  // wrapper adopts that slot rather than asking for a second.
+  const pool = devPoolPath(root || devServersRoot());
+  const admitted = await (deps.admit || admit)({
+    service: start.service,
+    worktree,
+    waitSeconds: deps.admitWaitSeconds ?? 900,
+    env,
+    // mc's own shot or suite may stop a holder mc has not used for five
+    // minutes (`admit`); a server started by hand asks through `mc dev admit`, which never does.
+    evict: true,
+    root,
+    sleep,
+    now,
+    onWaiting: deps.onWaiting,
+    ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
+    main,
+    sessionsDir: deps.sessionsDir,
+    session: holder,
   });
-  child.unref?.();
-
-  // Stage one: has it said where it will serve? One window, and one more if the
-  // wrapper spawned here is still alive when the first lapses — see REGISTER_TIMEOUT_MS.
-  const alive = deps.pidAlive || pidAlive;
-  const childPid = Number.isInteger(child?.pid) ? child.pid : null;
-  let registerBy = now() + registerMs;
-  let extended = false;
-  let server = null;
-  for (;;) {
-    while (!server && now() < registerBy) {
-      await sleep(1000);
-      server = fresh();
+  if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
+  const reservation = admitted.reservation || null;
+  const letGo = (pids) => {
+    if (!reservation) return;
+    try {
+      disownReservation({ file: pool, id: reservation, pids });
+    } catch (error) {
+      // Held by a dead pid, it is swept on the next read; nothing more to do here.
+      log('dev-reservation-disown-failed', { reservation, error: error.message });
     }
-    if (server || extended || childPid === null || !alive(childPid)) break;
-    extended = true;
-    registerBy = now() + registerMs;
-    const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
-      + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
-    // Its own callback: `onWaiting` is handed admission verdicts, and a line
-    // given to it reached `waitingLine` as a verdict and threw (2026-11-02).
-    if (deps.onSlowStart) deps.onSlowStart(line);
-    else process.stderr.write(`${line}\n`);
-  }
-  if (!server) {
-    const stillAlive = extended && alive(childPid);
-    return {
-      ok: false,
-      error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
-        + ' — its log is under .wrangler/dev-server/logs/'
-        + (stillAlive ? ` (pid ${childPid} is still alive — mc dev stop it, or wait for it and run this again)` : ''),
-    };
+  };
+
+  let server = null;
+  let started = true;
+  if (admitted.reuse) {
+    // Another start for this worktree and service registered while this one
+    // waited, or one was already up: taken, not started again. A server that
+    // was just stopped and is still registered is not a reuse.
+    if (admitted.reuse === replaced) {
+      return { ok: false, error: `${replaced} is still running after its stop command — nothing was started; mc dev stop ${replaced}, then run this again` };
+    }
+    server = serversFor(worktree, { root }).find((item) => item.instance_id === admitted.reuse) || null;
+    if (!server) return { ok: false, error: `${admitted.reuse} was registered for ${worktree} and left before it could be reused` };
+    started = false;
+  } else {
+    let child;
+    try {
+      child = (deps.spawn || spawn)(process.execPath, [
+        fileURLToPath(new URL('../mc-cli.js', import.meta.url)), 'keys', 'serve', ...start.argv,
+      ], {
+        cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...env, MC_DEV_ADMITTED: reservation || '' },
+      });
+      child.unref?.();
+    } catch (error) {
+      letGo([process.pid]);
+      return { ok: false, error: `${start.service} could not be started: ${error.message}` };
+    }
+
+    // Stage one: has it said where it will serve? One window, and one more if the
+    // wrapper spawned here is still alive when the first lapses — see REGISTER_TIMEOUT_MS.
+    const alive = deps.pidAlive || pidAlive;
+    const childPid = Number.isInteger(child?.pid) ? child.pid : null;
+    // The child may create the server after this process has gone: it holds the slot too.
+    if (reservation && childPid !== null) {
+      try {
+        addReservationPid({ file: pool, id: reservation, pid: childPid });
+      } catch (error) {
+        log('dev-reservation-hand-failed', { reservation, child_pid: childPid, error: error.message });
+      }
+    }
+    let registerBy = now() + registerMs;
+    let extended = false;
+    for (;;) {
+      while (!server && now() < registerBy) {
+        await sleep(1000);
+        server = fresh();
+      }
+      if (server || extended || childPid === null || !alive(childPid)) break;
+      extended = true;
+      registerBy = now() + registerMs;
+      const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
+        + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
+      // Its own callback: `onWaiting` is handed admission verdicts, and a line
+      // given to it reached `waitingLine` as a verdict and threw (2026-11-02).
+      if (deps.onSlowStart) deps.onSlowStart(line);
+      else process.stderr.write(`${line}\n`);
+    }
+    if (!server) {
+      const stillAlive = childPid !== null && alive(childPid);
+      // A child still alive may still register: the slot stays held by it, and
+      // goes when it does. One that is gone will not, and frees it now.
+      letGo(stillAlive ? [process.pid] : [process.pid, ...(childPid !== null ? [childPid] : [])]);
+      return {
+        ok: false,
+        error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
+          + ' — its log is under .wrangler/dev-server/logs/'
+          + (stillAlive && extended ? ` (pid ${childPid} is still alive and keeps its slot — mc dev stop it, or wait for it and run this again)` : ''),
+      };
+    }
+    // Registered: the record counts now, and the registration fulfilled the reservation.
+    letGo([process.pid, ...(childPid !== null ? [childPid] : [])]);
   }
   deps.onRegistered?.(server);
 
@@ -543,7 +587,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       (deps.touchServer || touchServer)(server.instance_id, { ...(root ? { root } : {}), holder });
       return {
-        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
+        ok: true, server, started, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes

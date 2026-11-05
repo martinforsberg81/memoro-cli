@@ -15,16 +15,20 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { describe, it } from 'node:test';
 
 import {
-  admission, admit, checkManifest, freeMemoryPercent, holdersOf, keptHolds, listServers, processCwd, registerManifest, serversUnder,
+  admission, admit, checkManifest, freeMemoryPercent, holdersOf, keptHolds, listServers, processCwd, refusalText, registerManifest, serversUnder,
   stopServersUnder, strayCwd, touchServer, unregisterManifest, waitingLine, DEFAULT_MAX_SERVERS, DEFAULT_HOLDER_STALE_MINUTES,
 } from '../../src/mc/dev-servers.js';
 import {
   devQueuePath, GATE_PRIORITY_MS, joinQueue, leaveQueue, nextInQueue, queueOrder, readQueue,
 } from '../../src/mc/dev-queue.js';
 import { run } from '../../src/mc/commands/dev.js';
+import {
+  addReservationPid, devPoolPath, disownReservation, LockError, readReservations, SLOT_LIMIT, slotCapOf, withFileLock,
+} from '../../src/mc/dev-reservations.js';
 import { setLogPath } from '../../src/mc/logger.js';
 
 /** A pid that is certainly not running, and one that certainly is. */
@@ -70,6 +74,12 @@ function writeSource(worktree, overrides = {}) {
   const path = join(dir, 'mc-dev.json');
   writeFileSync(path, `${JSON.stringify(manifest(worktree, overrides), null, 2)}\n`);
   return path;
+}
+
+/** A yes: admitted, and the slot held by a reservation. */
+function assertReserved(verdict, message) {
+  assert.equal(verdict.ok, true, message || JSON.stringify(verdict));
+  assert.match(verdict.reservation, /^res-/u, message || JSON.stringify(verdict));
 }
 
 function capture() {
@@ -179,12 +189,38 @@ describe('registering and forgetting', () => {
     registerManifest(source, { root });
     rmSync(source, { force: true });
 
-    const result = unregisterManifest(source, { root });
+    const result = unregisterManifest(source, { root, alive: () => false });
     assert.equal(result.ok, true);
     assert.equal(result.removed, true);
     assert.deepEqual(listServers({ root }).servers, []);
     rmSync(root, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('live unregister retains capacity after source removal until confirmed death', async () => {
+    const root = scratch();
+    const worktree = scratch();
+    try {
+      const source = writeSource(worktree);
+      registerManifest(source, { root });
+      unregisterManifest(source, { root });
+      rmSync(source);
+      const leaving = unregisterManifest(source, { root });
+      const refused = await admit({ root, service: 'memoro-worker', worktree: '/w/replacement', env: { MC_DEV_MAX_SERVERS: '1' }, freeMemory: () => 90 });
+      assert.equal(refused.reason, 'cap');
+      assert.deepEqual(refused.holders.map((item) => item.instance_id), ['dev-0123abcd']);
+      assert.equal(leaving.removed, false);
+      assert.equal(leaving.reason, 'still-running');
+      const same = await admit({ root, service: 'memoro-worker', worktree, env: {}, freeMemory: () => 90 });
+      assert.equal(same.reuse, 'dev-0123abcd', 'restart cannot reserve while the old pid is live');
+      assert.equal(unregisterManifest(source, { root, alive: () => false }).removed, true);
+      assert.deepEqual(listServers({ root }).servers, []);
+      const next = await admit({ root, service: 'memoro-worker', worktree, env: {}, freeMemory: () => 90 });
+      assert.match(next.reservation, /^res-/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
   });
 
   it('is not an error to unregister what was never registered', () => {
@@ -207,7 +243,7 @@ describe('the sweep', () => {
     const swept = listServers({ root });
     assert.deepEqual(swept.servers, []);
     assert.deepEqual(swept.reaped, ['dev-0123abcd']);
-    assert.equal(readdirSync(root).length, 0, 'the sweep removes the file, not just the row');
+    assert.deepEqual(readdirSync(root).filter((name) => name.endsWith('.json')), [], 'the sweep removes the file, not just the row');
 
     rmSync(root, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
@@ -291,7 +327,8 @@ describe('the verb memoro calls', () => {
 
     const gone = capture();
     assert.equal(await run(['unregister', source, '--json'], { stdout: gone, stderr: capture(), root }), 0);
-    assert.equal(JSON.parse(gone.text()).removed, true);
+    assert.equal(JSON.parse(gone.text()).removed, false);
+    assert.equal(JSON.parse(gone.text()).reason, 'still-running');
 
     rmSync(root, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
@@ -333,7 +370,7 @@ describe('admission — may one more server start', () => {
     assert.equal(verdict.cap, 2);
     assert.equal(verdict.free_percent, 40);
     assert.deepEqual(verdict.holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
-    assert.deepEqual(Object.keys(verdict.holders[0]).sort(), ['instance_id', 'last_used_at', 'service', 'started_at', 'url', 'worktree_path']);
+    assert.deepEqual(Object.keys(verdict.holders[0]).sort(), ['instance_id', 'last_used_at', 'resource_class', 'service', 'started_at', 'url', 'worktree_path']);
   });
 
   it('names the holders mc may stop, oldest use first, only past staleBefore and only with a stop command', () => {
@@ -347,12 +384,14 @@ describe('admission — may one more server start', () => {
     assert.equal(ask([live('measure-a', '/w/a', stop), live('measure-b', '/w/b', stop)]).evictable, undefined, 'no staleBefore names none');
   });
 
-  it('a light server does not count', () => {
-    assert.deepEqual(ask([live('static-a', '/w/a', { resource_class: 'light' }), live('measure-b', '/w/b')]), { ok: true });
+  it('a light server takes a slot like any other', () => {
+    const verdict = ask([live('static-a', '/w/a', { resource_class: 'light', service: 'memoro-static' }), live('measure-b', '/w/b')]);
+    assert.equal(verdict.reason, 'cap');
+    assert.deepEqual(verdict.holders.map((holder) => [holder.instance_id, holder.resource_class]), [['static-a', 'light'], ['measure-b', 'standard']]);
   });
 
-  it('the asker\'s own worktree and service does not count — a restart replaces itself', () => {
-    assert.deepEqual(ask([live('measure-a', '/w/third'), live('measure-b', '/w/b')]), { ok: true });
+  it('a live server for the asker\'s own worktree and service is reused, and takes no new slot', () => {
+    assert.deepEqual(ask([live('measure-a', '/w/third'), live('measure-b', '/w/b')]), { ok: true, reuse: 'measure-a' });
     // The same worktree with another service does count.
     const other = ask([live('static-a', '/w/third', { service: 'memoro-static' }), live('measure-b', '/w/b')]);
     assert.equal(other.reason, 'cap');
@@ -360,7 +399,7 @@ describe('admission — may one more server start', () => {
 
   it('refuses on memory below the floor, before counting', () => {
     const verdict = ask([], { freePercent: 10 });
-    assert.deepEqual(verdict, { ok: false, reason: 'memory', holders: [], free_percent: 10, cap: 2 });
+    assert.deepEqual(verdict, { ok: false, reason: 'memory', holders: [], pending: [], free_percent: 10, cap: 2 });
   });
 
   it('skips the memory check when the free percentage is unknown', () => {
@@ -409,7 +448,7 @@ describe('admit — waiting for a slot', () => {
       onWaiting: (refused) => waiting.push(refused),
       logEvent: (event, fields) => events.push({ event, fields }),
     });
-    assert.deepEqual(verdict, { ok: true });
+    assertReserved(verdict);
     assert.equal(waiting.length, 1);
     assert.deepEqual(waiting[0].holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
     assert.deepEqual(events, [{
@@ -465,7 +504,7 @@ describe('admit — waiting for a slot', () => {
       stop: (server) => { stopped.push(server.instance_id); rmSync(join(root, `${server.instance_id}.json`)); return { ok: true }; },
       logEvent: (event, fields) => events.push({ event, fields }),
     });
-    assert.deepEqual(verdict, { ok: true });
+    assertReserved(verdict);
     assert.deepEqual(stopped, ['measure-a'], 'only the one unused for an hour; b was used ten minutes ago');
     assert.equal(events[0].event, 'dev-server-stopped');
     assert.equal(events[0].fields.reason, 'stale-holder');
@@ -509,20 +548,27 @@ describe('admit — waiting for a slot', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('by default four holders are admitted against, and a fifth waits; a holder unused five minutes is stale', async () => {
-    assert.equal(DEFAULT_MAX_SERVERS, 4);
+  it('by default three slots, of any class; MC_DEV_MAX_SERVERS lowers it and cannot raise it; a holder unused five minutes is stale', async () => {
+    assert.equal(DEFAULT_MAX_SERVERS, 3);
     assert.equal(DEFAULT_HOLDER_STALE_MINUTES, 5);
     const root = scratch();
-    for (const id of ['a', 'b', 'c']) register(root, `/w/${id}`, `measure-${id}`);
-    const ask = () => admit({
-      service: 'memoro-worker', worktree: '/w/fifth', waitSeconds: 0, env: {}, root,
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    const ask = (worktree, env = {}) => admit({
+      service: 'memoro-worker', worktree, waitSeconds: 0, env, root, pid: DEAD_PID,
       now: () => 0, sleep: async () => {}, freeMemory: () => 50, logEvent: () => {},
     });
-    assert.deepEqual(await ask(), { ok: true }, 'three live: a fourth is admitted');
-    register(root, '/w/d', 'measure-d');
-    const refused = await ask();
-    assert.equal(refused.reason, 'cap');
-    assert.equal(refused.cap, 4);
+    assertReserved(await ask('/w/third'), 'two live: a third is admitted');
+    assert.equal((await ask('/w/third', { MC_DEV_MAX_SERVERS: '2' })).reason, 'cap', 'lowered to two, the third is refused');
+    // A static server is the third holder: a fourth is refused, however high the override.
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'static-c.json'), JSON.stringify(manifest('/w/c', { instance_id: 'static-c', service: 'memoro-static', resource_class: 'light' })));
+    for (const env of [{}, { MC_DEV_MAX_SERVERS: '4' }, { MC_DEV_MAX_SERVERS: '99' }, { MC_DEV_MAX_SERVERS: 'lots' }]) {
+      const refused = await ask('/w/fourth', env);
+      assert.equal(refused.reason, 'cap', JSON.stringify(env));
+      assert.equal(refused.cap, 3, JSON.stringify(env));
+      assert.deepEqual(refused.holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b', 'static-c']);
+    }
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -558,10 +604,10 @@ describe('admit — waiting for a slot', () => {
     assert.equal(await run(['admit', 'memoro-worker', '--worktree', '/w/third'], {
       root, stdout: text, stderr: capture(), env: TWO_SLOTS, freeMemory: () => 40,
     }), 0);
-    assert.equal(text.text(), 'mc: admitted\n');
+    assert.match(text.text(), /^mc: admitted — res-[0-9a-f-]+\n$/u);
 
     const low = capture();
-    assert.equal(await run(['admit', 'memoro-worker', '--worktree', '/w/third'], {
+    assert.equal(await run(['admit', 'memoro-worker', '--worktree', '/w/fourth'], {
       root, stdout: low, stderr: capture(), env: { MC_DEV_MIN_FREE_PERCENT: '101' }, freeMemory: () => 40,
     }), 75);
     assert.equal(low.text(), 'mc: only 40% memory free (floor 101%)\n');
@@ -623,7 +669,7 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
     const verdict = await admit(askOpts(root, {
       stop: (server) => { stopped.push(server.instance_id); return { ok: true }; },
     }));
-    assert.deepEqual(verdict, { ok: true }, 'not counted, so the one slot is free');
+    assertReserved(verdict, 'not counted, so the one slot is free');
     assert.deepEqual(stopped, []);
     rmSync(root, { recursive: true, force: true });
   });
@@ -642,7 +688,7 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
         return { ok: true };
       },
     }));
-    assert.deepEqual(verdict, { ok: true });
+    assertReserved(verdict);
     assert.deepEqual(stopped, ['measure-b'], 'the main server is the oldest use and still is not stopped');
     rmSync(root, { recursive: true, force: true });
   });
@@ -660,7 +706,8 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
     const opts = askOpts(root, {
       worktree: '/w/main', waitSeconds: 900, sleep: async () => { throw new Error('must not wait'); },
     });
-    assert.deepEqual(await admit(opts), { ok: true }, 'admitted at once, though the cap is full and one waits');
+    const first = await admit({ ...opts, pid: DEAD_PID });
+    assertReserved(first, 'admitted at once, though the cap is full and one waits');
     assert.deepEqual(JSON.parse(readFileSync(queue, 'utf8')).tickets.map((item) => item.id), ['ahead'], 'no ticket taken');
     const short = await admit({ ...opts, waitSeconds: 0, freeMemory: () => 5 });
     assert.equal(short.reason, 'memory');
@@ -748,7 +795,7 @@ describe('queue: admission in order', () => {
       onWaiting: (refused) => waiting.push(refused),
       logEvent: (event, fields) => events.push({ event, fields }),
     });
-    assert.deepEqual(verdict, { ok: true });
+    assertReserved(verdict);
     assert.equal(polls, 3, 'not admitted while the earlier ticket was at the head, though a slot was free');
     assert.equal(waiting[0].place, 2);
     assert.deepEqual(waiting[0].queue.map((item) => item.holder), ['step:earlier', null]);
@@ -769,7 +816,7 @@ describe('queue: admission in order', () => {
     const verdict = await admit({
       service: 'memoro-worker', worktree: '/w/new', waitSeconds: 0, env: {}, root, now: () => T0, freeMemory: () => 50, logEvent: () => {},
     });
-    assert.deepEqual(verdict, { ok: true });
+    assertReserved(verdict);
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -803,7 +850,7 @@ describe('queue: admission in order', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  it('queue: a request for a worktree and service with a live server of its own is not queued — a restart replaces itself', async () => {
+  it('queue: a request for a worktree and service with a live server of its own is a reuse, not queued', async () => {
     const { base, root, queue } = place();
     register(root, '/w/mine', 'measure-mine');
     writeQueue(queue, [ticket('ahead', T0 - MIN)]);
@@ -811,7 +858,7 @@ describe('queue: admission in order', () => {
       service: 'memoro-worker', worktree: '/w/mine', waitSeconds: 900, env: {}, root, now: () => T0,
       sleep: async () => { throw new Error('must not wait'); }, freeMemory: () => 50, logEvent: () => {},
     });
-    assert.deepEqual(verdict, { ok: true });
+    assert.deepEqual(verdict, { ok: true, reuse: 'measure-mine' }, 'reused, and no slot reserved');
     assert.deepEqual(queued(queue).map((item) => item.id), ['ahead'], 'no ticket was taken');
     rmSync(base, { recursive: true, force: true });
   });
@@ -880,8 +927,9 @@ describe('queue: admission in order', () => {
     const out = capture();
     assert.equal(await run(['status'], { root, stdout: out, stderr: capture(), env: {}, freeMemory: () => 38, now: () => T0 }), 0);
     assert.equal(out.text(), [
-      'mc: 1 of 4 app servers · 38% memory free (floor 15%)',
+      'mc: 2 of 3 dev-server slots · 38% memory free (floor 15%)',
       '  measure-x  memoro-worker  /w/x  used 4 min ago',
+      '  static-s  memoro-worker  /w/s  used 1416 h ago',
       'mc: 2 waiting, in the order they will be admitted',
       '  1. gate-7 (gate)  memoro-worker  /w/gate  joined 3 min ago',
       '  2. step:shot  memoro-worker  /w/shot  joined 5 min ago',
@@ -890,8 +938,9 @@ describe('queue: admission in order', () => {
     const json = capture();
     assert.equal(await run(['status', '--json'], { root, stdout: json, stderr: capture(), env: {}, freeMemory: () => null, now: () => T0 }), 0);
     const parsed = JSON.parse(json.text());
-    assert.deepEqual([parsed.cap, parsed.free_percent, parsed.min_free_percent], [4, null, 15]);
-    assert.deepEqual(parsed.servers.map((server) => server.instance_id), ['measure-x']);
+    assert.deepEqual([parsed.cap, parsed.free_percent, parsed.min_free_percent], [3, null, 15]);
+    assert.deepEqual(parsed.servers.map((server) => server.instance_id), ['measure-x', 'static-s']);
+    assert.deepEqual(parsed.pending, []);
     assert.deepEqual(parsed.queue.map((item) => [item.holder, item.gate, item.waited_s]), [['gate-7', true, 180], ['step:shot', false, 300]]);
 
     writeQueue(queue, []);
@@ -1049,3 +1098,229 @@ describe('stopping what a worktree runs', () => {
     assert.equal(await run(['stop', 'a', 'b'], { stdout: capture(), stderr: capture(), root: scratch() }), 2);
   });
 });
+
+describe('reservations: the slot is held from yes to registration', () => {
+  const ASK = {
+    service: 'memoro-worker', waitSeconds: 0, env: {}, now: () => 0, sleep: async () => {}, freeMemory: () => 50, logEvent: () => {},
+  };
+  /** A registry root of its own; its reservations live inside it. */
+  function pool() {
+    const base = scratch();
+    const root = join(base, 'dev-servers');
+    mkdirSync(root, { recursive: true });
+    return { base, root, file: devPoolPath(root) };
+  }
+  function register(root, worktree, id, overrides = {}) {
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, ...overrides })));
+  }
+  const held = (file) => readReservations(file).map((item) => item.worktree_path);
+
+  it('reservations: three starts that have not registered take all three slots; a fourth of any class is refused, naming them', async () => {
+    assert.equal(SLOT_LIMIT, 3);
+    const { base, root, file } = pool();
+    for (const worktree of ['/w/a', '/w/b', '/w/c']) assertReserved(await admit({ ...ASK, worktree, root }), worktree);
+    assert.deepEqual(held(file), ['/w/a', '/w/b', '/w/c']);
+    const refused = await admit({ ...ASK, worktree: '/w/d', root, service: 'memoro-static' });
+    assert.equal(refused.reason, 'cap');
+    assert.deepEqual(refused.holders, []);
+    assert.deepEqual(refused.pending.map((item) => item.worktree_path), ['/w/a', '/w/b', '/w/c']);
+    assert.match(refusalOf(refused), /0 running and 3 starting \(res-.+ for \/w\/a, .+\) of 3 dev-server slots/u);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: a registration fulfils its reservation — the server is counted once, not twice', async () => {
+    const { base, root, file } = pool();
+    const worktree = join(base, 'wt');
+    const first = await admit({ ...ASK, worktree, root });
+    assertReserved(first);
+    assertReserved(await admit({ ...ASK, worktree: '/w/b', root }));
+    const source = writeSource(worktree, { instance_id: 'dev-a', reservation_id: first.reservation });
+    const done = registerManifest(source, { root });
+    assert.deepEqual([done.ok, done.reservation], [true, first.reservation]);
+    assert.deepEqual(held(file), ['/w/b'], 'the registered one left the reservations');
+    // One registered and one starting: a third fits, a fourth does not.
+    assertReserved(await admit({ ...ASK, worktree: '/w/c', root }));
+    const refused = await admit({ ...ASK, worktree: '/w/d', root });
+    assert.deepEqual([refused.reason, refused.holders.map((item) => item.instance_id), refused.pending.map((item) => item.worktree_path)],
+      ['cap', ['dev-a'], ['/w/b', '/w/c']]);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: an older wrapper that names no reservation fulfils the one for its service and worktree', async () => {
+    const { base, root, file } = pool();
+    const worktree = join(base, 'wt');
+    assertReserved(await admit({ ...ASK, worktree, root }));
+    assert.equal(registerManifest(writeSource(worktree, { instance_id: 'dev-old' }), { root }).ok, true);
+    assert.deepEqual(held(file), []);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: a second start for the same service and worktree is not a second slot — starting, then a reuse', async () => {
+    const { base, root } = pool();
+    const worktree = join(base, 'wt');
+    const first = await admit({ ...ASK, worktree, root });
+    assertReserved(first);
+    const again = await admit({ ...ASK, worktree, root });
+    assert.deepEqual([again.ok, again.reason, again.reservation], [false, 'starting', first.reservation]);
+    let polls = 0;
+    const waited = await admit({
+      ...ASK, worktree, root, waitSeconds: 900,
+      sleep: async () => { polls += 1; if (polls === 2) registerManifest(writeSource(worktree, { instance_id: 'dev-a', reservation_id: first.reservation }), { root }); },
+    });
+    assert.deepEqual(waited, { ok: true, reuse: 'dev-a' }, 'it waited for the first and took it');
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: MAIN takes no slot and there is one — a second MAIN start waits on the first', async () => {
+    const { base, root, file } = pool();
+    const main = { worktree: '/w/main', service: 'memoro-worker' };
+    for (const worktree of ['/w/a', '/w/b', '/w/c']) assertReserved(await admit({ ...ASK, worktree, root, main }));
+    const mainStart = await admit({ ...ASK, worktree: '/w/main', root, main });
+    assertReserved(mainStart, 'three slots taken, MAIN still starts');
+    assert.equal(readReservations(file).find((item) => item.id === mainStart.reservation).main, true);
+    assert.equal((await admit({ ...ASK, worktree: '/w/main', root, main })).reason, 'starting', 'never a second MAIN');
+    // The checkout's other service is not MAIN: it needs a slot, and there is none.
+    assert.equal((await admit({ ...ASK, worktree: '/w/main', root, main, service: 'memoro-static' })).reason, 'cap');
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: held while any of its processes lives, however old; swept and logged once none does', async () => {
+    const { base, root, file } = pool();
+    const events = [];
+    const slow = await admit({ ...ASK, worktree: '/w/slow', root, now: () => Date.parse('2026-01-01T00:00:00Z') });
+    const dead = await admit({ ...ASK, worktree: '/w/dead', root, pid: DEAD_PID });
+    assertReserved(slow);
+    assertReserved(dead);
+    // Months later the slow build's process is still alive: still its slot.
+    const later = await admit({ ...ASK, worktree: '/w/next', root, now: () => Date.parse('2026-11-05T00:00:00Z'), logEvent: (event, fields) => events.push({ event, fields }) });
+    assertReserved(later);
+    assert.deepEqual(held(file), ['/w/slow', '/w/next']);
+    assert.deepEqual(events, [{
+      event: 'dev-reservation-swept', fields: { reservation: dead.reservation, service: 'memoro-worker', worktree_path: '/w/dead', pids: [DEAD_PID] },
+    }]);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('reservations: the child mc spawned holds it after mc lets go; letting go of the last live pid frees it', async () => {
+    const { base, root, file } = pool();
+    const asked = await admit({ ...ASK, worktree: '/w/a', root });
+    assert.equal(addReservationPid({ file, id: asked.reservation, pid: process.ppid }), true);
+    assert.deepEqual(disownReservation({ file, id: asked.reservation, pids: [process.pid] }), { removed: false, held: true });
+    assert.deepEqual(readReservations(file)[0].pids, [process.ppid], 'the child keeps the slot');
+    assert.deepEqual(disownReservation({ file, id: asked.reservation, pids: [process.ppid] }), { removed: true, held: false });
+    assert.deepEqual(held(file), []);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('handoff: mc dev admit reserves for its owner, and a wrapper adopts mc\'s reservation once — "1" or a stranger\'s id is no pass', async () => {
+    const { base, root, file } = pool();
+    const ask = async (worktree, env, deps = {}) => {
+      const out = capture();
+      const code = await run(['admit', 'memoro-worker', '--worktree', worktree, '--json'], {
+        root, stdout: out, stderr: capture(), env: { MC_DEV_OWNER_PID: String(process.pid), ...env }, freeMemory: () => 40, main: null, ...deps,
+      });
+      return { code, verdict: JSON.parse(out.text()) };
+    };
+    const mine = await ask('/w/a', {});
+    assert.equal(mine.code, 0);
+    assert.deepEqual(readReservations(file).find((item) => item.id === mine.verdict.reservation).pids, [process.pid], 'held by the wrapper, not by the exiting mc');
+    // The owner named is dead: the parent holds it.
+    const orphan = await ask('/w/b', { MC_DEV_OWNER_PID: String(DEAD_PID) }, { ppid: process.ppid });
+    assert.deepEqual(readReservations(file).find((item) => item.id === orphan.verdict.reservation).pids, [process.ppid]);
+    // A third, made by mc for /w/c, is adopted by its wrapper and not doubled.
+    const made = await admit({ ...ASK, worktree: '/w/c', root });
+    const adopted = await ask('/w/c', { MC_DEV_ADMITTED: made.reservation });
+    assert.deepEqual(adopted.verdict, { ok: true, reservation: made.reservation, adopted: true });
+    assert.deepEqual(readReservations(file).find((item) => item.id === made.reservation).pids, [process.pid]);
+    assert.equal(readReservations(file).length, 3, 'adopting took no slot');
+    // A second process that inherited the id is no second starter.
+    const second = await ask('/w/c', { MC_DEV_ADMITTED: made.reservation, MC_DEV_OWNER_PID: String(process.ppid) });
+    assert.deepEqual([second.code, second.verdict.reason], [75, 'starting']);
+    // "1", or mc's id for another worktree, is asked like any other request: the pool is full.
+    for (const handed of ['1', made.reservation]) {
+      const other = await ask('/w/d', { MC_DEV_ADMITTED: handed });
+      assert.deepEqual([other.code, other.verdict.reason], [75, 'cap'], handed);
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('fail closed: a lock held by a live process is a refusal with reason lock, and nothing is reserved or registered', async () => {
+    const { base, root, file } = pool();
+    mkdirSync(join(root, '.pool'), { recursive: true });
+    writeFileSync(`${file}.lock`, String(process.ppid));
+    const lock = { waitMs: 40, pollMs: 10 };
+    const events = [];
+    const verdict = await admit({ ...ASK, worktree: '/w/a', root, lock, logEvent: (event, fields) => events.push({ event, fields }) });
+    assert.deepEqual([verdict.ok, verdict.reason], [false, 'lock']);
+    assert.match(verdict.error, /held by pid \d+ — gave up after 40 ms/u);
+    assert.deepEqual(events.map((item) => [item.event, item.fields.reason]), [['dev-server-refused', 'lock']]);
+    const registered = registerManifest(writeSource(join(base, 'wt')), { root, lock });
+    assert.deepEqual([registered.ok, registered.reason], [false, 'lock']);
+    assert.deepEqual(readdirSync(root).filter((name) => name.endsWith('.json')), [], 'no record written past the lock');
+    assert.deepEqual(readdirSync(join(root, '.pool')), ['reservations.json.lock'], 'and no reservation file either');
+    rmSync(`${file}.lock`);
+    // A reservation file that does not parse is refused too, never read as empty.
+    writeFileSync(file, '{ half');
+    assert.equal((await admit({ ...ASK, worktree: '/w/a', root })).reason, 'lock');
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('fail closed: a lock whose holder is dead is broken; the queue lock fails closed the same way', () => {
+    const { base, root, file } = pool();
+    mkdirSync(join(root, '.pool'), { recursive: true });
+    writeFileSync(`${file}.lock`, String(DEAD_PID));
+    assert.equal(withFileLock(file, () => 'ran'), 'ran');
+    const queue = devQueuePath(root);
+    writeFileSync(`${queue}.lock`, String(process.ppid));
+    assert.throws(() => withFileLock(queue, () => 'ran', { waitMs: 30, pollMs: 10 }), LockError);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('the cap reads MC_DEV_MAX_SERVERS as a lowering only', () => {
+    assert.deepEqual(['', '0', '1', '2', '3', '4', '99', '-1', '2.5', 'many'].map((raw) => slotCapOf({ MC_DEV_MAX_SERVERS: raw })), [3, 0, 1, 2, 3, 3, 3, 3, 3, 3]);
+    assert.equal(slotCapOf({}), 3);
+  });
+
+  it('race: four threads counting and reserving at the same moment through the file lock take exactly three slots', async () => {
+    // admit counts and reserves inside one updateReservations callback (the
+    // cases above); this is that lock under real parallelism — four threads,
+    // each doing the same synchronous read-count-write on one file, released
+    // together. Threads, not processes: the same O_EXCL lock, without paying
+    // four node startups.
+    const { base, file } = pool();
+    const gate = new Int32Array(new SharedArrayBuffer(4));
+    const worker = join(base, 'reserve.mjs');
+    writeFileSync(worker, `
+      import { workerData, parentPort } from 'node:worker_threads';
+      const { newReservation, updateReservations } = await import(${JSON.stringify(new URL('../../src/mc/dev-reservations.js', import.meta.url).href)});
+      parentPort.postMessage('ready');
+      Atomics.wait(workerData.gate, 0, 0);
+      const won = updateReservations(workerData.file, (held) => {
+        if (held.length >= 3) return { result: false };
+        return { reservations: [...held, newReservation({ service: 'memoro-worker', worktree: workerData.worktree, pid: process.pid })], result: true };
+      });
+      parentPort.postMessage({ worktree: workerData.worktree, won });
+    `);
+    const ready = [];
+    const results = ['a', 'b', 'c', 'd'].map((name) => {
+      const thread = new Worker(worker, { workerData: { gate, file, worktree: `/w/${name}` } });
+      ready.push(new Promise((done) => { thread.once('message', done); }));
+      return new Promise((resolve, reject) => {
+        thread.on('message', (message) => { if (message !== 'ready') resolve(message); });
+        thread.once('error', reject);
+      });
+    });
+    await Promise.all(ready);
+    Atomics.store(gate, 0, 1);
+    Atomics.notify(gate, 0);
+    const answers = await Promise.all(results);
+    const winners = answers.filter((item) => item.won).map((item) => item.worktree).sort();
+    assert.equal(winners.length, 3, JSON.stringify(answers));
+    assert.deepEqual(readReservations(file).map((item) => item.worktree_path).sort(), winners, 'exactly the three that won are held');
+    rmSync(base, { recursive: true, force: true });
+  });
+});
+
+function refusalOf(verdict) {
+  return refusalText(verdict, { env: {} });
+}
