@@ -39,11 +39,66 @@ goals beside them and `mc goal` as their writer. A `goal/<goal>` branch
 belongs to that goal's worktree; a planning branch is `plan/<slug>`.
 The prompt predicts no deliverable, pull request or landing route.
 
-`openInWorkArea` resumes the existing conversation (`pick: null`), with no
-intro; `--new` starts fresh. Instructions are `all-sessions.md` plus the
-`plan-session` overlay, assembled by `instructionsFor`. The launch sets
-`MC_ROLE=plan-session` and `MC_PROGRAMME` for new conversations and resumes.
-The SessionStart hook also recognises the role from cwd.
+### Resume selection and provenance
+
+`openInWorkArea` discovers conversations from the tools' native stores under
+its area root. In layout 2 that includes descendant goal worktrees: newest
+same-tool conversation alone is **not** a safe plan-session selection.
+For a role-aware entrance (including `mc plan`), automatic selection walks
+newest first within the requested tool and resumes only positive evidence of
+the same normalized role **and** programme. `plan` and `plan-session` are the
+same identity; `brief` and `manager` share the existing identity alias too.
+Cwd, labels, user messages, and the environment for the new launch do not
+prove a historical conversation's authority. A compatible older plan can win
+over a newer descendant review. Unscoped ordinary work-area opens retain
+their existing selection; they do not establish role provenance.
+
+Skipped candidates are explained on stderr. With no compatible conversation,
+the opener starts fresh with the requested role instructions and opening
+prompt. `--new` always starts fresh. An explicitly selected incompatible or
+unknown conversation is refused, with a fresh-session route (`mc plan
+<programme> --new` for planning); it is not silently replaced by another id.
+A named id still selects its own tool; tool/model flags retain their existing
+precedence. Compatible continuation has no introductory user message.
+
+Evidence is deliberately bounded, and missing evidence means **unknown**:
+
+- **Codex:** the first 64 KiB of the native rollout must contain mc's
+  versioned role/programme launch marker in a `response_item` developer
+  message or a `turn_context.developer_instructions` field. A marker in user
+  text, a cwd or a label is ignored. Conflicting markers are unknown.
+- **Claude:** native transcripts do not prove the appended system prompt.
+  A fresh role-aware launch supplies a UUID through `--session-id` and records
+  it, cwd, role, programme and instruction channel in the existing `work.open`
+  log. Selection reads at most the last 4 MiB of the current mc log and its
+  single rotated predecessor, once per selection, for a matching instructed
+  launch. Missing, incomplete, conflicting or rotated-away evidence is
+  unknown. This is not a new conversation registry: discovery and ids still
+  come from Claude's store, not the log.
+
+Legacy histories without that evidence start fresh even if their opening
+words claim the right role. No history is rewritten or migrated. Bounds can
+also conservatively reject a genuine compatible history. SessionStart's cwd
+role hint is not historical instruction provenance.
+
+### Instruction channel
+
+Instructions are `all-sessions.md` plus the `plan-session` overlay, assembled
+by `instructionsFor`. Role-aware launches use Claude's
+`--append-system-prompt` and Codex's `-c developer_instructions=<JSON string>`;
+the latter carries the launch marker beside the instructions. They are native
+instruction configuration, supplied on fresh launches **and compatible
+resumes**, not ordinary resume text purporting to override historical
+developer instructions. The older `-c instructions=` path elsewhere is not
+accepted as plan provenance. In particular, Claude's system configuration is
+reapplied rather than assumed to live in its transcript. The isolated tests
+verify discovery and launch composition, not a paid provider turn.
+
+Launches set `MC_ROLE=plan` (the shared identity also accepts `plan-session`)
+and `MC_PROGRAMME`, clearing inherited goal/step/headless identity as before.
+Decision logs record requested and identified role/programme, evidence source,
+conversation id and resume/exclude/fresh/refusal, without copying transcript
+or prompt content. Session ownership and headless restrictions are unchanged.
 
 The plan session has full freedom toward the programme's aim: investigate,
 write goals, build and land work itself, or take over a goal's branch when
@@ -93,5 +148,9 @@ No automatic pass can decide that a programme's aim is over.
 ## How it is tested
 
 `tests/mc/commands/plan.test.js` covers the paths, refusal inside a session,
-programme picker, prompt, role body, resume and new launch without opening a
-tool. `tests/mc/archive-programme.test.js` covers archive refusals and ordering.
+programme picker, prompt, role body and the real discovery/launcher composition
+for fresh, compatible resume and `--new`, with provider spawn replaced.
+`tests/mc/work-open.test.js` uses isolated Codex rollouts and Claude stores
+and launch evidence for descendant review, wrong programme, unknown identity,
+explicit refusal, aliases and compatible continuation.
+`tests/mc/archive-programme.test.js` covers archive refusals and ordering.

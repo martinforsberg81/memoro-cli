@@ -18,9 +18,16 @@ export function withoutSessionIdentity(env) {
   return next;
 }
 
+/** Shared aliases for live identity and historical launch evidence. */
+export function normalizeSessionRole(role) {
+  if (role === 'brief') return 'manager';
+  if (role === 'plan-session') return PLAN_ROLE;
+  return role || null;
+}
+
 /** Environment first; cwd is the fallback for a session opened by hand. */
 export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {}) {
-  if (env.MC_ROLE) return { role: env.MC_ROLE === 'brief' ? 'manager' : env.MC_ROLE === 'plan-session' ? PLAN_ROLE : env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
+  if (env.MC_ROLE) return { role: normalizeSessionRole(env.MC_ROLE), programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
   if (env.MC_GOAL) return { role: BUILD_ROLES.goal, programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
 
   const path = relative(resolve(workRoot(env)), resolve(cwd));
