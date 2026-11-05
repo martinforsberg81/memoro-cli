@@ -344,7 +344,7 @@ export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
 const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
 
 /**
- * LANGUAGE — what `mc language` last read and last ran, inside PRODUCTION
+ * LANGUAGE — what `mc language` last read and last ran, inside MERGE & DEPLOY
  * because it is the other door to production. Only the languages with
  * something to say are drawn — unresolved selectors, rows waiting, a reading a
  * week old — and the last run rides on the heading. With neither the section
@@ -831,14 +831,13 @@ export function renderPageLines(data, {
   lines.push('');
   mergesLines(lines, c, wide, data.merges, expand);
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
-  panelEnd(lines, c, wide);
-  lines.push('');
-  devLines(lines, c, wide, data.dev, expand);
-  panelEnd(lines, c, wide);
   lines.push('');
   deployLines(lines, c, wide, runner.production, expand);
   const language = [];
   if (languageLines(language, c, wide - 2, data.language, at)) lines.push(...language.map(line => `  ${line}`));
+  panelEnd(lines, c, wide);
+  lines.push('');
+  devLines(lines, c, wide, data.dev, expand);
   panelEnd(lines, c, wide);
   lines.push('');
   maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);
