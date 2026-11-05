@@ -69,7 +69,7 @@ session is for; a verb file says how a verb is used).
 | `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merge after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
-| `manager` | opus | `manager` | `mc manager`, a foreground session in `~/mc/brief/` |
+| `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 

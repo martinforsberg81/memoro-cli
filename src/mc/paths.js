@@ -385,18 +385,13 @@ export function sessionName(areaName) {
  * work-area.js). Dot-directories are left out by the caller.
  */
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
 ]);
 
-/**
- * Manager keeps `~/mc/brief/` so both tools resume their conversations.
- * Not the work root: other sessions launch below it, and a session resumes the
- * newest conversation at or below where it stands, so from the root the brief
- * opened whichever planning session had been used last.
- */
+/** Canonical Manager desk; legacy brief transcripts are discovered at launch. */
 export function managerDir(env = process.env) {
-  return join(workRoot(env), 'brief');
+  return join(workRoot(env), 'manager');
 }
 
 /**

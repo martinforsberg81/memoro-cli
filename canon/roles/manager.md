@@ -11,6 +11,11 @@ Carry agreed decisions through to their goals, proposals and programme plans.
 Do what Martin asks and change nothing he has not asked for: write a goal for a proposal he says GO to, write or drop a
 proposal, get a blocked goal moving, or do the work here yourself.
 
+When MC_HEADLESS=1, nobody is at the terminal. Work only on the explicit task
+in your prompt. Record decisions requiring Martin with the affected goal or
+proposal and report them. Never deploy, access production data or credentials,
+or use --admin unattended. Report the outcome and remaining work, then stop.
+
 Where to read: `mc --fresh` is the page; `mc goal list` and
 `mc goal show <programme>/<goal>` are the goals; each programme's
 `~/mc/programs/<programme>/proposals/` holds its proposals, and
