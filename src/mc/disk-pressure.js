@@ -23,10 +23,12 @@
  *   - **Unknown is not room.** A reading that fails is written down, shown,
  *     and refuses admission; cleanup and `mc tidy` still work.
  *   - **One pass at a time.** In a process, callers share one flight; across
- *     processes the pass holds a lease in `disk-pressure.json`, taken under
+ *     processes cleanup and admissions hold a lease in `disk-pressure.json`,
+ *     taken under
  *     the runner lock, and a second process that finds it held does not run
- *     its own. Admissions in a process are serialized, so each reads the disk
- *     after the one before it, cleanup included, rather than one stale reading.
+ *     its own. A live holder excludes even another instance in the same process.
+ *     Admission holds exclusion through allocation and spawn, then releases it;
+ *     competing starts defer and remeasure on retry, never sharing a stale reading.
  *   - **A pass that cannot help waits.** One that ends below the pressure line
  *     sets a five-minute cooldown, persisted, so a restart does not loop. A
  *     healthy reading clears the pressure state and the cooldown.
@@ -38,6 +40,7 @@
  * Every door is injected (`createDiskPressure`), so the rules are tested on a
  * fake clock and a fake filesystem, with no disk filled.
  */
+import { randomUUID } from 'node:crypto';
 import { statfsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -53,8 +56,6 @@ export const POLL_MS = 60 * 1000;
 export const EVENTS_KEEP = 100;
 /** Kept reasons and errors kept per step of an event. */
 export const DETAIL_KEEP = 20;
-/** A lease older than this is a hung holder's, and is taken over. */
-export const LEASE_MAX_MS = 60 * 60 * 1000;
 
 export const STATE_FILE = 'disk-pressure.json';
 export const EVENTS_FILE = 'disk-pressure-events.json';
@@ -108,6 +109,14 @@ export function createDiskPressure({
   path, stateDir, freeBytes = statfsAvailable, read, writeJson, now = () => Date.now(), pid = process.pid,
   alive = () => false, lock = (fn) => fn(), steps = [], say = () => {},
 } = {}) {
+  const token = randomUUID();
+  // All state/event read-modify-writes share the strict short filesystem lock.
+  // Nested synchronous helpers reuse that critical section, not the lease.
+  let inLock = false;
+  function critical(fn) {
+    if (inLock) return fn();
+    return lock(() => { inLock = true; try { return fn(); } finally { inLock = false; } });
+  }
   const statePath = join(stateDir, STATE_FILE);
   const eventsPath = join(stateDir, EVENTS_FILE);
   const nowMs = () => { const value = now(); return value instanceof Date ? value.getTime() : Number(value); };
@@ -123,11 +132,11 @@ export function createDiskPressure({
     const value = readJson(statePath, null);
     return value && !Array.isArray(value) ? value : null;
   };
-  const writeState = (patch) => {
+  const writeState = (patch) => critical(() => {
     const next = { ...(readState() || {}), ...patch, schema: SCHEMA, version: 1, policy: POLICY, volume: path, at: iso() };
     writeJson(statePath, next);
     return next;
-  };
+  });
 
   /** `{ available, known }`, read now. */
   function measure() {
@@ -144,10 +153,12 @@ export function createDiskPressure({
   }
 
   function appendEvent(event) {
-    const kept = readJson(eventsPath, []);
-    const list = Array.isArray(kept) ? kept : [];
-    list.push(event);
-    writeJson(eventsPath, list.slice(-EVENTS_KEEP));
+    critical(() => {
+      const kept = readJson(eventsPath, []);
+      const list = Array.isArray(kept) ? kept : [];
+      list.push(event);
+      writeJson(eventsPath, list.slice(-EVENTS_KEEP));
+    });
   }
 
   /** A healthy reading: the pressure state and its cooldown end, said once. */
@@ -165,17 +176,16 @@ export function createDiskPressure({
 
   /** The lease: true when this process holds it now, else the holder. */
   function takeLease(trigger) {
-    return lock(() => {
+    return critical(() => {
       const state = readState();
       const held = state?.lease;
-      const age = nowMs() - Date.parse(held?.since || '');
-      if (held && held.pid !== pid && alive(held.pid) && age < LEASE_MAX_MS) return { ok: false, holder: held };
-      writeState({ lease: { pid, since: iso(), trigger } });
+      if (held && (held.pid === pid || alive(held.pid))) return { ok: false, holder: held };
+      writeState({ lease: { pid, token, since: iso(), trigger } });
       return { ok: true };
     });
   }
   function dropLease() {
-    lock(() => { if (readState()?.lease?.pid === pid) writeState({ lease: null }); });
+    critical(() => { if (readState()?.lease?.token === token) writeState({ lease: null }); });
   }
 
   let flight = null;
@@ -184,28 +194,28 @@ export function createDiskPressure({
    * One pressure pass, shared: a caller that finds one in flight in this
    * process gets the same answer. Resolves `{ ran, skipped?, event?, after }`.
    */
-  function relieve({ trigger = 'pressure', admission = null } = {}) {
+  function relieve({ trigger = 'pressure', admission = null, leased = false } = {}) {
     if (flight) return flight;
     flight = (async () => {
-      try { return await pass({ trigger, admission }); } finally { flight = null; }
+      try { return await pass({ trigger, admission, leased }); } finally { flight = null; }
     })();
     return flight;
   }
 
-  async function pass({ trigger }) {
+  async function pass({ trigger, leased = false }) {
     const before = measure();
-    if (!before.known) { unknown(readState()); return { ran: false, skipped: 'unknown', after: before }; }
-    if (before.available >= PRESSURE_BYTES) { healthy(before, readState()); return { ran: false, skipped: 'healthy', after: before }; }
-    const waiting = cooldown();
-    if (waiting) return { ran: false, skipped: 'cooldown', cooldown: waiting, after: before };
-    const lease = takeLease(trigger);
+    const lease = leased ? { ok: true } : takeLease(trigger);
     if (!lease.ok) return { ran: false, skipped: 'busy', holder: lease.holder, after: before };
-    say(`disk: ${gb(before.available)} free, below ${gb(PRESSURE_BYTES)} (${trigger}) — tidying toward ${gb(RECOVERY_BYTES)}`);
-    writeState({ status: 'pressure', available_bytes: before.available });
-    const done = [];
-    const errors = [];
-    let current = before;
     try {
+      if (!before.known) { unknown(readState()); return { ran: false, skipped: 'unknown', after: before }; }
+      if (before.available >= PRESSURE_BYTES) { healthy(before, readState()); return { ran: false, skipped: 'healthy', after: before }; }
+      const waiting = cooldown();
+      if (waiting) return { ran: false, skipped: 'cooldown', cooldown: waiting, after: before };
+      say(`disk: ${gb(before.available)} free, below ${gb(PRESSURE_BYTES)} (${trigger}) — tidying toward ${gb(RECOVERY_BYTES)}`);
+      writeState({ status: 'pressure', available_bytes: before.available });
+      const done = [];
+      const errors = [];
+      let current = before;
       for (const step of steps) {
         if (current.known && current.available >= RECOVERY_BYTES) break;
         const record = { name: step.name, ok: false, estimate_bytes: 0, removed: 0, kept: [], errors: [], available_after: null };
@@ -227,39 +237,37 @@ export function createDiskPressure({
         if (!record.ok && !record.errors.length) errors.push(`${step.name}: failed`);
         done.push(record);
       }
-    } finally {
-      dropLease();
-    }
-    const after = current;
-    const failed = done.some((record) => !record.ok);
-    const restored = after.known && after.available >= PRESSURE_BYTES;
-    const recovered = after.known && after.available >= RECOVERY_BYTES;
-    const delta = after.known ? after.available - before.available : null;
-    const outcome = recovered ? 'recovered' : restored ? 'above-pressure' : !after.known ? 'unknown' : delta > 0 ? 'shortfall' : 'no-progress';
-    const shortfall = after.known ? Math.max(0, RECOVERY_BYTES - after.available) : null;
-    const event = {
-      at: iso(), volume: path, trigger, before_bytes: before.available, after_bytes: after.available, measured_delta_bytes: delta,
-      estimate_bytes: done.reduce((sum, record) => sum + record.estimate_bytes, 0),
-      steps: done, errors, failed, outcome, shortfall_bytes: shortfall, admission: null,
-    };
-    const cool = !restored;
-    writeState({
-      status: restored ? 'healthy' : after.known ? 'pressure' : 'unknown',
-      available_bytes: after.available,
-      last_cleanup: {
-        at: event.at, trigger, before_bytes: before.available, after_bytes: after.available, measured_delta_bytes: delta,
-        estimate_bytes: event.estimate_bytes, outcome, failed, errors: errors.slice(0, DETAIL_KEEP),
-      },
-      shortfall_bytes: shortfall,
-      cooldown_until: cool ? iso(nowMs() + COOLDOWN_MS) : null,
-      cooldown_why: cool ? `${outcome}${failed ? ', a step failed' : ''}` : null,
-    });
-    appendEvent(event);
-    const freed = delta === null ? 'unknown' : gb(Math.max(0, delta));
-    say(`disk: pressure pass (${trigger}) ${outcome} — ${gb(before.available)} → ${gb(after.available)} free, measured ${freed} back`
-      + `${shortfall ? `, ${gb(shortfall)} short of ${gb(RECOVERY_BYTES)}` : ''}${failed ? ` · failed: ${errors.slice(0, 3).join('; ') || 'a step failed'}` : ''}`
-      + `${cool ? ` · next pass after ${COOLDOWN_MS / 60000} min` : ''}`);
-    return { ran: true, event, after };
+      const after = current;
+      const failed = done.some((record) => !record.ok);
+      const restored = after.known && after.available >= PRESSURE_BYTES;
+      const recovered = after.known && after.available >= RECOVERY_BYTES;
+      const delta = after.known ? after.available - before.available : null;
+      const outcome = recovered ? 'recovered' : restored ? 'above-pressure' : !after.known ? 'unknown' : delta > 0 ? 'shortfall' : 'no-progress';
+      const shortfall = after.known ? Math.max(0, RECOVERY_BYTES - after.available) : null;
+      const event = {
+        at: iso(), volume: path, trigger, before_bytes: before.available, after_bytes: after.available, measured_delta_bytes: delta,
+        estimate_bytes: done.reduce((sum, record) => sum + record.estimate_bytes, 0),
+        steps: done, errors, failed, outcome, shortfall_bytes: shortfall, admission: null,
+      };
+      const cool = !restored;
+      writeState({
+        status: restored ? 'healthy' : after.known ? 'pressure' : 'unknown',
+        available_bytes: after.available,
+        last_cleanup: {
+          at: event.at, trigger, before_bytes: before.available, after_bytes: after.available, measured_delta_bytes: delta,
+          estimate_bytes: event.estimate_bytes, outcome, failed, errors: errors.slice(0, DETAIL_KEEP),
+        },
+        shortfall_bytes: shortfall,
+        cooldown_until: cool ? iso(nowMs() + COOLDOWN_MS) : null,
+        cooldown_why: cool ? `${outcome}${failed ? ', a step failed' : ''}` : null,
+      });
+      appendEvent(event);
+      const freed = delta === null ? 'unknown' : gb(Math.max(0, delta));
+      say(`disk: pressure pass (${trigger}) ${outcome} — ${gb(before.available)} → ${gb(after.available)} free, measured ${freed} back`
+        + `${shortfall ? `, ${gb(shortfall)} short of ${gb(RECOVERY_BYTES)}` : ''}${failed ? ` · failed: ${errors.slice(0, 3).join('; ') || 'a step failed'}` : ''}`
+        + `${cool ? ` · next pass after ${COOLDOWN_MS / 60000} min` : ''}`);
+      return { ran: true, event, after };
+    } finally { if (!leased) dropLease(); }
   }
 
   /**
@@ -268,10 +276,15 @@ export function createDiskPressure({
    */
   async function poll({ trigger = 'poll' } = {}) {
     const reading = measure();
-    const state = readState();
-    if (!reading.known) { unknown(state); return { status: 'unknown', reading }; }
-    if (reading.available >= PRESSURE_BYTES) { healthy(reading, state); return { status: 'healthy', reading }; }
-    if (state?.status !== 'pressure') writeState({ status: 'pressure', available_bytes: reading.available });
+    if (!reading.known || reading.available >= PRESSURE_BYTES) {
+      critical(() => {
+        const state = readState();
+        if (state?.lease && (state.lease.pid === pid || alive(state.lease.pid))) return;
+        if (!reading.known) unknown(state);
+        else healthy(reading, state);
+      });
+      return { status: reading.known ? 'healthy' : 'unknown', reading };
+    }
     const relief = await relieve({ trigger });
     return { status: relief.after?.known && relief.after.available >= PRESSURE_BYTES ? 'healthy' : 'pressure', reading, relief };
   }
@@ -280,11 +293,31 @@ export function createDiskPressure({
 
   /**
    * Whether new heavy work (`what`) may start now. Serialized in this
-   * process: each caller reads the disk after the one before it finished.
-   * Resolves `{ admitted, available, reason, line }`.
+   * process and excluded across instances/processes by the shared lease.
+   * With `hold`, the caller MUST release in finally after allocation/spawn,
+   * not after running work completes. Competing starts defer. Resolves `{ admitted, available, reason, line }`.
    */
-  function admit({ trigger = 'admission', what = 'new work' } = {}) {
-    const answer = queue.then(() => decide({ trigger, what }));
+  function admit({ trigger = 'admission', what = 'new work', hold = false } = {}) {
+    const answer = queue.then(async () => {
+      let lease;
+      try { lease = takeLease(trigger); } catch (error) {
+        const reason = `disk policy lock unavailable: ${message(error)}`;
+        return { admitted: false, available: null, reason, line: `disk: unknown free — ${what} not started: ${reason}` };
+      }
+      if (!lease.ok) {
+        const reading = measure();
+        const reason = `pid ${lease.holder.pid} is reclaiming space now or admitting work`;
+        appendEvent({ at: iso(), volume: path, trigger, before_bytes: reading.available, after_bytes: reading.available, measured_delta_bytes: 0, estimate_bytes: 0, steps: [], errors: [], outcome: 'busy', admission: { admitted: false, trigger, what, available: reading.available, reason } });
+        return { admitted: false, available: reading.available, reason, line: `disk: ${gb(reading.available)} free — ${what} not started: ${reason}` };
+      }
+      let retained = false;
+      try {
+        const result = await decide({ trigger, what });
+        retained = result.admitted && hold;
+        let released = false;
+        return retained ? { ...result, recheck: () => decide({ trigger, what }), release: () => { if (!released) { released = true; dropLease(); } } } : result;
+      } finally { if (!retained) dropLease(); }
+    });
     queue = answer.catch(() => {});
     return answer;
   }
@@ -294,7 +327,7 @@ export function createDiskPressure({
     if (reading.known && reading.available >= PRESSURE_BYTES) { healthy(reading, readState()); return { admitted: true, available: reading.available, reason: null }; }
     let relief = null;
     if (reading.known) {
-      relief = await relieve({ trigger });
+      relief = await relieve({ trigger, leased: true });
       reading = measure();
       if (reading.known && reading.available >= PRESSURE_BYTES) {
         if (relief.event) recordAdmission(relief.event, { admitted: true, trigger, what, available: reading.available });
@@ -324,12 +357,14 @@ export function createDiskPressure({
 
   /** An admission decided on a pass's result, written into that pass's event. */
   function recordAdmission(event, admission) {
-    const list = readJson(eventsPath, []);
-    if (!Array.isArray(list)) return;
-    const index = list.findLastIndex((item) => item.at === event.at && item.trigger === event.trigger);
-    if (index < 0) return;
-    list[index] = { ...list[index], admission };
-    writeJson(eventsPath, list.slice(-EVENTS_KEEP));
+    critical(() => {
+      const list = readJson(eventsPath, []);
+      if (!Array.isArray(list)) return;
+      const index = list.findLastIndex((item) => item.at === event.at && item.trigger === event.trigger);
+      if (index < 0) return;
+      list[index] = { ...list[index], admission };
+      writeJson(eventsPath, list.slice(-EVENTS_KEEP));
+    });
   }
 
   /** What the page and `mc tidy --json` show: the state file and a fresh reading, no walk. */
@@ -377,14 +412,14 @@ export function describe(state, reading, events = [], nowMs = Date.now()) {
     const delta = Number.isFinite(last.measured_delta_bytes) ? gb(Math.max(0, last.measured_delta_bytes)) : 'unknown';
     lines.push(`disk: last pass ${minute(last.at)} (${last.trigger}) ${last.outcome}: measured +${delta}, estimated ${gb(last.estimate_bytes || 0)}${last.failed ? ', a step failed' : ''}`);
   }
-  if (status !== 'healthy' && Number.isFinite(state?.shortfall_bytes) && state.shortfall_bytes > 0) {
-    lines.push(`disk: ${gb(state.shortfall_bytes)} short of the ${gb(RECOVERY_BYTES)} target; protected data is kept`);
+  if (last && known && available < RECOVERY_BYTES) {
+    lines.push(`disk: ${gb(RECOVERY_BYTES - available)} short of the ${gb(RECOVERY_BYTES)} target; protected data is kept`);
   }
   if (status !== 'healthy' && cooldownUntil) lines.push(`disk: next pass after ${minute(cooldownUntil)}`);
   if (status !== 'healthy') lines.push(`disk: ${LIMITATION}`);
   return {
     available_bytes: available, status, pressure: status === 'pressure', cooldown_until: cooldownUntil,
-    last_cleanup: last, shortfall_bytes: state?.shortfall_bytes ?? null, last_refusal: state?.last_refusal || null,
+    last_cleanup: last, shortfall_bytes: last && known ? Math.max(0, RECOVERY_BYTES - available) : null, last_refusal: state?.last_refusal || null,
     lease: state?.lease || null, events: Array.isArray(events) ? events.length : 0, policy: POLICY, limitation: LIMITATION, lines,
   };
 }

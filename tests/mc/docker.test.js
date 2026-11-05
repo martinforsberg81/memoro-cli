@@ -417,9 +417,13 @@ describe('the disk policy at a start (disk-pressure.js)', () => {
     }
     const { io, calls } = stopped();
     const disk = fakeDisk(25e9, [{ name: 'tidy', run: async (d) => { d.free += 6e9; return { ok: true }; } }]);
-    const result = await ensure({ pid: 5000, root, env: {}, io: { ...io, admitDisk: disk.admit } });
+    const result = await ensure({ pid: 5000, root, env: {}, io: { ...io, admitDisk: disk.admit, run: (cmd, args, options) => {
+      if (cmd === 'orbctl' && args[0] === 'start') assert.equal(disk.policy.readState()?.lease?.trigger, 'docker-start');
+      return io.run(cmd, args, options);
+    } } });
     assert.equal(result.ok, true);
     assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
+    assert.equal(disk.policy.readState().lease, null, 'startup releases admission');
   }));
 
   it('a runtime that is up is not asked, and a person\'s mc tidy --docker --apply starts it to recover even under pressure', () => withRoot(async (root) => {

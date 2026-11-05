@@ -261,7 +261,7 @@ function runnerLines(lines, c, wide, runner, expand) {
 /** The disk policy's lines, from `diskSummary`: one grey line while healthy. */
 function pressureLines(lines, c, wide, pressure) {
   if (!pressure?.lines?.length) return;
-  if (pressure.status === 'healthy') { say(lines, c, wide, 4, pressure.lines[0]); return; }
+  if (pressure.status === 'healthy') { for (const line of pressure.lines) say(lines, c, wide, 4, line); return; }
   for (const line of pressure.lines) detail(lines, c, wide, 4, line, [pressure.status === 'unknown' ? 'red' : 'yellow']);
 }
 

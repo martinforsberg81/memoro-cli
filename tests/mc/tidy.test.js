@@ -1,3 +1,4 @@
+import { cwdsOfUser } from '../../src/mc/standing.js';
 /**
  * `mc tidy` (tidy.js): one list, written first, decided purely, and each
  * entry asked again at removal.
@@ -947,6 +948,7 @@ describe('the printout', () => {
       [33e9, { status: 'healthy', shortfall_bytes: 7e9, last_cleanup: { ...at, outcome: 'above-pressure' } }, [
         'disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
         'disk: last pass 2026-10-12T11:00Z (monitor) above-pressure: measured +3.0 GB, estimated 11.0 GB',
+        'disk: 7.0 GB short of the 40.0 GB target; protected data is kept',
       ]],
       [27e9, { status: 'pressure', shortfall_bytes: 13e9, last_cleanup: { ...at, outcome: 'shortfall' } }, [
         'disk: 27.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
@@ -1097,11 +1099,13 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     } finally { s.m.cleanup(); }
   });
 
-  it('an lsof that fails keeps every one with the error', () => {
+  it('an lsof that fails, including partial stdout, keeps every one with the error', () => {
     const s = scratchMachine();
     try {
       const ended = s.area('ended', { worktree: {}, derived: true });
-      const { list } = runTidy({ apply: true, ...s.doors({ cwds: () => [] }) });
+      const partial = cwdsOfUser({ run: () => { throw Object.assign(new Error('partial'), { stdout: 'p111\nn/elsewhere\n' }); } });
+      assert.deepEqual([...partial], [{ pid: 111, cwd: '/elsewhere' }]);
+      const { list } = runTidy({ apply: true, ...s.doors({ cwds: () => partial }) });
       assert.deepEqual(ruled(list, 'S'), []);
       assert.equal(keptOf(list, join(ended, 'DerivedData')).why, 'error: lsof could not say who stands in it');
       assert.ok(exists(join(ended, 'replay', 'src.js')) && exists(join(ended, 'DerivedData')));

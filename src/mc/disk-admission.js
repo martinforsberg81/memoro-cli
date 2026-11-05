@@ -71,7 +71,7 @@ export function mcDiskPressure({ env = process.env, docker = true, say = (line) 
     now: () => Date.now(),
     pid: process.pid,
     alive: pidAlive,
-    lock: (fn) => realLock(workRoot(env), fn),
+    lock: (fn) => realLock(workRoot(env), fn, { strict: true }),
     say,
     steps: [
       { name: 'tidy', run: async () => tidyStep(runTidy({ apply: true, env })) },

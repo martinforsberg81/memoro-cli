@@ -261,18 +261,23 @@ export async function ensure({
     // admits its start or it stays down. Its pass prunes no Docker — this is
     // the runtime it would prune through. A runtime that is up is not asked.
     const admitDisk = io.admitDisk !== undefined ? io.admitDisk : (io.run ? null : realAdmitDisk(env));
+    let admitted;
     if (admitDisk) {
-      const admitted = await admitDisk({ trigger: 'docker-start', what: `the ${rt.kind} start` });
+      admitted = await admitDisk({ trigger: 'docker-start', what: `the ${rt.kind} start`, hold: true });
       if (!admitted?.admitted) return fail(admitted?.line || `disk: ${admitted?.reason || 'not admitted'}`);
     }
-    const start = rt.kind === 'orbstack'
-      ? { tool: 'orbctl', args: ['start'], label: 'orbctl start' }
-      : (m.platform === 'darwin' ? { tool: 'open', args: ['-a', 'Docker'], label: 'open -a Docker' } : null);
-    if (start) {
-      const result = await m.run(start.tool, start.args, { timeoutMs: START_TIMEOUT_MS });
-      started = true;
-      if (result?.status !== 0) return fail(`${start.label} failed: ${failure(result)}`);
-    }
+    try {
+      const start = rt.kind === 'orbstack'
+        ? { tool: 'orbctl', args: ['start'], label: 'orbctl start' }
+        : (m.platform === 'darwin' ? { tool: 'open', args: ['-a', 'Docker'], label: 'open -a Docker' } : null);
+      if (start) {
+        const pending = m.run(start.tool, start.args, { timeoutMs: START_TIMEOUT_MS });
+        admitted?.release?.();
+        const result = await pending;
+        started = true;
+        if (result?.status !== 0) return fail(`${start.label} failed: ${failure(result)}`);
+      }
+    } finally { admitted?.release?.(); }
   }
 
   const polling = m.now();

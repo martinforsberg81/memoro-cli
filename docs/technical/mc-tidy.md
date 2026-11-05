@@ -183,7 +183,8 @@ and blocks new mc work.
 (`diskTick`), independent of the chores, the nightly and the lanes; the
 deployer reads every minute while its script runs, with or without a
 runner. A healthy reading writes nothing. Admission is asked at the top of a
-lane's pass and again at the start itself, after the wait for a slot; by the
+lane's pass and before worktree/dependency allocation, after waiting for a slot,
+then rechecked just before spawning; by the
 deployer at the spawn; by `ensure` before it starts a stopped runtime. An
 up runtime is not asked. A reading that fails is written as `unknown`, shown,
 and refuses admission; cleanup and `mc tidy` still work.
@@ -204,10 +205,12 @@ The build cache is never pruned (§ Docker): no `builder prune`, no `system
 prune`, no cap. A pass that ends below 30 GB — exhausted, no progress, failed
 — sets `cooldown_until` five minutes ahead, persisted, so a restart does not
 repeat it; a healthy reading clears it and the pressure state. Passes are
-single-flight in a process; across processes the pass holds a lease in the
-state file, taken under the runner lock, and a second process that finds a
-live holder defers. Admissions in a process are serialized, each reading the
-disk after the one before it, cleanup included.
+single-flight in a policy instance. Cleanup and admissions share a persisted
+lease taken under a strict runner lock: lock failure refuses new work. A live
+holder excludes other instances, including ones with the same pid, without
+an age-based takeover. Only a dead holder is replaced. An admission keeps
+the lease through allocation and the synchronous spawn boundary, not the
+lifetime of the work. Competing callers defer and remeasure on retry.
 
 A person's `mc tidy --docker --apply` is recovery and may start the runtime
 under pressure; nothing else starts one to inspect or to clean.
@@ -225,8 +228,10 @@ refused admission with no pass is an event too. `disk.json` still carries the
 runner's refusal line for the page.
 
 **Where it shows.** `mc` draws one grey line with the measured free space;
-under pressure or unknown, the last pass with its measured gain beside its
-estimate, the shortfall to 40 GB, the next pass after a cooldown and the
+the last pass with its measured gain beside its estimate remains visible even
+when admission is restored. Any current shortfall to 40 GB remains visible
+after a cleanup; a fresh measurement at or above 40 GB clears that displayed
+shortfall. Under pressure or unknown, it also shows the next cooldown and the
 limit, in yellow (`diskSummary`: the state file and one statfs, no walk).
 `mc tidy` begins with the same lines, and `--json` carries them as `disk`.
 

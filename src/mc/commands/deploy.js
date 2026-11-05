@@ -881,8 +881,9 @@ export async function ship(job, deps = {}) {
     // reading that fails refuses too. Only on the real spawn: a fixture with
     // its own and no `disk` touches no disk of this machine.
     const disk = deps.disk !== undefined ? deps.disk : (deps.spawnDeploy ? null : mcDiskPressure({ env, say: (line) => stdout.write(`mc: ${line}\n`) }));
+    let diskAdmission;
     if (disk) {
-      const admitted = await disk.admit({ trigger: 'deploy', what: 'the deploy script' });
+      const admitted = diskAdmission = await disk.admit({ trigger: 'deploy', what: 'the deploy script', hold: true });
       if (!admitted.admitted) {
         recordEnd(key, { outcome: FAILED, stopped_at: 'disk', note: `mc: ${admitted.line}` }, env);
         stderr.write(`mc: ${admitted.line} — nothing was deployed\n`);
@@ -899,8 +900,11 @@ export async function ship(job, deps = {}) {
     const stopMonitor = disk ? every(DISK_POLL_MS, () => disk.poll({ trigger: 'deploy-monitor' }).catch(() => null)) : null;
     let result;
     try {
-      result = await spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
+      const pending = spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
+      diskAdmission?.release?.();
+      result = await pending;
     } finally {
+      diskAdmission?.release?.();
       stopMonitor?.();
     }
     const said = readScriptOutput(tail);

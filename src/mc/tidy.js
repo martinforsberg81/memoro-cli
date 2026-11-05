@@ -226,7 +226,7 @@ export function gatherTidyFacts({
   // empty answer is lsof failing — and then nothing can be said to be unused.
   let running = null;
   try { running = cwds(); } catch { running = null; }
-  if (running && running.length === 0) running = null;
+  if (running && (running.length === 0 || running.complete === false)) running = null;
   const tip = pullAtTip || ((wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {}));
   for (const programme of listNames(roots.plan)) {
     const area = join(roots.plan, programme);

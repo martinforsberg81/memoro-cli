@@ -435,7 +435,7 @@ export function realDeps(env = process.env) {
     diagnoseGithub: () => diagnoseGithub({ run: (cmd, args) => sh(cmd, args, { timeout: DIAGNOSE_TIMEOUT_MS }) }),
     exists: existsSync,
     // The runner's lock (runner-lock.js): every write of the merger's queue takes it.
-    lock: (root, fn) => realLock(root, fn),
+    lock: (root, fn, options) => realLock(root, fn, options),
     // The one liveness test the page, `mc run start` and the loop's own
     // refusal all use, so a runner.json that names a pid means the same thing
     // to every reader of it.
@@ -621,7 +621,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // reader: a deps object without `freeBytes` has no disk policy.
   const disk = deps.freeBytes ? createDiskPressure({
     path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
-    now: deps.now, pid, alive, lock: (fn) => lock(root, fn), say,
+    now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true }), say,
     steps: [
       { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
       ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
@@ -1583,26 +1583,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A plan session stands in the programme's directory, beside the goal; it
     // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
     const cwd = programmeTurn ? goal.dir : planning ? dirname(dirname(goal.dir)) : worktree;
-    const lost = planning ? null : placeGoalWorktrees(goal, name);
-    if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
-    // A goal's branch is made when it can start: one made at `mc goal new` in a
-    // later phase is remade from origin/main before its first build, if unbuilt.
-    if (kind === 'build' && !lastBuildEntry(goal.log)) {
-      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
-    }
-    const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
-    const repo = repos.find((item) => item.name === repoName);
-    let pr = null;
-    if (review) {
-      pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
-      if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
-      if (!pr) {
-        goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
-        return 'skipped:no-pr';
-      }
-    }
-    const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
-    if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
@@ -1612,104 +1592,134 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
       return 'skipped:no-capacity';
     }
-    // The disk asked again at the start itself: the pass's reading is from
-    // before the wait for a slot, and another lane may have started since.
-    if (!(await diskRoom('start'))) {
+    const admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+    if (!admission.admitted) {
       dropSlot();
+      const line = `disk: ${gb(admission.available)} free — no session started: ${admission.reason}`;
+      say(line);
+      writeJson(paths.disk, { at: stamp(), free_bytes: admission.available, line });
       return 'skipped:disk';
     }
-
-    // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
-    const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-    const prompt = programmeTurn
-      ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
-      : review
-      ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
-      : planning
-      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
-      : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
-    const instructions = instructionsFor(launch.id, role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
-    const ts = stamp().replace(/[-:]/gu, '');
-    // A goal's name holds a `/`, which a file stem may not.
-    const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
-    const out = join(paths.log, stem);
-    const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
-    const t0 = deps.now().getTime();
-    // There exactly as long as the session is, so in flight and slot are one
-    // fact, and the eligibility of this goal is that same fact.
-    const currentPath = paths.currentFor(repoName, lane);
-    const current = {
-      name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
-      check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
-      started: stamp(), pid, worktree: cwd,
-      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
-    };
-    writeJson(currentPath, current);
-    const scratch = join(paths.scratch, stem);
-    // Who owns it, and later that the session ended: tidy's rule S removes a
-    // worktree or DerivedData in it only on that record, never on age.
-    const scratchMarker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind, stem, started: stamp() };
-    let scratchEnv = {};
     try {
-      deps.mkdir(scratch);
-      writeJson(join(scratch, SCRATCH_MARKER), scratchMarker);
-      scratchEnv = { MC_SCRATCH: scratch };
-    } catch (error) {
-      say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
-    }
-    let result;
-    try {
-      if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
-      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
-      result = await deps.session({
-        bin: tool.bin,
-        args: tool.args,
-        cwd,
-        logPath: `${out}.jsonl`,
-        ...watchFor(launch, settings, {
-          prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
-          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
-        }),
-        env: {
-          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
-          MC_HEADLESS: '1',
-          MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
-          // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
-          ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
-          // The review uses this head as context; the Stop hook reads when it began.
-          ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
-          ...(settings.model ? { MC_MODEL: settings.model } : {}),
-          ...scratchEnv,
-        },
-        unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
-      });
-    } finally {
-      remove(currentPath);
-      dropSlot();
-      if (scratchEnv.MC_SCRATCH) {
-        try { writeJson(join(scratch, SCRATCH_MARKER), { ...scratchMarker, ended: stamp(), exit: result?.status ?? null }); } catch { /* kept: no end, no removal */ }
+      const lost = planning ? null : placeGoalWorktrees(goal, name);
+      if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      // A goal's branch is made when it can start: one made at `mc goal new` in a
+      // later phase is remade from origin/main before its first build, if unbuilt.
+      if (kind === 'build' && !lastBuildEntry(goal.log)) {
+        remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
       }
-    }
-    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-    writeSessionLogs(out, result);
-    noteWindows({ name, launch }, result.stdout);
-    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
-    recordRefusal({ name, launch, route }, read, picked.billing);
-    const provider = launch.id === 'codex' ? 'codex' : 'claude';
-    if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
-    const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
-    if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
-    else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
-    else if (review) afterReview(goal, name);
-    else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-    const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
-    logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
-    say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
-    return 'ran';
+      const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
+      const repo = repos.find((item) => item.name === repoName);
+      let pr = null;
+      if (review) {
+        pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
+        if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
+        if (!pr) {
+          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
+          return 'skipped:no-pr';
+        }
+      }
+      const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
+      if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
+      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
+      const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
+      const prompt = programmeTurn
+        ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
+        : review
+        ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
+        : planning
+        ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
+        : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const ts = stamp().replace(/[-:]/gu, '');
+      // A goal's name holds a `/`, which a file stem may not.
+      const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
+      const out = join(paths.log, stem);
+      const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
+      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
+      const t0 = deps.now().getTime();
+      // There exactly as long as the session is, so in flight and slot are one
+      // fact, and the eligibility of this goal is that same fact.
+      const currentPath = paths.currentFor(repoName, lane);
+      const current = {
+        name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
+        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
+        started: stamp(), pid, worktree: cwd,
+        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
+      };
+      writeJson(currentPath, current);
+      const scratch = join(paths.scratch, stem);
+      // Who owns it, and later that the session ended: tidy's rule S removes a
+      // worktree or DerivedData in it only on that record, never on age.
+      const scratchMarker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind, stem, started: stamp() };
+      let scratchEnv = {};
+      try {
+        deps.mkdir(scratch);
+        writeJson(join(scratch, SCRATCH_MARKER), scratchMarker);
+        scratchEnv = { MC_SCRATCH: scratch };
+      } catch (error) {
+        say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
+      }
+      let result;
+      try {
+        if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+        if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
+        const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+        const rechecked = await admission.recheck?.();
+        if (rechecked && !rechecked.admitted) {
+          say(rechecked.line);
+          writeJson(paths.disk, { at: stamp(), free_bytes: rechecked.available, line: rechecked.line });
+          return 'skipped:disk';
+        }
+        const pendingSession = deps.session({
+          bin: tool.bin,
+          args: tool.args,
+          cwd,
+          logPath: `${out}.jsonl`,
+          ...watchFor(launch, settings, {
+            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
+            onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+          }),
+          env: {
+            // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+            MC_HEADLESS: '1',
+            MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
+            // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
+            ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
+            // The review uses this head as context; the Stop hook reads when it began.
+            ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
+            ...(settings.model ? { MC_MODEL: settings.model } : {}),
+            ...scratchEnv,
+          },
+          unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
+        });
+        admission.release?.();
+        result = await pendingSession;
+      } finally {
+        remove(currentPath);
+        if (scratchEnv.MC_SCRATCH) {
+          try { writeJson(join(scratch, SCRATCH_MARKER), { ...scratchMarker, ended: stamp(), exit: result?.status ?? null }); } catch { /* kept: no end, no removal */ }
+        }
+      }
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      writeSessionLogs(out, result);
+      noteWindows({ name, launch }, result.stdout);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      const provider = launch.id === 'codex' ? 'codex' : 'claude';
+      if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
+      const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
+      else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
+      else if (review) afterReview(goal, name);
+      else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
+      const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
+      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+      return 'ran';
+    } finally { admission.release?.(); dropSlot(); }
   }
 
 

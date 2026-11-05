@@ -1442,18 +1442,24 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
     const timers = [];
     let finish;
     let started;
+    let heldAtSpawn = false;
     const running = new Promise((resolve) => { started = resolve; });
     const { stdout, stderr } = io();
     const shipped = run([], {
       ...deps({
         disk: disk.policy,
         every: (ms, fn) => { const timer = { ms, fn, stopped: false }; timers.push(timer); return () => { timer.stopped = true; }; },
-        spawnDeploy: () => new Promise((resolve) => { finish = resolve; started(); }),
+        spawnDeploy: () => new Promise((resolve) => {
+          heldAtSpawn = disk.policy.readState()?.lease?.trigger === 'deploy';
+          finish = resolve; started();
+        }),
       }),
       stdout, stderr,
     });
     await running;
     assert.equal(disk.ran, 1, 'the pass before the spawn');
+    assert.equal(heldAtSpawn, true, 'spawn is inside admission exclusion');
+    assert.equal(disk.policy.readState().lease, null, 'running deploy does not hold admission');
     assert.deepEqual(timers.map((timer) => timer.ms), [60_000]);
     disk.free = 27e9;
     await timers[0].fn();

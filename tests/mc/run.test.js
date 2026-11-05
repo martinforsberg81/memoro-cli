@@ -1,3 +1,4 @@
+import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -676,7 +677,66 @@ const pressureState = (f) => JSON.parse(f.files['/w/runner/disk-pressure.json'] 
 const pressureEvents = (f) => JSON.parse(f.files['/w/runner/disk-pressure-events.json'] ?? '[]');
 const GBYTES = 1e9;
 
-test('at exactly 30 GB a session starts, and a healthy disk runs no pass and writes nothing', async () => {
+test('shared admission excludes other policy instances through allocation/start, and lock failure refuses', async () => {
+  for (const otherPid of [1, 2]) {
+    const files = new Map();
+    let free = 30e9;
+    const options = { path: '/disk', stateDir: '/state', freeBytes: () => free,
+      read: (p) => files.get(p), writeJson: (p, v) => files.set(p, JSON.stringify(v)), alive: () => true };
+    const first = createDiskPressure({ ...options, pid: 1 });
+    const second = createDiskPressure({ ...options, pid: otherPid });
+    const admitted = await first.admit({ hold: true });
+    assert.equal(admitted.admitted, true);
+    assert.equal((await second.admit({ hold: true })).admitted, false, 'no stale healthy admission while allocation is held');
+    free = 29e9; // the admitted allocation consumed space before releasing
+    admitted.release();
+    assert.equal((await second.admit()).admitted, false);
+    free = 30e9;
+    assert.equal((await second.admit()).admitted, true);
+  }
+  const failed = createDiskPressure({ path: '/disk', stateDir: '/state', freeBytes: () => 50e9,
+    read: () => null, writeJson: () => assert.fail('must not write without exclusion'), lock: () => { throw new Error('held'); } });
+  assert.match((await failed.admit()).reason, /lock unavailable/u);
+});
+
+test('runner holds admission during dependency allocation and rechecks before spawning', async () => {
+  const f = goalFixture({ alpha: {} });
+  const disk = onDisk(f, 30e9);
+  let heldAtAllocation = false;
+  f.deps.attachDeps = async () => {
+    heldAtAllocation = pressureState(f)?.lease?.trigger === 'session:start';
+    disk.free = 29e9;
+    return { ok: true };
+  };
+  assert.equal((await createRunner({ deps: f.deps }).pass()).waited, 'skipped:disk');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(heldAtAllocation, true, 'allocation happens only while admission is held');
+  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureEvents(f).at(-1).admission.admitted, false);
+});
+
+test('same-pid policy instances cannot duplicate a pending cleanup or bypass it at the healthy boundary', async () => {
+  const files = new Map();
+  let free = 29e9;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const removed = [];
+  const options = { path: '/disk', stateDir: '/state', pid: 1, alive: () => true,
+    freeBytes: () => free, read: (p) => files.get(p), writeJson: (p, v) => files.set(p, JSON.stringify(v)),
+    steps: [{ name: 'tidy', run: async () => { removed.push('safe'); await pending; free = 40e9; return {}; } }] };
+  const first = createDiskPressure(options);
+  const second = createDiskPressure(options);
+  const pass = first.poll();
+  await Promise.resolve();
+  assert.equal((await second.poll()).relief.skipped, 'busy');
+  assert.equal((await second.admit()).admitted, false);
+  assert.deepEqual(removed, ['safe']);
+  release();
+  await pass;
+  assert.equal((await second.admit()).admitted, true);
+});
+
+test('at exactly 30 GB a session starts, and a healthy disk runs no cleanup or diagnostic event', async () => {
   const f = goalFixture({ alpha: {} });
   const disk = onDisk(f, PRESSURE_BYTES);
   f.files['/w/runner/disk.json'] = JSON.stringify({ line: 'disk: 1.0 GB free — no session started' });
@@ -684,8 +744,9 @@ test('at exactly 30 GB a session starts, and a healthy disk runs no pass and wri
   assert.equal(r.ran, 1);
   assert.deepEqual(disk.steps, []);
   assert.deepEqual([...new Set(disk.read)], ['/w/runner/scratch'], 'the volume read is the one MC_SCRATCH is made on');
-  assert.equal(disk.read.length, 2, 'asked at the top of the pass and again at the start');
-  assert.equal(pressureState(f), null);
+  assert.equal(disk.read.length, 3, 'asked before allocation and rechecked at the spawn boundary');
+  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureState(f).last_cleanup, undefined);
   assert.deepEqual(pressureEvents(f), []);
   assert.equal('/w/runner/disk.json' in f.files, false, 'the page line goes');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /disk:/u);
@@ -759,7 +820,7 @@ test('a disk that cannot be read refuses new sessions, shows it, and runs no pas
 });
 
 test('two lanes asking at once share one pressure pass, and each decides on the reading after it', async () => {
-  for (const [frees, ran] of [[2 * GBYTES, [1, 1]], [0, [0, 0]]]) {
+  for (const [frees, ran] of [[2 * GBYTES, [1, 0]], [0, [0, 0]]]) {
     const f = goalFixture({ alpha: {}, beta: {} });
     const disk = onDisk(f, 29 * GBYTES, { tidyFrees: frees });
     let open;
@@ -772,6 +833,7 @@ test('two lanes asking at once share one pressure pass, and each decides on the 
     assert.deepEqual(results.map((r) => r.ran), ran);
     assert.deepEqual(disk.steps.filter((step) => step === 'tidy'), ['tidy'], 'one pass for both');
     assert.equal(f.calls.sessions.length, ran[0] + ran[1]);
+    if (frees) assert.equal((await runner.pass({ lane: 1 })).ran, 1, 'deferred lane remeasures and starts on retry');
   }
 });
 
@@ -781,7 +843,7 @@ test('a pressure lease another live process holds means no second pass here; a d
   f.files['/w/runner/disk-pressure.json'] = JSON.stringify({ status: 'pressure', lease: { pid: 777, since: '2026-08-29T09:59:00Z', trigger: 'deploy' } });
   assert.equal((await createRunner({ deps: f.deps }).pass()).waited, 'skipped:disk');
   assert.deepEqual(disk.steps, []);
-  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /pid 777 is reclaiming space now$/u);
+  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /pid 777 is reclaiming space now/u);
   f.deps.alive = () => false;
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
   assert.deepEqual([disk.steps, pressureState(f).lease], [['tidy', 'docker'], null]);
@@ -825,7 +887,7 @@ test('the monitor reads the disk every minute on its own timer and relieves pres
   assert.deepEqual(timers.map((timer) => timer.ms), [POLL_MS]);
   assert.equal(POLL_MS, 60_000);
   await timers[0].fn();
-  assert.deepEqual([pressureState(f), disk.steps], [null, []], 'healthy: quiet');
+  assert.deepEqual([pressureState(f).last_cleanup, disk.steps], [undefined, []], 'healthy: no cleanup');
   disk.free = 28 * GBYTES;
   await timers[0].fn();
   assert.deepEqual(disk.steps, ['tidy', 'docker']);

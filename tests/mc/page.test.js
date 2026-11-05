@@ -376,6 +376,11 @@ describe('SESSIONS', () => {
       'disk: next pass after 2026-08-29T12:05Z',
       'disk: this holds back mc\'s new work only; other apps and running work can still fill the disk',
     ]);
+    assert.deepEqual(rows(summary(33e9, state)), [
+      'disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
+      'disk: last pass 2026-08-29T12:00Z (monitor) shortfall: measured +1.0 GB, estimated 9.0 GB',
+      'disk: 7.0 GB short of the 40.0 GB target; protected data is kept',
+    ]);
     assert.equal(rows(summary(null, state))[0], 'disk: free space could not be measured — new sessions, deploys and Docker starts are refused');
   });
 
