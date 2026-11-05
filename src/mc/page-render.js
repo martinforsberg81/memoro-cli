@@ -822,8 +822,15 @@ function ownerWords(owner) {
  */
 function prsLines(lines, c, wide, prs) {
   if (!prs) return;
-  const counts = prs.counts || {};
+  // Attached PRs are accounted for by their programme, even when no local
+  // worktree holds the branch. Only the remainder can be nobody's here.
+  const attached = (prs.items || []).filter((pr) => pr.programme).length;
+  const counts = attached ? {} : (prs.counts || {});
+  if (attached) for (const pr of prs.items || []) {
+    if (!pr.programme) counts[pr.owner.kind] = (counts[pr.owner.kind] || 0) + 1;
+  }
   const words = [
+    attached ? `${attached} in programmes` : '',
     counts.plan ? `${counts.plan} plan` : '',
     counts.workarea ? `${counts.workarea} in a workarea` : '',
     counts.worktree ? `${counts.worktree} checked out elsewhere` : '',
@@ -838,7 +845,7 @@ function prsLines(lines, c, wide, prs) {
   ].filter(Boolean);
   heading(lines, c, wide, 'PULL REQUESTS', prs.fetched ? between(parts, ' · ') : 'not asked yet — mc prs asks GitHub', 'mc prs');
   for (const pr of prs.items || []) {
-    if (pr.merging || pr.merge_red) continue;
+    if (pr.programme || pr.merging || pr.merge_red) continue;
     lines.push(prRow(c, wide, pr, ownerWords(pr.owner)));
   }
 }
@@ -907,33 +914,32 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * A goal in the shared grid. Primary text is white while work remains;
- * finished rows are entirely grey, including their PRs and last words.
+ * A goal in the shared grid. Names and repositories use the terminal foreground;
+ * finished rows keep their state and last words quiet without hiding identity.
  * Criteria remain available in the goal detail and JSON.
  */
 function goalLine(c, wide, goal) {
   const word = goal.stage ?? goal.state ?? '—';
   const tone = goal.status === 'blocked' ? stateTone('blocked')
     : goal.running ? ['green']
-    : stateTone(word);
+    : word === 'plan' ? ['cyan'] : stateTone(word);
   const finished = goal.stage === 'done' || goal.stage === 'dropped';
   const said = finished ? (goal.last?.done ?? goal.last?.comment ?? null) : (goal.question ?? goal.last?.next ?? goal.last?.comment ?? null);
   const waits = goal.held ? `phase ${goal.phase} — after phase ${goal.phase - 1}` : null;
-  let tail = said ? [{ text: said, styles: ['white'] }] : [];
+  let tail = said ? [{ text: said, styles: finished ? ['grey'] : [] }] : [];
   if (goal.problems?.length) tail = [{ text: `GOAL.json: ${goal.problems[0]}`, styles: ['red'] }];
   else if (waits) {
-    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said, styles: ['white'] } : null];
+    tail = [{ text: waits, styles: stateTone('waiting') }, said && one(said) !== waits ? { text: said } : null];
   } else if (goal.person) {
     const head = 'waits on a person';
     tail = [{ text: 'blocked', styles: stateTone('blocked') }, { text: head, styles: stateTone('blocked') },
-      said && one(said) !== head ? { text: said, styles: ['white'] } : null];
+      said && one(said) !== head ? { text: said } : null];
   }
-  const draw = finished ? (text) => c(text, 'grey') : c;
-  return gridRow(draw, wide, {
+  return gridRow(c, wide, {
     mark: { text: MARK.running, styles: goal.problems?.length ? ['red'] : goal.held ? stateTone('waiting') : tone },
     kind: { text: '' },
-    name: { text: goal.name, styles: goal.running ? ['white', 'bold'] : ['white'] },
-    repo: { text: goal.repo ?? goal.repos?.[0] ?? '—', styles: ['grey'] },
+    name: { text: goal.name, styles: goal.running ? ['bold'] : [] },
+    repo: { text: goal.repo ?? goal.repos?.[0] ?? '—' },
     state: { text: word, styles: tone },
     progress: { text: goal.progress ?? '', styles: ['grey'] },
     pr: prCellOf(goal.prs),
@@ -971,7 +977,7 @@ function programmeLine(c, wide, group) {
   const goals = (group.goals || []).length;
   const parts = [
     { text: group.programme, styles: ['bold', 'cyan'] },
-    { text: goals ? `${goals} goal${goals === 1 ? '' : 's'}` : 'no goal yet', styles: ['grey'] },
+    { text: goals ? `${goals} goal${goals === 1 ? '' : 's'}` : 'no goal yet' },
     (group.prs || []).length ? { text: `${group.prs.length} pr`, styles: ['grey'] } : null,
     { text: meta ? `● plan ${meta}` : 'no plan session', styles: meta ? ['cyan'] : ['grey'] },
     opened ? { text: `${opened} open`, styles: ['cyan'] } : null,
@@ -985,7 +991,9 @@ function programmeLine(c, wide, group) {
     visible.push(part);
     used += size;
   }
-  return `  ${paint(c, between(visible, ' · '), wide - 2)}`;
+  const label = `  ${paint(c, between(visible, ' · '), wide - 2)}`;
+  const room = wide - width(label) - 2;
+  return room >= 3 ? `${label}  ${c('─'.repeat(room), 'cyan')}` : label;
 }
 
 function programmePrLine(c, wide, pr) {
@@ -993,7 +1001,7 @@ function programmePrLine(c, wide, pr) {
   return gridRow(c, wide, {
     mark: { styles: pr.merge_red ? ['red'] : pr.merging ? ['green'] : ['grey'] },
     kind: { text: 'pr', styles: PR_TONE },
-    name: { text: pr.title || pr.branch || '—', styles: ['white'] },
+    name: { text: pr.title || pr.branch || '—' },
     repo: { text: pr.repo, styles: ['grey'] },
     state: { text: state, styles: stateTone(state) },
     pr: prCellOf([pr]),
@@ -1008,7 +1016,7 @@ function programmeColumnHead(c, wide) {
     if (!col[key].width) continue;
     line = line.padEnd(col[key].x) + clip(title, col[key].width - 1);
   }
-  return c(line, 'grey');
+  return c(line, 'bold');
 }
 
 function programmesLines(lines, c, wide, programmes, expand) {

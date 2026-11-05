@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  attachPrs, goalsOf, intakeSection, mergesSection, programmesSection, runnerSection, sessionsSection,
+  attachPrs, goalsOf, intakeSection, mergesSection, programmesSection, prsSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -127,8 +127,8 @@ describe('goal rows on the page', () => {
     const painted = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
     for (const name of ['landed', 'letgo']) {
       const codes = [...goalLineOf(painted, name).matchAll(/\u001b\[(\d+)m/gu)].map((match) => match[1]);
-      assert.ok(goalLineOf(painted, name).includes(`\u001b[90m${name}`), 'the name is explicitly grey');
-      assert.ok(codes.every((code) => ['90', '0'].includes(code)), 'the entire finished row is grey');
+      assert.ok(!goalLineOf(painted, name).includes(`\u001b[90m${name}\u001b[0m`), 'the name keeps the readable terminal foreground');
+      assert.ok(codes.every((code) => ['90', '0'].includes(code)), 'finished state and metadata remain quiet');
     }
 
   });
@@ -262,6 +262,43 @@ describe('a goal in a phase its programme has not reached', () => {
 });
 
 describe('programme pull requests', () => {
+  it('shows each owned PR only under its programme and keeps unassigned PRs visible', () => {
+    const root = '/work';
+    const programmes = programmesSection({ goalRows: [GOALS[0]], programmes: ['study'] });
+    const pulls = prsSection({
+      root, fetched: NOW.toISOString(), now: NOW,
+      prs: [
+        { repo: 'memoro-cli', number: 31, headRefName: 'goal/rollout', title: 'Goal change' },
+        { repo: 'memoro-cli', number: 32, headRefName: 'study/chat', title: 'Study change' },
+        { repo: 'memoro-cli', number: 33, headRefName: 'plan/mc', title: 'Scratch plan change' },
+        { repo: 'memoro-cli', number: 34, headRefName: 'fix/unassigned', title: 'Unassigned change' },
+      ],
+      worktrees: { 'memoro-cli': [
+        { branch: 'study/chat', path: `${root}/programs/study/chat/memoro-cli` },
+        { branch: 'plan/mc', path: '/tmp/plan-copy/memoro-cli' },
+      ] },
+    });
+    attachPrs({ programmes, pulls });
+    const group = (name) => programmes.programmes.find((item) => item.programme === name);
+    assert.deepEqual(group('mc').goals[0].prs.map((pr) => pr.number), [31]);
+    assert.deepEqual(group('mc').prs.map((pr) => pr.number), [33]);
+    assert.deepEqual(group('study').prs.map((pr) => pr.number), [32]);
+    assert.equal(group('study').dormant, false);
+    assert.deepEqual(pulls.items.map((pr) => [pr.number, pr.programme]), [
+      [34, null], [33, 'mc'], [32, 'study'], [31, 'mc'],
+    ]);
+    for (const columns of [60, 80, 120, 160]) {
+      const lines = renderPageLines(pageData({ programmes, prs: pulls }), { columns, now: NOW });
+      const divider = lines.findIndex((line) => line.includes('PULL REQUESTS'));
+      if (columns >= 120) assert.match(lines[divider], /3 in programmes .*1 nobody's/u);
+      for (const number of [31, 32, 33, 34]) {
+        const own = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.includes(`#${number}`));
+        assert.equal(own.length, 1, `#${number} appears once at ${columns} columns`);
+        assert.equal(own[0].index < divider, number !== 34);
+      }
+    }
+  });
+
   it('draws unclaimed plan PRs under their programme, including a programme with no goals', () => {
     const programmes = programmesSection({ goalRows: [{ ...GOALS[0], carries: [{ repo: 'memoro-cli', pr: 3 }] }], programmes: ['empty'] });
     const pr = (number, name, branch = `plan/${name}`) => ({ repo: 'memoro-cli', number, title: `Change ${number}`, branch, owner: { kind: 'plan', name } });

@@ -43,22 +43,27 @@ in its status colour (`statusRollup`, `page-render.js`).
 
 Each active programme has a heading with ` · ` between its name, goal count,
 standalone PR count, planning sessions by provider, other open sessions and
-proposal count. Active session metadata is cyan; counts and absent sessions
-are grey. Dormant programmes have no goals or standalone PRs and fold into
-one line; `a` draws them all. A planning session alone does not make one active.
-A column title row labels the shared grid below PROGRAMMES.
+proposal count, followed by a cyan rule filling the remaining width. Active
+session metadata is cyan; goal counts use the terminal foreground, while
+absent sessions and secondary counts are grey. Dormant programmes have no
+goals or standalone PRs and fold into one line; `a` draws them all. A planning session alone does not make one active.
+A bold column title row labels the shared grid below PROGRAMMES.
 
 Standalone PRs owned by a programme's planning worktree (or `plan/<programme>`
-branch) appear under that programme with `pr` in the kind cell. Goal-owned
+branch, including one checked out in a scratch directory) appear under that
+programme with `pr` in the kind cell. Goal-owned
 PRs stay with their goal and are never repeated as standalone rows. A programme
-with only a standalone PR remains visible.
+with only a standalone PR remains visible. Attached PRs carry `programme` in
+JSON and are omitted from the loose rows under PULL REQUESTS; unassigned PRs
+remain visible there. The `mc prs` listing still shows every open PR.
 
 Every goal has a row in the grid: a large `●` in the left margin, name,
 first repository, stage, `N sess`, and open PRs. The kind cell is empty for
 goals; its space keeps columns aligned with SESSIONS and MERGES. Primary text
-is white while the goal is unfinished, with metadata and state colours kept
-distinct. Done and dropped rows are entirely grey. Criteria counts remain
-in JSON and goal detail, and no longer appear in each row. The tail says:
+uses the terminal foreground for names and repositories, including finished
+goals. Plan stages are cyan; running work is green; waits are yellow and
+blockers red. Done and dropped states and last words are grey. Criteria
+counts remain in JSON and goal detail, and no longer appear in each row. The tail says:
 
 - a higher phase: yellow `phase <n> — after phase <n-1>`;
 - blocked in any stage: red `blocked · waits on a person`, then its question;
