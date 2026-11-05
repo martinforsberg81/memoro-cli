@@ -13,6 +13,9 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { headlessArgs, readSessionOutput, sessionResult, TIMEOUT_EXIT } from './run-plan.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
+import { readModels } from './model-config.js';
+import { readCapacity } from './model-capacity.js';
+import { chooseCandidate } from './model-choice.js';
 
 function runSession({ bin, args, cwd, env, timeoutMs }) {
   return new Promise(resolve => {
@@ -27,12 +30,30 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   if (!prompt?.trim() || !Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) return { ok: false, reason: 'invalid manager task or time limit' };
   const role = (deps.role || readCanonRole)('manager');
   if (!role?.overlay) return { ok: false, reason: 'manager role missing' };
-  const launch = (deps.launch || resolveLaunch)(tool || role.tools?.[0] || 'claude');
+  const catalog = !model && (!tool || tool === 'codex') ? (deps.catalog || (() => readModels(env)))() : { providerPriority: 'auto', large: [] };
+  const priority = catalog.providerPriority ?? 'auto';
+  let routeCandidate = null;
+  let routeWhy = null;
+  if (!model && (tool === 'codex' || (!tool && priority !== 'auto'))) {
+    const roleCandidates = [
+      { tool: 'claude', model: role.model || 'opus', effort: 'medium' },
+      ...(catalog.large || []).filter((candidate) => candidate.tool === 'codex'),
+    ];
+    if (tool === 'codex') routeCandidate = roleCandidates.find((candidate) => candidate.tool === 'codex') || null;
+    else {
+      const chosen = chooseCandidate({ cls: 'large', catalog: { large: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority });
+      routeCandidate = chosen.candidate;
+      routeWhy = chosen.why;
+    }
+  }
+  const selectedTool = tool || routeCandidate?.tool || role.tools?.[0] || 'claude';
+  const launch = (deps.launch || resolveLaunch)(selectedTool);
   if (!launch?.ok) return { ok: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
-  const selectedModel = model || (launch.shortName === role.tools?.[0] ? role.model : null) || (launch.id === 'codex' ? 'gpt-6.1-sol' : 'opus');
+  if (launch.id === 'codex' && !model && !routeCandidate) return { ok: false, reason: 'no Codex Manager candidate is listed in mc model' };
+  const selectedModel = model || routeCandidate?.model || (launch.shortName === role.tools?.[0] ? role.model : null) || 'opus';
   const instructions = instructionsFor(launch.id, role.overlay);
   const task = `You are running headless with nobody at the terminal. Carry out only the task below, then report what changed, what was checked and what remains. When a decision needs Martin, record the question with the affected goal or proposal and report it; do not guess his answer. Do not start another Manager session.\n\n${prompt}`;
-  const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: selectedModel, instructions, prompt: task, profileArgs, stream: false, cache: role.cache });
+  const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: selectedModel, effort: routeCandidate?.effort, instructions, prompt: task, profileArgs, stream: false, cache: role.cache });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
   const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env });
   const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
@@ -62,7 +83,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
         } catch { /* not a JSON event */ }
       }
     }
-    const receipt = { ...summary, answer, ok, status: result.status, tool: launch.shortName || launch.id, model: selectedModel, billing: billing.billing, started: now.toISOString(), finished: new Date().toISOString(), prompt, stdout: result.stdout, stderr: result.stderr };
+    const receipt = { ...summary, answer, ok, status: result.status, tool: launch.shortName || launch.id, model: selectedModel, providerPriority: priority, routeWhy, billing: billing.billing, started: now.toISOString(), finished: new Date().toISOString(), prompt, stdout: result.stdout, stderr: result.stderr };
     writeFileSync(log, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
     return { ...receipt, log };
   } finally {

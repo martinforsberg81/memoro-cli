@@ -78,6 +78,7 @@ import { nightlyReading } from './nightly-history.js';
 import { watcherState } from './repo-watch.js';
 import { billingStatus } from './billing-route.js';
 import { readCapacity } from './model-capacity.js';
+import { readModels } from './model-config.js';
 import { readBillingState } from './billing.js';
 import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
@@ -1440,9 +1441,13 @@ export async function collectPage({
   });
   attachPrs({ programmes, runner, pulls });
 
+  let providerPriority = 'auto';
+  try { providerPriority = readModels(env).providerPriority; } catch (error) { notes.push(`provider priority unreadable (${error.message})`); }
+
   return {
     runner,
     billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
+    providerPriority,
     sessions,
     // File reads and a signal 0 per server; one `git branch` per worktree.
     dev: devSection({

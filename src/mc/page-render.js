@@ -837,6 +837,7 @@ export function renderPageLines(data, {
   runnerLines(lines, c, wide, { ...runner, at_ms: at }, expand);
   dockerLine(lines, c, wide, data.docker);
   if (data.billing) detail(lines, c, wide, 2, `BILLING  ${data.billing}`);
+  detail(lines, c, wide, 2, `PROVIDER PRIORITY  ${data.providerPriority || 'auto'}`);
   for (const note of data.notes || []) {
     // How old the PR cache is was the page's last line, every time, and it was
     // never what anybody came for; `mc --json` has it under `caches`.

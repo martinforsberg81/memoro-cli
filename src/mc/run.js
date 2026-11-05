@@ -738,7 +738,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
-      const chosen = chooseCandidate({ cls, catalog: catalog ?? deps.catalog(), capacity: capacity.read(), now: deps.now(), avoid });
+      const saved = deps.catalog();
+      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto' });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {

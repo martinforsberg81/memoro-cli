@@ -46,3 +46,7 @@ How you judge:
   everything that could be improved.
 
 There is nobody to ask, so decide and say what you decided.
+
+An unattended intake launch follows `mc model priority` with a role-appropriate
+model and uses the other usable subscription before the API reserve; `auto`
+retains the role's Claude default.

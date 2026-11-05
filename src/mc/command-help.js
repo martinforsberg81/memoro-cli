@@ -46,12 +46,16 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   model: [
     "usage — mc model [list] [--json]   the ordered fast, large and review candidates\n",
+    "        mc model priority [auto|codex|claude]   show or set the global unattended provider preference\n",
     "        mc model add fast|large|review <tool>:<model>:<effort>   append a candidate to the list\n",
     "        mc model remove fast|large|review <tool>:<model>   remove that exact tool/model\n",
     "        mc model set review <tool>:<model>:<effort>   replace the whole review list with that one candidate\n",
     "\n",
     "Review is an ordered list of candidates: it takes the first that can run on its plan\n",
     "now and is not the model the goal was built on, and that model only when no other can.\n",
+    "The optional provider priority is a preference among usable subscriptions, before\n",
+    "capacity headroom and review's build-model avoidance. If it cannot use its subscription,\n",
+    "another usable subscription is tried before the API reserve. auto keeps capacity balancing.\n",
     "The catalog does not poll capacity. --json applies only to list.\n",
   ].join(''),
   goal: [

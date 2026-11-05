@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { it } from 'node:test';
 import { getAdapter } from '../../src/adapters/index.js';
 import { runManagerTurn } from '../../src/mc/manager-turn.js';
+import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
 
 function fixture(t, tool = 'codex') {
   const root = mkdtempSync(join(tmpdir(), 'mc-manager-turn-'));
@@ -56,6 +57,35 @@ it('starts a new unattended session every time for either provider and isolates 
     }
     assert.equal(JSON.parse(readFileSync(first.log)).ok, true);
   }
+});
+
+it('unattended Manager honors saved Codex priority with a valid catalog model and effort', async t => {
+  const f = fixture(t);
+  let priority = 'codex';
+  let seen;
+  let capacity = applyObservation(normaliseCapacity(null), 'claude', {
+    windows: { five_hour: { fraction_used: 0.9, resets_at: '2026-11-05T22:00:00Z' }, seven_day: { fraction_used: 0.9, resets_at: '2026-11-12T18:00:00Z' } },
+  }, new Date('2026-11-05T18:00:00Z'));
+  capacity = applyObservation(capacity, 'codex', {
+    windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
+    models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }],
+  }, new Date('2026-11-05T18:00:00Z'));
+  const result = await runManagerTurn({
+    ...f.options, tool: null, model: null,
+    deps: { ...f.options.deps, catalog: () => ({ providerPriority: priority, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+      launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
+      session: async (call) => { seen = call; return { status: 0, stdout: '{"type":"thread.started","thread_id":"fresh"}\n{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}\n{"type":"turn.completed","usage":{}}\n', stderr: '' }; } },
+  });
+  assert.equal(result.tool, 'codex');
+  assert.equal(result.model, 'gpt-6.1-sol');
+  assert.ok(seen.args.includes('model_reasoning_effort=high'));
+  assert.equal(result.providerPriority, 'codex');
+  priority = 'claude';
+  const fallback = await runManagerTurn({ ...f.options, tool: null, model: null, deps: { ...f.options.deps,
+    catalog: () => ({ providerPriority: priority, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+    launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
+  } });
+  assert.deepEqual([fallback.tool, fallback.model, fallback.providerPriority], ['claude', 'opus', 'claude']);
 });
 
 it('records failures and timeouts and releases the running-session record', async t => {

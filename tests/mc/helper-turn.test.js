@@ -20,6 +20,8 @@ import {
   describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
 } from '../../src/mc/helper-turn.js';
 import { expandRoleIncludes, sharedRoleText } from '../../src/mc/roles.js';
+import { getAdapter } from '../../src/adapters/index.js';
+import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
 const FILE = 'errors-memoro-2026-08-29.md';
@@ -67,6 +69,7 @@ async function turn(overrides = {}, options = {}) {
   const seen = {};
   const result = await runHelperTurn({
     env: e, now: NOW, file: options.file || join(intakeDir(e), FILE),
+    tool: options.tool || null,
     deps: {
       role: () => ROLE, launch: () => LAUNCH,
       ground: GROUND, session: fakeSession(seen, options.session), ...overrides,
@@ -76,6 +79,43 @@ async function turn(overrides = {}, options = {}) {
 }
 
 describe('the helper turn', () => {
+  it('uses the saved Codex priority with the intake candidate and supported effort', async () => {
+    let capacity = applyObservation(normaliseCapacity(null), 'claude', {
+      windows: { five_hour: { fraction_used: 0.9, resets_at: '2026-08-29T13:00:00Z' }, seven_day: { fraction_used: 0.9, resets_at: '2026-09-05T12:00:00Z' } },
+    }, NOW);
+    capacity = applyObservation(capacity, 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-08-29T13:00:00Z' } },
+      models: [{ id: 'gpt-6-luna', efforts: ['high'] }],
+    }, NOW);
+    let seen;
+    let priority = 'codex';
+    const overrides = {
+      catalog: () => ({ providerPriority: priority, fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }),
+      capacity: () => capacity,
+      launch: (tool) => ({ ...LAUNCH, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code') }),
+      session: async (call) => { seen = call; return { status: 0, stdout: CLAUDE_JSON, stderr: '' }; },
+    };
+    const { result } = await turn(overrides);
+    assert.equal(result.tool, 'codex');
+    assert.equal(result.model, 'gpt-6-luna');
+    assert.equal(result.providerPriority, 'codex');
+    assert.match(result.routeWhy, /codex provider priority/u);
+    assert.ok(seen.args.includes('model_reasoning_effort=high'));
+    priority = 'claude';
+    const next = await turn(overrides);
+    assert.deepEqual([next.result.tool, next.result.model, next.result.providerPriority], ['claude', 'sonnet', 'claude']);
+  });
+
+  it('keeps an explicit intake tool ahead of saved priority', async () => {
+    const capacity = applyObservation(normaliseCapacity(null), 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-08-29T13:00:00Z' } },
+      models: [{ id: 'gpt-6-luna', efforts: ['high'] }],
+    }, NOW);
+    const { result } = await turn({ catalog: () => ({ providerPriority: 'codex', fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }), capacity: () => capacity }, { tool: 'claude' });
+    assert.equal(result.tool, 'claude');
+    assert.equal(result.model, 'sonnet');
+  });
+
   it('does not inherit its caller’s goal or step identity', async () => {
     const { seen } = await turn({}, { env: { ...env(), MC_ROLE: 'goal', MC_PROGRAMME: 'wrong', MC_GOAL: 'wrong/g', MC_STEP: 'p:0', MC_PROJECT: 'p' } });
     assert.equal(seen.env.MC_ROLE, 'intake');

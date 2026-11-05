@@ -135,7 +135,7 @@ export async function run(argv, deps = {}) {
   if (!live) return 0;
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
-    stdout, stderr, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
+    stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -244,7 +244,7 @@ export function pageKey(data) {
   const activityKey = [...(data?.runner?.sessions || []), ...foreground]
     .filter((s) => s.pid || s.goal || s.name || s.area)
     .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.check_ins || 0].join(':')).sort().join('|');
-  return [goalKey, activityKey].filter(Boolean).join('|');
+  return [goalKey, activityKey, data?.providerPriority || ''].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -263,7 +263,7 @@ export function parsePageArgs(argv) {
 
 const KEYS = [
   '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
-  '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
+  '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -309,7 +309,7 @@ async function showGoalVerb(argv, io) {
  * back — and the reader owns everything from the prompt onwards.
  */
 export async function menu(first, {
-  stdout, stderr, page, reader, expand = () => {},
+  stdout, stderr, env = process.env, page, reader, expand = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -352,6 +352,15 @@ export async function menu(first, {
       return manager.run([], { stdout, stderr });
     }
 
+    const words = answer.split(/\s+/u).filter(Boolean);
+    if (words[0] === 'priority' && words.length <= 2) {
+      const model = await import('./model.js');
+      stdout.write('\n');
+      await model.run(['priority', ...words.slice(1)], { stdout, stderr, env });
+      data = await redraw();
+      continue;
+    }
+
     const order = runnerOrder(answer);
     if (order) {
       const verb = await import('./run.js');
@@ -361,7 +370,6 @@ export async function menu(first, {
       continue;
     }
 
-    const words = answer.split(/\s+/u).filter(Boolean);
     // `p` alone is as good an answer as `p <programme>`: `mc plan` asks which
     // programme when it is not told, and the page is exactly the place
     // somebody would rather be shown the list than have to remember a name.

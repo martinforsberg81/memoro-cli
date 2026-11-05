@@ -130,6 +130,20 @@ leaves it build · ready for the next session.
 
 ### Launch settings
 
+`mc model priority [auto|codex|claude]` saves one global provider preference in
+`runner/models.json`; an absent value is `auto`. The runner rereads it for each
+fresh class-routed build, review and plan launch, including headless programme
+planning, while an already-running conversation is unchanged. A preferred
+provider wins among usable subscriptions regardless of relative headroom or
+review build-model avoidance; within that provider the existing capacity and
+model ranking remains. If its subscription is exhausted, refused, stale,
+unavailable, or lacks the candidate/effort, another usable subscription is
+tried before that provider's API reserve. Existing API-off guards still apply.
+`auto` keeps capacity balancing. Manager and intake use role-appropriate
+provider models; manual explicit tool/model choices and interactive `mc plan`
+and `mc manager` retain their selections. The page displays this setting and
+its menu's `priority auto|codex|claude` command writes through `mc model`.
+
 Class routing supplies the tool, model and effort. The shared internal
 `SESSION_DEFAULTS` fallback still has these rows (`step` is an internal key,
 not a unit of runnable work):
@@ -280,7 +294,9 @@ is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by one
-read-only Codex call an hour. `review` is a class too, but only a goal's review takes it, and it is not scored by headroom.
+read-only Codex call an hour. `review` is a class too, but only a goal's review
+takes it. A provider priority first ranks usable candidates from that provider;
+capacity/model ranking and the build-model tie rule then apply within it.
 Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. A candidate can run on its plan when its provider has not refused it and
 no window in force is at its limit. A goal's review passes over every
 candidate whose model is its last build entry's while another can run on its
@@ -295,6 +311,8 @@ written whole or not at all:
 - `mc model [list] [--json]` — the candidates of fast, large and review, each
   a numbered list in preference order, and whether they come from the file or
   the defaults.
+- `mc model priority [auto|codex|claude]` — show or change the provider
+  preference for unattended launches; an absent setting means `auto`.
 - `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate.
 - `mc model remove fast|large|review <tool>:<model>` — removes the candidate
   with exactly that tool and model; a list keeps at least one.

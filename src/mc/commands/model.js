@@ -6,6 +6,7 @@
  * that is the routing's, and this verb does not poll anything.
  *
  *   mc model [list] [--json]                               the catalog, and whether it is the file's or the defaults
+ *   mc model priority [auto|codex|claude]                   the global unattended provider preference
  *   mc model add fast|large|review <tool>:<model>:<effort>  append a candidate to a list
  *   mc model remove fast|large|review <tool>:<model>        remove the candidate with exactly that tool and model
  *   mc model set review <tool>:<model>:<effort>             replace the whole review list with that one candidate
@@ -15,7 +16,7 @@
  */
 import { commandUsage } from '../command-help.js';
 import {
-  LISTS, ModelConfigError, addCandidate, candidateSpec, changeModels, parseCandidate, parseTarget,
+  LISTS, PROVIDER_PRIORITIES, ModelConfigError, addCandidate, candidateSpec, changeModels, changeProviderPriority, parseCandidate, parseTarget,
   readModels, removeCandidate, setReview,
 } from '../model-config.js';
 import { scanArgs } from './flags.js';
@@ -31,13 +32,16 @@ export function usage() {
  * the catalog, and help-routes.test.js walks the help with it.
  */
 const SCAN = { booleans: ['--json'] };
-export const ROUTES = Object.fromEntries(['', 'list', 'add', 'remove', 'set'].map((verb) => [
+export const ROUTES = Object.fromEntries(['', 'list', 'add', 'remove', 'set', 'priority'].map((verb) => [
   verb, { ...SCAN, check: ({ flags, positional }) => refusal(verb || 'list', positional, flags) },
 ]));
 
 /** What `mc model <verb> <rest…>` may not be, the candidate's own spelling aside. */
 function refusal(verb, rest, flags) {
   if (verb === 'list') return rest.length ? `unexpected arg: ${rest[0]}` : null;
+  if (flags.json && verb !== 'list') return '--json is for mc model list';
+  if (verb === 'priority') return rest.length > 1 || (rest.length === 1 && !PROVIDER_PRIORITIES.includes(rest[0]))
+    ? `mc model priority [${PROVIDER_PRIORITIES.join('|')}]` : null;
   if (!['add', 'remove', 'set'].includes(verb)) return `unknown model command "${verb}"`;
   if (flags.json) return '--json is for mc model list';
   if (verb === 'add' || verb === 'remove') {
@@ -62,6 +66,17 @@ export async function run(argv, deps = {}) {
       const models = readModels(env);
       if (flags.json) stdout.write(`${JSON.stringify({ ok: true, ...models }, null, 2)}\n`);
       else stdout.write(listText(models));
+      return 0;
+    }
+
+    if (verb === 'priority') {
+      if (!rest.length) {
+        const models = readModels(env);
+        stdout.write(`provider priority: ${models.providerPriority}\n`);
+      } else {
+        const models = changeProviderPriority(env, rest[0]);
+        stdout.write(`provider priority: ${models.providerPriority}\n`);
+      }
       return 0;
     }
 
@@ -112,6 +127,7 @@ function listText(models) {
     ? `${models.path}  (config)`
     : `${models.path}  (defaults — no file there yet)`;
   const lines = [head];
+  lines.push(`provider priority: ${models.providerPriority}`);
   for (const cls of LISTS) {
     lines.push(cls);
     models[cls].forEach((value, index) => lines.push(`  ${index + 1}  ${candidateSpec(value)}`));

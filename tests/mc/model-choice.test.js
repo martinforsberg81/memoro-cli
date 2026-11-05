@@ -258,3 +258,35 @@ test('an unavailable plan may still use the provider API reserve', () => {
 test('a class is fast, large or review', () => {
   assert.throws(() => choose(empty(), 'credits'), /"credits" is not a class — fast, large or review/u);
 });
+
+test('provider preference outranks headroom, is symmetric, and auto keeps capacity ranking', () => {
+  const roomierClaude = codex(claude(empty(), win(0.1)), win(0.9));
+  assert.equal(chooseCandidate({ cls: 'fast', catalog: DEFAULT_CATALOG, capacity: roomierClaude, now: NOW, priority: 'codex' }).spec, 'codex:gpt-6-luna:high');
+  const roomierCodex = codex(claude(empty(), win(0.9)), win(0.1));
+  assert.equal(chooseCandidate({ cls: 'fast', catalog: DEFAULT_CATALOG, capacity: roomierCodex, now: NOW, priority: 'claude' }).spec, 'claude:haiku:high');
+  assert.equal(choose(roomierClaude).spec, 'claude:haiku:high');
+});
+
+test('priority prefers a subscription before any API reserve and falls back for exhausted or refused providers', () => {
+  const mixed = { ...DEFAULT_CATALOG, fast: [DEFAULT_CATALOG.fast[1], DEFAULT_CATALOG.fast[0]] };
+  const availableClaude = codex(claude(empty(), win(0.9)), win(1, LATER));
+  const fallback = chooseCandidate({ cls: 'fast', catalog: mixed, capacity: availableClaude, now: NOW, priority: 'codex' });
+  assert.equal(fallback.spec, 'claude:haiku:high');
+  assert.equal(fallback.billing, undefined);
+  assert.match(fallback.why, /codex unavailable on subscription, claude subscription fallback/u);
+  const refused = applyRefusal(codex(claude(empty(), win(0.1)), win(0.1)), 'codex', AHEAD);
+  assert.equal(chooseCandidate({ cls: 'fast', catalog: mixed, capacity: refused, now: NOW, priority: 'codex' }).spec, 'claude:haiku:high');
+  const noSubscription = chooseCandidate({ cls: 'fast', catalog: mixed, capacity: codex(applyRefusal(empty(), 'claude', AHEAD), win(1, LATER)), now: NOW, priority: 'codex' });
+  assert.equal(noSubscription.candidate.tool, 'codex');
+  assert.equal(noSubscription.billing, 'credits');
+});
+
+test('review priority wins over build-model avoidance and review headroom, but unavailable preference falls back to a subscription', () => {
+  const candidates = { ...DEFAULT_CATALOG, review: [OPUS, SOL] };
+  const capacity = codex(claude(empty(), win(0.9)), win(0.1));
+  const preferred = chooseCandidate({ cls: 'review', catalog: candidates, capacity, now: NOW, priority: 'codex', avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
+  assert.equal(preferred.spec, 'codex:gpt-6.1-sol:high');
+  assert.equal(preferred.billing, undefined);
+  const unavailable = codex(claude(empty(), win(0.9)), win(0.1), null, { models: [] });
+  assert.equal(chooseCandidate({ cls: 'review', catalog: candidates, capacity: unavailable, now: NOW, priority: 'codex' }).spec, 'claude:opus:high');
+});
