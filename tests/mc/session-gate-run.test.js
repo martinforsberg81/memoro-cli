@@ -420,9 +420,9 @@ it('the real gate request and worker preserve whole affected selection, costly f
 
   try {
     const wholeRequest = await requestFor(true);
-    assert.equal(wholeRequest.defer, false);
     const whole = await execute(wholeRequest);
     assert.deepEqual(whole.actual.files, selectedFiles);
+    assert.equal(wholeRequest.defer, false);
     assert.deepEqual(whole.result.files, selectedFiles);
     assert.deepEqual(whole.result.deferred, []);
     assert.deepEqual(whole.actual.commands, ["npm run 'lint:selected' -- --base-ref '" + base + "'"]);
