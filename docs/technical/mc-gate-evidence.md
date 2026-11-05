@@ -1,10 +1,10 @@
 # Local gate evidence
 
 `mc gate` freezes the base commit and fingerprints the launch worktree before
-starting its lane-owning worker. The worker checks that content before selection
-and after all checks. A temporary Git index computes the prospective commit tree
-without changing the real index. It starts from a copy of the real index (its
-stat cache, with the original's mtime for Git's racy-entry check) when every
+starting its detached session worker. The worker checks that content before
+selection and after all checks. A temporary Git index computes the prospective
+commit tree without changing the real index. It starts from a copy of the real
+index (its stat cache, with the original's mtime for Git's racy-entry check) when every
 entry is ordinary, and from `HEAD` when any is assume-unchanged, skip-worktree
 or unmerged; on memoro that is about 5 s rather than 27 s. A second fingerprint includes raw tracked and
 non-ignored untracked bytes, executable bits and symlink targets. Ignored
@@ -17,7 +17,8 @@ and common Git directory, gate run, optional session run and goal revision,
 frozen base SHA, measured tree/raw fingerprint, measurement version, timestamps,
 actual selected files/commands/flags/pattern and execution outcome. A repeated
 write must have identical bytes. The detached worker, not the waiting command,
-writes the receipt before publishing its exit code and releasing ownership.
+writes the receipt before publishing its result and exit marker. The waiting
+command then clears the matching worktree exclusion lock.
 
 Only completed checks with known successful exits and unchanged content produce
 a green receipt. No checks, zero executed tests, unknown exits, interruption,
@@ -47,14 +48,31 @@ solve the study selector's test-selection ceiling.
 
 ## Waiting and recovery
 
-The command's budget includes lane waiting. Budget expiry returns `RUNNING`
-(exit 3) and leaves the worktree lock in place; the detached worker continues
-holding its own lane and test children, not the short-lived command's. Another
-caller in that worktree is refused while it runs. `mc gate --wait` observes the
-same log/result and can itself time out without starting or releasing anything.
-An orderly worker interrupt stops the active child group before releasing the
-lane. Standard/sqlite batches retain the selected lane count; heavy batches
-remain exclusive. Evidence does not reserve additional resources.
+Three mechanisms are distinct:
+
+- **Worktree exclusion:** `src/mc/commands/gate.js` uses a short atomic
+  `mc-gate.json.launch` claim to serialize launch, then stores the worker PID
+  and log in `<worktree git dir>/mc-gate.json`. A second launch there refuses
+  while that worker lives without an exit marker. Other worktrees are not
+  excluded by this lock.
+- **Detached child lifecycle:** `src/mc/session-gate-run.js` owns selection,
+  test/command children, receipt, result and exit marker. It starts at low
+  priority without a merger lane; for memoro it waits for a deploy/iOS build
+  before execution. Budget expiry returns `RUNNING` (exit 3), leaving this
+  worker and the worktree lock intact. The command's budget includes that
+  build wait, not a merger-lane queue. `mc gate --wait` observes the same
+  request/log; its own budget expiry neither starts nor stops work. SIGINT,
+  SIGTERM and the repository ceiling propagate abort to active test/command
+  children; an interrupt or ceiling is not a completed green measurement.
+- **Merger-lane reservation:** `src/mc/gate-lock.js` uses an atomic
+  `gate-running-<repo>.json.claim` plus a status file under mc home, owned by
+  a live PID, for repository rounds/builds. `takeGateLock`/`releaseGateLock`
+  guard ownership; `repo-gate.js` takes/releases this reservation. The local
+  session worker does not. Evidence reserves no lane or extra resources.
+
+After an exit marker or observed worker death, the waiting command removes
+only its matching worktree lock. Standard/sqlite test-process concurrency and
+heavy-batch exclusivity are resource batching, not merger-lane reservations.
 
 A worker that disappears without its exit marker is a red command, even if its
 log printed passing counts or its result file exists. A failure before receipt
