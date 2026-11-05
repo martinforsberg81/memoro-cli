@@ -9,7 +9,7 @@ import { cwdsOfUser } from '../../src/mc/standing.js';
  */
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1025,25 +1025,41 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     const answers = {};
     const opens = {};
     const removed = [];
+    const refs = {};
     const marker = (over = {}) => JSON.stringify({ schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: 'goal:mc/x', kind: 'build', stem: 's', started: '2026-10-12T08:00:00Z', ended: '2026-10-12T09:00:00Z', exit: 0, ...over });
     const area = (stem, { record = marker(), worktree = null, derived = false, evidence = true } = {}) => {
       const dir = join(root, stem);
       mkdirSync(dir, { recursive: true });
       if (record !== null) writeFileSync(join(dir, '.mc-scratch.json'), record);
-      if (evidence) { writeFileSync(join(dir, 'gate.log'), 'red'); writeFileSync(join(dir, 'fault.patch'), 'diff'); }
+      if (evidence) {
+        writeFileSync(join(dir, 'gate.log'), 'red'); writeFileSync(join(dir, 'fault.patch'), 'diff');
+        mkdirSync(join(m.work, 'runner', 'log'), { recursive: true });
+        writeFileSync(join(m.work, 'runner', 'log', stem + '.json.err'), 'finished stderr');
+        writeFileSync(join(m.work, 'runner', 'log', stem + '.jsonl'), 'finished stream');
+      }
       if (worktree) {
         m.write(join(dir, 'replay', '.git'), 'gitdir: /fake', NOW);
         m.write(join(dir, 'replay', 'src.js'), 'x', NOW);
-        answers[join(dir, 'replay')] = { status: '', refs: 'refs/heads/goal/x\n', ...worktree };
+        answers[join(dir, 'replay')] = { status: '', refs: 'refs/heads/goal/x\n', head: 'a'.repeat(40), ...worktree };
       }
       if (derived) m.write(join(dir, 'DerivedData', 'Build', 'app.o'), 'o'.repeat(100), NOW);
       return dir;
     };
     const git = (cwd, args) => {
       const answer = answers[cwd];
-      if (!answer) return m.git(cwd, args);
-      if (args[0] === 'status') return answer.status;
-      if (args[0] === 'rev-parse' && args.includes('--verify')) return 'abc123\n';
+      if (!answer) {
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          return Object.entries(answers).filter(([, value]) => value.registered !== false).map(([path, value]) => 'worktree ' + path + '\nHEAD ' + value.head + '\n').join('\n');
+        }
+        if (args[0] === 'rev-parse' && args.includes('--verify')) return refs[args.at(-1)] ? refs[args.at(-1)] + '\n' : null;
+        if (args[0] === 'update-ref') {
+          if (args[3] !== '0'.repeat(args[2].length) || refs[args[1]]) return null;
+          refs[args[1]] = args[2]; return '';
+        }
+        return m.git(cwd, args);
+      }
+      if (args[0] === 'status') return answer.gitStatusFails ? null : answer.status;
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return answer.head + '\n';
       if (args[0] === 'for-each-ref') return answer.refs;
       if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return `${join(m.home, 'repos', 'memoro')}/.git\n`;
       return null;
@@ -1053,7 +1069,7 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       removeWorktree: (owner, path) => { removed.push([owner, path]); rmSync(path, { recursive: true }); return true; },
       ...over,
     });
-    return { m, root, area, marker, answers, opens, removed, doors };
+    return { m, root, area, marker, answers, opens, removed, refs, doors };
   }
   const exists = (path) => existsSync(path);
 
@@ -1065,6 +1081,10 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       s.m.cwds = [{ pid: 1, cwd: '/' }, { pid: 50, cwd: join(live, 'sub') }];
       const running = s.area('running', { record: s.marker({ ended: undefined }), derived: true });
       const legacy = s.area('legacy', { record: null, derived: true, worktree: {} });
+      mkdirSync(join(legacy, 'memory'), { recursive: true });
+      writeFileSync(join(legacy, 'memory', 'MEMORY.md'), 'private note');
+      writeFileSync(join(legacy, 'other-evidence.txt'), 'keep');
+      const noReceipt = s.area('no-receipt', { record: null, worktree: {}, evidence: false });
       const unreadable = s.area('unreadable', { record: '{', derived: true });
       const foreign = s.area('foreign', { record: s.marker({ owner: 'person' }), derived: true });
       const dirty = s.area('dirty', { worktree: { status: ' M src.js\n' } });
@@ -1075,27 +1095,38 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       s.opens[join(unknownOpen, 'DerivedData')] = null;
 
       const { list, outcome } = runTidy({ apply: true, ...s.doors() });
+      assert.equal(list.person, false, 'ordinary unattended tidy selects rule S without person authority');
       assert.deepEqual(ruled(list, 'S').map((item) => [item.path, item.kind]).sort(), [
         [join(ended, 'DerivedData'), 'scratch-derived'], [join(ended, 'replay'), 'scratch-worktree'],
+        [join(legacy, 'replay'), 'scratch-worktree'], [join(orphan, 'replay'), 'scratch-worktree'],
       ]);
-      assert.equal(outcome.removed, 2);
-      assert.deepEqual(s.removed, [[join(s.m.home, 'repos', 'memoro'), join(ended, 'replay')]], 'the worktree goes through git, in its own repository');
+      assert.equal(outcome.removed, 4);
+      assert.deepEqual(s.removed, [
+        [join(s.m.home, 'repos', 'memoro'), join(ended, 'replay')],
+        [join(s.m.home, 'repos', 'memoro'), join(legacy, 'replay')],
+        [join(s.m.home, 'repos', 'memoro'), join(orphan, 'replay')],
+      ], 'every replay is removed through git in its actual owning repository');
       assert.ok(!exists(join(ended, 'replay')) && !exists(join(ended, 'DerivedData')));
+      assert.ok(!exists(join(legacy, 'replay')) && exists(join(legacy, 'DerivedData')));
+      assert.equal(s.refs['refs/mc/retained-replay/' + 'a'.repeat(40)], 'a'.repeat(40), 'detached HEAD is retained before removal');
       for (const kept of ['gate.log', 'fault.patch', '.mc-scratch.json']) assert.ok(exists(join(ended, kept)), `${kept} stays`);
+      for (const kept of ['gate.log', 'fault.patch']) assert.ok(exists(join(legacy, kept)), `legacy ${kept} stays`);
+      for (const receipt of ['legacy.json.err', 'legacy.jsonl']) assert.ok(exists(join(s.m.work, 'runner', 'log', receipt)), `${receipt} stays`);
+      for (const kept of ['memory/MEMORY.md', 'other-evidence.txt']) assert.ok(exists(join(legacy, kept)), `${kept} stays`);
+      for (const receipt of ['ended.json.err', 'ended.jsonl']) assert.ok(exists(join(s.m.work, 'runner', 'log', receipt)), `${receipt} stays`);
 
       const why = (path) => keptOf(list, path)?.why;
       assert.equal(why(join(live, 'DerivedData')), 'process 50 stands in its scratch directory');
       assert.equal(why(join(running, 'DerivedData')), 'goal:mc/x has not recorded an end');
-      assert.equal(why(join(legacy, 'DerivedData')), 'its scratch directory has no ownership record — legacy scratch is kept');
-      assert.equal(why(join(legacy, 'replay')), 'its scratch directory has no ownership record — legacy scratch is kept');
+      assert.equal(why(join(legacy, 'DerivedData')), 'marker-less scratch data is not adopted');
+      assert.match(why(join(noReceipt, 'replay')), /no-receipt\.json\.err/u);
       assert.match(why(join(unreadable, 'DerivedData')), /^its scratch directory's ownership record cannot be read/u);
       assert.equal(why(join(foreign, 'DerivedData')), 'its scratch directory\'s owner is not clear');
       assert.equal(why(join(dirty, 'replay')), '1 uncommitted change(s)');
-      assert.equal(why(join(orphan, 'replay')), 'its HEAD is on no branch or tag');
       assert.equal(why(join(open, 'DerivedData')), 'process 77 holds a file open in it');
       assert.equal(why(join(unknownOpen, 'DerivedData')), 'error: could not tell whether a file in it is open');
       for (const dir of [live, running, legacy, unreadable, foreign, open, unknownOpen]) assert.ok(exists(join(dir, 'DerivedData')), `${dir} keeps its DerivedData`);
-      for (const dir of [legacy, dirty, orphan]) assert.ok(exists(join(dir, 'replay', 'src.js')), `${dir} keeps its worktree`);
+      for (const dir of [dirty, noReceipt]) assert.ok(exists(join(dir, 'replay', 'src.js')), `${dir} keeps its worktree`);
     } finally { s.m.cleanup(); }
   });
 
@@ -1116,14 +1147,19 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     const s = scratchMachine();
     try {
       const ended = s.area('ended', { derived: true });
+      const escaped = s.area('escaped', { record: null, worktree: {} });
       const outside = join(s.m.home, 'elsewhere');
       mkdirSync(outside, { recursive: true });
       writeFileSync(join(outside, '.mc-scratch.json'), s.marker());
       s.m.write(join(outside, 'DerivedData', 'keep.o'), 'o', NOW);
+      const externalWorktree = join(outside, 'external-replay');
       symlinkSync(outside, join(s.root, 'escape'));
 
       const { list, listPath } = runTidy(s.doors());
-      assert.deepEqual(ruled(list, 'S').map((item) => item.path).sort(), [join(ended, 'DerivedData'), join(s.root, 'escape', 'DerivedData')]);
+      assert.deepEqual(ruled(list, 'S').map((item) => item.path).sort(), [join(ended, 'DerivedData'), join(s.root, 'escape', 'DerivedData'), join(escaped, 'replay')]);
+      // Replace the listed checkout with a symlink to a real directory outside scratch.
+      renameSync(join(escaped, 'replay'), externalWorktree);
+      symlinkSync(externalWorktree, join(escaped, 'replay'));
       // Another session takes the directory over between the list and the apply.
       writeFileSync(join(ended, '.mc-scratch.json'), s.marker({ session: 'goal:mc/y', started: '2026-10-12T11:00:00Z' }));
       const { applied } = applyTidy({ listPath, ...s.doors() });
@@ -1131,7 +1167,103 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.deepEqual(outcomeOf(join(ended, 'DerivedData')), { path: join(ended, 'DerivedData'), ok: false, why: 're-check: its scratch directory\'s owner changed since the list' });
       assert.deepEqual(outcomeOf(join(s.root, 'escape', 'DerivedData')).ok, false);
       assert.match(outcomeOf(join(s.root, 'escape', 'DerivedData')).why, /^refused: not under /u);
+      assert.equal(outcomeOf(join(escaped, 'replay')).ok, false);
+      assert.match(outcomeOf(join(escaped, 'replay')).why, /^refused: not under /u);
       assert.ok(exists(join(ended, 'DerivedData')) && exists(join(outside, 'DerivedData', 'keep.o')));
+    } finally { s.m.cleanup(); }
+  });
+
+  it('legacy completion needs both exact regular receipts and refuses dirty, active or open sessions', () => {
+    const s = scratchMachine();
+    try {
+      const clean = s.area('clean-legacy', { record: null, worktree: {} });
+      const noErr = s.area('no-err', { record: null, worktree: {} });
+      unlinkSync(join(s.m.work, 'runner', 'log', 'no-err.json.err'));
+      const noStream = s.area('no-stream', { record: null, worktree: {} });
+      unlinkSync(join(s.m.work, 'runner', 'log', 'no-stream.jsonl'));
+      const invalidReceipt = s.area('invalid-receipt', { record: null, worktree: {} });
+      const escapedReceipt = join(s.m.home, 'outside.jsonl');
+      s.m.write(escapedReceipt, 'not an in-root receipt');
+      unlinkSync(join(s.m.work, 'runner', 'log', 'invalid-receipt.jsonl'));
+      symlinkSync(escapedReceipt, join(s.m.work, 'runner', 'log', 'invalid-receipt.jsonl'));
+      const noRegistration = s.area('no-registration', { record: null, worktree: { registered: false } });
+      const gitFailure = s.area('git-failure', { record: null, worktree: { gitStatusFails: true } });
+      const dirty = s.area('dirty-legacy', { record: null, worktree: { status: '?? new.js\n' } });
+      const open = s.area('open-legacy', { record: null, worktree: {} });
+      s.opens[open] = [91];
+      const unknownOpen = s.area('unknown-open-legacy', { record: null, worktree: {} });
+      s.opens[unknownOpen] = null;
+      const active = s.area('active-legacy', { record: null, worktree: {} });
+      s.m.cwds.push({ pid: 92, cwd: join(active, 'replay', 'src') });
+
+      const { list, outcome } = runTidy({ apply: true, ...s.doors() });
+      assert.deepEqual(ruled(list, 'S').map((item) => item.path), [join(clean, 'replay')]);
+      assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(clean, 'replay'), true]]);
+      assert.match(keptOf(list, join(noErr, 'replay')).why, /no-err\.json\.err/u);
+      assert.match(keptOf(list, join(noStream, 'replay')).why, /no-stream\.jsonl/u);
+      assert.match(keptOf(list, join(invalidReceipt, 'replay')).why, /stream receipt is not a regular file/u);
+      assert.match(keptOf(list, join(noRegistration, 'replay')).why, /does not register/u);
+      assert.match(keptOf(list, join(gitFailure, 'replay')).why, /git status could not be read/u);
+      assert.equal(keptOf(list, join(dirty, 'replay')).why, '1 uncommitted change(s)');
+      assert.equal(keptOf(list, join(open, 'replay')).why, 'process 91 holds a file open in its scratch session');
+      assert.match(keptOf(list, join(unknownOpen, 'replay')).why, /could not tell whether a file in its scratch session is open/u);
+      assert.equal(keptOf(list, join(active, 'replay')).why, 'process 92 stands in its scratch directory');
+      for (const dir of [noErr, noStream, invalidReceipt, noRegistration, gitFailure, dirty, open, unknownOpen, active]) assert.ok(exists(join(dir, 'replay', 'src.js')));
+    } finally { s.m.cleanup(); }
+  });
+
+  it('dry-run creates no retention ref; apply refuses a changed HEAD or replaced receipt', () => {
+    const s = scratchMachine();
+    try {
+      const legacy = s.area('legacy', { record: null, worktree: { refs: '' } });
+      const { list, listPath } = runTidy(s.doors());
+      assert.deepEqual(ruled(list, 'S').map((item) => item.path), [join(legacy, 'replay')]);
+      assert.deepEqual(s.refs, {}, 'dry-run does not create any refs');
+      s.answers[join(legacy, 'replay')].head = 'b'.repeat(40);
+      const changedHead = applyTidy({ listPath, ...s.doors() });
+      assert.equal(changedHead.applied[0].ok, false);
+      assert.match(changedHead.applied[0].why, /HEAD/u);
+      assert.ok(exists(join(legacy, 'replay', 'src.js')));
+
+      s.answers[join(legacy, 'replay')].head = 'a'.repeat(40);
+      const identityPlan = runTidy(s.doors());
+      const gitEntry = join(legacy, 'replay', '.git');
+      unlinkSync(gitEntry);
+      writeFileSync(gitEntry, 'gitdir: /replacement');
+      const staleIdentity = applyTidy({ listPath: identityPlan.listPath, ...s.doors() });
+      assert.equal(staleIdentity.applied[0].ok, false);
+      assert.match(staleIdentity.applied[0].why, /identity/u);
+      assert.ok(exists(join(legacy, 'replay', 'src.js')));
+
+      const refreshed = runTidy(s.doors());
+      const receipt = join(s.m.work, 'runner', 'log', 'legacy.json.err');
+      unlinkSync(receipt);
+      writeFileSync(receipt, 'replacement receipt with different size');
+      const stale = applyTidy({ listPath: refreshed.listPath, ...s.doors() });
+      assert.equal(stale.applied[0].ok, false);
+      assert.match(stale.applied[0].why, /receipt/u);
+      assert.ok(exists(join(legacy, 'replay', 'src.js')));
+    } finally { s.m.cleanup(); }
+  });
+
+  it('a failed retention or non-forced Git removal keeps the replay worktree', () => {
+    const s = scratchMachine();
+    try {
+      const legacy = s.area('legacy', { record: null, worktree: { refs: '' } });
+      const plan = runTidy(s.doors());
+      const failingGit = (cwd, args) => {
+        if (args[0] === 'update-ref') return null;
+        return s.doors().git(cwd, args);
+      };
+      const notRetained = applyTidy({ listPath: plan.listPath, ...s.doors({ git: failingGit }) });
+      assert.equal(notRetained.applied[0].ok, false);
+      assert.match(notRetained.applied[0].why, /could not be retained/u);
+      assert.ok(exists(join(legacy, 'replay', 'src.js')));
+
+      const next = runTidy(s.doors());
+      const refused = applyTidy({ listPath: next.listPath, ...s.doors({ removeWorktree: () => false }) });
+      assert.deepEqual(refused.applied[0], { path: join(legacy, 'replay'), ok: false, why: 'git worktree remove refused' });
+      assert.ok(exists(join(legacy, 'replay', 'src.js')));
     } finally { s.m.cleanup(); }
   });
 

@@ -355,11 +355,16 @@ export function gatherTidyFacts({
     const dir = join(roots.scratch, stem);
     let marker = null;
     let markerError = null;
+    let markerAbsent = false;
     try {
+      if (!lstatSync(join(dir, SCRATCH_MARKER)).isFile()) throw new Error('not a regular file');
       const value = JSON.parse(readFileSync(join(dir, SCRATCH_MARKER), 'utf8'));
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
       marker = value;
-    } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') markerError = message(error); }
+    } catch (error) {
+      if (error?.code === 'ENOENT') markerAbsent = true;
+      else markerError = message(error);
+    }
     let entries = [];
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { entries = []; }
     for (const entry of entries) {
@@ -368,15 +373,23 @@ export function gatherTidyFacts({
       const worktree = present(join(path, '.git'));
       if (!worktree && entry.name !== DERIVED_DATA) continue;
       const item = {
-        path, stem, kind: worktree ? 'scratch-worktree' : 'scratch-derived', marker, marker_error: markerError,
-        live: null, open: null, dirty: null, refs: null, owner: null, bytes: 0,
+        path, stem, session_dir: dir, marker, marker_error: markerError, marker_absent: markerAbsent,
+        kind: worktree ? 'scratch-worktree' : 'scratch-derived', live: null, open: null,
+        dirty: null, refs: null, owner: null, head: null, evidence: null, identity: null, bytes: 0,
       };
       facts.scratch_items.push(item);
       try {
-        if (!marker || markerError || !marker.ended) continue;
+        if (markerError || (!marker && !markerAbsent) || (marker && !marker.ended)) continue;
         if (!running) throw new Error('lsof could not say who stands in it');
         item.live = [...new Set(processesStandingIn([dir], { cwds: running }).map((p) => p.pid))];
         if (item.live.length) continue;
+        if (!marker) {
+          if (!worktree) continue; // Marker-less DerivedData is never adopted.
+          item.evidence = legacySessionEvidence(stem, env);
+          item.open = openIn(dir);
+          if (!Array.isArray(item.open)) throw new Error('could not tell whether a file in its scratch session is open');
+          if (item.open.length) continue;
+        }
         if (worktree) {
           const status = git(path, ['status', '--porcelain', '--untracked-files=all']);
           if (status === null) throw new Error('git status could not be read');
@@ -384,15 +397,19 @@ export function gatherTidyFacts({
           if (item.dirty) continue;
           const head = git(path, ['rev-parse', '--verify', 'HEAD'])?.trim();
           if (!head) throw new Error('git could not name its HEAD');
+          item.head = head;
           const refs = git(path, ['for-each-ref', '--contains', head, '--format=%(refname)']);
           if (refs === null) throw new Error('git could not say which refs hold its HEAD');
           item.refs = refs.split('\n').map((line) => line.trim()).filter(Boolean);
-          if (!item.refs.length) continue;
           const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
           if (!common?.trim()) throw new Error('git could not name the repository that owns it');
           item.owner = repositoryDir(common.trim());
+          const registration = git(item.owner, ['worktree', 'list', '--porcelain']);
+          if (registration === null) throw new Error('git could not verify its worktree registration');
+          if (!registeredWorktree(registration, path)) { item.error = 'git does not register this scratch child as a worktree'; continue; }
+          item.identity = worktreeIdentity(path);
         }
-        item.open = openIn(path);
+        if (marker) item.open = openIn(path);
         if (scratchItem(item).target) item.bytes = treeBytes(path);
       } catch (error) { item.error = message(error); }
     }
@@ -479,6 +496,59 @@ function openFilesIn(path) {
   if (r.status === 0) return [...new Set(pids)];
   if (r.status === 1 && !pids.length && !String(r.stderr || '').trim()) return [];
   return null;
+}
+
+/** A legacy receipt exists only when both finalized runner files are regular files inside runner/log. */
+function legacySessionEvidence(stem, env) {
+  if (!stem || stem.includes('/') || stem.includes('\\') || stem === '.' || stem === '..') throw new Error('scratch stem cannot name a runner log');
+  const logRoot = join(runnerDir(env), 'log');
+  const realRoot = realpathSync(logRoot);
+  const files = {};
+  for (const [name, suffix] of [['err', '.json.err'], ['stream', '.jsonl']]) {
+    const path = join(logRoot, stem + suffix);
+    const stat = lstatSync(path);
+    if (!stat.isFile()) throw new Error('runner ' + name + ' receipt is not a regular file');
+    const real = realpathSync(path);
+    if (!real.startsWith(realRoot + '/')) throw new Error('runner ' + name + ' receipt escapes runner/log');
+    files[name] = { real, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+  }
+  return files;
+}
+
+function sameEvidence(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function registeredWorktree(list, path) {
+  const expected = realpathSync(path);
+  return String(list).split(/\n(?=worktree )/u).some((entry) => {
+    const field = /^worktree (.+)$/mu.exec(entry)?.[1];
+    if (!field) return false;
+    const value = field.startsWith('"') ? (() => { try { return JSON.parse(field); } catch { return null; } })() : field;
+    if (!value) return false;
+    try { return realpathSync(value) === expected; } catch { return false; }
+  });
+}
+
+function worktreeIdentity(path) {
+  const real = realpathSync(path);
+  const gitPath = join(path, '.git');
+  const stat = lstatSync(gitPath);
+  if (!stat.isFile() && !stat.isDirectory()) throw new Error('worktree identity is not a regular .git entry');
+  return { real, git_real: realpathSync(gitPath), git_dev: stat.dev, git_ino: stat.ino, git_mtimeMs: stat.mtimeMs };
+}
+
+/** Keep a detached replay tip before removing its worktree, atomically and without replacing a ref. */
+function retainReplayHead(owner, head, refs, git) {
+  if (refs.length) return true;
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(head)) return false;
+  const ref = 'refs/mc/retained-replay/' + head.toLowerCase();
+  const existing = git(owner, ['rev-parse', '--verify', ref]);
+  if (existing !== null) return existing.trim().toLowerCase() === head.toLowerCase();
+  const zero = '0'.repeat(head.length);
+  if (git(owner, ['update-ref', ref, head, zero]) !== null) return true;
+  // Another tidy may have created this exact ref concurrently; never accept a different commit.
+  return git(owner, ['rev-parse', '--verify', ref])?.trim().toLowerCase() === head.toLowerCase();
 }
 
 /** What `ps` calls a process, or its pid. */
@@ -657,25 +727,32 @@ export function scratchOwner(marker) {
 export function scratchItem(item) {
   if (item.error) throw new Error(item.error);
   if (item.marker_error) return { target: false, why: `its scratch directory's ownership record cannot be read (${item.marker_error})` };
-  if (!item.marker) return { target: false, why: 'its scratch directory has no ownership record — legacy scratch is kept' };
+  if (!item.marker) {
+    if (!item.marker_absent) return { target: false, why: 'its scratch directory has no ownership record — legacy scratch is kept' };
+    if (item.kind !== 'scratch-worktree') return { target: false, why: 'marker-less scratch data is not adopted' };
+  }
   const marker = item.marker;
-  if (marker.schema !== SCRATCH_SCHEMA || marker.owner !== 'runner' || !marker.session || !marker.started) {
+  if (marker && (marker.schema !== SCRATCH_SCHEMA || marker.owner !== 'runner' || !marker.session || !marker.started)) {
     return { target: false, why: 'its scratch directory\'s owner is not clear' };
   }
-  if (!marker.ended) return { target: false, why: `${marker.session} has not recorded an end` };
+  if (marker && !marker.ended) return { target: false, why: marker.session + ' has not recorded an end' };
   if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
   if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in its scratch directory` };
+  if (!marker && Array.isArray(item.open) && item.open.length) {
+    return { target: false, why: `process ${item.open.join(', ')} holds a file open in its scratch session` };
+  }
   if (item.kind === 'scratch-worktree') {
     if (item.dirty === null || item.dirty === undefined) throw new Error('could not tell whether it has uncommitted changes');
     if (item.dirty) return { target: false, why: `${item.dirty} uncommitted change(s)` };
     if (!Array.isArray(item.refs)) throw new Error('could not tell whether its HEAD is on a ref');
-    if (!item.refs.length) return { target: false, why: 'its HEAD is on no branch or tag' };
     if (!item.owner) throw new Error('no repository owns it');
   }
   if (!Array.isArray(item.open)) throw new Error('could not tell whether a file in it is open');
   if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds a file open in it` };
   return item.kind === 'scratch-worktree'
-    ? { target: true, why: `a clean worktree of ended session ${marker.session}, its HEAD on ${item.refs[0]}` }
+    ? { target: true, why: marker
+      ? (item.refs.length ? 'a clean worktree of ended session ' + marker.session + ', its HEAD on ' + item.refs[0] : 'a clean detached worktree of ended session ' + marker.session + '; its HEAD will be retained before removal')
+      : 'a clean registered replay worktree with finalized runner receipts; its HEAD will be retained before removal' }
     : { target: true, why: `rebuildable DerivedData of ended session ${marker.session}` };
 }
 
@@ -773,7 +850,11 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
   for (const item of facts.scratch_items || []) {
     const verdict = judge(scratchItem, item);
     if (verdict.target) {
-      targets.push({ path: item.path, kind: item.kind, rule: 'S', why: verdict.why, bytes: item.bytes || 0, owner_id: scratchOwner(item.marker), ...(item.owner ? { owner: item.owner } : {}) });
+      targets.push({
+        path: item.path, kind: item.kind, rule: 'S', why: verdict.why, bytes: item.bytes || 0,
+        owner_id: scratchOwner(item.marker), head: item.head, identity: item.identity, evidence: item.evidence,
+        ...(item.owner ? { owner: item.owner } : {}),
+      });
     } else keep(item.path, 'S', verdict.why);
   }
 
@@ -909,6 +990,13 @@ export function applyTidy({
         applied.push({ path, ok: false, why: 're-check: its scratch directory\'s owner changed since the list' });
         continue;
       }
+      if (target.kind === 'scratch-worktree' && (
+        again.head !== target.head || again.owner !== target.owner || !sameEvidence(again.identity, target.identity)
+        || (target.evidence !== undefined && !sameEvidence(again.evidence, target.evidence))
+      )) {
+        applied.push({ path, ok: false, why: 're-check: its worktree identity, HEAD or runner receipts changed since the list' });
+        continue;
+      }
       if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
@@ -924,9 +1012,12 @@ export function applyTidy({
         const owner = compares.get(path)?.owner;
         if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'scratch-worktree') {
-        // Through git, without --force, in the repository read now: a tree that changed since stays, and its commits stay on their refs.
-        const owner = scratch.get(path)?.owner;
-        if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
+        // Retain even an unreferenced replay tip before handing the clean registered tree to git, without --force.
+        const item = scratch.get(path);
+        const owner = item?.owner;
+        const git = doors.git || realGit;
+        if (!owner || !retainReplayHead(owner, item.head, item.refs, git)) { applied.push({ path, ok: false, why: 'replay HEAD could not be retained in its owning repository' }); continue; }
+        if (!removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);
         remove(path);
