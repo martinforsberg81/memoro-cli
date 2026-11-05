@@ -2373,7 +2373,6 @@ test('an API credit refusal is recorded without exposing the key', async () => {
   assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u);
 });
 
-
 test('a lane with no runnable step starts the oldest open goal', async () => {
   const f = goalFixture({
     newer: { log: goalLog('2026-08-20T10:00Z', '2026-08-28T10:00Z') },
@@ -3138,4 +3137,37 @@ test('two blocked goals in one programme share one planning session at a time', 
   release();
   assert.equal((await first).ran, 1);
   assert.equal(runner.nextWork()?.name, 'goal:prog/b');
+});
+
+test('programme priority is reread live within a stage; blocked recovery, review and phase eligibility take precedence', () => {
+  const f = goalFixture({ older: { log: goalLog('2026-08-27T10:00Z') } });
+  const base = '/w/programs/preferred';
+  f.files[`${base}/goals/new/GOAL.json`] = goalJson({ repos: ['memoro'] });
+  f.files[`${base}/goals/new/LOG.md`] = goalLog('2026-08-28T10:00Z');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(runner.nextWork().name, 'goal:prog/older');
+  f.files[`${base}/PRIORITY.json`] = JSON.stringify({ priority: 10 });
+  assert.equal(runner.nextWork().name, 'goal:preferred/new');
+  f.files[`${GOALS}/older/GOAL.json`] = withGoal(f.files[`${GOALS}/older/GOAL.json`], { stage: 'review' });
+  assert.equal(runner.nextWork().name, 'goal:prog/older', 'review precedes even a preferred build');
+  f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { status: 'blocked' });
+  assert.equal(runner.nextWork().name, 'goal:preferred/new', 'recovery precedes review');
+  f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { phase: 2 });
+  f.files[`${base}/goals/first/GOAL.json`] = goalJson({ repos: ['memoro'], stage: 'plan' });
+  assert.equal(runner.nextWork().name, 'goal:prog/older', 'priority does not bypass phases');
+  f.files[`${GOALS}/older/GOAL.json`] = withGoal(f.files[`${GOALS}/older/GOAL.json`], { stage: 'build' });
+  f.files[`${base}/PRIORITY.json`] = JSON.stringify({ priority: 0 });
+  delete f.files[`${base}/goals/first/GOAL.json`];
+  f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { phase: 1, status: 'ready' });
+  assert.equal(runner.nextWork().name, 'goal:prog/older', 'reset restores oldest first');
+});
+
+test('next-step planning yields to existing builds even with higher programme priority', () => {
+  const f = goalFixture({ done: { stage: 'done' } });
+  f.files['/w/programs/prog/PRIORITY.json'] = JSON.stringify({ priority: 100 });
+  f.files['/w/programs/other/goals/build/GOAL.json'] = goalJson({ repos: ['memoro'] });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(runner.nextWork().name, 'goal:other/build');
+  delete f.files['/w/programs/other/goals/build/GOAL.json'];
+  assert.equal(runner.nextWork().name, 'plan:prog');
 });

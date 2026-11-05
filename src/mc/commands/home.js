@@ -244,7 +244,9 @@ export function pageKey(data) {
   const activityKey = [...(data?.runner?.sessions || []), ...foreground]
     .filter((s) => s.pid || s.goal || s.name || s.area)
     .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.check_ins || 0].join(':')).sort().join('|');
-  return [goalKey, activityKey].filter(Boolean).join('|');
+  const priorityKey = (data?.programmes?.programmes || []).filter((group) => group.priority)
+    .map((group) => `${group.programme}:priority:${group.priority}`).join('|');
+  return [goalKey, activityKey, priorityKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -264,6 +266,7 @@ export function parsePageArgs(argv) {
 const KEYS = [
   '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
   '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
+  '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -317,6 +320,8 @@ export async function menu(first, {
   // `mc goal <verb>` for a goal's number — a dependency, as runOrder is, so a
   // test drives the menu without a goal on disk.
   showGoal = null,
+  // Reuse the programme verb; no separate priority parser for the menu.
+  programOrder = null,
   // The page on newer code, when a frame said mc moved under it (`RESTART`).
   restart = () => 0,
 }) {
@@ -362,6 +367,13 @@ export async function menu(first, {
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);
+    if (words[0] === 'priority') {
+      const programs = await import('./programs.js');
+      stdout.write('\n');
+      await (programOrder || programs.run)(words, { stdout, stderr });
+      data = await redraw();
+      continue;
+    }
     // `p` alone is as good an answer as `p <programme>`: `mc plan` asks which
     // programme when it is not told, and the page is exactly the place
     // somebody would rather be shown the list than have to remember a name.

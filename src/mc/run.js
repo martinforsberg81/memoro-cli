@@ -89,6 +89,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { pickWork } from './lane-pick.js';
+import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { withoutSessionIdentity } from './session-role.js';
@@ -1806,6 +1807,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
     const items = [...goalWork({ repos: names, passed }), ...programmeWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
+    const priorities = new Map();
+    for (const item of items) {
+      const programme = item.goal.programme;
+      if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
+      item.priority = priorities.get(programme);
+    }
     return pickWork({ items, held, lanes: capNow(), carry });
   }
 

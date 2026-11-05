@@ -1,9 +1,4 @@
-/**
- * What a free lane takes (`pickWork`): finishing before starting — the
- * project the lane carries, then a review, then a project's build, then a
- * goal's — the longest waiting first among equals, and no repository holding
- * every lane while another has work.
- */
+/** Finish existing work first, then programme preference and age, within repository shares. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -32,14 +27,15 @@ test('pickWork: a step the API cut off goes first among its kind', () => {
   assert.equal(pickWork({ items, lanes: 4 }).name, 'cut');
 });
 
-test('pickWork: the project a lane carries goes on, ahead of a review', () => {
+test('pickWork: carrying a build yields to a review and breaks ties within a rank', () => {
   const items = [review('r', 'memoro-cli'), build('p', 'memoro')];
-  assert.equal(pickWork({ items, lanes: 4, carry: 'p' }).name, 'p');
+  assert.equal(pickWork({ items, lanes: 4, carry: 'p' }).name, 'r');
+  assert.equal(pickWork({ items: [build('old', 'memoro', ''), build('p', 'memoro')], carry: 'p' }).name, 'p');
   assert.equal(pickWork({ items, lanes: 4, carry: 'gone' }).name, 'r', 'a carry that cannot start is no carry');
 });
 
-test('pickWork: one repository with much work cannot take every lane while the other has work', () => {
-  const memoro = Array.from({ length: 6 }, (_, i) => review(`m${i}`, 'memoro', 'project', `2026-10-0${i + 1}T00:00Z`));
+test('pickWork: repository fairness reserves lanes within the same scheduling rank', () => {
+  const memoro = Array.from({ length: 6 }, (_, i) => goal(`m${i}`, 'memoro', `2026-10-0${i + 1}T00:00Z`));
   const cli = [goal('g', 'memoro-cli', '2026-11-02T00:00Z')];
   // Four lanes, filled one at a time as a runner fills them.
   const held = [];
@@ -51,7 +47,7 @@ test('pickWork: one repository with much work cannot take every lane while the o
     held.push(pick.repo);
     items = items.filter((item) => item !== pick);
   }
-  assert.ok(taken.includes('g'), 'the goal build got a lane though every memoro item ranks above it');
+  assert.ok(taken.includes('g'), 'the goal build got a lane though every memoro item has waited longer');
   assert.ok(held.filter((repo) => repo === 'memoro').length < 4, 'memoro did not take every lane');
 
   // memoro holds three lanes while memoro-cli was idle; its work appears and the next free lane is its.
@@ -59,7 +55,7 @@ test('pickWork: one repository with much work cannot take every lane while the o
   // With nothing waiting elsewhere, one repository may have every lane.
   assert.equal(pickWork({ items: memoro, held: ['memoro', 'memoro', 'memoro'], lanes: 4 }).repo, 'memoro');
   // A carried project on a repository at its share yields too.
-  assert.equal(pickWork({ items: [build('p', 'memoro'), ...cli], held: ['memoro', 'memoro'], lanes: 4, carry: 'p' }).name, 'g');
+  assert.equal(pickWork({ items: [goal('p', 'memoro'), ...cli], held: ['memoro', 'memoro'], lanes: 4, carry: 'p' }).name, 'g');
 });
 
 test('pickWork: with one lane, the repositories take turns by their wait', () => {
@@ -69,4 +65,38 @@ test('pickWork: with one lane, the repositories take turns by their wait', () =>
   assert.equal(laneShare(4, 2), 2);
   assert.equal(laneShare(5, 2), 3);
   assert.equal(pickWork({ items: [], lanes: 4 }), null);
+});
+
+test('pickWork: blocked, finish/merge, review, build, next-step, before programme preference or carry', () => {
+  const items = [
+    { ...build('new-plan', 'memoro'), kind: 'plan', priority: 99, goal: { reason: 'next_step' } },
+    { ...goal('build', 'memoro'), priority: 98 },
+    { ...review('review', 'memoro'), priority: 97 },
+    { ...build('finish', 'memoro'), kind: 'plan', priority: 1, goal: { stage: 'finish' } },
+    { ...build('blocked', 'memoro'), kind: 'plan', goal: { status: 'blocked' } },
+  ];
+  assert.equal(pickWork({ items, held: ['memoro'], lanes: 2 }).name, 'blocked', 'existing sessions do not demote recovery');
+  const taken = [];
+  while (items.length) {
+    const next = pickWork({ items, carry: 'build' });
+    taken.push(next.name);
+    items.splice(items.indexOf(next), 1);
+  }
+  assert.deepEqual(taken, ['blocked', 'finish', 'review', 'build', 'new-plan']);
+  assert.equal(pickWork({ items: [review('r', 'memoro'), { ...build('merge', 'memoro'), kind: 'plan', goal: { stage: 'merge' } }] }).name, 'merge');
+});
+
+test('pickWork: higher programme priority wins within a rank, with fairness and old tie rules intact', () => {
+  const low = { ...goal('low', 'memoro', ''), priority: 1, resumed: true };
+  const high = { ...goal('high', 'memoro'), priority: 2 };
+  assert.equal(pickWork({ items: [low, high], carry: 'low' }).name, 'high');
+  assert.equal(pickWork({ items: [low, { ...high, priority: 1 }] }).name, 'low');
+  const other = goal('other-repository', 'memoro-cli');
+  assert.equal(pickWork({ items: [high, other], held: ['memoro'], lanes: 2 }).name, 'other-repository');
+  assert.equal(pickWork({ items: [{ ...low, priority: undefined }, { ...high, priority: 0 }] }).name, 'low');
+});
+
+test('pickWork: stage order precedes repository shares when another repository has only new builds', () => {
+  const items = [goal('new-build', 'memoro-cli'), { ...review('stuck-review', 'memoro'), goal: { status: 'blocked' }, kind: 'plan' }];
+  assert.equal(pickWork({ items, held: ['memoro'], lanes: 2 }).name, 'stuck-review');
 });
