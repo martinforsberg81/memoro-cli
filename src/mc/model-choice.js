@@ -7,8 +7,9 @@
  * returns (model-config.js); the snapshot is what `readCapacity` returns
  * (model-capacity.js). The runner reads this choice at each class launch.
  *
- * Available subscription candidates come first. If all lack plan capacity,
- * the first catalog candidate uses its provider's API reserve.
+ * In `auto`, available subscriptions rank by headroom, with catalog order on a
+ * tie. A provider priority ranks its eligible subscription candidates first,
+ * and the other provider's eligible subscriptions before either API reserve.
  *
  * Review chooses the plan with most known headroom. On equal headroom it
  * prefers a model other than the build model, then catalog order. Unknown
@@ -73,33 +74,36 @@ function judge(capacity, candidate, now) {
 
 const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls, candidate, spec: candidateSpec(candidate), basis, headroom, why });
 
-/** Review ranks measured plan headroom first; build-model avoidance breaks ties. */
-function chooseReview(cls, catalog, capacity, now, avoid) {
+/** Review ranks provider preference first, then plan headroom; build-model avoidance breaks ties. */
+function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
   const list = catalog.review;
   const builtOn = (value) => Boolean(avoid?.model) && value.model === avoid.model;
   const others = list.filter((value) => !builtOn(value));
   const order = [...others, ...list.filter(builtOn)];
-  const judged = order.map((value) => {
-    const standing = providerAt(capacity, value.tool, now);
-    if (standing.refusal_until) return { candidate: value, onPlan: false, why: `${value.tool} plan refused until ${standing.refusal_until}` };
-    const windows = windowStanding(value.tool, standing);
-    return { candidate: value, onPlan: windows.state !== 'exhausted', headroom: windows.headroom, why: windows.why };
-  });
+  const judged = order.map((value) => ({ candidate: value, ...judge(capacity, value, now) }));
   const passed = (entry) => `${candidateSpec(entry.candidate)}: ${entry.why}`;
-  const eligible = judged.filter((entry) => entry.onPlan);
-  const best = eligible.reduce((a, b) => !a || (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a, null);
+  const allKnown = judged.some((entry) => entry.state === 'known');
+  const eligible = judged.filter((entry) => entry.state === 'known' || (!allKnown && entry.state === 'unknown' && entry.candidate.tool === 'claude'));
+  const preferred = priority === 'auto' ? eligible : eligible.filter((entry) => entry.candidate.tool === priority);
+  const selectedPool = preferred.length ? preferred : eligible;
+  const best = selectedPool.reduce((a, b) => !a || (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a, null);
   const index = judged.indexOf(best);
   if (index >= 0) {
     const chosen = judged[index];
     const same = builtOn(chosen.candidate);
+    const priorityOverridesHeadroom = priority !== 'auto' && chosen.candidate.tool === priority
+      && eligible.some((entry) => (entry.headroom ?? -1) > (chosen.headroom ?? -1));
     const reasons = same
-      ? [...judged.slice(0, index).map(passed), `${avoid.tool} ${avoid.model} built it${eligible.some((entry) => !builtOn(entry.candidate)) ? "; its plan has the most headroom" : ", and no other candidate can run on its plan"}`]
-      : [...(others.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []), ...judged.slice(0, index).map(passed)];
+      ? [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...judged.slice(0, index).map(passed), `${avoid.tool} ${avoid.model} built it${eligible.some((entry) => !builtOn(entry.candidate)) ? (priorityOverridesHeadroom ? "; provider priority overrides a roomier alternative" : "; its plan has the most headroom") : ", and no other candidate can run on its plan"}`]
+      : [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...(others.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []), ...judged.slice(0, index).map(passed)];
     const place = `review candidate ${list.indexOf(chosen.candidate) + 1}`;
-    return answer(cls, chosen.candidate, 'preferred', null, reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`);
+    const fallback = priority !== 'auto' && chosen.candidate.tool !== priority ? `; ${priority} unavailable on subscription, ${chosen.candidate.tool} subscription fallback` : '';
+    return answer(cls, chosen.candidate, 'preferred', chosen.headroom ?? null, `${reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`}${fallback}`);
   }
-  const [first] = judged;
-  return { ...answer(cls, first.candidate, 'api', null, `${judged.map(passed).join('; ')}; API reserve`), billing: 'credits' };
+  const ordered = priority === 'auto' ? judged : [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
+  const [first] = ordered;
+  const priorityWhy = priority === 'auto' ? '' : `; ${priority} priority has no usable subscription`;
+  return { ...answer(cls, first.candidate, 'api', null, `${judged.map(passed).join('; ')}${priorityWhy}; API reserve`), billing: 'credits' };
 }
 
 /**
@@ -119,10 +123,24 @@ function chooseReview(cls, catalog, capacity, now, avoid) {
  * session ran on: review avoids it on equal headroom, and uses the API
  * reserve only when no candidate can run on its plan.
  */
-export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null }) {
-  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid);
+export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto' }) {
+  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority);
   if (!CLASSES.includes(cls)) throw new Error(`"${cls}" is not a class — fast, large or review`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
+  if (priority !== 'auto') {
+    const known = judged.filter((entry) => entry.state === 'known');
+    const usable = known.length ? known : judged.filter((entry) => entry.state === 'unknown' && entry.candidate.tool === 'claude');
+    const preferred = usable.filter((entry) => entry.candidate.tool === priority);
+    const pool = preferred.length ? preferred : usable;
+    if (pool.length) {
+      const best = pool.reduce((a, b) => (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a);
+      const fallback = best.candidate.tool === priority ? '' : `; ${priority} unavailable on subscription, ${best.candidate.tool} subscription fallback`;
+      return answer(cls, best.candidate, best.state === 'unknown' ? 'bootstrap' : 'known', best.headroom, `${best.why} — ${priority} provider priority${fallback}`);
+    }
+    const ordered = [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
+    const reserve = ordered.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state));
+    if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; ${priority} priority has no usable subscription; API reserve`), billing: 'credits' };
+  }
   const known = judged.filter((entry) => entry.state === 'known');
   if (known.length) {
     const best = known.reduce((a, b) => (b.headroom > a.headroom ? b : a));

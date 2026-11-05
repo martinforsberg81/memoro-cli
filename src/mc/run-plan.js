@@ -278,7 +278,7 @@ export function collectNote({ repo, digest = null }) {
  */
 export function intakeNote(turn) {
   if (!turn) return 'turn-missing';
-  if (turn.ok) return `success,${turn.wrote?.length ?? 0}-proposals`;
+  if (turn.ok) return `success,${turn.wrote?.length ?? 0}-proposals${turn.providerPriority && turn.providerPriority !== 'auto' ? `,${turn.tool}-${turn.providerPriority}-priority${turn.tool !== turn.providerPriority ? '-fallback' : ''}` : ''}`;
   return turn.reason || turn.note || 'failed';
 }
 

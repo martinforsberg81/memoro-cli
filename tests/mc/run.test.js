@@ -2434,6 +2434,24 @@ test('a failed attach is said, and the session still runs', async () => {
   assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/c: dependencies could not be attached — npm error boom/u);
 });
 
+test('one live runner rereads provider priority for fresh fast and large launches', async () => {
+  const f = goalFixture({ flexible: {} });
+  let priority = 'codex';
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority,
+    fast: [DEFAULT_CATALOG.fast[0], DEFAULT_CATALOG.fast[1]],
+    large: [DEFAULT_CATALOG.large[0], { tool: 'codex', model: 'gpt-6-luna', effort: 'high' }],
+  });
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
+  f.files[`${GOALS}/flexible/GOAL.json`] = withGoal(f.files[`${GOALS}/flexible/GOAL.json`], { class: 'fast' });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['codex', 'gpt-6-luna']);
+  priority = 'claude';
+  f.files[`${GOALS}/flexible/GOAL.json`] = withGoal(f.files[`${GOALS}/flexible/GOAL.json`], { class: 'large' });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['claude', 'opus']);
+});
+
 /** The `rate_limit_event` as it stood in `~/mc/runner/log/*.jsonl` on 2026-10-11. */
 const WINDOWS_EVENT = JSON.stringify({
   type: 'rate_limit_event',
@@ -2844,6 +2862,26 @@ test('a goal in finish starts one plan session: the plan role, opus, the program
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
 });
 
+test('one runner applies changed priority to finish, blocked and next_step plan launches', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish' } });
+  let priority = 'codex';
+  f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
+  let capacity = capacityWith({ claude: 0.1 });
+  capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.1-sol', efforts: ['medium'] }] }, ROUTING_NOW);
+  f.deps.capacity.write(capacity);
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['finish', 'codex', 'gpt-6.1-sol']);
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'build', status: 'blocked' });
+  priority = 'claude';
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['blocked', 'claude', 'opus']);
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'done', status: 'ready' });
+  priority = 'codex';
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['next_step', 'codex', 'gpt-6.1-sol']);
+});
+
 test('a finish session that moves the goal to merge hands it to the merger: no session starts after it', async () => {
   const f = goalFixture({ stuck: { stage: 'finish' } });
   f.answer = plans(f, 'stuck', 'merge');
@@ -3119,6 +3157,7 @@ test('a goal built on the second review candidate is reviewed on it when the fir
 
 const SOL_REVIEW = { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' };
 const OPUS_REVIEW = { tool: 'claude', model: 'opus', effort: 'high' };
+const LUNA_REVIEW = { tool: 'codex', model: 'gpt-6-luna', effort: 'high' };
 /** A catalog whose review list is codex sol then claude opus, and a billing whose codex API is `codexApi`. */
 function reviewList(f, { codexApi = false } = {}) {
   f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [SOL_REVIEW, OPUS_REVIEW] });
@@ -3146,12 +3185,30 @@ test('a goal built on the first review candidate is reviewed by the next one whe
   assert.ok(f.log.some((line) => /review starting .* class large: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
 });
 
+test('goal review rereads changed provider priority over headroom and build-model avoidance', async () => {
+  const f = reviewFixture({ log: builtBy('codex gpt-6-luna') });
+  let priority = 'codex';
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [OPUS_REVIEW, LUNA_REVIEW] });
+  f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
+  f.answer = judges(f, 'review');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  const call = f.calls.sessions[0];
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['codex', 'gpt-6-luna']);
+  assert.ok(f.log.some((line) => /codex provider priority/u.test(line)));
+  priority = 'claude';
+  f.answer = judges(f, 'merge');
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['claude', 'opus']]);
+});
+
 test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
   const f = reviewList(reviewFixture({ log: builtBy('claude haiku') }));
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: 'codex', review: [SOL_REVIEW, OPUS_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 1, refuse: { claude: '2026-08-29T13:00:00Z' } }));
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 0);
-  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — .*codex is at 100 % of its plan limit.*; API reserve; codex API off/u.test(line)));
+  assert.ok(f.log.some((line) => /goal:prog\/judged: its review waits — .*; API reserve; codex API off/u.test(line)));
 });
 
 test('a review decides: merge is the merger\'s — the runner queues nothing and reads nothing, and starts no session after it', async () => {

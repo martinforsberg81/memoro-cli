@@ -13,6 +13,7 @@ import { describe, it } from 'node:test';
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
+import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
@@ -1438,6 +1439,33 @@ describe('the page', () => {
     }
   });
 
+  it('the menu writes priority through mc model and redraws the effective setting', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-priority-'));
+    try {
+      const env = { MC_WORK_ROOT: root };
+      const shown = [];
+      const output = [];
+      const asked = ['priority codex', 'q'];
+      const render = (providerPriority) => pageData({ providerPriority });
+      const code = await page([], {
+        env, collect: async () => render(readModels(env).providerPriority),
+        stdout: { columns: 120, write: (line) => output.push(line) }, stderr: { write: () => {} }, interactive: () => true,
+        reader: { ask: async () => asked.shift() ?? null, show: (lines, key) => shown.push({ text: lines.join('\n'), key }) },
+        checkAndPrintFreshInstall: async () => {},
+      });
+      assert.equal(code, 0);
+      assert.equal(readModels(env).providerPriority, 'codex');
+      assert.match(output.join(''), /provider priority: codex/u);
+      assert.match(shown[0].text, /PROVIDER PRIORITY  codex/u);
+      assert.notEqual(shown[0].key, '');
+      for (const columns of [80, 120]) {
+        const lines = renderPageLines(render('codex'), { columns, now: NOW }).join('\n');
+        assert.match(lines, /PROVIDER PRIORITY  codex/u);
+      }
+      assert.ok(!readFileSync(modelsPath(env), 'utf8').includes('claude-code'), 'the real command wrote only the priority setting');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   /**
    * A page left open while `~/mc/self` fast-forwards goes on drawing with the
    * code it started on — on 2026-10-26 that showed codex-models as `invalid —
@@ -2092,6 +2120,7 @@ describe('MC', () => {
     assert.notEqual(activity(), activity({ started: '2026-11-05T09:00:00Z' }), 'a replacement session is visible');
     assert.notEqual(activity(), activity({ check_ins: 1 }), 'a check-in is visible even off-screen');
     assert.equal(pageKey({}), '');
+    assert.notEqual(pageKey({ providerPriority: 'codex' }), pageKey({ providerPriority: 'claude' }));
   });
 });
 

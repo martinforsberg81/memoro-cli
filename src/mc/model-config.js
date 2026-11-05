@@ -39,7 +39,8 @@ export const CLASSES = Object.freeze(['fast', 'large']);
 /** The lists `mc model add` and `remove` change: the two work classes and review. */
 export const LISTS = Object.freeze([...CLASSES, 'review']);
 export const TOOLS = Object.freeze(['claude', 'codex']);
-const DOCUMENT_KEYS = Object.freeze(['schema', 'version', 'fast', 'large', 'review']);
+const DOCUMENT_KEYS = Object.freeze(['schema', 'version', 'fast', 'large', 'review', 'provider_priority']);
+export const PROVIDER_PRIORITIES = Object.freeze(['auto', 'codex', 'claude']);
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
 const LOCK_POLL_MS = 50;
 
@@ -127,6 +128,7 @@ function documentProblems(value) {
   const problems = Object.keys(value).filter((key) => !DOCUMENT_KEYS.includes(key)).map((key) => `${key}: unknown key`);
   if (value.schema !== MODELS_SCHEMA) problems.push(`schema: must be "${MODELS_SCHEMA}"`);
   if (value.version !== MODELS_VERSION) problems.push(`version: ${MODELS_VERSION} is the only version this mc reads`);
+  if (value.provider_priority !== undefined && !PROVIDER_PRIORITIES.includes(value.provider_priority)) problems.push(`provider_priority: one of ${PROVIDER_PRIORITIES.join(', ')}`);
   for (const cls of LISTS) {
     const list = cls === 'review' ? reviewList(value.review) : value[cls];
     if (!Array.isArray(list) || list.length === 0) {
@@ -164,7 +166,7 @@ export function readModels(env = process.env) {
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
-    if (error?.code === 'ENOENT') return { source: 'defaults', path, ...cloneCatalog(DEFAULT_CATALOG) };
+    if (error?.code === 'ENOENT') return { source: 'defaults', path, providerPriority: 'auto', providerPriorityPersisted: false, ...cloneCatalog(DEFAULT_CATALOG) };
     throw new ModelConfigError(`${path} cannot be read (${error?.code || error?.message}) — ${RECOVERY}`);
   }
   let value;
@@ -178,6 +180,8 @@ export function readModels(env = process.env) {
   return {
     source: 'config',
     path,
+    providerPriority: value.provider_priority ?? 'auto',
+    providerPriorityPersisted: Object.hasOwn(value, 'provider_priority'),
     fast: value.fast.map((item) => candidate(item.tool, item.model, item.effort)),
     large: value.large.map((item) => candidate(item.tool, item.model, item.effort)),
     review: reviewList(value.review).map((item) => candidate(item.tool, item.model, item.effort)),
@@ -285,8 +289,24 @@ export function changeModels(env = process.env, change) {
       fast: catalog.fast,
       large: catalog.large,
       review: catalog.review,
+      ...(current.providerPriorityPersisted ? { provider_priority: current.providerPriority } : {}),
     };
     writeJsonAtomic(current.path, document);
-    return { source: 'config', path: current.path, ...catalog };
+    return { source: 'config', path: current.path, providerPriority: current.providerPriority, providerPriorityPersisted: current.providerPriorityPersisted, ...catalog };
+  });
+}
+
+/** Change the global provider preference using the same lock and atomic write as candidate edits. */
+export function changeProviderPriority(env = process.env, priority) {
+  if (!PROVIDER_PRIORITIES.includes(priority)) throw new ModelConfigError(`priority must be one of ${PROVIDER_PRIORITIES.join(', ')}`);
+  return withCatalogLock(runnerDir(env), () => {
+    const current = readModels(env);
+    const document = {
+      schema: MODELS_SCHEMA, version: MODELS_VERSION,
+      fast: current.fast, large: current.large, review: current.review,
+      provider_priority: priority,
+    };
+    writeJsonAtomic(current.path, document);
+    return { ...current, providerPriority: priority, providerPriorityPersisted: true };
   });
 }

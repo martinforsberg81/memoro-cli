@@ -95,3 +95,41 @@ test('a review list that is empty or repeats a model is refused, not read as the
     }
   }
 });
+
+test('provider priority reads as auto, roundtrips reversibly, and catalog edits preserve it and every list', async () => {
+  const c = catalogAt(OLD);
+  try {
+    assert.equal(readModels(c.env).providerPriority, 'auto');
+    for (const priority of ['codex', 'claude', 'auto']) {
+      const set = await c.verb('priority', priority);
+      assert.equal(set.code, 0, set.err);
+      assert.equal(set.out, `provider priority: ${priority}\n`);
+      assert.equal(readModels(c.env).providerPriority, priority);
+      assert.equal((await c.verb('priority')).out, `provider priority: ${priority}\n`);
+      const listed = JSON.parse((await c.verb('list', '--json')).out);
+      assert.equal(listed.providerPriority, priority);
+      assert.equal(c.file().provider_priority, priority);
+    }
+    const before = c.file();
+    assert.equal((await c.verb('priority', 'nobody')).code, 2);
+    assert.deepEqual(c.file(), before, 'invalid command does not modify the file');
+    await c.verb('add', 'fast', 'codex:gpt-6-luna:high');
+    await c.verb('remove', 'fast', 'codex:gpt-6-luna');
+    await c.verb('set', 'review', 'claude:opus:high');
+    assert.equal(c.file().provider_priority, 'auto');
+    assert.deepEqual(c.file().large, before.large);
+    assert.deepEqual(c.file().fast, before.fast);
+  } finally { c.done(); }
+});
+
+test('an invalid persisted provider priority is refused without replacing the catalog', async () => {
+  const invalid = { ...OLD, provider_priority: 'openai' };
+  const c = catalogAt(invalid);
+  try {
+    const before = readFileSync(modelsPath(c.env), 'utf8');
+    assert.throws(() => readModels(c.env), /provider_priority: one of auto, codex, claude/u);
+    const refusal = await c.verb('priority', 'claude');
+    assert.equal(refusal.code, 1);
+    assert.equal(readFileSync(modelsPath(c.env), 'utf8'), before);
+  } finally { c.done(); }
+});
