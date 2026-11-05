@@ -1,7 +1,8 @@
 /** The interactive session for priorities and decisions across all programmes. */
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { managerDir } from '../paths.js';
+import { managerDir, workRoot } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
@@ -13,7 +14,15 @@ export function usage() {
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--new'], strictValues: ['--model'], toolSugar: true, check: ({ positional }) => (positional.length ? `unknown argument ${positional[0]}` : null) } };
+export const ROUTES = { '': { booleans: ['--new', '--headless'], strictValues: ['--model', '--prompt', '--minutes'], toolSugar: true, check: managerArguments } };
+
+function managerArguments({ flags, positional }) {
+  if (positional.length) return `unknown argument ${positional[0]}`;
+  if (flags.headless && !flags.prompt?.trim()) return '--headless requires --prompt';
+  if (!flags.headless && (flags.prompt !== null || flags.minutes !== null)) return '--prompt and --minutes require --headless';
+  if (flags.minutes !== null && (!Number.isFinite(Number(flags.minutes)) || Number(flags.minutes) <= 0 || Number(flags.minutes) > 1440)) return '--minutes must be greater than 0 and at most 1440';
+  return null;
+}
 
 export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
@@ -26,6 +35,13 @@ export async function run(argv, deps = {}) {
   }
   const { flags } = scanned;
 
+  if (flags.headless) {
+    const { runManagerTurn } = await import('../manager-turn.js');
+    const result = await (deps.turn || runManagerTurn)({ prompt: flags.prompt, tool: flags.tool, model: flags.model, minutes: flags.minutes === null ? 30 : Number(flags.minutes) });
+    (deps.stdout || process.stdout).write(`${result.answer ? `${result.answer}\n` : ''}manager: ${result.note || result.reason}\n${result.log ? `log: ${result.log}\n` : ''}`);
+    return result.ok ? 0 : (Number.isInteger(result.status) && result.status > 0 ? result.status : 1);
+  }
+
   const role = readCanonRole('manager');
   if (!role?.overlay) {
     stderr.write('mc: the manager role is missing from this install — expected canon/roles/manager.md with an overlay body\n');
@@ -36,6 +52,7 @@ export async function run(argv, deps = {}) {
   (deps.mkdir || mkdirSync)(root, { recursive: true });
   const opened_ = await (deps.open || openInWorkArea)({
     areaRoot: root,
+    conversationRoots: [root, join(workRoot(), 'brief')],
     worktree: { repo: null, path: root, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
     pick: flags.new ? 'new' : null,

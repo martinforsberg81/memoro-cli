@@ -460,11 +460,14 @@ export const COMMAND_USAGE = Object.freeze({
   manager: [
     "usage — mc manager [--new] [--codex|--claude] [--model <model>]\n",
     "\n",
+    "        mc manager --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n",
     "Person: opens or resumes Manager, the session across all programmes: prioritise work,\n",
     "resolve blockers and review proposals. --new starts a fresh conversation.\n",
-    "Keeps ~/mc/brief/ to resume existing conversations. mc brief is a compatibility alias.\n",
+    "Uses ~/mc/manager/; older ~/mc/brief/ conversations remain resumable. mc brief is an alias.\n",
+    "Headless runs one explicit task in a fresh conversation, always; --new is implicit.\n",
+    "Default limit: 30 minutes. Prints outcome and result log path. No automatic trigger.\n",
   ].join(''),
-  brief: "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n\nCompatibility alias for mc manager.\n",
+  brief: "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n        mc brief --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n\nCompatibility alias for mc manager.\n",
   plan: [
     "usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n",
     "        mc plan <programme> --archive\n",

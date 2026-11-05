@@ -40,6 +40,7 @@ import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-s
 
 export async function openInWorkArea({
   areaRoot,
+  conversationRoots = [areaRoot],
   worktree,
   tool = null,
   pick = null,
@@ -70,7 +71,9 @@ export async function openInWorkArea({
   // Every session belongs to a programme or a desk (session-owner.js); one mc
   // would start for nobody is refused before anything is looked up or spawned.
   if (!ownerOf({ verb, area: areaName, programme })) return { ok: false, reason: 'no owner', hint: OWNERLESS_HINT };
-  const before = listConversations(areaRoot, env);
+  const before = [...new Map(conversationRoots.flatMap(root => listConversations(root, env))
+    .sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0))
+    .map(item => [`${item.tool}:${item.id}`, item])).values()];
 
   // A named conversation decides its own tool: asking for one by id and being
   // given a different tool's conversation would be a worse answer than either.

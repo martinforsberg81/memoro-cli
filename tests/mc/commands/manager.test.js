@@ -1,6 +1,6 @@
 /**
  * `mc manager` — the session: the manager role ships with mc, the verb opens the
- * foreground conversation in the existing ~/mc/brief desk with the overlay and no opening
+ * foreground conversation in the ~/mc/manager desk with the overlay and no opening
  * words — Martin types the first message; nothing is gathered for it.
  */
 import assert from 'node:assert/strict';
@@ -24,7 +24,7 @@ describe('the manager launch', () => {
 });
 
 describe('mc manager', () => {
-  it('opens the conversation in the existing ~/mc/brief desk, foreground, with the overlay and no gathered document', async () => {
+  it('opens the conversation in the ~/mc/manager desk, foreground, with the overlay and no gathered document', async () => {
     const { stdout, stderr } = io();
     let seen = null;
     const code = await run(['--model', 'fable'], {
@@ -32,8 +32,9 @@ describe('mc manager', () => {
     });
     assert.equal(code, 0);
     // Its own room, not the work root every other session is launched below.
-    assert.equal(seen.areaRoot, join(process.env.MC_WORK_ROOT, 'brief'));
-    assert.equal(seen.worktree.path, join(process.env.MC_WORK_ROOT, 'brief'));
+    assert.equal(seen.areaRoot, join(process.env.MC_WORK_ROOT, 'manager'));
+    assert.equal(seen.worktree.path, join(process.env.MC_WORK_ROOT, 'manager'));
+    assert.deepEqual(seen.conversationRoots, [join(process.env.MC_WORK_ROOT, 'manager'), join(process.env.MC_WORK_ROOT, 'brief')]);
     assert.equal(seen.verb, 'manager');
     assert.equal(seen.roleName, 'manager');
     // The manager session there is resumed; `--new` is the only fresh start.
@@ -80,5 +81,34 @@ describe('mc manager', () => {
     const { out, stdout, stderr } = io();
     assert.equal(await run(['now'], { stdout, stderr }), 2);
     assert.match(out.stderr, /unknown argument now/u);
+  });
+});
+
+describe('manual headless manager', () => {
+  it('dispatches an explicit task without opening an interactive conversation, including through brief', async () => {
+    const { run: brief } = await import('../../../src/mc/commands/brief.js');
+    for (const command of [run, brief]) {
+      const { out, stdout, stderr } = io();
+      let seen;
+      assert.equal(await command(['--headless', '--new', '--prompt', 'Resolve the blocked merge', '--codex', '--model', 'gpt-6.1-sol', '--minutes', '12'], {
+        stdout, stderr, open: () => assert.fail('interactive launch'),
+        turn: async options => { seen = options; return { ok: true, answer: 'Merge resolved', note: 'success', log: '/receipt.json' }; },
+      }), 0);
+      assert.deepEqual(seen, { prompt: 'Resolve the blocked merge', tool: 'codex', model: 'gpt-6.1-sol', minutes: 12 });
+      assert.match(out.stdout, /Merge resolved/u);
+      assert.match(out.stdout, /receipt.json/u);
+    }
+  });
+
+  it('rejects missing work and invalid limits before starting a model, and preserves failure status', async () => {
+    for (const argv of [['--headless'], ['--headless', '--prompt', ' '], ['--prompt', 'task'], ['--minutes', '2'], ...['0', '-2', 'NaN', 'Infinity', '1441'].map(n => ['--headless', '--prompt', 'task', '--minutes', n])]) {
+      const { stdout, stderr } = io();
+      assert.equal(await run(argv, { stdout, stderr, turn: () => assert.fail('invalid launch'), open: () => assert.fail('invalid launch') }), 2);
+    }
+    const { stdout, stderr } = io();
+    assert.equal(await run(['--headless', '--prompt', 'task'], { stdout, stderr, turn: async o => {
+      assert.equal(o.minutes, 30);
+      return { ok: false, status: 142, note: 'timeout' };
+    } }), 142);
   });
 });

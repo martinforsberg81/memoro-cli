@@ -695,3 +695,15 @@ for (const tool of ['codex', 'claude']) {
     });
   });
 }
+
+it('resumes legacy Manager history while launching in the canonical manager directory', async () => {
+  const { areaRoot: legacy, env } = fixture({ entries: [{ type: 'assistant', message: { model: 'claude-fable-5', content: [] } }] });
+  const canonical = join(legacy, '..', 'manager');
+  mkdirSync(canonical);
+  const { calls, options } = opening();
+  const result = await openInWorkArea({ areaRoot: canonical, conversationRoots: [canonical, legacy], worktree: { path: canonical, is_git: false }, env, ...options });
+  assert.equal(result.ok, true);
+  assert.ok(calls[0].args.includes('--resume'));
+  assert.ok(calls[0].args.includes(CONVERSATION_ID));
+  assert.equal(calls[0].spawnOptions.cwd, canonical);
+});

@@ -1,15 +1,17 @@
 # mc manager — the session across all programmes
 
 `mc manager [--new] [--codex|--claude] [--model <model>]` is the person's
-entrance to the Manager desk in `~/mc/brief/`. It opens or resumes a foreground
+entrance to the Manager desk in `~/mc/manager/`. It opens or resumes a foreground
 conversation with the `manager` role. It gathers nothing and supplies no opening
 words: Martin types what he wants help with. A session already running never
 uses this entrance to start itself.
 
 Manager helps prioritise between programmes, resolve blockers across them, and
 review proposals. It carries agreed decisions into goals and programme plans.
-`mc brief` remains a compatibility alias. The existing `~/mc/brief/` directory
-is kept so Claude and Codex can resume their conversations.
+`mc brief` remains a compatibility alias. Older conversations launched in `~/mc/brief/` remain discoverable alongside
+those in `~/mc/manager/`, newest first. Resuming one starts the tool in the new
+desk with its original conversation ID. Existing files in `brief/` stay there;
+no transcript or active session is moved or rewritten.
 
 ## Launch and ground
 
@@ -25,6 +27,29 @@ The ground is read where it lives: `mc`, `mc goal list`, `mc goal show
 <programme>/<goal>`, programme proposals and the repositories. There is no
 snapshot report handed over by the command. `--collect` and `--offline` were
 removed on 2026-09-19: the page already supplies the live reading.
+
+## Manual headless tasks
+
+`mc manager --headless --prompt "Resolve the blocked merge" [--minutes 30]`
+runs one explicit task and waits for it to end. `--codex`, `--claude` and
+`--model` select the tool and model as for the foreground entrance. Headless
+always starts fresh: `--new` is implicit and accepted for explicit callers.
+There is no timer, runner trigger or automatic wakeup for Manager.
+
+`manager-turn.js` uses the shared headless argument builder, billing route and
+provider output reader. It clears inherited goal/programme identity, sets
+`MC_ROLE=manager` and `MC_HEADLESS=1`, and scrubs provider API keys. The role
+records decisions needing Martin rather than inventing an answer; existing
+headless restrictions apply to deploys, production data, credentials and admin.
+
+Each invocation gets its own cwd under `~/mc/runner/manager/<timestamp>-<uuid>/`,
+separate from interactive desk history. `result.json` there records the task,
+outcome, provider output, timestamps and available token usage. The command
+prints the final answer, outcome and receipt path. The default wall-clock limit
+is 30 minutes (`--minutes` accepts positive values up to 1440). Failures and
+timeouts return nonzero. The session is visible as Manager on the page while
+running; its registration is released on completion. No session is started
+by installing this change.
 
 ## Decisions and work
 
@@ -46,6 +71,10 @@ owns live in `~/mc/proposals/`. The page lists waiting names, not their contents
 
 `tests/mc/commands/manager.test.js` covers the launch arguments without opening a
 coding tool: foreground desk, overlay, no opening words, resume and `--new`,
-and rejection of retired flags. The shared readers are covered by
+and rejection of retired flags. It also checks explicit headless dispatch,
+validation and failure exits. `manager-turn.test.js` exercises both providers'
+real argument builders with a replaced process boundary, fresh invocation
+isolation, environment identity and result receipts, including failures and
+timeouts. `work-open.test.js` checks resuming legacy history from the new cwd. The shared readers are covered by
 `tests/mc/brief-collect.test.js`. This document claims no live interactive
 launch measurement.

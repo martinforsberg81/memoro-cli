@@ -18,12 +18,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
 
 import { run as runGit } from './git.js';
 import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr } from './merge-queue.js';
 import { installedHead, readMerger } from './merger.js';
 import { workRoot } from './paths.js';
+import { repoNameOf } from './repos.js';
 
 /**
  * How often the queue is read. `merges.json` is a local file, so polling it
@@ -190,7 +190,7 @@ function ghPrView(repoPath) {
  */
 export async function followMerge({ repoPath, pr, timeoutMs = WATCH_TIMEOUT_MIN * 60_000, json = false, stdout, deps = {} }) {
   // The queue names a repository by its directory, as `queueForMerger` wrote it.
-  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const repo = repoNameOf(repoPath);
   const root = deps.root || workRoot(process.env);
   const { code, result } = await (deps.watch || watch)({
     repo,
