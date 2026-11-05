@@ -95,11 +95,11 @@ Sequencing context from the prior bounded audit: the `branch-landed.test.js` cal
 
 | Path | Status | Existing execution metadata |
 | --- | --- | --- |
-| tests/adapters/codex-hooks.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/adapters/get-status-contract.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/adapters/managed-runtime/claude-managed-custody.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/adapters/materialise.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/adapters/model-args.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/adapters/codex-hooks.test.js | KEEP; [static cleanup audit, safety contract H](audit-adapters-001.md#1-codex-hookstestjs--keep-selective-filesystem-cleanup); runtime NOT MEASURED | package test; affected selection dynamic; isolated home |
+| tests/adapters/get-status-contract.test.js | KEEP; [static status/presence audit](audit-adapters-001.md#2-get-status-contracttestjs--keep-cheap-status-decisions); runtime NOT MEASURED | package test; affected selection dynamic; isolated home |
+| tests/adapters/managed-runtime/claude-managed-custody.test.js | KEEP crypto/CAS checks; REBUILD lease proof; [static evidence, contract C](audit-adapters-001.md#3-claude-managed-custodytestjs--keep-security-checks-rebuild-lease-proof); runtime NOT MEASURED | package test; affected selection dynamic; isolated home |
+| tests/adapters/materialise.test.js | KEEP active refusal; [static evidence and legacy-skip gaps, contract M](audit-adapters-001.md#4-materialisetestjs--keep-active-plaintext-refusal-not-legacy-green); runtime NOT MEASURED | package test; affected selection dynamic; isolated home |
+| tests/adapters/model-args.test.js | KEEP; [static argv/overlap audit](audit-adapters-001.md#5-model-argstestjs--keep-exact-native-argv-contracts); runtime NOT MEASURED | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-lib-001 · tests/lib · 2 subject(s)
 
