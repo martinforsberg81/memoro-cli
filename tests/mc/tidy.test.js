@@ -1016,8 +1016,8 @@ describe('the printout', () => {
 describe('(S) worktrees and DerivedData in ended runner sessions\' scratch directories', () => {
   /**
    * `~/mc/runner/scratch/` with one session directory per case. `git` answers
-   * for each worktree by its path: `status` its porcelain, `for-each-ref
-   * --contains` the refs that hold its HEAD.
+   * for each worktree by its path: status, HEAD and refs; the owning fake
+   * repository records registrations, retained refs and removals.
    */
   function scratchMachine() {
     const m = machine();
@@ -1026,6 +1026,8 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     const opens = {};
     const removed = [];
     const refs = {};
+    const refWrites = [];
+    const actions = [];
     const marker = (over = {}) => JSON.stringify({ schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: 'goal:mc/x', kind: 'build', stem: 's', started: '2026-10-12T08:00:00Z', ended: '2026-10-12T09:00:00Z', exit: 0, ...over });
     const area = (stem, { record = marker(), worktree = null, derived = false, evidence = true } = {}) => {
       const dir = join(root, stem);
@@ -1051,10 +1053,11 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
         if (args[0] === 'worktree' && args[1] === 'list') {
           return Object.entries(answers).filter(([, value]) => value.registered !== false).map(([path, value]) => 'worktree ' + path + '\nHEAD ' + value.head + '\n').join('\n');
         }
-        if (args[0] === 'rev-parse' && args.includes('--verify')) return refs[args.at(-1)] ? refs[args.at(-1)] + '\n' : null;
+        if (args[0] === 'rev-parse' && args.includes('--verify')) return refs[cwd + ':' + args.at(-1)] ? refs[cwd + ':' + args.at(-1)] + '\n' : null;
         if (args[0] === 'update-ref') {
-          if (args[3] !== '0'.repeat(args[2].length) || refs[args[1]]) return null;
-          refs[args[1]] = args[2]; return '';
+          const key = cwd + ':' + args[1];
+          if (args[3] !== '0'.repeat(args[2].length) || refs[key]) return null;
+          refs[key] = args[2]; refWrites.push([cwd, args[1], args[2], args[3]]); actions.push(['retain', cwd, args[1]]); return '';
         }
         return m.git(cwd, args);
       }
@@ -1066,10 +1069,10 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     };
     const doors = (over = {}) => m.doors({
       git, openIn: (path) => (path in opens ? opens[path] : []),
-      removeWorktree: (owner, path) => { removed.push([owner, path]); rmSync(path, { recursive: true }); return true; },
+      removeWorktree: (owner, path) => { removed.push([owner, path]); actions.push(['remove', owner, path]); rmSync(path, { recursive: true }); return true; },
       ...over,
     });
-    return { m, root, area, marker, answers, opens, removed, refs, doors };
+    return { m, root, area, marker, answers, opens, removed, refs, refWrites, actions, doors };
   }
   const exists = (path) => existsSync(path);
 
@@ -1108,7 +1111,9 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       ], 'every replay is removed through git in its actual owning repository');
       assert.ok(!exists(join(ended, 'replay')) && !exists(join(ended, 'DerivedData')));
       assert.ok(!exists(join(legacy, 'replay')) && exists(join(legacy, 'DerivedData')));
-      assert.equal(s.refs['refs/mc/retained-replay/' + 'a'.repeat(40)], 'a'.repeat(40), 'detached HEAD is retained before removal');
+      const owner = join(s.m.home, 'repos', 'memoro');
+      assert.deepEqual(s.refWrites, [[owner, 'refs/mc/retained-replay/' + 'a'.repeat(40), 'a'.repeat(40), '0'.repeat(40)]]);
+      assert.ok(s.actions.findIndex((action) => action[0] === 'retain') < s.actions.findIndex((action) => action[2] === join(orphan, 'replay')), 'retention precedes detached worktree removal');
       for (const kept of ['gate.log', 'fault.patch', '.mc-scratch.json']) assert.ok(exists(join(ended, kept)), `${kept} stays`);
       for (const kept of ['gate.log', 'fault.patch']) assert.ok(exists(join(legacy, kept)), `legacy ${kept} stays`);
       for (const receipt of ['legacy.json.err', 'legacy.jsonl']) assert.ok(exists(join(s.m.work, 'runner', 'log', receipt)), `${receipt} stays`);
@@ -1197,6 +1202,7 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       s.m.cwds.push({ pid: 92, cwd: join(active, 'replay', 'src') });
 
       const { list, outcome } = runTidy({ apply: true, ...s.doors() });
+      for (const dir of [noErr, noStream, invalidReceipt, noRegistration, gitFailure, dirty, open, unknownOpen, active]) assert.ok(exists(join(dir, 'replay', 'src.js')), `${dir} keeps its worktree`);
       assert.deepEqual(ruled(list, 'S').map((item) => item.path), [join(clean, 'replay')]);
       assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(clean, 'replay'), true]]);
       assert.match(keptOf(list, join(noErr, 'replay')).why, /no-err\.json\.err/u);
@@ -1208,7 +1214,6 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.equal(keptOf(list, join(open, 'replay')).why, 'process 91 holds a file open in its scratch session');
       assert.match(keptOf(list, join(unknownOpen, 'replay')).why, /could not tell whether a file in its scratch session is open/u);
       assert.equal(keptOf(list, join(active, 'replay')).why, 'process 92 stands in its scratch directory');
-      for (const dir of [noErr, noStream, invalidReceipt, noRegistration, gitFailure, dirty, open, unknownOpen, active]) assert.ok(exists(join(dir, 'replay', 'src.js')));
     } finally { s.m.cleanup(); }
   });
 
