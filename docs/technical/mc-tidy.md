@@ -16,7 +16,7 @@ goal directory moved to `goals/.archive/`. One row is appended to
 `goals/goal_log.md`; phases are renumbered so there are no gaps. Nothing is
 written into a repository. The runner calls the same operation once a goal
 has been done or dropped for 24 hours, counted from its stage-setting log
-entry. A refusal is recorded once in LOG.md, not every chore pass.
+entry, and in a disk pressure pass without the 24 hours (§ Disk pressure). A refusal is recorded once in LOG.md, not every chore pass.
 
 Projects went on 2026-11-03; their migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project). Old execution
@@ -39,12 +39,14 @@ stays.
 | `~/mc/runner/step/<name>/` | an old execution area | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
+| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean worktree whose HEAD is on a ref, and `DerivedData`, once the directory's ownership record says its session ended and nothing stands in or holds it (S); never the logs, patches or the directory |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
-Rule P was removed with projects; rules version 7 reads no execution
-register. Old logs, scratch directories and transcripts are left to a person.
+Rule P was removed with projects; rules version 8 reads no execution
+register, and adds S. Old logs, legacy scratch directories and transcripts are
+left to a person.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
@@ -128,6 +130,109 @@ and `memoro-cli.git-365b96c6`.
 
 **A — gate-cache entries.** `~/mc/gate-cache/<slug>/<key>/` is the gate's dependency cache (`prepare-cache.js`): a `node_modules` a green `npm ci` left, with a `meta.json` whose `at` a store sets and every hit renews. Under a slug a repository mc knows has, an entry no round has used for fourteen days (`PREPARE_CACHE_MAX_AGE_MS`) goes, judged by `meta.at` or, without a meta, by the directory's own mtime; a `<key>.tmp-<pid>` staging directory goes once it is a day old, since a store that is running renews its mtime. Removal is through `rmTree`. A round that is cloning an entry as it goes falls back to `npm ci`, which is why no lock is taken. An entry under a slug no repository knows is K's, and goes whole with its slug.
 
+**S — an ended runner session's scratch.** The runner makes
+`~/mc/runner/scratch/<stem>/` for each session (`MC_SCRATCH`) and writes
+`.mc-scratch.json` into it: `{ schema: "mc-scratch", owner: "runner",
+runner_pid, session, kind, stem, started }`, and `ended` and `exit` when the
+session is over. Under it only two kinds of child are judged: a directory with
+a `.git` (a replay or probe worktree) and one named `DerivedData`. Each goes
+only when every one of these is proved, and stays with the first that is not:
+
+- the record reads, names `owner: "runner"`, a session and a start, and has
+  `ended`; a directory with no record is legacy and is kept, whatever its age;
+- `lsof` answers, and no process stands anywhere in the scratch directory;
+- for a worktree: `git status --porcelain --untracked-files=all` is empty, and
+  `git for-each-ref --contains HEAD` names a ref, so its commit stays reachable
+  after it goes; the repository that owns it is read from
+  `rev-parse --git-common-dir`;
+- `lsof +D` on the candidate answers, and no process holds a file open in it.
+
+A worktree is removed with `git worktree remove` in its own repository,
+without `--force`, so a tree that changed since stays; `DerivedData` with
+`rmTree`. Logs, patches, the record and everything else stay. At the apply
+the target is re-judged on fresh facts, and refused when its record names
+another session or start than the list did, or when its realpath leaves the
+scratch root (a symlinked directory). Age and mtime are never asked. Until
+2026-11-05 the chore pass removed every scratch directory not touched for two
+days, logs and evidence with it; that sweep is gone, so nothing bypasses S.
+
+## Disk pressure
+
+`src/mc/disk-pressure.js` is the one policy the runner, the deployer and a
+Docker start share (goal mc/disk-headroom, 2026-11-05). It reads the
+filesystem's own available bytes (`statfs` `bavail` × `bsize`) on the volume
+under `~/mc/runner/scratch/`: never a sum of file sizes and never Docker's
+reclaimable estimate. Gigabytes are decimal (1 GB = 1e9 bytes).
+
+| | bytes | what it means |
+|---|---|---|
+| reserve | 20e9 | the floor kept for mc's operations |
+| pressure and admission | 30e9 | below it a pressure pass starts; no new heavy work is admitted until it is back |
+| recovery target | 40e9 | a pass stops here, or when its safe steps are exhausted |
+
+The 10 GB between the reserve and the admission line is policy headroom, not a
+measured bound on what a deploy or a session writes. **This is a
+controlled-workload policy.** It holds back mc's own new work: a headless
+session, a deploy script, a stopped Docker runtime's start. It does not stop
+other applications, it does not cap a build that is already running, and it
+never kills running work or changes what production runs. A running external
+operation may use more than the headroom; the monitor then reports pressure
+and blocks new mc work.
+
+**When it reads.** The runner reads every minute on its own timer
+(`diskTick`), independent of the chores, the nightly and the lanes; the
+deployer reads every minute while its script runs, with or without a
+runner. A healthy reading writes nothing. Admission is asked at the top of a
+lane's pass and again at the start itself, after the wait for a slot; by the
+deployer at the spawn; by `ensure` before it starts a stopped runtime. An
+up runtime is not asked. A reading that fails is written as `unknown`, shown,
+and refuses admission; cleanup and `mc tidy` still work.
+
+**The pass.** Below 30 GB a pass runs at once, unless a cooldown holds. Its
+steps, each measured after it, stop at 40 GB:
+
+1. (runner only) finished goals archived through `archiveGoal` without the 24
+   hours, with every refusal kept and logged as before; no goal is set done to
+   free space;
+2. tidy's file rules (`runTidy --apply`): the same rules, rule S among them;
+3. Docker's images unused for three days, on a runtime that is already up
+   (`tidyDocker` without `start`). A failed prune fails the pass. A runtime
+   that is down is left down. `ensure`'s own pass has no Docker step, so a start
+   does not prune through the runtime it is starting.
+
+The build cache is never pruned (§ Docker): no `builder prune`, no `system
+prune`, no cap. A pass that ends below 30 GB — exhausted, no progress, failed
+— sets `cooldown_until` five minutes ahead, persisted, so a restart does not
+repeat it; a healthy reading clears it and the pressure state. Passes are
+single-flight in a process; across processes the pass holds a lease in the
+state file, taken under the runner lock, and a second process that finds a
+live holder defers. Admissions in a process are serialized, each reading the
+disk after the one before it, cleanup included.
+
+A person's `mc tidy --docker --apply` is recovery and may start the runtime
+under pressure; nothing else starts one to inspect or to clean.
+
+**What it writes.** `~/mc/runner/disk-pressure.json`: `{ status, available_bytes,
+volume, policy, cooldown_until, cooldown_why, lease, last_cleanup,
+shortfall_bytes, last_refusal }`. `~/mc/runner/disk-pressure-events.json`: the
+newest 100 events (`EVENTS_KEEP`), each `{ at, volume, trigger, before_bytes,
+after_bytes, measured_delta_bytes, estimate_bytes, steps: [{ name, ok,
+estimate_bytes, removed, kept, errors, available_after }], errors, failed,
+outcome, shortfall_bytes, admission }`, with at most 20 kept reasons and
+errors per step. The estimate is what the candidates were said to hold; the
+measured delta is what the disk gave back, and the two are never merged. A
+refused admission with no pass is an event too. `disk.json` still carries the
+runner's refusal line for the page.
+
+**Where it shows.** `mc` draws one grey line with the measured free space;
+under pressure or unknown, the last pass with its measured gain beside its
+estimate, the shortfall to 40 GB, the next pass after a cooldown and the
+limit, in yellow (`diskSummary`: the state file and one statfs, no walk).
+`mc tidy` begins with the same lines, and `--json` carries them as `disk`.
+
+The 18 GB lost in two hours that started this goal has not been attributed:
+neither Docker nor any other writer is named as its cause here.
+
 ### The list file
 
 Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`
@@ -143,12 +248,12 @@ and logged as `tidy` with counts. The newest 30 list files are kept.
 
 ### When it runs
 
-`mc tidy` by hand prints the counts and bytes per rule, the first ten targets,
-every keep worth reading, and the list file; `--json` prints the list. The
+`mc tidy` by hand prints the disk (§ Disk pressure), the counts and bytes per
+rule, the first ten targets, every keep worth reading, and the list file;
+`--json` prints the list with `disk`. The bytes are the list's estimate. The
 runner runs `mc tidy --apply` once a day by its own `runs.tsv` row (kind
-`tidy`, note `freed=<bytes>,items=<n>,kept=<k>`). It also runs it in the first
-chore pass after a lane skipped for disk, at most once per hour
-(`TIDY_DISK_MIN_INTERVAL_MS`, remembered in memory). In the same pass
+`tidy`, note `freed=<bytes>,items=<n>,kept=<k>`), and its file rules in every
+pressure pass. In the chore pass
 `runner.log` moves to `runner.log.1` once it passes 32 MiB
 (`RUNNER_LOG_MAX_BYTES`).
 
@@ -201,5 +306,15 @@ and no globbing.
 
 `tests/mc/goal-archive.test.js` covers archive checks, worktree removal,
 archive rows and phase renumbering. `tests/mc/tidy.test.js` covers the
-per-root rules and rechecks on fixture facts. No historical execution record
+per-root rules and rechecks on fixture facts, rule S on a temporary scratch
+root with fake git and lsof, and the disk lines of the printout.
+`tests/mc/run.test.js` drives the policy through the runner's fixture: the
+exact line and one byte under it, recovery to 40 GB, exhausted candidates and
+the persisted cooldown across a restart, an unreadable disk, two lanes at
+once, a lease another process holds, a failed Docker prune, the monitor while
+a session and a chore run, archiving under pressure and the bounded history.
+`tests/mc/commands/deploy.test.js` and `tests/mc/docker.test.js` cover the
+deploy script and a stopped runtime held back, and no build-cache prune. No
+test fills a disk; real Git semantics beyond the fake's answers are not
+claimed, and `git worktree remove` without `--force` is the runtime backstop. No historical execution record
 is a substitute for a fresh release verdict.

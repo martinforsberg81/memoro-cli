@@ -98,6 +98,12 @@ export const COMMAND_USAGE = Object.freeze({
     "removes from that list after rechecking it. Docker images unused for three days go too,\n",
     "if the runtime is up. --docker is Docker only, and with --apply starts the runtime when\n",
     "it is down.\n",
+    "\n",
+    "It begins with the disk as measured (statfs available bytes, decimal GB): healthy at 30 GB\n",
+    "and above. Below it the runner, the deployer and a Docker start run a pressure pass toward\n",
+    "40 GB and start no new heavy work until 30 GB is back; 20 GB is the reserve. The last\n",
+    "pass shows its measured gain beside its estimate, and any shortfall; --json has it as\n",
+    "disk. Work already running, and other apps, can still fill the disk.\n",
   ].join(''),
   layout: [
     "usage — mc layout [--json]               layout 1 or 2, and where the planning sessions,\n",

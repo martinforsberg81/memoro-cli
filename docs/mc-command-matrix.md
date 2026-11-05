@@ -122,12 +122,13 @@ too (`tidy.js`: `gatherTidyFacts` reads, the pure `tidyPlan` decides,
 removal: its realpath under its kind's root, its rule on fresh facts; a check
 that fails or throws keeps it. The rules — G (planning transcripts past 72 hours), X (a planning area's landed
 extra worktree), L (T1–T5 transcripts and leftovers), C (a `mc shot --compare`
-tree unused for a day with no dev server); W, S and R are listed
-and never removed — are in
+tree unused for a day with no dev server), S (a clean, referenced worktree or
+DerivedData in an ended runner session's scratch directory); W and R are listed
+and never removed by the runner — are in
 [`docs/technical/mc-tidy.md`](technical/mc-tidy.md) § *mc tidy*. A work area,
 every `memory/` under
 `~/.claude/projects` are never removed. The runner runs it once a day and
-after a lane skipped for disk. The apply logs `tidy` with counts only.
+in its disk pressure pass below 30 GB. The apply logs `tidy` with counts only.
 Its Docker half (`tidyDocker`, `docker.js`) runs `docker image prune --all`
 with `--filter until=72h`, and leaves the build cache alone. It runs only
 when the runtime is already up, except under `mc tidy --docker --apply`.
