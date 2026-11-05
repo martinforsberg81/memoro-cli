@@ -802,15 +802,15 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const out = JSON.parse(cap.out.join('\n'));
     const after = server.inspect();
     assert.equal(rc, 1);
-    assert.equal(out.code, 'VAULT_LEGACY_SECRETS_REMAIN');
-    assert.equal(out.changed_password, false);
-    assert.match(out.error, /mc vault migrate.*separately/);
     assert.equal(after.config.auth_hash, before.config.auth_hash);
     assert.equal(after.config.salt, before.config.salt);
     assert.deepEqual(after.secrets, before.secrets);
     assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
     assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore);
     assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method)), []);
+    assert.equal(out.code, 'VAULT_LEGACY_SECRETS_REMAIN');
+    assert.equal(out.changed_password, false);
+    assert.match(out.error, /mc vault migrate.*separately/);
   });
 
   it('change-password accepts complete envelopes and rewraps the same decryptable root only', async () => {
