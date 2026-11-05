@@ -39,14 +39,13 @@ stays.
 | `~/mc/runner/step/<name>/` | an old execution area | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
-| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean worktree whose HEAD is on a ref, and `DerivedData`, once the directory's ownership record says its session ended and nothing stands in or holds it (S); never the logs, patches or the directory |
+| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
 Rule P was removed with projects; rules version 8 reads no execution
-register, and adds S. Old logs, legacy scratch directories and transcripts are
-left to a person.
+register, and adds S. Old logs, patches and uncertain legacy scratch remain.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
@@ -130,31 +129,47 @@ and `memoro-cli.git-365b96c6`.
 
 **A — gate-cache entries.** `~/mc/gate-cache/<slug>/<key>/` is the gate's dependency cache (`prepare-cache.js`): a `node_modules` a green `npm ci` left, with a `meta.json` whose `at` a store sets and every hit renews. Under a slug a repository mc knows has, an entry no round has used for fourteen days (`PREPARE_CACHE_MAX_AGE_MS`) goes, judged by `meta.at` or, without a meta, by the directory's own mtime; a `<key>.tmp-<pid>` staging directory goes once it is a day old, since a store that is running renews its mtime. Removal is through `rmTree`. A round that is cloning an entry as it goes falls back to `npm ci`, which is why no lock is taken. An entry under a slug no repository knows is K's, and goes whole with its slug.
 
-**S — an ended runner session's scratch.** The runner makes
+**S — completed runner scratch replay worktrees.** The runner makes
 `~/mc/runner/scratch/<stem>/` for each session (`MC_SCRATCH`) and writes
 `.mc-scratch.json` into it: `{ schema: "mc-scratch", owner: "runner",
 runner_pid, session, kind, stem, started }`, and `ended` and `exit` when the
-session is over. Under it only two kinds of child are judged: a directory with
-a `.git` (a replay or probe worktree) and one named `DerivedData`. Each goes
-only when every one of these is proved, and stays with the first that is not:
+session is over. Under it only two kinds of immediate child are judged: a
+directory with a `.git` (a replay or probe worktree) and one named
+`DerivedData`. A worktree must be registered in its owning repository's Git
+worktree list. Each goes only when every applicable condition is proved, and
+stays with the first that is not:
 
-- the record reads, names `owner: "runner"`, a session and a start, and has
-  `ended`; a directory with no record is legacy and is kept, whatever its age;
+- with a record: it is a readable regular file, names `owner: "runner"`, a
+  session and a start, and has `ended`; invalid, unreadable, foreign or
+  unfinished records are never treated as absent;
+- only when the record is absent, a worktree (never marker-less `DerivedData`)
+  may use legacy proof: the exact scratch stem has both a regular
+  `runner/log/<stem>.json.err` and `<stem>.jsonl`, with canonical paths inside
+  the configured log root. `writeSessionLogs` writes `.json.err` only after
+  the session resolves. Missing, ambiguous or escaped receipts keep the tree;
 - `lsof` answers, and no process stands anywhere in the scratch directory;
+- for a marker-less worktree, no file is open anywhere in its scratch session
+  (marker-owned worktrees retain the existing candidate-open check);
 - for a worktree: `git status --porcelain --untracked-files=all` is empty, and
-  `git for-each-ref --contains HEAD` names a ref, so its commit stays reachable
-  after it goes; the repository that owns it is read from
-  `rev-parse --git-common-dir`;
+  the owning repository and exact HEAD are read from Git. A detached HEAD is
+  eligible: at apply, before removal, tidy retains that commit at
+  `refs/mc/retained-replay/<full-sha>` in the owning repository if no ref
+  already contains it. An existing different value or failed retention keeps
+  the tree; dry runs never create refs;
 - `lsof +D` on the candidate answers, and no process holds a file open in it.
 
 A worktree is removed with `git worktree remove` in its own repository,
-without `--force`, so a tree that changed since stays; `DerivedData` with
-`rmTree`. Logs, patches, the record and everything else stay. At the apply
-the target is re-judged on fresh facts, and refused when its record names
-another session or start than the list did, or when its realpath leaves the
-scratch root (a symlinked directory). Age and mtime are never asked. Until
-2026-11-05 the chore pass removed every scratch directory not touched for two
-days, logs and evidence with it; that sweep is gone, so nothing bypasses S.
+without `--force`, after apply rechecks registration, clean state, identity,
+HEAD, any legacy receipts, process/open-file state and retention. A changed
+tree, session directory identity (device/inode/birth time), worktree identity
+or receipt stays. `DerivedData` uses `rmTree`. Logs, patches,
+receipts, memory, other scratch children and the parent directory stay. Apply
+also requires the canonical target path to remain inside the scratch root and
+have its exact allowed shape. Age and pid absence alone are never proof. This
+rule runs in routine unattended tidy, including disk-pressure passes;
+marker-less `DerivedData` is never adopted. Before 2026-11-05 the chore pass
+removed every scratch directory not touched for two days, including evidence;
+that sweep is gone.
 
 ## Disk pressure
 
