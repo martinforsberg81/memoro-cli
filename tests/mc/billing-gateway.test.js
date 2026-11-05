@@ -71,7 +71,12 @@ test('expired and exactly-at-expiry grants are refused before HTTP upstream admi
 test('expired and exactly-at-expiry grants are refused before WebSocket upstream admission', async (t) => {
   for (const expiresAt of expiryBoundaries) {
     const websocket = await socketFixture(t, { expiresAt, now: () => NOW });
-    assert.equal(await websocket.connect().refused, 401);
+    const attempt = websocket.connect();
+    const admission = await boundedAny([
+      { target: attempt.socket, name: 'unexpected-response', project: (_req, res) => { res.resume(); return { kind: 'refused', status: res.statusCode }; } },
+      { target: attempt.socket, name: 'open', project: () => ({ kind: 'admitted' }) },
+    ]);
+    assert.deepEqual(admission, { kind: 'refused', status: 401 });
     assert.equal(websocket.provider.sockets.length, 0, 'expired upgrades never open an upstream socket');
     assert.deepEqual(websocket.provider.frames, [], 'no expired WebSocket frame reaches upstream');
   }
@@ -179,9 +184,9 @@ async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00
     return {
       socket,
       received,
-      opened: boundedEvent(socket, 'open'),
-      closed: boundedEvent(socket, 'close', (code, reason) => ({ code, reason: reason.toString() })),
-      refused: boundedEvent(socket, 'unexpected-response', (_req, res) => { res.resume(); return res.statusCode; }),
+      get opened() { return boundedEvent(socket, 'open'); },
+      get closed() { return boundedEvent(socket, 'close', (code, reason) => ({ code, reason: reason.toString() })); },
+      get refused() { return boundedEvent(socket, 'unexpected-response', (_req, res) => { res.resume(); return res.statusCode; }); },
     };
   };
   return { provider, providerEvents, connect, send };
