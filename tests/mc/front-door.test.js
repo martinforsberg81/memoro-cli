@@ -95,7 +95,8 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.equal(page.providerPriority, 'auto');
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
       assert.match(page.billing, /claude \? plan · codex \? plan/u);
