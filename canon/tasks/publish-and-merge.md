@@ -12,40 +12,34 @@ in it and say why in the reply.
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
-- Before a review or finish session authorizes direct goal landing with `mc
-  goal stage merge`, run `mc gate --whole-selection` on the final judged
-  worktree and require a completed GREEN verdict. Record the selected scope,
-  frozen base and judged revision, plus the command's log path, in the review
-  record. If it returns RUNNING, `mc gate --wait` observes that same request;
-  only its completed verdict counts. A red, timeout, interruption, missing
-  result or incomplete selection is not acceptance. Named criterion reruns and
-  ordinary gates with deferred files are not equivalent. Direct goal landing
-  deliberately runs no additional gate and does not validate base/head state.
-- It answers within 540 s with GREEN or RED, the failing lines and the log
-  path; give the Bash call `timeout: 600000`. Past the budget: `RUNNING`,
-  exit 3, and `mc gate --wait` reads the same log. Nothing goes in the
-  background to be polled. Red: fix, then run the `re-run:` line it printed.
-- `--full` is refused, and so is bypassing the lane with `npm test`,
-  `npm run ci` or a bare `node --test`: the whole suite is the merger's.
-  Dependencies are attached for you: never `npm ci` or a bare `npm install`;
-  in memoro `npm run deps:ensure` re-attaches the shared cache.
+- Before review or finish authorizes `mc goal stage merge`, run `mc gate
+  --whole-selection` on the final judged worktree; require completed GREEN.
+  Record scope, frozen base, revision and log. `mc gate --wait` must complete
+  the same RUNNING request. Named reruns, deferred green, red, timeout,
+  interruption or incomplete results are not acceptance. Direct landing adds no
+  gate or base/head validation.
+- It answers within 540 s with GREEN/RED, failing lines and log path; give the
+  Bash call `timeout: 600000`. Past budget: `RUNNING`, exit 3; `mc gate --wait`
+  reads the same log. Do not poll or run in the background. Red: fix, then run
+  its `re-run:` line.
+- `--full` and bypasses (`npm test`, `npm run ci`, bare `node --test`) are
+  refused: the whole suite is the merger's. Never run `npm ci`/`npm install`;
+  memoro re-attaches its cache with `npm run deps:ensure`.
 - Never lower a threshold, or skip, weaken or delete a test to turn it green.
 
 ## `mc publish` — push and open the pull request
-- Refuses on `main`, on a dirty tree, and when `origin`'s branch has moved; it
-  never forces. Then `git push -u` and `gh pr create`, or, for a branch with an
-  open pull request, edits only the fields given (`--title`, `--body`,
-  `--body-file`, `--base`).
+- Refuses on `main`, a dirty tree or moved origin; never forces. Then pushes and
+  opens a PR, or edits only requested fields (`--title`, `--body`, `--body-file`,
+  `--base`) on an open one.
 - Then it queues the pull request for the merger in the same call.
   `--no-merge` pushes and opens and queues nothing; so does `--json`.
-- The body says what changed, why, the user impact, the root cause of a fix,
-  what was run and what was not, known gaps, and each new or changed test with
-  its time from your `mc gate` (`test <file> › <name> — 0.xyz s`). Never claim
-  a run you did not make: "suite not run" is an acceptable sentence.
+- The body says what changed, why, impact, root cause, what did and did not run,
+  known gaps and each changed test's `mc gate` timing (`test <file> › <name> —
+  0.xyz s`). Never claim a run you did not make; "suite not run" is acceptable.
 
 ## `mc merge <repo> <pr>` — the one door to main
-`mc goal stage merge` is the session's final decision: merge every registered
-PR directly, without gate, criteria or head checks; done after all land.
+`mc goal stage merge` directly merges every registered PR, without gate,
+criteria or head checks; the goal is done after all land.
 Conflicts go to a session. The rounds below apply to ordinary PR jobs.
 
 - Queues the pull request and returns. The merger takes the queue one at a
@@ -57,10 +51,9 @@ Conflicts go to a session. The rounds below apply to ordinary PR jobs.
   not atomic: a red lands a prefix and stops.
 - Do not poll: no loop, no `sleep`, no `mc merge watch` unless asked. One
   `gh pr view --json …` snapshot is the state; an empty check list is normal.
-- A red's files are in `~/mc/runner/merge-red/<repo>-<pr>.txt`; rerun them
-  with `mc gate` before fixing. A round that hit its ceiling left the
-  unfinished files unmeasured, not green. Stopped for a reason not the PR's
-  (main moved, a lease): `mc repo who <repo>`, then queue it again.
+- A red's files are in `~/mc/runner/merge-red/<repo>-<pr>.txt`; rerun with
+  `mc gate` before fixing. A ceiling leaves unfinished files unmeasured. For a
+  non-PR stop (main moved, a lease), run `mc repo who <repo>` and requeue.
 - `--admin` squashes with GitHub's admin override and no gate round: for a
   change the round cannot measure, after you measured what it reaches; the
   PR says what ran. The hook refuses it headless. `gh pr merge` skips mc's
