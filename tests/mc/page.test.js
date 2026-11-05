@@ -2096,7 +2096,7 @@ describe('the palette', () => {
   it('gives a session kind one colour wherever a kind is printed', () => {
     // The runner's three kinds, `step` as the build it was before, and the
     // foreground verbs a lane file could name.
-    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['plan', 'cyan'], ['triage', 'blue'], ['brief', 'cyan']]) {
+    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['plan', 'blue'], ['triage', 'blue'], ['brief', 'cyan']]) {
       const data = pageData({
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
@@ -2109,11 +2109,9 @@ describe('the palette', () => {
         }),
       });
       const lines = paintedPage(data);
-      // The lane row: the mark, then the kind as its first word — what it
-      // works on and the repository are the terminal's own text, and have no
-      // run of their own.
-      const now = signature(rowWith(lines, `${kind === 'step' ? 'BUILD' : kind.toUpperCase()}`)).split(' ');
-      assert.equal(now[1], tone, `activity says ${kind} in ${now[1]}`);
+      const label = kind === 'step' ? 'BUILD' : kind.toUpperCase();
+      const code = { green: 32, magenta: 35, blue: 34, cyan: 36 }[tone];
+      assert.ok(rowWith(lines, label).includes(`\x1b[${code}m${label}\x1b[0m`), `activity says ${kind} in ${tone}`);
     }
   });
 

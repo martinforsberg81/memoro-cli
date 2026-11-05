@@ -58,8 +58,11 @@ history folding; a number opens that goal's detail.
 Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
-used. A check-in and its yellow clock remain visible without expansion;
-repository, advisor, pid and zero check-ins are expanded details. A session
+used. A tight rounded frame encloses just this live session data, with green
+borders for build, blue for plan and magenta for review. Long activity wraps
+inside the frame within the terminal width. A check-in and its yellow clock
+remain visible without expansion; repository, advisor, pid and zero check-ins
+are expanded details. A session
 with no matching goal appears under UNASSIGNED ACTIVITY, including its name
 and PR references, so removing SESSIONS cannot hide it. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
@@ -206,7 +209,7 @@ that every word has a row on today's page.
 | `triage` | blue |
 | `manager` | cyan |
 | `brief` | cyan |
-| `plan` | cyan |
+| `plan` | blue |
 | `gate` | green |
 | `wait` | grey |
 | `red` | red |

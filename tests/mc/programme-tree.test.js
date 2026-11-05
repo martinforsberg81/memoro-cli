@@ -80,12 +80,29 @@ describe('PROGRAMMES phase tree', () => {
     const data = fixture({ currents: [current('parallel-a', 'build'), current('far-future', 'review'), current('missing-goal', 'plan')] });
     for (const columns of [60, 80, 120, 160]) {
       const lines = draw(data, { columns });
+      const painted = renderPageLines(data, { columns, colour: true, now: NOW });
+      assert.deepEqual(painted.map(plain), lines);
+      for (const [kind, code] of [['BUILD', 32], ['REVIEW', 35], ['PLAN', 34]]) {
+        const at = lines.findIndex((line) => line.includes(`● · ${kind}`));
+        assert.ok(painted[at - 1].includes(`\u001b[${code}m╭`), `${kind} top border`);
+        const bottom = lines.findIndex((line, index) => index > at && line.trimStart().startsWith('╰'));
+        assert.ok(bottom > at, `${kind} bottom border`);
+        assert.ok(painted[bottom].includes(`\u001b[${code}m╰`), `${kind} bottom border colour`);
+        for (let row = at; row < bottom; row++) {
+          assert.ok(painted[row].includes(`\u001b[${code}m│`), `${kind} side border colour`);
+          assert.equal(width(lines[row]), width(lines[at - 1]), `${kind} wrapped frame width`);
+        }
+      }
       assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
       for (const title of ['Title parallel-a', 'Title far-future']) {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
-        assert.match(lines[at + 2], /● · (BUILD|REVIEW) · 12 min · codex · sol/u);
-        assert.match(lines[at + 3], /1 check-in/u);
+        assert.match(lines[at + 2], /^ {10}╭─+╮$/u);
+        assert.match(lines[at + 3], /^ {10}│ ● · (BUILD|REVIEW) · 12 min · codex · sol │$/u);
+        assert.match(lines[at + 4], /^ {10}╰─+╯$/u);
+        assert.equal(width(lines[at + 2]), width(lines[at + 3]), 'frame hugs the session');
+        assert.equal(width(lines[at + 3]), width(lines[at + 4]));
+        assert.match(lines[at + 5], /1 check-in/u);
       }
       const unmatched = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
       assert.ok(unmatched > 0);
