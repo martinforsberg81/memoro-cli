@@ -20,9 +20,10 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { memoroFetch } from '../../../src/lib/api.js';
 import { run as vaultRunRaw } from '../../../src/cli/vault.js';
 import { PBKDF2_ITERATIONS, bytesToBase64, deriveVaultKeys, encryptSecretPayload } from '../../../src/vault/engine/client-crypto.js';
-import { mintCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
+import { decryptEnvelopeSecret, mintCustodyRoot, unwrapCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
 
 const PW = 'this-is-a-long-test-master-password';
@@ -86,6 +87,7 @@ function makeMemCacheDeps() {
     async setSecret(account, value) { store.set(account, value); return 'mem'; },
     async deleteSecret(account) { store.delete(account); return 'mem'; },
     now: () => Date.now(),
+    snapshot: () => [...store.entries()],
   };
 }
 
@@ -116,13 +118,18 @@ async function portalWithCustody(server, portal) {
   const config = server.inspect().config;
   const { vaultKey } = await keys.deriveVaultKeys(PW, config.salt, config.iterations);
   const custody = await mintCustodyRoot(vaultKey);
+  let current = custody;
   return {
     ...portal,
     memoroFetch: async (apiUrl, path, opts) => {
       const result = await portal.memoroFetch(apiUrl, path, opts);
-      return path === '/api/vault/status'
-        ? { ...result, vault: { ...result.vault, wrapped_crk: custody.wrapped_crk, crk_iv: custody.crk_iv } }
-        : result;
+      if (path === '/api/vault/change-password' && result?.ok) {
+        current = { wrapped_crk: opts.body.wrappedCrk, crk_iv: opts.body.crkIv };
+      }
+      const withCustody = (info) => ({ ...info, wrapped_crk: current.wrapped_crk, crk_iv: current.crk_iv });
+      if (path === '/api/vault/status') return { ...result, vault: withCustody(result.vault) };
+      if (path === '/api/vault/unlock') return withCustody(result);
+      return result;
     },
   };
 }
@@ -773,111 +780,199 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(server.inspect().secrets.length, 2);
   });
 
-  it('change-password rotates the auth hash and re-encrypts all secrets', async () => {
-    // Initial setup at PW
+  const passwordPrompt = (current = PW) => (prompt) => Promise.resolve(
+    prompt.toLowerCase().startsWith('current') ? current : NEW_PW,
+  );
+
+  it('change-password refuses legacy rows before auth, ciphertext or cache mutation', async () => {
     await vaultRun(['setup', '--json'], { portal });
-    // Store a secret (the value will be PW because of env-passphrase)
-    await vaultRun(['set', 'k1', '--no-confirm', '--json'], { portal });
     cap.restore(); cap = captureConsole();
+    await vaultRun(['unlock', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'envelope', '--no-confirm', '--json'], { portal: custodyPortal });
+    await vaultRun(['set', 'legacy', '--no-confirm', '--json'], { portal });
+    cap.restore(); cap = captureConsole();
+    const before = server.inspect();
+    before.config = { ...before.config };
+    const cpCallsBefore = server.calls.filter((c) => c.path === '/api/vault/change-password').length;
+    const cacheBefore = activeCacheDeps.snapshot();
+    const callsBefore = server.calls.length;
+    assert.notEqual(cacheBefore.length, 0, 'the refusal case starts with an existing cached key');
+    const rc = await vaultRun(['change-password', '--json'], { portal, promptStub: passwordPrompt() });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    const after = server.inspect();
+    assert.equal(after.config.auth_hash, before.config.auth_hash);
+    assert.equal(after.config.salt, before.config.salt);
+    assert.deepEqual(after.secrets, before.secrets);
+    assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore);
+    assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method)), []);
+    assert.equal(rc, 1);
+    assert.equal(out.code, 'VAULT_LEGACY_SECRETS_REMAIN');
+    assert.equal(out.changed_password, false);
+    assert.match(out.error, /mc vault migrate.*separately/);
+  });
 
-    // For change-password we need three distinct prompt answers.
-    // MC_VAULT_PASSPHRASE returns the same value for all prompts, so
-    // we use the promptStub opts hook to script them.
+  it('change-password accepts complete envelopes and rewraps the same decryptable root only', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'enveloped-one', '--no-confirm', '--json'], { portal: custodyPortal });
+    await vaultRun(['set', 'enveloped-two', '--no-confirm', '--json'], { portal: custodyPortal });
+    cap.restore(); cap = captureConsole();
+    const before = server.inspect();
+    before.config = { ...before.config };
+    const cpCallsBefore = server.calls.filter((c) => c.path === '/api/vault/change-password').length;
+    const beforeStatus = await custodyPortal.memoroFetch('x', '/api/vault/status');
+    const rowsBefore = before.secrets.map(({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv }) =>
+      ({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv }));
     delete process.env.MC_VAULT_PASSPHRASE;
-    const promptStub = (prompt) => {
-      if (prompt.toLowerCase().startsWith('current')) return Promise.resolve(PW);
-      if (prompt.toLowerCase().startsWith('new')) return Promise.resolve(NEW_PW);
-      if (prompt.toLowerCase().startsWith('confirm')) return Promise.resolve(NEW_PW);
-      return Promise.resolve(PW);
-    };
-    const rc = await vaultRun(['change-password', '--json'], { portal, promptStub });
-    cap.restore();
-    process.env.MC_VAULT_PASSPHRASE = PW; // restore for any teardown
-    assert.equal(rc, 0, `change-password failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const badCache = { ...activeCacheDeps, setSecret: async () => { throw new Error('keychain unavailable'); } };
+    const rc = await vaultRun(['change-password', '--json'], { portal: custodyPortal, cacheDeps: badCache, promptStub: passwordPrompt() });
+    cap.restore(); process.env.MC_VAULT_PASSPHRASE = PW;
+    assert.equal(rc, 0, cap.out.join('\n'));
+    const success = JSON.parse(cap.out.join('\n'));
+    assert.equal(success.changed_password, true);
+    assert.equal(success.cache_refreshed, false);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore + 1);
+    assert.equal(server.calls.filter((c) => c.method === 'PUT').length, 0);
+    const after = server.inspect();
+    assert.notEqual(after.config.auth_hash, before.config.auth_hash);
+    assert.notEqual(after.config.salt, before.config.salt);
+    assert.deepEqual(after.secrets.map(({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv }) =>
+      ({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv })), rowsBefore);
+    const { vaultKey: newKey } = await keys.deriveVaultKeys(NEW_PW, after.config.salt, after.config.iterations);
+    const newStatus = await custodyPortal.memoroFetch('x', '/api/vault/status');
+    const newRoot = await unwrapCustodyRoot(newKey, newStatus.vault.wrapped_crk, newStatus.vault.crk_iv);
+    const clear = await decryptEnvelopeSecret(newRoot, after.secrets[0]);
+    assert.equal(clear.label, 'enveloped-two');
+    assert.ok(clear.data);
+    await assert.rejects(() => unwrapCustodyRoot(newKey, beforeStatus.vault.wrapped_crk, beforeStatus.vault.crk_iv));
 
-    // Verify: a new unlock with PW (old) must fail; unlock with NEW_PW must succeed
     server.forceLock();
-    process.env.MC_VAULT_PASSPHRASE = PW;
     cap = captureConsole();
-    let unlockOldRc = await vaultRun(['unlock', '--json'], { portal });
+    const oldRc = await vaultRun(['unlock', '--json'], { portal: custodyPortal, promptStub: () => Promise.resolve(PW) });
     cap.restore();
-    assert.equal(unlockOldRc, 1, 'unlock with old password should fail after change-password');
-
+    assert.equal(oldRc, 1);
     server.forceLock();
-    process.env.MC_VAULT_PASSPHRASE = NEW_PW;
     cap = captureConsole();
-    const unlockNewRc = await vaultRun(['unlock', '--json'], { portal });
+    const newRc = await vaultRun(['unlock', '--json'], { portal: custodyPortal, promptStub: () => Promise.resolve(NEW_PW) });
     cap.restore();
-    assert.equal(unlockNewRc, 0, 'unlock with new password must succeed');
-
-    // And the stored secret must still be readable under the new password
-    cap = captureConsole();
-    const listRc = await vaultRun(['list', '--json'], { portal });
-    cap.restore();
-    assert.equal(listRc, 0);
-    const listJson = JSON.parse(cap.out.join('\n'));
-    assert.equal(listJson.secrets.length, 1);
-    assert.equal(listJson.secrets[0].label, 'k1', 'secret label must survive re-encryption');
-    const update = server.calls.find((call) => call.method === 'PUT');
-    assert.equal(update.body.expectedRevision, 1);
-
+    assert.equal(newRc, 0);
     process.env.MC_VAULT_PASSPHRASE = PW;
   });
 
-  it('change-password stops at a revision conflict and reports writes already landed', async () => {
+  it('change-password refuses an empty vault without an existing custody root', async () => {
     await vaultRun(['setup', '--json'], { portal });
-    await vaultRun(['set', 'k1', '--no-confirm', '--json'], { portal });
-    await vaultRun(['set', 'k2', '--no-confirm', '--json'], { portal });
-    server.forceNextWriteConflict();
+    await vaultRun(['unlock', '--json'], { portal });
     cap.restore(); cap = captureConsole();
-    delete process.env.MC_VAULT_PASSPHRASE;
-    const promptStub = (prompt) => Promise.resolve(
-      prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
-    );
-    const rc = await vaultRun(['change-password', '--json'], { portal, promptStub });
+    const before = structuredClone(server.inspect());
+    const cacheBefore = activeCacheDeps.snapshot();
+    assert.notEqual(cacheBefore.length, 0);
+    const callsBefore = server.calls.length;
+    const rc = await vaultRun(['change-password', '--json'], { portal, promptStub: passwordPrompt() });
     cap.restore();
-    process.env.MC_VAULT_PASSPHRASE = PW;
     const out = JSON.parse(cap.out.join('\n'));
     assert.equal(rc, 1);
-    assert.match(out.error, /revision conflict/);
-    assert.match(out.error, /the rest were not attempted/);
-    assert.equal(out.conflict, true);
-    assert.equal(out.re_encrypted, 0);
-    assert.deepEqual(out.not_attempted, ['k1']);
-    const updates = server.calls.filter((call) => call.method === 'PUT');
-    assert.equal(updates.length, 1, 'no following row is retried or attempted after conflict');
-    assert.equal(updates[0].body.expectedRevision, 1);
+    assert.equal(out.code, 'VAULT_CUSTODY_ROOT_MISSING');
+    assert.equal(out.changed_password, false);
+    assert.equal(server.inspect().config.auth_hash, before.config.auth_hash);
+    assert.equal(server.inspect().config.salt, before.config.salt);
+    assert.deepEqual(server.inspect().secrets, before.secrets);
+    assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+    assert.deepEqual(server.calls.slice(callsBefore).filter((c) =>
+      c.path === '/api/vault/change-password' || (c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method))), []);
   });
 
-  it('change-password names what landed and what it left when a later row conflicts', async () => {
+  it('change-password rewraps an existing root for a valid empty snapshot', async () => {
     await vaultRun(['setup', '--json'], { portal });
-    for (const label of ['k1', 'k2', 'k3']) {
-      await vaultRun(['set', label, '--no-confirm', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    cap.restore(); cap = captureConsole();
+    const before = server.inspect();
+    before.config = { ...before.config };
+    const cpCallsBefore = server.calls.filter((c) => c.path === '/api/vault/change-password').length;
+    const rc = await vaultRun(['change-password', '--json'], { portal: custodyPortal, promptStub: passwordPrompt() });
+    cap.restore();
+    assert.equal(rc, 0, cap.out.join('\n'));
+    assert.equal(server.inspect().secrets.length, 0);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore + 1);
+    const status = await custodyPortal.memoroFetch('x', '/api/vault/status');
+    const { vaultKey } = await keys.deriveVaultKeys(NEW_PW, server.inspect().config.salt, server.inspect().config.iterations);
+    await unwrapCustodyRoot(vaultKey, status.vault.wrapped_crk, status.vault.crk_iv);
+    assert.notEqual(server.inspect().config.salt, before.config.salt);
+  });
+
+  it('change-password refuses an existing but unopenable custody root before rotation', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['unlock', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'preserved-envelope', '--no-confirm', '--json'], { portal: custodyPortal });
+    const brokenPortal = { ...custodyPortal, memoroFetch: async (url, path, opts) => {
+      const result = await custodyPortal.memoroFetch(url, path, opts);
+      if (path === '/api/vault/status') return { ...result, vault: { ...result.vault, wrapped_crk: 'not-a-real-wrap' } };
+      if (path === '/api/vault/unlock') return { ...result, wrapped_crk: 'not-a-real-wrap' };
+      return result;
+    } };
+    cap.restore(); cap = captureConsole();
+    const before = structuredClone(server.inspect());
+    const cacheBefore = activeCacheDeps.snapshot();
+    const callsBefore = server.calls.length;
+    const rc = await vaultRun(['change-password', '--json'], { portal: brokenPortal, promptStub: passwordPrompt() });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.equal(out.code, 'VAULT_CUSTODY_ROOT_UNOPENABLE');
+    assert.equal(server.inspect().config.auth_hash, before.config.auth_hash);
+    assert.equal(server.inspect().config.salt, before.config.salt);
+    assert.deepEqual(server.inspect().secrets, before.secrets);
+    assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, 1);
+    assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method)), []);
+  });
+
+  it('change-password refuses missing and malformed list snapshots before rotation', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['unlock', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'preserved-envelope', '--no-confirm', '--json'], { portal: custodyPortal });
+    const complete = { id: 'row-1', schema_version: 2, wrapped_dek: 'wrap', dek_iv: 'iv', class: 'secret', encrypted_label: 'x', label_iv: 'x', encrypted_data: 'x', iv: 'x' };
+    const badRows = [
+      null, {},
+      { ...complete, schema_version: 1 },
+      { ...complete, wrapped_dek: '' },
+      { ...complete, dek_iv: '' },
+      { ...complete, class: 'unknown' },
+      { ...complete, iv: '' },
+      { ...complete, encrypted_data: '' },
+    ];
+    const badSnapshots = badRows.map((row) => ({ ok: true, secrets: [row] }));
+    for (const result of [null, new Error('list transport failed'), { ok: false, secrets: [] }, { ok: 'true', secrets: [] }, { ok: true }, { ok: true, secrets: null }, { ok: true, secrets: {} }, ...badSnapshots]) {
+      const brokenPortal = { ...custodyPortal, memoroFetch: async (url, path, opts) => {
+        if (path === '/api/vault/secrets' && (!opts?.method || opts.method === 'GET')) {
+          if (result instanceof Error) throw result;
+          return result;
+        }
+        return custodyPortal.memoroFetch(url, path, opts);
+      } };
+      cap.restore(); cap = captureConsole();
+      const before = structuredClone(server.inspect());
+      const cacheBefore = activeCacheDeps.snapshot();
+      const callsBefore = server.calls.length;
+      const cpCallsBefore = server.calls.filter((c) => c.path === '/api/vault/change-password').length;
+      const rc = await vaultRun(['change-password', '--json'], { portal: brokenPortal, promptStub: passwordPrompt() });
+      cap.restore();
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(rc, 1);
+      assert.equal(out.changed_password, false);
+      assert.equal(server.inspect().config.auth_hash, before.config.auth_hash);
+      assert.equal(server.inspect().config.salt, before.config.salt);
+      assert.deepEqual(server.inspect().secrets, before.secrets);
+      assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+      assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore);
+      assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method)), []);
     }
-    const [, second] = server.inspect().secrets;
-    const bumpingPortal = {
-      ...portal,
-      memoroFetch: async (apiUrl, path, opts) => {
-        const result = await portal.memoroFetch(apiUrl, path, opts);
-        if (opts?.method === 'PUT') server.bumpRevision(second.id);
-        return result;
-      },
-    };
-    cap.restore(); cap = captureConsole();
-    delete process.env.MC_VAULT_PASSPHRASE;
-    const promptStub = (prompt) => Promise.resolve(
-      prompt.toLowerCase().startsWith('current') ? PW : NEW_PW,
-    );
-    const rc = await vaultRun(['change-password', '--json'], { portal: bumpingPortal, promptStub });
-    cap.restore();
-    process.env.MC_VAULT_PASSPHRASE = PW;
-    const out = JSON.parse(cap.out.join('\n'));
-    assert.equal(rc, 1);
-    assert.equal(out.re_encrypted, 1);
-    assert.deepEqual(out.not_attempted, ['k1']);
-    assert.match(out.error, /k2 changed since it was read/);
-    assert.match(out.error, /Not re-encrypted: k2, k1/);
-    assert.equal(server.calls.filter((call) => call.method === 'PUT').length, 2);
   });
 
   it('change-password refuses when current password is wrong', async () => {
@@ -893,6 +988,84 @@ describe('mc vault — full lifecycle (in-process)', () => {
     cap.restore();
     process.env.MC_VAULT_PASSPHRASE = PW;
     assert.equal(rc, 1);
+  });
+
+  it('change-password preserves the cache on explicit safe server refusal', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['unlock', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    const refusingPortal = { ...custodyPortal, memoroFetch: async (url, path, opts) => {
+      if (path === '/api/vault/change-password') {
+        return memoroFetch(url, path, { curlFallback: true, ...opts,
+          fetchImpl: async () => new Response(JSON.stringify({ ok: false, code: 'VAULT_LEGACY_SECRETS_REMAIN', error: 'legacy rows remain' }), { status: 409 }),
+          curlImpl: async () => { assert.fail('an explicit HTTP refusal must not replay'); },
+        });
+      }
+      return custodyPortal.memoroFetch(url, path, opts);
+    } };
+    const cacheBefore = activeCacheDeps.snapshot();
+    assert.notEqual(cacheBefore.length, 0);
+    const cpCallsBefore = server.calls.filter((c) => c.path === '/api/vault/change-password').length;
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['change-password', '--json'], { portal: refusingPortal, promptStub: passwordPrompt() });
+    cap.restore();
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(rc, 1);
+    assert.equal(out.code, 'VAULT_LEGACY_SECRETS_REMAIN');
+    assert.equal(out.changed_password, false);
+    assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/change-password').length, cpCallsBefore);
+  });
+
+  it('change-password reports unknown without replay through the real transport after ambiguous commits', async () => {
+    // Use the real API wrapper, parser and fallback decision; only external
+    // fetch/curl are replaced. A replay would refuse with a stale verifier.
+    for (const confirmation of ['fetch-loss', '', 'not-json', '{}', '{"ok":"true"}']) {
+      server = createMockVaultServer();
+      portal = makeTestPortal(server);
+      activeCacheDeps = makeMemCacheDeps();
+      cap.restore(); cap = captureConsole();
+      await vaultRun(['setup', '--json'], { portal });
+      await vaultRun(['unlock', '--json'], { portal });
+      const custodyPortal = await portalWithCustody(server, portal);
+      await vaultRun(['set', 'preserved-envelope', '--no-confirm', '--json'], { portal: custodyPortal });
+      let fetchCalls = 0;
+      let curlCalls = 0;
+      const uncertainPortal = { ...custodyPortal, memoroFetch: async (url, path, opts) => {
+        if (path !== '/api/vault/change-password') return custodyPortal.memoroFetch(url, path, opts);
+        return memoroFetch(url, path, { curlFallback: true, ...opts,
+          fetchImpl: async (_url, request) => {
+            fetchCalls++;
+            await custodyPortal.memoroFetch(url, path, { method: request.method, body: JSON.parse(request.body) });
+            if (confirmation === 'fetch-loss') throw new Error('response lost after commit');
+            return new Response(confirmation, { status: 200 });
+          },
+          curlImpl: async () => {
+            curlCalls++;
+            return { status: 409, text: JSON.stringify({ ok: false, code: 'VAULT_CONFIG_CONFLICT', error: 'stale verifier on replay' }) };
+          },
+        });
+      } };
+      const before = structuredClone(server.inspect());
+      const callsBefore = server.calls.length;
+      assert.notEqual(activeCacheDeps.snapshot().length, 0);
+      cap.restore(); cap = captureConsole();
+      const rc = await vaultRun(['change-password', '--json'], { portal: uncertainPortal, promptStub: passwordPrompt() });
+      cap.restore();
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(rc, 1, confirmation);
+      assert.equal(out.changed_password, 'unknown', confirmation);
+      assert.equal(out.code, 'VAULT_PASSWORD_CHANGE_OUTCOME_UNKNOWN');
+      assert.match(out.error, /check by unlocking/);
+      assert.notEqual(server.inspect().config.auth_hash, before.config.auth_hash);
+      assert.deepEqual(server.inspect().secrets, before.secrets);
+      assert.deepEqual(activeCacheDeps.snapshot(), []);
+      assert.equal(fetchCalls, 1);
+      assert.equal(curlCalls, 0, 'a lost confirmation must not replay the mutation');
+      assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path === '/api/vault/change-password').map((c) => c.method), ['POST']);
+      assert.deepEqual(server.calls.slice(callsBefore).filter((c) => c.path.startsWith('/api/vault/secrets') && ['POST', 'PUT', 'DELETE'].includes(c.method)), []);
+    }
   });
 
   it('migrate sends the revision from the legacy row it read', async () => {

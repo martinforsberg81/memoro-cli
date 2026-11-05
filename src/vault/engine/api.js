@@ -165,6 +165,9 @@ export async function deleteSecret(portal, id, { expectedRevision } = {}) {
 export async function changePassword(portal, { currentAuthHash, newAuthHash, newSalt, wrappedCrk = null, crkIv = null }) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, '/api/vault/change-password', {
+    // Non-idempotent: a lost fetch response may follow a committed rotation.
+    // Never replay it via curl, even if the default transport enables fallback.
+    curlFallback: false,
     token: p.token, method: 'POST',
     body: {
       currentAuthHash, newAuthHash, newSalt,

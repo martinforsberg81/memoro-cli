@@ -107,7 +107,7 @@ const VERBS = {
   hydrate:           { handler: cmdHydrate,          help: 'Sign this device in from custody (claude | codex) [--force]' },
   devices:           { handler: cmdDevices,          help: 'List devices holding a durable unlock' },
   'revoke-device':   { handler: cmdRevokeDevice,     help: 'Refuse a device\'s future unlocks' },
-  'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-wraps the custody root)' },
+  'change-password': { handler: cmdChangePassword,   help: 'Change password for migrated custody-envelope secrets; run migrate separately first' },
   recovery:          { handler: cmdRecovery,         help: 'Create a recovery code (shown once) for a lost password' },
   recover:           { handler: cmdRecover,          help: 'Reset the master password with your recovery code' },
   'destroy-forgotten': { handler: cmdDestroyForgotten, help: 'Wipe the vault when the master password is lost (requires fresh login)' },
@@ -1246,145 +1246,99 @@ async function cmdChangePassword(argv, opts = {}) {
     return 1;
   }
 
-  // CRITICAL: changing the master password CHANGES the vault key,
-  // because the vault key is the first 256 bits of the PBKDF2 output
-  // (and the auth hash is the last 256). Different password ⇒ different
-  // PBKDF2 output ⇒ different vault key. Every previously stored secret
-  // was encrypted with the OLD vault key and would be unreadable under
-  // the new key.
-  //
-  // The server's change-password route only updates the auth hash + salt;
-  // it does NOT re-encrypt blobs. So the client must:
-  //
-  //   1. derive the NEW vault key + auth hash client-side
-  //   2. pull all secrets
-  //   3. decrypt-with-old + re-encrypt-with-new into a staging list
-  //   4. commit the auth-hash rotation via /change-password
-  //   5. push the re-encrypted blobs via /secrets/:id PUT
-  //
-  // If step 3 fails partway, we never call /change-password — the vault
-  // stays usable under the old password. If step 5 fails, we've already
-  // rotated the auth hash, so we keep going (best effort) and surface
-  // which secrets need manual re-set. A revision conflict in step 5 stops
-  // the loop instead, and the same report names the entries it left. This
-  // is a narrow window but documented in the error message.
-
   const newSaltBytes = new Uint8Array(32);
   keyDeps(opts).getRandomValues(newSaltBytes);
   const newSaltB64 = bytesToBase64(newSaltBytes);
   const { authHash: newAuthHash, vaultKey: newVaultKey, vaultKeyBytes: newVaultKeyBytes } =
     await keyDeps(opts).deriveVaultKeys(newPassword, newSaltB64, config.iterations);
 
-  // Step 2 + 3: pull, decrypt + re-encrypt to an in-memory staging list.
-  const listRes = await VaultApi.listSecrets(portal);
-  const wire = listRes?.secrets || [];
-  // Envelope rows are untouched by rotation: their DEKs are wrapped by the
-  // CRK, and only the CRK's passphrase wrap changes — that is the payoff of
-  // the envelope (S4). Legacy rows still re-encrypt under the new key.
-  const restaged = [];
-  for (const s of wire) {
-    if (isEnvelopeSecret(s)) continue;
-    try {
-      const { label, data } = await decryptSecretPayload(vaultKey, s);
-      const enc = await encryptSecretPayload(newVaultKey, label, data);
-      restaged.push({ id: s.id, label, enc, expectedRevision: s.row_revision });
-    } catch (err) {
-      emit(flags.json, {
-        ok: false,
-        error: `re-encrypt failed for secret ${s.id} (${err.message}). Aborting — vault is unchanged.`,
-      });
-      return 1;
-    }
-  }
-
-  // Re-wrap the CRK under the new passphrase-derived key, applied by the
-  // server atomically with the auth-hash change. Unwrap fails closed: a
-  // rotation must never orphan the envelope.
-  let newCrkWrap = null;
-  if (unlock.wrapped_crk && unlock.crk_iv) {
-    try {
-      const crkBytes = await unwrapCustodyRootBytes(vaultKey, unlock.wrapped_crk, unlock.crk_iv);
-      const { wrapped, iv } = await wrapCustodyRootBytes(newVaultKey, crkBytes);
-      crkBytes.fill(0);
-      newCrkWrap = { wrappedCrk: wrapped, crkIv: iv };
-    } catch {
-      emit(flags.json, {
-        ok: false,
-        error: 'could not re-wrap the custody root key with the current password. Aborting — vault is unchanged.',
-      });
-      return 1;
-    }
-  }
-
-  // Step 4: commit auth-hash rotation. Past this point the OLD password
-  // no longer works.
-  const cp = await VaultApi.changePassword(portal, {
-    currentAuthHash, newAuthHash, newSalt: newSaltB64,
-    ...(newCrkWrap || {}),
-  });
-  if (!cp?.ok) {
-    emit(flags.json, { ok: false, error: cp?.error || 'change-password failed' });
-    return 1;
-  }
-
-  // Re-unlock with the new auth hash before mutating secrets — the
-  // change-password call may have invalidated the session.
-  await VaultApi.unlockVault(portal, { authHash: newAuthHash }).catch(() => {});
-  // Refresh this device's durable entry — the old cached key is now stale.
-  {
-    const prior = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
-    await cacheVaultKey(newVaultKeyBytes, {
-      authHash: newAuthHash, durable: true,
-      deviceId: prior?.deviceId || globalThis.crypto.randomUUID(),
-      deps: opts.cacheDeps,
-    }).catch(() => {});
-  }
-
-  // Step 5: push re-encrypted blobs.
-  const failures = [];
-  let landed = 0;
-  for (const item of restaged) {
-    const updRes = await VaultApi.updateSecret(portal, item.id, {
-      encryptedLabel: item.enc.encryptedLabel,
-      encryptedData: item.enc.encryptedData,
-      iv: item.enc.iv,
-      labelIv: item.enc.labelIv,
-      ...(item.expectedRevision === undefined ? {} : { expectedRevision: item.expectedRevision }),
-    }).catch((err) => ({ ok: false, error: err.message, conflict: isSecretRevisionConflict(err) }));
-    if (!updRes?.ok) {
-      failures.push({ id: item.id, label: item.label, error: updRes?.error, conflict: updRes?.conflict });
-      if (updRes?.conflict) break;
-    } else {
-      landed += 1;
-    }
-  }
-
-  // §12f: any cached vault-key is now stale (the password change
-  // rotated the key). Refresh the cache with the NEW key so the next
-  // verb runs without re-prompting. Best-effort: cache failure here
-  // just means the next verb prompts.
-  await cacheVaultKey(newVaultKeyBytes, { deps: opts.cacheDeps });
-
-  if (failures.length) {
-    const conflict = failures.find((failure) => failure.conflict);
-    const notAttempted = restaged.slice(landed + failures.length).map((item) => item.label);
-    const notEncrypted = [...failures.map((failure) => failure.label), ...notAttempted];
+  // The CLI check is a fail-closed aid, not a concurrency barrier. The
+  // companion server's password-change-envelope-barrier owns that boundary.
+  let listRes;
+  try { listRes = await VaultApi.listSecrets(portal); } catch { listRes = null; }
+  const rows = listRes?.ok === true && Array.isArray(listRes.secrets) ? listRes.secrets : null;
+  const invalidRow = (row) => !row || typeof row !== 'object'
+    || typeof row.id !== 'string' || !row.id.trim()
+    || row.schema_version !== 2
+    || typeof row.wrapped_dek !== 'string' || !row.wrapped_dek.trim()
+    || typeof row.dek_iv !== 'string' || !row.dek_iv.trim()
+    || !['secret', 'tool-auth'].includes(row.class)
+    || !['encrypted_label', 'label_iv', 'encrypted_data', 'iv'].every((field) =>
+      typeof row[field] === 'string' && row[field].trim());
+  if (!rows || rows.some(invalidRow)) {
+    const legacy = rows?.some((row) => !row || row.schema_version !== 2);
     emit(flags.json, {
-      ok: false,
-      changed_password: true,
-      failures,
-      ...(conflict ? { conflict: true, re_encrypted: landed, not_attempted: notAttempted } : {}),
-      error: conflict
-        ? `password changed; revision conflict: ${conflict.label} changed since it was read, so that write was not applied. ${landed} secret(s) re-encrypted before the conflict; the rest were not attempted. Not re-encrypted: ${notEncrypted.join(', ')}. Use \`mc vault set\` to re-store them.`
-        : `password changed; ${failures.length}/${restaged.length} secret(s) failed to re-encrypt on the server. Affected labels: ${failures.map(f => f.label).join(', ')}. Use \`mc vault set\` to re-store them.`,
+      ok: false, code: legacy ? 'VAULT_LEGACY_SECRETS_REMAIN' : 'VAULT_SECRETS_UNSAFE',
+      changed_password: false,
+      error: legacy
+        ? 'legacy secrets remain; run `mc vault migrate` separately while the old password still works, then retry after migration finishes and a fresh snapshot is safe.'
+        : 'secret list is missing or contains an invalid/incomplete envelope; password was not changed.',
     });
     return 1;
   }
 
-  emit(flags.json,
-    { ok: true, re_encrypted: restaged.length },
-    `Master password changed. ${restaged.length} secret${restaged.length === 1 ? '' : 's'} re-encrypted.`,
-  );
+  // Empty snapshots are safe only when an established custody root exists;
+  // do not adopt one as a side effect of changing passwords.
+  let status;
+  try { status = await VaultApi.getStatus(portal); } catch { status = null; }
+  const custody = unlock?.wrapped_crk && unlock?.crk_iv ? unlock : status?.vault;
+  if (!custody?.wrapped_crk || !custody?.crk_iv) {
+    emit(flags.json, { ok: false, code: 'VAULT_CUSTODY_ROOT_MISSING', changed_password: false,
+      error: 'custody root unavailable; run `mc vault unlock` to establish/adopt custody first, then retry.' });
+    return 1;
+  }
+  let newCrkWrap;
+  let crkBytes;
+  try {
+    crkBytes = await unwrapCustodyRootBytes(vaultKey, custody.wrapped_crk, custody.crk_iv);
+    const { wrapped, iv } = await wrapCustodyRootBytes(newVaultKey, crkBytes);
+    newCrkWrap = { wrappedCrk: wrapped, crkIv: iv };
+  } catch {
+    emit(flags.json, { ok: false, code: 'VAULT_CUSTODY_ROOT_UNOPENABLE', changed_password: false,
+      error: 'could not open the custody root with the current password; password was not changed.' });
+    return 1;
+  } finally {
+    crkBytes?.fill(0);
+  }
+
+  let cp;
+  try {
+    cp = await VaultApi.changePassword(portal, {
+      currentAuthHash, newAuthHash, newSalt: newSaltB64, ...newCrkWrap,
+    });
+  } catch (err) {
+    if (err?.status >= 400 && err.status < 500) {
+      emit(flags.json, { ok: false, ...(err.data?.code ? { code: err.data.code } : {}), changed_password: false,
+        error: err.data?.error || err.message || 'server refused the password change.' });
+      return 1;
+    }
+    // Transport and server failures without an explicit refusal are uncertain.
+    cp = null;
+  }
+  if (cp?.ok === false) {
+    emit(flags.json, { ok: false, ...(cp?.code ? { code: cp.code } : {}), changed_password: false,
+      error: cp?.error || 'change-password refused; password was not changed.' });
+    return 1;
+  }
+
+  if (cp?.ok !== true) {
+    // Dispatch may have committed even if its confirmation is empty/unreadable.
+    // Neither key is safe to cache and an automatic retry could rotate again.
+    await clearCachedVaultKey({ deps: opts.cacheDeps });
+    emit(flags.json, { ok: false, code: 'VAULT_PASSWORD_CHANGE_OUTCOME_UNKNOWN',
+      changed_password: 'unknown', error: 'password-change outcome is unknown; check by unlocking. No automatic retry was made.' });
+    return 1;
+  }
+
+  // A confirmed server commit is authoritative even when local cache refresh
+  // fails; never describe that as an unchanged vault.
+  const prior = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  const cached = await cacheVaultKey(newVaultKeyBytes, {
+    authHash: newAuthHash, durable: true,
+    deviceId: prior?.deviceId || globalThis.crypto.randomUUID(), deps: opts.cacheDeps,
+  });
+  emit(flags.json, { ok: true, changed_password: true, ...(cached ? {} : { cache_refreshed: false }) },
+    `Master password changed${cached ? '' : ', but this device could not refresh its key cache; unlock again'}. Secret ciphertext was preserved.`);
   return 0;
 }
 
