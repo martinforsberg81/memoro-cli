@@ -6,12 +6,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-- `mc tidy` now previews and can retire eligible Wrangler logs, MC screenshots
-  and Codex generated images after an independent 72-hour window. Recent Codex
-  image groups, active/open files and uncertain paths stay; list/apply
-  revalidation and the approved root/shape boundaries apply to these files too.
-
 ### Changed
 - A goal in `review` whose pull request is in the merger's line gets no
   review session (`reviewDue`), and the plan role queues a mechanical fix of

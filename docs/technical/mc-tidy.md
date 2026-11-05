@@ -57,7 +57,7 @@ Wrangler root is `~/Library/Preferences/.wrangler/logs/`; only direct regular
 `.log` children qualify. The MC root is `${MC_HOME}/shots/`; it is walked
 recursively without following symlinks, but hidden directories (including
 browser profiles) and `sessions/` are not entered. Only regular `.png` files
-qualify. The Codex root is `${CODEX_HOME:-~/.codex}/generated_images/`; only
+qualify, both directly under `shots/` and in eligible subdirectories. The Codex root is `${CODEX_HOME:-~/.codex}/generated_images/`; only
 direct regular `.png`, `.jpg`, `.jpeg` or `.webp` children of UUID-named
 session directories qualify. A Codex session image group stays intact if its
 directory or any child was touched within 72 hours; in an old group only the

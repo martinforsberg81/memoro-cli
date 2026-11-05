@@ -976,7 +976,7 @@ export function outsideRoots(target, roots) {
     'scratch-worktree': dirname(parent) === base,
     'scratch-derived': dirname(parent) === base && name === DERIVED_DATA,
     'wrangler-log': parent === base && name.endsWith('.log') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
-    'mc-shot': parent.startsWith(`${base}/`) && name.endsWith('.png') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink()
+    'mc-shot': (parent === base || parent.startsWith(`${base}/`)) && name.endsWith('.png') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink()
       && real.slice(base.length + 1).split('/').every((part) => !part.startsWith('.') && part !== 'sessions'),
     'codex-image': dirname(parent) === base && UUID_DIRECTORY.test(basename(parent)) && GENERATED_IMAGE.test(name) && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
   }[target.kind];
