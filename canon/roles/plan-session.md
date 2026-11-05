@@ -15,7 +15,7 @@ starting a new build session.
 A goal (`GOAL.json`, written with the `mc goal` verbs) is what `mc build goal`
 runs. It is a means toward the aim, not the aim itself: a goal that turns out
 to be the wrong one is rewritten, replaced or dropped. How many goals come
-out of the programme, their names and order (`--after`), are worked out here;
+out of the programme, their names and phase order (`--phase`), are worked out here;
 one, four or none are all real answers.
 
 **Interactive.** Martin opens you with `mc plan`, his command; you never run

@@ -25,12 +25,23 @@ it is not a goal yet.
 Work that is several pieces in order is several goals, each in the phase after
 the one before: a goal starts only when every goal of its programme in a lower
 phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later;
-goals of one phase run side by side.
+goals of one phase run side by side. Phase numbers may be renumbered; name
+prerequisite goals too. A plan placeholder also holds later phases back.
 
-- **Nothing in a goal is Martin's:** no criterion or `check` that waits on
-  him — no "show Martin", "by hand", "decide whether", "evaluate". What he
-  must see or decide is done in a session, before the goal is written. Every
-  `check` is commands a session runs on this machine, from the goal's branch.
+- **Readiness:** resolve policy decisions before build. A future outline stays
+  in `plan`; do not activate it with unresolved prerequisites or acceptance.
+  A bounded diagnosis is buildable when its subjects, probe budget, deliverable
+  and evidence limits are explicit; a negative result can satisfy diagnosis,
+  never implementation or performance acceptance.
+- **Criteria:** each states an observable outcome and a pass/fail boundary. Its
+  `check` gives runnable commands, working directory, prerequisites and expected
+  results. For a report, specify the reconciliation and evidence to inspect;
+  file existence, a keyword match or a green gate alone does not prove content.
+  No check waits for Martin. Put policy choices in planning, not acceptance.
+- **Evidence:** distinguish measured, historical and missing proof. Record
+  revision, scope and logs; partial, skipped or unavailable evidence is not
+  green. Mark a criterion met only after its entire check holds. For costs,
+  follow writing-tests.md; moving work between clocks is not a saving.
 - **Test protection:** name protected behaviours, failure consequences, the
   cheapest credible test level and existing tests to reuse. State the evidence
   the build must produce, or why no new automated test is warranted. Follow
