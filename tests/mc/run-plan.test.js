@@ -36,7 +36,7 @@ test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex 
   assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob,Agent');
   assert.deepEqual(helper.slice(helper.indexOf('--tools'), helper.indexOf('--tools') + 3), ['--tools', CLAUDE_TOOLS, '--strict-mcp-config']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
-  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="INSTRUCTIONS"', 'do it']);
+  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="INSTRUCTIONS"', '--skip-git-repo-check', 'do it']);
   assert.equal(codex.includes('--autocompact'), false, 'codex has no such flag');
   // Never `--full-auto`: workspace-write has no network and no writes outside
   // the working directory, so the step could not push or open its PR — and a
@@ -44,7 +44,7 @@ test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex 
   assert.equal(codex.includes('--full-auto'), false);
   // No model named means no `-m` at all — the tool's own default, not opus.
   const bare = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => (m ? ['-m', m] : []) }, model: null, instructions: null, prompt: 'do it', profileArgs });
-  assert.deepEqual(bare, ['exec', '--json', '--sandbox', 'danger-full-access', 'do it']);
+  assert.deepEqual(bare, ['exec', '--json', '--sandbox', 'danger-full-access', '--skip-git-repo-check', 'do it']);
 });
 
 /**
@@ -62,7 +62,7 @@ test('headlessArgs: claude gets --model, --effort and --advisor, and none when u
   assert.deepEqual(adapter.advisorArgs('off'), [], '`off` is no advisor, not an advisor called off');
   // Codex takes no advisor, whatever it is handed; its effort is its own override.
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: codexAdapter.modelArgs, effortArgs: codexAdapter.effortArgs, advisorArgs: () => ['--advisor', 'y'] }, model: 'o3', effort: 'high', advisor: 'opus', instructions: null, prompt: 'do it', profileArgs });
-  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'model_reasoning_effort=high', 'do it']);
+  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'model_reasoning_effort=high', '--skip-git-repo-check', 'do it']);
 });
 
 test('headlessArgs: codex new and resumed launches take the Codex model and effort, and no claude flag', () => {
@@ -75,6 +75,8 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
   assert.deepEqual(resumed.slice(-2), ['sess-1', 'go on']);
 
   for (const argv of [fresh, resumed]) {
+    assert.equal(argv.filter(arg => arg === '--skip-git-repo-check').length, 1,
+      'headless programme planning runs from mc-owned directories outside Git');
     assert.equal(argv.includes('--effort'), false);
     assert.equal(argv.includes('--advisor'), false);
   }
@@ -97,6 +99,7 @@ test('headlessArgs: every role including plan has native delegation, fresh and r
         assert.equal(claude.includes('--agents'), false, name);
 
         const codex = headlessArgs({ ...base, toolId: 'codex', adapter: codexAdapter, model: 'gpt-6.1-sol', instructions: instructionsFor('codex', role.overlay) });
+        assert.equal(codex.filter(arg => arg === '--skip-git-repo-check').length, 1, name);
         const at = codex.indexOf('features.multi_agent=true');
         assert.ok(at > 0, name);
         assert.equal(codex[at - 1], '-c', name);
