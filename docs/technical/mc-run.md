@@ -297,13 +297,7 @@ account. The snapshot is refreshed by sessions that run anyway, and by one
 read-only Codex call an hour. `review` is a class too, but only a goal's review
 takes it. A provider priority first ranks usable candidates from that provider;
 capacity/model ranking and the build-model tie rule then apply within it.
-Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. A candidate can run on its plan when its provider has not refused it and
-no window in force is at its limit. A goal's review passes over every
-candidate whose model is its last build entry's while another can run on its
-plan, and takes the first of them on its plan when none can. When no candidate
-can run on its plan, the first that is not that model (or that model, when
-every candidate is it) uses its provider's API reserve, and waits when that API is off: no
-candidate goes to credits while another's plan is free (ruling 59 § 4).
+Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. Codex also needs a fresh successful capacity observation listing the model and effort; Claude retains unknown-capacity bootstrap when no candidate has measured usable capacity. With no usable subscription, priority orders the API reserve candidates, retaining build-model avoidance and catalog order within each provider. The review waits when the selected API is off: no candidate goes to credits while another's subscription is usable (ruling 59 § 4).
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
