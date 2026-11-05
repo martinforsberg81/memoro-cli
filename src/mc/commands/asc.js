@@ -225,7 +225,10 @@ export function declaredScript(key, deps) {
   });
   if (command.missing) return { ok: false, line: command.missing };
   const mediated = keysRunCommand(command.argv, command.cwd);
-  if (mediated.error) return { ok: false, line: mediated.error };
+  if (mediated.error) {
+    if (command.dir) rmSync(command.dir, { recursive: true, force: true });
+    return { ok: false, line: mediated.error };
+  }
   return {
     ok: true,
     command: { ...command, argv: mediated.argv },

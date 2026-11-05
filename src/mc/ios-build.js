@@ -498,8 +498,8 @@ export function listBuilds({
   const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git, exportTree });
   if (command.missing) return refuse(command.missing);
   const mediated = keysRunCommand(command.argv, command.cwd);
-  if (mediated.error) return refuse(mediated.error);
   try {
+    if (mediated.error) return refuse(mediated.error);
     const r = run(mediated.argv, { cwd: command.cwd, env, timeoutMs: 2 * MIN });
     if (r.code !== 0) return refuse(reasonLine(r.error || r.stderr || r.stdout) || `exit ${r.code}`);
     let json;
