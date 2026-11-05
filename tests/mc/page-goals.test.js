@@ -50,7 +50,7 @@ const GOALS = [
     last: { next: 'the second repository', comment: null }, running: true, problems: [],
   },
   {
-    name: 'cleanup', programme: 'mc', repos: ['memoro-cli'], stage: 'build', status: 'blocked', sessions: 1,
+    name: 'cleanup', programme: 'mc', repos: ['memoro-cli'], stage: 'build', status: 'Martin', sessions: 1,
     last: { next: null, comment: 'waits on Martin' }, running: false, problems: [],
   },
 ].map(goalRow);
@@ -76,7 +76,7 @@ describe('goal rows on the page', () => {
 
 
     const mcHeading = at(/^ {2}mc(?: |$)/u);
-    const cleanup = at(/^ +1 cleanup +build +blocked/u);
+    const cleanup = at(/^ +1 cleanup +build +Martin/u);
     const rollout = at(/^ +2 rollout +build +running/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
     assert.equal(rollout, cleanup + 2, 'rollout is drawn after cleanup, in name order');
@@ -190,34 +190,35 @@ describe('goalsOf — what the page reads of a goal', () => {
 });
 
 describe('a goal\'s stage and status on the page, and one waiting on a person', () => {
-  it('goalsOf gives the stage and the status, and marks a blocked goal, in any stage, as waiting on a person with the last entry\'s comment', () => {
-    const asked = { at: '2026-11-01T11:00Z', tool: 'claude', model: 'opus', stage: 'build', status: 'blocked', done: null, comment: 'which table?', next: null };
-    const died = { at: '2026-11-01T11:00Z', tool: 'runner', model: null, stage: 'review', status: 'blocked', done: null, comment: 'the review ended with the goal still in review, a second time — waits on a person', next: null };
-    const [byQuestion, byRunner, judged] = goalsOf({
+  it('goalsOf gives the stage and the status, and distinguishes Martin from blocked recovery in any stage with the last entry\'s comment', () => {
+    const asked = { at: '2026-11-01T11:00Z', tool: 'claude', model: 'opus', stage: 'build', status: 'Martin', done: null, comment: 'which table?', next: null };
+    const died = { at: '2026-11-01T11:00Z', tool: 'runner', model: null, stage: 'review', status: 'Martin', done: null, comment: 'the review ended with the goal still in review, a second time — waits on a person', next: null };
+    const [byQuestion, byRunner, judged, blocked] = goalsOf({
       goals: [
-        { programme: 'mc', goal: 'asked', repos: ['memoro-cli'], stage: 'build', status: 'blocked', log: [asked], problems: [] },
-        { programme: 'mc', goal: 'died', repos: ['memoro-cli'], stage: 'review', status: 'blocked', log: [died], problems: [] },
+        { programme: 'mc', goal: 'asked', repos: ['memoro-cli'], stage: 'build', status: 'Martin', log: [asked], problems: [] },
+        { programme: 'mc', goal: 'died', repos: ['memoro-cli'], stage: 'review', status: 'Martin', log: [died], problems: [] },
         { programme: 'mc', goal: 'judged', repos: ['memoro-cli'], stage: 'merge', status: 'ready', log: [], problems: [] },
+        { programme: 'mc', goal: 'blocked', repos: ['memoro-cli'], stage: 'build', status: 'blocked', log: [], problems: [] },
       ],
     });
-    assert.deepEqual([byQuestion.stage, byQuestion.status, byQuestion.person, byQuestion.question], ['build', 'blocked', true, 'which table?']);
+    assert.deepEqual([byQuestion.stage, byQuestion.status, byQuestion.person, byQuestion.question], ['build', 'Martin', true, 'which table?']);
     assert.deepEqual([byRunner.person, byRunner.question], [true, died.comment]);
     assert.deepEqual([judged.stage, judged.status, judged.person, judged.question], ['merge', 'ready', false, null]);
-    assert.equal('plan' in judged, false, 'nothing waits on plan any more');
+    assert.deepEqual([blocked.person, blocked.question, blocked.runnable], [false, null, true]);
   });
 
   it('uses quiet stage labels, green merge availability and red blockers', () => {
     const rows = [
       { name: 'judged', programme: 'mc', repos: ['memoro-cli'], stage: 'review', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
       { name: 'landing', programme: 'mc', repos: ['memoro-cli'], stage: 'merge', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
-      { name: 'stuck', programme: 'mc', repos: ['memoro-cli'], stage: 'finish', status: 'blocked', sessions: 2, last: { next: null, comment: 'split it?' }, running: false, person: true, question: 'split the goal in two?', problems: [] },
+      { name: 'stuck', programme: 'mc', repos: ['memoro-cli'], stage: 'finish', status: 'Martin', sessions: 2, last: { next: null, comment: 'split it?' }, running: false, person: true, question: 'split the goal in two?', problems: [] },
     ];
     const data = pageData({ programmes: programmesSection({ goalRows: rows.map(goalRow), programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 140, now: NOW, colour: true }));
     const line = (name) => goalLineOf(lines, name);
     assert.match(line('judged'), /\u001b\[90mreview/u, 'stage is secondary; availability carries the state colour');
     assert.match(line('landing'), /\u001b\[32mawaiting merge/u, 'merge availability is green');
-    assert.match(plain(line('stuck')), /finish +blocked/u);
+    assert.match(plain(line('stuck')), /finish +Martin/u);
     assert.ok(lines.some((row) => plain(row).includes('split the goal in two?')));
     assert.match(line('stuck'), /\u001b\[31mfinish/u, 'a blocked goal\'s stage is red');
     assert.ok(lines.some((row) => /\u001b\[31msplit the goal in two\?/u.test(row)), 'the question is red');

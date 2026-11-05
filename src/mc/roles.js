@@ -119,7 +119,7 @@ export function readCanonRole(ref) {
  */
 export function roleRef(ref) {
   const [file, part = null] = String(ref ?? '').split(':');
-  return { file, part: part || null };
+  return { file: file === 'plan' ? 'plan-session' : file, part: part || null };
 }
 
 /** The file a role reference reads, for a message: `canon/roles/build-session.md (part goal)`. */

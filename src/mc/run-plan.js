@@ -318,13 +318,15 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
  * runner's last word on it, and where its worktree is, which it works in
  * itself. The rest is `canon/roles/plan-session.md`'s.
  */
-export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', why = null, brief = null }) {
+export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', reason: cause = 'finish', why = null, brief = null }) {
   const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
-  const task = stage === 'merge'
+  const task = cause === 'blocked'
+    ? `it is blocked in ${stage}: read LOG.md and REVIEW.md when present, resolve the obstacle, then retry the same stage with mc goal ready; in merge, mc goal stage merge executes the retry`
+    : stage === 'merge'
     ? 'it is in merge and the merger did not land it: take the red in its worktree, publish, and queue it again'
     : 'it is in finish: read its REVIEW.md, when there is one, and LOG.md, fix it in its worktree, publish, and move it to merge';
   return withBrief([
-    `The goal ${name} is yours to finish, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
+    `The goal ${name} is yours, headless (reason: ${cause}) — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
   ].join('\n'), brief);
 }
@@ -333,9 +335,10 @@ export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', 
 export function goalPlanCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
-    'If you are still finishing the goal, say so in one line and go on.',
+    'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
-    'If you cannot finish it, end now: `mc goal blocked --reason "<the question for Martin>"` (or drop it), and stop.',
+    'You retain planning and implementation authority: resolve technical choices, missing planning detail and bounded test scope yourself within the promised outcome and Martin\'s explicit constraints. Preserve acceptance and gate requirements.',
+    'Block only for a decision or act reserved for Martin: `mc goal martin --reason "<what only Martin can decide or do, what you tried, and your recommendation>"`. If the goal is wrong, use your role\'s drop/replacement path.',
   ].join('\n');
 }
 

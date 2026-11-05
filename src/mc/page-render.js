@@ -619,7 +619,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   const statuses = [['running', 'running', ['green']], ['ready', 'can start', ['green']],
     ['waiting', 'waiting for phase', ['yellow']], ['planning', 'need plan', ['cyan']],
     ['incomplete', 'need criteria', ['yellow']], ['merging', 'await merge', ['green']],
-    ['blocked', 'blocked', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
+    ['blocked', 'await plan', ['yellow']], ['Martin', 'Martin', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
     .filter(([key]) => expand && availability[key])
     .map(([key, label, styles]) => ({ text: `${availability[key]} ${label}`, styles }));
   const groups = programmes.programmes || [];
@@ -777,6 +777,7 @@ function headerLines(lines, c, wide, data, version) {
     { text: `${(data.runner?.sessions || []).length} in flight` },
     { text: `${statuses.ready || 0} ready`, styles: ['green'] },
     { text: `${statuses.blocked || 0} blocked`, styles: statuses.blocked ? ['red'] : ['grey'] },
+    { text: `${statuses.Martin || 0} Martin`, styles: statuses.Martin ? ['red'] : ['grey'] },
     { text: `${proposals} proposals`, styles: proposals ? ['yellow'] : ['grey'] },
     { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
   ]), room), room));

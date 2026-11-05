@@ -1173,6 +1173,7 @@ test('a successor lane waits while its predecessor holds the lane file, skips th
   const started = [];
   let polls = 0;
   f.answer = (call) => {
+    if (!call.env.MC_GOAL) return okSession()(call);
     started.push(call.env.MC_GOAL.split('/')[1]);
     return endsGoal(f)(call);
   };
@@ -1831,6 +1832,7 @@ function liveLanes(names, per) {
   let release = null;
   const held = new Promise((resolve) => { release = resolve; });
   f.answer = async (call) => {
+    if (!call.env.MC_GOAL) return okSession()(call);
     starts.push(call.env.MC_GOAL.split('/')[1]);
     await held;
     return endsGoal(f)(call);
@@ -1904,6 +1906,7 @@ function laneRace({ total }) {
   let release = null;
   const held = new Promise((resolve) => { release = resolve; });
   f.answer = async (call) => {
+    if (!call.env.MC_GOAL) return okSession()(call);
     state.starts.push(call.env.MC_GOAL.split('/')[1]);
     state.live += 1;
     state.peak = Math.max(state.peak, state.live);
@@ -2496,10 +2499,12 @@ test('a build session that writes no log entry gets a runner entry, and three in
   // In finish it wakes one plan session; that one ends with the goal still in
   // finish, so the runner sets it blocked, and nothing starts again.
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan-session');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
   assert.equal(where(), 'finish · blocked');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(where(), 'finish · Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(runRows(f.files).length, 4);
+  assert.equal(runRows(f.files).length, 5);
 });
 
 /* ------------------------------------------------------- archive a finished goal */
@@ -2584,7 +2589,7 @@ test('headless planning chooses Opus or Sol by capacity, always at medium, for f
       const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
       assert.equal(result.ran, 1);
       const [call] = f.calls.sessions;
-      assert.equal(call.env.MC_ROLE, 'plan-session');
+      assert.equal(call.env.MC_ROLE, 'plan');
       assert.equal(call.env.MC_MODEL, tool === 'claude' ? 'opus' : 'gpt-6.1-sol');
       assert.equal(call.env.MC_TOOL, tool);
       if (tool === 'claude') assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
@@ -2595,13 +2600,13 @@ test('headless planning chooses Opus or Sol by capacity, always at medium, for f
 
 test('a goal in finish starts one plan session: the plan role, opus, the programme directory, no worktree, told to finish it', async () => {
   const f = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: REVIEW.md\n' } });
-  f.answer = plans(f, 'stuck', 'finish', 'blocked');
+  f.answer = plans(f, 'stuck', 'finish', 'Martin');
   const runner = createRunner({ deps: f.deps });
   const r = await runner.pass({ repo: 'memoro', lane: 1 });
   assert.equal(r.ran, 1);
   assert.equal(r.name, 'goal:prog/stuck');
   const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'plan-session');
+  assert.equal(call.env.MC_ROLE, 'plan');
   assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
   assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
@@ -2609,14 +2614,14 @@ test('a goal in finish starts one plan session: the plan role, opus, the program
   assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
   assert.equal('MC_WORKAREA' in call.env, false);
   assert.equal('MC_REVIEW_HEAD' in call.env, false);
-  assert.match(call.args.join('\n'), /ROLE plan-session/u);
+  assert.match(call.args.join('\n'), /ROLE plan/u);
   assert.match(call.prompt, /it is in finish: read its REVIEW\.md, when there is one, and LOG\.md, fix it in its worktree, publish, and move it to merge/u);
   assert.match(call.prompt, /its worktree is `\/w\/programs\/prog\/goals\/stuck\/memoro`/u);
   const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
   assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'plan', null]);
   assert.equal(runRows(f.files)[0].kind, 'plan');
   // It set the goal blocked itself: the runner adds nothing, and no second session starts.
-  assert.equal(where(f, 'stuck'), 'finish · blocked');
+  assert.equal(where(f, 'stuck'), 'finish · Martin');
   assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
 });
@@ -2639,8 +2644,8 @@ test('a red in merge starts one plan session; queued again it gets the runner\'s
   f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return okSession()(call); };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'plan-session');
-  assert.match(f.calls.sessions[0].prompt, /it is in merge and the merger did not land it: take the red in its worktree, publish, and queue it again\. The last word on it: merger answered red on #31/u);
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'plan');
+  assert.match(f.calls.sessions[0].prompt, /retry.*The last word on it: merger answered red on #31/u);
   assert.equal(where(f, 'red'), 'merge · ready');
   assert.equal(parseLog(f.files[`${GOALS}/red/LOG.md`]).at(-1).done, 'plan session took the red; the pull request is in the merger\'s line again');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'the red is taken: no second session');
@@ -2649,12 +2654,12 @@ test('a red in merge starts one plan session; queued again it gets the runner\'s
   g.files[`${GOALS}/red/GOAL.json`] = withGoal(g.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
   g.deps.pendingMerges = () => [];
   await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
-  assert.equal(where(g, 'red'), 'merge · blocked');
-  assert.match(parseLog(g.files[`${GOALS}/red/LOG.md`]).at(-1).comment, /nothing in the merger's line — waits on a person/u);
+  assert.equal(where(g, 'red'), 'merge · Martin');
+  assert.match(parseLog(g.files[`${GOALS}/red/LOG.md`]).at(-1).comment, /nothing in the merger's line/u);
 });
 
-test('a blocked goal, in any stage, and a goal in plan, start nothing', async () => {
-  const goals = Object.fromEntries(STAGES.map((stage) => [`in-${stage}`, { stage, status: 'blocked' }]));
+test('a Martin goal, in any stage, and a goal in plan, start nothing', async () => {
+  const goals = Object.fromEntries(STAGES.map((stage) => [`in-${stage}`, { stage, status: 'Martin' }]));
   const f = goalFixture({ ...goals, planned: { stage: 'plan' } });
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 0);
@@ -2713,7 +2718,7 @@ test('the runner gives goals written before phases and stages a phase by the dep
 });
 
 test('the runner recovers missing PR jobs for an existing merge decision without resetting a red job', async () => {
-  const f = goalFixture({ multi: { stage: 'merge' }, building: { stage: 'build', status: 'blocked' } });
+  const f = goalFixture({ multi: { stage: 'merge' }, building: { stage: 'build', status: 'Martin' } });
   f.files[`${GOALS}/multi/GOAL.json`] = withGoal(f.files[`${GOALS}/multi/GOAL.json`], { repos: ['memoro', 'memoro-cli'], prs: ['memoro#14804', 'memoro-cli#31'] });
   f.files[`${GOALS}/building/GOAL.json`] = withGoal(f.files[`${GOALS}/building/GOAL.json`], { prs: ['memoro#99'] });
   const pending = [{ repo: 'memoro-cli', pr: 31, state: 'red' }];
@@ -2725,7 +2730,7 @@ test('the runner recovers missing PR jobs for an existing merge decision without
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
   assert.deepEqual(f.calls.rounds.map(({ repo, pr }) => [repo, pr]), [['memoro', 14804]]);
-  assert.equal(where(f, 'building'), 'build · blocked');
+  assert.equal(where(f, 'building'), 'build · Martin');
   assert.equal(pending[0].state, 'red');
   f.deps.now = () => new Date('2026-08-29T10:06:00Z');
   await runner.pass({ repo: 'memoro' });
@@ -2733,7 +2738,7 @@ test('the runner recovers missing PR jobs for an existing merge decision without
 });
 
 test('a goal whose every pull request (prs) has landed or closed is set done by the runner, at most every five minutes', async () => {
-  const f = goalFixture({ asc: { stage: 'merge', status: 'blocked' }, open: { stage: 'merge', status: 'blocked' }, gone: { stage: 'dropped' } });
+  const f = goalFixture({ asc: { stage: 'merge', status: 'Martin' }, open: { stage: 'merge', status: 'Martin' }, gone: { stage: 'dropped' } });
   const withPrs = (name, prs) => { f.files[`${GOALS}/${name}/GOAL.json`] = withGoal(f.files[`${GOALS}/${name}/GOAL.json`], { prs: prs.split(',').map((one) => one.trim()) }); };
   withPrs('asc', 'memoro#14761, memoro#14756');
   withPrs('open', 'memoro#20');
@@ -2750,23 +2755,23 @@ test('a goal whose every pull request (prs) has landed or closed is set done by 
   };
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(where(f, 'asc'), 'merge · blocked', 'memoro#14761 is still open');
+  assert.equal(where(f, 'asc'), 'merge · Martin', 'memoro#14761 is still open');
   assert.equal(asked.includes(30), false, 'a dropped goal is not asked about');
 
   states[14761] = 'MERGED';
   await runner.pass({ repo: 'memoro' });
-  assert.equal(where(f, 'asc'), 'merge · blocked', 'not asked again within five minutes');
+  assert.equal(where(f, 'asc'), 'merge · Martin', 'not asked again within five minutes');
 
   f.deps.now = () => new Date('2026-08-29T10:06:00Z');
   await runner.pass({ repo: 'memoro' });
   assert.equal(goalField(f.files[`${GOALS}/asc/GOAL.json`], 'stage'), 'done');
   const entry = parseLog(f.files[`${GOALS}/asc/LOG.md`]).at(-1);
   assert.deepEqual([entry.tool, entry.stage, entry.done], ['runner', 'done', 'landed memoro#14761, memoro#14756']);
-  assert.equal(where(f, 'open'), 'merge · blocked', 'memoro#20 is open');
+  assert.equal(where(f, 'open'), 'merge · Martin', 'memoro#20 is open');
 });
 
-test('a blocked or done goal is never started', async () => {
-  const f = goalFixture({ stuck: { status: 'blocked' }, finished: { stage: 'done' } });
+test('a Martin or done goal is never started', async () => {
+  const f = goalFixture({ stuck: { status: 'Martin' }, finished: { stage: 'done' } });
   f.files[`${GOALS}/broken/GOAL.json`] = 'no front matter\n';
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.ran, 0);
@@ -2951,7 +2956,7 @@ test('a review that sends the goal to finish hands it to one plan session, which
   assert.equal(where(f, 'judged'), 'finish · ready');
   f.answer = plans(f, 'judged', 'merge');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan-session');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
   assert.equal(f.calls.sessions.some((call) => call.env.MC_ROLE === 'build-session:goal'), false, 'never back to a build session');
 });
 
@@ -2965,9 +2970,12 @@ test('a review that dies leaves review · ready and a review runs again; a secon
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
   assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'review-session:goal');
   assert.equal(where(f, 'judged'), 'review · blocked');
-  assert.match(goalEntries(f).at(-1).comment, /a second time — waits on a person$/u);
+  assert.match(goalEntries(f).at(-1).comment, /a second time — a blocked plan session takes it$/u);
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'blocked');
+  assert.equal(where(f, 'judged'), 'review · Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(f.calls.sessions.length, 3);
 });
 
 test('a goal in review with no open pull request goes to finish, and no review starts', async () => {
@@ -3012,10 +3020,122 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
   await runner.pass({ repo: 'memoro' }); note();
   // 5. The head moved past the one judged: the second answer in merge blocks it.
   mergerAnswers('moved'); note();
+  f.answer = plans(f, 'judged', 'merge', 'Martin');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'blocked');
+  assert.equal(where(f, 'judged'), 'merge · Martin');
   for (let i = 0; i < 5; i += 1) assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `pass ${i + 1} after it starts nothing`);
 
   assert.deepEqual(seen, ['review · ready', 'finish · ready', 'merge · ready', 'merge · ready', 'merge · ready', 'merge · blocked']);
   const stages = parseLog(f.files[`${GOALS}/judged/LOG.md`]).map((entry) => entry.stage).filter(Boolean);
   for (let i = 1; i < stages.length; i += 1) assert.ok(rank(stages[i]) >= rank(stages[i - 1]), `${stages[i - 1]} → ${stages[i]} goes back`);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'plan-session', 'plan-session'], 'four sessions, each stage passed once');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'plan', 'plan', 'plan'], 'finish and two merge recoveries, without moving a stage backward');
+});
+
+test('blocked work wakes plan with its reason and retries the same stage; Martin never wakes it', async () => {
+  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) {
+    const f = goalFixture({ stuck: { stage, status: 'blocked' } });
+    if (stage === 'merge') {
+      f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { prs: ['memoro#31'] });
+      f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 31, state: 'queued' }];
+    }
+    f.answer = plans(f, 'stuck', stage);
+    const runner = createRunner({ deps: f.deps });
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, stage);
+    const [call] = f.calls.sessions;
+    assert.equal(call.env.MC_ROLE, 'plan', stage);
+    assert.equal(call.env.MC_PLAN_REASON, 'blocked', stage);
+    assert.equal(call.env.MC_GOAL, 'prog/stuck', stage);
+    assert.equal(where(f, 'stuck'), `${stage} · ready`, stage);
+    assert.equal(runner.nextWork({ repo: 'memoro' })?.kind ?? null,
+      { plan: null, build: 'build', review: 'review', finish: 'plan', merge: null }[stage], stage);
+    f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'Martin' });
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, stage);
+  }
+});
+
+test('a recovery that cannot resolve the obstacle waits on Martin, without a repeated session', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked' } });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 1);
+  assert.equal(where(f, 'stuck'), 'build · Martin');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('repeated blocked recoveries are bounded across restarts, and a person can explicitly retry', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked' } });
+  f.answer = plans(f, 'stuck', 'build');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+    f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'blocked' });
+  }
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(where(f, 'stuck'), 'build · Martin');
+  f.files[`${GOALS}/stuck/LOG.md`] += '\n## 2026-08-29T12:00Z · person · build · ready\n\nComment: resolved it\n';
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'blocked' });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+});
+
+test('all goals done invokes next_step once across lanes, restarts and archive moves, without MC_GOAL', async () => {
+  const f = goalFixture({ a: { stage: 'done' }, b: { stage: 'done' } });
+  let release;
+  f.answer = () => new Promise((resolve) => { release = () => resolve(okSession()()); });
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ repo: 'memoro', lane: 1 });
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 2 })).ran, 0);
+  for (let turn = 0; !release && turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof release, 'function');
+  const [call] = f.calls.sessions;
+  assert.equal(call.env.MC_ROLE, 'plan');
+  assert.equal(call.env.MC_PLAN_REASON, 'next_step');
+  assert.equal(call.cwd, '/w/programs/prog');
+  assert.equal('MC_GOAL' in call.env, false);
+  const current = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
+  assert.deepEqual([current.name, current.reason], ['plan:prog', 'next_step']);
+  release();
+  assert.equal((await first).ran, 1);
+  f.answer = okSession();
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  for (const file of ['GOAL.json', 'LOG.md']) {
+    f.files[`${GOALS}/.archive/a/${file}`] = f.files[`${GOALS}/a/${file}`];
+    delete f.files[`${GOALS}/a/${file}`];
+  }
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  f.files[`${GOALS}/c/GOAL.json`] = goalJson({ stage: 'build', title: 'next' });
+  assert.equal(createRunner({ deps: f.deps }).nextWork()?.kind, 'build');
+  f.files[`${GOALS}/c/GOAL.json`] = withGoal(f.files[`${GOALS}/c/GOAL.json`], { stage: 'done' });
+  f.answer = okSession();
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'next_step');
+});
+
+test('next_step needs all goals done: empty programmes, proposals, invalid and Martin goals do not qualify', () => {
+  const f = goalFixture({ done: { stage: 'done' }, waiting: { stage: 'plan', status: 'Martin' } });
+  const runner = createRunner({ deps: f.deps });
+  for (const stage of ['plan', 'build', 'review', 'finish', 'merge', 'dropped']) {
+    f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage });
+    assert.equal(runner.nextWork(), null, stage);
+  }
+  delete f.files[`${GOALS}/waiting/GOAL.json`];
+  delete f.files[`${GOALS}/done/GOAL.json`];
+  f.files['/w/programs/prog/README.md'] = '# aim';
+  f.files['/w/programs/prog/proposals/new.md'] = '# work';
+  assert.equal(runner.nextWork(), null);
+  f.files[`${GOALS}/broken/GOAL.json`] = 'invalid';
+  f.files[`${GOALS}/done/GOAL.json`] = goalJson({ stage: 'done', title: 'done' });
+  assert.equal(runner.nextWork(), null);
+});
+
+test('two blocked goals in one programme share one planning session at a time', async () => {
+  const f = goalFixture({ a: { status: 'blocked' }, b: { status: 'blocked' } });
+  let release;
+  f.answer = plans(f, 'a', 'build', 'Martin', () => new Promise((resolve) => { release = () => resolve(okSession()()); }));
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ lane: 1 });
+  assert.equal((await runner.pass({ lane: 2 })).ran, 0);
+  for (let turn = 0; !release && turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  release();
+  assert.equal((await first).ran, 1);
+  assert.equal(runner.nextWork()?.name, 'goal:prog/b');
 });

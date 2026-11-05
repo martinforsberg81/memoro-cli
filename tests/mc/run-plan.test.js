@@ -84,7 +84,7 @@ test('headlessArgs: codex new and resumed launches take the Codex model and effo
 });
 
 test('headlessArgs: every role including plan has native delegation, fresh and resumed, stream and single-turn', () => {
-  for (const name of ['build-session:goal', 'review-session:goal', 'plan-session', 'manager', 'helper', 'intake']) {
+  for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'helper', 'intake']) {
     const role = readCanonRole(name);
     assert.ok(role, name);
     for (const resume of [null, 'sid']) {

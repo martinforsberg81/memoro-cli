@@ -144,7 +144,7 @@ describe('leaseHolder', () => {
     assert.deepEqual(of(SESSION), EXPECTED);
     assert.deepEqual(of({ MC_ROLE: 'review-session:goal', MC_GOAL: 'mc/email-compose' }),
       { kind: 'review', owner: 'mc', name: 'mc/email-compose', pid: AGENT });
-    assert.deepEqual(of({ MC_ROLE: 'plan-session', MC_PROGRAMME: 'mc' }), { kind: 'plan', owner: 'mc', name: 'mc', pid: AGENT });
+    assert.deepEqual(of({ MC_ROLE: 'plan', MC_PROGRAMME: 'mc' }), { kind: 'plan', owner: 'mc', name: 'mc', pid: AGENT });
     assert.deepEqual(of({ MC_ROLE: 'brief' }), { kind: 'brief', owner: 'brief', name: null, pid: AGENT });
     assert.deepEqual(of({}), { kind: 'shot', owner: null, name: null, pid: 42 });
     assert.equal(of({ ...SESSION, MC_SESSION_PID: '77' }).pid, 77, 'a session may say its own pid');

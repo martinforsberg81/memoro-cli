@@ -4,13 +4,13 @@ import { activityLines, sessionGoal } from './page-activity.js';
 import { width } from './status-render.js';
 
 const FINISHED = 'finished';
-const LABEL = { ready: 'can start', running: 'running', waiting: 'waiting for phase', blocked: 'blocked',
+const LABEL = { ready: 'can start', running: 'running', waiting: 'waiting for phase', blocked: 'awaiting plan', Martin: 'Martin',
   invalid: 'invalid', planning: 'needs plan', merging: 'awaiting merge', incomplete: 'needs criteria', finished: 'finished' };
-const TONE = { ready: ['green'], running: ['green'], waiting: ['yellow'], blocked: ['red'], invalid: ['red'],
+const TONE = { ready: ['green'], running: ['green'], waiting: ['yellow'], blocked: ['yellow'], Martin: ['red'], invalid: ['red'],
   planning: ['cyan'], merging: ['green'], incomplete: ['yellow'], finished: ['grey'] };
 const one = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
 const plural = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
-const noteworthy = (goal) => ['running', 'blocked', 'invalid', 'merging'].includes(goal.availability) || goal.prs?.length;
+const noteworthy = (goal) => ['running', 'blocked', 'Martin', 'invalid', 'merging'].includes(goal.availability) || goal.prs?.length;
 
 function line(c, wide, indent, text, styles = []) {
   const shown = clipCell(text, Math.max(0, wide - indent));
@@ -40,14 +40,14 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   const finished = goal.availability === FINISHED;
   const stage = goal.stage ?? goal.state ?? '—';
   const tone = TONE[goal.availability] || ['grey'];
-  const stageTone = goal.availability === 'blocked' || goal.availability === 'invalid' ? tone
+  const stageTone = ['blocked', 'Martin', 'invalid'].includes(goal.availability) ? tone
     : ['grey'];
   const number = String(goal.number ?? '').padStart(3);
   lines.push((`      ${c(number, 'grey')} ${cell(c, goal.title || goal.name, col.name, goal.running ? ['bold'] : [])}`
     + `${cell(c, stage, col.stage, stageTone)}${cell(c, LABEL[goal.availability] || 'unknown', col.state, tone)}`).trimEnd());
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
-  else if (goal.availability === 'blocked') {
-    lines.push(line(c, wide, 10, goal.question || goal.last?.comment || 'waits on a person', ['red']));
+  else if (['blocked', 'Martin'].includes(goal.availability)) {
+    lines.push(line(c, wide, 10, goal.question || goal.last?.comment || (goal.availability === 'Martin' ? 'waits on Martin' : 'a plan session resolves the obstacle'), ['red']));
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { expand }));
   for (const pr of goal.prs || []) {
@@ -58,7 +58,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   const metadata = [goal.name, ...(goal.repos || []), `${goal.sessions ?? 0} sessions`].filter(Boolean).join(' · ');
   lines.push(line(c, wide, 10, metadata, ['grey']));
   const said = finished ? goal.last?.done || goal.last?.comment : goal.last?.next || goal.last?.comment;
-  if (said && one(said) !== one(goal.question || (goal.availability === 'blocked' ? goal.last?.comment : ''))) {
+  if (said && one(said) !== one(goal.question || (['blocked', 'Martin'].includes(goal.availability) ? goal.last?.comment : ''))) {
     lines.push(line(c, wide, 10, said, finished ? ['grey'] : []));
   }
 }
