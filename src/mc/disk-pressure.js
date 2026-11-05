@@ -63,7 +63,12 @@ export const SCHEMA = 'mc-disk-pressure';
 export const POLICY = Object.freeze({ reserve_bytes: RESERVE_BYTES, pressure_bytes: PRESSURE_BYTES, recovery_bytes: RECOVERY_BYTES });
 
 /** The limit, in a line a person reads: what this policy does not promise. */
-export const LIMITATION = 'mc keeps this headroom for its own new work; other applications, and work already running, can still fill the disk';
+export const LIMITATION = 'this holds back mc\'s new work only; other apps and running work can still fill the disk';
+
+/** `2026-11-05T12:00Z`: an ISO stamp to the minute. */
+function minute(at) {
+  return typeof at === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d/u.test(at) ? `${at.slice(0, 16)}Z` : String(at);
+}
 
 /** `27.9 GB`, rounded down, so a disk just under a line never reads as at it. */
 export function gb(bytes) {
@@ -338,6 +343,19 @@ export function createDiskPressure({
 }
 
 /**
+ * What the page and `mc tidy` show, read cheaply from this machine: the state
+ * file and one statfs, no walk and no Docker. `read` and `freeBytes` are doors.
+ */
+export function diskSummary({ path, stateDir, read, freeBytes = statfsAvailable, nowMs = Date.now() }) {
+  let state = null;
+  try { state = JSON.parse(read(join(stateDir, STATE_FILE)) ?? 'null'); } catch { state = null; }
+  let available = null;
+  try { available = freeBytes(path); } catch { available = null; }
+  const known = Number.isFinite(available) && available >= 0;
+  return describe(state && typeof state === 'object' ? state : null, { known, available: known ? available : null }, [], nowMs);
+}
+
+/**
  * The state as a person reads it: `{ available_bytes, status, pressure,
  * cooldown_until, last_cleanup, shortfall_bytes, last_refusal, events,
  * policy, limitation, lines }`. `status` is from the reading now when there is
@@ -357,12 +375,12 @@ export function describe(state, reading, events = [], nowMs = Date.now()) {
       : `disk: ${gb(available)} free (measured) — below ${gb(PRESSURE_BYTES)}: new sessions, deploys and Docker starts wait`);
   if (last) {
     const delta = Number.isFinite(last.measured_delta_bytes) ? gb(Math.max(0, last.measured_delta_bytes)) : 'unknown';
-    lines.push(`disk: last pressure pass ${last.at} (${last.trigger}) ${last.outcome} — measured ${delta} back, candidates estimated ${gb(last.estimate_bytes || 0)}${last.failed ? ', a step failed' : ''}`);
+    lines.push(`disk: last pass ${minute(last.at)} (${last.trigger}) ${last.outcome}: measured +${delta}, estimated ${gb(last.estimate_bytes || 0)}${last.failed ? ', a step failed' : ''}`);
   }
   if (status !== 'healthy' && Number.isFinite(state?.shortfall_bytes) && state.shortfall_bytes > 0) {
     lines.push(`disk: ${gb(state.shortfall_bytes)} short of the ${gb(RECOVERY_BYTES)} target; protected data is kept`);
   }
-  if (status !== 'healthy' && cooldownUntil) lines.push(`disk: next pressure pass after ${cooldownUntil}`);
+  if (status !== 'healthy' && cooldownUntil) lines.push(`disk: next pass after ${minute(cooldownUntil)}`);
   if (status !== 'healthy') lines.push(`disk: ${LIMITATION}`);
   return {
     available_bytes: available, status, pressure: status === 'pressure', cooldown_until: cooldownUntil,

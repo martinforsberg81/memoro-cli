@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 
 import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/tidy.js';
 import { setLogPath } from '../../src/mc/logger.js';
+import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
@@ -933,10 +934,39 @@ describe('the printout', () => {
     const outcome = { applied: [{ path: '/w/plan/mc/wt-a', ok: false, why: 're-check: 1 uncommitted' }], freed: 1.2e9, removed: 12, kept: 1 };
     const { out, stdout } = capture();
     assert.equal(await tidyCommand({ apply: true, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome }), docker: noDocker }), 1);
-    assert.match(out.join(''), /freed 1\.20 GB in 12 items, kept 1 on re-check/u);
+    assert.match(out.join(''), /freed 1\.20 GB in 12 items \(estimated from the list\), kept 1 on re-check/u);
     const json = capture();
     await tidyCommand({ json: true, days: 14 }, { stdout: json.stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker });
     assert.deepEqual(JSON.parse(json.out.join('')), list);
+  });
+
+  it('mc tidy begins with the disk as measured — healthy, recovering, short — and --json carries it apart from the list\'s estimates', async () => {
+    const at = { at: '2026-10-12T11:00:00.000Z', trigger: 'monitor', measured_delta_bytes: 3e9, estimate_bytes: 11e9, failed: false };
+    const cases = [
+      [45e9, null, ['disk: 45.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']],
+      [33e9, { status: 'healthy', shortfall_bytes: 7e9, last_cleanup: { ...at, outcome: 'above-pressure' } }, [
+        'disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
+        'disk: last pass 2026-10-12T11:00Z (monitor) above-pressure: measured +3.0 GB, estimated 11.0 GB',
+      ]],
+      [27e9, { status: 'pressure', shortfall_bytes: 13e9, last_cleanup: { ...at, outcome: 'shortfall' } }, [
+        'disk: 27.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+        'disk: last pass 2026-10-12T11:00Z (monitor) shortfall: measured +3.0 GB, estimated 11.0 GB',
+        'disk: 13.0 GB short of the 40.0 GB target; protected data is kept',
+      ]],
+    ];
+    for (const [free, state, lines] of cases) {
+      const disk = () => diskSummary({ path: '/w/runner/scratch', stateDir: '/w/runner', read: () => JSON.stringify(state), freeBytes: () => free, nowMs: NOW });
+      const { out, stdout } = capture();
+      await tidyCommand({ apply: false, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker, disk });
+      const said = out.join('').split('\n').filter((line) => line.startsWith('disk:'));
+      assert.deepEqual(said.slice(0, lines.length), lines);
+      const json = capture();
+      await tidyCommand({ json: true, days: 14 }, { stdout: json.stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker, disk });
+      const parsed = JSON.parse(json.out.join(''));
+      assert.deepEqual([parsed.disk.available_bytes, parsed.disk.status, parsed.disk.last_cleanup?.measured_delta_bytes ?? null, parsed.disk.last_cleanup?.estimate_bytes ?? null],
+        [free, free >= 30e9 ? 'healthy' : 'pressure', state ? 3e9 : null, state ? 11e9 : null]);
+      assert.deepEqual(parsed.targets, list.targets, 'the list is unchanged beside it');
+    }
   });
 
   const pruned = (ok = true) => ({

@@ -234,6 +234,10 @@ function runnerLines(lines, c, wide, runner, expand) {
   // Yellow while the runner holds new starts back for want of disk or memory;
   // a file left by a runner that is gone says nothing about now.
   if (now.disk?.line && alive) detail(lines, c, wide, 4, now.disk.line, ['yellow']);
+  // The disk policy (disk-pressure.js): measured free space always, grey when
+  // healthy; under pressure or unknown, the last pass, its shortfall and what
+  // the policy does not promise, in yellow.
+  pressureLines(lines, c, wide, now.pressure);
   if (now.memory?.line && alive) detail(lines, c, wide, 4, now.memory.line, ['yellow']);
   if (expand && now.day) dayLine(lines, c, wide, now.day);
   else if (now.day) say(lines, c, wide, 4, `24 h · build ${now.day.by_kind?.build?.sessions || 0} · review ${now.day.by_kind?.review?.sessions || 0} · plan ${now.day.by_kind?.plan?.sessions || 0}`);
@@ -254,6 +258,13 @@ function runnerLines(lines, c, wide, runner, expand) {
  * person has to act: until then nothing starts in that repository. The
  * clock alone inside a day, the date with it past one.
  */
+/** The disk policy's lines, from `diskSummary`: one grey line while healthy. */
+function pressureLines(lines, c, wide, pressure) {
+  if (!pressure?.lines?.length) return;
+  if (pressure.status === 'healthy') { say(lines, c, wide, 4, pressure.lines[0]); return; }
+  for (const line of pressure.lines) detail(lines, c, wide, 4, line, [pressure.status === 'unknown' ? 'red' : 'yellow']);
+}
+
 export function githubLine(failure) {
   const since = failure.since_seconds != null && failure.since_seconds < 86_400
     ? when(failure.since).replace(/^\d{2}-\d{2} /u, '')

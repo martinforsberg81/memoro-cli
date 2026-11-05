@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
-import { COOLDOWN_MS, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
+import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
 import { parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
@@ -785,6 +785,16 @@ test('a pressure lease another live process holds means no second pass here; a d
   f.deps.alive = () => false;
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
   assert.deepEqual([disk.steps, pressureState(f).lease], [['tidy', 'docker'], null]);
+});
+
+test('the event history keeps the newest EVENTS_KEEP: the oldest goes when one more is written', async () => {
+  const f = goalFixture({ alpha: {} });
+  onDisk(f, new Error('EIO'));
+  f.files['/w/runner/disk-pressure-events.json'] = JSON.stringify(Array.from({ length: EVENTS_KEEP }, (_, n) => ({ at: `old-${n}` })));
+  await createRunner({ deps: f.deps }).pass();
+  const events = pressureEvents(f);
+  assert.equal(EVENTS_KEEP, 100);
+  assert.deepEqual([events.length, events[0].at, events.at(-2).at, events.at(-1).outcome], [100, 'old-1', 'old-99', 'unknown']);
 });
 
 test('a failed Docker prune makes a failed pass, not a file-only success, and the cooldown says so', async () => {
