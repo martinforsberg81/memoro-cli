@@ -283,10 +283,12 @@ test('priority prefers a subscription before any API reserve and falls back for 
 
 test('review priority wins over build-model avoidance and review headroom, but unavailable preference falls back to a subscription', () => {
   const candidates = { ...DEFAULT_CATALOG, review: [OPUS, SOL] };
-  const capacity = codex(claude(empty(), win(0.9)), win(0.1));
+  const capacity = codex(claude(empty(), win(0.1)), win(0.9));
   const preferred = chooseCandidate({ cls: 'review', catalog: candidates, capacity, now: NOW, priority: 'codex', avoid: { tool: 'codex', model: 'gpt-6.1-sol' } });
   assert.equal(preferred.spec, 'codex:gpt-6.1-sol:high');
   assert.equal(preferred.billing, undefined);
+  assert.match(preferred.why, /priority overrides a roomier alternative/u);
+  assert.doesNotMatch(preferred.why, /most headroom/u);
   const unavailable = codex(claude(empty(), win(0.9)), win(0.1), null, { models: [] });
   assert.equal(chooseCandidate({ cls: 'review', catalog: candidates, capacity: unavailable, now: NOW, priority: 'codex' }).spec, 'claude:opus:high');
 });

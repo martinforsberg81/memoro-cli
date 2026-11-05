@@ -34,6 +34,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   const priority = catalog.providerPriority ?? 'auto';
   let routeCandidate = null;
   let routeWhy = null;
+  let routeBilling = null;
   if (!model && (tool === 'codex' || (!tool && priority !== 'auto'))) {
     const roleCandidates = [
       { tool: 'claude', model: role.model || 'opus', effort: 'medium' },
@@ -44,6 +45,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
       const chosen = chooseCandidate({ cls: 'large', catalog: { large: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority });
       routeCandidate = chosen.candidate;
       routeWhy = chosen.why;
+      routeBilling = chosen.billing;
     }
   }
   const selectedTool = tool || routeCandidate?.tool || role.tools?.[0] || 'claude';
@@ -55,7 +57,8 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   const task = `You are running headless with nobody at the terminal. Carry out only the task below, then report what changed, what was checked and what remains. When a decision needs Martin, record the question with the affected goal or proposal and report it; do not guess his answer. Do not start another Manager session.\n\n${prompt}`;
   const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: selectedModel, effort: routeCandidate?.effort, instructions, prompt: task, profileArgs, stream: false, cache: role.cache });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
-  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env });
+  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env, route: { billing: routeBilling, why: routeWhy } });
+  if (billing.billing === 'unavailable') return { ok: false, reason: billing.why, providerPriority: priority, routeWhy };
   const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
   // Keep unattended conversations outside the interactive desk's history lookup.
   const dir = join(runnerDir(env), 'manager', `${now.toISOString().replace(/[:.]/gu, '-')}-${randomUUID()}`);

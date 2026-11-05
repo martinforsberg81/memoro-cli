@@ -2967,15 +2967,21 @@ test('a goal built on the first review candidate is reviewed by the next one whe
   assert.ok(f.log.some((line) => /review starting .* class large: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
 });
 
-test('goal review honors provider priority over headroom and the build-model avoidance', async () => {
+test('goal review rereads changed provider priority over headroom and build-model avoidance', async () => {
   const f = reviewFixture({ log: builtBy('codex gpt-6-luna') });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: 'codex', review: [OPUS_REVIEW, LUNA_REVIEW] });
+  let priority = 'codex';
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [OPUS_REVIEW, LUNA_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
-  f.answer = judges(f, 'merge');
-  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  f.answer = judges(f, 'review');
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
   const call = f.calls.sessions[0];
   assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['codex', 'gpt-6-luna']);
   assert.ok(f.log.some((line) => /codex provider priority/u.test(line)));
+  priority = 'claude';
+  f.answer = judges(f, 'merge');
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['claude', 'opus']]);
 });
 
 test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {

@@ -91,8 +91,10 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
   if (index >= 0) {
     const chosen = judged[index];
     const same = builtOn(chosen.candidate);
+    const priorityOverridesHeadroom = priority !== 'auto' && chosen.candidate.tool === priority
+      && eligible.some((entry) => (entry.headroom ?? -1) > (chosen.headroom ?? -1));
     const reasons = same
-      ? [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...judged.slice(0, index).map(passed), `${avoid.tool} ${avoid.model} built it${eligible.some((entry) => !builtOn(entry.candidate)) ? "; its plan has the most headroom" : ", and no other candidate can run on its plan"}`]
+      ? [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...judged.slice(0, index).map(passed), `${avoid.tool} ${avoid.model} built it${eligible.some((entry) => !builtOn(entry.candidate)) ? (priorityOverridesHeadroom ? "; provider priority overrides a roomier alternative" : "; its plan has the most headroom") : ", and no other candidate can run on its plan"}`]
       : [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...(others.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []), ...judged.slice(0, index).map(passed)];
     const place = `review candidate ${list.indexOf(chosen.candidate) + 1}`;
     const fallback = priority !== 'auto' && chosen.candidate.tool !== priority ? `; ${priority} unavailable on subscription, ${chosen.candidate.tool} subscription fallback` : '';

@@ -292,6 +292,7 @@ export async function runHelperTurn({
   }
   let routeCandidate = null;
   let routeWhy = null;
+  let routeBilling = null;
   let savedPriority = 'auto';
   if (!model && (!tool || tool === 'codex')) {
     const catalog = (deps.catalog || (() => readModels(env)))();
@@ -306,6 +307,7 @@ export async function runHelperTurn({
       const chosen = chooseCandidate({ cls: 'fast', catalog: { fast: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });
       routeCandidate = chosen.candidate;
       routeWhy = chosen.why;
+      routeBilling = chosen.billing;
     }
   }
   const selectedTool = tool || routeCandidate?.tool || role.tools?.[0] || 'claude';
@@ -338,7 +340,8 @@ export async function runHelperTurn({
     toolId: launch.id, adapter: launch.adapter, model: model || routeCandidate?.model || role.model, effort: routeCandidate?.effort, instructions, prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
   });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
-  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env });
+  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env, route: { billing: routeBilling, why: routeWhy } });
+  if (billing.billing === 'unavailable') return { ok: false, reason: billing.why, providerPriority: savedPriority, routeWhy };
   const selectedModel = model || routeCandidate?.model || role.model;
   const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
 
@@ -369,6 +372,7 @@ export async function runHelperTurn({
     model: selectedModel,
     tool: launch.shortName || launch.id,
     providerPriority: savedPriority,
+    billing: billing.billing,
     routeWhy,
     wrote,
     waiting: after,

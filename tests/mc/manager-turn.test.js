@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { it } from 'node:test';
 import { getAdapter } from '../../src/adapters/index.js';
 import { runManagerTurn } from '../../src/mc/manager-turn.js';
-import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
+import { applyObservation, normaliseCapacity, writeCapacity } from '../../src/mc/model-capacity.js';
+import { changeProviderPriority } from '../../src/mc/model-config.js';
+import { writeBillingApi } from '../../src/mc/billing.js';
+import { runnerDir } from '../../src/mc/paths.js';
 
 function fixture(t, tool = 'codex') {
   const root = mkdtempSync(join(tmpdir(), 'mc-manager-turn-'));
@@ -102,4 +105,50 @@ it('records failures and timeouts and releases the running-session record', asyn
   const f = fixture(t, 'claude');
   f.options.deps.session = async () => ({ status: 0, stdout: '{"type":"result","is_error":true,"result":"failed"}', stderr: '' });
   assert.equal((await runManagerTurn(f.options)).ok, false);
+});
+
+it('preserves the API reserve decision for an unusable subscription and refuses API off', async t => {
+  const now = new Date('2026-11-05T18:00:00Z');
+  const f = fixture(t);
+  const e = f.options.env;
+  changeProviderPriority(e, 'codex');
+  const root = runnerDir(e);
+  const fullClaude = applyObservation(normaliseCapacity(null), 'claude', {
+    windows: { five_hour: { fraction_used: 1, resets_at: '2026-11-05T22:00:00Z' } },
+  }, now);
+  for (const observation of [
+    { models: [] },
+    { models: [{ id: 'gpt-6.1-sol', efforts: ['low'] }] },
+    { models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
+  ]) {
+    const capacity = applyObservation(fullClaude, 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
+      models: observation.models,
+    }, new Date(observation.observed_at || now));
+    writeCapacity(capacity, { root });
+    const calls = [];
+    const options = {
+      ...f.options, prompt: 'Check routing',
+      env: e, now, tool: null,
+      deps: {
+        register: () => () => {},
+        launch: tool => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool,
+          adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/provider' } }),
+        session: async call => { calls.push(call); return { status: 0, stdout: '{"type":"turn.completed","usage":{}}', stderr: '' }; },
+      },
+    };
+    writeBillingApi('codex', true, { root });
+    const result = await runManagerTurn(options);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].bin, process.execPath, 'API reserve must not launch the unusable subscription directly');
+    assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
+    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6.1-sol', '/fake/provider']);
+    assert.equal(result.billing, 'credits');
+    assert.match(result.routeWhy, /API reserve/u);
+    writeBillingApi('codex', false, { root });
+    const off = await runManagerTurn(options);
+    assert.equal(off.ok, false);
+    assert.match(off.reason, /codex API off/u);
+    assert.equal(calls.length, 1, 'API off must launch neither API nor an unusable subscription');
+  }
 });
