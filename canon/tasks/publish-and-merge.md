@@ -41,7 +41,6 @@ in it and say why in the reply.
 `mc goal stage merge` directly merges every registered PR, without gate,
 criteria or head checks; the goal is done after all land.
 Conflicts go to a session.
-
 - Queues the pull request and returns. The merger takes the queue one at a
   time per repository lane, runs the gate round on a candidate with the
   current base and squashes only on green. No flag lands a red.
