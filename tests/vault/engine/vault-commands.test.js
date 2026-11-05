@@ -603,18 +603,20 @@ describe('mc vault — full lifecycle (in-process)', () => {
   it('rm deletes a secret (with --no-confirm)', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'doomed', '--no-confirm', '--json'], { portal });
+    const expectedRevision = server.inspect().secrets[0].row_revision;
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['rm', 'doomed', '--no-confirm', '--json'], { portal });
     cap.restore();
     assert.equal(rc, 0);
     assert.equal(server.inspect().secrets.length, 0);
     const deletion = server.calls.find((call) => call.method === 'DELETE');
-    assert.equal(deletion.body.expectedRevision, 1);
+    assert.equal(deletion.body.expectedRevision, expectedRevision);
   });
 
   it('rm refuses a stale row without deleting it', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'stale-rm', '--no-confirm', '--json'], { portal });
+    const expectedRevision = server.inspect().secrets[0].row_revision;
     server.forceNextWriteConflict();
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['rm', 'stale-rm', '--no-confirm', '--json'], { portal });
@@ -624,10 +626,10 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.match(out.error, /changed since it was read/);
     assert.match(out.error, /nothing was written to that entry/);
     assert.equal(server.inspect().secrets.length, 1);
-    assert.equal(server.calls.find((call) => call.method === 'DELETE').body.expectedRevision, 1);
+    assert.equal(server.calls.find((call) => call.method === 'DELETE').body.expectedRevision, expectedRevision);
   });
 
-  it('rm omits the revision when the server has not deployed row revisions', async () => {
+  it('rm refuses a missing row revision before deleting', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'legacy-server', '--no-confirm', '--json'], { portal });
     const legacyPortal = {
@@ -643,8 +645,10 @@ describe('mc vault — full lifecycle (in-process)', () => {
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['rm', 'legacy-server', '--no-confirm', '--json'], { portal: legacyPortal });
     cap.restore();
-    assert.equal(rc, 0);
-    assert.equal(server.calls.find((call) => call.method === 'DELETE').body?.expectedRevision, undefined);
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
+    assert.equal(server.calls.filter((call) => call.method === 'DELETE').length, 0);
+    assert.equal(server.inspect().secrets.length, 1);
   });
 
   it('rm of unknown label returns 1 with helpful error', async () => {
@@ -662,6 +666,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     // (entry doubled, -prev label exists), not on the literal value.
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'mykey', '--no-confirm', '--json'], { portal });
+    const expectedRevision = server.inspect().secrets[0].row_revision;
 
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['rotate', 'mykey', '--no-confirm', '--json'], { portal });
@@ -680,12 +685,13 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const labels = listJson.secrets.map(s => s.label).sort();
     assert.deepEqual(labels, ['mykey', 'mykey-prev']);
     const update = server.calls.find((call) => call.method === 'PUT');
-    assert.equal(update.body.expectedRevision, 1);
+    assert.equal(update.body.expectedRevision, expectedRevision);
   });
 
   it('rotate reports a revision conflict and does not overwrite the row', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'stale-rotate', '--no-confirm', '--json'], { portal });
+    const expectedRevision = server.inspect().secrets[0].row_revision;
     const before = server.inspect().secrets;
     server.forceNextWriteConflict();
     cap.restore(); cap = captureConsole();
@@ -701,7 +707,32 @@ describe('mc vault — full lifecycle (in-process)', () => {
       'a conflict leaves no -prev behind and the row as it was');
     assert.equal(server.calls.filter((call) => call.method === 'PUT').length, 1, 'nothing is retried');
     const update = server.calls.find((call) => call.method === 'PUT');
-    assert.equal(update.body.expectedRevision, 1);
+    assert.equal(update.body.expectedRevision, expectedRevision);
+  });
+
+  it('rotate refuses a missing row revision before creating a backup', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['set', 'legacy-rotate', '--no-confirm', '--json'], { portal });
+    const before = server.inspect().secrets.map((row) => [row.id, row.encrypted_data]);
+    const callsBefore = server.calls.length;
+    const legacyPortal = {
+      ...portal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await portal.memoroFetch(apiUrl, path, opts);
+        if (path === '/api/vault/secrets' && opts?.method !== 'POST') {
+          return { ...result, secrets: result.secrets.map(({ row_revision, ...secret }) => secret) };
+        }
+        return result;
+      },
+    };
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['rotate', 'legacy-rotate', '--no-confirm', '--json'], { portal: legacyPortal });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
+    assert.deepEqual(server.inspect().secrets.map((row) => [row.id, row.encrypted_data]), before);
+    assert.deepEqual(server.calls.slice(callsBefore).filter((call) => call.path.startsWith('/api/vault/secrets')
+      && ['POST', 'PUT', 'DELETE'].includes(call.method)), []);
   });
 
   it('rotate keeps an earlier -prev when the update conflicts', async () => {
@@ -1079,12 +1110,46 @@ describe('mc vault — full lifecycle (in-process)', () => {
       method: 'POST',
       body: { secretType: 'api_key', ...encrypted },
     });
+    const expectedRevision = server.inspect().secrets[0].row_revision;
     cap.restore(); cap = captureConsole();
     const rc = await vaultRun(['migrate', '--json'], { portal: custodyPortal });
     cap.restore();
     assert.equal(rc, 0, cap.out.join('\n'));
     const update = server.calls.find((call) => call.method === 'PUT');
-    assert.equal(update.body.expectedRevision, 1);
+    assert.equal(update.body.expectedRevision, expectedRevision);
+  });
+
+  it('migrate preflights every legacy row before any update when a revision is missing', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    await vaultRun(['set', 'custody-seed', '--no-confirm', '--json'], { portal: custodyPortal });
+    const config = server.inspect().config;
+    const { vaultKey } = await keys.deriveVaultKeys(PW, config.salt, config.iterations);
+    for (const label of ['legacy-first', 'legacy-second']) {
+      const encrypted = await encryptSecretPayload(vaultKey, label, { value: 'opaque' });
+      await server.memoroFetch('x', '/api/vault/secrets', {
+        method: 'POST', body: { secretType: 'api_key', ...encrypted },
+      });
+    }
+    const before = server.inspect().secrets.map((row) => [row.id, row.encrypted_data]);
+    const legacyPortal = {
+      ...custodyPortal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await custodyPortal.memoroFetch(apiUrl, path, opts);
+        if (path === '/api/vault/secrets' && opts?.method !== 'POST') {
+          return { ...result, secrets: result.secrets.map(({ row_revision, ...secret }) => secret) };
+        }
+        return result;
+      },
+    };
+    const callsBefore = server.calls.length;
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['migrate', '--json'], { portal: legacyPortal });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
+    assert.deepEqual(server.inspect().secrets.map((row) => [row.id, row.encrypted_data]), before);
+    assert.equal(server.calls.slice(callsBefore).filter((call) => call.method === 'PUT').length, 0);
   });
 
   it('migrate stops at a revision conflict, says so, and writes nothing to that row', async () => {
@@ -1126,6 +1191,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     };
     let rc = await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: custodyPortal, toolAuthDeps });
     assert.equal(rc, 0);
+    const expectedRevision = server.inspect().secrets[0].row_revision;
     server.forceNextWriteConflict();
     cap.restore(); cap = captureConsole();
     rc = await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: custodyPortal, toolAuthDeps });
@@ -1133,8 +1199,39 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(rc, 1);
     assert.match(JSON.parse(cap.out.join('\n')).error, /changed since it was read/);
     const update = server.calls.find((call) => call.method === 'PUT');
-    assert.equal(update.body.expectedRevision, 1);
+    assert.equal(update.body.expectedRevision, expectedRevision);
     assert.equal(server.inspect().secrets.length, 1);
+  });
+
+  it('adopt refuses a missing custody row revision before capturing or updating', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const custodyPortal = await portalWithCustody(server, portal);
+    const toolAuthDeps = {
+      platform: 'linux',
+      exists: () => true,
+      readFile: () => JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'token' } }),
+    };
+    await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: custodyPortal, toolAuthDeps });
+    let captures = 0;
+    const legacyToolAuthDeps = { ...toolAuthDeps, readFile: () => { captures += 1; return toolAuthDeps.readFile(); } };
+    const legacyPortal = {
+      ...custodyPortal,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await custodyPortal.memoroFetch(apiUrl, path, opts);
+        if (path === '/api/vault/secrets' && opts?.method !== 'POST') {
+          return { ...result, secrets: result.secrets.map(({ row_revision, ...secret }) => secret) };
+        }
+        return result;
+      },
+    };
+    const callsBefore = server.calls.length;
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['adopt', 'codex', '--no-confirm', '--json'], { portal: legacyPortal, toolAuthDeps: legacyToolAuthDeps });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
+    assert.equal(captures, 0);
+    assert.equal(server.calls.slice(callsBefore).filter((call) => call.method === 'PUT').length, 0);
   });
 });
 
