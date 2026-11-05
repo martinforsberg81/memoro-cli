@@ -407,7 +407,14 @@ const DIGEST_REPO = 11;
 
 /** Repository readings side by side; missing measurements stay unknown. */
 function maintenanceLines(lines, c, wide, sessions, intake, checks) {
-  heading(lines, c, wide, 'MAINTENANCE', '', 'mc helper · mc brief');
+  const helper = sessions?.desks?.helper;
+  const last = intake?.last_run;
+  const status = [
+    { text: helper ? `helper ${MARK.running} ${openFor(helper.age_seconds)}` : 'helper not open', styles: helper ? ['cyan'] : ['grey'] },
+    { text: last ? `last run ${ageWords(last.age_seconds)} ago${last.ok ? '' : ' failed'}` : 'no run recorded', styles: last && !last.ok ? ['red'] : ['grey'] },
+    { text: helper ? [helper.tool, helper.model].filter(Boolean).join(' ') : '', styles: ['grey'] },
+  ];
+  heading(lines, c, wide, 'MAINTENANCE', fitting(trailing(status), wide - 17), null);
   const compact = wide < 100;
   const columns = [
     ['REPO', 11], ['ERRORS', 7], ['NEW', 5], ['LOUD', 5],
@@ -436,11 +443,6 @@ function maintenanceLines(lines, c, wide, sessions, intake, checks) {
   else say(lines, c, wide, 2, 'errors: fingerprints · DEP: dependency vulnerabilities', ['grey']);
   const untagged = intake?.by_system?.untagged || 0;
   if (untagged) say(lines, c, wide, 7, `${untagged} proposal${untagged === 1 ? '' : 's'} · untagged ${untagged}`, ['yellow']);
-  for (const verb of ['helper', 'brief']) {
-    const session = sessions?.desks?.[verb];
-    if (!session) continue;
-    say(lines, c, wide, 7, `${verb} ${MARK.running} ${openFor(session.age_seconds)} · ${[session.tool, session.model].filter(Boolean).join(' ')}${session.pid ? ` · pid ${session.pid}` : ''}`, ['cyan']);
-  }
 }
 
 
@@ -758,6 +760,37 @@ function dockerLine(lines, c, wide, docker) {
   say(lines, c, wide, 2, parts.join(' · '));
 }
 
+/** Global work and its Manager share one header above programme details. */
+function headerLines(lines, c, wide, data, version) {
+  const room = wide - 6;
+  const frame = (text) => lines.push(`  ${c('│', 'grey')} ${text}${' '.repeat(Math.max(0, room - width(text)))} ${c('│', 'grey')}`);
+  const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
+  const statuses = data.programmes?.availability || data.programmes?.statuses || {};
+  const proposals = (data.intake?.proposals || 0) + (data.programmes?.programmes || []).reduce((n, group) => n + (group.proposals || 0), 0);
+  const manager = data.sessions?.desks?.manager;
+  lines.push('');
+  rule('┌', '┐');
+  const brand = `MC${version ? `  ${version}` : ''}`;
+  const action = 'mc manager';
+  frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
+  frame(paint(c, fitting(trailing([
+    { text: `${(data.runner?.sessions || []).length} in flight` },
+    { text: `${statuses.ready || 0} ready`, styles: ['green'] },
+    { text: `${statuses.blocked || 0} blocked`, styles: statuses.blocked ? ['red'] : ['grey'] },
+    { text: `${proposals} proposals`, styles: proposals ? ['yellow'] : ['grey'] },
+    { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
+  ]), room), room));
+  frame(paint(c, fitting(trailing([
+    { text: 'MANAGER', styles: ['bold', 'cyan'] },
+    { text: manager ? `${MARK.running} ${openFor(manager.age_seconds)}` : 'not open', styles: manager ? ['cyan'] : ['grey'] },
+    { text: manager ? [manager.tool, manager.model].filter(Boolean).join(' ') : 'all programmes', styles: ['grey'] },
+    { text: manager?.pid ? `pid ${manager.pid}` : '', styles: ['grey'] },
+  ]), room), room));
+  frame(c(clip('Priorities across programmes · blockers · proposals', room), 'grey'));
+  rule('└', '┘');
+  lines.push('');
+}
+
 /* ------------------------------------------------------------------- page */
 
 /**
@@ -772,28 +805,7 @@ export function renderPageLines(data, {
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
 
-  const cost = money(data.runner?.day?.cost);
-  const brand = `${c('MEMORO·CLI', 'bold')}${version ? c(`  ${version}`, 'grey') : ''}`;
-  // What is true of the work, in three numbers that are all on the page below:
-  // the sessions the runner has in flight, and the goals that are
-  // ready and blocked (PROGRAMMES). The three ride in one part so that a
-  // narrow terminal drops the cost rather than half of the answer.
-  const statuses = data.programmes?.availability || data.programmes?.statuses || {};
-  const flight = (data.runner?.sessions || []).length;
-  // Counted on the plain text, and the narrowest terminal keeps the count it
-  const parts = [
-    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.blocked || 0} blocked` },
-    cost ? { text: `${cost} today`, styles: ['grey'] } : null,
-  ].filter(Boolean);
-  const plain = () => parts.map((part) => part.text).join('  ·  ');
-  while (parts.length > 1 && width(brand) + plain().length + 6 > wide) parts.pop();
-  const counts = paint(c, between(parts, '  ·  '));
-  // A narrow terminal gives up the version first: the counts are
-  // the answer, and the MC line below says the version again.
-  const head = width(brand) + width(counts) + 6 <= wide ? brand : c('MEMORO·CLI', 'bold');
-  lines.push('');
-  lines.push(`  ${head}  ${counts}`);
-  lines.push('');
+  headerLines(lines, c, wide, data, version);
   // A language run stopped inside a gap is production half-way between two
   // states: above every section, until `mc language resume` closes it.
   openGapLine(lines, c, wide, data.language?.open_gap);

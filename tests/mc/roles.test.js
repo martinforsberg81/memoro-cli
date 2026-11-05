@@ -225,7 +225,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'helper', 'intake', ...STARTS]) {
+    for (const name of ['manager', 'helper', 'intake', ...STARTS]) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -268,7 +268,7 @@ describe('the text every role session shares', () => {
  */
 describe('the verb files', () => {
   it('reaches a session by reference, without preloading the manual', () => {
-    for (const name of ['plan-session', 'brief']) {
+    for (const name of ['plan-session', 'manager']) {
       const { overlay } = readCanonRole(name);
       assert.match(overlay, /^@verb goal$/mu);
       const told = instructionsFor('codex', overlay);
@@ -348,7 +348,7 @@ describe('the role catalogue', () => {
   // and the passages verb files, with `plan-session-roles` (2026-11-03).
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'brief.md', 'build-session.md', 'helper.md', 'intake.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'build-session.md', 'helper.md', 'intake.md', 'manager.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });

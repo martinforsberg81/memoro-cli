@@ -26,6 +26,7 @@ export const VERB_MODULES = {
   language: './mc/commands/language.js',
   deps: './mc/commands/deps.js',
   prs: './mc/commands/prs.js',
+  manager: './mc/commands/manager.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
   plan: './mc/commands/plan.js',
@@ -40,7 +41,7 @@ export const VERB_MODULES = {
 
 /**
  * The verbs that went on 2026-11-03 (goal mc/no-work): every session belongs
- * to a programme (plan, build, review) or a desk (brief, helper), and there is
+ * to a programme (plan, build, review) or a desk (manager, helper), and there is
  * no third kind. The dispatcher answers either with `retiredLines` and exit 2.
  */
 export const RETIRED_VERBS = Object.freeze(['work', 'worker', 'project', 'step']);
@@ -66,7 +67,7 @@ export function retiredLines(verb) {
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',
     '    mc plan <programme>   plan a programme',
-    '    mc brief · mc helper  the two desks',
+    '    mc manager · mc helper  the two desks',
     '    mc tidy               what is left under ~/mc/work/, and whether it can go',
   ];
 }

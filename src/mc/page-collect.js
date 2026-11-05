@@ -50,7 +50,7 @@ import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
+  DAY_MS, defaultRepos, listProgrammes, proposalSystem, parseRuns, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
@@ -412,7 +412,7 @@ export function sessionsSection({
     .map((item) => ({ ...item, age_seconds: age(item.started), owner: ownerOf(item) }));
 
   const desks = {};
-  for (const verb of DESKS) desks[verb] = open.find((item) => item.verb === verb) || null;
+  for (const verb of DESKS) desks[verb] = open.find((item) => item.owner?.kind === 'desk' && item.owner.name === verb) || null;
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
   // that programme's own heading — which is the whole reason `mc plan` puts
@@ -859,7 +859,7 @@ export function countNewErrors(text) {
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
  */
-export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED } = {}) {
+export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED, runs = [] } = {}) {
   const repos = digests.map((digest) => {
     const { lines, first } = newErrorLines(digest.text);
     const loud = lines.filter((line) => line.loud);
@@ -890,7 +890,10 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
       first,
     };
   });
-  return { repos, digests: repos.length, proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
+  const last = runs.reduce((latest, row) => row.kind === 'helper' && Number.isFinite(Date.parse(row.ts))
+    && (!latest || Date.parse(row.ts) >= Date.parse(latest.ts)) ? row : latest, null);
+  const last_run = last ? { at: last.ts, age_seconds: Math.max(0, Math.round((now.getTime() - Date.parse(last.ts)) / 1000)), ok: String(last.exit) === '0' } : null;
+  return { last_run, repos, digests: repos.length, proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
 }
 
 /** How many of the newest proposals BRIEF names. */
@@ -1478,7 +1481,7 @@ export async function collectPage({
     }),
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
-    intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
+    intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
     // File reads only, as DEPLOY's are: the page never runs a read.
     language: languageState(env),

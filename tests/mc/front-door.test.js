@@ -176,7 +176,7 @@ describe('bare mc', () => {
         // A goal's session is named `<programme>/<goal>`, as its goal row is.
         ['msr/fast-path', { kind: 'programme', name: 'msr' }],
       ]);
-      assert.deepEqual(page.sessions.desks.brief.owner, { kind: 'desk', name: 'brief' });
+      assert.deepEqual(page.sessions.desks.manager.owner, { kind: 'desk', name: 'manager' });
       const all = [...page.runner.sessions, ...Object.values(page.sessions.desks).filter(Boolean),
         ...Object.values(page.sessions.planning_sessions).flat(), ...Object.values(page.sessions.programme_sessions).flat()];
       assert.equal(all.length, 3);
@@ -210,7 +210,7 @@ describe('the workarea verbs are gone', () => {
         assert.equal(result.stdout, '', what);
         assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — every session belongs to a programme or a desk$`, 'mu'), what);
         assert.match(result.stderr, /mc plan <programme>/u, what);
-        assert.match(result.stderr, /mc brief · mc helper/u, what);
+        assert.match(result.stderr, /mc manager · mc helper/u, what);
       }
       assert.equal(existsSync(join(fx.workRoot, 'work')), false, 'nothing made ~/mc/work/');
     } finally { fx.cleanup(); }
@@ -401,7 +401,7 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show that goal', 'a  all / collapse', 'b  brief', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show that goal', 'a  all / collapse', 'm  manager', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');

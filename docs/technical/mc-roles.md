@@ -5,7 +5,7 @@ Every session mc starts in a role is told two things, in this order: the text
 the user's Coding Profile, which once came first, was removed by ruling 24, and
 the one rule in it nothing else said (what is written in English) is a sentence
 in `all-sessions.md`. This document is the one account of how those two are found
-and joined. `mc run`, `mc plan`, `mc helper` and `mc brief` each described a corner
+and joined. `mc run`, `mc plan`, `mc helper` and `mc manager` each described a corner
 of it from their own angle; they now point here, because four parallel accounts
 of one mechanism is four things to keep true.
 
@@ -69,7 +69,7 @@ session is for; a verb file says how a verb is used).
 | `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merge after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
-| `brief` | opus | `brief` | `mc brief`, a foreground session in `~/mc/brief/` |
+| `manager` | opus | `manager` | `mc manager`, a foreground session in `~/mc/brief/` |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 
@@ -163,7 +163,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc brief`, `mc helper`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runGoal`) | a goal build, review or headless plan session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
@@ -172,7 +172,7 @@ Each of them used to write the join out by hand.
 
 ## The verb files
 
-`canon/verbs/goal.md` holds the goal manual. The plan and brief role files name
+`canon/verbs/goal.md` holds the goal manual. The plan and manager role files name
 it with `@verb goal`. `expandRoleIncludes`, called by `instructionsFor`, turns
 that line into a short instruction to read the installed `mc/verbs/goal.md`
 before using `mc goal`. It never pastes the manual into the launch context.
@@ -308,7 +308,7 @@ body, is **not** listed as a role with the file sitting in the catalogue
 directory under test, and is not in a role's own overlay.
 
 Blocks below it. *The verb files* asserts the defining sentences of each verb
-file are in exactly that file, that `plan-session` and `brief` carry the
+file are in exactly that file, that `plan-session` and `manager` carry the
 markers and no copy, that a verb file is not listed as a role, that
 `instructionsFor` expands the marker and leaves none behind — and that an
 unresolvable marker is left standing. *Every canon role has a body* walks
@@ -357,7 +357,7 @@ verified by opening a real planning session with it (2026-09-05, #614).
 Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
 accompanies programme-owned launches; `MC_GOAL` identifies a goal. Runner
 roles are `build-session:goal`, `review-session:goal` and `plan-session`;
-desks are `brief`, `helper` and `intake`. The launch clears inherited session
+desks are `manager`, `helper` and `intake`. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then

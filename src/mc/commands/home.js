@@ -262,7 +262,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  all / collapse   ·   b  brief',
+  '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
   '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
@@ -347,9 +347,9 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
-    if (answer === 'b' || answer === 'brief') {
-      const brief = await import('./brief.js');
-      return brief.run([], { stdout, stderr });
+    if (['m', 'manager', 'b', 'brief'].includes(answer)) {
+      const manager = await import('./manager.js');
+      return manager.run([], { stdout, stderr });
     }
 
     const order = runnerOrder(answer);

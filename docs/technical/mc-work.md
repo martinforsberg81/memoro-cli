@@ -5,7 +5,7 @@ their own under `~/mc/work/<name>/` — a "workarea" — with a session in it th
 belonged to nobody. Martin, 2026-11-03: *"Sedan ska vi helt ta bort konceptet
 med work; sessioner hör alltid till ett program eller så är det t ex BRIEF."*
 So every session belongs to a programme (plan, build, review) or a desk
-(brief, helper), and there is no third kind (goal `mc/no-work`).
+(manager, helper), and there is no third kind (goal `mc/no-work`).
 
 What took each part's place:
 

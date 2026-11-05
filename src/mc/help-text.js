@@ -11,7 +11,7 @@ THE PAGE
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
 
 PLAN AND FOLLOW
-  mc brief                        Person: open or resume the brief session
+  mc manager                      Person: manage work across all programmes
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
   mc programs list [--json]        Every programme, active or dormant
@@ -41,7 +41,7 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan, mc brief, mc helper open interactive sessions;
+  Person: mc plan, mc manager, mc helper open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc goal new / set / criterion add writes goals; mc goal log
@@ -104,7 +104,7 @@ ${commandReference('deps')}
 
 ${commandReference('log')}
 
-${commandReference('brief')}
+${commandReference('manager')}
 
 ${commandReference('plan')}
 
@@ -138,7 +138,7 @@ WHAT IS NOT HERE
   share only the name: dev servers, and dependency updates.
 
   Nor is a session of nobody's. Every session belongs to a programme (plan,
-  build, review) or a desk (brief, helper); the verbs that opened folders of
+  build, review) or a desk (manager, helper); the verbs that opened folders of
   their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS

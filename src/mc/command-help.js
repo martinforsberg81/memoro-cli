@@ -457,12 +457,14 @@ export const COMMAND_USAGE = Object.freeze({
     "Groups: on a step (project and step), plan sessions, workareas, checked out elsewhere, nobody's.\n",
     "Reads only: nothing is closed, merged or moved.\n",
   ].join(''),
-  brief: [
-    "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n",
+  manager: [
+    "usage — mc manager [--new] [--codex|--claude] [--model <model>]\n",
     "\n",
-    "Person: opens (or resumes) the brief in ~/mc/brief/ with its role and gathers nothing —\n",
-    "it reads the page, mc status and mc goal list itself. --new starts a fresh conversation.\n",
+    "Person: opens or resumes Manager, the session across all programmes: prioritise work,\n",
+    "resolve blockers and review proposals. --new starts a fresh conversation.\n",
+    "Keeps ~/mc/brief/ to resume existing conversations. mc brief is a compatibility alias.\n",
   ].join(''),
+  brief: "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n\nCompatibility alias for mc manager.\n",
   plan: [
     "usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n",
     "        mc plan <programme> --archive\n",
