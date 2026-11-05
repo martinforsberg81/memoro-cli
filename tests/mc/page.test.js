@@ -1361,7 +1361,7 @@ describe('the page', () => {
     assert.match(text, /^  ● memoro\s+\?\s+1\s+1\s+\?\s+\?\s+\?\s+\?\s+0\s+60 min old$/mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     assert.match(text, /PROGRAMMES {2}3 active · 1 dormant · 3 goals {2}ready 2 · blocked 1\s+p {2}plan a programme/u);
-    assert.match(text, /^ {2}docx-editing-surface\s+· 1 goal · no plan session$/mu,
+    assert.match(text, /^ {2}docx-editing-surface\s+· 1 goal · no plan session +─+$/mu,
       'the programme is a heading of its own, and it counts its own goals');
     // Every goal is a row under its programme, numbered in programme order,
     // with its repository in a column of its own.
@@ -2094,13 +2094,13 @@ describe('the palette', () => {
     '',
     'bold+cyan grey green grey red grey', //          PROGRAMMES  3 active · 1 dormant · 3 goals  ready 2 · blocked 1
     'grey', // dormant programmes
-    'grey', // column titles
-    'bold+cyan grey grey grey grey', // programme name · goals · plan sessions
-    'red white grey red grey red grey red grey white', // blocked goal, primary text white
-    'bold+cyan grey grey grey grey',
-    'green white+bold grey green grey white', // running goal
-    'bold+cyan grey grey grey grey',
-    'grey white grey grey grey white', // unfinished goal
+    'bold', // column titles
+    'bold+cyan grey grey grey cyan', // programme name · goals · plan sessions
+    'red red grey red grey red grey', // blocked goal, primary text uses the terminal foreground
+    'bold+cyan grey grey grey cyan',
+    'green bold green grey', // running goal
+    'bold+cyan grey grey grey cyan',
+    'grey grey grey', // unfinished goal
     'yellow', //                                         not an area mc knows
     'bold grey', //                                      mc-docx-editor  tmux session · open 60 min
     '',

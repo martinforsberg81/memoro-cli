@@ -751,7 +751,10 @@ export function attachPrs({ programmes, runner, pulls }) {
       || (goal.carries || []).some((carried) => carried.repo === item.repo && Number(carried.pr) === item.number))
     && (!goal.repos?.length || goal.repos.includes(item.repo)));
   for (const group of programmes?.programmes || []) {
-    for (const goal of group.goals || []) goal.prs = goalPrs(goal);
+    for (const goal of group.goals || []) {
+      goal.prs = goalPrs(goal);
+      for (const pr of goal.prs) pr.programme = group.programme;
+    }
   }
   // A goal owns its PR first. The remaining programme-owned PRs need rows
   // even when the programme has no goals or no planning session left open.
@@ -761,8 +764,11 @@ export function attachPrs({ programmes, runner, pulls }) {
     for (const group of groups) group.prs = [];
     for (const pr of pulls.items) {
       if (claimed.has(pr)) continue;
-      const name = pr.owner?.kind === 'plan'
-        ? pr.owner.name || pr.branch?.match(/^plan[/-](.+)$/u)?.[1] : null;
+      // A planning branch can be held in a scratch worktree, outside the
+      // programme directory. Its explicit branch name still identifies it.
+      const name = (pr.owner?.kind === 'plan' ? pr.owner.name : null)
+        || pr.branch?.match(/^plan[/-](.+)$/u)?.[1] || null;
+      pr.programme = name;
       if (!name) continue;
       let group = groups.find((item) => item.programme === name);
       if (!group) {
