@@ -1307,21 +1307,26 @@ async function cmdChangePassword(argv, opts = {}) {
       currentAuthHash, newAuthHash, newSalt: newSaltB64, ...newCrkWrap,
     });
   } catch (err) {
-    if (err?.data?.code) {
-      emit(flags.json, { ok: false, code: err.data.code, changed_password: false,
-        error: err.data.error || err.message || 'server refused the password change.' });
+    if (err?.status >= 400 && err.status < 500) {
+      emit(flags.json, { ok: false, ...(err.data?.code ? { code: err.data.code } : {}), changed_password: false,
+        error: err.data?.error || err.message || 'server refused the password change.' });
       return 1;
     }
-    // Dispatch may have committed before a transport failure. Neither key is
-    // safe to cache and an automatic retry could rotate again.
+    // Transport and server failures without an explicit refusal are uncertain.
+    cp = null;
+  }
+  if (cp?.ok === false) {
+    emit(flags.json, { ok: false, ...(cp?.code ? { code: cp.code } : {}), changed_password: false,
+      error: cp?.error || 'change-password refused; password was not changed.' });
+    return 1;
+  }
+
+  if (cp?.ok !== true) {
+    // Dispatch may have committed even if its confirmation is empty/unreadable.
+    // Neither key is safe to cache and an automatic retry could rotate again.
     await clearCachedVaultKey({ deps: opts.cacheDeps });
     emit(flags.json, { ok: false, code: 'VAULT_PASSWORD_CHANGE_OUTCOME_UNKNOWN',
       changed_password: 'unknown', error: 'password-change outcome is unknown; check by unlocking. No automatic retry was made.' });
-    return 1;
-  }
-  if (!cp?.ok) {
-    emit(flags.json, { ok: false, ...(cp?.code ? { code: cp.code } : {}), changed_password: false,
-      error: cp?.error || 'change-password refused; password was not changed.' });
     return 1;
   }
 
