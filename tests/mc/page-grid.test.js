@@ -94,7 +94,7 @@ describe('page layouts', () => {
       const rows = rowsOf(lines);
       assert.match(rows[0], /↳ memoro-cli#1102/u);
       assert.match(rows[1], /memoro-cli#1103/u, 'unassigned activity retains its PR');
-      assert.match(rows[2], /#1104 · queued/u);
+      assert.match(rows[2], /1 in queue: #1104/u);
       assert.ok(lines.some((line) => /SLOT +:8920 +leased/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns));
       assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
