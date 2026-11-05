@@ -48,9 +48,13 @@ export function devLines(lines, c, wide, dev, expand) {
     const stateCell = clipCell(state, 8).padEnd(8);
     const stageCell = clipCell(label, 7).padEnd(7);
     const warning = server.holder_gone ? ' · holder gone' : '';
-    const room = wide - prefix.length - stateCell.length - stageCell.length - 2 - warning.length;
+    const pidText = server.pid ? `pid ${server.pid}` : '';
+    const inlinePid = pidText && wide - prefix.length - stateCell.length - stageCell.length - 2 - warning.length - pidText.length - 3 >= 4;
+    const pidSuffix = inlinePid ? ` · ${pidText}` : '';
+    const room = wide - prefix.length - stateCell.length - stageCell.length - 2 - warning.length - pidSuffix.length;
     const name = clipCell(server.holder?.name || '', room);
-    lines.push(`${c(prefix, 'grey')}${c(stateCell, ...stateTone(state))} ${c(stageCell, ...(server.holder_gone ? ['grey'] : []))} ${c(name, ...(server.holder_gone ? ['grey'] : []))}${warning ? ' · ' + c('holder gone', 'yellow') : ''}`.trimEnd());
+    lines.push(`${c(prefix, 'grey')}${c(stateCell, ...stateTone(state))} ${c(stageCell, ...(server.holder_gone ? ['grey'] : []))} ${c(name, ...(server.holder_gone ? ['grey'] : []))}${warning ? ' · ' + c('holder gone', 'yellow') : ''}${c(pidSuffix, 'grey')}`.trimEnd());
+    if (pidText && !inlinePid) detail(lines, c, wide, 6, pidText);
     if (expand) {
       detail(lines, c, wide, 12, [server.url, server.service, server.progress && `last used ${server.progress} ago`].filter(Boolean).join(' · '));
       detail(lines, c, wide, 12, [server.branch, shortPath(server.worktree)].filter(Boolean).join(' · '));
@@ -111,6 +115,7 @@ export function mergesLines(lines, c, wide, merges, expand) {
       const label = `${red ? 'failed' : 'merging'} ${refs}`;
       const status = [!red && mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
       operation(lines, c, wide, label, status, stateTone(item.state));
+      if (!red && item.pid) detail(lines, c, wide, 8, `pid ${item.pid}`);
       if (red) detail(lines, c, wide, 8, item.said || item.reason || 'failure reason unavailable', ['red']);
       if (item.batch_of) detail(lines, c, wide, 8, `with #${item.batch_of}`);
       if (expand) {
@@ -145,6 +150,7 @@ export function deployLines(lines, c, wide, production, expand) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
     operation(lines, c, wide, 'ATTEMPT', `${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}${p.running && !p.running.late ? ' · progress unknown' : ''}`,
       p.running?.late || state === 'refused' ? ['yellow'] : stateTone(state));
+    if (attempt.pid) detail(lines, c, wide, 14, `pid ${attempt.pid}`);
     if (attempt.stopped_at) detail(lines, c, wide, 14, attempt.stopped_at, ['red']);
   }
   if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');

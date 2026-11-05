@@ -2837,7 +2837,12 @@ test('headless planning chooses Opus or Sol by capacity, always at medium, for f
 
 test('a goal in finish starts one plan session: the plan role, opus, the programme directory, no worktree, told to finish it', async () => {
   const f = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: REVIEW.md\n' } });
-  f.answer = plans(f, 'stuck', 'finish', 'Martin');
+  const finish = plans(f, 'stuck', 'finish', 'Martin');
+  f.answer = (call) => {
+    call.onSpawn?.(98765);
+    assert.equal(JSON.parse(f.files['/w/runner/current-memoro-1.json']).session_pid, 98765);
+    return finish(call);
+  };
   const runner = createRunner({ deps: f.deps });
   const r = await runner.pass({ repo: 'memoro', lane: 1 });
   assert.equal(r.ran, 1);

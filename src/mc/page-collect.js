@@ -194,6 +194,7 @@ export function productionSection({
     sha: row.sha || null,
     short: shortSha(row.sha),
     holder: row.holder || null,
+    pid: Number(row.pid) || null,
     at: row.ended || row.started || null,
     age_seconds: age(row.ended || row.started),
     stopped_at: row.stopped_at || null,
@@ -553,7 +554,7 @@ export function mergesSection({
     return [
       { ...round, goal: own?.goal || null, ...named(round.repo, round.pr, own), queue_since: own?.since || null },
       ...rest.map((item) => ({
-        repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, batch_of: Number(round.pr),
+        repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, pid: round.pid ?? null, batch_of: Number(round.pr),
         ...named(item.repo || round.repo, item.pr, item),
       })),
     ];
@@ -1006,8 +1007,8 @@ export function mcSection({
     behind: Number.isInteger(behind) ? behind : null,
     // Only while mc's hook registration in ~/.claude/settings.json has drifted.
     ...(hooks ? { hooks } : {}),
-    // Only while two runners overlap; otherwise the line is what it was.
-    ...(predecessor ? { pid: Number.isInteger(pid) ? pid : null, predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
+    pid: process?.alive && Number.isInteger(pid) ? pid : null,
+    ...(predecessor ? { predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
     // Only while a process is behind; otherwise the line is what it was.
     ...(behindCheckout.length ? { behind_checkout: behindCheckout } : {}),
     update_requested: updateText == null ? null : {

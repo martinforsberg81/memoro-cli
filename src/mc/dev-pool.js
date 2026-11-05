@@ -99,6 +99,7 @@ export function serverRow(server, { main = null, now = Date.now(), alive = pidAl
   return {
     kind: isMainServer(server, main) ? 'main' : 'slot',
     instance_id: server.instance_id ?? null,
+    pid: server.pid ?? null,
     service: server.service ?? null,
     holder,
     holder_alive: living,

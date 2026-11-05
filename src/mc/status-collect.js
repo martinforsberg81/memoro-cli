@@ -139,6 +139,7 @@ export function nowBlock({
       billing: current.billing || null,
       worktree: current.worktree || null,
       pid: current.pid ?? null,
+      session_pid: current.session_pid ?? null,
       started: current.started || null,
       elapsed_seconds: elapsed,
       check_in_seconds: checkInSeconds,
