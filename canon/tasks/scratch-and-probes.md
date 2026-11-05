@@ -5,9 +5,11 @@ description: Where files that are not the change go in mc — probes, output, bo
 # Scratch files and probes
 
 Files that are not the change — probes, output, a PR body, a script — go in
-`$MC_SCRATCH`, or the system temp directory when it is unset. Never the
-worktree.
-
+`$MC_SCRATCH`, never the worktree. Initialize once; reuse this root throughout:
+```sh
+MC_SCRATCH="${MC_SCRATCH:-$(mktemp -d "${TMPDIR:-/tmp}/mc-probes.XXXXXX")}" || exit 1
+export MC_SCRATCH
+```
 A probe that runs mc's own code from a worktree — a review trying a branch, the
 page drawn from it, a runner function called by hand — sets
 `MC_HOME="$MC_SCRATCH/mc-home"` and `MC_WORK_ROOT="$MC_SCRATCH/mc-root"` first.
@@ -15,9 +17,8 @@ Reading mc's state can write it (a migration, a heal), and without them it
 writes Martin's: `~/.memoro/mc/lanes.json` was rewritten that way on 2026-11-02
 and the running runner dropped to one lane per repository.
 
-The same holds for a home: a worktree's `mc skills sync` or `mc hook install`
-writes `~/.claude` and `~/.agents` unless `HOME` (and `CLAUDE_CONFIG_DIR`)
-point into the scratch directory.
+For a worktree's `mc skills sync` or `mc hook install`, also isolate `HOME` and
+`CLAUDE_CONFIG_DIR` under that root; otherwise it writes `~/.claude`/`~/.agents`.
 
 ## Independent fault replay
 
@@ -25,7 +26,6 @@ For a commissioned source fault, keep the reviewed worktree read-only. Before
 replay, record its `git rev-parse HEAD` and `git status --short`; require the
 prompted judged SHA and a clean status. Start a disposable scratch worktree at
 that SHA, never current `main`:
-
 ```sh
 sha=<judged-sha>
 reviewed=<reviewed-worktree>
