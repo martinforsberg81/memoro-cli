@@ -112,9 +112,9 @@ describe('page layouts', () => {
 
   it('draws a numbered goal with its own layout and its PR as a child', () => {
     const lines = renderPageLines(threeRows(), { columns: 120, now: NOW }).map(plain);
-    const index = lines.findIndex((line) => /^ +1 grid-goal +build +can start/u.test(line));
+    const index = lines.findIndex((line) => /^ +1 grid-goal$/u.test(line));
     assert.ok(index >= 0, lines.join('\n'));
-    assert.match(lines[index + 1], /↳ memoro-cli#1102/u);
+    assert.match(lines[index + 2], /↳ memoro-cli#1102/u);
     assert.ok(!lines.some((line) => /(?:^| )g · /u.test(line)), 'no row says `g ·`');
   });
 

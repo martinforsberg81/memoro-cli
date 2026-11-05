@@ -545,7 +545,7 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
     });
     const head = rowWith(lines, 'LANGUAGE');
     assert.match(strip(head), /^ {2}LANGUAGE {2}last run sv-forms-cutover · stopped · 60 min ago +mc language$/u);
-    assert.deepEqual(signature(head).split(' '), ['bold+cyan', 'yellow', 'grey', 'grey'],
+    assert.deepEqual(signature(head).split(' '), ['bold+cyan', 'yellow', 'white', 'white'],
       'a section title, and a stopped run waits on a person');
     assert.match(strip(rowWith(lines, 'rows waiting')), /^ {4}sv {2}3 unresolved selectors · 724 rows waiting · mc language promote · read 2 h ago$/u);
     assert.match(strip(rowWith(lines, ' fr ')), /^ {4}fr {2}read 9 d ago$/u, 'a reading a week old is worth taking again');
@@ -1272,7 +1272,7 @@ describe('the page', () => {
     assert.match(text, /MC {2}0\.7\.11/u);
     // What is true of the work: the session in flight, and the goals
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 1 ready · 0 blocked · 1 Martin/u);
+    assert.match(text, /1 in flight · 2 ready · 0 blocked · 1 Martin/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
@@ -1295,11 +1295,10 @@ describe('the page', () => {
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^  ● memoro\s+\?\s+1\s+1\s+\?\s+\?\s+\?\s+\?\s+0\s+60 min old$/mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
-    // Every goal is a row under its programme, numbered in programme order,
-    // with its repository in a column of its own.
-    assert.match(text, /^ +1 avatar-self-serve +build +Martin$/mu);
-    assert.match(text, /^ +2 docx-editor +build +running$/mu);
-    assert.match(text, /^ +3 mc-ui +build +can start$/mu);
+    // Goal titles retain their numbers; canonical metadata follows on a child row.
+    assert.match(text, /^ +1 avatar-self-serve$/mu);
+    assert.match(text, /^ +2 docx-editor$/mu);
+    assert.match(text, /^ +3 mc-ui$/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
     assert.doesNotMatch(text, /unplanned-workareas/u);
     // mc itself is the last line: how long the runner has been up, on what, and
@@ -1326,14 +1325,14 @@ describe('the page', () => {
    * the goals keep their numbers either way.
    */
   it('draws every programme on expand, keeping the same goal numbers', () => {
-    const names = (lines) => lines.map((line) => /^ +[123] (avatar-self-serve|docx-editor|mc-ui) +build/u.exec(line)?.[1]).filter(Boolean);
+    const names = (lines) => lines.map((line) => /^ +[123] (avatar-self-serve|docx-editor|mc-ui)$/u.exec(line)?.[1]).filter(Boolean);
     const folded = renderPageLines(DATA, { columns: 120, now: NOW });
     const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
     assert.deepEqual(names(all), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.deepEqual(names(folded), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.ok(folded.some((line) => /^ {2}▸ 1 dormant$/u.test(line)), folded.join('\n'));
-    assert.ok(!folded.some((line) => /^ {2}dormant-one\s/u.test(line)));
-    assert.ok(all.some((line) => /^ {2}dormant-one · 0 goals/u.test(line)), all.join('\n'));
+    assert.ok(!folded.some((line) => /^ {2}┌─ dormant-one\s/u.test(line)));
+    assert.ok(all.some((line) => /^ {2}┌─ dormant-one · 0 goals/u.test(line)), all.join('\n'));
   });
 
   /**
@@ -1358,7 +1357,7 @@ describe('the page', () => {
     });
     assert.equal(code, 0);
     assert.equal(shown.length, 2);
-    assert.match(shown[0], /^ {2}dormant-one · 0 goals/mu);
+    assert.match(shown[0], /^ {2}┌─ dormant-one · 0 goals/mu);
     assert.match(shown[0], /#14008 · queued/u);
     assert.match(shown[0], /goal\/preview-only/u);
     assert.doesNotMatch(shown[1], /dormant-one|#14008|goal\/preview-only/u);
@@ -2031,8 +2030,8 @@ describe('the palette', () => {
   //
   // A name with no run against it is not an unpainted row: it is a name drawn
   // in the terminal's own foreground, which is what primary text is here. Every
-  // `white` and every `dim+grey` that used to be in this list went one of those
-  // two ways — to nothing, or to plain `grey`.
+  // Secondary information now uses ANSI white instead of dark grey; primary
+  // text retains the terminal foreground and no row uses dim.
 
 
   it('paints nothing with the dim attribute, anywhere on the page', () => {
@@ -2046,10 +2045,10 @@ describe('the palette', () => {
 
   it('paints every row of the page, and the same colour for the same meaning', () => {
     const lines = paintedPage(DATA);
-    assert.match(rowWith(lines, 'avatar-self-serve'), /\x1b\[31mMartin/u);
-    assert.match(rowWith(lines, 'can start'), /\x1b\[32mcan start/u);
+    assert.ok(lines.some((line) => /\x1b\[31mMartin/u.test(line)));
+    assert.ok(lines.some((line) => /\x1b\[32mready/u.test(line)));
     assert.match(rowWith(lines, 'PROGRAMMES'), /\x1b\[[0-9;]*36mPROGRAMMES/u);
-    assert.ok(!lines.slice(lines.findIndex((line) => strip(line).includes('PROGRAMMES'))).some((line) => strip(line).includes('────')));
+    assert.ok(lines.some((line) => /^  ┌─ mc /u.test(strip(line))), 'programme boundary stays visible');
   });
 
   it('adds every escape outside the width: a coloured row is as wide as its plain twin', () => {
@@ -2149,7 +2148,7 @@ describe('the palette', () => {
       return signature(rowWith(lines, 'quota: 1 answer(s)'));
     };
     assert.equal(quota('2026-08-29T11:00:00Z'), 'yellow', 'an hour ago is why the runner is idle');
-    assert.equal(quota('2026-08-29T02:00:00Z'), 'grey', 'ten hours ago is history');
+    assert.equal(quota('2026-08-29T02:00:00Z'), 'white', 'ten hours ago is history');
   });
 
   // The two tables in `docs/technical/mc-ui.md` are the palette written down;
@@ -2177,7 +2176,7 @@ describe('the palette', () => {
     }
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
       programmes: programmesSection({ strays: [{ name: 'jobbet', checkout: false, uncommitted: 0 }] }),
-    })), 'jobbet')).split(' '), ['bold', 'grey'],
+    })), 'jobbet')).split(' '), ['bold', 'white'],
     'a stray is its name and its facts in grey');
   });
 

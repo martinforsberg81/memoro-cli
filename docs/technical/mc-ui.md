@@ -33,25 +33,27 @@ One `a` / `all` toggles all folded content and details across the page;
 the next press returns to the normal view. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
 remain visible in both modes. Normal headings use spacing and indentation,
-without horizontal rules or repeated table headers.
+without repeated table headers; programme blocks have opening and closing rules.
 
 ### PROGRAMMES
 
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
-→ goal → PR. `page-programmes.js` renders that structure with a flexible title
-column, stage and availability. Repository, technical name, session count and
-latest log detail appear with `a`. Stage is secondary grey; running/startable
-availability is green and blocked/invalid work is red. Programme names use
-bold terminal foreground, phases and folded summaries grey. The normal
-section heading leaves aggregate bookkeeping to `a`; the brand retains the
-running, startable and blocked counts.
+→ goal → PR. Each programme is a bounded block with a bold name and cyan
+opening/closing rules. Each phase has its own bold cyan heading. All unfinished
+phases and goals are visible, including future phases labelled `after phase N`.
+Only finished history folds by default; `a` expands it. Malformed goals appear
+under NEEDS ATTENTION, without an inferred phase.
 
-The lowest unfinished valid phase is current. Quiet future phases and finished
-goals fold into summary rows. Blockers, malformed goals, running work, goals
-awaiting merge and goals with open PRs stay visible even in later phases.
-Malformed goals have no inferred phase and appear under NEEDS ATTENTION.
-Menu numbers remain stable in programme/name order across folding and phase
-moves; a number opens that goal's detail.
+Each numbered goal title is followed immediately by `stage build · status ready
+· criteria 1/3`, rather than distant right-aligned columns. Status is exactly
+`ready`, `blocked` or `Martin`; stage is the stored stage. There is no derived
+availability classification. Running activity, phase holds and invalid-record
+warnings are separate information, not replacement goal statuses. Criteria
+met/total remain visible in both modes; narrow terminals put criteria on their
+own line when needed. Missing counts are shown as `—`, not invented zeroes.
+Repository, technical name, session count and latest log detail appear with `a`.
+Menu numbers remain stable in programme/name order across phase moves and
+history folding; a number opens that goal's detail.
 
 Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
@@ -175,8 +177,7 @@ environment addresses, repository queues and version evidence. The retired
 lane/PR grid has no remaining renderer. `page-grid.js` retains the shared
 palette, duration and numeric-safe clipping helpers.
 
-Widths stay clamped to 60–160 columns. Programme titles use remaining width
-after stage and availability; repository metadata is in expansion. Whole PR
+Widths stay clamped to 60–160 columns. Programme titles use their own line, with stage, status and criteria directly below; repository metadata is in expansion. Whole PR
 references get child rows. Operational reasons wrap and ordinary title cells
 clip with an ellipsis without splitting numeric tokens. Colour is applied
 after measurement, so painted and plain frames have identical text/width.
@@ -234,7 +235,10 @@ Green means in hand, yellow waiting, red a fault or a person needed, grey
 bookkeeping. A goal's stage/status rules above refine its state cell. A PR
 is green while landing, red bold after a red, yellow bold when quiet for a
 day, grey once landed, and cyan bold otherwise. Primary text uses the
-terminal's own foreground; there is no dim text or fixed white. Painting
+terminal's own foreground. The page maps the shared palette's `grey`
+bookkeeping tone to standard ANSI white (SGR 37), not dark grey (SGR 90),
+so secondary text stays legible on dark backgrounds. There is no dim text.
+Exact RGB colours still depend on the terminal palette. Painting
 happens after clipping plain text so no escape sequence is cut. Plain and
 painted rows occupy the same columns.
 
