@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** The local gate's detached worker. Selection and test execution use the
  * merge gate's implementations. It takes no lane and waits for nobody but a
- * build (await-deploy.js): it runs at low priority, so a merge round has the
- * cores, and it leaves what costs too much to that round (test-times.js). */
+ * build (await-deploy.js): it runs at low priority. Ordinary requests may
+ * defer costly selected files; --whole-selection runs the full affected scope. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { resolve } from 'node:path';
@@ -128,7 +128,12 @@ async function executeSessionGate(request, {
   let selection = { files: request.files || [], commands: [], classes: {} };
   if (request.select) {
     const selected = await select({ command: request.select, cwd, env, signal, say: (line) => write(`${line}\n`), mainOnly: request.mainOnly });
-    if (!selected.ok) { write(`Error: selection failed — ${selected.reason}\n`); return { ok: false, code: 1, stopped_at: 'selection' }; }
+    if (!selected.ok) {
+      write(`Error: selection failed — ${selected.reason}\n`);
+      return { ok: false, code: 1, stopped_at: 'selection', deferred: [], coverage: {
+        kind: request.files ? 'named' : 'affected', files: [], commands: [], pattern: request.pattern ?? null, selector: request.select ?? null,
+      } };
+    }
     selection = request.files ? { ...selection, classes: selected.classes || {} } : selected;
   }
   const selected = [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
@@ -141,10 +146,13 @@ async function executeSessionGate(request, {
     ? sessionFiles(selected, { times: readTestTimes(request.gate), keep: request.addedTests })
     : { run: selected, deferred: [] };
   onPhase('selection', false);
-  if (deferred.length) write(`deferred to the merge round, too costly here (${deferred.length}): ${deferred.join(' ')}\n`);
+  if (deferred.length) write(`deferred, too costly for this partial gate (${deferred.length}; unmeasured): ${deferred.join(' ')}\n`);
   if (!files.length && !selection.commands?.length) {
     write('NOTHING RUN — the repository selector selected no checks\n');
-    return { ok: false, code: 2, stopped_at: 'no-checks', files };
+    return { ok: false, code: 2, stopped_at: 'no-checks', files, deferred, coverage: {
+      kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
+      flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null,
+    } };
   }
   const selectedCommands = selection.commands || [];
   let code = 0;

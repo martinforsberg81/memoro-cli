@@ -68,6 +68,14 @@ An absent cache entry simply causes the merger to measure again.
 
 ## Coverage and bound consumers
 
+Every completed worker result carries the selected coverage shape (`kind`,
+`files`, `commands` and `pattern`) and the exact `deferred` file members in its
+result JSON, whether or not the attempt can produce a reusable receipt. An
+ordinary gate with deferred files is explicitly `partial`: those files were
+not measured, and direct goal landing does not promise another gate. Use
+`mc gate --whole-selection` for a complete affected-selection measurement;
+timeouts, interruption and incomplete execution remain red.
+
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
 unfiltered affected selection can populate the existing `gate-greens.jsonl`
