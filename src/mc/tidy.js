@@ -1042,8 +1042,8 @@ export function outsideRoots(target, roots) {
     }
   }
   const real = realpathSync(target.path);
-  if (lstatSync(target.path).isSymbolicLink()) return `symbolic link is not a target`;
   if (!real.startsWith(`${base}/`)) return `not under ${roots[key]}`;
+  if (lstatSync(target.path).isSymbolicLink()) return `symbolic link is not a target`;
   const name = basename(real);
   const parent = dirname(real);
   const shaped = {
