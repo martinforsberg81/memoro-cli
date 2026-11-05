@@ -25,7 +25,9 @@
  * done or dropped for 24 hours is archived (`archiveGoalsDue`, goal-archive.js),
  * every repository is fetched and asked what is open for the page
  * (`askGithub`), a merger that should be running is started (`wakeMerger`),
- * orphaned dev processes are reaped, Docker and scratch are swept.
+ * orphaned dev processes are reaped, Docker is swept. Beside them a timer
+ * reads the disk every minute (`diskTick`, disk-pressure.js), whatever the
+ * chores and lanes are in, and a session starts only on a fresh admission.
  *
  * Things that are not goal sessions ride along, and none opens a worktree or
  * touches a branch. `runHelperDay` is the collect: once per calendar day, in
@@ -54,7 +56,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -101,6 +103,8 @@ import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf 
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
 import { rmTree } from './rm-tree.js';
+import { POLL_MS as DISK_POLL_MS, createDiskPressure, gb, statfsAvailable } from './disk-pressure.js';
+import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
   BUILD_ROLES, collectNote, goalCheckInPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
@@ -118,19 +122,13 @@ const HEADLESS_PLAN_CANDIDATES = Object.freeze([
   Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }),
 ]);
 
-/**
- * A session's scratch directory is kept this long after it was last touched.
- * Two days, not seven: on 2026-10-08 scratch held 15 GiB and a session hit
- * ENOSPC. Not hours either — the gate logs a proposal cites live here.
+/*
+ * Disk: no session starts unless the shared policy admits it
+ * (disk-pressure.js: 30 GB available, after a pressure pass if need be).
+ * 2026-10-08 a session hit ENOSPC with 118 MiB free; until 2026-11-05 the
+ * line was 5 GiB, and scratch went by age alone after two days. Scratch now
+ * goes only by tidy's rule S, which needs proof that its session ended.
  */
-export const SCRATCH_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
-
-/**
- * Below this many free bytes on the volume where `MC_SCRATCH` is made, no
- * session starts (2026-10-08: 118 MiB free, and a session's first shell
- * commands failed on ENOSPC). Sessions already running go on.
- */
-export const DISK_MIN_BYTES = 5 * 2 ** 30;
 
 /**
  * Below this `kern.memorystatus_level` (percent of memory free), no
@@ -140,13 +138,6 @@ export const DISK_MIN_BYTES = 5 * 2 ** 30;
  * 8 GB). Sessions already running go on.
  */
 export const MEMORY_MIN_FREE_PERCENT = 20;
-
-/**
- * After a lane skipped a pass for disk (`diskRoom`), the next chore pass runs
- * `mc tidy --apply` — at most this often, so a disk tidy cannot free stays
- * full without the runner tidying every pass.
- */
-export const TIDY_DISK_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** `runner.log` moves to `runner.log.1` past this size; one generation is kept. */
 export const RUNNER_LOG_MAX_BYTES = 32 * 2 ** 20;
@@ -187,6 +178,14 @@ export function dockerNote(docker) {
   if (!docker?.pruned?.length) return '';
   const parts = docker.pruned.map((item) => (item.ok ? `${item.what} ${item.reclaimed || '0B'}` : `${item.what} failed — ${item.detail}`));
   return ` · docker: ${parts.join(', ')}`;
+}
+
+/** Docker's `1.2GB`, `512MB`, `0B` as bytes (decimal, as Docker prints them); 0 when it says nothing readable. */
+export function sizeBytes(text) {
+  const match = /^([\d.]+)\s*([kKMGT]?)B$/u.exec(String(text ?? '').trim());
+  if (!match) return 0;
+  const scale = { '': 1, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12 }[match[2]];
+  return Math.round(Number(match[1]) * scale) || 0;
 }
 
 /* ------------------------------------------------------------ real deps */
@@ -471,24 +470,20 @@ export function realDeps(env = process.env) {
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
     remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
     // A session's scratch directory (`~/mc/runner/scratch/`): made before the
-    // session, and the directories in it that are old enough are taken by the
-    // chore pass. `scratchDirs` lists directories only, with their age.
+    // session, with its ownership record (`.mc-scratch.json`) that tidy's rule
+    // S reads. Nothing here removes one by age.
     mkdir: (path) => { mkdirSync(path, { recursive: true }); },
-    scratchDirs: (path) => {
-      try {
-        return readdirSync(path, { withFileTypes: true }).filter((e) => e.isDirectory())
-          .map((e) => ({ name: e.name, mtimeMs: statSync(join(path, e.name)).mtimeMs }));
-      } catch { return []; }
-    },
     // The bytes an unprivileged writer can still use on the volume holding
     // `path` — or its nearest existing parent, since scratch may not exist
-    // yet. Null when nothing can be read.
-    freeBytes: (path) => {
-      for (let at = path; ; at = dirname(at)) {
-        try { const fs = statfsSync(at); return Number(fs.bavail) * Number(fs.bsize); } catch { /* try the parent */ }
-        if (dirname(at) === at) return null;
-      }
-    },
+    // yet. Null when nothing can be read. A deps object without it has no disk
+    // policy at all, which is how a test fixture stays off this machine's disk.
+    freeBytes: (path) => statfsAvailable(path),
+    // The disk monitor's timer: `fn` every `ms`, unref'd, and a stop.
+    every: (ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); },
+    // The pressure pass's file and Docker halves (disk-pressure.js). Docker's
+    // never starts a runtime that is down (`tidyDocker` without `start`).
+    pressureTidy: async () => runTidy({ apply: true, env }),
+    pressureDocker: async () => tidyDocker({ apply: true, env }),
     // `kern.memorystatus_level`, the percent of memory free; null off macOS.
     freeMemoryPercent: () => freeMemoryPercent(),
     // Read-only files and directories go too (rm-tree.js): memoro's dependency cache is read-only.
@@ -615,9 +610,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const pid = deps.pid ?? process.pid;
   const repos = defaultRepos(deps.env);
   const stamp = () => deps.now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
-  // When a lane last skipped for disk, and when that last ran a tidy.
-  let diskSkippedAt = null;
-  let lastDiskTidyAt = null;
   const say = (text) => {
     const line = `${stamp()}  ${text}`;
     deps.append(paths.runnerLog, `${line}\n`);
@@ -629,6 +621,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // (`deps.lock`), because a test's work root is not a directory.
   const lock = deps.lock || ((_root, fn) => fn());
   const alive = deps.alive || pidAlive;
+
+  // The disk policy (disk-pressure.js), on this runner's doors. Its pressure
+  // pass is, in order: finished goals archived without the 24 hours, tidy's
+  // file rules, Docker's images on a runtime that is already up. Only with a
+  // reader: a deps object without `freeBytes` has no disk policy.
+  const disk = deps.freeBytes ? createDiskPressure({
+    path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
+    now: deps.now, pid, alive, lock: (fn) => lock(root, fn), say,
+    steps: [
+      { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
+      ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
+      ...(deps.pressureDocker ? [{ name: 'docker-images', run: async () => dockerStep(await deps.pressureDocker()) }] : []),
+    ],
+  }) : null;
 
   // Sticky: a STOP read once is a STOP for the rest of this run, whether or
   // not the file is still there. 2026-10-07 a STOP written three seconds
@@ -832,22 +838,53 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
    * written into its LOG.md once, as a runner entry, not at every pass.
    */
-  function archiveGoalsDue() {
-    convertAfter();
+  function archiveGoalsDue({ holdMs } = {}) {
+    if (holdMs === undefined) convertAfter();
     const all = goals();
     const now = deps.now();
+    const answer = { ok: true, removed: 0, kept: [], errors: [] };
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
-      if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
+      if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
       const result = archiveGoal(goal, {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       });
-      if (result.refused) { refuseGoalOnce(goal, result.refused); continue; }
-      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
+      if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
+      answer.removed += 1;
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
+    return answer;
+  }
+
+  /** `runTidy`'s answer as a pressure step: its targets' bytes are the estimate, never the result. */
+  function tidyStep(ran) {
+    const list = ran?.list || {};
+    const applied = ran?.outcome?.applied || [];
+    const kept = [
+      ...applied.filter((item) => !item.ok),
+      ...(list.kept || []).filter((item) => item.rule === 'S' || item.rule === 'error'),
+    ];
+    return {
+      ok: true, estimate_bytes: (list.targets || []).reduce((sum, item) => sum + (item.bytes || 0), 0),
+      removed: ran?.outcome?.removed || 0, kept, errors: [],
+    };
+  }
+
+  /** `tidyDocker`'s answer as a pressure step: a failed prune fails the step; a runtime that is down is left down. */
+  function dockerStep(answer) {
+    const failed = (answer?.pruned || []).filter((item) => !item.ok);
+    const errors = failed.map((item) => `${item.what}: ${item.detail}`);
+    if (answer?.reason && answer.up) errors.push(answer.reason);
+    return {
+      ok: errors.length === 0,
+      estimate_bytes: (answer?.pruned || []).reduce((sum, item) => sum + sizeBytes(item.reclaimed), 0),
+      removed: (answer?.pruned || []).filter((item) => item.ok).length,
+      kept: answer?.up ? [] : [{ path: 'docker', why: `runtime left as it is — ${answer?.reason || 'not running'}` }],
+      errors,
+    };
   }
 
   /** `archiveGoal`'s refusal of a finished goal, written into its LOG.md unless the log already says the same last. */
@@ -914,18 +951,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * `mc tidy --apply` (tidy.js), once a day by its own runs.tsv row, and in
-   * the first chore pass after a lane skipped for disk — that one at most
-   * once per `TIDY_DISK_MIN_INTERVAL_MS`, remembered in memory. Shaped like
+   * `mc tidy --apply` (tidy.js), once a day by its own runs.tsv row. Low disk
+   * is the pressure pass's, not this one's (`disk`). Shaped like
    * `runDepsDaily`: the row is written however it went. Returns 'ran',
    * 'failed' or null when it was not due.
    */
   async function runTidyDaily() {
     const now = deps.now().getTime();
     const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now(), kind: TIDY_KIND });
-    const forDisk = diskSkippedAt !== null && (lastDiskTidyAt === null || now - lastDiskTidyAt >= TIDY_DISK_MIN_INTERVAL_MS);
-    if ((!due.due && !forDisk) || !deps.tidy) return null;
-    if (forDisk) { lastDiskTidyAt = now; diskSkippedAt = null; }
+    if (!due.due || !deps.tidy) return null;
     const took = () => Math.round((deps.now().getTime() - now) / 1000);
     let outcome = null;
     let docker = null;
@@ -943,7 +977,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       ...dashes,
       note: `freed=${freed},items=${items},kept=${kept}`,
     });
-    const why = forDisk ? 'a lane skipped for disk' : 'daily';
+    const why = 'daily';
     say(failure
       ? `tidy (${why}): failed — ${failure}`
       : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check${dockerNote(docker)}`);
@@ -1336,6 +1370,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (planning) claims.delete(`plan:${goal.programme}`);
     }
     if (outcome === 'stop') return { ran: 0, stop: true };
+    if (outcome === 'skipped:disk') return { ran: 0, waited: outcome };
     if (outcome !== 'ran') return { ran: 0 };
     const ran = { ran: 1, name, step: null, goal: true };
     if (stopRequested()) {
@@ -1612,6 +1647,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
       return 'skipped:no-capacity';
     }
+    // The disk asked again at the start itself: the pass's reading is from
+    // before the wait for a slot, and another lane may have started since.
+    if (!(await diskRoom('start'))) {
+      dropSlot();
+      return 'skipped:disk';
+    }
 
     // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
     const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
@@ -1643,9 +1684,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     };
     writeJson(currentPath, current);
     const scratch = join(paths.scratch, stem);
+    // Who owns it, and later that the session ended: tidy's rule S removes a
+    // worktree or DerivedData in it only on that record, never on age.
+    const scratchMarker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind, stem, started: stamp() };
     let scratchEnv = {};
     try {
       deps.mkdir(scratch);
+      writeJson(join(scratch, SCRATCH_MARKER), scratchMarker);
       scratchEnv = { MC_SCRATCH: scratch };
     } catch (error) {
       say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
@@ -1680,6 +1725,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } finally {
       remove(currentPath);
       dropSlot();
+      if (scratchEnv.MC_SCRATCH) {
+        try { writeJson(join(scratch, SCRATCH_MARKER), { ...scratchMarker, ended: stamp(), exit: result?.status ?? null }); } catch { /* kept: no end, no removal */ }
+      }
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     writeSessionLogs(out, result);
@@ -1879,10 +1927,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   } = {}) {
     const label = tag || repo || 'run';
     const passed = new Set(already);
-    if (!diskRoom()) {
-      diskSkippedAt = deps.now().getTime();
-      return { ran: 0, waited: 'skipped:disk' };
-    }
+    if (!(await diskRoom('lane'))) return { ran: 0, waited: 'skipped:disk' };
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
@@ -1894,31 +1939,49 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A goal's build or review, or the plan session a blocked goal wakes: the only work a lane takes.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = await goalPass(pick.goal, { lane, label });
-      if (ran.ran || ran.stop) return ran;
+      if (ran.ran || ran.stop || ran.waited) return ran;
       passed.add(pick.name);
     }
   }
 
   /**
-   * Whether the volume where `MC_SCRATCH` is made has room for a session to
-   * start. Read once per pass, before anything is picked: under
-   * `DISK_MIN_BYTES` the line is said and written to `disk.json` for the
-   * page, and the pass starts nothing. Check-ins and landings of sessions
-   * already running are not in a pass, so they go on. No reader, or a volume
-   * that cannot be read, is room: a guess must not stop the runner.
+   * Whether the volume where `MC_SCRATCH` is made admits a new session now
+   * (disk-pressure.js `admit`): asked at the top of a pass and again at the
+   * start itself, so a pass that waited for a slot does not start on an old
+   * reading. A refusal — under 30 GB after a pressure pass, or a reading that
+   * failed — is said once per line and written to `disk.json` for the page.
+   * Sessions already running go on. No policy (a fixture) is room.
    */
-  function diskRoom() {
-    let free = null;
-    try { free = deps.freeBytes ? deps.freeBytes(paths.scratch) : null; } catch { free = null; }
-    if (free == null || free >= DISK_MIN_BYTES) {
+  let diskLine = null;
+  async function diskRoom(trigger) {
+    if (!disk) return true;
+    const answer = await disk.admit({ trigger: `session:${trigger}`, what: 'no session' });
+    if (answer.admitted) {
+      diskLine = null;
       if (deps.exists(paths.disk)) remove(paths.disk);
       return true;
     }
-    // Rounded down, so a disk just under the line never reads as at it.
-    const line = `disk: ${(Math.floor((free / 2 ** 30) * 10) / 10).toFixed(1)} GiB free, below ${DISK_MIN_BYTES / 2 ** 30} GiB — no session started`;
-    say(line);
-    writeJson(paths.disk, { at: stamp(), free_bytes: free, line });
+    const line = `disk: ${gb(answer.available)} free — no session started: ${answer.reason}`;
+    if (line !== diskLine) say(line);
+    diskLine = line;
+    writeJson(paths.disk, { at: stamp(), free_bytes: answer.available, line });
     return false;
+  }
+
+  /**
+   * The disk monitor's tick (`runLoop`'s timer, every `POLL_MS`): a cheap
+   * reading, and a pressure pass at once below 30 GB unless the cooldown
+   * holds. Independent of the chores and lanes, so a nightly or a session in
+   * flight does not hide the disk. A tick while the last is running is skipped.
+   */
+  let ticking = null;
+  function diskTick() {
+    if (!disk) return Promise.resolve(null);
+    if (ticking) return ticking;
+    ticking = disk.poll({ trigger: 'monitor' })
+      .catch((error) => { say(`disk: monitor failed — ${error?.message || error}`); return null; })
+      .finally(() => { ticking = null; });
+    return ticking;
   }
 
   /**
@@ -1960,7 +2023,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
-    sweepScratch();
     await refreshCodexDue();
     await runTidyDaily();
     // Last: the nightly is the long one, and nothing above should wait twenty
@@ -2001,21 +2063,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) {
       say(`docker: sweep failed — ${error?.message || error}`);
     }
-  }
-
-  /**
-   * The scratch directories no session is likely to want any more: every
-   * directory directly under `~/mc/runner/scratch/` not touched for two days.
-   * Nothing outside that directory is looked at, and a name that is not a
-   * directory is left.
-   */
-  function sweepScratch() {
-    const cutoff = deps.now().getTime() - SCRATCH_KEEP_MS;
-    let removed = 0;
-    for (const dir of deps.scratchDirs(paths.scratch)) {
-      if (dir.mtimeMs < cutoff && deps.rmTree(join(paths.scratch, dir.name))) removed += 1;
-    }
-    if (removed) say(`scratch: ${removed} director${removed === 1 ? 'y' : 'ies'} older than two days removed`);
   }
 
   /**
@@ -2085,7 +2132,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, claims, chores, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested,
+    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, markRunner, dropPredecessor, clearRunner,
   };
 }
@@ -2229,6 +2276,9 @@ export async function runLoop({
     runner.say(`update: could not hand over — this runner keeps going on ${commit || 'the code it holds'}; mc run --update to try again`);
     return false;
   })());
+  // The disk monitor (disk-pressure.js): every minute while this runner
+  // runs, on its own timer, whatever the lanes and chores are in.
+  const stopMonitor = !once && deps.every ? deps.every(DISK_POLL_MS, () => runner.diskTick()) : null;
   try {
     if (!once) {
       // The unattended run: `mc run lanes <n>` loops, each on its own clock,
@@ -2416,6 +2466,7 @@ export async function runLoop({
     runner.say(r.ran ? 'once: exiting' : 'once: nothing to run');
     return 0;
   } finally {
+    stopMonitor?.();
     if (!handedOver) runner.clearRunner();
   }
 }
