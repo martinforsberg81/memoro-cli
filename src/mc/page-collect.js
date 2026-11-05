@@ -239,17 +239,16 @@ export function runnerSection({
   // `~/mc/runner/github.json` as the round left it: the repositories whose
   // last `gh pr list` failed, why, and since when (github-backoff.js).
   github = null,
-  // `~/mc/runner/disk.json`: present while the runner starts no step because
-  // the disk under scratch is too full, with the line it said.
+  // `~/mc/runner/disk.json`: a historical refusal, never current disk state.
   disk = null,
   // `~/mc/runner/memory.json`: the same, while too little memory is free.
   memory = null,
-  // The disk policy as `diskSummary` read it (disk-pressure.js): measured
-  // free bytes, pressure, the last pass and its shortfall. No walk.
+  // The disk policy as `diskSummary` read it (disk-pressure.js): the current
+  // measurement and explicitly named diagnostic history. No walk.
   pressure = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const { runner: process, steps: sessions, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
+  const { runner: process, steps: sessions, ...base } = nowBlock({ runner, currents, stop, rows, disk: null, memory, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -271,6 +270,9 @@ export function runnerSection({
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
     ...base,
+    // Keep the runner's old refusal available to JSON consumers as history,
+    // but never expose its line/free_bytes as a current reading.
+    disk: disk?.line ? { last_refusal: disk } : null,
     pressure,
     sessions,
     stop_requested: stop && !Number.isNaN(stopAt)
@@ -1323,6 +1325,9 @@ export async function collectPage({
   checkout = mcCheckout(),
   // Injected so that no test reads the real file; an env without HOME means none is read.
   claudeSettings = () => (env.HOME ? readClaudeSettings(claudeSettingsPath(env.HOME)) : null),
+  // The current statfs measurement; injectable for the same real collection
+  // path used by the page without depending on this machine's free space.
+  diskFreeBytes = undefined,
   // The dev-server pool (dev-pool.js): injected so a test names its own main slot.
   pool = (args) => readPool(args),
 } = {}) {
@@ -1408,7 +1413,7 @@ export async function collectPage({
     github: readJson(join(root, 'runner', GITHUB_STATE)),
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
     memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
-    pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path) }),
+    pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path), freeBytes: diskFreeBytes, nowMs: now.getTime() }),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
