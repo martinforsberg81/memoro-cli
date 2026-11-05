@@ -106,6 +106,8 @@ ${commandReference('log')}
 
 ${commandReference('manager')}
 
+${commandReference('brief')}
+
 ${commandReference('plan')}
 
 ${commandReference('helper')}

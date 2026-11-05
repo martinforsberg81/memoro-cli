@@ -63,7 +63,7 @@ function opening(overrides = {}) {
   const calls = [];
   const options = {
     // Every launch has an owner (session-owner.js); a desk is the plainest.
-    verb: 'brief',
+    verb: 'manager',
     tool: 'claude',
     spawn: (bin, args, spawnOptions) => { calls.push({ bin, args, spawnOptions }); return { status: 0 }; },
     ...overrides,
@@ -214,7 +214,7 @@ describe('openInWorkArea and the launch switches', () => {
 
 describe('openInWorkArea in a role area', () => {
   it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
-    for (const name of ['build-session:goal', 'review-session:goal', 'plan-session', 'brief', 'helper', 'intake']) {
+    for (const name of ['build-session:goal', 'review-session:goal', 'plan-session', 'manager', 'helper', 'intake']) {
       const role = readCanonRole(name);
       assert.ok(role, name);
       for (const resumed of [false, true]) {
@@ -334,13 +334,13 @@ describe('openInWorkArea and the foreground register', () => {
     const { events, register } = registering();
     const { calls, options } = opening();
     await openInWorkArea({
-      areaRoot, worktree, env, verb: 'brief', overlay: 'OVERLAY',
-      roleName: 'brief', roleSource: 'canon', register, ...options,
+      areaRoot, worktree, env, verb: 'manager', overlay: 'OVERLAY',
+      roleName: 'manager', roleSource: 'canon', register, ...options,
     });
     const handed = calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1];
     assert.equal(handed, `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nOVERLAY`);
     assert.deepEqual(events[0].role, {
-      name: 'brief',
+      name: 'manager',
       source: 'canon',
       // The shared text and the overlay, joined as a launch
       // joins them — asserted against the string the tool actually got.
@@ -370,7 +370,7 @@ describe('openInWorkArea and the foreground register', () => {
     const { events, register } = registering();
     const { options } = opening({ spawn: () => { throw new Error('no such binary'); } });
     await assert.rejects(openInWorkArea({
-      areaRoot, worktree, env, verb: 'brief', register, ...options,
+      areaRoot, worktree, env, verb: 'manager', register, ...options,
     }));
     assert.deepEqual(events.map((item) => item.event), ['register', 'release']);
   });
@@ -385,7 +385,7 @@ describe('openInWorkArea and the foreground register', () => {
       const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
       assert.equal(result.ok, false, JSON.stringify(owner));
       assert.equal(result.reason, 'no owner');
-      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc brief, mc helper\)/u);
+      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc manager, mc helper\)/u);
       assert.deepEqual(calls, []);
     }
     assert.deepEqual(events, []);
@@ -523,7 +523,7 @@ describe('startInBackground and --model', () => {
 
 describe('foreground launch identity', () => {
   it('sets the role for plan, brief and helper, on a new conversation and a resume', async () => {
-    for (const roleName of ['plan', 'brief', 'helper']) {
+    for (const roleName of ['plan', 'manager', 'helper']) {
       for (const resumed of [false, true]) {
         const { areaRoot, worktree, env } = fixture(resumed ? { entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
         const { calls, options } = opening();

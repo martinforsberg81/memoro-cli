@@ -157,7 +157,7 @@ describe('help names the caller, not only the operation', () => {
     const result = runMc(['--help']);
     assert.equal(result.status, 0);
     assert.equal(result.stdout.split('WHO USES THE VERBS\n').length - 1, 1, 'role guidance must not be duplicated during a merge');
-    assert.match(result.stdout, /Person: mc plan, mc brief, mc helper open interactive sessions/u);
+    assert.match(result.stdout, /Person: mc plan, mc manager, mc helper open interactive sessions/u);
     assert.match(result.stdout, /mc run start\|stop controls the headless runner/u);
     assert.match(result.stdout, /Session: mc goal new \/ set \/ criterion add writes goals/u);
     const plan = runMc(['plan', '--help'], { env: { MC_ROLE: 'plan-session', MC_PROGRAMME: 'mc' } });
