@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/merge.js';
-import { WATCH_POLL_MS, watch, watchLine, watchState } from '../../src/mc/merge-watch.js';
+import { WATCH_POLL_MS, followMerge, watch, watchLine, watchState } from '../../src/mc/merge-watch.js';
 
 const REPO = 'memoro-cli';
 const job = (pr, over = {}) => ({
@@ -190,6 +190,46 @@ describe('watchState and watchLine', () => {
 
 describe('mc merge watch', () => {
   const sink = () => { const out = []; return { out, write: (s) => { out.push(s); } }; };
+
+  async function follows(repoPath, queueRepo) {
+    const w = world({
+      polls: [[job(835, { repo: queueRepo })], []],
+      view: { state: 'MERGED', mergeCommit: '4f2a1c9deadbeef' },
+    });
+    const stdout = sink();
+    const code = await followMerge({ repoPath, pr: 835, json: true, stdout, deps: w.deps });
+    return { code, json: JSON.parse(stdout.out.join('')), views: w.views };
+  }
+
+  it('follows a bare repository queue entry by its normalized name', async () => {
+    const { code, json, views } = await follows('/repos/memoro.git', 'memoro');
+    assert.equal(code, 0);
+    assert.deepEqual(json, {
+      repo: 'memoro', pr: 835, outcome: 'merged', merge_commit: '4f2a1c9deadbeef',
+      reason: null, place: 1, seconds: 10,
+    });
+    assert.deepEqual(views, [{ repo: 'memoro', pr: 835, read: 2 }]);
+  });
+
+  it('follows a bare repository queue entry with a trailing slash', async () => {
+    const { code, json, views } = await follows('/repos/memoro.git/', 'memoro');
+    assert.equal(code, 0);
+    assert.deepEqual(json, {
+      repo: 'memoro', pr: 835, outcome: 'merged', merge_commit: '4f2a1c9deadbeef',
+      reason: null, place: 1, seconds: 10,
+    });
+    assert.deepEqual(views, [{ repo: 'memoro', pr: 835, read: 2 }]);
+  });
+
+  it('retains ordinary checkout repository behavior', async () => {
+    const { code, json, views } = await follows('/repos/memoro-cli', 'memoro-cli');
+    assert.equal(code, 0);
+    assert.deepEqual(json, {
+      repo: 'memoro-cli', pr: 835, outcome: 'merged', merge_commit: '4f2a1c9deadbeef',
+      reason: null, place: 1, seconds: 10,
+    });
+    assert.deepEqual(views, [{ repo: 'memoro-cli', pr: 835, read: 2 }]);
+  });
 
   it('runs the loop for the resolved repository and prints one object with --json', async () => {
     const stdout = sink();
