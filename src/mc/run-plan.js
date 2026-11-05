@@ -420,10 +420,12 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
   const session = adapter?.sessionArgs?.({ cache }) ?? [];
   const instr = profileArgs(toolId, instructions);
+  // Headless planning/helper work starts in mc-owned directories outside Git.
+  // Allow that cwd in fresh and resumed runs; keep the sandbox policy unchanged.
   // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
   // setting goes through `-c`, and the session id is the first positional.
-  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, ...effortArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, resume, prompt];
-  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...effortArgs, ...session, ...instr, prompt];
+  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, ...effortArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, '--skip-git-repo-check', resume, prompt];
+  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...effortArgs, ...session, ...instr, '--skip-git-repo-check', prompt];
   const tuning = [...effortArgs, ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
   const io = stream
