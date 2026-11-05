@@ -322,18 +322,18 @@ Sequencing context from the prior bounded audit: the `branch-landed.test.js` cal
 
 | Path | Status | Existing execution metadata |
 | --- | --- | --- |
-| tests/vault/engine/audit.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/bindings.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/c1-claude-lease.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/crypto-port.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/custody-crypto.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/custody-session.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/device-unlock.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/import-scan.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/key-cache.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/local-codex-revision.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/startup.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
-| tests/vault/engine/step-credit-key.test.js | UNREVIEWED | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/audit.test.js | [KEEP recommendation inspected](audit-vault-001.md#1-audittestjs--keep); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/bindings.test.js | [REBUILD recommendation inspected](audit-vault-001.md#2-bindingstestjs--rebuild-the-value-free-fixture-keep-metadata-behaviour); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/c1-claude-lease.test.js | [KEEP recommendation inspected](audit-vault-001.md#3-c1-claude-leasetestjs--keep-scoped-parserscanner-and-trust-pin-evidence); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/crypto-port.test.js | [KEEP recommendation inspected](audit-vault-001.md#4-crypto-porttestjs--keep-real-webcrypto-and-compatibility-vectors); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/custody-crypto.test.js | [KEEP recommendation inspected](audit-vault-001.md#5-custody-cryptotestjs--keep-real-authenticated-hierarchy-and-wire-oracle); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/custody-session.test.js | [REBUILD recommendation inspected](audit-vault-001.md#6-custody-sessiontestjs--rebuild-race-key-identity-evidence); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/device-unlock.test.js | [KEEP recommendation inspected](audit-vault-001.md#7-device-unlocktestjs--keep-durable-vs-legacy-decision-boundary); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/import-scan.test.js | [KEEP recommendation inspected](audit-vault-001.md#8-import-scantestjs--keep-value-free-metadata-and-ambiguity-decisions); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/key-cache.test.js | [KEEP recommendation inspected](audit-vault-001.md#9-key-cachetestjs--keep-validation-legacy-decoding-and-macset-seam); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/local-codex-revision.test.js | [KEEP recommendation inspected](audit-vault-001.md#10-local-codex-revisiontestjs--keep-opaque-token-and-no-retry-evidence); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/startup.test.js | [REBUILD recommendation inspected](audit-vault-001.md#11-startuptestjs--rebuild-output-denial-proof-keep-no-materialisation); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
+| tests/vault/engine/step-credit-key.test.js | [REBUILD recommendation inspected](audit-vault-001.md#12-step-credit-keytestjs--rebuild-selection-minimization-evidence); static only; runtime NOT MEASURED, faults UNRUN; no protection change | package test; affected selection dynamic; isolated home |
 
 #### CLI-tests-vault-002 · tests/vault · 4 subject(s)
 
