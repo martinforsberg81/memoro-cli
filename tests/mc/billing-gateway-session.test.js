@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { createBillingGateway } from '../../src/mc/billing-gateway.js';
 import { gatewayToolConfig, runGatewaySession } from '../../src/mc/billing-gateway-session.js';
@@ -43,6 +44,48 @@ process.exit(res.status === 200 ? 0 : 3);
     createGateway: ({ keys, grants }) => createBillingGateway({ keys, grants, fetchImpl: async () => new Response('ok') }),
   });
   assert.equal(result, 0, 'the fake tool received no key and the gateway accepted its Claude model');
+});
+
+test('each provider receives one exact-model grant bounded to 500 requests and 12 hours', async () => {
+  const twelveHours = 12 * 60 * 60 * 1000;
+  for (const { provider, model, keyEnvName, grantEnvName } of [
+    { provider: 'claude', model: 'opus', keyEnvName: 'claude', grantEnvName: 'ANTHROPIC_AUTH_TOKEN' },
+    { provider: 'codex', model: 'gpt-6-astra', keyEnvName: 'codex', grantEnvName: 'MC_GATEWAY_GRANT' },
+  ]) {
+    let captured;
+    let childEnv;
+    const before = Date.now();
+    const result = await runGatewaySession({
+      provider, model, bin: process.execPath, args: [], terminal: false,
+      readKey: async () => ({ ok: true, key: `${provider}-provider-secret` }),
+      readApi: () => ({ claude: true, codex: true }),
+      createGateway: (input) => {
+        captured = input;
+        return createBillingGateway(input);
+      },
+      spawnTool: (_bin, _args, options) => {
+        childEnv = options.env;
+        const child = new EventEmitter();
+        queueMicrotask(() => child.emit('close', 0, null));
+        return child;
+      },
+    });
+    const after = Date.now();
+    assert.equal(result, 0);
+    assert.deepEqual(Object.keys(captured.keys), [keyEnvName], 'only the selected provider key enters the gateway');
+    assert.equal(captured.grants.length, 1);
+    const [grant] = captured.grants;
+    assert.equal(grant.provider, provider);
+    assert.deepEqual(grant.models, [model], 'the grant contains exactly the selected model, never a wildcard');
+    assert.ok(!grant.models.includes('*'));
+    assert.ok(Number.isFinite(grant.maxRequests) && grant.maxRequests > 0);
+    assert.equal(grant.maxRequests, 500);
+    const expiry = Date.parse(grant.expiresAt);
+    assert.ok(Number.isFinite(expiry));
+    assert.ok(expiry >= before + twelveHours, 'expiry is no earlier than twelve hours after invocation began');
+    assert.ok(expiry <= after + twelveHours, 'expiry is no later than twelve hours after invocation ended');
+    assert.equal(childEnv[grantEnvName], grant.token, 'the child receives the exact grant token');
+  }
 });
 
 test('API off: the key is never opened and the tool never starts', async () => {

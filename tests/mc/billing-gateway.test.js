@@ -1,20 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBillingGateway, listenBillingGateway } from '../../src/mc/billing-gateway.js';
 
 const NOW = Date.parse('2026-10-29T12:00:00Z');
 
-async function fixture(t) {
+async function fixture(t, { expiresAt = '2026-10-29T13:00:00Z', now = () => NOW } = {}) {
   const calls = [];
   const gateway = createBillingGateway({
     keys: { claude: 'anthropic-secret-canary', codex: 'openai-secret-canary' },
     grants: [
-      { provider: 'claude', token: 'claude-session-grant', models: ['claude-opus-4-6'], maxRequests: 1, expiresAt: '2026-10-29T13:00:00Z' },
-      { provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests: 1, expiresAt: '2026-10-29T13:00:00Z' },
+      { provider: 'claude', token: 'claude-session-grant', models: ['claude-opus-4-6'], maxRequests: 1, expiresAt },
+      { provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests: 1, expiresAt },
     ],
-    now: () => NOW,
+    now,
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
       return new Response('data: {"type":"message_stop"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
@@ -55,6 +56,25 @@ test('gateway refuses cross-provider grants, unknown paths, model changes and ex
   assert.equal((await send('/claude/v1/messages', 'claude-session-grant', 'claude-opus-4-6')).status, 200);
   assert.equal((await send('/claude/v1/messages', 'claude-session-grant', 'claude-opus-4-6')).status, 429);
   assert.equal(calls.length, 1, 'refused requests never reach a provider');
+});
+
+const expiryBoundaries = [new Date(NOW - 1).toISOString(), new Date(NOW).toISOString()];
+
+test('expired and exactly-at-expiry grants are refused before HTTP upstream admission', async (t) => {
+  for (const expiresAt of expiryBoundaries) {
+    const http = await fixture(t, { expiresAt, now: () => NOW });
+    assert.equal((await http.send('/claude/v1/messages', 'claude-session-grant', 'claude-opus-4-6')).status, 401);
+    assert.equal(http.calls.length, 0, 'expired HTTP requests never reach the upstream');
+  }
+});
+
+test('expired and exactly-at-expiry grants are refused before WebSocket upstream admission', async (t) => {
+  for (const expiresAt of expiryBoundaries) {
+    const websocket = await socketFixture(t, { expiresAt, now: () => NOW });
+    assert.equal(await websocket.connect().refused, 401);
+    assert.equal(websocket.provider.sockets.length, 0, 'expired upgrades never open an upstream socket');
+    assert.deepEqual(websocket.provider.frames, [], 'no expired WebSocket frame reaches upstream');
+  }
 });
 
 test('a Claude grant on a family alias admits that family\'s model ids, fable among them', async (t) => {
@@ -111,8 +131,9 @@ test('codex remote compaction is a route of its own', async (t) => {
 });
 
 // A local server stands in for wss://api.openai.com/v1/responses.
-async function socketFixture(t, { maxRequests = 2 } = {}) {
-  const provider = { headers: null, frames: [], sockets: [] };
+async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00:00Z', now = () => NOW } = {}) {
+  const provider = { headers: null, frames: [], sockets: [], httpCalls: [] };
+  const providerEvents = new EventEmitter();
   const fake = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await new Promise((resolve) => fake.once('listening', resolve));
   fake.on('connection', (socket, req) => {
@@ -120,14 +141,18 @@ async function socketFixture(t, { maxRequests = 2 } = {}) {
     provider.sockets.push(socket);
     socket.on('message', (data) => {
       provider.frames.push(JSON.parse(data.toString()));
+      providerEvents.emit('frame', provider.frames.at(-1));
       socket.send(JSON.stringify({ type: 'response.completed', response: { id: `resp_${provider.frames.length}` } }));
     });
   });
   const gateway = createBillingGateway({
     keys: { codex: 'openai-secret-canary' },
-    grants: [{ provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests, expiresAt: '2026-10-29T13:00:00Z' }],
-    now: () => NOW,
-    fetchImpl: async () => new Response('{}'),
+    grants: [{ provider: 'codex', token: 'codex-session-grant', models: ['gpt-6.1-sol'], maxRequests, expiresAt }],
+    now,
+    fetchImpl: async (url, options) => {
+      provider.httpCalls.push({ url, options });
+      return new Response('{}', { status: 200 });
+    },
     websocketUpstream: `ws://127.0.0.1:${fake.address().port}/v1/responses`,
   });
   const base = await listenBillingGateway(gateway);
@@ -135,26 +160,65 @@ async function socketFixture(t, { maxRequests = 2 } = {}) {
     await new Promise((resolve) => gateway.close(resolve));
     await new Promise((resolve) => fake.close(resolve));
   });
+  const clients = new Set();
+  t.after(() => { for (const client of clients) client.terminate(); });
+  const send = (body) => fetch(`${base}/codex/v1/responses`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer codex-session-grant', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   const connect = (path = '/codex/v1/responses', grant = 'codex-session-grant') => {
     const socket = new WebSocket(`${base.replace('http', 'ws')}${path}`, {
       headers: { authorization: `Bearer ${grant}`, 'openai-beta': 'responses_websockets=2026-02-06' },
     });
+    clients.add(socket);
+    socket.once('close', () => clients.delete(socket));
     const received = [];
     socket.on('message', (data) => received.push(data.toString()));
     socket.on('error', () => {});
     return {
       socket,
       received,
-      opened: new Promise((resolve) => socket.once('open', resolve)),
-      closed: new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }))),
-      refused: new Promise((resolve) => socket.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); })),
+      opened: boundedEvent(socket, 'open'),
+      closed: boundedEvent(socket, 'close', (code, reason) => ({ code, reason: reason.toString() })),
+      refused: boundedEvent(socket, 'unexpected-response', (_req, res) => { res.resume(); return res.statusCode; }),
     };
   };
-  return { provider, connect };
+  return { provider, providerEvents, connect, send };
 }
 
 const create = (model) => JSON.stringify({ type: 'response.create', model, input: [] });
 const until = async (check) => { while (!check()) await new Promise((resolve) => setTimeout(resolve, 5)); };
+
+function boundedEvent(target, name, project = (...args) => args[0]) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(reject, new Error(`timed out waiting for ${name}`)), 1000);
+    const handler = (...args) => finish(resolve, project(...args));
+    const finish = (complete, value) => {
+      clearTimeout(timer);
+      target.removeListener(name, handler);
+      complete(value);
+    };
+    target.once(name, handler);
+  });
+}
+
+function boundedAny(events) {
+  return new Promise((resolve, reject) => {
+    const cleanups = [];
+    const timer = setTimeout(() => finish(reject, new Error(`timed out waiting for ${events.map(({ name }) => name).join(' or ')}`)), 1000);
+    const finish = (complete, value) => {
+      clearTimeout(timer);
+      for (const cleanup of cleanups) cleanup();
+      complete(value);
+    };
+    for (const { target, name, project } of events) {
+      const handler = (...args) => finish(resolve, project(...args));
+      target.once(name, handler);
+      cleanups.push(() => target.removeListener(name, handler));
+    }
+  });
+}
 
 test('a Codex websocket is carried to the provider with the key, which never comes back', async (t) => {
   const { provider, connect } = await socketFixture(t);
@@ -201,6 +265,37 @@ test('each response.create counts against the session request limit, across sock
   assert.deepEqual(await second.closed, { code: 1008, reason: 'session request limit reached' });
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 2);
   assert.equal(provider.frames.length, 3, 'other session frames are forwarded unchanged');
+});
+
+test('one request budget is shared when HTTP consumes before WebSocket', async (t) => {
+  const { provider, providerEvents, connect, send } = await socketFixture(t, { maxRequests: 1 });
+  assert.equal((await send({ model: 'gpt-6.1-sol', input: [] })).status, 200);
+  assert.equal(provider.httpCalls.length, 1);
+
+  const session = connect();
+  await session.opened;
+  const outcome = boundedAny([
+    { target: session.socket, name: 'close', project: (code, reason) => ({ kind: 'closed', code, reason: reason.toString() }) },
+    { target: providerEvents, name: 'frame', project: (frame) => ({ kind: 'forwarded', frame }) },
+  ]);
+  session.socket.send(create('gpt-6.1-sol'));
+  assert.deepEqual(await outcome, { kind: 'closed', code: 1008, reason: 'session request limit reached' });
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 0);
+  assert.equal(provider.httpCalls.length, 1, 'the exhausted WebSocket request was not forwarded');
+});
+
+test('one request budget is shared when WebSocket consumes before HTTP', async (t) => {
+  const { provider, providerEvents, connect, send } = await socketFixture(t, { maxRequests: 1 });
+  const session = connect();
+  await session.opened;
+  const forwarded = boundedEvent(providerEvents, 'frame');
+  session.socket.send(create('gpt-6.1-sol'));
+  assert.equal((await forwarded).type, 'response.create');
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
+
+  assert.equal((await send({ model: 'gpt-6.1-sol', input: [] })).status, 429);
+  assert.equal(provider.httpCalls.length, 0, 'the exhausted HTTP request never reaches upstream');
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
 });
 
 test('closing either side closes the other', async (t) => {
