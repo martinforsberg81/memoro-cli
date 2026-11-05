@@ -5,7 +5,8 @@ description: Starting, finding and using a dev server for an mc repository (memo
 # Dev servers
 
 Dev servers start only through mc: `mc shot dev` and `mc test dev` start one,
-and mc admits at most four app servers on the machine (`mc dev admit`).
+and mc admits one MAIN plus at most three other live or starting servers on
+the machine, including static servers (`mc dev admit`).
 `npm run dev` is for a person at a terminal. Every server start goes through
 `mc keys`: mc wraps the declared argv with `mc keys serve`, and project npm
 entrypoints use `mc keys run`. Measuring is an activity against a dev server,

@@ -14,7 +14,8 @@ PLAN AND FOLLOW
   mc manager                      Person: manage work across all programmes
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
-  mc programs list [--json]        Every programme, active or dormant
+  mc programs list [--json]        Every programme and its priority
+  mc programs priority <p>... --set <n>  Set programme priorities
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
 
 RUN AND LAND

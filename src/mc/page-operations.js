@@ -67,50 +67,88 @@ export function devLines(lines, c, wide, dev, expand) {
   } else if (dev?.queued) detail(lines, c, wide, 4, `${dev.queued} queued · details unavailable`, ['yellow']);
 }
 
+/** Align operation labels and status; continuation lines stay in the status column. */
+function operation(lines, c, wide, label, status = '', tone = ['grey'], { indent = 6, labelWide = 20 } = {}) {
+  if (label.length > labelWide) {
+    detail(lines, c, wide, indent, label, tone);
+    if (status) detail(lines, c, wide, indent + labelWide + 3, status, tone);
+    return;
+  }
+  const prefix = `${' '.repeat(indent)}${label.padEnd(labelWide)}   `;
+  const wrapped = [];
+  detail(wrapped, c, wide, prefix.length, status, tone);
+  if (wrapped.length) {
+    lines.push(c(prefix, ...tone) + wrapped[0].slice(prefix.length));
+    lines.push(...wrapped.slice(1));
+  } else detail(lines, c, wide, indent, label, tone);
+}
+
+/** A phase marker, never a percentage: prepare, gate, then land. */
+function mergeBar(state) {
+  return { rebase: '[●··]', gate: '[━●·]', landing: '[━━●]' }[state] || '[···]';
+}
+
 export function mergesLines(lines, c, wide, merges, expand) {
-  panelHeading(lines, c, wide, 'MERGE', '', 'mc merge <repo> <pr>');
-  for (const repo of merges?.repos || []) {
+  panelHeading(lines, c, wide, 'MERGE & DEPLOY', '', 'mc merge · mc deploy');
+  for (const [index, repo] of (merges?.repos || []).entries()) {
+    if (index) lines.push('');
     const active = repo.landings || [];
     const reds = repo.reds || [];
     const waiting = repo.waiting || [];
-    const counts = [active.length && `${active.length} landing`, waiting.length && `${waiting.length} queued`, reds.length && `${reds.length} red`].filter(Boolean).join(' · ') || 'idle';
-    detail(lines, c, wide, 4, `${repo.repo} · ${counts}`, ['bold']);
-    if (repo.pause) detail(lines, c, wide, 6, `paused · ${repo.pause.reason || repo.pause.kind}`, ['red']);
-    if (repo.merger_stopped) detail(lines, c, wide, 6, 'merger stopped', ['red']);
-    const shown = [...active, ...reds, ...(expand ? waiting : waiting.slice(0, QUEUED_DRAWN))];
-    for (const item of shown) {
+    const shown = expand ? waiting : waiting.slice(0, QUEUED_DRAWN);
+    const refs = shown.flatMap((item) => (item.prs || []).map((pr) => `#${pr.number}`));
+    const unknown = shown.filter((item) => !item.prs?.length).length;
+    const queue = waiting.length ? `${waiting.length} in queue: ${refs.join(' ')}${unknown ? ` · ${unknown} PR unknown` : ''}` : 'queue empty';
+    operation(lines, c, wide, repo.repo, queue, ['bold'], { indent: 4, labelWide: 10 });
+    if (shown.length < waiting.length) detail(lines, c, wide, 19, `+${waiting.length - shown.length} more queued · a shows all`);
+    if (repo.pause) operation(lines, c, wide, 'paused', repo.pause.reason || repo.pause.kind, ['red']);
+    if (repo.merger_stopped) operation(lines, c, wide, 'merger stopped', 'queue waiting', ['red']);
+    if (!active.length && !repo.pause && !repo.merger_stopped) {
+      operation(lines, c, wide, waiting.length ? 'waiting' : 'idle', waiting.length ? 'ready for merger' : 'no merge running');
+    }
+    for (const item of [...active, ...reds]) {
       const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
-      // References get their own line when unusually long, never a cut number.
-      detail(lines, c, wide, 6, `${refs} · ${item.state || 'unknown'}${item.progress ? ` · ${item.progress}` : ''}`, stateTone(item.state));
-      detail(lines, c, wide, 8, item.name || item.title || '', []);
-      if (item.kind === 'red' || item.state === 'red') detail(lines, c, wide, 8, item.said || item.reason || 'failure reason unavailable', ['red']);
+      const red = item.kind === 'red' || item.state === 'red';
+      const label = `${red ? 'failed' : 'merging'} ${refs}`;
+      const status = [!red && mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
+      operation(lines, c, wide, label, status, stateTone(item.state));
+      if (red) detail(lines, c, wide, 8, item.said || item.reason || 'failure reason unavailable', ['red']);
       if (item.batch_of) detail(lines, c, wide, 8, `with #${item.batch_of}`);
       if (expand) {
+        detail(lines, c, wide, 8, item.name || item.title || '');
         if (item.title && item.title !== item.name) detail(lines, c, wide, 8, item.title);
         if (item.queue_age_seconds != null) detail(lines, c, wide, 8, `queued ${duration(item.queue_age_seconds)}`);
       }
     }
-    if (!expand && waiting.length > QUEUED_DRAWN) detail(lines, c, wide, 6, `▸ ${waiting.length - QUEUED_DRAWN} more queued`);
-    if (expand) detail(lines, c, wide, 6, `${repo.day_count || 0} merges in 24 h${repo.last ? ` · last ${age(repo.last.age_seconds)}${repo.last.pr ? ` · #${repo.last.pr}` : ''}` : ' · no landing yet'}`);
+    if (expand) {
+      for (const item of waiting) {
+        const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
+        operation(lines, c, wide, refs, `${item.state || 'unknown'}${item.progress ? ` · ${item.progress}` : ''}`, stateTone(item.state));
+        detail(lines, c, wide, 8, item.name || item.title || '');
+      }
+      detail(lines, c, wide, 6, `${repo.day_count || 0} merges in 24 h${repo.last ? ` · last ${age(repo.last.age_seconds)}${repo.last.pr ? ` · #${repo.last.pr}` : ''}` : ' · no landing yet'}`);
+    }
   }
+  if (expand) detail(lines, c, wide, 4, 'Merge stages: [●··] prepare · [━●·] gate · [━━●] land; not a percentage');
 }
 
 export function deployLines(lines, c, wide, production, expand) {
-  panelHeading(lines, c, wide, 'PRODUCTION', '', 'mc deploy');
+  operation(lines, c, wide, 'DEPLOY', 'memoro · mc deploy', ['bold'], { indent: 4, labelWide: 10 });
   const p = production || {};
-  detail(lines, c, wide, 4, p.live
-    ? `LIVE      ${p.live.short || p.live.commit || 'unknown'} · observed ${age(p.live.age_seconds)}`
-    : 'LIVE      unknown · no version reading', p.differs ? ['yellow'] : []);
-  detail(lines, c, wide, 4, p.sha
-    ? `RECORDED  ${p.short} · deployed ${age(p.age_seconds)}`
-    : 'RECORDED  none');
+  operation(lines, c, wide, 'LIVE', p.live
+    ? `${p.live.short || p.live.commit || 'unknown'} · observed ${age(p.live.age_seconds)}`
+    : 'unknown · no version reading', p.differs ? ['yellow'] : []);
+  operation(lines, c, wide, 'RECORDED', p.sha
+    ? `${p.short} · deployed ${age(p.age_seconds)}`
+    : 'none');
   const attempt = p.running || p.failed || p.attempt;
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
-    detail(lines, c, wide, 4, `ATTEMPT   ${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}`,
+    operation(lines, c, wide, 'ATTEMPT', `${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}${p.running && !p.running.late ? ' · progress unknown' : ''}`,
       p.running?.late || state === 'refused' ? ['yellow'] : stateTone(state));
     if (attempt.stopped_at) detail(lines, c, wide, 14, attempt.stopped_at, ['red']);
   }
+  if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');
   if (p.differs) detail(lines, c, wide, 4, 'version mismatch · live and recorded commits differ', ['yellow']);
   if (expand) {
     if (p.build) detail(lines, c, wide, 4, `recorded build ${p.build}${p.at ? ` · ${p.at}` : ''}`);

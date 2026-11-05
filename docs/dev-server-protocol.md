@@ -19,11 +19,11 @@ Six verbs:
 
 ```sh
 mc dev list [--json]                     what is running, and where
-mc dev status [--json]                   the app servers, the queue for one, cap and memory (see Admission)
+mc dev status [--json]                   the servers, starting reservations, the queue, cap and memory (see Admission)
 mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
-mc dev unregister <manifest> [--json]    forget it
+mc dev unregister <manifest> [--json]    forget it once its pid is dead
 mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
-                                         may one more server start? (see Admission)
+                                         may one more server start? a reservation, a reuse or a refusal (see Admission)
 mc dev stop <instance_id>                stop it, through its own stop command
 ```
 
@@ -196,18 +196,20 @@ since the start. Without it those two are not looked for. The plan identity fiel
 `start_argv`, `resource_class`) and `coding_session_id` are optional and
 carried through as they come — the exact-match reuse they were added for went
 with `mc dev ensure`, and a manifest without them is a first-class citizen
-again. `resource_class` has one reader since 2026-09-26: admission, where
-`light` does not count and anything else, or nothing, does. URLs must target loopback, and the source
+again. `resource_class` is informational: since 2026-11-05 admission counts
+every class alike, `light` included. A wrapper admitted with a reservation
+writes it as `"reservation_id": "res-…"` (optional; see Admission). URLs must target loopback, and the source
 manifest and log must stay inside `worktree_path`. Control commands are argv
 arrays and are run without a shell.
 
 ## Admission
 
-At most four app servers run on this machine at once (two until 2026-11-03),
-and none starts while memory is already short. Measured 12–26 Sep 2026 on an 8 GB M1: 141 of 571
-memoro dev-server starts died unexpectedly, and on 2026-09-26 seven registered
-servers sat beside 6.8–8.2 GB of swap. The decision is mc's and is made in one
-place:
+At most **one MAIN and three other servers** run or start on this machine at
+once, and none starts while memory is already short. Measured 12–26 Sep 2026
+on an 8 GB M1: 141 of 571 memoro dev-server starts died unexpectedly, and on
+2026-09-26 seven registered servers sat beside 6.8–8.2 GB of swap. On
+2026-11-05 the machine held one MAIN, three worktree apps and a static server
+the old rule never counted. The decision is mc's and is made in one place:
 
 ```sh
 mc dev admit <service> --worktree <path> [--wait <seconds>] [--json]
@@ -218,22 +220,110 @@ admitted; exit 75 is refused after the wait. With `--json` stdout is exactly one
 of:
 
 ```json
-{ "ok": true }
-{ "ok": false, "reason": "cap" | "memory" | "queue",
-  "holders": [{ "instance_id", "service", "worktree_path", "started_at", "last_used_at", "url" }],
-  "free_percent": 31, "cap": 4,
-  "place": 2, "queue": [ … ] }
+{ "ok": true, "reservation": "res-…" }
+{ "ok": true, "reservation": "res-…", "adopted": true }
+{ "ok": true, "reuse": "<instance_id>" }
+{ "ok": false, "reason": "cap" | "memory" | "queue" | "starting" | "lock",
+  "holders": [{ "instance_id", "service", "worktree_path", "resource_class", "started_at", "last_used_at", "url" }],
+  "pending": [{ "reservation", "service", "worktree_path", "created_at", "pids" }],
+  "free_percent": 31, "cap": 3,
+  "place": 2, "queue": [ … ], "reservation": "res-… (starting)", "error": "… (lock)" }
 ```
 
-What counts is live registered servers whose `resource_class` is not
-`light` — **`light` means "does not count"** — except those whose
-`worktree_path` *and* `service` are the asker's: a restart replaces itself. The
-cap is `MC_DEV_MAX_SERVERS`, default 4. It was 2 until 2026-11-03: from 31 Oct
-to 3 Nov 72 starts waited for a slot (median ~200 s) and 26 were refused after
-fifteen minutes, every one on the cap and none on memory (36–41 % free). Memory is asked first:
-`sysctl -n kern.memorystatus_level` (percentage free, macOS) below
-`MC_DEV_MIN_FREE_PERCENT`, default 15, refuses with reason `memory`, and where
-the sysctl is missing the memory check is skipped (`free_percent: null`).
+**What takes a slot.** Every live registered server that is not MAIN, whatever
+its `resource_class` — `light` static servers included — and every
+reservation that is not MAIN and has no live server yet. Each server is
+counted once: a registration removes its reservation under the same lock. The
+cap is three (`SLOT_LIMIT`, `src/mc/dev-reservations.js`). `MC_DEV_MAX_SERVERS`
+(a whole number 0–3) may lower it; a higher or malformed value is three. It was
+two until 2026-11-03 and four, uncounted light and pending starts aside, until
+2026-11-05.
+
+**In order**, `admission` (`src/mc/dev-servers.js`, pure) answers:
+
+1. A live server for the asker's service and worktree: `reuse`, which takes
+   no slot. A restart stops the old server first; while its process is still
+   registered and alive it is still that slot, and nothing new is started
+   (`mc test dev` says the old one is still running after its stop command).
+2. A reservation for the same service and worktree: `starting`. A second
+   caller never starts a second server; with `--wait` it waits, unqueued, and
+   is a `reuse` once the first registers.
+3. Memory: `sysctl -n kern.memorystatus_level` (percentage free, macOS) below
+   `MC_DEV_MIN_FREE_PERCENT`, default 15, refuses with reason `memory`; where
+   the sysctl is missing the check is skipped (`free_percent: null`).
+4. The cap, then the queue below.
+
+### Reservations
+
+A yes writes a reservation in `<registry>/.pool/reservations.json`
+(`~/.memoro/mc/dev-servers/.pool/`), in the same locked step that counted:
+
+```json
+{ "schema_version": 1,
+  "reservations": [{ "id": "res-…", "service", "worktree_path", "main": false,
+                     "pids": [1234, 1240], "adopted_by": 1240,
+                     "session": { … }, "created_at": "2026-11-05T10:00:00.000Z" }] }
+```
+
+`pids` are the processes that may still create the reservation's server. It
+is **held while any of them is alive**, and never expires on time alone: a
+build still running after ten minutes will still register. It ends when:
+
+| Event | What happens |
+| --- | --- |
+| The server registers | `mc dev register` removes the reservation it names in `reservation_id`, or (a wrapper that names none) the one for its service and worktree, under the lock that writes the record. A re-registration removes only one it names. |
+| mc spawned the child | `mc test dev` adds the child's pid; the child holds the slot after mc exits. |
+| The wrapper adopts it | `adopted_by` and `pids` gain the wrapper's pid (below). |
+| Refusal, spawn failure | `mc test dev` disowns its pids; a reservation with no other live pid is removed. |
+| Registration timeout | A child still alive keeps the slot (mc disowns only itself); a child that is gone frees it. |
+| Crash, `kill -9`, cancellation | Every pid dead: swept on the next locked read, logged as `dev-reservation-swept`. While any pid lives the slot stays held — that process may still start a server. |
+
+pid reuse is the residual risk: a pid the system reuses for an unrelated
+process keeps a dead starter's slot until that process exits.
+
+### Handoff to a wrapper
+
+`mc dev admit` exits as soon as it answers, so the reservation it writes is
+held by its **owner**: `MC_DEV_OWNER_PID` in its environment when that names a
+live process (memoro's wrapper sets its own pid), else its parent.
+
+`mc test dev` starts the project's command with `MC_DEV_ADMITTED=<reservation
+id>`. A wrapper that asks for itself passes its environment to `mc dev admit`,
+which **adopts** that reservation for the owner when it is for the same service
+and worktree and no other live process adopted it first: `{ ok: true,
+reservation, adopted: true }`, no second slot. Anything else in
+`MC_DEV_ADMITTED` — the `1` mc wrote until 2026-11-05, another worktree's id,
+an id already adopted — is no pass: the request is asked like any other.
+
+### Lock and failure
+
+Counting and reserving, registering, adopting and the queue each take
+`<file>.lock` with `O_EXCL`, naming the writer's pid. A lock whose pid is dead
+is broken under a second lock (`.break`), so two takers cannot remove each
+other's. A live lock is waited on for five seconds and then refused: `mc dev
+admit` answers `reason: "lock"`, `mc dev register` fails (the wrapper retries
+it), nothing is admitted past it. A reservation file that does not parse is
+the same refusal, never read as empty.
+
+### Deployment compatibility
+
+- **New mc, older memoro wrapper.** The old wrapper skips asking only on
+  `MC_DEV_ADMITTED=1`; it now gets an id, asks, and adopts. It names no
+  `reservation_id`, so its registration fulfils the reservation for its
+  service and worktree. Its static server did not ask at all, so a static
+  server started by hand from an older checkout is not counted until it
+  registers.
+- **New memoro wrapper, older mc.** A positive verdict without a valid
+  reservation is refused, as are missing mc and malformed responses. Upgrade
+  mc first, then all checkout wrappers. Old direct static/full starts do not
+  enforce the bound; they are not a supported hard-limit deployment.
+- **Stop/restart.** Unregister under the pool lock retains a live pid's record
+  (`removed: false`, `reason: still-running`), even after source removal.
+  Shutdown cannot free capacity before exit; inventory sweeps after pid death.
+  Wrappers wait for death after SIGKILL too and refuse replacement on failure.
+- **Already over capacity.** Installing this stops nothing. Existing servers
+  keep running and keep their slots; new starts queue until enough leave, and
+  `mc test dev`/`mc shot dev` reclaim only idle holders as below.
 
 ### The queue
 
@@ -280,14 +370,14 @@ to make room. A refusal that ends a wait is logged as `dev-server-refused` with
 and `place_at_join`.
 
 `mc dev status [--json]` reads the same state and changes none of it: the live
-app servers with mc's last use of each, the queue in the order it will be
-served, the cap and free memory. `mc dev list` keeps its meaning.
+servers with mc's last use of each, the reservations still starting
+(`pending`), the queue in the order it will be served, the cap and free
+memory. `mc dev list` keeps its meaning.
 
-`mc test dev` asks before it starts a server — up to fifteen minutes, printing
-the waiting line — and starts the project's command with `MC_DEV_ADMITTED=1`
-in its environment, so a wrapper that asks for itself when started by hand
-knows it has already been admitted. A profile whose `resource_class` is `light`
-does not ask, since it would not count once running.
+`mc test dev` asks before it starts any server, `light` ones included — up to
+fifteen minutes, printing the waiting line — and starts the project's command
+with `MC_DEV_ADMITTED=<reservation id>` in its environment (see *Handoff to a
+wrapper*).
 
 `mc test dev` and `mc shot dev` (through `ensureAppServer`) also make room: a
 holder mc has not used for `MC_DEV_HOLDER_STALE_MINUTES` (default 5; 30 until 2026-11-03) is
@@ -304,9 +394,11 @@ never ran out while three shots waited fifteen minutes each behind it.
 
 The shared checkout's app server (`~/mc/self/memoro`, the one `mc shot dev --main`
 and `mc test dev` use by default) is mc's standing server. It is never stopped as
-a stale holder; it counts against `MC_DEV_MAX_SERVERS` for no one, and a request
-for it is neither capped nor queued behind the waiters for a capped slot; it still
-asks the free-memory floor first when it starts.
+a stale holder; it takes none of the three slots, and a request for it is
+neither capped nor queued behind the waiters for a capped slot; it still asks
+the free-memory floor first when it starts. Only the configured app service of
+that checkout is MAIN, and there is at most one: a second MAIN start waits on
+the first (`starting`). The checkout's static server takes a slot.
 `mc dev status` marks it `(main)`.
 
 It follows main. When mc has not used it for `MC_DEV_MAIN_IDLE_SECONDS` (60), the

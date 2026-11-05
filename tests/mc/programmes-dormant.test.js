@@ -148,6 +148,15 @@ describe('dormant programmes on the page', () => {
   });
 });
 
+it('shows programme priority on the page and in the listing', () => {
+  const programmes = programmesSection({ goalRows: GOALS, priority: (name) => name === 'mc' ? 7 : 0 });
+  const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
+  assert.match(lines.find((line) => line.startsWith('  ┌─ mc ')), /priority 7/u);
+  const listing = programmesListing({ section: programmes });
+  assert.equal(listing.programmes.find((item) => item.name === 'mc').priority, 7);
+  assert.match(listingText(listing), /mc\s+active\s+priority 7/u);
+});
+
 describe('mc programs', () => {
   const read = () => ({ section: section(), homes: { empty: ['memoro'], mc: ['memoro-cli'] } });
 
@@ -173,10 +182,10 @@ describe('mc programs', () => {
     const lines = listingText(programmesListing(read())).trimEnd().split('\n');
     assert.equal(lines[0], 'programmes — 3 active · 2 dormant');
     assert.equal(lines.length, 6);
-    assert.match(lines[1], /^ {2}done-only +active +memoro +1 goal · ready 1 +0 proposals +no plan session$/u);
-    assert.match(lines[2], /^ {2}empty +dormant +memoro +no goal +2 proposals +no plan session$/u);
-    assert.match(lines[3], /^ {2}goal-only +active +memoro +1 goal · blocked 1 +0 proposals +no plan session$/u);
-    assert.match(lines[5], /^ {2}planned +dormant +— +no goal +0 proposals +plan claude 1$/u);
+    assert.match(lines[1], /^ {2}done-only +active +priority 0 +memoro +1 goal · ready 1 +0 proposals +no plan session$/u);
+    assert.match(lines[2], /^ {2}empty +dormant +priority 0 +memoro +no goal +2 proposals +no plan session$/u);
+    assert.match(lines[3], /^ {2}goal-only +active +priority 0 +memoro +1 goal · blocked 1 +0 proposals +no plan session$/u);
+    assert.match(lines[5], /^ {2}planned +dormant +priority 0 +— +no goal +0 proposals +plan claude 1$/u);
   });
 
   it('prints the list, or the same as data with --json', async () => {

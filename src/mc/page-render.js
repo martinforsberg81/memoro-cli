@@ -234,6 +234,10 @@ function runnerLines(lines, c, wide, runner, expand) {
   // Yellow while the runner holds new starts back for want of disk or memory;
   // a file left by a runner that is gone says nothing about now.
   if (now.disk?.line && alive) detail(lines, c, wide, 4, now.disk.line, ['yellow']);
+  // The disk policy (disk-pressure.js): measured free space always, grey when
+  // healthy; under pressure or unknown, the last pass, its shortfall and what
+  // the policy does not promise, in yellow.
+  pressureLines(lines, c, wide, now.pressure);
   if (now.memory?.line && alive) detail(lines, c, wide, 4, now.memory.line, ['yellow']);
   if (expand && now.day) dayLine(lines, c, wide, now.day);
   else if (now.day) say(lines, c, wide, 4, `24 h · build ${now.day.by_kind?.build?.sessions || 0} · review ${now.day.by_kind?.review?.sessions || 0} · plan ${now.day.by_kind?.plan?.sessions || 0}`);
@@ -254,6 +258,13 @@ function runnerLines(lines, c, wide, runner, expand) {
  * person has to act: until then nothing starts in that repository. The
  * clock alone inside a day, the date with it past one.
  */
+/** The disk policy's lines, from `diskSummary`: one grey line while healthy. */
+function pressureLines(lines, c, wide, pressure) {
+  if (!pressure?.lines?.length) return;
+  if (pressure.status === 'healthy') { for (const line of pressure.lines) say(lines, c, wide, 4, line); return; }
+  for (const line of pressure.lines) detail(lines, c, wide, 4, line, [pressure.status === 'unknown' ? 'red' : 'yellow']);
+}
+
 export function githubLine(failure) {
   const since = failure.since_seconds != null && failure.since_seconds < 86_400
     ? when(failure.since).replace(/^\d{2}-\d{2} /u, '')
@@ -333,7 +344,7 @@ export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
 const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
 
 /**
- * LANGUAGE — what `mc language` last read and last ran, inside PRODUCTION
+ * LANGUAGE — what `mc language` last read and last ran, inside MERGE & DEPLOY
  * because it is the other door to production. Only the languages with
  * something to say are drawn — unresolved selectors, rows waiting, a reading a
  * week old — and the last run rides on the heading. With neither the section
@@ -599,7 +610,7 @@ export function statusRollup(statuses = {}) {
 
 function programmeLine(c, wide, group, expand) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
-  const label = clipCell(`${group.programme}${metadata}`, wide - 8);
+  const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${metadata}`, wide - 8);
   return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - label.length - 6))}`, 'cyan')}`;
 }
 
@@ -820,14 +831,13 @@ export function renderPageLines(data, {
   lines.push('');
   mergesLines(lines, c, wide, data.merges, expand);
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
-  panelEnd(lines, c, wide);
-  lines.push('');
-  devLines(lines, c, wide, data.dev, expand);
-  panelEnd(lines, c, wide);
   lines.push('');
   deployLines(lines, c, wide, runner.production, expand);
   const language = [];
   if (languageLines(language, c, wide - 2, data.language, at)) lines.push(...language.map(line => `  ${line}`));
+  panelEnd(lines, c, wide);
+  lines.push('');
+  devLines(lines, c, wide, data.dev, expand);
   panelEnd(lines, c, wide);
   lines.push('');
   maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);

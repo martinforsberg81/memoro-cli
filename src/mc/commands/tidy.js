@@ -12,13 +12,22 @@
  *                            if it is down, which nothing else here does
  *
  * Without `--docker` the Docker half runs too, but only on a runtime that is
- * already up. The runner runs it once a day and after a lane skipped for
- * disk; what it applies then is never a retired workarea (rule W, tidy.js),
- * which only a person's `mc tidy --apply` removes — a headless session
- * (`MC_HEADLESS=1`) is not one.
+ * already up. The runner runs it once a day, and its pressure pass under
+ * 30 GB (disk-pressure.js); what it applies then is never a retired workarea
+ * (rule W, tidy.js), which only a person's `mc tidy --apply` removes — a
+ * headless session (`MC_HEADLESS=1`) is not one.
+ *
+ * Every run begins with the disk as the policy reads it: measured free
+ * bytes, pressure, the last pass and its shortfall (`diskSummary`) — and
+ * `--json` carries it as `disk`. The list's byte counts are what removal is
+ * expected to give back, never a measurement.
  */
+import { readFileSync } from 'node:fs';
+
 import { describeSize } from '../conversations.js';
+import { diskSummary } from '../disk-pressure.js';
 import { tidyDocker } from '../docker.js';
+import { runnerDir, runnerScratchDir } from '../paths.js';
 import { DEFAULT_DAYS, ROUTINE, runTidy, shortPath } from '../tidy.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
@@ -38,7 +47,15 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  return tidyCommand(opts, { stdout, tidy: deps.tidy, docker: deps.docker });
+  return tidyCommand(opts, { stdout, tidy: deps.tidy, docker: deps.docker, disk: deps.disk });
+}
+
+/** The disk as the policy reads it here: the state file and one statfs. */
+function realDisk(env) {
+  return diskSummary({
+    path: runnerScratchDir(env), stateDir: runnerDir(env),
+    read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+  });
 }
 
 export function parseArgs(argv) {
@@ -64,8 +81,10 @@ export function withDays(opts, days) {
  * when an apply kept something on re-check or a Docker prune failed.
  * `docker` is `tidyDocker`; `--docker` runs nothing else.
  */
-export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyDocker, env = process.env } = {}) {
+export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyDocker, env = process.env, disk = null } = {}) {
   const prune = docker || tidyDocker;
+  // A caller with its own tidy and no `disk` is a test: no reading of this machine.
+  const reading = (disk || (tidy && tidy !== runTidy ? () => null : () => realDisk(env)))();
   if (opts.docker) {
     const answer = await prune({ apply: opts.apply, start: opts.apply ? { pid: process.pid, run: 'mc tidy --docker' } : null });
     if (opts.json) stdout.write(`${JSON.stringify(answer, null, 2)}\n`);
@@ -79,10 +98,15 @@ export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyD
   const answer = await prune({ apply: opts.apply });
   const code = outcome?.kept || dockerFailed(answer) ? 1 : 0;
   if (opts.json) {
-    stdout.write(`${JSON.stringify(answer ? { ...list, docker: answer } : list, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...list, ...(answer ? { docker: answer } : {}), ...(reading ? { disk: reading } : {}) }, null, 2)}\n`);
     return code;
   }
   stdout.write(`mc tidy${opts.apply ? '' : ' — dry run'}\n`);
+  if (reading) {
+    stdout.write('\n');
+    for (const line of reading.lines) stdout.write(`${line}\n`);
+    stdout.write(`disk: ${reading.limitation}\n`);
+  }
   const byRule = new Map();
   for (const item of list.targets) {
     if (!byRule.has(item.rule)) byRule.set(item.rule, { count: 0, bytes: 0 });
@@ -108,7 +132,7 @@ export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyD
     for (const item of outcome.applied.filter((entry) => !entry.ok)) {
       stdout.write(`  not removed  ${shortPath(String(item.path))} — ${item.why}\n`);
     }
-    stdout.write(`freed ${(outcome.freed / 1e9).toFixed(2)} GB in ${outcome.removed} items, kept ${outcome.kept} on re-check\n`);
+    stdout.write(`freed ${(outcome.freed / 1e9).toFixed(2)} GB in ${outcome.removed} items (estimated from the list), kept ${outcome.kept} on re-check\n`);
   }
   if (answer) {
     stdout.write('\n');

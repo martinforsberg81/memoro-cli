@@ -98,11 +98,12 @@ describe('PROGRAMMES phase tree', () => {
         const at = lines.findIndex((line) => line.includes(title));
         assert.ok(at >= 0, title);
         assert.match(lines[at + 2], /^ {10}╭─+╮$/u);
-        assert.match(lines[at + 3], /^ {10}│ ● · (BUILD|REVIEW) · 12 min · codex · sol │$/u);
-        assert.match(lines[at + 4], /^ {10}╰─+╯$/u);
+        const bottom = lines.findIndex((line, index) => index > at + 2 && line.trimStart().startsWith('╰'));
+        const content = lines.slice(at + 3, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
+        assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in$/u);
         assert.equal(width(lines[at + 2]), width(lines[at + 3]), 'frame hugs the session');
-        assert.equal(width(lines[at + 3]), width(lines[at + 4]));
-        assert.match(lines[at + 5], /1 check-in/u);
+        assert.equal(width(lines[at + 3]), width(lines[bottom]));
+        assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
       }
       const unmatched = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
       assert.ok(unmatched > 0);

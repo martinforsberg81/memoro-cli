@@ -24,8 +24,8 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` draws PROGRAMMES followed by four work panels: MERGE, DEV,
-PRODUCTION and MAINTENANCE. Orange opening and closing rules distinguish these
+`renderPageLines` draws PROGRAMMES followed by three work panels: MERGE & DEPLOY, DEV
+and MAINTENANCE. Orange opening and closing rules distinguish these
 panels from cyan programme boundaries. SYSTEM follows a horizontal separator
 at the bottom, containing MC, runner diagnostics, Docker when present and BILLING. There is no
 separate SESSIONS section. A stopped language run inside an open gap still
@@ -38,6 +38,14 @@ remain visible in both modes. Normal headings use spacing and indentation,
 without repeated table headers; programme blocks have opening and closing rules.
 
 ### PROGRAMMES
+
+Nonzero programme priorities appear on the programme heading. Type
+`priority mc inbox --set 10` at the page prompt to set one or several; zero
+resets them. This calls the same verb as `mc programs priority`, then redraws.
+The live refresh key also changes when a priority changes in another terminal.
+Scheduling first prefers blocked recovery, finish/merge, review, build, then
+next-step planning; programme priorities decide within a rank after repository
+shares. See [mc-run.md](mc-run.md#the-pick-in-order).
 
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
 → goal → PR. Each programme is a bounded block with a bold name and cyan
@@ -62,8 +70,9 @@ Each live runner session is matched by its explicit programme/goal identity
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
 used. A tight rounded frame encloses just this live session data, with green
 borders for build, blue for plan and magenta for review. Long activity wraps
-inside the frame within the terminal width. A check-in and its yellow clock
-remain visible without expansion; repository, advisor, pid and zero check-ins
+inside the frame within the terminal width. Positive check-in counts appear
+at the end of the activity inside the frame, in yellow, and its yellow clock
+remains visible without expansion; repository, advisor, pid and zero check-ins
 are expanded details. A session
 with no matching goal appears under UNASSIGNED ACTIVITY, including its name
 and PR references, so removing SESSIONS cannot hide it. Rendering joins the
@@ -121,40 +130,38 @@ that window expires. `cold` is not produced by this DEV projection. The
 collector does not sweep or rewrite the registry or queue; dead records await
 a writer. These semantics describe the current projection, not server health.
 
-### MERGE
+### MERGE & DEPLOY
 
-Each repository has a short heading with active, queued and red counts, or
-idle. Pause reasons and stopped-merger warnings belong to that repository.
-Active landing rounds and every red entry remain visible; the normal queue
-shows its first six waiting entries in recorded order and a folded count.
-`a` shows the entire queue plus titles, queue ages and 24-hour landing history.
+One panel groups both repository merge lanes and memoro deployment evidence.
+Columns are separated by whitespace; middle dots separate data only within a
+column. Repository names occupy an aligned column; their queue summaries show `queue
+empty` or `4 in queue: #1 #2 #3 #4` in landing order. The normal view shows up
+to six waiting entries, with an explicit remainder; `a` shows all references,
+branches, queue ages and 24-hour landing history. Queued entries without a PR
+number remain counted and say `PR unknown`.
 
-Each item shows whole PR references, actual state, age and its recorded name.
-Failures get their measured reason on a separate red child row; batch members
-name their lead PR. Long reasons wrap rather than being lost at the terminal
-edge. The sole source is `merges.repos[]`; legacy aggregates are not rendered.
+Indented operation rows align the action/PR with its status: `merging #123`,
+a phase bar, short state, elapsed time and the recorded phase message. The bar
+marks prepare `[●··]`, gate `[━●·]` or land `[━━●]`; it is a stage indicator,
+not test completion or a time-based percentage. Missing phase evidence uses
+`[···]`. Active rounds and every failure remain visible. Pauses, stopped
+mergers, failure reasons and batch membership retain their own rows. Empty
+lanes explicitly say idle; queued lanes without an active round say waiting.
 
-### PRODUCTION
-
-Separate rows show LIVE (the cached `/api/version` observation and age),
-RECORDED (the last successful deployment and age) and ATTEMPT (latest outcome,
-SHA and age, with a failure location beneath). Missing readings say unknown;
-a recorded deployment is never substituted for a live observation. Different
-commits retain both readings and an explicit yellow mismatch warning.
-
-A running attempt with a dead recorded pid, or an old pid-less record, says
-no end recorded. A failed or refused first attempt remains visible even before
-any deployment/version observation exists. `runner.production.attempt` adds
-latest-attempt evidence to JSON; existing `running`, `failed` and successful
-record fields remain. `a` adds builds and the recorded timestamp. Collection
-uses existing local records; rendering initiates no production request.
+DEPLOY is a subsection of the same panel, for memoro. Its aligned LIVE,
+RECORDED and ATTEMPT rows keep the cached version reading, successful deploy
+record and last attempt distinct. A live attempt says running and `progress
+unknown`: the record supplies no completion fraction. Failed/refused attempts,
+missing end records and live/recorded mismatches stay visible. Expanded details
+include build numbers and record timestamps. Language status remains inside
+this combined panel. DEV follows it as a separate panel.
 
 ### Related work and system details
 
-MERGE includes a conditional **PRs outside goals** group for open PRs not
+MERGE & DEPLOY includes a conditional **PRs outside goals** group for open PRs not
 represented by a programme, running session or merger. Its counts describe
 that group only; `mc prs` still lists every PR. Empty groups disappear.
-LANGUAGE lives inside PRODUCTION when cached readings or a run have something
+LANGUAGE lives inside MERGE & DEPLOY when cached readings or a run have something
 to report. The stopped-language-gap warning remains above the work.
 
 A horizontal SYSTEM separator places installed-code/update/draining information,

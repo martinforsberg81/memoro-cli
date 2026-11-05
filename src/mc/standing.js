@@ -25,16 +25,20 @@ import { userInfo } from 'node:os';
 
 /**
  * Every process of this user with its cwd, as lsof reports them. One call.
- * `-F pn`: a pid line, then the name line for its cwd.
+ * `-F pn`: a pid line, then the name line for its cwd. The returned array
+ * carries a non-enumerable `complete` flag: partial results are useful for
+ * display, but cannot prove absence for destructive cleanup.
  */
 export function cwdsOfUser({ run = execFileSync, uid = userInfo().uid } = {}) {
   let output = '';
+  let complete = true;
   try {
     output = run('lsof', ['-a', '-d', 'cwd', '-u', String(uid), '-F', 'pn'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024,
     });
   } catch (error) {
     // lsof exits 1 when some process could not be read; the rest is still here.
+    complete = false;
     output = error?.stdout?.toString?.() || '';
   }
   const found = [];
@@ -43,6 +47,7 @@ export function cwdsOfUser({ run = execFileSync, uid = userInfo().uid } = {}) {
     if (line.startsWith('p')) { pid = Number(line.slice(1).trim()); continue; }
     if (line.startsWith('n') && pid) found.push({ pid, cwd: line.slice(1).trim() });
   }
+  Object.defineProperty(found, 'complete', { value: complete });
   return found;
 }
 

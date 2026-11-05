@@ -77,7 +77,7 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'MERGE', 'DEV', 'PRODUCTION', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} is missing`);
       }
       // No WORK heading: every session is a programme's or a desk's, and the
@@ -142,7 +142,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['PROGRAMMES', 'MERGE', 'DEV', 'PRODUCTION', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
@@ -522,4 +522,20 @@ describe('the menu under the page', () => {
     assert.deepEqual(opened, [], 'a goal is not opened as a project');
     assert.equal(drawn, 1, 'the page is drawn again under the goal');
   });
+});
+
+it('the page forwards programme priority settings and redraws after the command', async () => {
+  const data = { programmes: { programmes: [] } };
+  const answers = ['priority mc inbox --set 10', 'q'];
+  const orders = [];
+  let redraws = 0;
+  const code = await menu(data, {
+    stdout: { write() {} }, stderr: { write(text) { assert.fail(text); } },
+    reader: { ask: async () => answers.shift(), show: () => { redraws += 1; } },
+    page: async () => ({ data, lines: [], key: 'changed' }),
+    programOrder: async (args) => { orders.push(args); return 0; },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(orders, [['priority', 'mc', 'inbox', '--set', '10']]);
+  assert.equal(redraws, 1);
 });

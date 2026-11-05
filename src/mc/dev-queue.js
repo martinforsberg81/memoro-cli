@@ -19,73 +19,30 @@
  * dead server: a waiter killed mid-wait must not hold the head for ever.
  */
 import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { withFileLock } from './dev-reservations.js';
 import { devServersRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
 /** How long a gate round's ticket waits before it goes ahead of the others. */
 export const GATE_PRIORITY_MS = 2 * 60_000;
 
-const LOCK_POLL_MS = 20;
-const LOCK_WAIT_MS = 5000;
-
 /** The queue beside the registry it orders: `~/.memoro/mc/dev-queue.json` for the default root. */
 export function devQueuePath(root = devServersRoot()) {
   return join(dirname(resolve(root)), 'dev-queue.json');
 }
 
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function readText(path) {
-  try {
-    return readFileSync(path, 'utf8').trim();
-  } catch {
-    return null;
-  }
-}
-
 /**
- * One writer at a time: `<queue>.lock`, taken with `O_EXCL` and naming the
- * writer's pid. A lock whose pid is dead is taken over; a live one is waited
- * on for five seconds and then gone ahead of, as the register's lock does — a
- * queue that cannot be written for five seconds must not stop a shot, and the
- * write itself is atomic, so the worst case is one ticket lost and re-taken
- * on the next turn.
+ * One writer at a time, through the pool's lock (`withFileLock`): a lock that
+ * cannot be taken within five seconds is an error the waiter refuses on. Until
+ * 2026-11-05 a writer went ahead of a held lock and the worst case was a lost
+ * ticket; a queue nobody can write is now a refusal, never a guess.
  */
 function withLock(file, fn, { alive = pidAlive } = {}) {
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const path = `${file}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let held = false;
-  for (;;) {
-    try {
-      const fd = openSync(path, 'wx');
-      writeSync(fd, String(process.pid));
-      closeSync(fd);
-      held = true;
-      break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') break;
-      const holder = readText(path);
-      if (holder === null) continue;
-      if (!alive(Number(holder))) {
-        rmSync(path, { force: true });
-        continue;
-      }
-      if (Date.now() > deadline) break;
-      sleepSync(LOCK_POLL_MS);
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    if (held && readText(path) === String(process.pid)) rmSync(path, { force: true });
-  }
+  return withFileLock(file, fn, { alive });
 }
 
 function readTickets(file) {

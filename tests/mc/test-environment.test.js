@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
+import { devPoolPath, readReservations } from '../../src/mc/dev-reservations.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
   accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
@@ -95,6 +96,11 @@ function worktreeWith({ declaration = DECLARATION, definition = DEV_DEFINITION }
   if (declaration) writeFileSync(join(root, '.mc', 'test.json'), JSON.stringify(declaration));
   if (definition) writeFileSync(join(root, '.mc', 'dev.json'), JSON.stringify(definition));
   return root;
+}
+
+/** What a wrapper's stop command leaves behind: its process gone, its registration with it. */
+function unregistered(root, server) {
+  rmSync(join(root, `${server.instance_id}.json`), { force: true });
 }
 
 function registerServer(root, worktree, {
@@ -762,8 +768,8 @@ describe('bringing one up', () => {
       now: () => t,
       sleep: async (ms) => { t += ms; },
       registerTimeoutMs: 5_000,
-      spawn: () => ({ pid: 4242, unref() {} }),
-      pidAlive: () => true,
+      // A child that is really alive: it may still register, so it keeps the slot.
+      spawn: () => ({ pid: process.ppid, unref() {} }),
       stopServer: () => { stopped += 1; return { ok: true }; },
       onSlowStart: () => {},
       fetch: async () => ({ ok: true }),
@@ -771,9 +777,10 @@ describe('bringing one up', () => {
 
     assert.equal(ensured.ok, false);
     assert.match(ensured.error, /within/u);
-    assert.match(ensured.error, /pid 4242 is still alive/u);
+    assert.match(ensured.error, new RegExp(`pid ${process.ppid} is still alive and keeps its slot`, 'u'));
     assert.ok(t >= 10_000, `gave up after ${t}ms`);
     assert.equal(stopped, 0, 'a live child is named, never stopped');
+    assert.deepEqual(readReservations(devPoolPath(root)).map((item) => item.pids), [[process.ppid]], 'held by the child alone once mc gave up');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
@@ -802,6 +809,7 @@ describe('bringing one up', () => {
     assert.doesNotMatch(ensured.error, /still alive/u);
     assert.deepEqual(waiting, []);
     assert.ok(t >= 5_000 && t < 10_000, `gave up after ${t}ms`);
+    assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
@@ -908,7 +916,7 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
       processCwd: () => null,
       freeMemory: () => null,
       git: git.git,
-      stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
+      stopServer: (server) => { stopped.push(server.instance_id); unregistered(root, server); return { ok: true, instance_id: server.instance_id }; },
       sleep: async () => {},
       spawn: (command, args) => {
         spawned.push([command, ...args]);
@@ -1122,7 +1130,7 @@ describe('a service built from a tree that is gone', () => {
       processCwd: () => null,
       freeMemory: () => null,
       git: git('bbbbbbbbbb2222'),
-      stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
+      stopServer: (server) => { stopped.push(server.instance_id); unregistered(root, server); return { ok: true, instance_id: server.instance_id }; },
       sleep: async () => {},
       now: (() => { let t = 0; return () => { t += 1000; return t; }; })(),
       spawn: (command, args) => {
@@ -1325,40 +1333,160 @@ describe('admission before a start', () => {
     });
     assert.equal(ensured.ok, false);
     assert.equal(spawned, 0);
-    assert.match(ensured.error, /2 of 2 app servers already running — dev-a \(\/tmp\/a\), dev-b \(\/tmp\/b\)/u);
+    assert.match(ensured.error, /2 running of 2 dev-server slots — dev-a \(\/tmp\/a\), dev-b \(\/tmp\/b\)/u);
     assert.equal(ensured.refused.reason, 'cap');
     assert.equal(ensured.refused.holders.length, 2);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
-  it('spawns with MC_DEV_ADMITTED=1 when admission says yes', async () => {
+  /** Three servers live in other worktrees: every slot is taken. */
+  function fullPool(root) {
+    const others = ['a', 'b', 'c'].map(() => worktreeWith());
+    others.forEach((other, index) => registerServer(root, other, { port: 8950 + index }));
+    return others;
+  }
+
+  it('spawns with its reservation in MC_DEV_ADMITTED; the child holds it, and the registration fulfils it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
-    let asked = null;
     let env = null;
     let launch = null;
+    let during = null;
+    let t = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      env: {},
       processCwd: () => null,
-      now: () => 0,
-      sleep: async () => {},
-      admit: async (question) => { asked = question; return { ok: true }; },
+      freeMemory: () => 50,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        if (during) return;
+        // Spawned and not registered yet: the slot is this start's, held by mc and its child.
+        during = readReservations(devPoolPath(root));
+        registerServer(root, worktree, { port: 8900, extra: { reservation_id: env.MC_DEV_ADMITTED } });
+      },
       spawn: (command, args, options) => {
         env = options.env;
         launch = [command, ...args];
-        registerServer(root, worktree, { port: 8900 });
-        return { unref() {} };
+        return { pid: process.ppid, unref() {} };
       },
       fetch: async () => ({ ok: true }),
     });
     assert.equal(ensured.ok, true, ensured.error);
-    assert.equal(env.MC_DEV_ADMITTED, '1');
+    assert.match(env.MC_DEV_ADMITTED, /^res-/u, 'a reservation, not a universal 1');
+    assert.deepEqual(during.map((item) => [item.id, item.pids]), [[env.MC_DEV_ADMITTED, [process.pid, process.ppid]]]);
+    assert.deepEqual(readReservations(devPoolPath(root)), [], 'registered: the server counts, the reservation is gone');
     assert.equal(launch[0], process.execPath);
     assert.match(launch[1], /mc-cli\.js$/u);
     assert.deepEqual(launch.slice(2, 4), ['keys', 'serve']);
-    assert.equal(asked.service, 'memoro-worker');
-    assert.equal(asked.worktree, worktree);
-    assert.equal(asked.waitSeconds, 900);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a light static start asks for a slot like the app, and is refused when the three are taken', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    const others = fullPool(root);
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, TIERED_DECLARATION, {
+      root,
+      env: {},
+      service: 'memoro-static',
+      admitWaitSeconds: 0,
+      processCwd: () => null,
+      freeMemory: () => 50,
+      spawn: () => { spawned += 1; return { unref() {} }; },
+    });
+    assert.equal(ensured.ok, false);
+    assert.equal(ensured.refused.reason, 'cap');
+    assert.equal(ensured.refused.cap, 3);
+    assert.equal(spawned, 0);
+    for (const path of [root, worktree, ...others]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a start still building holds its slot: another worktree asking meanwhile is refused, the same worktree waits and reuses it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const others = [worktreeWith(), worktreeWith()];
+    registerServer(root, others[0], { port: 8960 });
+    registerServer(root, others[1], { port: 8961 });
+    const late = worktreeWith();
+    let lateTry = null;
+    let sameTry = null;
+    let spawned = 0;
+    let t = 0;
+    const base = {
+      root, env: {}, processCwd: () => null, freeMemory: () => 50, fetch: async () => ({ ok: true }),
+    };
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      ...base,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        if (lateTry) return;
+        // Two registered and this one building: the third slot is taken.
+        lateTry = await ensureDevServer(late, DECLARATION, {
+          ...base, admitWaitSeconds: 0, spawn: () => { throw new Error('must not start a fourth'); },
+        });
+        // The same worktree waits on this start, unqueued, and takes it when it registers.
+        let u = 0;
+        sameTry = await ensureDevServer(worktree, DECLARATION, {
+          ...base,
+          now: () => u,
+          sleep: async (step) => { u += step; registerServer(root, worktree, { port: 8900 }); },
+          spawn: () => { throw new Error('must not start the same worktree twice'); },
+        });
+      },
+      registerTimeoutMs: 5_000,
+      spawn: () => { spawned += 1; return { pid: process.ppid, unref() {} }; },
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(spawned, 1);
+    assert.equal(lateTry.ok, false);
+    assert.equal(lateTry.refused.reason, 'cap');
+    assert.deepEqual(lateTry.refused.pending.map((item) => item.worktree_path), [worktree]);
+    assert.equal(sameTry.ok, true, sameTry.error);
+    assert.equal(sameTry.started, false);
+    assert.equal(sameTry.server.instance_id, 'dev-8900');
+    for (const path of [root, worktree, late, ...others]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a spawn that throws frees the slot it was given', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      processCwd: () => null,
+      freeMemory: () => 50,
+      spawn: () => { throw new Error('EAGAIN'); },
+    });
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /could not be started: EAGAIN/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a restart whose old server has not stopped starts nothing: the old one keeps its slot', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8900, extra: { built_from: { commit: 'aaaaaaaaaa1111' } } });
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      processCwd: () => null,
+      freeMemory: () => 50,
+      git: () => ({ status: 0, stdout: 'bbbbbbbbbb2222\n' }),
+      // Its stop command says yes and the process is still there.
+      stopServer: () => ({ ok: true }),
+      fetch: async () => ({ ok: true }),
+      spawn: () => { spawned += 1; return { unref() {} }; },
+    });
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /dev-8900 is still running after its stop command — nothing was started/u);
+    assert.equal(spawned, 0);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });

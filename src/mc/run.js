@@ -25,7 +25,9 @@
  * done or dropped for 24 hours is archived (`archiveGoalsDue`, goal-archive.js),
  * every repository is fetched and asked what is open for the page
  * (`askGithub`), a merger that should be running is started (`wakeMerger`),
- * orphaned dev processes are reaped, Docker and scratch are swept.
+ * orphaned dev processes are reaped, Docker is swept. Beside them a timer
+ * reads the disk every minute (`diskTick`, disk-pressure.js), whatever the
+ * chores and lanes are in, and a session starts only on a fresh admission.
  *
  * Things that are not goal sessions ride along, and none opens a worktree or
  * touches a branch. `runHelperDay` is the collect: once per calendar day, in
@@ -54,7 +56,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -89,6 +91,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { pickWork } from './lane-pick.js';
+import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { withoutSessionIdentity } from './session-role.js';
@@ -101,6 +104,9 @@ import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf 
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
 import { rmTree } from './rm-tree.js';
+import { POLL_MS as DISK_POLL_MS, createDiskPressure, gb, statfsAvailable } from './disk-pressure.js';
+import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
+import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
   BUILD_ROLES, collectNote, goalCheckInPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
@@ -118,19 +124,13 @@ const HEADLESS_PLAN_CANDIDATES = Object.freeze([
   Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }),
 ]);
 
-/**
- * A session's scratch directory is kept this long after it was last touched.
- * Two days, not seven: on 2026-10-08 scratch held 15 GiB and a session hit
- * ENOSPC. Not hours either — the gate logs a proposal cites live here.
+/*
+ * Disk: no session starts unless the shared policy admits it
+ * (disk-pressure.js: 30 GB available, after a pressure pass if need be).
+ * 2026-10-08 a session hit ENOSPC with 118 MiB free; until 2026-11-05 the
+ * line was 5 GiB, and scratch went by age alone after two days. Scratch now
+ * goes only by tidy's rule S, which needs proof that its session ended.
  */
-export const SCRATCH_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
-
-/**
- * Below this many free bytes on the volume where `MC_SCRATCH` is made, no
- * session starts (2026-10-08: 118 MiB free, and a session's first shell
- * commands failed on ENOSPC). Sessions already running go on.
- */
-export const DISK_MIN_BYTES = 5 * 2 ** 30;
 
 /**
  * Below this `kern.memorystatus_level` (percent of memory free), no
@@ -140,13 +140,6 @@ export const DISK_MIN_BYTES = 5 * 2 ** 30;
  * 8 GB). Sessions already running go on.
  */
 export const MEMORY_MIN_FREE_PERCENT = 20;
-
-/**
- * After a lane skipped a pass for disk (`diskRoom`), the next chore pass runs
- * `mc tidy --apply` — at most this often, so a disk tidy cannot free stays
- * full without the runner tidying every pass.
- */
-export const TIDY_DISK_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** `runner.log` moves to `runner.log.1` past this size; one generation is kept. */
 export const RUNNER_LOG_MAX_BYTES = 32 * 2 ** 20;
@@ -443,7 +436,7 @@ export function realDeps(env = process.env) {
     diagnoseGithub: () => diagnoseGithub({ run: (cmd, args) => sh(cmd, args, { timeout: DIAGNOSE_TIMEOUT_MS }) }),
     exists: existsSync,
     // The runner's lock (runner-lock.js): every write of the merger's queue takes it.
-    lock: (root, fn) => realLock(root, fn),
+    lock: (root, fn, options) => realLock(root, fn, options),
     // The one liveness test the page, `mc run start` and the loop's own
     // refusal all use, so a runner.json that names a pid means the same thing
     // to every reader of it.
@@ -471,24 +464,20 @@ export function realDeps(env = process.env) {
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
     remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
     // A session's scratch directory (`~/mc/runner/scratch/`): made before the
-    // session, and the directories in it that are old enough are taken by the
-    // chore pass. `scratchDirs` lists directories only, with their age.
+    // session, with its ownership record (`.mc-scratch.json`) that tidy's rule
+    // S reads. Nothing here removes one by age.
     mkdir: (path) => { mkdirSync(path, { recursive: true }); },
-    scratchDirs: (path) => {
-      try {
-        return readdirSync(path, { withFileTypes: true }).filter((e) => e.isDirectory())
-          .map((e) => ({ name: e.name, mtimeMs: statSync(join(path, e.name)).mtimeMs }));
-      } catch { return []; }
-    },
     // The bytes an unprivileged writer can still use on the volume holding
     // `path` — or its nearest existing parent, since scratch may not exist
-    // yet. Null when nothing can be read.
-    freeBytes: (path) => {
-      for (let at = path; ; at = dirname(at)) {
-        try { const fs = statfsSync(at); return Number(fs.bavail) * Number(fs.bsize); } catch { /* try the parent */ }
-        if (dirname(at) === at) return null;
-      }
-    },
+    // yet. Null when nothing can be read. A deps object without it has no disk
+    // policy at all, which is how a test fixture stays off this machine's disk.
+    freeBytes: (path) => statfsAvailable(path),
+    // The disk monitor's timer: `fn` every `ms`, unref'd, and a stop.
+    every: (ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); },
+    // The pressure pass's file and Docker halves (disk-pressure.js). Docker's
+    // never starts a runtime that is down (`tidyDocker` without `start`).
+    pressureTidy: async () => runTidy({ apply: true, env }),
+    pressureDocker: async () => tidyDocker({ apply: true, env }),
     // `kern.memorystatus_level`, the percent of memory free; null off macOS.
     freeMemoryPercent: () => freeMemoryPercent(),
     // Read-only files and directories go too (rm-tree.js): memoro's dependency cache is read-only.
@@ -615,9 +604,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const pid = deps.pid ?? process.pid;
   const repos = defaultRepos(deps.env);
   const stamp = () => deps.now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
-  // When a lane last skipped for disk, and when that last ran a tidy.
-  let diskSkippedAt = null;
-  let lastDiskTidyAt = null;
   const say = (text) => {
     const line = `${stamp()}  ${text}`;
     deps.append(paths.runnerLog, `${line}\n`);
@@ -629,6 +615,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // (`deps.lock`), because a test's work root is not a directory.
   const lock = deps.lock || ((_root, fn) => fn());
   const alive = deps.alive || pidAlive;
+
+  // The disk policy (disk-pressure.js), on this runner's doors. Its pressure
+  // pass is, in order: finished goals archived without the 24 hours, tidy's
+  // file rules, Docker's images on a runtime that is already up. Only with a
+  // reader: a deps object without `freeBytes` has no disk policy.
+  const disk = deps.freeBytes ? createDiskPressure({
+    path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
+    now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true }), say,
+    steps: [
+      { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
+      ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
+      ...(deps.pressureDocker ? [{ name: 'docker-images', run: async () => dockerStep(await deps.pressureDocker()) }] : []),
+    ],
+  }) : null;
 
   // Sticky: a STOP read once is a STOP for the rest of this run, whether or
   // not the file is still there. 2026-10-07 a STOP written three seconds
@@ -833,22 +833,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
    * written into its LOG.md once, as a runner entry, not at every pass.
    */
-  function archiveGoalsDue() {
-    convertAfter();
+  function archiveGoalsDue({ holdMs } = {}) {
+    if (holdMs === undefined) convertAfter();
     const all = goals();
     const now = deps.now();
+    const answer = { ok: true, removed: 0, kept: [], errors: [] };
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
-      if (!goalArchiveDue({ goal, nowMs: now.getTime() }).due) continue;
+      if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
       const result = archiveGoal(goal, {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       });
-      if (result.refused) { refuseGoalOnce(goal, result.refused); continue; }
-      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
+      if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
+      answer.removed += 1;
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
+    return answer;
   }
 
   /** `archiveGoal`'s refusal of a finished goal, written into its LOG.md unless the log already says the same last. */
@@ -915,18 +918,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * `mc tidy --apply` (tidy.js), once a day by its own runs.tsv row, and in
-   * the first chore pass after a lane skipped for disk — that one at most
-   * once per `TIDY_DISK_MIN_INTERVAL_MS`, remembered in memory. Shaped like
+   * `mc tidy --apply` (tidy.js), once a day by its own runs.tsv row. Low disk
+   * is the pressure pass's, not this one's (`disk`). Shaped like
    * `runDepsDaily`: the row is written however it went. Returns 'ran',
    * 'failed' or null when it was not due.
    */
   async function runTidyDaily() {
     const now = deps.now().getTime();
     const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now(), kind: TIDY_KIND });
-    const forDisk = diskSkippedAt !== null && (lastDiskTidyAt === null || now - lastDiskTidyAt >= TIDY_DISK_MIN_INTERVAL_MS);
-    if ((!due.due && !forDisk) || !deps.tidy) return null;
-    if (forDisk) { lastDiskTidyAt = now; diskSkippedAt = null; }
+    if (!due.due || !deps.tidy) return null;
     const took = () => Math.round((deps.now().getTime() - now) / 1000);
     let outcome = null;
     let docker = null;
@@ -944,7 +944,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       ...dashes,
       note: `freed=${freed},items=${items},kept=${kept}`,
     });
-    const why = forDisk ? 'a lane skipped for disk' : 'daily';
+    const why = 'daily';
     say(failure
       ? `tidy (${why}): failed — ${failure}`
       : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check${dockerNote(docker)}`);
@@ -1337,6 +1337,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (planning) claims.delete(`plan:${goal.programme}`);
     }
     if (outcome === 'stop') return { ran: 0, stop: true };
+    if (outcome === 'skipped:disk') return { ran: 0, waited: outcome };
     if (outcome !== 'ran') return { ran: 0 };
     const ran = { ran: 1, name, step: null, goal: true };
     if (stopRequested()) {
@@ -1584,26 +1585,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A plan session stands in the programme's directory, beside the goal; it
     // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
     const cwd = programmeTurn ? goal.dir : planning ? dirname(dirname(goal.dir)) : worktree;
-    const lost = planning ? null : placeGoalWorktrees(goal, name);
-    if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
-    // A goal's branch is made when it can start: one made at `mc goal new` in a
-    // later phase is remade from origin/main before its first build, if unbuilt.
-    if (kind === 'build' && !lastBuildEntry(goal.log)) {
-      remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
-    }
-    const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
-    const repo = repos.find((item) => item.name === repoName);
-    let pr = null;
-    if (review) {
-      pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
-      if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
-      if (!pr) {
-        goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
-        return 'skipped:no-pr';
-      }
-    }
-    const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
-    if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
@@ -1613,91 +1594,134 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
       return 'skipped:no-capacity';
     }
-
-    // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
-    const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-    const prompt = programmeTurn
-      ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
-      : review
-      ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
-      : planning
-      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
-      : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
-    const instructions = instructionsFor(launch.id, role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
-    const ts = stamp().replace(/[-:]/gu, '');
-    // A goal's name holds a `/`, which a file stem may not.
-    const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
-    const out = join(paths.log, stem);
-    const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
-    const t0 = deps.now().getTime();
-    // There exactly as long as the session is, so in flight and slot are one
-    // fact, and the eligibility of this goal is that same fact.
-    const currentPath = paths.currentFor(repoName, lane);
-    const current = {
-      name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
-      check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
-      started: stamp(), pid, worktree: cwd,
-      role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
-    };
-    writeJson(currentPath, current);
-    const scratch = join(paths.scratch, stem);
-    let scratchEnv = {};
-    try {
-      deps.mkdir(scratch);
-      scratchEnv = { MC_SCRATCH: scratch };
-    } catch (error) {
-      say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
-    }
-    let result;
-    try {
-      if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
-      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
-      result = await deps.session({
-        bin: tool.bin,
-        args: tool.args,
-        cwd,
-        logPath: `${out}.jsonl`,
-        ...watchFor(launch, settings, {
-          prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
-          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
-        }),
-        env: {
-          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
-          MC_HEADLESS: '1',
-          MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
-          // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
-          ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
-          // The review uses this head as context; the Stop hook reads when it began.
-          ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
-          ...(settings.model ? { MC_MODEL: settings.model } : {}),
-          ...scratchEnv,
-        },
-        unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
-      });
-    } finally {
-      remove(currentPath);
+    const admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+    if (!admission.admitted) {
       dropSlot();
+      const line = `disk: ${gb(admission.available)} free — no session started: ${admission.reason}`;
+      say(line);
+      writeJson(paths.disk, { at: stamp(), free_bytes: admission.available, line });
+      return 'skipped:disk';
     }
-    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-    writeSessionLogs(out, result);
-    noteWindows({ name, launch }, result.stdout);
-    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
-    recordRefusal({ name, launch, route }, read, picked.billing);
-    const provider = launch.id === 'codex' ? 'codex' : 'claude';
-    if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
-    const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
-    if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
-    else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
-    else if (review) afterReview(goal, name);
-    else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-    const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
-    logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
-    say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
-    return 'ran';
+    try {
+      const lost = planning ? null : placeGoalWorktrees(goal, name);
+      if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      // A goal's branch is made when it can start: one made at `mc goal new` in a
+      // later phase is remade from origin/main before its first build, if unbuilt.
+      if (kind === 'build' && !lastBuildEntry(goal.log)) {
+        remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
+      }
+      const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
+      const repo = repos.find((item) => item.name === repoName);
+      let pr = null;
+      if (review) {
+        pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
+        if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
+        if (!pr) {
+          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
+          return 'skipped:no-pr';
+        }
+      }
+      const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
+      if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
+      // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
+      const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
+      const prompt = programmeTurn
+        ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
+        : review
+        ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
+        : planning
+        ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
+        : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const ts = stamp().replace(/[-:]/gu, '');
+      // A goal's name holds a `/`, which a file stem may not.
+      const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
+      const out = join(paths.log, stem);
+      const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
+      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
+      const t0 = deps.now().getTime();
+      // There exactly as long as the session is, so in flight and slot are one
+      // fact, and the eligibility of this goal is that same fact.
+      const currentPath = paths.currentFor(repoName, lane);
+      const current = {
+        name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
+        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
+        started: stamp(), pid, worktree: cwd,
+        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
+      };
+      writeJson(currentPath, current);
+      const scratch = join(paths.scratch, stem);
+      // Who owns it, and later that the session ended: tidy's rule S removes a
+      // worktree or DerivedData in it only on that record, never on age.
+      const scratchMarker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind, stem, started: stamp() };
+      let scratchEnv = {};
+      try {
+        deps.mkdir(scratch);
+        writeJson(join(scratch, SCRATCH_MARKER), scratchMarker);
+        scratchEnv = { MC_SCRATCH: scratch };
+      } catch (error) {
+        say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
+      }
+      let result;
+      try {
+        if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+        if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
+        const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+        const rechecked = await admission.recheck?.();
+        if (rechecked && !rechecked.admitted) {
+          say(rechecked.line);
+          writeJson(paths.disk, { at: stamp(), free_bytes: rechecked.available, line: rechecked.line });
+          return 'skipped:disk';
+        }
+        const pendingSession = deps.session({
+          bin: tool.bin,
+          args: tool.args,
+          cwd,
+          logPath: `${out}.jsonl`,
+          ...watchFor(launch, settings, {
+            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
+            onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+          }),
+          env: {
+            // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
+            MC_HEADLESS: '1',
+            MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
+            // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
+            ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
+            // The review uses this head as context; the Stop hook reads when it began.
+            ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
+            ...(settings.model ? { MC_MODEL: settings.model } : {}),
+            ...scratchEnv,
+          },
+          unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
+        });
+        admission.release?.();
+        result = await pendingSession;
+      } finally {
+        remove(currentPath);
+        if (scratchEnv.MC_SCRATCH) {
+          try { writeJson(join(scratch, SCRATCH_MARKER), { ...scratchMarker, ended: stamp(), exit: result?.status ?? null }); } catch { /* kept: no end, no removal */ }
+        }
+      }
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      writeSessionLogs(out, result);
+      noteWindows({ name, launch }, result.stdout);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      const provider = launch.id === 'codex' ? 'codex' : 'claude';
+      if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
+      const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
+      else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
+      else if (review) afterReview(goal, name);
+      else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
+      const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
+      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+      return 'ran';
+    } finally { admission.release?.(); dropSlot(); }
   }
 
 
@@ -1807,6 +1831,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
     const items = [...goalWork({ repos: names, passed }), ...programmeWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
+    const priorities = new Map();
+    for (const item of items) {
+      const programme = item.goal.programme;
+      if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
+      item.priority = priorities.get(programme);
+    }
     return pickWork({ items, held, lanes: capNow(), carry });
   }
 
@@ -1880,10 +1910,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   } = {}) {
     const label = tag || repo || 'run';
     const passed = new Set(already);
-    if (!diskRoom()) {
-      diskSkippedAt = deps.now().getTime();
-      return { ran: 0, waited: 'skipped:disk' };
-    }
+    if (!(await diskRoom('lane'))) return { ran: 0, waited: 'skipped:disk' };
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
@@ -1895,31 +1922,49 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A goal's build or review, or the plan session a blocked goal wakes: the only work a lane takes.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = await goalPass(pick.goal, { lane, label });
-      if (ran.ran || ran.stop) return ran;
+      if (ran.ran || ran.stop || ran.waited) return ran;
       passed.add(pick.name);
     }
   }
 
   /**
-   * Whether the volume where `MC_SCRATCH` is made has room for a session to
-   * start. Read once per pass, before anything is picked: under
-   * `DISK_MIN_BYTES` the line is said and written to `disk.json` for the
-   * page, and the pass starts nothing. Check-ins and landings of sessions
-   * already running are not in a pass, so they go on. No reader, or a volume
-   * that cannot be read, is room: a guess must not stop the runner.
+   * Whether the volume where `MC_SCRATCH` is made admits a new session now
+   * (disk-pressure.js `admit`): asked at the top of a pass and again at the
+   * start itself, so a pass that waited for a slot does not start on an old
+   * reading. A refusal — under 30 GB after a pressure pass, or a reading that
+   * failed — is said once per line and written to `disk.json` for the page.
+   * Sessions already running go on. No policy (a fixture) is room.
    */
-  function diskRoom() {
-    let free = null;
-    try { free = deps.freeBytes ? deps.freeBytes(paths.scratch) : null; } catch { free = null; }
-    if (free == null || free >= DISK_MIN_BYTES) {
+  let diskLine = null;
+  async function diskRoom(trigger) {
+    if (!disk) return true;
+    const answer = await disk.admit({ trigger: `session:${trigger}`, what: 'no session' });
+    if (answer.admitted) {
+      diskLine = null;
       if (deps.exists(paths.disk)) remove(paths.disk);
       return true;
     }
-    // Rounded down, so a disk just under the line never reads as at it.
-    const line = `disk: ${(Math.floor((free / 2 ** 30) * 10) / 10).toFixed(1)} GiB free, below ${DISK_MIN_BYTES / 2 ** 30} GiB — no session started`;
-    say(line);
-    writeJson(paths.disk, { at: stamp(), free_bytes: free, line });
+    const line = `disk: ${gb(answer.available)} free — no session started: ${answer.reason}`;
+    if (line !== diskLine) say(line);
+    diskLine = line;
+    writeJson(paths.disk, { at: stamp(), free_bytes: answer.available, line });
     return false;
+  }
+
+  /**
+   * The disk monitor's tick (`runLoop`'s timer, every `POLL_MS`): a cheap
+   * reading, and a pressure pass at once below 30 GB unless the cooldown
+   * holds. Independent of the chores and lanes, so a nightly or a session in
+   * flight does not hide the disk. A tick while the last is running is skipped.
+   */
+  let ticking = null;
+  function diskTick() {
+    if (!disk) return Promise.resolve(null);
+    if (ticking) return ticking;
+    ticking = disk.poll({ trigger: 'monitor' })
+      .catch((error) => { say(`disk: monitor failed — ${error?.message || error}`); return null; })
+      .finally(() => { ticking = null; });
+    return ticking;
   }
 
   /**
@@ -1961,7 +2006,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
-    sweepScratch();
     await refreshCodexDue();
     await runTidyDaily();
     // Last: the nightly is the long one, and nothing above should wait twenty
@@ -2002,21 +2046,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) {
       say(`docker: sweep failed — ${error?.message || error}`);
     }
-  }
-
-  /**
-   * The scratch directories no session is likely to want any more: every
-   * directory directly under `~/mc/runner/scratch/` not touched for two days.
-   * Nothing outside that directory is looked at, and a name that is not a
-   * directory is left.
-   */
-  function sweepScratch() {
-    const cutoff = deps.now().getTime() - SCRATCH_KEEP_MS;
-    let removed = 0;
-    for (const dir of deps.scratchDirs(paths.scratch)) {
-      if (dir.mtimeMs < cutoff && deps.rmTree(join(paths.scratch, dir.name))) removed += 1;
-    }
-    if (removed) say(`scratch: ${removed} director${removed === 1 ? 'y' : 'ies'} older than two days removed`);
   }
 
   /**
@@ -2086,7 +2115,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, claims, chores, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested,
+    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, markRunner, dropPredecessor, clearRunner,
   };
 }
@@ -2230,6 +2259,9 @@ export async function runLoop({
     runner.say(`update: could not hand over — this runner keeps going on ${commit || 'the code it holds'}; mc run --update to try again`);
     return false;
   })());
+  // The disk monitor (disk-pressure.js): every minute while this runner
+  // runs, on its own timer, whatever the lanes and chores are in.
+  const stopMonitor = !once && deps.every ? deps.every(DISK_POLL_MS, () => runner.diskTick()) : null;
   try {
     if (!once) {
       // The unattended run: `mc run lanes <n>` loops, each on its own clock,
@@ -2417,6 +2449,7 @@ export async function runLoop({
     runner.say(r.ran ? 'once: exiting' : 'once: nothing to run');
     return 0;
   } finally {
+    stopMonitor?.();
     if (!handedOver) runner.clearRunner();
   }
 }
