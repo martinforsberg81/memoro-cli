@@ -1702,6 +1702,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           args: tool.args,
           cwd,
           logPath: `${out}.jsonl`,
+          onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
           handoff: canHandoff ? () => {
             try { return JSON.parse(deps.read(handoffPath) ?? 'null')?.goal === `${goal.programme}/${goal.goal}`; }
             catch { return false; }

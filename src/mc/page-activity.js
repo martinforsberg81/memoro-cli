@@ -23,6 +23,8 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
   add([session.tool, session.model].filter(Boolean).join(' · '), ['grey']);
   if (session.billing === 'credits') add('credits', ['grey']);
   if (session.check_ins > 0) add(`${session.check_ins} check-in${session.check_ins === 1 ? '' : 's'}`, ['yellow']);
+  if (session.session_pid) add(`pid ${session.session_pid}`, ['grey']);
+  else if (session.pid) add(`${Object.hasOwn(session, 'session_pid') || session.goal ? 'runner ' : ''}pid ${session.pid}`, ['grey']);
   const lines = [];
   let current = ' '.repeat(indent);
   for (const part of parts) {
@@ -43,7 +45,7 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
     `${prefix}${c(`╰${rule}╯`, ...tone)}`,
   ];
   if (expand) {
-    const details = [session.repo, session.advisor && `${session.advisor} advisor`, session.pid && `pid ${session.pid}`,
+    const details = [session.repo, session.advisor && `${session.advisor} advisor`,
       session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
     if (details) framed.push(`${' '.repeat(indent + 2)}${c(clipCell(details, wide - indent - 2), 'grey')}`);
   }

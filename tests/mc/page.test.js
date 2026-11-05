@@ -95,7 +95,7 @@ describe('SESSIONS', () => {
     const runner = runnerSection({
       runner: RUNNER,
       currents: [
-        lane({ name: 'goal:mc/runner-sessions', kind: 'build', variant: 'goal', repo: 'memoro-cli', lane: 0, started: '2026-08-29T11:00:00Z' }),
+        lane({ name: 'goal:mc/runner-sessions', session_pid: 98765, kind: 'build', variant: 'goal', repo: 'memoro-cli', lane: 0, started: '2026-08-29T11:00:00Z' }),
         lane({ name: 'docx-editor', kind: 'build', variant: 'project', repo: 'memoro', lane: 1, model: 'sonnet', started: '2026-08-29T11:40:00Z' }),
         lane({ name: 'goal:mc/review-and-land', kind: 'review', variant: 'goal', repo: 'memoro-cli', lane: 2, started: '2026-08-29T11:50:00Z' }),
         lane({ name: 'goal:mc/headless-plan', kind: 'plan', repo: 'memoro-cli', lane: 3, started: '2026-08-29T11:55:00Z' }),
@@ -122,6 +122,7 @@ describe('SESSIONS', () => {
       const lines = renderPageLines(pageData({ runner }), { columns, now: NOW });
       assert.ok(lines.every((line) => width(line) <= columns));
       assert.match(lines.join('\n'), /runner running · 5\/6 lanes/u);
+      assert.match(lines.join('\n'), /pid 98765/u);
       for (const name of ['mc/runner-sessions', 'docx-editor', 'mc/review-and-land', 'mc/headless-plan', 'mc-ui'])
         assert.equal(lines.filter((line) => line.includes(` · ${name} · `)).length, 1, name);
     }
@@ -300,18 +301,14 @@ describe('SESSIONS', () => {
     }
   });
 
-  /**
-   * The pid on a lane row was the runner's own: `current-memoro.json` and
-   * `current-memoro-cli.json` both carry the pid of the one process that drives
-   * both lanes, so the same number was drawn twice and killed nothing. The
-   * repository is what tells the two rows apart.
-   */
+  // Legacy lane records identify their runner until a child PID is recorded.
   it('summarizes occupied lanes at MC and retains activity without a duplicate session section', () => {
     const runner = runnerSection({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live });
     const lines = paintedPage(pageData({ runner }));
     assert.match(lines.map(strip).join('\n'), /mc-ui · 20 min/u);
     assert.match(lines.map(strip).join('\n'), /runner running · 1\/2 lanes/u);
-    assert.doesNotMatch(lines.map(strip).join('\n'), /pid 4242|SESSIONS/u);
+    assert.match(lines.map(strip).join('\n'), /runner pid 4242/u);
+    assert.doesNotMatch(lines.map(strip).join('\n'), /SESSIONS/u);
     assert.match(paintedPage(pageData()).map(strip).join('\n'), /runner not running.*mc run starts it/u);
   });
 
@@ -508,6 +505,8 @@ describe('DEPLOY', () => {
     const row = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running', pid: '4242' };
     const alive = (pid) => pid === 4242;
     assert.equal(section({ attempt: row, alive }).running.late, false);
+    assert.equal(section({ attempt: row, alive }).running.pid, 4242);
+    assert.match(strip(line({ attempt: row, alive })), /pid 4242/u);
     assert.match(strip(line({ attempt: row, alive })), /ATTEMPT + b3e65b6 · running · 4 h ago/u);
     assert.equal(section({ attempt: { ...row, started }, alive: () => false }).running.late, true);
 
@@ -907,6 +906,7 @@ describe('MERGES', () => {
       assert.match(lines.join('\n'), /merging #11651 + \[━●·\] · gate · 4 min/u);
       assert.match(renderPageLines(pageData({ merges }), { columns, expand: true }).join('\n'), /feature/u);
       assert.match(lines.join('\n'), /1 in queue: #11652/u);
+      assert.match(lines.join('\n'), /pid 4242/u);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
     assert.equal(mergePhase('rebase candidate'), 'rebase');
@@ -1371,9 +1371,7 @@ describe('the page', () => {
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
     assert.match(text, /1 in flight · 2 ready · 0 blocked · 1 Martin/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
-    // One row per lane, the repository first and the runner's own pid nowhere:
-    // both lane files carry it, so it named neither of them.
-    assert.doesNotMatch(text, /pid 4242/u);
+    assert.match(text, /runner pid 4242/u);
     assert.match(text, /■ stopping since an unknown time/u);
     assert.match(text, /runner running · 1\/2 lanes/u);
     assert.match(text, /UNASSIGNED ACTIVITY/u);
@@ -1411,7 +1409,7 @@ describe('the page', () => {
       predecessor: { pid: 4242, steps: ['gmail-ready', 'claims-entity'] },
     });
     assert.match(renderPage({ ...DATA, mc: overlap }, { columns: 160, version: '0.7.11', now: NOW }),
-      /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · pid 9001 on abc1234 · pid 4242 finishing 2 sessions \(gmail-ready, claims-entity\)$/mu);
+      /^ {2}MC {2}0\.7\.11 · pid 9001 · up to date · runner up 120 min · on abc1234 · pid 4242 finishing 2 sessions \(gmail-ready, claims-entity\)$/mu);
     assert.doesNotMatch(text, /--fresh asks GitHub/u);
     assert.match(text, /note: no runner\/log\/runs\.tsv/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
@@ -2128,7 +2126,7 @@ describe('MC', () => {
     assert.equal(data.mc.hooks, 'session-start not registered, pre-tool not registered, stop not registered');
     delete data.mc.hooks;
     assert.deepEqual(data.mc, {
-      up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
+      up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3, pid: 4242,
       update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 2 },
     });
   });

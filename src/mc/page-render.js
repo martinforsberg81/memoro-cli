@@ -706,10 +706,11 @@ function mcLine(lines, c, wide, mc, caches, version) {
   // The state before the bookkeeping, and in a short form when the long one
   // does not fit: it is the only part of the line that can ask for anything.
   const short = asked ? 'draining' :(info.behind ? 'update available' : state.text);
-  const lead = [{ text: version || '', styles: ['grey'] }];
+  const lead = [{ text: version || '', styles: ['grey'] },
+    { text: info.pid ? `pid ${info.pid}` : '', styles: ['grey'] }];
   const rest = [
     { text: info.up_seconds == null ? 'runner not running' : `runner up ${duration(info.up_seconds)}`, styles: ['grey'] },
-    { text: info.commit ? `${info.predecessor && info.pid ? `pid ${info.pid} ` : ''}on ${info.commit}` : '', styles: ['grey'] },
+    { text: info.commit ? `on ${info.commit}` : '', styles: ['grey'] },
     {
       text: info.predecessor
         ? `pid ${info.predecessor.pid} finishing ${info.predecessor.steps.length} session${info.predecessor.steps.length === 1 ? '' : 's'}${info.predecessor.steps.length ? ` (${info.predecessor.steps.join(', ')})` : ''}`

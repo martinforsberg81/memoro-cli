@@ -100,7 +100,7 @@ describe('PROGRAMMES phase tree', () => {
         assert.match(lines[at + 2], /^ {10}╭─+╮$/u);
         const bottom = lines.findIndex((line, index) => index > at + 2 && line.trimStart().startsWith('╰'));
         const content = lines.slice(at + 3, bottom).map((line) => line.trim().slice(1, -1).trim()).join(' ');
-        assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in$/u);
+        assert.match(content, /^● · (BUILD|REVIEW) · 12 min · codex · sol(?: ·)? 1 check-in(?: ·)? runner pid 7$/u);
         assert.equal(width(lines[at + 2]), width(lines[at + 3]), 'frame hugs the session');
         assert.equal(width(lines[at + 3]), width(lines[bottom]));
         assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
