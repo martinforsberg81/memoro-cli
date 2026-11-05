@@ -48,7 +48,7 @@ export const KIND_TONE = Object.freeze({
   triage: ['blue'],
   manager: ['cyan'],
   brief: ['cyan'],
-  plan: ['cyan'],
+  plan: ['blue'],
   gate: ['green'],
   wait: ['grey'],
   red: ['red'],

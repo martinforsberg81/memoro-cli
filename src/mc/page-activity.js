@@ -9,6 +9,9 @@ export function sessionGoal(session) {
 
 /** Keep identity and the clock before optional metadata on narrow terminals. */
 export function activityLines(c, wide, session, { indent = 10, expand = false, named = false } = {}) {
+  const tone = kindTone(session.kind || session.verb);
+  // Reserve the two borders and one space on either side before wrapping.
+  const contentWide = wide - 4;
   const parts = [];
   const add = (text, styles = []) => { if (text) parts.push({ text: String(text), styles }); };
   add('●', ['green']);
@@ -23,19 +26,27 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
   let current = ' '.repeat(indent);
   for (const part of parts) {
     const separator = width(current) > indent ? ' · ' : '';
-    if (width(current) + separator.length + part.text.length > wide) {
+    if (width(current) + separator.length + part.text.length > contentWide) {
       if (width(current) > indent) lines.push(current);
       current = ' '.repeat(indent + 2);
     } else current += separator;
-    current += c(clipCell(part.text, wide - width(current)), ...part.styles);
+    current += c(clipCell(part.text, contentWide - width(current)), ...part.styles);
   }
   if (width(current) > indent) lines.push(current);
+  const room = Math.max(...lines.map((line) => width(line) - indent));
+  const prefix = ' '.repeat(indent);
+  const rule = '─'.repeat(room + 2);
+  const framed = [
+    `${prefix}${c(`╭${rule}╮`, ...tone)}`,
+    ...lines.map((line) => `${prefix}${c('│', ...tone)} ${line.slice(indent)}${' '.repeat(room - (width(line) - indent))} ${c('│', ...tone)}`),
+    `${prefix}${c(`╰${rule}╯`, ...tone)}`,
+  ];
   // A check-in remains visible without expanding; elapsed time is not a failure.
-  if (session.check_ins) lines.push(`${' '.repeat(indent + 2)}${c(`${session.check_ins} check-in${session.check_ins === 1 ? '' : 's'}`, 'yellow')}`);
+  if (session.check_ins) framed.push(`${' '.repeat(indent + 2)}${c(`${session.check_ins} check-in${session.check_ins === 1 ? '' : 's'}`, 'yellow')}`);
   if (expand) {
     const details = [session.repo, session.advisor && `${session.advisor} advisor`, session.pid && `pid ${session.pid}`,
       session.check_ins === 0 && '0 check-ins'].filter(Boolean).join(' · ');
-    if (details) lines.push(`${' '.repeat(indent + 2)}${c(clipCell(details, wide - indent - 2), 'grey')}`);
+    if (details) framed.push(`${' '.repeat(indent + 2)}${c(clipCell(details, wide - indent - 2), 'grey')}`);
   }
-  return lines;
+  return framed;
 }
