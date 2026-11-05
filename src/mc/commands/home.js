@@ -233,9 +233,18 @@ export function readerFor({ stdout, lines, page, key = null }) {
  */
 export function pageKey(data) {
   const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
-  return goals
+  const goalKey = goals
     .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
     .join('|');
+  const foreground = (data?.programmes?.programmes || []).flatMap((group) => [
+    ...(group.planning_sessions || []), ...(group.sessions || []),
+  ]);
+  // Activity is now above the prompt too. Identity/check-ins force a whole
+  // redraw when off-screen; a clock tick alone still does not.
+  const activityKey = [...(data?.runner?.sessions || []), ...foreground]
+    .filter((s) => s.pid || s.goal || s.name || s.area)
+    .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.check_ins || 0].join(':')).sort().join('|');
+  return [goalKey, activityKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -253,7 +262,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  all phases and finished   ·   b  brief',
+  '  <n>  show that goal   ·   a  all / collapse   ·   b  brief',
   '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');

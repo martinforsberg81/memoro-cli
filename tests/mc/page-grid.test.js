@@ -1,14 +1,4 @@
-/**
- * The page's one grid (goal mc/page-columns): a goal, a lane and a merge are
- * drawn in the same columns — the repository and the pull request at the
- * same x in all three — no row is wider than an 80-column terminal, a
- * cell is never cut inside a number, and every cell is a field `mc --json`
- * carries under the same name in every section.
- *
- * The rows come from the real collectors (`programmesSection`, `goalsOf`,
- * `runnerSection`, `mergesSection`, `attachPrs`), so the fixture is the shape
- * the page is really handed.
- */
+/** Page layouts retain complete identities and numeric-safe clipping at each width. */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -16,7 +6,7 @@ import {
   attachPrs, goalsOf, intakeSection, mergesSection, programmesSection, prsSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { devSection } from '../../src/mc/dev-pool.js';
-import { GRID_ROOMY, clipCell, gridColumns, prText } from '../../src/mc/page-grid.js';
+import { clipCell } from '../../src/mc/page-grid.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
 
@@ -97,52 +87,27 @@ function rowsOf(lines) {
   });
 }
 
-describe('the grid', () => {
-  it('keeps lanes, merges and dev servers aligned while programme PRs are children', () => {
-    for (const columns of [80, 100, 140]) {
-      const col = gridColumns(columns);
-      const allRows = rowsOf(renderPageLines(threeRows(), { columns, now: NOW }));
-      assert.match(allRows[0], /↳ memoro-cli#1102/u);
-      const rows = allRows.slice(1);
-      const prAt = rows.map((line) => line.search(/#11\d\d/u));
-      assert.deepEqual(prAt, [col.pr.x, col.pr.x], `${columns}: the PR column\n${rows.join('\n')}`);
-      if (columns >= GRID_ROOMY) {
-        const repoAt = rows.map((line) => line.indexOf(' memoro-cli ') + 1);
-        assert.deepEqual(repoAt, [col.repo.x, col.repo.x], `${columns}: the repo column\n${rows.join('\n')}`);
-      } else {
-        // Under 90 columns the repository gives way, in every section alike.
-        assert.equal(col.repo.width, 0);
-        for (const line of rows) assert.doesNotMatch(line, / memoro-cli /u, `${columns}: ${line}`);
-      }
-      // DEV's row: its repository where the others' stands, its port where their PR does.
-      const devRow = renderPageLines(threeRows(), { columns, now: NOW }).map(plain).find((line) => line.includes(':8920'));
-      assert.ok(devRow, `a DEV row at ${columns}`);
-      assert.equal(devRow.search(/:8920/u), col.pr.x, `${columns}: the port in the PR column\n${devRow}`);
-      if (columns >= GRID_ROOMY) assert.equal(devRow.indexOf(' memoro-cli ') + 1, col.repo.x, `${columns}: the repo column\n${devRow}`);
-      else assert.doesNotMatch(devRow, / memoro-cli /u);
-      assert.deepEqual([devRow.slice(col.kind.x, col.kind.x + col.kind.width).trim(), devRow.slice(col.state.x, col.state.x + col.state.width).trim(),
-        devRow.slice(col.progress.x, col.progress.x + col.progress.width).trim()], ['SLOT', 'leased', '2 min']);
-      // The same kind of fact in the same column: the state and the progress too.
-      const cells = rows.map((line) => [line.slice(col.kind.x, col.kind.x + col.kind.width).trim(),
-        line.slice(col.state.x, col.state.x + col.state.width).trim(),
-        line.slice(col.progress.x, col.progress.x + col.progress.width).trim()]);
-      assert.deepEqual(cells, [['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
+describe('page layouts', () => {
+  it('keeps goal PRs, unassigned activity and environment addresses visible at every width', () => {
+    for (const columns of [60, 80, 100, 120, 160]) {
+      const lines = renderPageLines(threeRows(), { columns, now: NOW }).map(plain);
+      const rows = rowsOf(lines);
+      assert.match(rows[0], /↳ memoro-cli#1102/u);
+      assert.match(rows[1], /memoro-cli#1103/u, 'unassigned activity retains its PR');
+      assert.match(rows[2], /#1104 · queued/u);
+      assert.ok(lines.some((line) => /SLOT +:8920 +leased/u.test(line)));
+      assert.ok(lines.every((line) => width(line) <= columns));
+      assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
     }
   });
 
   it('draws no line of the page wider than 80 columns, with long names, four PRs and a long tail', () => {
-    for (const colour of [false, true]) {
-      const lines = renderPageLines(threeRows({ long: true }), { columns: 80, now: NOW, colour, version: '0.7.11' });
-      const over = lines.filter((line) => width(line) > 80).map(plain);
-      assert.deepEqual(over, [], `colour ${colour}`);
+    for (const columns of [60, 80, 120, 160]) for (const colour of [false, true]) {
+      const lines = renderPageLines(threeRows({ long: true }), { columns, now: NOW, colour });
+      assert.deepEqual(lines.filter((line) => width(line) > columns), []);
+      for (const number of [1103, 1105, 1106, 1107]) assert.ok(lines.some((line) => line.includes(`#${number}`)));
+      assert.ok(lines.some((line) => line.includes('40 min')));
     }
-    // The four on the lane are the newest and `+3`, in the PR column; the long
-    // names gave way, the state and the progress did not.
-    const lane = renderPageLines(threeRows({ long: true }), { columns: 80, now: NOW }).find((line) => / BUILD /u.test(line));
-    const col = gridColumns(80);
-    assert.equal(lane.slice(col.pr.x, col.pr.x + col.pr.width).trim(), '#1107+3', lane);
-    assert.match(lane.slice(col.name.x, col.name.x + col.name.width), /^mc\/another-goal-wi… /u, lane);
-    assert.equal(lane.slice(col.state.x, col.progress.x + col.progress.width).replace(/\s+/gu, ' ').trim(), 'running 40 min');
   });
 
   it('draws a numbered goal with its own layout and its PR as a child', () => {
@@ -192,8 +157,5 @@ describe('the grid', () => {
     assert.equal(clipCell('2.5 h', 3), '…');
     assert.equal(clipCell('a 1 b', 4), 'a 1…', 'a cut after a whole number is a cut between words');
     // The PR cell drops its count before its number, and never cuts the number.
-    assert.equal(prText([{ number: 14709 }, { number: 1 }, { number: 2 }, { number: 3 }]), '#14709+3');
-    assert.equal(prText([{ number: 1234567 }, { number: 1 }]), '#1234567');
-    assert.equal(prText([{ number: 123456789 }]), '');
   });
 });

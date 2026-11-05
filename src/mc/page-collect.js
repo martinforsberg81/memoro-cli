@@ -173,9 +173,9 @@ function sameCommit(a, b) {
 export function productionSection({
   deploy = null, attempt = null, live = null, now = new Date(), alive = pidAlive,
 } = {}) {
-  // A first deploy, running before anything was ever deployed or collected, is
-  // still a deploy the page shows.
-  if (!deploy?.sha && !live && attempt?.outcome !== 'running') return null;
+  // Keep the first attempt even when it failed or was refused before any
+  // successful deployment or production reading.
+  if (!deploy?.sha && !live && !attempt) return null;
   const at = now.getTime();
   const age = (iso) => {
     const t = Date.parse(iso);
@@ -221,6 +221,7 @@ export function productionSection({
     differs: Boolean(live?.commit && deploy?.sha && !sameCommit(live.commit, deploy.sha)),
     running,
     failed: since?.outcome === 'failed' ? attemptState(since) : null,
+    attempt: attempt ? { ...attemptState(attempt), outcome: attempt.outcome } : null,
   };
 }
 
