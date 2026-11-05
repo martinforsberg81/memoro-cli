@@ -1715,7 +1715,7 @@ describe('collectPage', () => {
     return root;
   }
 
-  it('collects fresh healthy disk state without promoting the runner refusal to a current hold', async (t) => {
+  it('collects current disk state and retry times at the page observation clock', async (t) => {
     const root = workRootFixture();
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const oldLine = 'disk: 25.3 GB free — no session started';
@@ -1723,12 +1723,13 @@ describe('collectPage', () => {
     const pass = { at: '2026-08-29T11:40:00Z', trigger: 'monitor', outcome: 'shortfall', measured_delta_bytes: 1e9, estimate_bytes: 9e9, failed: true };
     writeFileSync(join(root, 'runner', 'disk.json'), JSON.stringify(refusal));
     writeFileSync(join(root, 'runner', 'disk-pressure.json'), JSON.stringify({ status: 'pressure', last_refusal: refusal, last_cleanup: pass }));
-    const data = await collectPage({
+    const collectDisk = (free) => collectPage({
       claudeSettings: () => null, env: { MC_WORK_ROOT: root, MC_HOME: root }, now: NOW, repos: [],
-      diskFreeBytes: () => 39.5e9, checkout: null, exec: async () => ({ ok: false, stdout: '' }),
+      diskFreeBytes: () => free, checkout: null, exec: async () => ({ ok: false, stdout: '' }),
       run: () => ({ status: 1, stdout: '' }), git: () => null,
       cache: { loadPrs: () => ({ prs: [], fetched: null }), savePrs: () => {} },
     });
+    const data = await collectDisk(39.5e9);
     assert.equal(data.runner.pressure.available_bytes, 39.5e9);
     assert.equal(data.runner.pressure.status, 'healthy');
     assert.equal(data.runner.disk.last_refusal.line, oldLine);
@@ -1737,6 +1738,22 @@ describe('collectPage', () => {
     assert.equal(lines.filter((line) => line.includes('disk:')).map((line) => line.trim()).join('\n'),
       'disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB');
     assert.ok(!lines.some((line) => line.includes('New sessions paused — low disk space')));
+    for (const [cooldown, expected] of [
+      ['2026-08-29T12:05:00.000Z', ['disk: next pass after 2026-08-29T12:05Z']],
+      ['2026-08-29T11:59:00.000Z', []],
+    ]) {
+      writeFileSync(join(root, 'runner', 'disk-pressure.json'), JSON.stringify({
+        status: 'pressure', last_refusal: refusal, last_cleanup: pass, cooldown_until: cooldown,
+      }));
+      const pressed = await collectDisk(26e9);
+      assert.equal(pressed.runner.pressure.cooldown_until, expected.length ? cooldown : null);
+      const rows = renderPageLines(pressed, { columns: 100, now: NOW });
+      assert.deepEqual(rows.filter((line) => line.includes('disk:')).map((line) => line.trim()), [
+        'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+        ...expected,
+      ], 'retry visibility follows the observation clock, not the wall clock');
+      assert.deepEqual(pressed.runner.pressure.last_cleanup, pass);
+    }
   });
 
   /**

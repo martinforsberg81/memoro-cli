@@ -53,6 +53,7 @@ in `page-collect.js` and drawn by `page-render.js`; the runner's `disk.json`
 refusal is kept only as historical structured data. A measured 30 GB or more
 is healthy for admission even below the 40 GB cleanup target, so stale refusal
 and cleanup details do not appear as current warnings. Current pressure and a
-failed measurement remain visible, with a future retry time only while active.
+failed measurement remain visible, with a future retry time only while active
+at the page collection observation time.
 The state is shared with `mc tidy`; see [mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure).
 

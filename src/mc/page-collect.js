@@ -1412,7 +1412,7 @@ export async function collectPage({
     github: readJson(join(root, 'runner', GITHUB_STATE)),
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
     memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
-    pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path), freeBytes: diskFreeBytes }),
+    pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path), freeBytes: diskFreeBytes, nowMs: now.getTime() }),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
