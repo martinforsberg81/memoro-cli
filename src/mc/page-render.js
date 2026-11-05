@@ -605,7 +605,7 @@ export function statusRollup(statuses = {}) {
 function programmeLine(c, wide, group, expand) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
   const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${metadata}`, wide - 8);
-  return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - label.length - 6))}`, 'cyan')}`;
+  return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - width(label) - 7))}┐`, 'cyan')}`;
 }
 
 function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []) {
@@ -647,7 +647,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     for (const session of group.planning_sessions || []) lines.push(...activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand }));
     for (const session of group.sessions || []) lines.push(...activityLines(c, wide, session, { indent: 4, expand }));
     lines.push(...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }));
-    lines.push(`  ${c('└' + '─'.repeat(wide - 3), 'cyan')}`);
+    lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
   }
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
   const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)));
