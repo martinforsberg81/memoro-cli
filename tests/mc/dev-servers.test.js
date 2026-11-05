@@ -203,12 +203,14 @@ describe('registering and forgetting', () => {
     try {
       const source = writeSource(worktree);
       registerManifest(source, { root });
-      assert.equal(unregisterManifest(source, { root }).reason, 'still-running');
+      unregisterManifest(source, { root });
       rmSync(source);
-      assert.equal(unregisterManifest(source, { root }).removed, false);
+      const leaving = unregisterManifest(source, { root });
       const refused = await admit({ root, service: 'memoro-worker', worktree: '/w/replacement', env: { MC_DEV_MAX_SERVERS: '1' }, freeMemory: () => 90 });
       assert.equal(refused.reason, 'cap');
       assert.deepEqual(refused.holders.map((item) => item.instance_id), ['dev-0123abcd']);
+      assert.equal(leaving.removed, false);
+      assert.equal(leaving.reason, 'still-running');
       const same = await admit({ root, service: 'memoro-worker', worktree, env: {}, freeMemory: () => 90 });
       assert.equal(same.reuse, 'dev-0123abcd', 'restart cannot reserve while the old pid is live');
       assert.equal(unregisterManifest(source, { root, alive: () => false }).removed, true);
