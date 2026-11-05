@@ -10,7 +10,7 @@ import { BUILD_ROLES } from './run-plan.js';
  * MC_HEADLESS is the runner's and the intake turn's mark on a session nobody
  * watches; an interactive session opened from inside one must not inherit it.
  */
-export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS'];
+export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS', 'MC_PLAN_REASON'];
 
 export function withoutSessionIdentity(env) {
   const next = { ...env };
@@ -20,7 +20,7 @@ export function withoutSessionIdentity(env) {
 
 /** Environment first; cwd is the fallback for a session opened by hand. */
 export function sessionIdentity({ cwd = process.cwd(), env = process.env } = {}) {
-  if (env.MC_ROLE) return { role: env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
+  if (env.MC_ROLE) return { role: env.MC_ROLE === 'plan-session' ? PLAN_ROLE : env.MC_ROLE, programme: env.MC_PROGRAMME || null, source: 'MC_ROLE' };
   if (env.MC_GOAL) return { role: BUILD_ROLES.goal, programme: env.MC_PROGRAMME || env.MC_GOAL.split('/')[0], source: 'MC_GOAL' };
 
   const path = relative(resolve(workRoot(env)), resolve(cwd));

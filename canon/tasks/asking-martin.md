@@ -9,7 +9,8 @@ would do — answerable in a word. Never a menu of options. Never ask while the
 question is unclear or reading would settle it: then read.
 
 - Headless, there is nobody to ask: your role says where the question goes (a
-  blocked step, a blocked goal, a pull request).
+  blocked step or a pull request). A goal needing Martin uses status
+  `Martin`; build and review report `blocked` to plan for recovery.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.

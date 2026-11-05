@@ -546,7 +546,11 @@ export function reviewStopDecision({ env = process.env, home, read = (path) => r
   const [programme, goal] = String(env.MC_GOAL).split('/');
   if (!programme || !goal) return null;
   let stage;
-  try { stage = JSON.parse(read(join(home, programme, 'goals', goal, 'GOAL.json'))).stage; } catch { return null; }
+  try {
+    const record = JSON.parse(read(join(home, programme, 'goals', goal, 'GOAL.json')));
+    if (record.status === 'blocked') return null;
+    stage = record.stage;
+  } catch { return null; }
   const started = Date.parse(env.MC_SESSION_STARTED ?? '');
   const missing = [];
   if (stage === 'review') missing.push('the goal is still in review — mc goal stage merge (OK to land: it merges all registered pull requests) or write REVIEW.md in the goal\'s directory and mc goal stage finish (not OK)');

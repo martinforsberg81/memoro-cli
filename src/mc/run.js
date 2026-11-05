@@ -66,7 +66,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1166,6 +1166,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * same goal. Two sessions in one worktree is the failure this refuses.
    */
   const claims = new Set();
+  const claimRepos = new Map();
   /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
   async function billingFor(launch, route) {
     return route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
@@ -1244,7 +1245,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     convertAfter();
     const held = new Set([...claims, ...passed, ...stepsHeld().map((item) => item.name)]);
     const may = (goal) => {
-      if (goal.stage !== 'review') return true;
+      if (goal.stage !== 'review' || goal.status === 'blocked') return true;
       const why = reviewRoute(goal).reason ?? null;
       const name = goalName(goal);
       if (why && reviewWaits.get(name) !== why) say(`${name}: its review waits — ${why}`);
@@ -1255,7 +1256,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const all = goals();
     return all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal)
+        && (goalSession(goal, merge) !== 'plan' || !programmePlanHeld(goal.programme)))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: kind === 'plan' ? null : 'goal', since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
@@ -1268,8 +1270,46 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
+    if (goal.status === 'blocked' || goal.reason === 'next_step') return 'plan';
     if (goal.stage === 'review') return 'review';
     return goal.stage === 'finish' || goal.stage === 'merge' ? 'plan' : 'build';
+  }
+
+  /** One plan session at a time per programme, including a predecessor runner. */
+  function programmePlanHeld(programme) {
+    return claims.has(`plan:${programme}`) || stepsHeld().some((held) => held.programme === programme && held.kind === 'plan');
+  }
+
+  const planReceipt = (programme) => join(root, 'runner', 'programme-plan', `${programme}.json`);
+
+  /** Completion is stable across archive moves; proposals and timers do not wake plan. */
+  function programmeWork(names, passed) {
+    const home = programsHome(deps.env);
+    const all = goals();
+    const out = [];
+    for (const programme of deps.list(home)) {
+      const own = all.filter((goal) => goal.programme === programme);
+      if (own.some((goal) => goal.problems.length || goal.stage !== 'done')) continue;
+      const archive = join(home, programme, 'goals', '.archive');
+      const completed = [...own, ...deps.list(archive).map((name) => {
+        const raw = deps.read(join(archive, name, GOAL_FILE));
+        if (raw === null) return null;
+        const parsed = parseGoal(raw);
+        return { ...parsed, goal: name, log: parseLog(deps.read(join(archive, name, LOG_FILE)) ?? '') };
+      }).filter((goal) => goal && goal.stage !== 'dropped')];
+      if (!completed.length || completed.some((goal) => goal.problems?.length || goal.stage !== 'done')) continue;
+      const name = `plan:${programme}`;
+      if (passed.has(name) || programmePlanHeld(programme)) continue;
+      const key = JSON.stringify(completed.map((goal) => [goal.goal, goal.created ?? null, stageSince(goal)]).sort(([a], [b]) => a.localeCompare(b)));
+      let receipt;
+      try { receipt = JSON.parse(deps.read(planReceipt(programme)) ?? 'null'); } catch { receipt = null; }
+      if (receipt?.key === key) continue;
+      const repo = completed.flatMap((goal) => goal.repos ?? []).find((repo) => names.includes(repo));
+      if (!repo) continue;
+      const goal = { programme, goal: null, dir: join(home, programme), reason: 'next_step', stage: null, status: 'ready', repos: [repo], class: 'large', log: [], completionKey: key };
+      out.push({ name, repo, kind: 'plan', variant: null, since: '', resumed: false, goal });
+    }
+    return out;
   }
 
   /** Planning uses the available Opus/Sol medium candidate with most headroom. */
@@ -1282,13 +1322,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * or `{ ran: 0 }` when it did not start.
    */
   async function goalPass(goal, { lane, label }) {
-    const name = goalName(goal);
+    const name = goal.reason === 'next_step' ? `plan:${goal.programme}` : goalName(goal);
+    const planning = goalKind(goal) === 'plan';
     claims.add(name);
+    claimRepos.set(name, goal.repos[0]);
+    if (planning) claims.add(`plan:${goal.programme}`);
     let outcome;
     try {
       outcome = await runGoal(goal, { lane });
     } finally {
       claims.delete(name);
+      claimRepos.delete(name);
+      if (planning) claims.delete(`plan:${goal.programme}`);
     }
     if (outcome === 'stop') return { ran: 0, stop: true };
     if (outcome !== 'ran') return { ran: 0 };
@@ -1421,7 +1466,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (now.status !== 'ready') return;
     const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
     if (reviewDiedBefore(log)) {
-      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — waits on a person` });
+      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a blocked plan session takes it` });
       return;
     }
     goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again` });
@@ -1436,17 +1481,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * runner's entry (the red is taken, so it wakes no session again); one not
    * in line sets `merge · blocked`.
    */
-  function afterPlan(goal, name, { stage }) {
+  function afterPlan(goal, name, { stage, reason }) {
     const now = stateNow(goal);
+    if (reason === 'blocked' && now.stage === stage && stage !== 'merge' && now.status === 'ready') {
+      say(`${name}: plan resolved the blocker; retry ${stage}`);
+      return;
+    }
+    if (reason === 'blocked' && now.stage === stage && now.status === 'blocked') {
+      goalState(goal, name, { status: 'Martin' }, { comment: 'plan left the obstacle unresolved; Martin needs to inspect LOG.md and the session log' });
+      return;
+    }
     if (now.stage !== stage || now.status !== 'ready') { say(`${name}: plan left it ${now.stage} · ${now.status}`); return; }
     if (stage === 'finish') {
-      goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — waits on a person' });
+      goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — a blocked plan session takes it' });
       return;
     }
     const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const queued = (goal.prs ?? []).some((item) => merge.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
     if (queued) goalState(goal, name, {}, { done: 'plan session took the red; the pull request is in the merger\'s line again' });
-    else goalState(goal, name, { status: 'blocked' }, { comment: 'the plan session on the red ended with nothing in the merger\'s line — waits on a person' });
+    else goalState(goal, name, { status: reason === 'blocked' ? 'Martin' : 'blocked' }, { comment: 'the plan session on the red ended with nothing in the merger\'s line — inspect its log before retrying' });
   }
 
   /**
@@ -1500,13 +1553,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * committed here for the same reason.
    */
   async function runGoal(goal, { lane = 0 } = {}) {
-    const name = goalName(goal);
+    const programmeTurn = goal.reason === 'next_step';
+    const reason = programmeTurn ? 'next_step' : goal.status === 'blocked' || goal.stage === 'merge' ? 'blocked' : 'finish';
+    const name = programmeTurn ? `plan:${goal.programme}` : goalName(goal);
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const kind = goalKind(goal);
     const review = kind === 'review';
     const planning = kind === 'plan';
+    if (planning && reason === 'blocked') {
+      const entries = inStage(parseLog(deps.read(logPath) ?? ''), goal.stage);
+      const reset = entries.findLastIndex((entry) => entry.tool === 'person' && entry.status === 'ready');
+      if (entries.slice(reset + 1).filter((entry) => entry.comment === 'starting blocked recovery').length >= 3) {
+        goalState(goal, name, { status: 'Martin' }, { comment: 'three blocked recoveries in this stage did not keep it moving; inspect LOG.md before another retry' });
+        return 'skipped:recovery-limit';
+      }
+    }
     const roleName = review ? REVIEW_ROLE : planning ? PLAN_ROLE : BUILD_ROLES.goal;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
@@ -1519,7 +1582,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
     // A plan session stands in the programme's directory, beside the goal; it
     // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
-    const cwd = planning ? dirname(dirname(goal.dir)) : worktree;
+    const cwd = programmeTurn ? goal.dir : planning ? dirname(dirname(goal.dir)) : worktree;
     const lost = planning ? null : placeGoalWorktrees(goal, name);
     if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
     // A goal's branch is made when it can start: one made at `mc goal new` in a
@@ -1527,7 +1590,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (kind === 'build' && !lastBuildEntry(goal.log)) {
       remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
     }
-    const branch = goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
+    const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
     const repo = repos.find((item) => item.name === repoName);
     let pr = null;
     if (review) {
@@ -1552,25 +1615,27 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
     // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
     const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-    const prompt = review
+    const prompt = programmeTurn
+      ? `You are the headless plan session for programme ${goal.programme} (reason: next_step). All its goals are done. Read ${cwd}/README.md, its proposals/ and proposals/archive/, and the completed goals. Decide the next step toward the programme aim, or explicitly decide to do nothing now. Create ready goals only for justified work. Archive handled or irrelevant proposals with their outcome and reason. Record your decision in ${cwd}/PLAN.md. Other programme wakeups belong to mc manager. No goal is assigned to this session.`
+      : review
       ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
       : planning
-      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, why: goal.log.at(-1), brief })
+      ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
       : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
     const ts = stamp().replace(/[-:]/gu, '');
     // A goal's name holds a `/`, which a file stem may not.
-    const stem = `goal-${goal.programme}-${goal.goal}-${ts}`;
+    const stem = programmeTurn ? `plan-${goal.programme}-next-step-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
     const out = join(paths.log, stem);
-    const entriesBefore = parseLog(deps.read(logPath) ?? '').length;
+    const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
     say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
     const t0 = deps.now().getTime();
     // There exactly as long as the session is, so in flight and slot are one
     // fact, and the eligibility of this goal is that same fact.
     const currentPath = paths.currentFor(repoName, lane);
     const current = {
-      name, step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+      name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree: cwd,
@@ -1587,6 +1652,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
     let result;
     try {
+      if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+      if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: 'started' });
       const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       result = await deps.session({
         bin: tool.bin,
@@ -1600,9 +1667,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         env: {
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
           MC_HEADLESS: '1',
-          MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
+          MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
           // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
-          MC_GOAL: `${goal.programme}/${goal.goal}`, ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
+          ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
           // The review uses this head as context; the Stop hook reads when it began.
           ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
           ...(settings.model ? { MC_MODEL: settings.model } : {}),
@@ -1621,11 +1688,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     recordRefusal({ name, launch, route }, read, picked.billing);
     const provider = launch.id === 'codex' ? 'codex' : 'claude';
     if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
-    const spoke = parseLog(deps.read(logPath) ?? '').length > entriesBefore;
-    if (planning) afterPlan(goal, name, { stage: goal.stage });
+    const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+    if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
+    else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
     else if (review) afterReview(goal, name);
     else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-    const note = spoke ? read.note : `${read.note},no-log`;
+    const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
     logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
     return 'ran';
@@ -1736,9 +1804,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = goalWork({ repos: names, passed });
-    const repoOfName = (name) => (String(name).startsWith('goal:') ? goals().find((goal) => goalName(goal) === name)?.repos[0] : null) ?? null;
-    const held = [...[...claims].map(repoOfName), ...others.map((item) => item.repo)].filter(Boolean);
+    const items = [...goalWork({ repos: names, passed }), ...programmeWork(names, passed)];
+    const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     return pickWork({ items, held, lanes: capNow(), carry });
   }
 
@@ -1764,7 +1831,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return [];
       }
       const lane = Number.isInteger(held?.lane) && held.lane > 0 ? held.lane : 0;
-      return [{ path, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign }];
+      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign }];
     });
   }
 

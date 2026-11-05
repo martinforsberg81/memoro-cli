@@ -92,7 +92,7 @@ export function leaseHolder({ env = process.env, verb = 'mc', pid = process.pid,
   } else if (role === REVIEW_ROLE || role?.startsWith('review-session')) {
     kind = 'review';
     name = goal;
-  } else if (role === PLAN_ROLE) {
+  } else if ([PLAN_ROLE, 'plan-session'].includes(role)) {
     kind = 'plan';
     name = programme;
   } else if (role && ['brief', 'helper', 'intake'].includes(role)) {

@@ -672,7 +672,7 @@ export function goalOfJob(job, goalsOf) {
  * landed — red, or moved past the head its review judged — a goal in
  * `merge` stays there: the first time `merge · ready`, for one plan
  * session (`mergeRetryDue`), a second time in `merge` `merge ·
- * blocked`, waiting on a person. A goal in another stage (a person queued it)
+ * blocked`, for blocked recovery. A goal in another stage (a person queued it)
  * gets the answer written and does not move. A requeue says nothing yet: the
  * next round answers it.
  */
@@ -702,7 +702,7 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
     }
     const again = !landed && inStage(goal.log ?? [], 'merge').some(mergeAnswered);
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : again ? { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — the second in merge: waits on a person`) }
+      : again ? { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — the second in merge: a blocked plan session takes it`) }
       : { stage: 'merge', status: 'ready', entry: entry(red, `${why} — one plan session takes it and queues it again`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;

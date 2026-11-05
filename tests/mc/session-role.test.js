@@ -12,13 +12,13 @@ describe('session identity', () => {
       { role: 'review-session:goal', programme: 'other', source: 'MC_ROLE' });
     assert.equal(identity('/mc/programs/mc', { MC_GOAL: 'other/g' }).role, 'build-session:goal');
     assert.equal(identity('/mc/programs/mc', { MC_GOAL: 'other/g' }).programme, 'other');
-    assert.equal(identity('/mc/programs/mc', { MC_STEP: 'p:0' }).role, 'plan-session', 'MC_STEP is not an identity any more');
+    assert.equal(identity('/mc/programs/mc', { MC_STEP: 'p:0' }).role, 'plan', 'MC_STEP is not an identity any more');
   });
 
   it('recognises both layouts without mistaking a goal for its programme planner', () => {
     for (const [cwd, role, programme = null] of [
-      ['/mc/programs/mc', 'plan-session', 'mc'], ['/mc/programs/mc/memoro-cli/src', 'plan-session', 'mc'],
-      ['/mc/plan/old/memoro', 'plan-session', 'old'], ['/mc/programs/mc/goals/g/memoro-cli', 'build-session:goal', 'mc'],
+      ['/mc/programs/mc', 'plan', 'mc'], ['/mc/programs/mc/memoro-cli/src', 'plan', 'mc'],
+      ['/mc/plan/old/memoro', 'plan', 'old'], ['/mc/programs/mc/goals/g/memoro-cli', 'build-session:goal', 'mc'],
       ['/mc/runner/step/p/memoro', null], ['/mc/step/p', null],
       ['/mc/runner/mend/memoro-1', null], ['/mc/brief', 'brief'],
       ['/mc/helper', 'helper'], ['/mc/intake', 'intake'],

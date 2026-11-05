@@ -17,13 +17,14 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
   goal. The next session starts from the last entry's `Next`.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `plan → build
-  → review → finish → merge → done` (or `dropped`), status `ready` or
-  `blocked`. The stage only moves forward, each stage with one owner: a plan
+  → review → finish → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, each stage with one owner: a plan
   session writes it in `plan` and moves it to `build`; a build session moves
   it to `review` or sets `blocked`; a review session moves it to `merge`
   (`mc goal stage merge` sends all registered PRs to merge) or `finish` (with
   REVIEW.md); a plan session finishes it to `merge`; the merger sets `done`.
-  `blocked`, in any stage, waits on a person; `mc goal ready` keeps the stage.
+  `blocked`, in any stage, wakes plan to resolve the obstacle and retry.
+  `Martin` waits on Martin and wakes nothing; `mc goal martin --reason "…"`
+  records his question and the recommendation. `mc goal ready` keeps the stage.
 - **Taking over a blocked goal.** In an interactive session, always read the
   goal's current stage, its blocking reason in LOG.md (and REVIEW.md when
   present), and the instructions for that stage before acting: `plan` and
@@ -39,16 +40,16 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   brief/check repairs and bounded test commissioning within the promised
   outcome and Martin's explicit constraints. Missing planning detail alone
   does not require a person; acceptance and gate requirements still hold.
-  In a headless session, follow the assigned role; if resolving the blocker
-  requires a person's decision or an act outside that role's authority, leave
-  the goal blocked in its current stage and record exactly what is needed.
+  In a headless session, follow the assigned role; a build or review that
+  cannot resolve its obstacle sets blocked for plan. If plan needs a person's decision or an act outside that role's authority, set
+  `mc goal martin --reason "…"` in its current stage and record exactly what is needed.
 - **Refused.** mc refuses every session a backward move, naming both stages
   — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
   logged. It refuses `done` and `dropped` from a build or review session,
   any move but `build → review` from a build session, any but `review →
   merge|finish` from a review, `finish` without REVIEW.md, and `review` from
   a session other than plan while a criterion is not met. The runner starts no
-  session on `plan`, on `blocked`, or on a goal with no criterion, and the
+  session on `plan · ready`, on `Martin`, or a build session on a goal with no criterion, and the
   merger does not land a goal with one unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|large --title "…" [--stage plan|build]` makes one; `mc goal drop

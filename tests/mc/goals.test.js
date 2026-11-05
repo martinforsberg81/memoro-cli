@@ -60,9 +60,9 @@ test('parseGoal reads GOAL.json: its fields, prose as paragraphs, criteria and d
 test('parseGoal names each problem by its field: not JSON, a stage, status or class unknown, no repository, a bad repository name', () => {
   assert.match(parseGoal('# no json\n').problems.join(), /^GOAL\.json is not JSON/u);
   assert.deepEqual(STAGES, ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped']);
-  assert.deepEqual(STATUSES, ['ready', 'blocked']);
+  assert.deepEqual(STATUSES, ['ready', 'blocked', 'Martin']);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: 'started' })).problems.join(), /^stage: one of plan, build, review, finish, merge, done, dropped, not started$/u);
-  assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'started' })).problems.join(), /^status: one of ready, blocked, not started$/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'started' })).problems.join(), /^status: one of ready, blocked, Martin, not started$/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { status: undefined })).problems.join(), /status: .*not missing/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: undefined })).problems.join(), /stage: .*not missing/u);
   // No status of before stages is one now: open, review, waiting are refused, and say how to convert.
@@ -227,7 +227,7 @@ test('setGoalState rewrites the stage or status and appends the entry with both,
 
   const before = { ...store };
   assert.deepEqual(setGoalState({ dir, stage: 'open', entry, read, write }).problems, ['stage: one of plan, build, review, finish, merge, done, dropped, not open']);
-  assert.deepEqual(setGoalState({ dir, status: 'waiting', entry, read, write }).problems, ['status: one of ready, blocked, not waiting']);
+  assert.deepEqual(setGoalState({ dir, status: 'waiting', entry, read, write }).problems, ['status: one of ready, blocked, Martin, not waiting']);
   assert.deepEqual(store, before, 'nothing written');
   const refused = model({ [`${dir}/${GOAL_FILE}`]: 'nothing here' });
   assert.ok(setGoalState({ dir, stage: 'done', entry, read: refused.read, write: refused.write }).problems);
@@ -280,7 +280,10 @@ test('goalSession: build · ready is a build, review · ready a review, finish �
   assert.equal(goalSession(red('red')), 'plan');
   assert.equal(goalSession(red('moved')), 'plan', 'a moved head the same');
   assert.equal(goalSession(red('red'), [{ repo: 'memoro', pr: 12, state: 'queued' }]), null, 'queued again: the merger\'s');
-  for (const stage of STAGES) assert.equal(goalSession(staged(stage, 'blocked')), null, `${stage} · blocked`);
+  for (const stage of STAGES) {
+    assert.equal(goalSession(staged(stage, 'Martin')), null, `${stage} · Martin`);
+    assert.equal(goalSession(staged(stage, 'blocked')), ['done', 'dropped'].includes(stage) ? null : 'plan', `${stage} · blocked`);
+  }
   for (const stage of ['plan', 'done', 'dropped']) assert.equal(goalSession(staged(stage)), null, stage);
   assert.equal(goalSession({ ...staged('build'), problems: ['x'] }), null);
 });
@@ -299,15 +302,15 @@ test('the merger\'s red, inStage and a review that died before', () => {
 
 test('nextGoal takes the goals the runner starts, oldest first, and leaves out what may refuses', () => {
   const goal = (name, stage, at, status = 'ready') => ({ ...staged(stage, status, [{ at, tool: 'claude', done: 'x' }]), goal: name });
-  const goals = [goal('a', 'build', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'build', '2026-11-01T10:00Z', 'blocked'), goal('d', 'plan', '2026-11-01T09:00Z')];
+  const goals = [goal('a', 'build', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'build', '2026-11-01T10:00Z', 'Martin'), goal('d', 'plan', '2026-11-01T09:00Z')];
   assert.equal(nextGoal(goals, { repos: ['memoro'] }).goal, 'b');
   assert.equal(nextGoal(goals, { repos: ['memoro'], may: (g) => g.stage !== 'review' }).goal, 'a');
   const bare = [{ ...goal('a', 'build', '2026-11-02T12:00Z'), success_criteria: [] }];
   assert.equal(nextGoal(bare, { repos: ['memoro'] }), null);
 });
 
-test('waitsOnPerson: blocked, in any stage that is not finished', () => {
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) assert.equal(waitsOnPerson(staged(stage, 'blocked')), true, stage);
+test('waitsOnPerson: Martin, in any stage that is not finished', () => {
+  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) assert.equal(waitsOnPerson(staged(stage, 'Martin')), true, stage);
   assert.equal(waitsOnPerson(staged('build')), false);
   assert.equal(waitsOnPerson(staged('done', 'blocked')), false);
 });

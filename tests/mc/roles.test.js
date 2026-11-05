@@ -88,7 +88,7 @@ describe('role files', () => {
 
   it('the canon build role runs on 5m and plan on an hour', () => {
     assert.equal(readCanonRole(BUILD_ROLES.goal).cache, '5m');
-    assert.equal(readCanonRole('plan-session').cache, '1h');
+    assert.equal(readCanonRole('plan').cache, '1h');
   });
 
   it('the canon review role parses, runs on opus and five minutes, and is the review\'s own words', () => {
@@ -268,7 +268,7 @@ describe('the text every role session shares', () => {
  */
 describe('the verb files', () => {
   it('reaches a session by reference, without preloading the manual', () => {
-    for (const name of ['plan-session', 'brief']) {
+    for (const name of ['plan', 'brief']) {
       const { overlay } = readCanonRole(name);
       assert.match(overlay, /^@verb goal$/mu);
       const told = instructionsFor('codex', overlay);
