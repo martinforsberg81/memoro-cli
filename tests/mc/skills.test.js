@@ -132,7 +132,7 @@ describe('the mc bundle', () => {
     }
     assert.ok(files['tasks/references/test-strategy.md']);
     for (const tool of ['claude-code', 'codex']) {
-      const told = instructionsFor(tool, readCanonRole('plan-session').overlay);
+      const told = instructionsFor(tool, readCanonRole('plan').overlay);
       const paths = [...told.matchAll(/`(~\/[^`]+\.md)`/gu)].map((m) => m[1]).filter((path) => path.includes('/skills/mc/'));
       assert.ok(paths.some((path) => path.endsWith('/mc/SKILL.md')));
       assert.ok(paths.some((path) => path.endsWith('/mc/verbs/goal.md')));

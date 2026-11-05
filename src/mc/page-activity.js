@@ -13,6 +13,7 @@ export function activityLines(c, wide, session, { indent = 10, expand = false, n
   const add = (text, styles = []) => { if (text) parts.push({ text: String(text), styles }); };
   add('●', ['green']);
   add(String(session.kind || session.verb || 'session').toUpperCase(), kindTone(session.kind || session.verb));
+  if (session.reason) add(session.reason);
   if (named) add(sessionGoal(session) || 'unknown');
   add(session.progress || duration(session.elapsed_seconds ?? session.age_seconds),
     session.check_ins > 0 || (session.check_in_seconds && session.elapsed_seconds >= session.check_in_seconds) ? ['yellow'] : []);

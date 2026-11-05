@@ -1000,6 +1000,7 @@ function phaseSection(goals) {
     goal.availability = goal.problems?.length ? 'invalid'
       : finished ? 'finished'
       : goal.running ? 'running'
+      : goal.status === 'Martin' ? 'Martin'
       : goal.status === 'blocked' ? 'blocked'
       : goal.held ? 'waiting'
       : goal.stage === 'plan' ? 'planning'
@@ -1020,7 +1021,7 @@ function phaseSection(goals) {
 }
 
 function availabilityCounts(goals) {
-  const counts = { ready: 0, running: 0, waiting: 0, blocked: 0, invalid: 0, planning: 0, merging: 0, incomplete: 0, finished: 0 };
+  const counts = { ready: 0, running: 0, waiting: 0, blocked: 0, Martin: 0, invalid: 0, planning: 0, merging: 0, incomplete: 0, finished: 0 };
   for (const goal of goals) counts[goal.availability] += 1;
   return counts;
 }
@@ -1132,7 +1133,7 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     criteria: criteriaCount(goal),
     last: goal.log.at(-1) ?? null,
     running,
-    // Blocked, in any stage, it waits on a person (`waitsOnPerson`).
+    // Martin, in any stage, waits on a person (`waitsOnPerson`).
     person: waitsOnPerson(goal),
     // What it waits on the person for: the last entry's comment — the
     // session's question, or the runner's word on why it stopped.

@@ -120,6 +120,7 @@ export function nowBlock({
     const goal = /^goal:(.+)$/u.exec(String(current.name || ''))?.[1] ?? null;
     steps.push({
       name: current.name || null,
+      ...(current.reason ? { reason: current.reason } : {}),
       kind: named?.kind ?? (current.kind || null),
       // A plan session has no variant; a file with no kind it knows is a
       // goal's when its name says so.

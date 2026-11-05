@@ -36,12 +36,12 @@ const NOW = new Date('2026-08-29T12:00:00Z');
 const goalRow = (name, programme, { repos = ['memoro-cli'], stage = 'build', status = 'ready', running = false, last = { next: 'the next thing', comment: null } } = {}) => ({
   name, programme, repos, stage, status, phase: 1, held: false, sessions: 1, criteria: { met: 0, all: 1 },
   kind: 'goal', repo: repos[0], state: stage, progress: '1 sess', prs: [], carries: [],
-  last, running, person: status === 'blocked', question: status === 'blocked' ? 'which one?' : null, problems: [],
+  last, running, person: status === 'Martin', question: status === 'Martin' ? 'which one?' : null, problems: [],
 });
 const GOALS = [
   goalRow('docx-editor', 'docx-editing-surface', { repos: ['memoro'], running: true }),
   goalRow('mc-ui', 'mc'),
-  goalRow('avatar-self-serve', 'assistant-avatar', { repos: ['memoro'], status: 'blocked' }),
+  goalRow('avatar-self-serve', 'assistant-avatar', { repos: ['memoro'], status: 'Martin' }),
 ];
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -1249,7 +1249,7 @@ describe('the page', () => {
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work: the session in flight, and the goals
     // PROGRAMMES counts open, waiting and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 1 ready · 1 blocked/u);
+    assert.match(text, /1 in flight · 1 ready · 0 blocked · 1 Martin/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
@@ -1274,7 +1274,7 @@ describe('the page', () => {
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     // Every goal is a row under its programme, numbered in programme order,
     // with its repository in a column of its own.
-    assert.match(text, /^ +1 avatar-self-serve +build +blocked$/mu);
+    assert.match(text, /^ +1 avatar-self-serve +build +Martin$/mu);
     assert.match(text, /^ +2 docx-editor +build +running$/mu);
     assert.match(text, /^ +3 mc-ui +build +can start$/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
@@ -2023,7 +2023,7 @@ describe('the palette', () => {
 
   it('paints every row of the page, and the same colour for the same meaning', () => {
     const lines = paintedPage(DATA);
-    assert.match(rowWith(lines, 'avatar-self-serve'), /\x1b\[31mblocked/u);
+    assert.match(rowWith(lines, 'avatar-self-serve'), /\x1b\[31mMartin/u);
     assert.match(rowWith(lines, 'can start'), /\x1b\[32mcan start/u);
     assert.match(rowWith(lines, 'PROGRAMMES'), /\x1b\[[0-9;]*36mPROGRAMMES/u);
     assert.ok(!lines.some((line) => strip(line).includes('────')));

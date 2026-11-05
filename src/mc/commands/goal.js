@@ -14,12 +14,12 @@
  *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
  *                                  (`project-convert.js`); a finished one is refused
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
- *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked]
+ *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked|Martin]
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
- *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
+ *   mc goal blocked|martin|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
@@ -86,8 +86,8 @@ const VERB_FLAGS = {
   list: [],
 };
 /** The verbs that set one field: `blocked` and `ready` the status, `done` and `drop` the final stage. */
-const STATUS_VERBS = ['blocked', 'ready', 'done', 'drop'];
-const STATUS_VERB_FIELDS = { blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
+const STATUS_VERBS = ['blocked', 'martin', 'ready', 'done', 'drop'];
+const STATUS_VERB_FIELDS = { martin: { status: 'Martin' }, blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
 /** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
 export const ROUTES = Object.fromEntries([
   ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
@@ -219,7 +219,7 @@ function newGoal(args, flags, ctx) {
 }
 
 /**
- * `mc goal log`, `mc goal stage` and `mc goal blocked|ready|done|drop` —
+ * `mc goal log`, `mc goal stage` and `mc goal blocked|martin|ready|done|drop` —
  * appends one entry to the goal's LOG.md, tagged with MC_TOOL and MC_MODEL
  * (`person` when neither is set), with the stage and status the goal then
  * has. With a stage or status GOAL.json's is set too; an unknown one is
@@ -261,7 +261,7 @@ function logEntry(args, fields, ctx) {
   const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, done, comment, next: fields.next };
   let now = goal;
   if (fields.stage !== null || fields.status !== null) {
-    const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? undefined, entry, read, write });
+    const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? (fields.stage === 'merge' ? 'ready' : undefined), entry, read, write });
     if (outcome.problems) {
       for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
       return 1;
@@ -655,9 +655,10 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (!isSession(env)) return null;
   const moves = to !== null && to !== from;
   if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
-  if (env.MC_ROLE === PLAN_ROLE) return null;
+  if ([PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return null;
+  if (status === 'Martin') return 'only plan or a person sets Martin — set blocked for a plan session';
   if (env.MC_ROLE === REVIEW_ROLE) {
-    if (status !== null) return 'a review sets no status — it ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
+    if (status !== null && status !== 'blocked') return 'a review sets no status — it ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
     if (!moves) return null;
     if (from !== 'review') return `a review moves only a goal in review, and this one is ${from}`;
     if (to !== 'merge' && to !== 'finish') return `a review ends in merge or finish, not ${to}`;
@@ -667,18 +668,18 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (to === 'done') return 'a session does not set done — move it to review; the merger sets done when the pull request lands';
   if (to === 'dropped') return 'only plan or a person drops a goal — set it blocked with the question';
   if (moves && !(from === 'build' && to === 'review')) return `a build session moves a goal only from build to review, not ${from} → ${to}`;
-  if (status === 'ready') return 'a build session does not set a goal ready — a person does';
+  if (status === 'ready') return 'a build session does not set a goal ready — plan or a person does';
   return null;
 }
 
-/** Whether the caller is a session: MC_GOAL set, MC_TOOL not `person`. */
+/** Whether the caller is a session: MC_GOAL or MC_ROLE set, MC_TOOL not `person`. */
 function isSession(env) {
-  return Boolean(env.MC_GOAL) && (env.MC_TOOL || 'person') !== 'person';
+  return Boolean(env.MC_GOAL || env.MC_ROLE) && (env.MC_TOOL || 'person') !== 'person';
 }
 
 /** Whether the caller is a session (MC_GOAL set, MC_TOOL not `person`) that is not plan's. */
 function sessionNotPlan(env) {
-  return isSession(env) && env.MC_ROLE !== PLAN_ROLE;
+  return isSession(env) && ![PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE);
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */

@@ -43,9 +43,10 @@ export const GOALS_DIR = 'goals';
 export const STAGES = ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
 /**
  * Whether a goal's stage can run now: `ready`, or `blocked` — waiting on a
- * person, in any stage, waking nothing. Setting a blocked goal ready keeps its stage.
+ * plan session, in any stage. `Martin` waits on Martin and wakes nothing.
+ * Setting a goal ready keeps its stage.
  */
-export const STATUSES = ['ready', 'blocked'];
+export const STATUSES = ['ready', 'blocked', 'Martin'];
 /** The stages a goal ends in; only a goal in one of them is archived. */
 export const FINISHED = ['done', 'dropped'];
 /** The statuses a goal had before stages, which `mc goal convert` (and the runner) turn into a stage (`goal-convert.js`). */
@@ -437,23 +438,25 @@ export function stageSince(goal) {
   return at;
 }
 
-/** Whether a goal waits on a person: blocked, in any stage, and not finished. */
+/** Whether a goal waits on a person: Martin, in any stage, and not finished. */
 export function waitsOnPerson(goal) {
-  return goal.status === 'blocked' && !FINISHED.includes(goal.stage);
+  return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
 /** The role every plan session runs with, `mc plan`'s and the runner's: `canon/roles/plan-session.md`. */
-export const PLAN_ROLE = 'plan-session';
+export const PLAN_ROLE = 'plan';
 
 /**
  * The session the runner starts on `goal`, or null: a build session on
  * `build · ready` (with a criterion), a review session on `review · ready`, a
  * headless plan session on `finish · ready` and on `merge · ready` after a
- * red (`mergeRetryDue`). Never on `plan`, never on `blocked`, never on a goal
+ * red (`mergeRetryDue`). Blocked goals wake plan in their current stage. Never on `Martin` or a goal
  * that does not parse. `inLine` is the merger's line.
  */
 export function goalSession(goal, inLine = []) {
-  if (goal.problems?.length || goal.status !== 'ready') return null;
+  if (goal.problems?.length || FINISHED.includes(goal.stage) || goal.status === 'Martin') return null;
+  if (goal.status === 'blocked') return 'plan';
+  if (goal.status !== 'ready') return null;
   if (goal.stage === 'build') return noCriteria(goal) ? null : 'build';
   if (goal.stage === 'review') return 'review';
   if (goal.stage === 'finish') return 'plan';

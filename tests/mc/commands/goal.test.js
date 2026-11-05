@@ -215,7 +215,7 @@ test('mc goal log --status and --stage rewrite GOAL.json and log the entry with 
   assert.deepEqual(['stage', 'status', 'comment'].map((key) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1)[key]), ['build', 'blocked', 'waits for Martin']);
   assert.match(f.out(), /mc: mc\/plain · build · blocked\n/u);
 
-  for (const [flag, value, said] of [['--status', 'open', /^mc: status is ready, blocked, not open\n$/u], ['--stage', 'started', /^mc: stage is plan, build, review, finish, merge, done, dropped, not started\n$/u]]) {
+  for (const [flag, value, said] of [['--status', 'open', /^mc: status is ready, blocked, Martin, not open\n$/u], ['--stage', 'started', /^mc: stage is plan, build, review, finish, merge, done, dropped, not started\n$/u]]) {
     const bad = fixture({ files: seededGoal() });
     assert.equal(await run(['log', 'mc/plain', flag, value, '--comment', 'x'], bad.deps), 2);
     assert.match(bad.err(), said);
@@ -224,7 +224,7 @@ test('mc goal log --status and --stage rewrite GOAL.json and log the entry with 
 });
 
 test('mc goal blocked, ready, done and drop set their one field and log the reason; a blocked goal set ready keeps its stage', async () => {
-  for (const [verb, stage, status] of [['blocked', 'build', 'blocked'], ['done', 'done', 'ready'], ['drop', 'dropped', 'ready']]) {
+  for (const [verb, stage, status] of [['martin', 'build', 'Martin'], ['blocked', 'build', 'blocked'], ['done', 'done', 'ready'], ['drop', 'dropped', 'ready']]) {
     const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } });
     assert.equal(await run([verb, '--reason', `because ${verb}`], f.deps), 0, f.err());
     const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
@@ -330,7 +330,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
     ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
     ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['plan', ['stage', 'build'], /a build session moves a goal only from build to review, not plan → build/u],
-    ['build', ['ready'], /a build session does not set a goal ready — a person does/u],
+    ['build', ['ready'], /a build session does not set a goal ready — plan or a person does/u],
   ]) {
     const f = fixture({ files: inStage(from), env: BUILD });
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -400,7 +400,7 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
   assert.equal(stateOf(f), 'finish · ready');
   assert.equal(f.queued.length, 0, 'nothing queued for a finish');
   for (const [from, argv, said] of [
-    ['review', ['blocked', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merge \(OK to land\) or finish/u],
+    ['review', ['ready', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merge \(OK to land\) or finish/u],
     ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
     ['build', ['stage', 'merge'], /a review moves only a goal in review, and this one is build/u],
   ]) {
@@ -488,7 +488,7 @@ test('mc goal show refuses a goal that does not parse, and says why', async () =
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { status: 'maybe' }) }) });
   assert.equal(await run(['show', 'mc/plain'], f.deps), 1);
   assert.match(f.err(), /mc\/plain does not parse:/u);
-  assert.match(f.err(), /status: one of ready, blocked, not maybe/u);
+  assert.match(f.err(), /status: one of ready, blocked, Martin, not maybe/u);
 });
 
 test('mc goal list prints one line a goal: its name, repositories, status, criteria, sessions and what is next', async () => {
@@ -536,7 +536,7 @@ test('mc goal list shows each goal\'s stage · status, and a blocked one as wait
   assert.equal(await run(['list'], f.deps), 0, f.err());
   assert.deepEqual(f.out().trim().split('\n').slice(1), [
     '  mc/a · memoro-cli · review · ready · criteria 0/1 · 1 sessions · —',
-    '  mc/b · memoro-cli · finish · blocked, waits on a person · criteria 0/1 · 0 sessions · —',
+    '  mc/b · memoro-cli · finish · blocked · criteria 0/1 · 0 sessions · —',
     '  mc/c · memoro-cli · merge · ready · criteria 0/1 · 0 sessions · —',
     '  mc/d · memoro-cli · plan · ready · criteria 0/1 · 0 sessions · —',
   ]);
@@ -554,7 +554,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|martin\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];
@@ -617,7 +617,7 @@ test('mc goal list groups by phase and says which phase is in progress; show giv
     '  mc/landed · memoro-cli · done · ready',
     '  mc/let-go · memoro-cli · dropped · ready',
     'mc · phase 2 · in progress',
-    '  mc/also · memoro-cli · build · blocked, waits on a person',
+    '  mc/also · memoro-cli · build · blocked',
     '  mc/now · memoro-cli · build · ready',
     'mc · phase 3 · after phase 2',
     '  mc/later · memoro-cli · review · ready',
@@ -767,4 +767,21 @@ test('mc goal convert gives every goal written with one status its stage: open i
   assert.match(f.out(), /mc: mc\/queued · merge · ready \(was review\), phase 1\n/u);
   assert.equal(await run(['convert', 'mc'], f.deps), 0);
   assert.match(f.out(), /mc: nothing to convert\n$/u, 'once');
+});
+
+
+test('plan without MC_GOAL has session authority: it retries merge but cannot move stages backward', async () => {
+  const env = { MC_ROLE: 'plan', MC_TOOL: 'codex', MC_PROGRAMME: 'mc' };
+  const f = fixture({ files: { ...inStage('merge'), [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'merge', status: 'blocked' }) }, env });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 2);
+  assert.match(f.err(), /a session does not move a goal back/u);
+  assert.equal(await run(['stage', 'mc/plain', 'merge'], f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'merge · ready');
+  assert.equal(await run(['martin', 'mc/plain', '--reason', 'choose scope; recommend keeping it'], f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'merge · Martin');
+  for (const role of ['build-session:goal', 'review-session:goal']) {
+    const rejected = fixture({ files: inStage('build'), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
+    assert.equal(await run(['martin', '--reason', 'question'], rejected.deps), 2);
+    assert.match(rejected.err(), /only plan or a person sets Martin/u);
+  }
 });

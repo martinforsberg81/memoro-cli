@@ -72,7 +72,11 @@ Nothing else: no comment on the pull request, no long LOG.md entry, no
 `--next`, no status. You never move the goal anywhere but `merge` or
 `finish`.
 
-You cannot end in `review`: the session's Stop hook (`mc hook stop`) refuses
+If the review itself cannot run, use `mc goal blocked --reason "…"` so plan
+can resolve the obstacle and retry review. This is distinct from a completed
+review finding work not OK, which goes to finish with REVIEW.md.
+
+You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what
 is missing. Then end the session, in the turn the stage is set.
 @end

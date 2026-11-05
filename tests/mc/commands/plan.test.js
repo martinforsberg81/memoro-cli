@@ -38,7 +38,7 @@ const REPOS = [
 describe('the plan role', () => {
   it('is the model and the tools, and a body of its own', () => {
     const role = readCanonRole(PLAN_ROLE);
-    assert.equal(role.name, 'plan-session');
+    assert.equal(role.name, 'plan');
     // Planning defaults to Opus medium (Martin, 2026-11-04).
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);

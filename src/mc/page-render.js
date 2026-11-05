@@ -617,7 +617,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   const statuses = [['running', 'running', ['green']], ['ready', 'can start', ['green']],
     ['waiting', 'waiting for phase', ['yellow']], ['planning', 'need plan', ['cyan']],
     ['incomplete', 'need criteria', ['yellow']], ['merging', 'await merge', ['green']],
-    ['blocked', 'blocked', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
+    ['blocked', 'await plan', ['yellow']], ['Martin', 'Martin', ['red']], ['invalid', 'invalid', ['red']], ['finished', 'finished', ['grey']]]
     .filter(([key]) => expand && availability[key])
     .map(([key, label, styles]) => ({ text: `${availability[key]} ${label}`, styles }));
   const groups = programmes.programmes || [];
@@ -782,7 +782,7 @@ export function renderPageLines(data, {
   const flight = (data.runner?.sessions || []).length;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
-    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.blocked || 0} blocked` },
+    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.blocked || 0} blocked · ${statuses.Martin || 0} Martin` },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');
