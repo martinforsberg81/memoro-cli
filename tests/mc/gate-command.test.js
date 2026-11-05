@@ -114,6 +114,28 @@ describe('mc gate <test files…>', () => {
     assert.equal(JSON.parse(whole.files.get(`${LOG}.request.json`)).defer, false);
   });
 
+  it('--whole-selection is a public bare-gate option and retains the selector request', async () => {
+    const whole = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    assert.equal(await run(['--whole-selection'], whole.deps), 0);
+    const request = JSON.parse(whole.files.get(`${LOG}.request.json`));
+    assert.equal(request.files, null);
+    assert.equal(request.defer, false);
+    assert.match(request.select, /--changed-path 'implementation\.js'/u);
+  });
+
+  it('--whole-selection refuses named files, patterns and wait observers before starting', async () => {
+    for (const [args, explanation] of [
+      [['--whole-selection', 'a.test.js'], /takes no named files/u],
+      [['--whole-selection', '--test-name-pattern', 'one'], /cannot be combined with --test-name-pattern/u],
+      [['--whole-selection', '--wait'], /--wait only observes the already-started request/u],
+    ]) {
+      const h = harness({ tests: ['a.test.js'] });
+      assert.equal(await run(args, h.deps), 2);
+      assert.match(h.out.stderr, explanation);
+      assert.deepEqual(h.out.spawned, []);
+    }
+  });
+
   it('a repository that declares session_whole leaves nothing to the merge round', async () => {
     const out = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     const declaration = out.deps.declaration;
@@ -122,12 +144,22 @@ describe('mc gate <test files…>', () => {
     assert.equal(JSON.parse(out.files.get(`${LOG}.request.json`)).defer, false);
   });
 
-  it('a green that left files to the merge round says so', async () => {
+  it('text names the exact deferred files as unmeasured and not run by direct goal landing', async () => {
     const { out, deps, files } = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
-    files.set(`${LOG}.request.json.result`, JSON.stringify({ deferred: ['b.test.js', 'c.test.js'] }));
+    files.set(`${LOG}.request.json.result`, JSON.stringify({ deferred: ['tests/b.test.js', 'tests/c.test.js'] }));
     deps.write = ((write) => (path, text) => { if (path !== `${LOG}.request.json`) write(path, text); else files.set(path, text); })(deps.write);
     assert.equal(await run(['a.test.js'], deps), 0);
-    assert.match(out.stdout, /2 costly test files left to the merge round/u);
+    assert.match(out.stdout, /PARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: tests\/b\.test\.js tests\/c\.test\.js/u);
+  });
+
+  it('--json keeps partial coverage and deferred members when there is no reusable receipt', async () => {
+    const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN,
+      result: { deferred: ['tests/costly.test.js'], coverage: { kind: 'partial', files: ['tests/changed.test.js'], commands: [{ packageScript: 'lint:selected' }], pattern: null } } });
+    assert.equal(await run(['--json'], h.deps), 0);
+    const result = JSON.parse(h.out.stdout);
+    assert.deepEqual(result.deferred, ['tests/costly.test.js']);
+    assert.deepEqual(result.coverage, { kind: 'partial', files: ['tests/changed.test.js'], commands: [{ packageScript: 'lint:selected' }], pattern: null });
+    assert.equal(result.evidence, undefined);
   });
 
   it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {

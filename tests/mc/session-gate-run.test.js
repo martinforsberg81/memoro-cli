@@ -346,6 +346,104 @@ it('test-name filters reach node as flags, before the test paths', async () => {
   assert.deepEqual(args.flags, ['--import', './loader.mjs', '--test-name-pattern=one|two']);
 });
 
+it('the real gate request and worker preserve whole affected selection, costly failures, and default partial mode', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-whole-selection-'));
+  const cwd = join(root, 'repo');
+  const state = join(root, 'state');
+  const selectedFiles = ['tests/selected.test.js', 'tests/costly.test.js'];
+  const selectedCommands = [{ id: 'lint:selected', packageScript: 'lint:selected', passBaseRef: true }];
+  const base = 'a'.repeat(40);
+  const candidate = { repository: '/repo/memoro/.git', tree: 'tree', fingerprint: 'bytes' };
+  const table = join(state, 'test-times', 'memoro.json');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(state, 'test-times'), { recursive: true });
+  writeFileSync(table, JSON.stringify({ 'tests/costly.test.js': 500 }));
+
+  async function requestFor(whole) {
+    const files = new Map();
+    const output = { stdout: '', stderr: '', spawned: [], alive: new Set() };
+    const now = new Date('2026-11-05T12:00:00.000Z');
+    const deps = {
+      cwd, env: { MC_HOME: state, MC_WORK_ROOT: root, MC_SCRATCH: root },
+      stdout: { write: (text) => { output.stdout += text; } },
+      stderr: { write: (text) => { output.stderr += text; } },
+      now: () => now, id: () => whole ? 'whole' : 'partial',
+      claim: () => ({ ok: true, marker: 'claimed' }), release: () => true,
+      snapshot: () => candidate,
+      git: (_cwd, args) => {
+        if (args[0] === 'merge-base') return base;
+        if (args[0] === 'diff') return 'implementation.js\0';
+        if (args[0] === 'ls-files') return '';
+        if (args[0] === 'rev-parse' && args[1] === 'origin/main^{commit}') return base;
+        if (args.includes('--git-common-dir')) return '/repo/memoro/.git';
+        return ({ '--show-toplevel': cwd, '--absolute-git-dir': join(cwd, '.git') })[args[1]] ?? null;
+      },
+      declaration: () => ({ ok: true, declaration: { select: 'node select.js --base-ref origin/main' } }),
+      read: (path) => {
+        if (path === join(cwd, 'package.json')) return JSON.stringify({ scripts: { test: 'node --test' } });
+        if (files.has(path)) return files.get(path);
+        throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' });
+      }, exists: () => false, isFile: () => false,
+      write: (path, text) => { files.set(path, text); }, remove: (path) => files.delete(path),
+      mkdir: () => {}, open: () => 9, close: () => {},
+      spawn: (_file, args) => { output.spawned.push(args); output.alive.add(4242); return { pid: 4242, unref() {} }; },
+      alive: (pid) => output.alive.has(pid),
+      sleep: async () => {
+        const requestPath = output.spawned[0][1];
+        const logPath = requestPath.slice(0, -'.request.json'.length);
+        files.set(logPath, 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n');
+        files.set(`${logPath}.exit`, '0\n');
+        output.alive.clear();
+      },
+    };
+    const args = whole ? ['--whole-selection'] : [];
+    assert.equal(await gateCommand(args, deps), 0, output.stderr);
+    return JSON.parse(files.get(output.spawned[0][1]));
+  }
+
+  async function execute(request, failing = false) {
+    const actual = { files: [], commands: [] };
+    const result = await runSessionGate(request, {
+      snapshot: () => candidate, persist: () => '/scratch/no-reusable-receipt.json', record: () => {}, write: () => {},
+      select: async () => ({ ok: true, files: selectedFiles, commands: selectedCommands,
+        classes: { 'tests/selected.test.js': 'standard', 'tests/costly.test.js': 'sqlite' } }),
+      tests: async ({ files: chosen }) => {
+        actual.files = [...chosen];
+        return failing
+          ? { code: 1, tap: 'not ok 1 - costly failure\n# tests 1\n# pass 0\n# fail 1\n' }
+          : { code: 0, tap: GREEN };
+      },
+      shell: async (command) => { actual.commands.push(command); return { status: 0, stdout: '', stderr: '' }; },
+    });
+    return { result, actual };
+  }
+
+  try {
+    const wholeRequest = await requestFor(true);
+    assert.equal(wholeRequest.defer, false);
+    const whole = await execute(wholeRequest);
+    assert.deepEqual(whole.actual.files, selectedFiles);
+    assert.deepEqual(whole.result.files, selectedFiles);
+    assert.deepEqual(whole.result.deferred, []);
+    assert.deepEqual(whole.actual.commands, ["npm run 'lint:selected' -- --base-ref '" + base + "'"]);
+    assert.deepEqual(whole.result.coverage.commands, selectedCommands);
+
+    const failed = await execute(wholeRequest, true);
+    assert.deepEqual(failed.actual.files, selectedFiles);
+    assert.equal(failed.result.ok, false, 'failure in the costly selected file remains red');
+    assert.equal(failed.result.code, 1);
+
+    const ordinaryRequest = await requestFor(false);
+    assert.equal(ordinaryRequest.defer, true);
+    const ordinary = await execute(ordinaryRequest);
+    assert.deepEqual(ordinary.actual.files, ['tests/selected.test.js']);
+    assert.deepEqual(ordinary.result.files, ['tests/selected.test.js']);
+    assert.deepEqual(ordinary.result.deferred, ['tests/costly.test.js']);
+    assert.deepEqual(ordinary.actual.commands, ["npm run 'lint:selected' -- --base-ref '" + base + "'"]);
+    assert.equal(ordinary.result.coverage.kind, 'partial');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it('selection replaces the old base and quotes every changed path', () => {
   assert.equal(selectorCommand('node select.js --base-ref origin/main', { base: 'origin/topic', changed: ["src/it's.js", 'src/new.js'] }),
     "node select.js --base-ref 'origin/topic' --changed-path 'src/it'\\''s.js' --changed-path 'src/new.js'");

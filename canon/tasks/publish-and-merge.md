@@ -12,6 +12,15 @@ in it and say why in the reply.
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
+- Before a review or finish session authorizes direct goal landing with `mc
+  goal stage merge`, run `mc gate --whole-selection` on the final judged
+  worktree and require a completed GREEN verdict. Record the selected scope,
+  frozen base and judged revision, plus the command's log path, in the review
+  record. If it returns RUNNING, `mc gate --wait` observes that same request;
+  only its completed verdict counts. A red, timeout, interruption, missing
+  result or incomplete selection is not acceptance. Named criterion reruns and
+  ordinary gates with deferred files are not equivalent. Direct goal landing
+  deliberately runs no additional gate and does not validate base/head state.
 - It answers within 540 s with GREEN or RED, the failing lines and the log
   path; give the Bash call `timeout: 600000`. Past the budget: `RUNNING`,
   exit 3, and `mc gate --wait` reads the same log. Nothing goes in the
