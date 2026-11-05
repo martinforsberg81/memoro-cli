@@ -2,7 +2,6 @@
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
 
-export const QUEUED_DRAWN = 6;
 const one = (value) => String(value ?? '').replace(/[\r\n\t]+/gu, ' ').trim();
 const age = (value) => value == null ? 'age unknown' : `${ageWords(value)} ago`;
 
@@ -95,12 +94,11 @@ export function mergesLines(lines, c, wide, merges, expand) {
     const active = repo.landings || [];
     const reds = repo.reds || [];
     const waiting = repo.waiting || [];
-    const shown = expand ? waiting : waiting.slice(0, QUEUED_DRAWN);
+    const shown = waiting;
     const refs = shown.flatMap((item) => (item.prs || []).map((pr) => `#${pr.number}`));
     const unknown = shown.filter((item) => !item.prs?.length).length;
     const queue = waiting.length ? `${waiting.length} in queue: ${refs.join(' ')}${unknown ? ` · ${unknown} PR unknown` : ''}` : 'queue empty';
     operation(lines, c, wide, repo.repo, queue, ['bold'], { indent: 4, labelWide: 10 });
-    if (shown.length < waiting.length) detail(lines, c, wide, 19, `+${waiting.length - shown.length} more queued · a shows all`);
     if (repo.pause) operation(lines, c, wide, 'paused', repo.pause.reason || repo.pause.kind, ['red']);
     if (repo.merger_stopped) operation(lines, c, wide, 'merger stopped', 'queue waiting', ['red']);
     if (!active.length && !repo.pause && !repo.merger_stopped) {

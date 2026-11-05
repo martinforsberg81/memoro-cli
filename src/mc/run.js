@@ -94,7 +94,7 @@ import { pickWork } from './lane-pick.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
-import { withoutSessionIdentity } from './session-role.js';
+import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
 import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
@@ -242,7 +242,7 @@ function shGit(args, { timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * an ambient provider API key cannot change its billing.
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn, maxRunMs = 0 }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, handoff = null, signalProcess = process.kill, logPath = null, spawn: spawnFn = spawn, maxRunMs = 0 }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     let childEnv = env;
@@ -250,7 +250,7 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
       childEnv = { ...env };
       for (const name of unsetEnv) delete childEnv[name];
     }
-    const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: childEnv });
+    const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: childEnv, detached: Boolean(handoff) });
     // A record, not the session, so a throwing recorder must not end the run.
     if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* recorded elsewhere */ } }
     let logFd = null;
@@ -281,6 +281,8 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     let failure = null;
     let stalled = false;
     let lingered = false;
+    let handedOff = false;
+    let handoffTimer = null;
     let resultSeen = false;
     let stallTimer = null;
     let graceTimer = null;
@@ -303,7 +305,7 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
       lastBeat = now;
       if (gap > SLEEP_GAP_MS) slept += gap - SLEEP_TICK_MS;
     };
-    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); clearInterval(beatTimer); clearTimeout(deadlineTimer); clearTimeout(deadlineKill); };
+    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); clearInterval(beatTimer); clearInterval(handoffTimer); clearTimeout(deadlineTimer); clearTimeout(deadlineKill); };
     const send = (text) => {
       if (!piped || resultSeen || settled || !child.stdin?.writable) return;
       child.stdin.write(userMessageLine(text));
@@ -412,15 +414,32 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     child.on('close', (status, signal) => {
       closeLog();
       done({
-        status: stalled ? TIMEOUT_EXIT : (lingered ? 0 : (status ?? 1)),
+        status: handedOff ? 0 : stalled ? TIMEOUT_EXIT : (lingered ? 0 : (status ?? 1)),
         stdout: stdout(),
         stderr: stderr() || (failure ? String(failure.message) : ''),
         timedOut: stalled,
         stalled,
         lingered,
+        handedOff,
         signal: signal ?? null,
       });
     });
+    if (handoff) handoffTimer = setInterval(() => {
+      if (settled || handedOff) return;
+      let complete = false;
+      try { complete = handoff(); } catch { return; }
+      if (!complete) return;
+      handedOff = true;
+      stop();
+      // The gateway and coding tool share this session's own process group.
+      // Release after close so no late finalizer removes the next assignment.
+      const end = (signal) => {
+        try { signalProcess(-child.pid, signal); }
+        catch { child.kill(signal); }
+      };
+      deadlineKill = setTimeout(() => { if (!settled) end('SIGKILL'); }, 1000);
+      end('SIGTERM');
+    }, 250);
   });
 }
 
@@ -1675,11 +1694,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           writeJson(paths.disk, { at: stamp(), free_bytes: rechecked.available, line: rechecked.line });
           return 'skipped:disk';
         }
+        const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
+        const canHandoff = !programmeTurn && (review || planning) && scratchEnv.MC_SCRATCH;
+        if (canHandoff) remove(handoffPath);
         const pendingSession = deps.session({
           bin: tool.bin,
           args: tool.args,
           cwd,
           logPath: `${out}.jsonl`,
+          handoff: canHandoff ? () => {
+            try { return JSON.parse(deps.read(handoffPath) ?? 'null')?.goal === `${goal.programme}/${goal.goal}`; }
+            catch { return false; }
+          } : null,
           ...watchFor(launch, settings, {
             prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
             onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
@@ -1709,11 +1735,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeSessionLogs(out, result);
       noteWindows({ name, launch }, result.stdout);
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
+      if (result.handedOff) read.note = 'success,queued';
       recordRefusal({ name, launch, route }, read, picked.billing);
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       if (programmeTurn) writeJson(planReceipt(goal.programme), { key: goal.completionKey, at: stamp(), outcome: read.note });
+      else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
       else if (review) afterReview(goal, name);
       else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);

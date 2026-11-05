@@ -17,7 +17,8 @@ function line(c, wide, indent, text, styles = []) {
 function prLine(c, wide, pr) {
   const ref = `${pr.repo || 'unknown'}#${pr.number}`;
   const state = pr.merge_red ? 'red' : pr.merging === 'landing' ? 'landing' : pr.merging === 'queued' ? 'queued' : pr.draft ? 'draft' : 'open';
-  const prefix = `          ↳ ${c(ref, ...prTone([pr]))} · ${c(state, ...stateTone(state))}  `;
+  const label = state === 'landing' ? 'merging' : state === 'queued' ? 'in queue' : state;
+  const prefix = `          ↳ ${c(ref, ...prTone([pr]))} · ${c(label, ...stateTone(state))}  `;
   return `${prefix}${clipCell(pr.title || pr.branch || '', Math.max(0, wide - width(prefix)))}`.trimEnd();
 }
 

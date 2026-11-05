@@ -46,6 +46,7 @@ function start(options = {}) {
     checkIn: (minutes, count) => { checkIns.push([minutes, count]); return `check-in ${count} at ${minutes}`; },
     onQuiet: (minutes, tasks) => `quiet ${minutes} ${tasks.map((t) => t.task_id).join(',')}`,
     spawn: (...call) => { spawned.push(call); return child; },
+    signalProcess: (pid, signal) => { assert.equal(pid, -child.pid); child.kill(signal); },
     ...options,
   });
   return { child, session, spawned, checkIns, texts: () => child.written.map((m) => m.message.content) };
@@ -191,6 +192,43 @@ describe('streamSession', () => {
     run(child, 120);
     assert.deepEqual(child.killed, []);
     assert.deepEqual(checkIns, []);
+  });
+
+  it('ends a handed-off session promptly, waits for close and cancels its timers', async () => {
+    let queued = false;
+    const { child, session, checkIns, spawned } = start({ handoff: () => queued });
+    assert.equal(spawned[0][2].detached, true, 'gateway and tool belong to the session group');
+    let ended = false;
+    session.then(() => { ended = true; });
+    child.kill = (signal) => { child.killed.push(signal); };
+    mock.timers.tick(250);
+    assert.deepEqual(child.killed, [], 'no completed handoff yet');
+    queued = true;
+    mock.timers.tick(250);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    await Promise.resolve();
+    assert.equal(ended, false, 'the next assignment must not share a live session');
+    child.emit('close', 143, null);
+    const result = await session;
+    assert.equal(result.handedOff, true);
+    assert.equal(result.status, 0);
+    assert.equal(result.stalled, false);
+    mock.timers.tick(60 * MINUTE);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    assert.deepEqual(checkIns, []);
+  });
+
+  it('ends an unresponsive handed-off process group without waiting for the stall guard', async () => {
+    const { child, session } = start({ handoff: () => true, prompt: null, stallMs: 0 });
+    child.kill = (signal) => {
+      child.killed.push(signal);
+      if (signal === 'SIGKILL') child.emit('close', null, signal);
+    };
+    mock.timers.tick(250);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    mock.timers.tick(1000);
+    assert.deepEqual(child.killed, ['SIGTERM', 'SIGKILL']);
+    assert.equal((await session).status, 0);
   });
 
   it('finds a result whose type comes after two thousand characters of usage', () => {

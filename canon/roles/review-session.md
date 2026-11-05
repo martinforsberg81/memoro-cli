@@ -62,6 +62,10 @@ runner reads neither your words nor your files.
 
 Your output is exactly three things, and nothing else:
 
+Write the proposal and any REVIEW.md before the stage verb. In a runner
+session, a successful `mc goal stage merge` ends the session and releases its
+lane as soon as every registered PR is queued; nothing follows that command.
+
 1. **The stage, always one of two.**
    - OK: `mc goal stage merge`. It sends every registered pull request
      to the merger. Your decision is final: mc merges them without another

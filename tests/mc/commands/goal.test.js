@@ -391,6 +391,20 @@ test('a queue failure preserves the merge decision so it can be retried', async 
   assert.deepEqual(f.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
 });
 
+test('a partial merge enqueue does not release its session before all PRs are handed off', async () => {
+  const env = { ...REVIEW, MC_HEADLESS: '1', MC_SCRATCH: '/scratch' };
+  const files = inStage('review');
+  files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32'] });
+  const f = reviewed({ files, env, queue: (job) => {
+    if (job.pr === 32) throw new Error('queue locked');
+  } });
+  assert.equal(await run(['stage', 'merge'], f.deps), 1);
+  assert.equal(f.store['/scratch/.mc-merge-handoff.json'], undefined);
+  f.deps.queue = () => {};
+  assert.equal(await run(['stage', 'merge'], f.deps), 0);
+  assert.deepEqual(JSON.parse(f.store['/scratch/.mc-merge-handoff.json']), { goal: 'mc/plain' });
+});
+
 test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merge or finish', async () => {
   const f = reviewed({ files: inStage('review') });
   assert.equal(await run(['stage', 'finish'], f.deps), 2);

@@ -85,6 +85,9 @@ present, all of LOG.md, the programme README and the code in the goal's
 worktree. Resolve review findings and missing evidence yourself, verify the
 criteria, run `mc gate`, commit, `mc publish --no-merge`, then `mc goal stage
 merge`. Your decision authorizes landing; no second review is required.
+Finish all records before that command. In a runner session, a successful
+merge handoff ends the session and releases its lane immediately after all
+registered PRs are queued.
 
 You retain planning and implementation authority. Investigate technical
 choices and missing test scope within the promised outcome and Martin's
