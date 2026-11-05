@@ -5,7 +5,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFile
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, realDeps, runLoop } from '../../src/mc/run.js';
+import { MEMORY_MIN_FREE_PERCENT, realDeps, runLoop } from '../../src/mc/run.js';
+import { PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 /**
@@ -132,7 +133,8 @@ test('a fast goal on a refused claude runs on codex through the adapter, and lan
   const { env, work, argvFile, worktree } = codexWorld(t);
   // The disk and the memory are the host's: a full disk or a loaded machine
   // would refuse the session this test is about, so both read as room enough.
-  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
+  // At the pressure line exactly, and no pass halves: nothing of this machine's disk is read or tidied.
+  const deps = { ...realDeps(env), freeBytes: () => PRESSURE_BYTES, pressureTidy: undefined, pressureDocker: undefined, freeMemoryPercent: () => MEMORY_MIN_FREE_PERCENT, log: () => {} };
   assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
 
   // The row: a goal's build, exit 0, the usage the event stream carried, and

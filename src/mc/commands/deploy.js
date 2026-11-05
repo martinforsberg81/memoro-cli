@@ -73,6 +73,8 @@ import {
   runningDeploy,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
+import { mcDiskPressure } from '../disk-admission.js';
+import { POLL_MS as DISK_POLL_MS } from '../disk-pressure.js';
 import { BUILD_LANE, releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
@@ -874,10 +876,37 @@ export async function ship(job, deps = {}) {
     if (shipping !== sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+    // The disk (disk-pressure.js), asked at the spawn itself: under 30 GB a
+    // pressure pass first, and no script unless it restores the line. A
+    // reading that fails refuses too. Only on the real spawn: a fixture with
+    // its own and no `disk` touches no disk of this machine.
+    const disk = deps.disk !== undefined ? deps.disk : (deps.spawnDeploy ? null : mcDiskPressure({ env, say: (line) => stdout.write(`mc: ${line}\n`) }));
+    let diskAdmission;
+    if (disk) {
+      const admitted = diskAdmission = await disk.admit({ trigger: 'deploy', what: 'the deploy script', hold: true });
+      if (!admitted.admitted) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'disk', note: `mc: ${admitted.line}` }, env);
+        stderr.write(`mc: ${admitted.line} — nothing was deployed\n`);
+        return 1;
+      }
+    }
     const onOutput = (chunk) => {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
     };
-    const result = await spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
+    // While the script runs, the disk is read every minute even with no
+    // runner, and a pressure pass starts below 30 GB. The deploy is never
+    // stopped for it: what it already writes is its own.
+    const every = deps.every || ((ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); });
+    const stopMonitor = disk ? every(DISK_POLL_MS, () => disk.poll({ trigger: 'deploy-monitor' }).catch(() => null)) : null;
+    let result;
+    try {
+      const pending = spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
+      diskAdmission?.release?.();
+      result = await pending;
+    } finally {
+      diskAdmission?.release?.();
+      stopMonitor?.();
+    }
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
     recordEnd(key, {

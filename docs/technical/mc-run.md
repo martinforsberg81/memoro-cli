@@ -111,10 +111,19 @@ checking and taking. Sessions held by a predecessor count too. A held lane
 polls every 15 s; admission is FIFO, with waiters visible in
 `runner/waiting.json`. STOP and UPDATE retire their waiting tickets.
 
-No new session starts with less than 5 GiB free on the scratch volume or
-memory status below 20 percent. The runner writes disk.json or memory.json
-and removes it when the hold clears. A failed reading is not a hold.
-Sessions already running and the merger go on.
+No new session starts unless the disk policy admits it
+([mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure)): 30 GB available on
+the scratch volume, after a pressure pass if need be, asked at the top of a
+pass and again at the start itself. A reading that fails refuses. No session
+starts either with memory status below 20 percent. The runner writes
+disk.json or memory.json and removes it when the hold clears. A timer reads
+the disk every minute, beside the lanes and chores. Sessions already running
+and the merger go on.
+
+Each session's scratch directory gets an ownership record,
+`.mc-scratch.json`, with its session and start, and its end and exit once
+the session is over. Scratch is no longer removed by age; tidy's rule S
+reclaims only on that record.
 
 ## The session
 

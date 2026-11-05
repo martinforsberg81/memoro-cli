@@ -43,8 +43,17 @@
  *   - (A) A `~/mc/gate-cache/<slug>/<key>/` entry under a slug a repository mc knows has goes when no round has used it for fourteen days
  *     (`meta.at`), and a `<key>.tmp-<pid>` staging directory once it is a day old, through `rmTree`. The dependency cache is bounded by
  *     count (`prepare-cache.js`); this bounds it by age too.
+ *   - (S) Inside a runner session's scratch directory
+ *     (`~/mc/runner/scratch/<stem>/`), a git worktree and a `DerivedData`
+ *     directory are the two things that may go, and only when the directory's
+ *     ownership record (`.mc-scratch.json`, written by the runner when it made
+ *     it) says its session has ended, no process stands in it or holds a file
+ *     open in the candidate, and — for a worktree — nothing is uncommitted and
+ *     its HEAD is on a branch or tag. Logs, patches and everything else in the
+ *     directory stay. A directory with no record is legacy and is kept: its age
+ *     says nothing about whether it is idle.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -60,7 +69,7 @@ import { FINISHED, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
-  planAreaRoot, runnerDir, stepAreaRoot, workGateCachePath, workGatePath, workRoot,
+  planAreaRoot, runnerDir, runnerScratchDir, stepAreaRoot, workGateCachePath, workGatePath, workRoot,
 } from './paths.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
@@ -71,7 +80,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 7;
+export const RULES_VERSION = 8;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
 /**
@@ -92,7 +101,12 @@ const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** mc's own files in a workarea: never what keeps one, and gone with it. */
 const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S']);
+/** The ownership record the runner writes into each session's scratch directory (`run.js`). */
+export const SCRATCH_MARKER = '.mc-scratch.json';
+export const SCRATCH_SCHEMA = 'mc-scratch';
+/** The one name under a scratch directory that is rebuildable whole. */
+const DERIVED_DATA = 'DerivedData';
 
 /** Every root tidy reads, by name. A kind removes only under its own. */
 export function tidyRoots(env = process.env) {
@@ -110,6 +124,8 @@ export function tidyRoots(env = process.env) {
     gate_cache: workGateCachePath(env),
     gate: workGatePath(env),
     selection: join(mcHome(env), 'selection'),
+    // A runner session's scratch directories (S): `~/mc/runner/scratch/<stem>/`.
+    scratch: runnerScratchDir(env),
   };
 }
 
@@ -126,6 +142,8 @@ const KIND_ROOT = {
   'gate-slug': 'gate',
   'selection-slug': 'selection',
   'gate-cache-entry': 'gate_cache',
+  'scratch-worktree': 'scratch',
+  'scratch-derived': 'scratch',
 };
 
 /** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
@@ -193,7 +211,7 @@ function realGit(cwd, args) {
 export function gatherTidyFacts({
   env = process.env, now = Date.now(), gh = null, git = realGit, cwds = cwdsOfUser,
   inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf,
-  servers = serversFor,
+  servers = serversFor, openIn = openFilesIn,
 } = {}) {
   const roots = tidyRoots(env);
   const root = roots.root;
@@ -201,13 +219,14 @@ export function gatherTidyFacts({
     now, work_root: root, projects_root: roots.claude, roots,
     plan_checkouts: [], plan_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
+    scratch_items: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
   // empty answer is lsof failing — and then nothing can be said to be unused.
   let running = null;
   try { running = cwds(); } catch { running = null; }
-  if (running && running.length === 0) running = null;
+  if (running && (running.length === 0 || running.complete === false)) running = null;
   const tip = pullAtTip || ((wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {}));
   for (const programme of listNames(roots.plan)) {
     const area = join(roots.plan, programme);
@@ -331,6 +350,54 @@ export function gatherTidyFacts({
     }
   }
 
+  // (S) A runner session's scratch directory: its record read once, its worktrees and DerivedData judged.
+  for (const stem of listNames(roots.scratch)) {
+    const dir = join(roots.scratch, stem);
+    let marker = null;
+    let markerError = null;
+    try {
+      const value = JSON.parse(readFileSync(join(dir, SCRATCH_MARKER), 'utf8'));
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
+      marker = value;
+    } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') markerError = message(error); }
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { entries = []; }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const path = join(dir, entry.name);
+      const worktree = present(join(path, '.git'));
+      if (!worktree && entry.name !== DERIVED_DATA) continue;
+      const item = {
+        path, stem, kind: worktree ? 'scratch-worktree' : 'scratch-derived', marker, marker_error: markerError,
+        live: null, open: null, dirty: null, refs: null, owner: null, bytes: 0,
+      };
+      facts.scratch_items.push(item);
+      try {
+        if (!marker || markerError || !marker.ended) continue;
+        if (!running) throw new Error('lsof could not say who stands in it');
+        item.live = [...new Set(processesStandingIn([dir], { cwds: running }).map((p) => p.pid))];
+        if (item.live.length) continue;
+        if (worktree) {
+          const status = git(path, ['status', '--porcelain', '--untracked-files=all']);
+          if (status === null) throw new Error('git status could not be read');
+          item.dirty = status.trim() ? status.trim().split('\n').length : 0;
+          if (item.dirty) continue;
+          const head = git(path, ['rev-parse', '--verify', 'HEAD'])?.trim();
+          if (!head) throw new Error('git could not name its HEAD');
+          const refs = git(path, ['for-each-ref', '--contains', head, '--format=%(refname)']);
+          if (refs === null) throw new Error('git could not say which refs hold its HEAD');
+          item.refs = refs.split('\n').map((line) => line.trim()).filter(Boolean);
+          if (!item.refs.length) continue;
+          const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+          if (!common?.trim()) throw new Error('git could not name the repository that owns it');
+          item.owner = repositoryDir(common.trim());
+        }
+        item.open = openIn(path);
+        if (scratchItem(item).target) item.bytes = treeBytes(path);
+      } catch (error) { item.error = message(error); }
+    }
+  }
+
   // Worktrees git knows of outside the work root: listed, never removed.
   for (const repo of repos) {
     const text = git(repo.path, ['worktree', 'list', '--porcelain']);
@@ -398,6 +465,20 @@ function programmeHasOpenGoal(area) {
 /** The names in a directory; none when it cannot be read. */
 function listNames(dir) {
   try { return readdirSync(dir).filter((name) => !name.startsWith('.')).sort(); } catch { return []; }
+}
+
+/**
+ * The pids holding a file open anywhere under `path` (`lsof +D`), or null
+ * when lsof cannot say. lsof exits 1 both for "nothing open" and for a
+ * failure; only a silent exit 1 is read as nothing.
+ */
+function openFilesIn(path) {
+  const r = spawnSync('lsof', ['-t', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+  if (r.error) return null;
+  const pids = String(r.stdout || '').split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (r.status === 0) return [...new Set(pids)];
+  if (r.status === 1 && !pids.length && !String(r.stderr || '').trim()) return [];
+  return null;
 }
 
 /** What `ps` calls a process, or its pid. */
@@ -561,6 +642,43 @@ export function staleGateCacheEntry(item, now) {
   return { target: true, why: `no round has used it for ${Math.floor((now - used) / DAY_MS)} days` };
 }
 
+/** Who owns a scratch directory, as its record says: the same at the list and at the apply, or it is not the same owner. */
+export function scratchOwner(marker) {
+  return marker ? `${marker.session ?? '?'}@${marker.started ?? '?'}` : null;
+}
+
+/**
+ * (S) A worktree or `DerivedData` in a runner session's scratch directory.
+ * It may go only on proof: the record names the runner as owner and says the
+ * session ended, no process stands in the directory or holds a file open in
+ * the candidate, and a worktree is clean with its HEAD on a ref. Anything
+ * not known keeps it; age is never asked.
+ */
+export function scratchItem(item) {
+  if (item.error) throw new Error(item.error);
+  if (item.marker_error) return { target: false, why: `its scratch directory's ownership record cannot be read (${item.marker_error})` };
+  if (!item.marker) return { target: false, why: 'its scratch directory has no ownership record — legacy scratch is kept' };
+  const marker = item.marker;
+  if (marker.schema !== SCRATCH_SCHEMA || marker.owner !== 'runner' || !marker.session || !marker.started) {
+    return { target: false, why: 'its scratch directory\'s owner is not clear' };
+  }
+  if (!marker.ended) return { target: false, why: `${marker.session} has not recorded an end` };
+  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
+  if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in its scratch directory` };
+  if (item.kind === 'scratch-worktree') {
+    if (item.dirty === null || item.dirty === undefined) throw new Error('could not tell whether it has uncommitted changes');
+    if (item.dirty) return { target: false, why: `${item.dirty} uncommitted change(s)` };
+    if (!Array.isArray(item.refs)) throw new Error('could not tell whether its HEAD is on a ref');
+    if (!item.refs.length) return { target: false, why: 'its HEAD is on no branch or tag' };
+    if (!item.owner) throw new Error('no repository owns it');
+  }
+  if (!Array.isArray(item.open)) throw new Error('could not tell whether a file in it is open');
+  if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds a file open in it` };
+  return item.kind === 'scratch-worktree'
+    ? { target: true, why: `a clean worktree of ended session ${marker.session}, its HEAD on ${item.refs[0]}` }
+    : { target: true, why: `rebuildable DerivedData of ended session ${marker.session}` };
+}
+
 /* ------------------------------------------------------------- deciding */
 
 /**
@@ -651,6 +769,14 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     else keep(item.path, 'A', verdict.why);
   }
 
+  // (S) worktrees and DerivedData in ended runner sessions' scratch directories; the rest of a scratch directory is not listed.
+  for (const item of facts.scratch_items || []) {
+    const verdict = judge(scratchItem, item);
+    if (verdict.target) {
+      targets.push({ path: item.path, kind: item.kind, rule: 'S', why: verdict.why, bytes: item.bytes || 0, owner_id: scratchOwner(item.marker), ...(item.owner ? { owner: item.owner } : {}) });
+    } else keep(item.path, 'S', verdict.why);
+  }
+
   // (L) T1–T5 and leftovers, unchanged, over what G left.
   const cutoff = facts.now - days * DAY_MS;
   const loose = transcripts.filter((item) => !claimed.has(item));
@@ -720,6 +846,9 @@ export function outsideRoots(target, roots) {
     'selection-slug': parent === base,
     // `<gate-cache>/<slug>/<key>`: two levels down, as the entry of a repository's cache.
     'gate-cache-entry': dirname(parent) === base,
+    // `<scratch>/<stem>/<worktree>` and `<scratch>/<stem>/DerivedData`.
+    'scratch-worktree': dirname(parent) === base,
+    'scratch-derived': dirname(parent) === base && name === DERIVED_DATA,
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }
@@ -762,6 +891,7 @@ export function applyTidy({
   const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
   const workAreas = new Map([...(facts.work_areas || []), ...(facts.step_areas || []).filter((item) => item.worktrees)].map((item) => [item.path, item]));
   const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
+  const scratch = new Map((facts.scratch_items || []).map((item) => [item.path, item]));
 
   const applied = [];
   let freed = 0;
@@ -773,6 +903,10 @@ export function applyTidy({
       const again = holds.get(path);
       if (!again || again.rule !== target.rule || again.kind !== target.kind) {
         applied.push({ path, ok: false, why: `re-check: ${keptNow.get(path)?.why || 'the rule no longer holds'}` });
+        continue;
+      }
+      if (again.rule === 'S' && again.owner_id !== target.owner_id) {
+        applied.push({ path, ok: false, why: 're-check: its scratch directory\'s owner changed since the list' });
         continue;
       }
       if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
@@ -788,6 +922,10 @@ export function applyTidy({
       } else if (target.kind === 'compare-worktree') {
         // The owner read now, never the one the list file names.
         const owner = compares.get(path)?.owner;
+        if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
+      } else if (target.kind === 'scratch-worktree') {
+        // Through git, without --force, in the repository read now: a tree that changed since stays, and its commits stay on their refs.
+        const owner = scratch.get(path)?.owner;
         if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);

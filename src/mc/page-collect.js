@@ -84,7 +84,8 @@ import { controlPaths, drainState, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { RUNNER_DISK, RUNNER_MEMORY, mcHome, programsHome, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, mcHome, programsHome, runnerScratchDir, workRoot } from './paths.js';
+import { diskSummary } from './disk-pressure.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
@@ -242,6 +243,9 @@ export function runnerSection({
   disk = null,
   // `~/mc/runner/memory.json`: the same, while too little memory is free.
   memory = null,
+  // The disk policy as `diskSummary` read it (disk-pressure.js): measured
+  // free bytes, pressure, the last pass and its shortfall. No walk.
+  pressure = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, steps: sessions, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
@@ -266,6 +270,7 @@ export function runnerSection({
   const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
     ...base,
+    pressure,
     sessions,
     stop_requested: stop && !Number.isNaN(stopAt)
       ? { at: new Date(stopAt).toISOString(), age_seconds: Math.max(0, Math.round((now.getTime() - stopAt) / 1000)) }
@@ -1402,6 +1407,7 @@ export async function collectPage({
     github: readJson(join(root, 'runner', GITHUB_STATE)),
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
     memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
+    pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path) }),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),

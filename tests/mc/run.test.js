@@ -1,3 +1,4 @@
+import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -5,8 +6,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
+import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
 import { parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
@@ -613,13 +615,19 @@ test('a goal session is started with MC_SCRATCH naming an existing directory und
   const f = goalFixture({ alpha: {} });
   const seen = [];
   f.answer = (call) => {
-    seen.push({ scratch: call.env.MC_SCRATCH, existed: f.dirs.has(call.env.MC_SCRATCH) });
+    seen.push({ scratch: call.env.MC_SCRATCH, existed: f.dirs.has(call.env.MC_SCRATCH), marker: JSON.parse(f.files[`${call.env.MC_SCRATCH}/.mc-scratch.json`]) });
     return okSession()(call);
   };
   await createRunner({ deps: f.deps }).pass();
   assert.equal(seen.length, 1);
   assert.match(seen[0].scratch, /^\/w\/runner\/scratch\/goal-prog-alpha-\d{8}T\d{6}Z$/u);
   assert.equal(seen[0].existed, true, 'the directory exists when the session starts');
+  // Its ownership record (tidy rule S): no end while the session runs, the end and exit after.
+  const { stem, ...during } = seen[0].marker;
+  assert.equal(stem, seen[0].scratch.split('/').at(-1));
+  assert.deepEqual(during, { schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: 'goal:prog/alpha', kind: 'build', started: '2026-08-29T10:00:00Z' });
+  const after = JSON.parse(f.files[`${seen[0].scratch}/.mc-scratch.json`]);
+  assert.deepEqual([after.started, after.ended, after.exit], ['2026-08-29T10:00:00Z', '2026-08-29T10:00:00Z', 0]);
 });
 
 test('a scratch directory that cannot be made is said, and the session starts without MC_SCRATCH', async () => {
@@ -632,50 +640,286 @@ test('a scratch directory that cannot be made is said, and the session starts wi
   assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/alpha: no scratch directory .*EACCES/u);
 });
 
-test('the chore pass removes a scratch directory older than two days and keeps a newer one', async () => {
+test('the chore pass removes no scratch directory by age: what goes from scratch is tidy rule S\'s, on proof', async () => {
   const f = fixture({ now: '2026-09-19T10:00:00Z' });
-  const hour = 60 * 60 * 1000;
   const now = Date.parse('2026-09-19T10:00:00Z');
-  assert.equal(SCRATCH_KEEP_MS, 48 * hour);
-  for (const [name, age] of [['old-20260917T090000Z', 49 * hour], ['new-20260917T120000Z', 47 * hour]]) {
-    f.dirs.add(`/w/runner/scratch/${name}`);
-    f.scratchAges[`/w/runner/scratch/${name}`] = now - age;
-  }
+  f.dirs.add('/w/runner/scratch/old-20260910T090000Z');
+  f.scratchAges['/w/runner/scratch/old-20260910T090000Z'] = now - 9 * 24 * 60 * 60 * 1000;
   await createRunner({ deps: f.deps }).chores();
-  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260917T090000Z']);
-  assert.ok(f.dirs.has('/w/runner/scratch/new-20260917T120000Z'));
-  assert.match(f.files['/w/runner/log/runner.log'], /scratch: 1 directory older than two days removed/u);
+  assert.deepEqual(f.calls.rmScratch, []);
+  assert.ok(f.dirs.has('/w/runner/scratch/old-20260910T090000Z'));
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /scratch:/u);
 });
+
+/* ------------------------------------------------ disk pressure (disk-pressure.js) */
 
 /**
- * 2026-10-08: a step session hit ENOSPC on its first shell commands with
- * 118 MiB free. Under 5 GiB on the volume where scratch is made, a pass
- * starts nothing, says why once, and leaves the line for the page.
+ * The disk as the fixture's statfs reads it, and the pressure pass's two
+ * halves faked on it: each frees what the test says, which the next reading
+ * sees, while its estimate may say more.
  */
-test('under 5 GiB free on the scratch volume no session launches, the line is said once and left for the page', async () => {
-  const f = goalFixture({ alpha: {} });
-  const asked = [];
-  f.deps.freeBytes = (path) => { asked.push(path); return DISK_MIN_BYTES - 1; };
-  const r = await createRunner({ deps: f.deps }).pass();
-  assert.equal(r.ran, 0);
-  assert.equal(r.waited, 'skipped:disk');
-  assert.equal(f.calls.sessions.length, 0, 'no session is launched');
-  assert.deepEqual(asked, ['/w/runner/scratch'], 'the volume read is the one MC_SCRATCH is made on');
-  const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /disk:/u.test(line));
-  assert.equal(said.length, 1);
-  assert.match(said[0], /disk: 4\.9 GiB free, below 5 GiB — no session started$/u);
-  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /^disk: 4\.9 GiB free, below 5 GiB — no session started$/u);
+function onDisk(f, free, { tidyFrees = 0, tidyEstimate = tidyFrees, dockerFrees = 0, docker = { up: true, pruned: [{ what: 'images', ok: true, reclaimed: '0B', detail: null }] } } = {}) {
+  const disk = { free, steps: [], read: [], tidyFrees, dockerFrees, docker, gate: null };
+  f.deps.freeBytes = (path) => { disk.read.push(path); if (disk.free instanceof Error) throw disk.free; return disk.free; };
+  f.deps.pressureTidy = async () => {
+    disk.steps.push('tidy');
+    if (disk.gate) await disk.gate;
+    disk.free += disk.tidyFrees;
+    return {
+      list: { targets: [{ path: '/w/runner/scratch/s/wt', bytes: tidyEstimate }], kept: [{ path: '/w/runner/scratch/legacy/wt', rule: 'S', why: 'its scratch directory has no ownership record — legacy scratch is kept' }] },
+      outcome: { removed: 1, applied: [] },
+    };
+  };
+  f.deps.pressureDocker = async () => { disk.steps.push('docker'); disk.free += disk.dockerFrees; return disk.docker; };
+  return disk;
+}
+const pressureState = (f) => JSON.parse(f.files['/w/runner/disk-pressure.json'] ?? 'null');
+const pressureEvents = (f) => JSON.parse(f.files['/w/runner/disk-pressure-events.json'] ?? '[]');
+const GBYTES = 1e9;
+
+test('shared admission excludes other policy instances through allocation/start, and lock failure refuses', async () => {
+  for (const otherPid of [1, 2]) {
+    const files = new Map();
+    let free = 30e9;
+    const options = { path: '/disk', stateDir: '/state', freeBytes: () => free,
+      read: (p) => files.get(p), writeJson: (p, v) => files.set(p, JSON.stringify(v)), alive: () => true };
+    const first = createDiskPressure({ ...options, pid: 1 });
+    const second = createDiskPressure({ ...options, pid: otherPid });
+    const admitted = await first.admit({ hold: true });
+    assert.equal(admitted.admitted, true);
+    assert.equal((await second.admit({ hold: true })).admitted, false, 'no stale healthy admission while allocation is held');
+    free = 29e9; // the admitted allocation consumed space before releasing
+    admitted.release();
+    assert.equal((await second.admit()).admitted, false);
+    free = 30e9;
+    assert.equal((await second.admit()).admitted, true);
+  }
+  const failed = createDiskPressure({ path: '/disk', stateDir: '/state', freeBytes: () => 50e9,
+    read: () => null, writeJson: () => assert.fail('must not write without exclusion'), lock: () => { throw new Error('held'); } });
+  assert.match((await failed.admit()).reason, /lock unavailable/u);
 });
 
-test('at 5 GiB free a session launches, and the disk line is taken off the page', async () => {
+test('runner holds admission during dependency allocation and rechecks before spawning', async () => {
   const f = goalFixture({ alpha: {} });
-  f.files['/w/runner/disk.json'] = JSON.stringify({ line: 'disk: 1.0 GiB free, below 5 GiB — no session started' });
-  f.deps.freeBytes = () => DISK_MIN_BYTES;
+  const disk = onDisk(f, 30e9);
+  let heldAtAllocation = false;
+  f.deps.attachDeps = async () => {
+    heldAtAllocation = pressureState(f)?.lease?.trigger === 'session:start';
+    disk.free = 29e9;
+    return { ok: true };
+  };
+  assert.equal((await createRunner({ deps: f.deps }).pass()).waited, 'skipped:disk');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(heldAtAllocation, true, 'allocation happens only while admission is held');
+  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureEvents(f).at(-1).admission.admitted, false);
+});
+
+test('same-pid policy instances cannot duplicate a pending cleanup or bypass it at the healthy boundary', async () => {
+  const files = new Map();
+  let free = 29e9;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const removed = [];
+  const options = { path: '/disk', stateDir: '/state', pid: 1, alive: () => true,
+    freeBytes: () => free, read: (p) => files.get(p), writeJson: (p, v) => files.set(p, JSON.stringify(v)),
+    steps: [{ name: 'tidy', run: async () => { removed.push('safe'); await pending; free = 40e9; return {}; } }] };
+  const first = createDiskPressure(options);
+  const second = createDiskPressure(options);
+  const pass = first.poll();
+  await Promise.resolve();
+  assert.equal((await second.poll()).relief.skipped, 'busy');
+  assert.equal((await second.admit()).admitted, false);
+  assert.deepEqual(removed, ['safe']);
+  release();
+  await pass;
+  assert.equal((await second.admit()).admitted, true);
+});
+
+test('at exactly 30 GB a session starts, and a healthy disk runs no cleanup or diagnostic event', async () => {
+  const f = goalFixture({ alpha: {} });
+  const disk = onDisk(f, PRESSURE_BYTES);
+  f.files['/w/runner/disk.json'] = JSON.stringify({ line: 'disk: 1.0 GB free — no session started' });
   const r = await createRunner({ deps: f.deps }).pass();
   assert.equal(r.ran, 1);
-  assert.equal(f.calls.sessions.length, 1);
-  assert.equal('/w/runner/disk.json' in f.files, false);
+  assert.deepEqual(disk.steps, []);
+  assert.deepEqual([...new Set(disk.read)], ['/w/runner/scratch'], 'the volume read is the one MC_SCRATCH is made on');
+  assert.equal(disk.read.length, 3, 'asked before allocation and rechecked at the spawn boundary');
+  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureState(f).last_cleanup, undefined);
+  assert.deepEqual(pressureEvents(f), []);
+  assert.equal('/w/runner/disk.json' in f.files, false, 'the page line goes');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /disk:/u);
+});
+
+test('30 GB minus one byte runs one pressure pass before the session, stops at 40 GB, and records measured beside estimated', async () => {
+  const f = goalFixture({ alpha: {} });
+  const disk = onDisk(f, PRESSURE_BYTES - 1, { tidyFrees: 12 * GBYTES, tidyEstimate: 20 * GBYTES });
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1);
+  assert.deepEqual(disk.steps, ['tidy'], 'at 40 GB Docker is not asked');
+  const [event] = pressureEvents(f);
+  assert.deepEqual({
+    trigger: event.trigger, before: event.before_bytes, after: event.after_bytes, delta: event.measured_delta_bytes, estimate: event.estimate_bytes,
+    outcome: event.outcome, steps: event.steps.map((step) => step.name), admitted: event.admission?.admitted, shortfall: event.shortfall_bytes,
+  }, {
+    trigger: 'session:lane', before: PRESSURE_BYTES - 1, after: PRESSURE_BYTES - 1 + 12 * GBYTES, delta: 12 * GBYTES, estimate: 20 * GBYTES,
+    outcome: 'recovered', steps: ['archive', 'tidy'], admitted: true, shortfall: 0,
+  });
+  assert.equal(event.steps[1].kept[0].why, 'its scratch directory has no ownership record — legacy scratch is kept');
+  const state = pressureState(f);
+  assert.deepEqual([state.status, state.cooldown_until, state.last_cleanup.outcome, state.lease], ['healthy', null, 'recovered', null]);
+  assert.match(f.files['/w/runner/log/runner.log'], /disk: 29\.9 GB free, below 30\.0 GB \(session:lane\) — tidying toward 40\.0 GB/u);
+});
+
+test('below 30 GB with safe candidates exhausted: refused with free bytes and reason, a persisted cooldown a restart obeys, a pass again after it', async () => {
+  let clock = Date.parse('2026-08-29T10:00:00Z');
+  const f = goalFixture({ alpha: {} });
+  f.deps.now = () => new Date(clock);
+  const disk = onDisk(f, 25 * GBYTES, { tidyFrees: GBYTES });
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual([r.ran, r.waited, f.calls.sessions.length], [0, 'skipped:disk', 0]);
+  assert.deepEqual(disk.steps, ['tidy', 'docker'], 'every safe step, then it stops');
+  let state = pressureState(f);
+  assert.deepEqual(
+    [state.status, state.available_bytes, state.shortfall_bytes, state.cooldown_until, state.last_cleanup.outcome],
+    ['pressure', 26 * GBYTES, 14 * GBYTES, '2026-08-29T10:05:00.000Z', 'shortfall'],
+  );
+  assert.equal(JSON.parse(f.files['/w/runner/disk.json']).line, 'disk: 26.0 GB free — no session started: below 30.0 GB after tidying; safe candidates are exhausted');
+  assert.deepEqual(pressureEvents(f)[0].admission, { admitted: false, trigger: 'session:lane', what: 'no session', available: 26 * GBYTES, reason: 'below 30.0 GB after tidying; safe candidates are exhausted' });
+
+  // A restart: a new runner on the same files, within the five minutes.
+  clock += COOLDOWN_MS - 1000;
+  const again = await createRunner({ deps: f.deps }).pass();
+  assert.equal(again.waited, 'skipped:disk');
+  assert.equal(disk.steps.length, 2, 'the cooldown survives the restart: no second pass');
+  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /the last pressure pass could not restore it \(shortfall\), next pass after 2026-08-29T10:05:00\.000Z$/u);
+  assert.equal(pressureEvents(f).at(-1).outcome, 'cooldown');
+
+  // After it, a pass that restores the pressure line admits, short of 40 GB.
+  clock += 1000;
+  disk.tidyFrees = 5 * GBYTES;
+  const after = await createRunner({ deps: f.deps }).pass();
+  assert.equal(after.ran, 1);
+  state = pressureState(f);
+  assert.deepEqual([state.status, state.cooldown_until, state.last_cleanup.outcome, state.shortfall_bytes], ['healthy', null, 'above-pressure', 9 * GBYTES]);
+  assert.equal('/w/runner/disk.json' in f.files, false);
+});
+
+test('a disk that cannot be read refuses new sessions, shows it, and runs no pass; a reading clears it', async () => {
+  const f = goalFixture({ alpha: {} });
+  const disk = onDisk(f, new Error('EIO'));
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).waited, 'skipped:disk');
+  assert.deepEqual([disk.steps, f.calls.sessions.length, pressureState(f).status], [[], 0, 'unknown']);
+  assert.equal(JSON.parse(f.files['/w/runner/disk.json']).line, 'disk: unknown free — no session started: free space could not be measured');
+  assert.equal(pressureEvents(f).at(-1).outcome, 'unknown');
+  disk.free = 50 * GBYTES;
+  assert.equal((await runner.pass()).ran, 1);
+  assert.equal(pressureState(f).status, 'healthy');
+});
+
+test('two lanes asking at once share one pressure pass, and each decides on the reading after it', async () => {
+  for (const [frees, ran] of [[2 * GBYTES, [1, 0]], [0, [0, 0]]]) {
+    const f = goalFixture({ alpha: {}, beta: {} });
+    const disk = onDisk(f, 29 * GBYTES, { tidyFrees: frees });
+    let open;
+    disk.gate = new Promise((resolve) => { open = resolve; });
+    const runner = createRunner({ deps: f.deps });
+    const both = Promise.all([runner.pass({ lane: 0 }), runner.pass({ lane: 1 })]);
+    await new Promise((resolve) => { setImmediate(resolve); });
+    open();
+    const results = await both;
+    assert.deepEqual(results.map((r) => r.ran), ran);
+    assert.deepEqual(disk.steps.filter((step) => step === 'tidy'), ['tidy'], 'one pass for both');
+    assert.equal(f.calls.sessions.length, ran[0] + ran[1]);
+    if (frees) assert.equal((await runner.pass({ lane: 1 })).ran, 1, 'deferred lane remeasures and starts on retry');
+  }
+});
+
+test('a pressure lease another live process holds means no second pass here; a dead holder\'s is taken over', async () => {
+  const f = goalFixture({ alpha: {} }, { livePids: [777] });
+  const disk = onDisk(f, 29 * GBYTES, { tidyFrees: 2 * GBYTES });
+  f.files['/w/runner/disk-pressure.json'] = JSON.stringify({ status: 'pressure', lease: { pid: 777, since: '2026-08-29T09:59:00Z', trigger: 'deploy' } });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).waited, 'skipped:disk');
+  assert.deepEqual(disk.steps, []);
+  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /pid 777 is reclaiming space now/u);
+  f.deps.alive = () => false;
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
+  assert.deepEqual([disk.steps, pressureState(f).lease], [['tidy', 'docker'], null]);
+});
+
+test('the event history keeps the newest EVENTS_KEEP: the oldest goes when one more is written', async () => {
+  const f = goalFixture({ alpha: {} });
+  onDisk(f, new Error('EIO'));
+  f.files['/w/runner/disk-pressure-events.json'] = JSON.stringify(Array.from({ length: EVENTS_KEEP }, (_, n) => ({ at: `old-${n}` })));
+  await createRunner({ deps: f.deps }).pass();
+  const events = pressureEvents(f);
+  assert.equal(EVENTS_KEEP, 100);
+  assert.deepEqual([events.length, events[0].at, events.at(-2).at, events.at(-1).outcome], [100, 'old-1', 'old-99', 'unknown']);
+});
+
+test('a failed Docker prune makes a failed pass, not a file-only success, and the cooldown says so', async () => {
+  const f = goalFixture({ alpha: {} });
+  onDisk(f, 25 * GBYTES, { docker: { up: true, pruned: [{ what: 'images', ok: false, reclaimed: null, detail: 'daemon busy' }] } });
+  await createRunner({ deps: f.deps }).pass();
+  const event = pressureEvents(f)[0];
+  assert.deepEqual([event.failed, event.errors, event.outcome], [true, ['docker-images: images: daemon busy'], 'no-progress']);
+  assert.deepEqual([pressureState(f).last_cleanup.failed, pressureState(f).cooldown_why], [true, 'no-progress, a step failed']);
+  assert.match(f.files['/w/runner/log/runner.log'], /failed: docker-images: images: daemon busy/u);
+});
+
+test('the monitor reads the disk every minute on its own timer and relieves pressure while a session and a chore are still running', async () => {
+  const f = goalFixture({ alpha: {} });
+  f.deps.laneCount = () => ({ lanes: 1 });
+  const disk = onDisk(f, 35 * GBYTES, { tidyFrees: 10 * GBYTES });
+  const timers = [];
+  f.deps.every = (ms, fn) => { const timer = { ms, fn, stopped: false }; timers.push(timer); return () => { timer.stopped = true; }; };
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const inSession = new Promise((resolve) => { entered = resolve; });
+  f.answer = async (call) => { entered(); await held; return okSession()(call); };
+  // A chore that does not end either: the monitor must not wait behind it.
+  f.deps.reapDevServers = async () => { await held; return []; };
+  const loop = runLoop({ deps: f.deps, awake: false });
+  await inSession;
+  assert.deepEqual(timers.map((timer) => timer.ms), [POLL_MS]);
+  assert.equal(POLL_MS, 60_000);
+  await timers[0].fn();
+  assert.deepEqual([pressureState(f).last_cleanup, disk.steps], [undefined, []], 'healthy: no cleanup');
+  disk.free = 28 * GBYTES;
+  await timers[0].fn();
+  assert.deepEqual(disk.steps, ['tidy', 'docker']);
+  const [event] = pressureEvents(f);
+  assert.deepEqual([event.trigger, event.before_bytes, event.after_bytes, event.outcome], ['monitor', 28 * GBYTES, 38 * GBYTES, 'above-pressure']);
+  assert.equal(f.calls.sessions.length, 1, 'the session in flight goes on');
+  f.files['/w/runner/STOP'] = '';
+  release();
+  assert.equal(await loop, 0);
+  assert.equal(timers[0].stopped, true, 'the timer stops with the runner');
+});
+
+const doneAnHourAgo = '## 2026-09-01T09:00Z · claude opus · done · ready\n\nDone: arbete\n';
+
+test('under pressure a goal done an hour ago is archived without the 24 hours, and a refused one stays with its reason', async () => {
+  const f = goalFixture({
+    fresh: { stage: 'done', log: doneAnHourAgo },
+    held: { stage: 'done', log: doneAnHourAgo },
+    work: {},
+  }, { now: '2026-09-01T10:00:00Z', dirty: ['held'] });
+  onDisk(f, 25 * GBYTES);
+  await createRunner({ deps: f.deps }).chores();
+  assert.ok(f.files[`${GOALS}/fresh/GOAL.json`], 'the chores keep the 24 hours');
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.files[`${GOALS}/fresh/GOAL.json`], undefined, 'archived by the pressure pass');
+  assert.equal(goalField(f.files['/w/programs/prog/goals/.archive/fresh/GOAL.json'], 'stage'), 'done');
+  assert.equal(goalField(f.files[`${GOALS}/held/GOAL.json`], 'stage'), 'done', 'refused: it stays, and stays done');
+  assert.equal(goalField(f.files[`${GOALS}/work/GOAL.json`], 'stage'), 'build', 'a goal not finished is never archived');
+  const [archive] = pressureEvents(f)[0].steps;
+  assert.deepEqual([archive.name, archive.removed], ['archive', 1]);
+  assert.match(archive.kept[0].why, /^not archived — memoro's worktree has uncommitted changes/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /fresh: done — archived to .* \(disk pressure: without the 24 hours\)/u);
 });
 
 /**
@@ -734,12 +978,12 @@ test('the chore pass runs the reaper every pass and says what it removed', async
 
 test('a reaper that throws is said, and the chore pass goes on', async () => {
   const f = fixture({ now: '2026-09-19T10:00:00Z' });
-  f.dirs.add('/w/runner/scratch/old-20260911T090000Z');
-  f.scratchAges['/w/runner/scratch/old-20260911T090000Z'] = Date.parse('2026-09-10T10:00:00Z');
+  let tidied = 0;
+  f.deps.tidy = async () => { tidied += 1; return { outcome: { freed: 0, removed: 0, kept: 0 } }; };
   f.deps.reapDevServers = async () => { throw new Error('ps exited 1'); };
   await createRunner({ deps: f.deps }).chores();
   assert.match(f.files['/w/runner/log/runner.log'], /reap: failed — ps exited 1/u);
-  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
+  assert.equal(tidied, 1, 'the daily tidy after it still ran');
 });
 
 test('the chore pass runs the docker sweep and says its line', async () => {
@@ -765,12 +1009,12 @@ test('a docker sweep with nothing to say says nothing', async () => {
 
 test('a docker sweep that throws is said, and the chore pass goes on', async () => {
   const f = fixture({ now: '2026-09-19T10:00:00Z' });
-  f.dirs.add('/w/runner/scratch/old-20260911T090000Z');
-  f.scratchAges['/w/runner/scratch/old-20260911T090000Z'] = Date.parse('2026-09-10T10:00:00Z');
+  let tidied = 0;
+  f.deps.tidy = async () => { tidied += 1; return { outcome: { freed: 0, removed: 0, kept: 0 } }; };
   f.deps.dockerSweep = async () => { throw new Error('orbctl status timed out'); };
   await createRunner({ deps: f.deps }).chores();
   assert.match(f.files['/w/runner/log/runner.log'], /docker: sweep failed — orbctl status timed out/u);
-  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
+  assert.equal(tidied, 1, 'the daily tidy after it still ran');
 });
 
 /**
@@ -1501,31 +1745,6 @@ test('the tidy line says what Docker reclaimed, and nothing when Docker was down
   assert.match(f.files['/w/runner/log/runner.log'], /kept 0 on re-check · docker: images failed — busy/u);
   assert.equal(dockerNote({ up: false, pruned: [] }), '');
   assert.equal(dockerNote(null), '');
-});
-
-test('a lane skipped for disk runs tidy in the next chore pass, at most once an hour', async () => {
-  let clock = Date.parse('2026-08-29T10:00:00Z');
-  const f = fixture({ runs: DEPS_HEADER + tidyRowAt('2026-08-29T09:00:00Z') });
-  f.deps.now = () => new Date(clock);
-  f.deps.freeBytes = () => DISK_MIN_BYTES - 1;
-  let calls = 0;
-  f.deps.tidy = async () => { calls += 1; return tidied({ freed: 1e9, removed: 3, kept: 0 })(); };
-  const runner = createRunner({ deps: f.deps });
-  await runner.chores();
-  assert.equal(calls, 0, 'today\'s row stands and no lane has skipped');
-  assert.equal((await runner.pass()).waited, 'skipped:disk');
-  await runner.chores();
-  assert.equal(calls, 1);
-  assert.match(f.files['/w/runner/log/runner.log'], /tidy \(a lane skipped for disk\): freed 1\.00 GB in 3 items/u);
-  await runner.chores();
-  assert.equal(calls, 1, 'one skip, one tidy');
-  clock += TIDY_DISK_MIN_INTERVAL_MS - 60_000;
-  await runner.pass();
-  await runner.chores();
-  assert.equal(calls, 1, 'within the hour a second skip waits');
-  clock += 60_000;
-  await runner.chores();
-  assert.equal(calls, 2, 'the skip within the hour is acted on once the hour is up');
 });
 
 test('runner.log is rotated once per chore pass, at RUNNER_LOG_MAX_BYTES', async () => {

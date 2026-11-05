@@ -13,6 +13,7 @@ import { describe, it } from 'node:test';
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
+import { diskSummary } from '../../src/mc/disk-pressure.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
@@ -354,6 +355,33 @@ describe('SESSIONS', () => {
     const room = runnerSection({ runner: RUNNER, now: NOW, alive: live, disk: null });
     assert.equal(room.disk, null);
     assert.ok(!paintedPage(pageData({ runner: room })).some((row) => /disk:/u.test(strip(row))));
+  });
+
+  // The disk policy (disk-pressure.js): measured free space, grey while
+  // healthy; the last pass, its shortfall and the limit while under pressure.
+  it('shows measured free space, and under pressure the last pass with measured beside estimated, its shortfall and the limit', () => {
+    const state = {
+      status: 'pressure', shortfall_bytes: 14e9, cooldown_until: '2026-08-29T12:05:00.000Z',
+      last_cleanup: { at: '2026-08-29T12:00:00.000Z', trigger: 'monitor', outcome: 'shortfall', measured_delta_bytes: 1e9, estimate_bytes: 9e9, failed: false },
+    };
+    const read = (value) => () => JSON.stringify(value);
+    const summary = (free, value) => diskSummary({ path: '/w/runner/scratch', stateDir: '/w/runner', read: read(value), freeBytes: () => free, nowMs: NOW.getTime() });
+    const rows = (pressure) => paintedPage(pageData({ runner: runnerSection({ runner: RUNNER, now: NOW, alive: live, pressure }) })).map(strip).filter((row) => /disk:/u.test(row)).map((row) => row.trim());
+
+    assert.deepEqual(rows(summary(45.29e9, null)), ['disk: 45.2 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
+    assert.deepEqual(rows(summary(26e9, state)), [
+      'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+      'disk: last pass 2026-08-29T12:00Z (monitor) shortfall: measured +1.0 GB, estimated 9.0 GB',
+      'disk: 14.0 GB short of the 40.0 GB target; protected data is kept',
+      'disk: next pass after 2026-08-29T12:05Z',
+      'disk: this holds back mc\'s new work only; other apps and running work can still fill the disk',
+    ]);
+    assert.deepEqual(rows(summary(33e9, state)), [
+      'disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB',
+      'disk: last pass 2026-08-29T12:00Z (monitor) shortfall: measured +1.0 GB, estimated 9.0 GB',
+      'disk: 7.0 GB short of the 40.0 GB target; protected data is kept',
+    ]);
+    assert.equal(rows(summary(null, state))[0], 'disk: free space could not be measured — new sessions, deploys and Docker starts are refused');
   });
 
   // The runner's `memory.json`, the same way, beside the disk line.
