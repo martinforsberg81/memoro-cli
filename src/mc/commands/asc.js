@@ -7,9 +7,9 @@
  * mc reads no App Store Connect key. Every subverb but `build`'s question
  * runs a script memoro declares in `.mc/ios.json` on `origin/main`, as
  * `origin/main` has it (`atRev`, ios-build.js) together with the
- * declaration's `script_paths` (the `marketing/` the scripts read), with
- * `MEMORO_DEV_VARS` naming the secrets file in memoro's checkout
- * (`secretsEnv`). The script reads the key; mc only says where it is.
+ * declaration's `script_paths` (the `marketing/` the scripts read), through
+ * this installation's `mc keys run` executor. The keys child receives the
+ * original control environment; mc never loads or names the dotenv source.
  *
  * `mc asc build` with no flag is the question (`iosQuestion`, ios-build.js):
  * it builds nothing and touches no worktree. `--shipped <build> <sha>`
@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 
 import {
   atRev, devicePreflight, exportAtRev, gitRead, iosBuildLogPath, iosQuestion, listBuilds, memoroCheckout, memoroRepo,
-  readIosDeclaration, reasonLine, recordShipped, runSync, secretsEnv,
+  keysRunCommand, readIosDeclaration, reasonLine, recordShipped, runSync,
 } from '../ios-build.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
@@ -224,10 +224,12 @@ export function declaredScript(key, deps) {
     repoPath, checkout, rev: 'origin/main', git, exportTree: deps.exportTree || exportAtRev, paths,
   });
   if (command.missing) return { ok: false, line: command.missing };
+  const mediated = keysRunCommand(command.argv, command.cwd);
+  if (mediated.error) return { ok: false, line: mediated.error };
   return {
     ok: true,
-    command,
-    env: secretsEnv(env, checkout),
+    command: { ...command, argv: mediated.argv },
+    env,
     cleanup: () => { if (command.dir) rmSync(command.dir, { recursive: true, force: true }); },
   };
 }

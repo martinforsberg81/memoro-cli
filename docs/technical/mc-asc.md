@@ -22,10 +22,24 @@ runs the copy with the working directory in the checkout. So the copy that is
 sent to App Store Connect is main's, whatever branch Martin's checkout stands
 on.
 
-mc reads no App Store Connect key. `secretsEnv` sets `MEMORO_DEV_VARS` to the
-secrets file in memoro's checkout (`self/memoro/.dev.vars`). The script reads
-the key from there, as it does when run by hand. Moving these scripts to
-`mc keys run` is later work.
+The selected entrypoint now runs through this installation's
+`src/mc-cli.js keys run <absolute-script> …` adapter. `atRev` still selects
+`origin/main` scripts and `script_paths`; keys receives the original control
+environment (including an explicit `MC_KEYS_FILE`) and delivers shared dotenv
+entries only to the trusted Node child. The controller never reads dotenv or
+adds `MEMORO_DEV_VARS`. Unsupported declared command shapes are refused with a
+value-free error. Capture, streaming, cwd, timeout, exit status and temporary
+tree cleanup remain at their previous boundaries.
+
+The trusted Memoro script reads `ASC_PRIVATE_KEY_PATH` and signs or passes it
+to the provider-specific tool; the generic keys parser treats that value only
+as text and never opens the referenced file. For IPA upload, altool still gets
+the existing key id and issuer argv, and the trusted child retains altool's
+private-key-path/symlink handling. Delivery of credentials is not approval to
+submit, release or upload: submit/release keep their terminal confirmation and
+state checks, and TestFlight upload keeps its consent, verification and
+build-number recheck. Credential scripts alone use keys; setup, sync and Xcode
+remain outside it. The verified builder wraps only its declared upload script.
 
 - `mc asc status [<version>] [--json]` reads only: per iOS version its
   `appStoreState`, `releaseType`, attached build and processing state, phased
@@ -127,7 +141,7 @@ only the script on stdin, as mc did before, ran it against the checkout's
 helpers: on 2026-10-26 the checkout was 57 commits behind and lacked
 `scripts/lib/dev-vars-path.mjs`, and the script stopped at its import.
 
-memoro's script reads its own App Store Connect credentials; mc reads no key.
+The declared `list_builds` script is invoked through `mc keys run`; it receives the control environment and reads credentials in the trusted child.
 The command's `builds[].version` values are parsed as integers, and the build
 is `max + 1` (`listBuilds`). When the call fails, the verb exits 1 with
 `App Store Connect's build numbers could not be read (<reason>) — no build number can be chosen`,
@@ -214,8 +228,9 @@ artifact, and the verb prints
 `mc: built <ipa> — memoro me <version> (<n>) from <short sha>; not uploaded`.
 
 (k) With the yes: the number is asked for again (`number-taken`, above). Then
-the declaration's `upload` command runs in the build worktree with the IPA
-appended, for at most 30 minutes. A delivery id the script prints
+the declaration's Node `upload` script runs in the verified build worktree
+through `mc keys run`, with the IPA appended, for at most 30 minutes. Setup,
+sync and Xcode do not receive delivered credentials. A delivery id the script prints
 (`Delivery UUID: <uuid>` or similar) is kept on the row. The row is completed
 `uploaded`, and the verb prints the command a person runs once App Store
 Connect has processed the build:

@@ -28,7 +28,7 @@ comments are supported. Duplicate names, malformed assignments, reserved
 runtime names, and missing or unreadable files fail before the script starts.
 Errors do not include values. All valid entries are delivered in the child
 environment on each invocation, including nonsecret identifiers and
-configuration such as paths. Referenced private-key files are not opened.
+configuration such as paths. Referenced private-key files are not opened. For ASC consumers, `ASC_PRIVATE_KEY_PATH` is delivered as an ordinary path value; the trusted ASC script reads and signs the file, or passes it through the existing altool interface and manages its altool symlink. Keys does not validate, resolve or take custody of that file.
 
 This is deliberately a trusted-script interface, not a per-script permission
 system. Any script and any dependency it loads can read every delivered entry
@@ -38,6 +38,8 @@ untracked and ordinary local or npm imports work. Missing names have normal
 Node behavior (`process.env.NAME` is `undefined`); scripts must diagnose their
 own required names. `run` supports Node scripts; `serve` accepts the trusted
 server's executable and arguments, without evaluating shell text.
+
+Credential delivery grants no approval or business authority. In particular, it does not approve an App Store submission, release or upload. The caller's existing consent, state and production/admin boundaries remain independent.
 
 The child's inherited environment is copied after mc's runtime-secret
 scrubbing; source values are added to that fresh copy. Runtime and executor

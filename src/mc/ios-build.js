@@ -31,7 +31,8 @@ import {
   existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, extname, isAbsolute, join, normalize, resolve } from 'node:path';
 
 import { stripAnsi } from '../lib/prompt.js';
 import { IOS_BUILD_MODE } from './await-deploy.js';
@@ -318,6 +319,19 @@ export function builtApp(derived) {
   return join(derived, 'Build', 'Products', 'Release-iphoneos', 'App.app');
 }
 
+/** Turn only a declared Node script into the local keys executor invocation. */
+export function keysRunCommand(argv, cwd = process.cwd()) {
+  if (!Array.isArray(argv) || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || argv.length < 2) {
+    return { error: 'unsupported declared credential-command shape; expected node <script>' };
+  }
+  const script = resolve(cwd, argv[1]);
+  if (!['.js', '.mjs', '.cjs'].includes(extname(script))) {
+    return { error: 'unsupported declared credential-command shape; expected a Node script' };
+  }
+  const cli = fileURLToPath(new URL('../mc-cli.js', import.meta.url));
+  return { argv: [process.execPath, cli, 'keys', 'run', script, ...argv.slice(2)] };
+}
+
 /** A command, waited for: `{ code, stdout, stderr, error }`. */
 export function runSync(argv, { cwd, env = process.env, timeoutMs = 60_000, input } = {}) {
   const r = spawnSync(argv[0], argv.slice(1), {
@@ -456,18 +470,6 @@ export async function devicePreflight({
 }
 
 /**
- * `env` with `MEMORO_DEV_VARS` naming the secrets file in memoro's checkout,
- * where mc keeps it (`self/memoro/.dev.vars`), unless the caller named one.
- * memoro's App Store Connect scripts read their key from that file; mc only
- * says where it is and never opens it. The scripts run in the build worktree
- * or piped from `origin/main`, neither of which has the file of its own.
- */
-export function secretsEnv(env = process.env, checkout = null) {
-  if (env.MEMORO_DEV_VARS || !checkout) return env;
-  return { ...env, MEMORO_DEV_VARS: join(checkout, '.dev.vars') };
-}
-
-/**
  * The line of a failed command's output that says why: Node prints where it
  * threw before the error itself, so a first line can be
  * `node:internal/modules/esm/resolve:274`, which names nothing. The first
@@ -481,7 +483,7 @@ export function reasonLine(text) {
 /**
  * The build numbers App Store Connect has, asked through the declaration's
  * `list_builds` in memoro's checkout — its script reads the credentials
- * itself from the file `secretsEnv` names; mc reads no key. `{ ok: true,
+ * itself from `mc keys run`; mc reads no key. `{ ok: true,
  * versions, next }` with `next` one more than the highest, or `{ ok: false,
  * line }`. Never a file to fall back on: a number from anywhere else is one
  * two binaries could share. A failure says the numbers could not be read,
@@ -495,8 +497,10 @@ export function listBuilds({
   const refuse = (why) => ({ ok: false, line: `App Store Connect's build numbers could not be read (${why}) — no build number can be chosen` });
   const command = atRev([].concat(declaration.list_builds), { repoPath, checkout, rev, git, exportTree });
   if (command.missing) return refuse(command.missing);
+  const mediated = keysRunCommand(command.argv, command.cwd);
+  if (mediated.error) return refuse(mediated.error);
   try {
-    const r = run(command.argv, { cwd: command.cwd, env: secretsEnv(env, checkout), timeoutMs: 2 * MIN });
+    const r = run(mediated.argv, { cwd: command.cwd, env, timeoutMs: 2 * MIN });
     if (r.code !== 0) return refuse(reasonLine(r.error || r.stderr || r.stdout) || `exit ${r.code}`);
     let json;
     try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
@@ -816,7 +820,9 @@ export async function buildIos(job, deps = {}) {
   };
   const run = (label, argv, options = {}) => {
     at = options.stoppedAt || label;
-    return step(label, argv, { cwd: worktree, env, ...options });
+    const command = label === 'upload' ? keysRunCommand(argv, options.cwd || worktree) : { argv };
+    if (command.error) return Promise.resolve({ ok: false, code: 1, signal: null, timedOut: false, error: command.error, output: '' });
+    return step(label, command.argv, { cwd: worktree, env, ...options });
   };
   const failed = (label, r, timeoutMs, stoppedAt = label) => fail(stoppedAt, stepNote(label, r, timeoutMs));
   const xcodeFailed = (label, r, timeoutMs, stoppedAt = label) => {
@@ -921,7 +927,7 @@ export async function buildIos(job, deps = {}) {
     if (again.versions.includes(number)) {
       return fail('number-taken', `build ${number} is in App Store Connect by now — this binary carries ${number} and is not renumbered; build again`);
     }
-    const uploaded = await run('upload', [...[].concat(declaration.upload), ipa], { env: secretsEnv(env, checkout), timeoutMs: 30 * MIN });
+    const uploaded = await run('upload', [...[].concat(declaration.upload), ipa], { env, timeoutMs: 30 * MIN });
     if (!uploaded.ok) return failed('upload', uploaded, 30 * MIN);
     recordEnd(key, { outcome: UPLOADED, ...done, delivery: deliveryId(uploaded.output) }, env);
     prune();
