@@ -498,11 +498,18 @@ build session or a second review.
 - **One at a time.** The session is named `goal:<p>/<g>` like the goal's other
   sessions, so the current file that holds a build or a review holds it too.
 - **What it does.** In `finish` it reads REVIEW.md when there is one and
-  LOG.md, fixes in the goal's worktree, `mc gate`, commits, `mc publish` (which
-  queues it), and moves the goal to `merge`; it is not reviewed again. In
+  LOG.md, fixes in the goal's worktree, verifies every criterion, `mc gate`,
+  commits, `mc publish --no-merge`, and `mc goal stage merge` queues the PRs;
+  it is not reviewed again. In
   `merge` it takes the red — main merged in, a conflict, the test named —
-  and publishes, which queues it again. It may drop a wrong goal, or set it
-  blocked with the question for Martin. It never does Martin's acts —
+  and publishes with `--no-merge`, then queues with `mc goal stage merge` again.
+  It owns technical decisions, brief/check repairs and bounded test
+  commissioning within the promised outcome and Martin's explicit constraints.
+  It records these decisions in LOG.md and preserves acceptance, the test
+  strategy and gate requirements. A check-in is not a deadline or a reason
+  to block while useful progress remains. It may drop a wrong goal, or block
+  for an exact decision or act reserved for Martin, naming what it tried and
+  why its authority cannot resolve it. It never does Martin's acts —
   `mc deploy`, production data, credentials, `--admin`.
 - **Bounded.** Each runs once: `finish` left as it was is `finish · blocked`,
   a `merge` red not queued again is `merge · blocked`, and the next red in
