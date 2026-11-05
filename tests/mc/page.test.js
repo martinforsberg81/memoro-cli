@@ -364,10 +364,10 @@ describe('SESSIONS', () => {
     const rows = (runner) => paintedPage(pageData({ runner })).map(strip).filter((row) => /disk:|New sessions paused/u.test(row)).map((row) => row.trim());
 
     const recovered = model(39.5e9);
+    assert.deepEqual(rows(recovered), ['disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
     assert.deepEqual(recovered.disk, { last_refusal: saved }, 'runner refusal remains clearly historical structured data');
     assert.equal(recovered.pressure.last_refusal.available_bytes, 25.3e9);
     assert.equal(recovered.pressure.last_cleanup.failed, true);
-    assert.deepEqual(rows(recovered), ['disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
 
     const boundary = model(30e9);
     assert.equal(boundary.pressure.status, 'healthy', '30 GB is admitted');
