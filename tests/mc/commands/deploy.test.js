@@ -22,6 +22,7 @@ import {
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault,
   worktreeState,
 } from '../../../src/mc/commands/deploy.js';
+import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
 import { startRun } from '../../../src/mc/language-runs.js';
@@ -1400,5 +1401,68 @@ describe('a deploy that was stopped', () => {
     assert.equal(readScriptOutput(captured).production, 'unchanged');
     assert.match(out.stderr, /mc: SIGINT — stopping the deploy; waiting for it/u);
     assert.equal(signals.listenerCount('SIGINT'), 0, 'the handlers go with the spawn');
+  });
+});
+
+describe('mc deploy — the disk (disk-pressure.js)', () => {
+  /** The shared policy on a fake disk and in-memory state: `frees` is what one tidy step gives back. */
+  function fakeDisk(free, { frees = 0 } = {}) {
+    const files = {};
+    const disk = { free, ran: 0, files };
+    disk.policy = createDiskPressure({
+      path: '/w/runner/scratch', stateDir: '/w/runner',
+      freeBytes: () => { if (disk.free instanceof Error) throw disk.free; return disk.free; },
+      read: (path) => files[path] ?? null, writeJson: (path, value) => { files[path] = JSON.stringify(value); },
+      now: () => Date.parse('2026-11-05T12:00:00Z'),
+      steps: [{ name: 'tidy', run: async () => { disk.ran += 1; disk.free += frees; return { ok: true, removed: 1, kept: [], errors: [] }; } }],
+    });
+    return disk;
+  }
+
+  it('too little or unknown space keeps the deploy script unspawned, and the row and the terminal say why', async () => {
+    for (const [free, said] of [
+      [25e9, /^mc: disk: 25\.0 GB free — the deploy script not started: below 30\.0 GB after tidying; safe candidates are exhausted — nothing was deployed$/mu],
+      [new Error('EIO'), /^mc: disk: unknown free — the deploy script not started: free space could not be measured — nothing was deployed$/mu],
+    ]) {
+      work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
+      const disk = fakeDisk(free);
+      let spawned = 0;
+      const { out, stdout, stderr } = io();
+      const code = await run([], { ...deps({ disk: disk.policy, spawnDeploy: async () => { spawned += 1; return { code: 0 }; } }), stdout, stderr });
+      assert.equal(code, 1);
+      assert.equal(spawned, 0, 'no script');
+      assert.match(out.stderr, said);
+      const [row] = readDeploys({ MC_WORK_ROOT: work });
+      assert.deepEqual([row.outcome, row.stopped_at], ['failed', 'disk']);
+    }
+  });
+
+  it('a pressure pass that restores 30 GB lets the script go, and the monitor reads every minute while it runs without stopping it', async () => {
+    const disk = fakeDisk(29e9, { frees: 2e9 });
+    const timers = [];
+    let finish;
+    let started;
+    const running = new Promise((resolve) => { started = resolve; });
+    const { stdout, stderr } = io();
+    const shipped = run([], {
+      ...deps({
+        disk: disk.policy,
+        every: (ms, fn) => { const timer = { ms, fn, stopped: false }; timers.push(timer); return () => { timer.stopped = true; }; },
+        spawnDeploy: () => new Promise((resolve) => { finish = resolve; started(); }),
+      }),
+      stdout, stderr,
+    });
+    await running;
+    assert.equal(disk.ran, 1, 'the pass before the spawn');
+    assert.deepEqual(timers.map((timer) => timer.ms), [60_000]);
+    disk.free = 27e9;
+    await timers[0].fn();
+    assert.equal(disk.ran, 2, 'below 30 GB during the deploy: a pass at once');
+    const events = JSON.parse(disk.files['/w/runner/disk-pressure-events.json']);
+    assert.deepEqual(events.map((event) => [event.trigger, event.before_bytes, event.after_bytes]), [['deploy', 29e9, 31e9], ['deploy-monitor', 27e9, 29e9]]);
+    assert.equal(timers[0].stopped, false, 'the deploy is not stopped for it');
+    finish({ code: 0 });
+    assert.equal(await shipped, 0);
+    assert.equal(timers[0].stopped, true, 'the monitor ends with the script');
   });
 });

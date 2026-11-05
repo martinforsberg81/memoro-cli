@@ -105,6 +105,7 @@ import { attachRepoDepsAsync } from './shared-deps.js';
 import { rmTree } from './rm-tree.js';
 import { POLL_MS as DISK_POLL_MS, createDiskPressure, gb, statfsAvailable } from './disk-pressure.js';
 import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
+import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
   BUILD_ROLES, collectNote, goalCheckInPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
@@ -178,14 +179,6 @@ export function dockerNote(docker) {
   if (!docker?.pruned?.length) return '';
   const parts = docker.pruned.map((item) => (item.ok ? `${item.what} ${item.reclaimed || '0B'}` : `${item.what} failed — ${item.detail}`));
   return ` · docker: ${parts.join(', ')}`;
-}
-
-/** Docker's `1.2GB`, `512MB`, `0B` as bytes (decimal, as Docker prints them); 0 when it says nothing readable. */
-export function sizeBytes(text) {
-  const match = /^([\d.]+)\s*([kKMGT]?)B$/u.exec(String(text ?? '').trim());
-  if (!match) return 0;
-  const scale = { '': 1, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12 }[match[2]];
-  return Math.round(Number(match[1]) * scale) || 0;
 }
 
 /* ------------------------------------------------------------ real deps */
@@ -857,34 +850,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
     return answer;
-  }
-
-  /** `runTidy`'s answer as a pressure step: its targets' bytes are the estimate, never the result. */
-  function tidyStep(ran) {
-    const list = ran?.list || {};
-    const applied = ran?.outcome?.applied || [];
-    const kept = [
-      ...applied.filter((item) => !item.ok),
-      ...(list.kept || []).filter((item) => item.rule === 'S' || item.rule === 'error'),
-    ];
-    return {
-      ok: true, estimate_bytes: (list.targets || []).reduce((sum, item) => sum + (item.bytes || 0), 0),
-      removed: ran?.outcome?.removed || 0, kept, errors: [],
-    };
-  }
-
-  /** `tidyDocker`'s answer as a pressure step: a failed prune fails the step; a runtime that is down is left down. */
-  function dockerStep(answer) {
-    const failed = (answer?.pruned || []).filter((item) => !item.ok);
-    const errors = failed.map((item) => `${item.what}: ${item.detail}`);
-    if (answer?.reason && answer.up) errors.push(answer.reason);
-    return {
-      ok: errors.length === 0,
-      estimate_bytes: (answer?.pruned || []).reduce((sum, item) => sum + sizeBytes(item.reclaimed), 0),
-      removed: (answer?.pruned || []).filter((item) => item.ok).length,
-      kept: answer?.up ? [] : [{ path: 'docker', why: `runtime left as it is — ${answer?.reason || 'not running'}` }],
-      errors,
-    };
   }
 
   /** `archiveGoal`'s refusal of a finished goal, written into its LOG.md unless the log already says the same last. */

@@ -16,6 +16,8 @@ import {
   sweepDocker, takeLease, tidyDocker, TIDY_KEEP_FILTER, writeState,
 } from '../../src/mc/docker.js';
 import { fakeIo, INFO } from './_helpers/docker-io.js';
+import { dockerStep } from '../../src/mc/disk-admission.js';
+import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 
 function withRoot(body) {
   const root = mkdtempSync(join(tmpdir(), 'mc-docker-'));
@@ -378,5 +380,71 @@ describe('tidyDocker — mc tidy\'s images', () => {
     assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
     assert.deepEqual(leaseFiles(root), [], 'the lease is released');
     assert.equal(readState({ root }).started_by_mc, true, 'so the idle stop stops it again');
+  }));
+});
+
+describe('the disk policy at a start (disk-pressure.js)', () => {
+  const IMAGES = `docker image prune --all --force --filter ${TIDY_KEEP_FILTER}`;
+  const running = { 'orbctl status': { status: 0, stdout: 'Running\n' } };
+  /** The shared policy on a fake disk and in-memory state; `steps` are its pressure pass. */
+  function fakeDisk(free, steps = []) {
+    const files = {};
+    const disk = { free, files };
+    disk.policy = createDiskPressure({
+      path: '/w/runner/scratch', stateDir: '/w/runner',
+      freeBytes: () => disk.free, read: (path) => files[path] ?? null, writeJson: (path, value) => { files[path] = JSON.stringify(value); },
+      now: () => Date.parse('2026-11-05T12:00:00Z'), steps: steps.map((step) => ({ ...step, run: () => step.run(disk) })),
+    });
+    disk.admit = (options) => disk.policy.admit(options);
+    return disk;
+  }
+  const stopped = (extra = {}) => fakeIo({
+    live: [5000],
+    answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' }, 'orbctl start': { status: 0 }, [INFO]: { status: 0, stdout: '28.0.1\n' }, ...extra },
+  });
+
+  it('too little or unknown space leaves a stopped runtime down with the reason; a pass that restores 30 GB starts it', () => withRoot(async (root) => {
+    for (const [free, reason] of [
+      [25e9, 'disk: 25.0 GB free — the orbstack start not started: below 30.0 GB after tidying; safe candidates are exhausted'],
+      [null, 'disk: unknown free — the orbstack start not started: free space could not be measured'],
+    ]) {
+      const { io, calls } = stopped();
+      const disk = fakeDisk(free);
+      const result = await ensure({ pid: 5000, root, env: {}, io: { ...io, admitDisk: disk.admit } });
+      assert.deepEqual([result.ok, result.started, result.reason], [false, false, reason]);
+      assert.deepEqual(calls.map((call) => call.argv.join(' ')), ['orbctl status'], 'not started');
+      assert.deepEqual(leaseFiles(root), []);
+    }
+    const { io, calls } = stopped();
+    const disk = fakeDisk(25e9, [{ name: 'tidy', run: async (d) => { d.free += 6e9; return { ok: true }; } }]);
+    const result = await ensure({ pid: 5000, root, env: {}, io: { ...io, admitDisk: disk.admit } });
+    assert.equal(result.ok, true);
+    assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
+  }));
+
+  it('a runtime that is up is not asked, and a person\'s mc tidy --docker --apply starts it to recover even under pressure', () => withRoot(async (root) => {
+    const refuse = async () => { throw new Error('the disk was asked'); };
+    const up = fakeIo({ live: [5000], answers: { 'orbctl status': { status: 0, stdout: 'Running\n' }, [INFO]: { status: 0, stdout: '28.0.1\n' } } });
+    assert.equal((await ensure({ pid: 5000, root, env: {}, io: { ...up.io, admitDisk: refuse } })).ok, true);
+    const { io, calls } = stopped({ [IMAGES]: { status: 0, stdout: 'Total reclaimed space: 1GB\n' } });
+    const answer = await tidyDocker({ apply: true, start: { pid: 5000, run: 'mc tidy --docker' }, root, io: { ...io, admitDisk: refuse } });
+    assert.equal(answer.up, true);
+    assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
+  }));
+
+  it('in a pressure pass a failed image prune is a failed step, a stopped runtime is left down, and no build-cache prune is ever issued', () => withRoot(async (root) => {
+    const failing = fakeIo({ answers: { ...running, [IMAGES]: { status: 1, stderr: 'a prune operation is already running\n' } } });
+    const down = fakeIo({ answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' } } });
+    for (const [machine, failed] of [[failing, true], [down, false]]) {
+      const disk = fakeDisk(25e9, [{ name: 'docker-images', run: async () => dockerStep(await tidyDocker({ apply: true, root, io: machine.io })) }]);
+      await disk.policy.poll({ trigger: 'monitor' });
+      const [event] = JSON.parse(disk.files['/w/runner/disk-pressure-events.json']);
+      assert.equal(event.failed, failed);
+      if (failed) assert.deepEqual(event.errors, ['docker-images: images: a prune operation is already running']);
+      else assert.match(event.steps[0].kept[0].why, /^runtime left as it is — orbstack is not running/u);
+      const argv = machine.calls.map((call) => call.argv.join(' '));
+      assert.ok(!argv.includes('orbctl start'), 'never started to clean');
+      assert.ok(argv.every((line) => !/builder|buildx|system prune/u.test(line)), argv.join(' | '));
+    }
   }));
 });

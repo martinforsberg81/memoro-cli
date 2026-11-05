@@ -257,6 +257,14 @@ export async function ensure({
     if (rt.kind === 'other') {
       return fail(`context ${rt.context} is not one mc can start — only ${ORBSTACK_CONTEXT} and ${DESKTOP_CONTEXT} are`);
     }
+    // A stopped runtime is new heavy work: the disk policy (disk-pressure.js)
+    // admits its start or it stays down. Its pass prunes no Docker — this is
+    // the runtime it would prune through. A runtime that is up is not asked.
+    const admitDisk = io.admitDisk !== undefined ? io.admitDisk : (io.run ? null : realAdmitDisk(env));
+    if (admitDisk) {
+      const admitted = await admitDisk({ trigger: 'docker-start', what: `the ${rt.kind} start` });
+      if (!admitted?.admitted) return fail(admitted?.line || `disk: ${admitted?.reason || 'not admitted'}`);
+    }
     const start = rt.kind === 'orbstack'
       ? { tool: 'orbctl', args: ['start'], label: 'orbctl start' }
       : (m.platform === 'darwin' ? { tool: 'open', args: ['-a', 'Docker'], label: 'open -a Docker' } : null);
@@ -287,6 +295,15 @@ export async function ensure({
   }, { root, io });
   m.log('docker-ensured', { pid, run, repo, started, waited_ms });
   return { ok: true, started, waited_ms, server: String(info.stdout ?? '').trim(), lease: path, reason: null };
+}
+
+/**
+ * The real disk policy for a start, loaded when first asked: disk-admission.js
+ * imports this module for `tidyDocker`. An `io` with its own `run` is a test's
+ * machine, and has no disk policy unless it brings `admitDisk`.
+ */
+function realAdmitDisk(env) {
+  return async (options) => (await import('./disk-admission.js')).mcDiskPressure({ env, docker: false }).admit(options);
 }
 
 const DF_TYPES = new Map([
@@ -436,7 +453,9 @@ export async function tidyDocker({
   let lease = null;
   if (!rt.up) {
     if (!apply || !start) return { ...answer, reason: `${rt.kind} is not running${rt.reason ? ` — ${rt.reason}` : ''}` };
-    const ensured = await ensure({ ...start, root, env, io });
+    // A person's `mc tidy --docker --apply` is recovery: the disk guard on a
+    // start must not refuse the one start that is there to free space.
+    const ensured = await ensure({ ...start, root, env, io: { ...io, admitDisk: null } });
     if (!ensured.ok) return { ...answer, reason: `could not be started — ${ensured.reason}` };
     lease = ensured.lease;
     answer.up = true;
