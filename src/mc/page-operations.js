@@ -38,21 +38,22 @@ export function devLines(lines, c, wide, dev, expand) {
   panelHeading(lines, c, wide, 'DEV', !dev ? 'not read' : servers.length || dev?.queued
     ? [`${dev.running} running`, `${dev.leased} leased`, dev.starting && `${dev.starting} starting`, dev.queued && `${dev.queued} queued`].filter(Boolean).join(' · ')
     : 'none running', 'mc dev list');
-  const repos = [...new Set(servers.map((server) => server.repo || 'unknown'))];
-  for (const repo of repos) {
-    detail(lines, c, wide, 4, repo, ['bold']);
-    for (const server of servers.filter((item) => (item.repo || 'unknown') === repo)) {
-      const kind = String(server.kind || 'slot').toUpperCase().padEnd(5);
-      const address = server.port ? `:${server.port}` : server.url || 'address unknown';
-      const state = server.state || 'unknown';
-      const prefix = `      ${kind} ${address.padEnd(8)} `;
-      lines.push(`${c(prefix, 'grey')}${c(clipCell(state, wide - prefix.length), ...stateTone(state))}`);
-      if (server.name) detail(lines, c, wide, 12, server.name, server.holder_gone ? ['grey'] : []);
-      if (server.holder_gone) detail(lines, c, wide, 12, 'holder gone', ['yellow']);
-      if (expand) {
-        detail(lines, c, wide, 12, [server.url, server.service, server.progress && `last used ${server.progress} ago`].filter(Boolean).join(' · '));
-        detail(lines, c, wide, 12, [server.branch, shortPath(server.worktree)].filter(Boolean).join(' · '));
-      }
+  for (const server of servers) {
+    const kind = String(server.kind || 'slot').toUpperCase().padEnd(5);
+    const address = server.port ? `:${server.port}` : server.url || 'address unknown';
+    const state = server.state || 'unknown';
+    const stage = one(server.holder?.kind);
+    const label = ['build', 'review'].includes(stage) ? stage.toUpperCase() : stage;
+    const prefix = `    ${kind} ${clipCell(address, 8).padEnd(8)} `;
+    const stateCell = clipCell(state, 8).padEnd(8);
+    const stageCell = clipCell(label, 7).padEnd(7);
+    const warning = server.holder_gone ? ' · holder gone' : '';
+    const room = wide - prefix.length - stateCell.length - stageCell.length - 2 - warning.length;
+    const name = clipCell(server.holder?.name || '', room);
+    lines.push(`${c(prefix, 'grey')}${c(stateCell, ...stateTone(state))} ${c(stageCell, ...(server.holder_gone ? ['grey'] : []))} ${c(name, ...(server.holder_gone ? ['grey'] : []))}${warning ? ' · ' + c('holder gone', 'yellow') : ''}`.trimEnd());
+    if (expand) {
+      detail(lines, c, wide, 12, [server.url, server.service, server.progress && `last used ${server.progress} ago`].filter(Boolean).join(' · '));
+      detail(lines, c, wide, 12, [server.branch, shortPath(server.worktree)].filter(Boolean).join(' · '));
     }
   }
   if (queue.length) {
