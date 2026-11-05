@@ -2,13 +2,11 @@
  * The dev-server pool as the page reads it: `mc --json`'s `dev`, and the DEV
  * section drawn from it (goal mc/dev-section).
  *
- * The pool is read through one function, `readPool`, so the day the pool
- * (`mc:dev-queue`) keeps its slots in a file of its own, the page changes in
- * one place. Today it is the registry (`~/.memoro/mc/dev-servers/`), the queue
- * (`dev-queue.json`) and the shared checkout that is the main slot
- * (`mainCheckout`). Read only: the registry is not swept and the queue not
- * rewritten — a dead server or a dead waiter is left for the next writer, and
- * not counted here.
+ * `readPool` reads live-pid registry records (`reap: false`), queue tickets
+ * whose pids pass the supplied liveness check, and the shared checkout record
+ * used to identify the main slot (`mainCheckout`). It does not make an HTTP
+ * request or sweep/rewrite the registry or queue. Dead server records and
+ * dead waiters are left for a writer and are not counted here.
  *
  * `devSection` is pure: what each server is and who holds it, from the records
  * alone. Who holds a server is what the verb that took it wrote
@@ -73,12 +71,17 @@ function holderAlive(holder, alive) {
 /**
  * One server as `mc --json` carries it. `state`:
  *
- * - `starting` — registered, never used by mc, and registered within
- *   `STARTING_SECONDS`: it has not answered yet.
- * - `leased` — its holder used it within the lease (`MC_DEV_HOLDER_STALE_MINUTES`,
- *   five minutes) and is still alive.
- * - `idle` — nobody holds it: the lease ran out, or its session ended
- *   (`holder_gone`).
+ * - `starting` — no recorded use or holder, with a parseable registration
+ *   time less than `STARTING_SECONDS` ago. This recent-registration heuristic
+ *   is not an HTTP result.
+ * - `leased` — a holder is recorded, its last use is within the configured
+ *   stale window, and it is not a dead session holder. Bare-verb holders are
+ *   not classified as gone, so their lease lasts until that window expires.
+ * - `idle` — none of those conditions applies; a dead session holder is also
+ *   reported separately as `holder_gone`.
+ *
+ * This projection has no `cold` state. `running` below is a registry-derived
+ * count of rows not classified as `starting`, not a server health probe.
  */
 export function serverRow(server, { main = null, now = Date.now(), alive = pidAlive, staleSeconds, branchOf = () => null } = {}) {
   const used = lastUsedAt(server);
@@ -130,7 +133,7 @@ export function queueRow(ticket, now) {
 /**
  * `mc --json`'s `dev`: the counts, one entry per live server — the main slot
  * first, then the slots by port — and the queue in the order it is served.
- * `running` is the servers that answer (not `starting`).
+ * `running` counts every projected row except `starting`; it is not a health result.
  */
 export function devSection({
   servers = [], queue = [], main = null, now = new Date(), alive = pidAlive, env = {}, branchOf,
