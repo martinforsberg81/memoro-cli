@@ -147,6 +147,15 @@ role tells the session to read LOG.md first.
   or a first merger red. It can finish the work and publish it. A subsequent red in merge is blocked for a person.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
+after handing its goal to merge, its lane is available for the next assignment
+without waiting for the merge. `mc goal stage merge` writes a receipt in the
+session's scratch directory after queueing every PR. The runner checks it
+every 250 ms, ends its own launched child, and releases the current file,
+slot and goal/programme claims after the child closes. Partial queue failures
+write no receipt and leave the session able to retry. Review and finish must
+write their records before the final stage command.
+
+If a session ends
 without writing a log entry, the runner writes one; three such build ends
 in succession send the goal to finish. A normal build end with more work
 leaves it build · ready for the next session.

@@ -69,6 +69,37 @@ function programmesOf(lines) {
 }
 
 describe('goal rows on the page', () => {
+  it('keeps merge goals in the programme with PR states and excludes the active PR from the full queue', () => {
+    const goal = { goal: 'ship', programme: 'mc', dir: '/goals/ship', repos: ['memoro-cli'],
+      stage: 'merge', status: 'ready', log: [], prs: [31, 32, 33].map((pr) => ({ repo: 'memoro-cli', pr })) };
+    const queued = [
+      { repo: 'memoro-cli', pr: 31, state: 'landing', merger: 4242, started: '2026-11-01T11:59:00Z',
+        goal: { programme: 'mc', goal: 'ship', dir: '/goals/ship' } },
+      { repo: 'memoro-cli', pr: 32, state: 'queued' },
+    ];
+    const merges = mergesSection({ goals: [goal], queued, now: NOW, alive: (pid) => pid === 4242 });
+    const programmes = programmesSection({ goalRows: [goalRow({ ...goal, name: 'ship', carries: goal.prs, problems: [] })] });
+    const pulls = prsSection({ prs: [], merges, now: NOW });
+    const runner = runnerSection({ rows: [], now: NOW });
+    attachPrs({ programmes, runner, pulls });
+    assert.deepEqual(merges.landings.map((item) => item.pr), [31]);
+    assert.deepEqual(merges.queued.items.map((item) => item.pr), [32, 33]);
+    for (const columns of [60, 80, 120]) {
+      const text = renderPageLines(pageData({ merges, programmes, runner }), { columns, now: NOW }).join('\n');
+      const programme = text.slice(0, text.indexOf('MERGE & DEPLOY'));
+      assert.match(programme, /stage merge · status ready/u);
+      assert.match(programme, /memoro-cli#31 · merging/u);
+      assert.match(programme, /memoro-cli#32 · in queue/u);
+      assert.match(programme, /memoro-cli#33 · in queue/u);
+      assert.doesNotMatch(programme, /╭|REVIEW|BUILD/u);
+      assert.match(text, /2 in queue: #32 #33/u);
+      assert.match(text, /merging #31/u);
+    }
+    const dead = mergesSection({ goals: [goal], queued, now: NOW, alive: () => false });
+    assert.deepEqual(dead.landings, []);
+    assert.deepEqual(dead.queued.items.map((item) => item.pr), [31, 32, 33]);
+  });
+
   it('goal rows are drawn under their programme and phase, with menu numbers', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));

@@ -21,7 +21,7 @@ import {
 } from '../../src/mc/page-collect.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
-import { QUEUED_DRAWN, colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
+import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { KIND_TONE, STATE_TONE } from '../../src/mc/page-grid.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
@@ -988,7 +988,8 @@ describe('MERGES', () => {
 
   it('treats a live merger pid on a queued job as live without merger.json', () => {
     const merges = section({ merger: null, queued: [job(1, { state: 'landing', merger: process.pid })], alive: (pid) => pid === process.pid });
-    assert.equal(merges.repos[0].state, 'waiting');
+    assert.equal(merges.repos[0].state, 'landing');
+    assert.deepEqual(merges.repos[0].waiting, []);
     assert.equal(merges.repos[0].merger_stopped, false);
     assert.doesNotMatch(drawing(merges, 80, true).map(strip).join('\n'), /merger stopped/u);
   });
@@ -1060,11 +1061,10 @@ describe('MERGES', () => {
     for (const columns of [60, 80, 120]) {
       const folded = drawing(merges, columns, true);
       assert.ok(folded.every((line) => width(line) <= columns));
-      assert.match(folded.map(strip).join('\n'), /24 more queued/u);
       assert.deepEqual(folded.map(strip).filter((line) => /failed #\d+/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
         Array.from({ length: 8 }, (_, i) => `#${13507 - i}`), 'all failures stay visible beyond the normal queue limit');
-      assert.deepEqual(folded.map(strip).filter((line) => /in queue:|^ {17}#/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []),
-        Array.from({ length: QUEUED_DRAWN }, (_, i) => `#${13200 + i}`));
+      assert.deepEqual(folded.map(strip).filter((line) => /in queue:|^ +#/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []),
+        Array.from({ length: 30 }, (_, i) => `#${13200 + i}`));
       const all = renderPageLines(pageData({ merges }), { columns, expand: true, now: NOW });
       assert.deepEqual(all.filter((line) => /#\d+ +queued/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
         Array.from({ length: 30 }, (_, i) => `#${13200 + i}`));
@@ -1457,7 +1457,8 @@ describe('the page', () => {
     assert.match(shown[0], /^ {2}┌─ dormant-one · 0 goals/mu);
     assert.match(shown[0], /#14008 +queued/u);
     assert.match(shown[0], /goal\/preview-only/u);
-    assert.doesNotMatch(shown[1], /dormant-one|#14008|goal\/preview-only/u);
+    assert.doesNotMatch(shown[1], /dormant-one|goal\/preview-only/u);
+    assert.match(shown[1], /#14008/u, 'all waiting PRs remain visible when details collapse');
     for (const text of shown) {
       assert.match(text, /BUILD.*mc-ui/u, 'live activity never collapses');
       assert.match(text, /stopping since an unknown time/u, 'runner stop remains visible');

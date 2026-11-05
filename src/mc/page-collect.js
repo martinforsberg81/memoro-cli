@@ -56,7 +56,7 @@ import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
 import { readProgrammePriority } from './programme-priority.js';
-import { FINISHED, goalName, goalSession, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
+import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -496,11 +496,37 @@ function prNumber(value) {
  */
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(), alive = pidAlive,
-  repos = REPO_NAMES, pauses = {}, merger = null, history = [],
+  repos = REPO_NAMES, pauses = {}, merger = null, history = [], goals = [],
 } = {}) {
   const all = queueEntries(queued);
+  // The stage is saved before queueing. Keep the pending PRs visible even
+  // during that handoff (or until the runner recovers a missing queue row).
+  // Recorded failures and completed PRs retain their own outcomes.
+  for (const goal of goals) {
+    if (goal.stage !== 'merge' || goal.status !== 'ready' || goal.problems?.length) continue;
+    for (const pr of goal.prs || []) {
+      const owner = { programme: goal.programme, goal: goal.goal, dir: goal.dir };
+      const recorded = all.find((item) => item.repo === pr.repo && item.pr === Number(pr.pr));
+      if (recorded) { recorded.goal ||= owner; continue; }
+      if (mergeAnswered(goal.log?.at(-1))) continue;
+      if ((goal.log || []).some((entry) => String(entry.done || '').startsWith(`${pr.repo}#${pr.pr} landed `))) continue;
+      all.push({ ...pr, pr: Number(pr.pr), state: 'queued', branch: `goal/${goal.goal}`,
+        goal: owner, since: goal.log?.at(-1)?.at || null });
+    }
+  }
   const entries = queueOrder(inLine(all));
   const rounds = [].concat(landing || []).filter(Boolean);
+  // Direct goal landing has no gate round. Its durable queue ownership is
+  // sufficient evidence of an active merge; a dead owner remains waiting.
+  for (const item of entries) {
+    if (item.state !== 'landing' || item.merger == null || !alive(item.merger)) continue;
+    if (rounds.some((round) => round.repo === item.repo && Number(round.pr) === item.pr)) continue;
+    if (item.started && rounds.some((round) => round.repo === item.repo && entries.some((member) =>
+      member.repo === item.repo && member.pr === Number(round.pr) && member.started === item.started))) continue;
+    rounds.push({ repo: item.repo, pr: item.pr, pid: item.merger, mode: 'merge',
+      since: item.started, age_seconds: item.started ? Math.max(0, Math.round((new Date(now) - Date.parse(item.started)) / 1000)) : null,
+      phase: 'merging pull request' });
+  }
   const ofRepo = (round, item) => !round.repo || !item.repo || round.repo === item.repo;
   const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing' && ofRepo(round, item);
   // The one a round is landing is drawn as the round, not twice — but its
@@ -525,7 +551,7 @@ export function mergesSection({
       : [];
     for (const item of rest) members.add(item);
     return [
-      { ...round, ...named(round.repo, round.pr, own), queue_since: own?.since || null },
+      { ...round, goal: own?.goal || null, ...named(round.repo, round.pr, own), queue_since: own?.since || null },
       ...rest.map((item) => ({
         repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, batch_of: Number(round.pr),
         ...named(item.repo || round.repo, item.pr, item),
@@ -721,7 +747,16 @@ export function prsSection({
   const landings = merges?.landings || [].concat(merges?.landing || []);
   const queued = merges?.queued?.items || [];
   const reds = merges?.red?.items || [];
-  const items = prs.map((pr) => {
+  const known = [...prs];
+  // Queue records can precede the next GitHub cache refresh. The PR still
+  // belongs beneath its goal and must carry the same state as the merge panel.
+  for (const item of [...landings, ...queued]) {
+    if (!item.goal) continue;
+    if (known.some((pr) => pr.repo === item.repo && Number(pr.number) === Number(item.pr))) continue;
+    known.push({ repo: item.repo, number: Number(item.pr), title: item.title,
+      headRefName: item.branch || (item.goal?.goal ? `goal/${item.goal.goal}` : null) });
+  }
+  const items = known.map((pr) => {
     const owner = prOwner(pr, { worktrees: worktrees[pr.repo] || [], root });
     const updated = Date.parse(pr.updatedAt || '');
     const number = Number(pr.number);
@@ -1395,6 +1430,7 @@ export async function collectPage({
 
   const stop = existsSync(join(root, 'runner', 'STOP'));
   const queuedForMerge = queueEntries(readJson(mergesPath(root)));
+  const goals = programsGoals({ home: programsHome(env) });
 
   // RUNNER draws one row per lane, and the drain line counts them.
   const laneSetting = laneCount({ root: home, repos: present.length });
@@ -1435,14 +1471,14 @@ export async function collectPage({
     repos: repos.map((repo) => repo.name),
     pauses: mergePauses({ repos: present, rounds: roundsNow, env, root: home, now, alive }),
     merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
-    alive,
+    alive, goals,
   });
   const programmes = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     programmeSessions: sessions.programme_sessions,
     sessionStrays: sessions.strays,
-    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
+    goalRows: goalsOf({ goals, currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),

@@ -61,6 +61,7 @@ import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
 import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
+import { MERGE_HANDOFF_FILE } from '../session-role.js';
 import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
@@ -277,6 +278,12 @@ function logEntry(args, fields, ctx) {
   }
   stdout.write(`mc: ${target.name} · ${stageWords(now)}${back ? ` — moved back from ${goal.stage}` : ''}\n`);
   if (done && done !== fields.done) stdout.write(`mc: ${done}\n`);
+  // Queueing is complete before the runner may end this session. A failed or
+  // partial enqueue leaves no receipt, so the session can repair and retry.
+  if (fields.stage === 'merge' && env.MC_HEADLESS === '1' && env.MC_GOAL === target.name
+      && [REVIEW_ROLE, PLAN_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
+    write(join(env.MC_SCRATCH, MERGE_HANDOFF_FILE), JSON.stringify({ goal: target.name }));
+  }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
 }

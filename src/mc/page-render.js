@@ -46,7 +46,6 @@
  */
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
-export { QUEUED_DRAWN } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';

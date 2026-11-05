@@ -17,6 +17,7 @@ import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/rol
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
+import { run as goalCommand } from '../../src/mc/commands/goal.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -3100,6 +3101,37 @@ const judges = (f, stage, inner = okSession()) => (call) => {
   return inner(call);
 };
 const goalEntries = (f, name = 'judged') => parseLog(f.files[`${GOALS}/${name}/LOG.md`]);
+
+test('review and finish release their lane after merge handoff so the next assignment can start', async () => {
+  for (const stage of ['review', 'finish']) {
+    const f = reviewFixture({ goals: { next: {} } });
+    f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage, prs: ['memoro#31'] });
+    f.deps.laneCount = () => ({ lanes: 1 });
+    let starts = 0;
+    f.answer = async (call) => {
+      starts += 1;
+      if (starts > 1) return logsItself(f, 'next')(call);
+      assert.equal(call.handoff(), false);
+      const queued = [];
+      const rc = await goalCommand(['stage', 'merge'], {
+        ...f.deps, env: call.env, home: '/w/programs', known: () => ['/home/memoro'],
+        stdout: { write() {} }, stderr: { write() {} },
+        queue: (job) => { queued.push([job.repo, job.pr]); assert.equal(call.handoff(), false); },
+      });
+      assert.equal(rc, 0);
+      assert.deepEqual(queued, [['memoro', 31]]);
+      assert.equal(call.handoff(), true, 'only a completed queue handoff ends the session');
+      return { ...okSession()(call), handedOff: true };
+    };
+    const runner = createRunner({ deps: f.deps });
+    assert.equal((await runner.pass({ lane: 1 })).name, 'goal:prog/judged');
+    assert.deepEqual(runner.stepsHeld(), []);
+    assert.equal((await runner.pass({ lane: 1 })).name, 'goal:prog/next');
+    assert.equal(starts, 2);
+    assert.equal(where(f, 'judged'), 'merge · ready');
+    assert.equal(f.log.some((line) => /waiting for a lane/u.test(line)), false);
+  }
+});
 
 test('a goal in review gets a review session: the goal-review role, the review model, its pull request and head', async () => {
   const f = reviewFixture();

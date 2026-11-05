@@ -5,6 +5,9 @@ import { PLAN_ROLE } from './goals.js';
 import { workRoot } from './paths.js';
 import { BUILD_ROLES } from './run-plan.js';
 
+/** Written in session scratch only after every registered PR has been queued. */
+export const MERGE_HANDOFF_FILE = '.mc-merge-handoff.json';
+
 /**
  * Identity belongs to the child, never to the session that started mc.
  * MC_HEADLESS is the runner's and the intake turn's mark on a session nobody

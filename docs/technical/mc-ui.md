@@ -86,6 +86,9 @@ active/dormant classification and full JSON listing remain unchanged.
 Every open PR remains a child of its goal, or in PRs without a goal under its
 programme. Explicit plan branches retain ownership even in scratch worktrees.
 Attached PRs carry `programme` in JSON and are excluded from the loose PR list.
+Goals handed to the merger retain `stage merge`, without a session frame.
+Their PR children say `in queue` or `merging`, including PRs whose queue
+records arrived before the GitHub cache refreshed.
 Unowned sessions and directories remain visible as strays.
 
 ### MAINTENANCE
@@ -135,9 +138,10 @@ a writer. These semantics describe the current projection, not server health.
 One panel groups both repository merge lanes and memoro deployment evidence.
 Columns are separated by whitespace; middle dots separate data only within a
 column. Repository names occupy an aligned column; their queue summaries show `queue
-empty` or `4 in queue: #1 #2 #3 #4` in landing order. The normal view shows up
-to six waiting entries, with an explicit remainder; `a` shows all references,
-branches, queue ages and 24-hour landing history. Queued entries without a PR
+empty` or `4 in queue: #1 #2 #3 #4` in landing order. Every waiting reference
+is visible in the normal view, wrapping within the terminal width; the active
+merge is excluded from that queue. `a` adds branches, queue ages and 24-hour
+landing history. Queued entries without a PR
 number remain counted and say `PR unknown`.
 
 Indented operation rows align the action/PR with its status: `merging #123`,
@@ -147,6 +151,10 @@ not test completion or a time-based percentage. Missing phase evidence uses
 `[···]`. Active rounds and every failure remain visible. Pauses, stopped
 mergers, failure reasons and batch membership retain their own rows. Empty
 lanes explicitly say idle; queued lanes without an active round say waiting.
+Direct goal merges have no gate round: a `landing` queue record owned by a
+live merger supplies their active row. A dead owner remains in the waiting
+queue. A ready goal in `merge` also supplies any PR missing from the queue
+during handoff, excluding recorded failures and PRs already logged as landed.
 
 DEPLOY is a subsection of the same panel, for memoro. Its aligned LIVE,
 RECORDED and ATTEMPT rows keep the cached version reading, successful deploy
