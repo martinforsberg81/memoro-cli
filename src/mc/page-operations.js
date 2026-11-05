@@ -1,4 +1,5 @@
 /** Repository-specific operational views; a port is an address, never a PR cell. */
+import { width } from './status-render.js';
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
 
@@ -19,14 +20,14 @@ export function detail(lines, c, wide, indent, value, tone = ['grey']) {
 
 /** Work panels share the programme frame shape, with orange structural rules. */
 export function panelHeading(lines, c, wide, name, summary = '', verb = '') {
-  const hint = verb && wide - name.length - verb.length >= 10 ? ` ${verb}` : '';
-  const rule = '─'.repeat(Math.max(0, wide - name.length - hint.length - 6));
-  lines.push(`  ${c('┌─ ', 'orange')}${c(name, 'bold')}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}`);
+  const hint = verb && wide - name.length - verb.length >= 10 ? ` ${verb} ` : '';
+  const rule = '─'.repeat(Math.max(0, wide - width(name) - width(hint) - 7));
+  lines.push(`  ${c('┌─ ', 'orange')}${c(name, 'bold')}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}${c('┐', 'orange')}`);
   if (summary) detail(lines, c, wide, 4, summary);
 }
 
 export function panelEnd(lines, c, wide) {
-  lines.push(`  ${c('└' + '─'.repeat(wide - 3), 'orange')}`);
+  lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'orange')}`);
 }
 
 const shortPath = (path) => String(path || '').replace(/^\/(?:Users|home)\/[^/]+/u, '~').replace(/^~\/mc\/programs\//u, '');

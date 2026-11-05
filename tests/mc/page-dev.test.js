@@ -112,7 +112,7 @@ describe('DEV — the dev servers and who holds each', () => {
   it('says none running in readable secondary text when there is no server', () => {
     const lines = renderPageLines(pageData({ dev: devSection({ now: NOW }) }), { columns: 100, now: NOW, colour: true });
     const [head, summary, ...rest] = devBlock(lines);
-    assert.match(plain(head), /^ {2}┌─ DEV ─+ mc dev list$/u);
+    assert.match(plain(head), /^ {2}┌─ DEV ─+ mc dev list ┐$/u);
     assert.equal(plain(summary), '    none running');
     assert.deepEqual(toneOf(summary, 'none running'), ['37']);
     assert.deepEqual(rest, []);
