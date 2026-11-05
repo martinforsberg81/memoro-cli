@@ -2037,7 +2037,7 @@ The project that carries this is `project-branch`.
 2. Review is its own ordered list of candidates, changed by `mc model
    add|remove review` and `mc model set review`: Claude Opus at high effort
    alone at first. It does not inherit the implementation step's provider, and
-   the first candidate is the preferred one. Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. `mc plan` remains the tool
+   catalog order breaks remaining ties. Current launch policy (2026-11-05): Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. `mc plan` remains the tool
    Martin chooses when starting it. Rewritten 2026-11-03, Martin: *"Ja, gör
    samma kandidatlista för review"* — with one review model, a review waited
    for an hour on a spent codex plan, and a goal built on the review model

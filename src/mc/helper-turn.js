@@ -42,6 +42,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'no
 import { basename, dirname, join } from 'node:path';
 
 import { withoutSessionIdentity } from './session-role.js';
+import { readModels } from './model-config.js';
+import { readCapacity } from './model-capacity.js';
+import { chooseCandidate } from './model-choice.js';
+import { runnerDir } from './paths.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
@@ -201,8 +205,9 @@ export function programmeRoutes(env = process.env, { read = (path) => readFileSy
 
 // The names come from the before/after listing in `runHelperTurn`, and a name without a system is said and left alone, because guessing it is the parse that was removed.
 /** What the turn produced, in the one line a runner log and a person share. */
-export function describeTurn({ wrote = [], waiting = [] }) {
-  if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)`;
+export function describeTurn({ wrote = [], waiting = [], providerPriority = 'auto', tool = null, routeWhy = null }) {
+  const route = providerPriority === 'auto' || !tool ? '' : ` · ${tool} (${providerPriority} priority${tool !== providerPriority ? `, fallback: ${routeWhy || 'other provider selected'}` : ''})`;
+  if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)${route}`;
   // Where it went, when the listing said: a programme by name, or the root as
   // the place for what no programme owns.
   const placed = wrote.filter((p) => p && typeof p === 'object' && 'programme' in p);
@@ -211,7 +216,8 @@ export function describeTurn({ wrote = [], waiting = [] }) {
     : '';
   const line = `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}${where}, ${waiting.length} waiting`;
   const untagged = wrote.filter((p) => typeof p?.file === 'string' && !proposalSystem(p.file)).map((p) => `proposal ${p.file} names no system (mc|memoro)`);
-  return untagged.length ? `${line} — ${untagged.join('; ')}` : line;
+  const described = untagged.length ? `${line} — ${untagged.join('; ')}` : line;
+  return `${described}${route}`;
 }
 
 function realSession({ bin, args, cwd, timeoutMs, env }) {
@@ -274,6 +280,7 @@ export async function runHelperTurn({
   now = new Date(),
   file,
   model = null,
+  tool = null,
   // Null means the name decides, and if the name does not say, the turn does.
   repo = null,
   minutes = DEFAULT_TURN_MINUTES,
@@ -283,10 +290,32 @@ export async function runHelperTurn({
   if (!role?.overlay) {
     return { ok: false, reason: 'no-role', note: `canon/roles/${INTAKE_ROLE}.md is missing from this install` };
   }
-  const launch = (deps.launch || resolveLaunch)(role.tools?.[0] || 'claude');
+  let routeCandidate = null;
+  let routeWhy = null;
+  let routeBilling = null;
+  let savedPriority = 'auto';
+  if (!model && (!tool || tool === 'codex')) {
+    const catalog = (deps.catalog || (() => readModels(env)))();
+    savedPriority = catalog.providerPriority ?? 'auto';
+    if (tool === 'codex') {
+      routeCandidate = (catalog.fast || []).find((candidate) => candidate.tool === 'codex') || null;
+    } else if (!tool && savedPriority !== 'auto') {
+      const roleCandidates = [
+        { tool: 'claude', model: role.model || 'sonnet', effort: 'medium' },
+        ...(catalog.fast || []).filter((candidate) => candidate.tool === 'codex'),
+      ];
+      const chosen = chooseCandidate({ cls: 'fast', catalog: { fast: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });
+      routeCandidate = chosen.candidate;
+      routeWhy = chosen.why;
+      routeBilling = chosen.billing;
+    }
+  }
+  const selectedTool = tool || routeCandidate?.tool || role.tools?.[0] || 'claude';
+  const launch = (deps.launch || resolveLaunch)(selectedTool);
   if (!launch?.ok) {
     return { ok: false, reason: 'no-tool', note: launch?.hint || launch?.reason || 'no tool to run the turn' };
   }
+  if (launch.id === 'codex' && !model && !routeCandidate) return { ok: false, reason: 'no Codex intake candidate is listed in mc model' };
 
   const dir = intakeDir(env);
   const proposals = proposalsDir(env);
@@ -308,14 +337,16 @@ export async function runHelperTurn({
     // `stream: false`: a helper turn is one short answer on its own
     // wall-clock cap, with no check-ins, so its prompt stays the positional
     // and its output the one JSON object (step-cost step 3 left it so).
-    toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
+    toolId: launch.id, adapter: launch.adapter, model: model || routeCandidate?.model || role.model, effort: routeCandidate?.effort, instructions, prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
   });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
-  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env });
-  const tool = gatewayLaunch({ provider, model: model || role.model, bin: launch.spec.bin, args, billing: billing.billing });
+  const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env, route: { billing: routeBilling, why: routeWhy } });
+  if (billing.billing === 'unavailable') return { ok: false, reason: billing.why, providerPriority: savedPriority, routeWhy };
+  const selectedModel = model || routeCandidate?.model || role.model;
+  const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
 
   const result = await (deps.session || realSession)({
-    bin: tool.bin, args: tool.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake', MC_HEADLESS: '1' }),
+    bin: processLaunch.bin, args: processLaunch.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake', MC_HEADLESS: '1' }),
   });
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
@@ -338,8 +369,11 @@ export async function runHelperTurn({
     cacheWrite: read.cacheWrite,
     stdout: result.stdout,
     stderr: result.stderr,
-    model: model || role.model,
+    model: selectedModel,
     tool: launch.shortName || launch.id,
+    providerPriority: savedPriority,
+    billing: billing.billing,
+    routeWhy,
     wrote,
     waiting: after,
     groundNotes: ground.notes || [],
@@ -387,6 +421,7 @@ export async function drainIntake({
   now = () => new Date(),
   limit = INTAKE_PER_ROUND,
   model = null,
+  tool = null,
   deps = {},
 } = {}) {
   const dir = intakeDir(env);
@@ -396,7 +431,7 @@ export async function drainIntake({
     const started = now().getTime();
     let turn;
     try {
-      turn = await (deps.turn || runHelperTurn)({ env, now: now(), file, model });
+      turn = await (deps.turn || runHelperTurn)({ env, now: now(), file, model, tool });
     } catch (error) {
       // The one path that would otherwise skip the archive below. A turn that
       // threw did not judge the file, but the file has had its turn.

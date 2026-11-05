@@ -24,7 +24,11 @@ export function billingRoute({ provider, capacity, state, api, now = new Date() 
   return { billing: 'plan', why: standing.status === 'unobserved' ? 'plan status unknown' : 'plan available' };
 }
 
-export function billingRouteNow(provider, { now = new Date(), env = process.env, capacity = readCapacity({ root: runnerDir(env) }), state = readBillingState({ root: runnerDir(env) }), api = readBillingApi({ root: runnerDir(env) }) } = {}) {
+/** Preserve a chooser's API reserve (including model unavailability), but never override API off. */
+export function billingRouteNow(provider, { now = new Date(), env = process.env, capacity = readCapacity({ root: runnerDir(env) }), state = readBillingState({ root: runnerDir(env) }), api = readBillingApi({ root: runnerDir(env) }), route = null } = {}) {
+  if (route?.billing === 'credits') return api?.[provider] === false
+    ? { billing: 'unavailable', why: `${route.why}; ${provider} API off` }
+    : { billing: 'credits', why: route.why };
   return billingRoute({ provider, capacity, state, api, now });
 }
 

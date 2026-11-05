@@ -42,22 +42,23 @@ stays.
 | `~/Library/Preferences/.wrangler/logs/` | Wrangler logs | regular `.log` files directly in the root, older than 72 hours (F) |
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
-| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean worktree whose HEAD is on a ref, and `DerivedData`, once the directory's ownership record says its session ended and nothing stands in or holds it (S); never the logs, patches or the directory |
+| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
 Rule P was removed with projects; rules version 9 reads no execution
 register, adds S, and includes the narrowly approved generated-file rule F.
-Legacy scratch directories, transcripts, and logs outside F's exact root and
-shape remain untouched by automatic cleanup.
+Scratch cleanup follows S below; transcripts and logs outside F's exact
+root and shape remain governed by their existing rules.
 
 **F — generated files (72 hours, independent of `--days`).** The approved
 Wrangler root is `~/Library/Preferences/.wrangler/logs/`; only direct regular
 `.log` children qualify. The MC root is `${MC_HOME}/shots/`; it is walked
 recursively without following symlinks, but hidden directories (including
 browser profiles) and `sessions/` are not entered. Only regular `.png` files
-qualify, both directly under `shots/` and in eligible subdirectories. The Codex root is `${CODEX_HOME:-~/.codex}/generated_images/`; only
+qualify, both directly under `shots/` and in eligible subdirectories. The Codex
+root is `${CODEX_HOME:-~/.codex}/generated_images/`; only
 direct regular `.png`, `.jpg`, `.jpeg` or `.webp` children of UUID-named
 session directories qualify. A Codex session image group stays intact if its
 directory or any child was touched within 72 hours; in an old group only the
@@ -150,31 +151,47 @@ and `memoro-cli.git-365b96c6`.
 
 **A — gate-cache entries.** `~/mc/gate-cache/<slug>/<key>/` is the gate's dependency cache (`prepare-cache.js`): a `node_modules` a green `npm ci` left, with a `meta.json` whose `at` a store sets and every hit renews. Under a slug a repository mc knows has, an entry no round has used for fourteen days (`PREPARE_CACHE_MAX_AGE_MS`) goes, judged by `meta.at` or, without a meta, by the directory's own mtime; a `<key>.tmp-<pid>` staging directory goes once it is a day old, since a store that is running renews its mtime. Removal is through `rmTree`. A round that is cloning an entry as it goes falls back to `npm ci`, which is why no lock is taken. An entry under a slug no repository knows is K's, and goes whole with its slug.
 
-**S — an ended runner session's scratch.** The runner makes
+**S — completed runner scratch replay worktrees.** The runner makes
 `~/mc/runner/scratch/<stem>/` for each session (`MC_SCRATCH`) and writes
 `.mc-scratch.json` into it: `{ schema: "mc-scratch", owner: "runner",
 runner_pid, session, kind, stem, started }`, and `ended` and `exit` when the
-session is over. Under it only two kinds of child are judged: a directory with
-a `.git` (a replay or probe worktree) and one named `DerivedData`. Each goes
-only when every one of these is proved, and stays with the first that is not:
+session is over. Under it only two kinds of immediate child are judged: a
+directory with a `.git` (a replay or probe worktree) and one named
+`DerivedData`. A worktree must be registered in its owning repository's Git
+worktree list. Each goes only when every applicable condition is proved, and
+stays with the first that is not:
 
-- the record reads, names `owner: "runner"`, a session and a start, and has
-  `ended`; a directory with no record is legacy and is kept, whatever its age;
+- with a record: it is a readable regular file, names `owner: "runner"`, a
+  session and a start, and has `ended`; invalid, unreadable, foreign or
+  unfinished records are never treated as absent;
+- only when the record is absent, a worktree (never marker-less `DerivedData`)
+  may use legacy proof: the exact scratch stem has both a regular
+  `runner/log/<stem>.json.err` and `<stem>.jsonl`, with canonical paths inside
+  the configured log root. `writeSessionLogs` writes `.json.err` only after
+  the session resolves. Missing, ambiguous or escaped receipts keep the tree;
 - `lsof` answers, and no process stands anywhere in the scratch directory;
+- for a marker-less worktree, no file is open anywhere in its scratch session
+  (marker-owned worktrees retain the existing candidate-open check);
 - for a worktree: `git status --porcelain --untracked-files=all` is empty, and
-  `git for-each-ref --contains HEAD` names a ref, so its commit stays reachable
-  after it goes; the repository that owns it is read from
-  `rev-parse --git-common-dir`;
+  the owning repository and exact HEAD are read from Git. A detached HEAD is
+  eligible: at apply, before removal, tidy retains that commit at
+  `refs/mc/retained-replay/<full-sha>` in the owning repository if no ref
+  already contains it. An existing different value or failed retention keeps
+  the tree; dry runs never create refs;
 - `lsof +D` on the candidate answers, and no process holds a file open in it.
 
 A worktree is removed with `git worktree remove` in its own repository,
-without `--force`, so a tree that changed since stays; `DerivedData` with
-`rmTree`. Logs, patches, the record and everything else stay. At the apply
-the target is re-judged on fresh facts, and refused when its record names
-another session or start than the list did, or when its realpath leaves the
-scratch root (a symlinked directory). Age and mtime are never asked. Until
-2026-11-05 the chore pass removed every scratch directory not touched for two
-days, logs and evidence with it; that sweep is gone, so nothing bypasses S.
+without `--force`, after apply rechecks registration, clean state, identity,
+HEAD, any legacy receipts, process/open-file state and retention. A changed
+tree, session directory identity (device/inode/birth time), worktree identity
+or receipt stays. `DerivedData` uses `rmTree`. Logs, patches,
+receipts, memory, other scratch children and the parent directory stay. Apply
+also requires the canonical target path to remain inside the scratch root and
+have its exact allowed shape. Age and pid absence alone are never proof. This
+rule runs in routine unattended tidy, including disk-pressure passes;
+marker-less `DerivedData` is never adopted. Before 2026-11-05 the chore pass
+removed every scratch directory not touched for two days, including evidence;
+that sweep is gone.
 
 ## Disk pressure
 
@@ -245,15 +262,21 @@ outcome, shortfall_bytes, admission }`, with at most 20 kept reasons and
 errors per step. The estimate is what the candidates were said to hold; the
 measured delta is what the disk gave back, and the two are never merged. A
 refused admission with no pass is an event too. `disk.json` still carries the
-runner's refusal line for the page.
+runner's refusal as historical diagnostic data; it does not define current
+page state.
 
-**Where it shows.** `mc` draws one grey line with the measured free space;
-the last pass with its measured gain beside its estimate remains visible even
-when admission is restored. Any current shortfall to 40 GB remains visible
-after a cleanup; a fresh measurement at or above 40 GB clears that displayed
-shortfall. Under pressure or unknown, it also shows the next cooldown and the
-limit, in yellow (`diskSummary`: the state file and one statfs, no walk).
-`mc tidy` begins with the same lines, and `--json` carries them as `disk`.
+**Where it shows.** `diskSummary` reads the state file and takes one fresh
+statfs measurement; that reading alone supplies the current disk text in the
+page and `mc tidy`. At 30 GB or more the human output is one concise measured
+line, including the healthy interval from 30 GB to the 40 GB cleanup target.
+It does not repeat a past refusal, cleanup outcome, measured/estimated gain,
+protected-data note, target shortfall or expired cooldown. Under pressure or
+when measurement fails, it shows the current measured value or measurement
+failure, and only a still-future retry time. The page's top-level pause notice
+also follows this fresh summary, never the saved `disk.json` line. `--json`
+keeps `last_refusal` and `last_cleanup` as named diagnostic history alongside
+the current `available_bytes` and `status`; history is not erased to simplify
+the human presentation.
 
 The 18 GB lost in two hours that started this goal has not been attributed:
 neither Docker nor any other writer is named as its cause here.

@@ -126,6 +126,7 @@ export async function run(argv, deps = {}) {
   const drained = await (deps.drain || drainIntake)({
     limit: INTAKE_PER_ROUND,
     model: flags.model || null,
+    tool: flags.tool || null,
     deps: { turn: deps.turn, files: deps.files, move: deps.move },
   });
   let wrote = 0;

@@ -434,10 +434,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    the first repository's worktree, with the goal's class routing, model and
    billing as any headless session has them. A goal in `review` gets a review session with
    the `review-session:goal` role instead, on a review candidate (`mc
-   model`). Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can. The model of the goal's last build entry
-   is passed over while another candidate can run on its plan, and taken on its
-   plan when none can: a review never waits for want of another model (Martin,
-   2026-11-03: *"I första hand väljs en annan modell, annars samma"*). With no
+   model`). Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. Build-model diversity is a tie rule, not a reason to abandon a preferred provider or roomier subscription. With no
    candidate on its plan it uses the API
    reserve as a class does (`docs/technical/mc-run.md`, *Work classes and
    capacity*). The models are compared as the catalog spells them, which is
@@ -523,8 +520,12 @@ checks, in order:
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
 output som ingen läser."* Its output is exactly three things:
 
-- **The stage, always one of two.** OK: `mc goal stage merge`, which queues
-  all registered pull requests (*The verbs*). Not OK: `REVIEW.md` in
+- **The stage, always one of two.** OK: `mc goal stage merge`, which directly
+  lands all registered pull requests. Before authorizing it, the review or
+  finish session must complete GREEN `mc gate --whole-selection` on the judged
+  worktrees; landing adds no gate or head validation. See the canonical
+  [publication and direct landing procedure](../../canon/tasks/publish-and-merge.md).
+  Not OK: `REVIEW.md` in
   the goal's directory — the head sha judged, what is wrong and where — then
   `mc goal stage finish`. Nobody reads a review that went to `merge`, so it
   writes no REVIEW.md then.

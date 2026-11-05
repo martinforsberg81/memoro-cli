@@ -124,7 +124,7 @@ catalog and observed capacity choose tool, model and effort at launch. Review
 has its own catalog list, changed with `mc model add|remove review` or
 `mc model set review`.
 
-Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can.
+Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order.
 
 ## Archiving a programme
 

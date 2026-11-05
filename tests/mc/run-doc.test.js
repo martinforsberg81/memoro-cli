@@ -132,7 +132,7 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
 
   it('says how review picks from its ordered list in the same words as mc-goals, mc-plan, ruling 59 and mc model --help', () => {
     const flat = (text) => text.replace(/\s+/gu, ' ');
-    const sentence = 'Review is an ordered list of candidates: it takes the first that can run on its plan now and is not the model the goal was built on, and that model only when no other can.';
+    const sentence = 'Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order.';
     const read = (path) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), 'utf8');
     const places = {
       'docs/technical/mc-run.md': DOC,

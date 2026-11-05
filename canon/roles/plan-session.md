@@ -70,6 +70,10 @@ You move a stage forward only; mc refuses a session's move back.
 
 ## Headless: one role, three reasons
 
+Each unattended launch reads `mc model priority` anew. A provider priority wins
+among usable subscriptions before capacity headroom; `auto` keeps the existing
+candidate ranking. Interactive `mc plan` sessions keep their explicit selection.
+
 Every invocation has `MC_ROLE=plan`. `MC_PLAN_REASON` and the prompt say why
 it started: `finish`, `blocked` or `next_step`. Other programme wakeups are
 mc manager's responsibility. Proposals alone and elapsed time start nothing.

@@ -18,9 +18,9 @@
  * headless session (`MC_HEADLESS=1`) is not one.
  *
  * Every run begins with the disk as the policy reads it: measured free
- * bytes, pressure, the last pass and its shortfall (`diskSummary`) — and
- * `--json` carries it as `disk`. The list's byte counts are what removal is
- * expected to give back, never a measurement.
+ * bytes and current pressure (`diskSummary`) — and `--json` carries the
+ * current reading plus named diagnostic history as `disk`. The list's byte
+ * counts are what removal is expected to give back, never a measurement.
  */
 import { readFileSync } from 'node:fs';
 
@@ -105,7 +105,6 @@ export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyD
   if (reading) {
     stdout.write('\n');
     for (const line of reading.lines) stdout.write(`${line}\n`);
-    stdout.write(`disk: ${reading.limitation}\n`);
   }
   const byRule = new Map();
   for (const item of list.targets) {

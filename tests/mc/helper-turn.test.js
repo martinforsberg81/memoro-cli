@@ -7,7 +7,7 @@
  * that `wrote` comes from the directory and not from what the turn said.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -20,6 +20,11 @@ import {
   describeTurn, drainIntake, helperGround, helperPrompt, programmeRoutes, repoOfFile, runHelperTurn,
 } from '../../src/mc/helper-turn.js';
 import { expandRoleIncludes, sharedRoleText } from '../../src/mc/roles.js';
+import { getAdapter } from '../../src/adapters/index.js';
+import { applyObservation, normaliseCapacity, writeCapacity } from '../../src/mc/model-capacity.js';
+import { changeProviderPriority } from '../../src/mc/model-config.js';
+import { writeBillingApi } from '../../src/mc/billing.js';
+import { runnerDir } from '../../src/mc/paths.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
 const FILE = 'errors-memoro-2026-08-29.md';
@@ -67,6 +72,7 @@ async function turn(overrides = {}, options = {}) {
   const seen = {};
   const result = await runHelperTurn({
     env: e, now: NOW, file: options.file || join(intakeDir(e), FILE),
+    tool: options.tool || null,
     deps: {
       role: () => ROLE, launch: () => LAUNCH,
       ground: GROUND, session: fakeSession(seen, options.session), ...overrides,
@@ -76,6 +82,43 @@ async function turn(overrides = {}, options = {}) {
 }
 
 describe('the helper turn', () => {
+  it('uses the saved Codex priority with the intake candidate and supported effort', async () => {
+    let capacity = applyObservation(normaliseCapacity(null), 'claude', {
+      windows: { five_hour: { fraction_used: 0.9, resets_at: '2026-08-29T13:00:00Z' }, seven_day: { fraction_used: 0.9, resets_at: '2026-09-05T12:00:00Z' } },
+    }, NOW);
+    capacity = applyObservation(capacity, 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-08-29T13:00:00Z' } },
+      models: [{ id: 'gpt-6-luna', efforts: ['high'] }],
+    }, NOW);
+    let seen;
+    let priority = 'codex';
+    const overrides = {
+      catalog: () => ({ providerPriority: priority, fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }),
+      capacity: () => capacity,
+      launch: (tool) => ({ ...LAUNCH, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code') }),
+      session: async (call) => { seen = call; return { status: 0, stdout: CLAUDE_JSON, stderr: '' }; },
+    };
+    const { result } = await turn(overrides);
+    assert.equal(result.tool, 'codex');
+    assert.equal(result.model, 'gpt-6-luna');
+    assert.equal(result.providerPriority, 'codex');
+    assert.match(result.routeWhy, /codex provider priority/u);
+    assert.ok(seen.args.includes('model_reasoning_effort=high'));
+    priority = 'claude';
+    const next = await turn(overrides);
+    assert.deepEqual([next.result.tool, next.result.model, next.result.providerPriority], ['claude', 'sonnet', 'claude']);
+  });
+
+  it('keeps an explicit intake tool ahead of saved priority', async () => {
+    const capacity = applyObservation(normaliseCapacity(null), 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-08-29T13:00:00Z' } },
+      models: [{ id: 'gpt-6-luna', efforts: ['high'] }],
+    }, NOW);
+    const { result } = await turn({ catalog: () => ({ providerPriority: 'codex', fast: [{ tool: 'codex', model: 'gpt-6-luna', effort: 'high' }] }), capacity: () => capacity }, { tool: 'claude' });
+    assert.equal(result.tool, 'claude');
+    assert.equal(result.model, 'sonnet');
+  });
+
   it('does not inherit its caller’s goal or step identity', async () => {
     const { seen } = await turn({}, { env: { ...env(), MC_ROLE: 'goal', MC_PROGRAMME: 'wrong', MC_GOAL: 'wrong/g', MC_STEP: 'p:0', MC_PROJECT: 'p' } });
     assert.equal(seen.env.MC_ROLE, 'intake');
@@ -481,4 +524,50 @@ describe('the proposal a turn leaves behind', () => {
     assert.match(text, /^---\nname: expose-operations\nrepo: memoro\nkind: project\n---\n/u);
     assert.match(text, /## Done when/u);
   });
+});
+
+it('preserves the API reserve decision for an unusable subscription and refuses API off', async t => {
+  const now = new Date('2026-11-05T18:00:00Z');
+  const e = env();
+  t.after(() => rmSync(e.MC_WORK_ROOT, { recursive: true, force: true }));
+  changeProviderPriority(e, 'codex');
+  const root = runnerDir(e);
+  const fullClaude = applyObservation(normaliseCapacity(null), 'claude', {
+    windows: { five_hour: { fraction_used: 1, resets_at: '2026-11-05T22:00:00Z' } },
+  }, now);
+  for (const observation of [
+    { models: [] },
+    { models: [{ id: 'gpt-6-luna', efforts: ['low'] }] },
+    { models: [{ id: 'gpt-6-luna', efforts: ['high'] }], observed_at: '2026-11-01T18:00:00Z' },
+  ]) {
+    const capacity = applyObservation(fullClaude, 'codex', {
+      windows: { primary: { fraction_used: 0.1, resets_at: '2026-11-05T22:00:00Z' } },
+      models: observation.models,
+    }, new Date(observation.observed_at || now));
+    writeCapacity(capacity, { root });
+    const calls = [];
+    const options = {
+      file: FILE,
+      env: e, now, tool: null,
+      deps: {
+        role: () => ROLE, ground: GROUND,
+        launch: tool => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool,
+          adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/provider' } }),
+        session: async call => { calls.push(call); return { status: 0, stdout: '{"type":"turn.completed","usage":{}}', stderr: '' }; },
+      },
+    };
+    writeBillingApi('codex', true, { root });
+    const result = await runHelperTurn(options);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].bin, process.execPath, 'API reserve must not launch the unusable subscription directly');
+    assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
+    assert.deepEqual(calls[0].args.slice(1, 4), ['codex', 'gpt-6-luna', '/fake/provider']);
+    assert.equal(result.billing, 'credits');
+    assert.match(result.routeWhy, /API reserve/u);
+    writeBillingApi('codex', false, { root });
+    const off = await runHelperTurn(options);
+    assert.equal(off.ok, false);
+    assert.match(off.reason, /codex API off/u);
+    assert.equal(calls.length, 1, 'API off must launch neither API nor an unusable subscription');
+  }
 });
