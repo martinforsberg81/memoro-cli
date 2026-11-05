@@ -124,7 +124,7 @@ describe('the grid', () => {
       const cells = rows.map((line) => [line.slice(col.kind.x, col.kind.x + col.kind.width).trim(),
         line.slice(col.state.x, col.state.x + col.state.width).trim(),
         line.slice(col.progress.x, col.progress.x + col.progress.width).trim()]);
-      assert.deepEqual(cells, [['goal', 'build', '2 sess'], ['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
+      assert.deepEqual(cells, [['', 'build', '2 sess'], ['BUILD', 'running', '40 min'], ['WAIT', 'queued', '10 min']]);
     }
   });
 
@@ -143,11 +143,11 @@ describe('the grid', () => {
     assert.equal(lane.slice(col.state.x, col.progress.x + col.progress.width).replace(/\s+/gu, ' ').trim(), 'running 40 min');
   });
 
-  it('draws a goal with `goal` in the kind column, never `g ·` before its name', () => {
+  it('draws a goal without a repeated kind label, keeping the shared columns', () => {
     const lines = renderPageLines(threeRows(), { columns: 120, now: NOW }).map(plain);
     const row = lines.find((line) => line.includes('#1102'));
     const col = gridColumns(120);
-    assert.equal(row.slice(col.kind.x, col.kind.x + col.kind.width).trim(), 'goal');
+    assert.equal(row.slice(col.kind.x, col.kind.x + col.kind.width).trim(), '');
     assert.equal(row.slice(col.name.x, col.name.x + col.name.width).trim(), 'grid-goal');
     assert.ok(!lines.some((line) => /(?:^| )g · /u.test(line)), 'no row says `g ·`');
   });

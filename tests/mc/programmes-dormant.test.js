@@ -108,12 +108,12 @@ describe('dormant programmes on the page', () => {
       planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
     });
     const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
-    assert.match(wide.find((line) => line.startsWith('  mc ')), /2 proposals · plan codex 1/u);
-    assert.match(wide.find((line) => line.startsWith('  empty ')), /1 proposal · no plan session/u);
+    assert.match(wide.find((line) => line.startsWith('  mc ')), /● plan codex 1 · 2 proposals/u);
+    assert.match(wide.find((line) => line.startsWith('  empty ')), /no plan session · 1 proposal/u);
     assert.doesNotMatch(wide.find((line) => line.startsWith('  zero ')), /proposal/u);
     const narrow = programmesOf(renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, expand: true }));
     const mc = narrow.find((line) => line.startsWith('  mc '));
-    assert.doesNotMatch(mc, /2 proposals/u);
+    assert.match(mc, /● plan codex 1/u);
     assert.ok(mc.length <= 60, mc);
   });
 
@@ -137,7 +137,7 @@ describe('dormant programmes on the page', () => {
     for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) {
       assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
     }
-    assert.ok(lines.some((line) => /^ {2}empty +no goal yet/u.test(line)));
+    assert.ok(lines.some((line) => /^ {2}empty · no goal yet/u.test(line)));
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
     const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
     assert.deepEqual(numbers.sort(), [1, 2, 3]);

@@ -41,23 +41,24 @@ heading carries the whole page's counts: `N active · N dormant · N goals`,
 then every goal status by count, biggest first (`blocked 1 · ready 1`), each
 in its status colour (`statusRollup`, `page-render.js`).
 
-Each active programme has a heading line of its own (`programmeLine`): its
-name, its goal count (`2 goals`, or `no goal yet`) — not its statuses, which
-are on its goal rows — then, in grey, the number of files directly in its
-`proposals/` directory (`N proposal(s)`; subdirectories such as `archive/`
-are not counted, and zero is not drawn), its planning sessions by provider
-(`plan claude 1 · codex 2`, or `no plan session`) and its other open sessions
-(`1 open`). On a narrow line the proposal count gives way first, then —
-when it has plan sessions — the goal count; the planning-session words stay. Dormant programmes have no goals
-and fold into one line under the heading, which says how many of them have a
-plan session and how many have proposals; `a` draws them all, and `mc
-programs list` gives each programme's goal and proposal counts. An open
-planning session alone does not make one active.
+Each active programme has a heading with ` · ` between its name, goal count,
+standalone PR count, planning sessions by provider, other open sessions and
+proposal count. Active session metadata is cyan; counts and absent sessions
+are grey. Dormant programmes have no goals or standalone PRs and fold into
+one line; `a` draws them all. A planning session alone does not make one active.
+A column title row labels the shared grid below PROGRAMMES.
 
-Every goal has a row in the grid: a large `●` in the left margin, `goal`,
-name, first repository, stage, `N sess`, and open PRs. Its circle uses its
-status colour; a live current file also gives it a bold name. The tail begins with `criteria <met>/<all>` (green when all
-hold), then what it waits on or the last session's words:
+Standalone PRs owned by a programme's planning worktree (or `plan/<programme>`
+branch) appear under that programme with `pr` in the kind cell. Goal-owned
+PRs stay with their goal and are never repeated as standalone rows. A programme
+with only a standalone PR remains visible.
+
+Every goal has a row in the grid: a large `●` in the left margin, name,
+first repository, stage, `N sess`, and open PRs. The kind cell is empty for
+goals; its space keeps columns aligned with SESSIONS and MERGES. Primary text
+is white while the goal is unfinished, with metadata and state colours kept
+distinct. Done and dropped rows are entirely grey. Criteria counts remain
+in JSON and goal detail, and no longer appear in each row. The tail says:
 
 - a higher phase: yellow `phase <n> — after phase <n-1>`;
 - blocked in any stage: red `blocked · waits on a person`, then its question;
@@ -213,13 +214,13 @@ SESSIONS, DEV and MERGES. The same kind of fact begins at the same column.
 | column | width ≥ 90 / < 90 | PROGRAMMES | SESSIONS | DEV | MERGES |
 |---|---|---|---|---|---|
 | mark + nr | 6 | status circle, no number | status circle and lane number | status circle | status circle |
-| kind | 8 | `goal` | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
+| kind | 8 | empty for goals, `pr` for standalone PRs | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
 | name | 28 / 20, floor 10 | goal name | programme/goal | holder | branch or repository |
 | repo | 12 / 0 | first repository | repository | repository | repository |
 | state | 9 | stage | running or idle | leased, idle or starting | round phase or queue state |
 | progress | 10 | N sess | elapsed | time since used | state age |
 | PR | 9 | open PRs | goal's open PRs | port | queue item or last landing |
-| tail | remainder | criteria and last words | model and check-ins | branch and worktree | reason and title |
+| tail | remainder | last words | model and check-ins | branch and worktree | reason and title |
 
 The tail gives way first, then the repository below 90 columns, then the
 name. The state, progress and PR widths hold. `clipCell` clips with `…`

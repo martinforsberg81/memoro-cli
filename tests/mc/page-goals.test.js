@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  goalsOf, intakeSection, mergesSection, programmesSection, runnerSection, sessionsSection,
+  attachPrs, goalsOf, intakeSection, mergesSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -68,7 +68,7 @@ const GOALS = [
 const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 
 /** The goal row named `name`, found by its kind and its name. */
-const goalLineOf = (lines, name) => lines.find((line) => new RegExp(` goal +${name} `, 'u').test(plain(line)));
+const goalLineOf = (lines, name) => lines.find((line) => new RegExp(` +${name} `, 'u').test(plain(line)));
 
 /** The PROGRAMMES section's lines, from its heading to the end of the page. */
 function programmesOf(lines) {
@@ -85,20 +85,19 @@ describe('goal rows on the page', () => {
 
 
     const mcHeading = at(/^ {2}mc\s/u);
-    const cleanup = at(/^  ● {5}goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+waits on Martin$/u);
-    const rollout = at(/^  ● {5}goal +rollout\s+memoro-cli\s+build\s+3 sess\s+the second repository$/u);
+    const cleanup = at(/^  ● +cleanup\s+memoro-cli\s+build\s+1 sess\s+waits on Martin$/u);
+    const rollout = at(/^  ● +rollout\s+memoro-cli\s+build\s+3 sess\s+the second repository$/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
     assert.equal(rollout, cleanup + 1, 'rollout is drawn after cleanup, in name order');
   });
 
-  it('a goal row says criteria 1/2 for a goal with one of two criteria met, green once all are', () => {
+  it('keeps criteria in the data and leaves them out of the rows', () => {
     const rows = [{ ...GOALS[1], criteria: { met: 1, all: 2 } }, { ...GOALS[0], criteria: { met: 2, all: 2 } }];
     const data = pageData({ programmes: programmesSection({ goalRows: rows, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));
-    assert.ok(lines.some((line) => /^  ● {5}goal +cleanup\s+memoro-cli\s+build\s+1 sess\s+criteria 1\/2 · waits on Martin$/u.test(line)), lines.join('\n'));
-    const painted = programmesOf(renderPageLines(data, { columns: 120, now: NOW, colour: true }));
-    assert.match(goalLineOf(painted, 'rollout'), /\u001b\[[0-9;]*32mcriteria 2\/2/u);
-    assert.doesNotMatch(goalLineOf(painted, 'cleanup'), /\u001b\[[0-9;]*32mcriteria/u);
+    assert.doesNotMatch(lines.join('\n'), /criteria/u);
+    assert.match(goalLineOf(lines, 'rollout'), /the second repository$/u);
+    assert.deepEqual(data.programmes.programmes.find((group) => group.programme === 'mc').goals[0].criteria, { met: 1, all: 2 });
   });
 
   it('the state words keep their colours', () => {
@@ -109,7 +108,7 @@ describe('goal rows on the page', () => {
     // green for `build` while a session is on it, red for any stage of a blocked goal
     assert.match(rollout, /\u001b\[[0-9;]*32m\s*build/u);
     assert.doesNotMatch(plain(rollout), /g · /u, 'no `g ·` before the name');
-    assert.match(plain(rollout), /^  ● {5}goal {4}rollout/u, '`goal` in the kind column');
+    assert.match(plain(rollout), /^  ● +rollout/u, 'the goal name without a repeated kind label');
     assert.match(cleanup, /\u001b\[[0-9;]*31m\s*build/u);
   });
 
@@ -125,6 +124,13 @@ describe('goal rows on the page', () => {
     assert.match(landed, /landed #1235 as 60e9f82$/u);
     assert.doesNotMatch(landed, /Merge #1235/u);
     assert.match(letgo, /dropped .*wrong goal$/u);
+    const painted = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }));
+    for (const name of ['landed', 'letgo']) {
+      const codes = [...goalLineOf(painted, name).matchAll(/\u001b\[(\d+)m/gu)].map((match) => match[1]);
+      assert.ok(goalLineOf(painted, name).includes(`\u001b[90m${name}`), 'the name is explicitly grey');
+      assert.ok(codes.every((code) => ['90', '0'].includes(code)), 'the entire finished row is grey');
+    }
+
   });
 
   it('a goal that does not parse is drawn with its problem', () => {
@@ -252,5 +258,29 @@ describe('a goal in a phase its programme has not reached', () => {
     const row = goalLineOf(lines, 'headless-plan');
     assert.match(plain(row), /plan .*phase 3 — after phase 2$/u);
     assert.match(row, /\u001b\[33mphase 3 — after phase 2/u, 'yellow');
+  });
+});
+
+describe('programme pull requests', () => {
+  it('draws unclaimed plan PRs under their programme, including a programme with no goals', () => {
+    const programmes = programmesSection({ goalRows: [{ ...GOALS[0], carries: [{ repo: 'memoro-cli', pr: 3 }] }], programmes: ['empty'] });
+    const pr = (number, name, branch = `plan/${name}`) => ({ repo: 'memoro-cli', number, title: `Change ${number}`, branch, owner: { kind: 'plan', name } });
+    const carried = pr(3, 'mc');
+    const standalone = pr(4, 'mc');
+    const only = pr(5, 'empty');
+    const newProgramme = pr(6, 'new-programme');
+    attachPrs({ programmes, pulls: { items: [carried, standalone, only, newProgramme] } });
+    const group = (name) => programmes.programmes.find((item) => item.programme === name);
+    assert.deepEqual(group('mc').goals[0].prs, [carried]);
+    assert.deepEqual(group('mc').prs, [standalone]);
+    assert.deepEqual(group('empty').prs, [only]);
+    assert.deepEqual(group('new-programme').prs, [newProgramme]);
+    assert.equal(group('empty').dormant, false, 'a PR keeps its programme visible');
+    for (const columns of [60, 80, 120]) {
+      const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns, now: NOW }));
+      for (const number of [3, 4, 5, 6]) assert.equal(lines.filter((line) => line.includes(`#${number}`)).length, 1);
+      assert.ok(lines.some((line) => /pr +Change 5/u.test(line)), 'standalone PR has its own row');
+      assert.ok(lines.every((line) => width(line) <= columns));
+    }
   });
 });
