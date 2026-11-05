@@ -74,7 +74,7 @@ function operation(lines, c, wide, label, status = '', tone = ['grey'], { indent
     if (status) detail(lines, c, wide, indent + labelWide + 3, status, tone);
     return;
   }
-  const prefix = `${' '.repeat(indent)}${label.padEnd(labelWide)} · `;
+  const prefix = `${' '.repeat(indent)}${label.padEnd(labelWide)}   `;
   const wrapped = [];
   detail(wrapped, c, wide, prefix.length, status, tone);
   if (wrapped.length) {
@@ -123,7 +123,7 @@ export function mergesLines(lines, c, wide, merges, expand) {
     if (expand) {
       for (const item of waiting) {
         const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
-        detail(lines, c, wide, 6, `${refs} · ${item.state || 'unknown'}${item.progress ? ` · ${item.progress}` : ''}`, stateTone(item.state));
+        operation(lines, c, wide, refs, `${item.state || 'unknown'}${item.progress ? ` · ${item.progress}` : ''}`, stateTone(item.state));
         detail(lines, c, wide, 8, item.name || item.title || '');
       }
       detail(lines, c, wide, 6, `${repo.day_count || 0} merges in 24 h${repo.last ? ` · last ${age(repo.last.age_seconds)}${repo.last.pr ? ` · #${repo.last.pr}` : ''}` : ' · no landing yet'}`);

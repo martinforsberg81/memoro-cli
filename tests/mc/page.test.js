@@ -430,7 +430,7 @@ describe('DEPLOY', () => {
     assert.equal(p.age_seconds, 7200);
     assert.equal(p.differs, false);
     assert.equal(p.running, null);
-    assert.match(strip(line()), /RECORDED +· 1a2b3c4 · deployed 2 h ago/u);
+    assert.match(strip(line()), /RECORDED + 1a2b3c4 · deployed 2 h ago/u);
     // The holder is on the object and in `mc status`, and not on the line: it
     // is a hostname, it is bookkeeping, and it was being spent before what is
     // wrong (2026-09-06).
@@ -458,8 +458,8 @@ describe('DEPLOY', () => {
     const p = section({ live: version(OTHER) });
     assert.equal(p.differs, true);
     const drawn = line({ live: version(OTHER) });
-    assert.match(strip(drawn), /LIVE +· b3e65b6 · observed 60 min ago/u);
-    assert.match(strip(drawn), /RECORDED +· 1a2b3c4/u);
+    assert.match(strip(drawn), /LIVE + b3e65b6 · observed 60 min ago/u);
+    assert.match(strip(drawn), /RECORDED + 1a2b3c4/u);
     assert.match(strip(drawn), /version mismatch/u);
     assert.match(rowWith(drawn.split('\n'), 'version mismatch'), /\x1b\[33m/u);
   });
@@ -470,11 +470,11 @@ describe('DEPLOY', () => {
     assert.equal(fresh.running.short, 'b3e65b6');
     assert.equal(fresh.running.late, false);
     assert.match(strip(line({ attempt: { ...DEPLOYED, started, ended: '', sha: OTHER, outcome: 'running' } })),
-      /ATTEMPT +· b3e65b6 · running · 5 min ago/u);
+      /ATTEMPT + b3e65b6 · running · 5 min ago/u);
 
     const old = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running' };
     assert.equal(section({ attempt: old }).running.late, true);
-    assert.match(strip(line({ attempt: old })), /ATTEMPT +· b3e65b6 · no end recorded · 4 h ago/u);
+    assert.match(strip(line({ attempt: old })), /ATTEMPT + b3e65b6 · no end recorded · 4 h ago/u);
   });
 
   it('reads a running deploy\'s pid from the record: alive is running however long, gone is late at once', () => {
@@ -482,7 +482,7 @@ describe('DEPLOY', () => {
     const row = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running', pid: '4242' };
     const alive = (pid) => pid === 4242;
     assert.equal(section({ attempt: row, alive }).running.late, false);
-    assert.match(strip(line({ attempt: row, alive })), /ATTEMPT +· b3e65b6 · running · 4 h ago/u);
+    assert.match(strip(line({ attempt: row, alive })), /ATTEMPT + b3e65b6 · running · 4 h ago/u);
     assert.equal(section({ attempt: { ...row, started }, alive: () => false }).running.late, true);
 
     // The first deploy there ever was, with nothing collected: still drawn.
@@ -491,7 +491,7 @@ describe('DEPLOY', () => {
     const drawn = paintedPage(pageData({
       runner: runnerSection({ rows: [], now: NOW, deploy: null, attempt: { ...row, started }, live: null, alive }),
     }));
-    assert.match(strip(rowWith(drawn, 'ATTEMPT')), /ATTEMPT +· b3e65b6 · running · 5 min ago/u);
+    assert.match(strip(rowWith(drawn, 'ATTEMPT')), /ATTEMPT + b3e65b6 · running · 5 min ago/u);
   });
 
   /**
@@ -507,7 +507,7 @@ describe('DEPLOY', () => {
     assert.equal(section({ attempt: failed }).failed.stopped_at, 'Deploy source preflight');
     for (const columns of [100, 120]) {
       assert.match(strip(line({ attempt: failed }, { columns })),
-        /ATTEMPT +· b3e65b6 · failed · 30 min ago\n +Deploy source preflight/u);
+        /ATTEMPT + b3e65b6 · failed · 30 min ago\n +Deploy source preflight/u);
     }
   });
 
@@ -517,7 +517,7 @@ describe('DEPLOY', () => {
       const p = section({ deploy: null, live: null, attempt });
       assert.equal(p.attempt.outcome, outcome);
       const text = strip(line({ deploy: null, live: null, attempt }));
-      assert.match(text, /LIVE +· unknown/u);
+      assert.match(text, /LIVE + unknown/u);
       assert.ok(text.includes(outcome));
       assert.match(text, /source preflight/u);
     }
@@ -528,14 +528,14 @@ describe('DEPLOY', () => {
     assert.equal(p.sha, null);
     assert.equal(p.differs, false, 'there is no row to differ from');
     assert.match(strip(line({ deploy: null, attempt: null })),
-      /LIVE +· 1a2b3c4 · observed 60 min ago/u);
+      /LIVE + 1a2b3c4 · observed 60 min ago/u);
 
     assert.equal(section({ deploy: null, attempt: null, live: null }), null);
     const quiet = paintedPage(pageData({ runner: runnerSection({ rows: [], now: NOW, alive: () => false }) }));
     assert.equal(quiet.filter((row) => strip(row).includes('production')).length, 0,
       'a machine that has never deployed and never collected says nothing about production');
     // The section is there all the same, as the desks are: one of it, always.
-    assert.match(strip(rowWith(quiet, 'DEPLOY     ')), /^ {4}DEPLOY +· memoro/u);
+    assert.match(strip(rowWith(quiet, 'DEPLOY     ')), /^ {4}DEPLOY + memoro/u);
   });
 });
 
@@ -852,18 +852,18 @@ describe('MERGES', () => {
       section({ queued: [job(2, { state: 'red', reason: 'tests red' })] })];
     for (const merges of fixtures) for (const columns of [60, 80, 120, 160]) {
       const lines = drawing(merges, columns);
-      assert.ok(lines.some((line) => /memoro +·/u.test(line)));
-      assert.ok(lines.some((line) => /memoro-cli +·/u.test(line)));
+      assert.ok(lines.some((line) => /memoro +/u.test(line)));
+      assert.ok(lines.some((line) => /memoro-cli +/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns));
     }
-    assert.match(drawing(section()).join('\n'), /memoro +· queue empty[\s\S]*idle/u);
+    assert.match(drawing(section()).join('\n'), /memoro + queue empty[\s\S]*idle/u);
   });
 
   it('puts counts on the heading, PR numbers in landing order on their repository row', () => {
     const merges = section({ queued: [job(3, { repo: 'memoro-cli' }), job(2), job(1, { since: '2026-08-29T11:00:00Z' })] });
     assert.deepEqual(merges.repos.map((repo) => repo.waiting.map((item) => item.pr)), [[1, 2], [3]]);
     const lines = drawing(merges);
-    assert.match(lines.join('\n'), /memoro +· 2 in queue: #1 #2/u);
+    assert.match(lines.join('\n'), /memoro + 2 in queue: #1 #2/u);
     assert.deepEqual(lines.filter((line) => /in queue:/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []), ['#1', '#2', '#3']);
     assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [3600, 600, 600]);
   });
@@ -878,7 +878,7 @@ describe('MERGES', () => {
     assert.equal(repo.waiting.length, 1);
     for (const columns of [60, 80, 120]) {
       const lines = drawing(merges, columns);
-      assert.match(lines.join('\n'), /merging #11651 +· \[━●·\] · gate · 4 min/u);
+      assert.match(lines.join('\n'), /merging #11651 + \[━●·\] · gate · 4 min/u);
       assert.match(renderPageLines(pageData({ merges }), { columns, expand: true }).join('\n'), /feature/u);
       assert.match(lines.join('\n'), /1 in queue: #11652/u);
       assert.ok(lines.every((line) => width(line) <= columns));
@@ -896,7 +896,7 @@ describe('MERGES', () => {
   it('keeps two concurrent landing queues separate', () => {
     const merges = section({ landing: [LANDING, { ...LANDING, repo: 'memoro-cli', pr: 838 }] });
     const text = drawing(merges).join('\n');
-    assert.match(text, /memoro +· queue empty[\s\S]*merging #11651 +· \[━●·\] · gate[\s\S]*memoro-cli +· queue empty[\s\S]*merging #838 +· \[━●·\] · gate/u);
+    assert.match(text, /memoro + queue empty[\s\S]*merging #11651 + \[━●·\] · gate[\s\S]*memoro-cli + queue empty[\s\S]*merging #838 + \[━●·\] · gate/u);
   });
 
   it('keeps legacy batch members in their repository\'s round, never as waiting', () => {
@@ -907,8 +907,8 @@ describe('MERGES', () => {
     assert.equal(merges.repos[0].landings.length, 2);
     assert.equal(merges.repos[0].waiting.length, 0);
     const text = drawing(merges).join('\n');
-    assert.match(text, /merging #11651 +· \[━●·\] · gate/u);
-    assert.match(text, /merging #11652 +· \[···\] · landing/u);
+    assert.match(text, /merging #11651 + \[━●·\] · gate/u);
+    assert.match(text, /merging #11652 + \[···\] · landing/u);
     assert.match(text, /with #11651/u);
   });
 
@@ -928,7 +928,7 @@ describe('MERGES', () => {
     assert.deepEqual(repo.waiting.map((item) => item.pr), [2]);
     const lines = drawing(merges, 120, true);
     assert.doesNotMatch(lines.join('\n'), /mending/u);
-    assert.match(strip(rowWith(lines, 'failed #1')), /failed #1 +· red · 5 min/u);
+    assert.match(strip(rowWith(lines, 'failed #1')), /failed #1 + red · 5 min/u);
     assert.match(rowWith(lines, 'tests red'), /\x1b\[31m/u);
     assert.match(lines.map(strip).join('\n'), /1 in queue: #2/u);
   });
@@ -973,8 +973,8 @@ describe('MERGES', () => {
     for (const columns of [60, 80, 120]) {
       const rows = drawing(merges, columns, true);
       const text = rows.map(strip).join('\n');
-      assert.match(text, /paused +· deploy/u);
-      assert.match(text, /paused +· gate round/u);
+      assert.match(text, /paused + deploy/u);
+      assert.match(text, /paused + gate round/u);
       assert.equal(rows.filter((line) => strip(line).includes('merger stopped')).length, 2);
       assert.ok(rows.every((line) => width(line) <= columns));
     }
@@ -1040,7 +1040,7 @@ describe('MERGES', () => {
       assert.deepEqual(folded.map(strip).filter((line) => /in queue:|^ {17}#/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []),
         Array.from({ length: QUEUED_DRAWN }, (_, i) => `#${13200 + i}`));
       const all = renderPageLines(pageData({ merges }), { columns, expand: true, now: NOW });
-      assert.deepEqual(all.filter((line) => /#\d+ · queued/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
+      assert.deepEqual(all.filter((line) => /#\d+ +queued/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
         Array.from({ length: 30 }, (_, i) => `#${13200 + i}`));
       assert.ok(all.every((line) => width(line) <= columns));
     }
@@ -1429,7 +1429,7 @@ describe('the page', () => {
     assert.equal(code, 0);
     assert.equal(shown.length, 2);
     assert.match(shown[0], /^ {2}┌─ dormant-one · 0 goals/mu);
-    assert.match(shown[0], /#14008 · queued/u);
+    assert.match(shown[0], /#14008 +queued/u);
     assert.match(shown[0], /goal\/preview-only/u);
     assert.doesNotMatch(shown[1], /dormant-one|#14008|goal\/preview-only/u);
     for (const text of shown) {
