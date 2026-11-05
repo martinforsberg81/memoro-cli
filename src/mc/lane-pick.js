@@ -1,22 +1,27 @@
 /**
- * What a free lane takes next, of every kind of work on every repository.
+ * What a free lane takes next from the candidates the runner supplies.
  *
- * `mc run lanes <n>` is the total (lane-count.js): n lanes, none of them bound
- * to a repository or a kind. A lane that frees asks this for the next piece
- * of work, out of everything that could start now:
+ * `run.js`'s `nextWork` supplies only startable goal sessions today:
  *
- * - a `review` session — a project's review step, or a goal in review;
- * - a `plan` session — a goal in finish, or in merge after a red (goals.js `goalSession`);
- * - a `build` session — a project's step (variant `project`) or a goal
- *   (variant `goal`).
+ * - `review` for a goal in review;
+ * - `plan` for a blocked goal, a goal in finish or merge after a red, and the
+ *   programme wakeup after all its goals are done;
+ * - `build` for a goal in build.
  *
- * The order is finishing before starting: the project this lane has just run
- * goes on (a project holds its lane from its first step to its review), then
- * reviews and plan sessions, then a project's build, then a goal's. Within one of those, a step
- * the API cut off goes first (its cache is warm, ruling 33), and then the work
- * that has waited longest: the oldest `since`, which is when the work last
- * moved (a project's register entry, a goal's last log entry). A tie keeps the
- * order the candidates came in.
+ * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
+ * first repository, and `phaseOpen` (goals in the lowest unfinished valid
+ * phase run side by side; later phases wait for lower goals to finish). It
+ * also excludes claims/current session files and reviews without an available
+ * route. The runner does not schedule project steps. `variant: 'project'` and
+ * project-shaped build/review items remain accepted legacy inputs to this
+ * picker; they do not describe today's runner candidates.
+ *
+ * With no eligible carry, review and plan tie at the first rank, then legacy
+ * project builds, then goal builds. Within a rank, `resumed` sorts first (the
+ * current goal caller sets it false), then oldest `since` (goal log time, or
+ * the programme wakeup's empty/oldest value), then input order. A surviving
+ * carry is chosen before that ordering: it wins within the fair set regardless
+ * of rank, age, or `resumed`.
  *
  * **No repository takes every lane while another waits.** Each repository
  * with work, or with a session running, has a share of the lanes:
@@ -38,12 +43,14 @@ function rankOf(item) {
 }
 
 /**
- * `{ items, held, lanes, carry }` → the item to start, or null.
+ * `{ items, held, lanes, carry }` → the item to start, or null. `lanes` is
+ * the machine-wide lane cap, not a per-repository allowance.
  *
  * `items`: `{ name, repo, kind: 'review'|'plan'|'build', variant: 'project'|'goal'|null,
- * since, resumed }` — everything that could start now, already without what
- * another lane holds. `held`: the repository of every session in flight on
- * this machine, one entry per session. `carry`: the name this lane ran a
+ * since, resumed }` — caller-approved candidates. `variant: 'project'` and
+ * project build/review kinds are retained for compatibility, although
+ * `run.js` currently supplies goal sessions only. `held`: one repository per
+ * in-flight session known to the caller. `carry`: the name this lane ran a
  * moment ago, or null.
  */
 export function pickWork({ items = [], held = [], lanes = 1, carry = null } = {}) {
@@ -53,6 +60,8 @@ export function pickWork({ items = [], held = [], lanes = 1, carry = null } = {}
   const active = new Set([...held, ...items.map((item) => item.repo)]);
   const share = Math.ceil(Math.max(1, lanes) / Math.max(1, active.size));
   const full = (repo) => (holding.get(repo) || 0) >= share;
+  // If any candidate repository is below its share, exclude full repositories;
+  // otherwise all candidates remain eligible. Carry cannot bypass this filter.
   const fair = items.some((item) => !full(item.repo)) ? items.filter((item) => !full(item.repo)) : items;
   const carried = carry ? fair.find((item) => item.name === carry) : null;
   if (carried) return carried;

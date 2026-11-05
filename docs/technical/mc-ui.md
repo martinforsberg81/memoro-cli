@@ -92,16 +92,25 @@ messages and proposal filenames remain in JSON and the digest.
 ### DEV
 
 `page-operations.js` groups environments by repository. Each row shows MAIN or
-SLOT, its port/address and the server's recorded state. The holder follows as
-a child; `holder gone` is a separate yellow warning, independent of idle state.
-`a` adds full URL, service, last-use age, branch and worktree. Ports no longer
-occupy a PR column. Queue rows show the recorded holder and elapsed wait in
-queue order, the first three normally and all with `a`.
+SLOT, its port/address and the projected state. The holder follows as a child;
+`holder gone` is a separate warning for a recorded session holder whose pid is
+not alive, independent of idle state. `a` adds full URL, service, last-use age,
+branch and worktree. Ports no longer occupy a PR column. Queue rows show the
+recorded holder and elapsed wait in queue order, the first three normally and
+all with `a`.
 
-All fields come from `devSection` / `readPool` (`dev-pool.js`), using recorded
-holders rather than guessing from worktree paths. The JSON registry and queue
-projection is unchanged. The collector still distinguishes running, leased
-and starting, and does not sweep or rewrite records during collection.
+`readPool` / `devSection` (`dev-pool.js`) project registry and queue records;
+they do not probe HTTP health. `readPool` leaves registry records unswept,
+filters servers and queue tickets by pid liveness, and reads the main checkout
+record. `starting` is only a recent-registration heuristic: no recorded use or
+holder and registration within `STARTING_SECONDS`. It is not evidence that a
+server has not answered. `running` counts projected server rows that are not
+`starting` (including idle rows), not servers confirmed to answer. `leased`
+uses the recorded holder and last-use age against the configured stale window;
+a bare-verb holder is not treated as a gone session and remains leased until
+that window expires. `cold` is not produced by this DEV projection. The
+collector does not sweep or rewrite the registry or queue; dead records await
+a writer. These semantics describe the current projection, not server health.
 
 ### MERGE
 

@@ -1,7 +1,7 @@
 /**
  * DEV on the page (goal mc/dev-section): the dev servers, and the session that
- * holds each. The heading counts the servers that answer, the leased ones and
- * the waiters; one row per server names its holder; a holder whose session
+ * holds each. The heading counts registry-derived non-starting rows, leased
+ * ones and waiters; one row per server names its holder; a holder whose session
  * has ended says `holder gone` in yellow; the queue is one yellow row; and
  * `mc --json` carries `dev` with every field the rows are drawn from.
  *
