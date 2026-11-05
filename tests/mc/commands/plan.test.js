@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -21,6 +21,8 @@ import {
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
 import { expandRoleIncludes, instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
+import { setLogPath } from '../../../src/mc/logger.js';
+import { withoutSessionIdentity } from '../../../src/mc/session-role.js';
 import { PLAN_ROLE } from '../../../src/mc/goals.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
@@ -329,7 +331,7 @@ describe('the launch', () => {
     assert.equal(opened[0].programme, 'msr-core');
     assert.equal(opened[0].roleName, PLAN_ROLE);
     // The session already in the directory is picked up, with no intro;
-    // `pick: null` is `openInWorkArea`'s "the most recent one here, else new".
+    // `pick: null` asks for the newest provably compatible conversation.
     assert.equal(opened[0].pick, null);
   });
 
@@ -464,3 +466,52 @@ describe('mc plan is the person’s entrance, not a session’s next action', ()
     }
   });
 });
+
+for (const tool of ['codex', 'claude']) {
+  it(`mc plan composes ${tool} fresh, compatible resume and --new through the real opener`, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-authority-'));
+    const areaRoot = join(root, 'programs', 'mc');
+    mkdirSync(areaRoot, { recursive: true });
+    const env = { ...withoutSessionIdentity(process.env), MC_HOME: join(root, 'home'), MC_WORK_ROOT: root,
+      CODEX_HOME: join(root, 'codex'), CLAUDE_CONFIG_DIR: join(root, 'claude') };
+    for (const key of ['CLAUDECODE', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_CI']) delete env[key];
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\nexit 99\n');
+    chmodSync(join(bin, 'codex'), 0o700);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath}`;
+    setLogPath(join(root, 'mc.log'));
+    t.after(() => { process.env.PATH = oldPath; setLogPath(null); rmSync(root, { recursive: true, force: true }); });
+    const calls = [];
+    const stderr = sink();
+    const deps = {
+      cwd: root, env, stderr, stdout: sink(), repos: REPOS,
+      ensure: () => ({ ok: true, path: areaRoot, repos: ['memoro-cli'] }),
+      open: (options) => openInWorkArea({ ...options, register: () => () => {},
+        spawn: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; } }),
+    };
+    assert.equal(await run(['mc', `--${tool}`, '--model', 'chosen-model'], deps), 0);
+    const fresh = calls[0];
+    assert.equal(fresh.options.env.MC_ROLE, PLAN_ROLE);
+    assert.equal(fresh.options.env.MC_PROGRAMME, 'mc');
+    assert.ok(fresh.args.includes('chosen-model'));
+    assert.match(fresh.args.at(-1), /plan session for the `mc` programme/u);
+    const id = tool === 'claude' ? fresh.args[fresh.args.indexOf('--session-id') + 1] : '11111111-0000-4000-8000-000000000001';
+    const directory = tool === 'codex' ? join(env.CODEX_HOME, 'sessions') : join(env.CLAUDE_CONFIG_DIR, 'projects', areaRoot.replace(/[/.]/gu, '-'));
+    mkdirSync(directory, { recursive: true });
+    const entries = tool === 'codex' ? [
+      { type: 'session_meta', payload: { id, cwd: areaRoot } },
+      { type: 'turn_context', payload: { developer_instructions: JSON.parse(fresh.args.find((arg) => arg.startsWith('developer_instructions=')).slice('developer_instructions='.length)) } },
+    ] : [{ type: 'user', cwd: areaRoot, message: { content: 'hello' } }];
+    writeFileSync(join(directory, tool === 'codex' ? `rollout-${id}.jsonl` : `${id}.jsonl`), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+    assert.equal(await run(['mc', `--${tool}`], deps), 0);
+    assert.ok(calls[1].args.includes(id), 'compatible plan conversation must resume');
+    assert.ok(calls[1].args.includes(tool === 'claude' ? 'opus' : 'gpt-6.1-sol'), 'planning keeps its provider default model');
+    assert.ok(!calls[1].args.some((arg) => arg.includes('Wait for him.')), 'no intro on continuation');
+    assert.equal(await run(['mc', `--${tool}`, '--new'], deps), 0);
+    assert.ok(!calls[2].args.includes(id));
+    assert.match(calls[2].args.at(-1), /plan session for the `mc` programme/u);
+    assert.equal(stderr.out.text, '');
+  });
+}

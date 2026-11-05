@@ -31,7 +31,8 @@ import { openSync, readSync, closeSync, lstatSync, readdirSync, rmSync, statSync
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { log } from './logger.js';
+import { log, logPath } from './logger.js';
+import { normalizeSessionRole } from './session-role.js';
 
 const HEAD_BYTES = 65536;
 
@@ -235,6 +236,78 @@ export function readHead(path) {
     opening = label(textOf(entry.message?.content ?? payload.content));
   }
   return { cwd, label: opening };
+}
+
+/** A launch marker is evidence only in a native developer instruction field. */
+export function launchIdentityMarker({ role, programme }) {
+  return `<!-- mc-launch-identity-v1 ${JSON.stringify({ role: normalizeSessionRole(role), programme: programme || null })} -->`;
+}
+
+function provenIdentity(value, source) {
+  const identifier = /^[A-Za-z0-9._:-]{1,128}$/u;
+  if (!value || typeof value.role !== 'string' || !identifier.test(value.role)) return null;
+  if (value.programme !== null && (typeof value.programme !== 'string' || !identifier.test(value.programme))) return null;
+  return { role: normalizeSessionRole(value.role), programme: value.programme, source };
+}
+
+/**
+ * Bounded evidence, never cwd, user text, or the new process's environment.
+ * Codex records developer instructions in native rollout entries. Claude does
+ * not record its system prompt: use the existing launch log, bound to the UUID
+ * mc supplied with --session-id. Missing/rotated evidence means unknown, not a
+ * guess. Read the log once per selection, not once per candidate.
+ */
+export function conversationIdentityReader() {
+  let launches = null;
+  return (item) => {
+    if (item.tool === 'claude-code') {
+      launches ??= [
+        ...readTailEntries(`${logPath()}.1`, WIDE_TAIL_BYTES),
+        ...readTailEntries(logPath(), WIDE_TAIL_BYTES),
+      ];
+      const records = launches.filter((entry) => entry?.event === 'work.open'
+        && entry.launched_id === item.id && entry.tool === item.tool
+        && entry.cwd === item.cwd && entry.instructions === true
+        && entry.instruction_channel === 'append-system-prompt');
+      const identities = records.map((entry) => provenIdentity({ role: entry.role, programme: entry.programme }, 'launch-log'));
+      return consistentIdentity(identities);
+    }
+    if (item.tool !== 'codex' || !item.path) return null;
+    const identities = [];
+    for (const entry of readHeadEntries(item.path)) {
+      const payload = entry?.payload;
+      let instructions = null;
+      if (entry?.type === 'response_item' && payload?.type === 'message' && payload.role === 'developer') {
+        instructions = textOf(payload.content);
+      } else if (entry?.type === 'turn_context' && typeof payload?.developer_instructions === 'string') {
+        instructions = payload.developer_instructions;
+      }
+      if (!instructions) continue;
+      for (const match of instructions.matchAll(/<!-- mc-launch-identity-v1 (.*?) -->/gu)) {
+        try { identities.push(provenIdentity(JSON.parse(match[1]), 'developer-instructions')); }
+        catch { identities.push(null); }
+      }
+    }
+    return consistentIdentity(identities);
+  };
+}
+
+function consistentIdentity(identities) {
+  const first = identities[0];
+  return first && identities.every((item) => item?.role === first.role && item.programme === first.programme) ? first : null;
+}
+
+function readHeadEntries(path) {
+  let fd = null;
+  try {
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    const read = readSync(fd, buffer, 0, HEAD_BYTES, 0);
+    return buffer.subarray(0, read).toString('utf8').split('\n').flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+  } catch { return []; }
+  finally { if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } } }
 }
 
 function textOf(content) {

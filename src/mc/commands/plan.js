@@ -166,12 +166,14 @@ export async function run(argv, deps = {}) {
   // spans them should not have to be opened in one of them by guess.
   //
   // A programme's session is picked up where it was, not started over: a
-  // conversation already in this directory is resumed, with no intro, and
-  // only `--new` starts another (Martin, 2026-09-13: "Existerar det en
+  // compatible conversation here is resumed, with no intro; unknown or
+  // incompatible history starts fresh, as does `--new` (Martin, 2026-09-13:
+  // "Existerar det en
   // session, ska samma öppnas utan intro").
   const launch = planLaunch({ programme, repos: ready.repos, role, env });
   const result = await (deps.open || openInWorkArea)({
     env,
+    stderr,
     programme,
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },

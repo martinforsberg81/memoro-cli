@@ -20,10 +20,11 @@
  * session was, as `mc helper` does.
  */
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { SESSION_IDENTITY_ENV, sessionLaunchEnvironment } from './session-role.js';
-import { conversationModel, listConversations } from './conversations.js';
+import { SESSION_IDENTITY_ENV, normalizeSessionRole, sessionLaunchEnvironment } from './session-role.js';
+import { conversationIdentityReader, conversationModel, launchIdentityMarker, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { workAreaName, workAreaPath, workRoot } from './paths.js';
 import { instructionsFor, roleRecord, textDigest } from './roles.js';
@@ -65,6 +66,7 @@ export async function openInWorkArea({
   env = process.env,
   spawn = spawnSync,
   register = registerForeground,
+  stderr = process.stderr,
 } = {}) {
   // Every session belongs to a programme or a desk (session-owner.js); one mc
   // would start for nobody is refused before anything is looked up or spawned.
@@ -81,19 +83,55 @@ export async function openInWorkArea({
     if (!chosen) return { ok: false, reason: `no conversation here starting with ${pick}` };
   }
 
-  // Asking for a new conversation is not asking for a different tool: the tool
-  // last used here is the one meant, unless a flag says otherwise.
+  const requestedRole = normalizeSessionRole(roleName || (verb === 'plan' ? 'plan' : null));
+  const requestedProgramme = programme || null;
+  const guarded = Boolean(requestedRole || requestedProgramme);
+  const identify = conversationIdentityReader();
+  const compatible = (identity) => identity && requestedRole
+    && identity.role === requestedRole && identity.programme === requestedProgramme;
+  const freshRoute = verb === 'plan' ? `mc plan ${programme} --new` : 'select new to start a fresh session';
+  const decision = (item, identity, action) => {
+    log('work.resume-decision', {
+      requested_role: requestedRole, requested_programme: requestedProgramme,
+      identified_role: identity?.role || null, identified_programme: identity?.programme || null,
+      evidence: identity?.source || null, conversation: item?.id || null,
+      tool: item?.tool || null, decision: action,
+    });
+    return `requested role=${requestedRole || 'unknown'} programme=${requestedProgramme || 'none'}; `
+      + `identified role=${identity?.role || 'unknown'} programme=${identity ? identity.programme || 'none' : 'unknown'}`;
+  };
+  if (chosen && guarded) {
+    const identity = identify(chosen);
+    if (!compatible(identity)) {
+      const explanation = decision(chosen, identity, 'refuse');
+      return { ok: false, reason: `cannot resume ${chosen.id}: ${explanation}`, hint: freshRoute };
+    }
+    decision(chosen, identity, 'resume');
+  }
+
+  // A tool flag still selects the provider; a named id still selects its own.
   const wanted = chosen?.tool || tool || before[0]?.tool || 'codex';
   const launch = resolveLaunch(wanted);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
   const toolId = launch.id;
   if (!chosen && pick !== 'new') {
-    chosen = before.find((item) => item.tool === toolId) || null;
+    for (const item of before.filter((candidate) => candidate.tool === toolId)) {
+      if (!guarded) { chosen = item; break; }
+      const identity = identify(item);
+      if (compatible(identity)) {
+        chosen = item;
+        decision(item, identity, 'resume');
+        break;
+      }
+      const explanation = decision(item, identity, 'exclude');
+      stderr.write(`mc: not resuming ${item.id}: ${explanation}. Looking for a compatible conversation; otherwise starting fresh.\n`);
+    }
   }
+  if (!chosen && guarded) decision(null, null, pick === 'new' ? 'fresh-requested' : 'fresh');
 
-  // A new conversation in a role's area is handed that role's instructions as
-  // it starts. A resumed one already has them in its own history, so handing
-  // them over again would be saying the same thing twice.
+  // A role-aware resume is allowed only after historical identity is proven.
+  // Native instruction configuration is supplied on each such launch; a user
+  // reply cannot change historical developer authority.
   //
   // The model rides along at both moments. New: whatever `--model` said,
   // else the area's role default — but only for the tool the role's defaults
@@ -113,15 +151,24 @@ export async function openInWorkArea({
     ? (model || (launch.id === 'codex' ? 'gpt-6.1-sol' : 'opus'))
     : chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
-  const instructions = resuming ? null : instructionsFor(toolId, overlay);
-  const handed = resuming ? [] : profileArgs(toolId, instructions);
+  // Claude's append-system-prompt is launch configuration, not transcript
+  // history: supply it on compatible resumes too. Codex uses its native
+  // developer instruction setting (ordinary resume text cannot replace it).
+  const roleInstructions = resuming && !guarded ? null : instructionsFor(toolId, overlay);
+  const instructions = toolId === 'codex' && guarded && roleInstructions
+    ? `${roleInstructions}\n\n${launchIdentityMarker({ role: requestedRole, programme: requestedProgramme })}`
+    : roleInstructions;
+  const handed = toolId === 'codex' && guarded && instructions
+    ? ['-c', `developer_instructions=${JSON.stringify(instructions)}`]
+    : (resuming && toolId !== 'claude-code' ? [] : profileArgs(toolId, instructions));
+  const launchedId = !resuming && guarded && handed.length && toolId === 'claude-code' ? randomUUID() : null;
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
-  // where only the role text is left off.
+  // including the role-aware instruction configuration.
   const session = [...sessionSwitches(launch, cache), ...(planning ? launch.adapter?.effortArgs?.('medium') ?? [] : [])];
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
   const baseArgs = resuming
-    ? [...resumeWith(toolId, resumed, session), ...(resumePrompt ? [resumePrompt] : [])]
-    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(prompt ? [prompt] : [])];
+    ? [...resumeWith(toolId, resumed, [...handed, ...session]), ...(resumePrompt ? [resumePrompt] : [])]
+    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(launchedId ? launch.adapter.newSessionArgs({ sessionId: launchedId }) : []), ...(prompt ? [prompt] : [])];
 
   const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
@@ -137,13 +184,16 @@ export async function openInWorkArea({
     cwd: worktree.path,
     tool: toolId,
     bin: launch.spec.bin,
-    args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
+    argc: args.length,
     resuming: chosen?.id || null,
     model: chosenModel || null,
-    overlay: !resuming && Boolean(overlay),
+    overlay: Boolean(overlay),
     // The register goes when the session does; the log is the one record of
     // which role text this launch handed over that is still there tomorrow.
-    role: roleName || null,
+    role: requestedRole,
+    programme: requestedProgramme,
+    launched_id: launchedId,
+    instruction_channel: handed.length ? (toolId === 'codex' && guarded ? 'developer_instructions' : toolId === 'claude-code' ? 'append-system-prompt' : 'instructions') : null,
     role_digest: textDigest(instructions),
     prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
     instructions: handed.length > 0,
@@ -162,19 +212,17 @@ export async function openInWorkArea({
   // same tool two things.
   const release = register({
     verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
-    // A resumed conversation is handed no instructions at all — its own
-    // history holds them — so it records the role and no digests rather than
-    // a digest of today's file, which would be a claim nobody checked.
+    // Record only the instructions actually handed to this launch.
     role: roleRecord({
       name: roleName,
       source: roleSource,
-      overlay: resuming ? null : overlay,
+      overlay,
       instructions,
     }),
   });
   let result;
   try {
-    const childEnv = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName, programme });
+    const childEnv = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName || requestedRole, programme });
     result = spawn(toolLaunch.bin, toolLaunch.args, { cwd: worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(childEnv) });
   } finally {
     release();
