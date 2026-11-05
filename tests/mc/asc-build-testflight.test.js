@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { run } from '../../src/mc/commands/asc.js';
 import {
   archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives, reasonLine, runSync,
-  secretsEnv,
+  keysRunCommand,
 } from '../../src/mc/ios-build.js';
 import { readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -44,6 +44,7 @@ const DECLARATION = {
 const LIST_SOURCE = "console.log('list on main');\n";
 /** origin/main's list script, as `atRev` writes it out: `node <its directory>/scripts/list.mjs --json`. */
 const isRevList = (argv) => argv[0] === 'node' && /\/mc-ios-script-[^/]+\/scripts\/list\.mjs$/u.test(argv[1] || '') && argv[2] === '--json';
+const isKeysList = (argv) => argv[0] === process.execPath && argv[2] === 'keys' && argv[3] === 'run' && /\/scripts\/list\.mjs$/u.test(argv[4] || '');
 const noExport = () => null;
 
 const SHA = '3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d';
@@ -87,7 +88,7 @@ function fakeRun({ asc = { code: 0, stdout: ASC, stderr: '' }, identities = ['Ap
     if (argv[0] === 'security') {
       return { code: 0, stdout: `${identities.map((id, i) => `  ${i + 1}) ABCDEF "${id}"`).join('\n')}\n`, stderr: '' };
     }
-    if (argv.join(' ') === DECLARATION.list_builds.join(' ') || isRevList(argv)) return asc;
+    if (isKeysList(argv)) return asc;
     return { code: 1, stdout: '', stderr: `unexpected ${argv.join(' ')}` };
   };
   fn.calls = calls;
@@ -125,11 +126,11 @@ describe('the number from App Store Connect', () => {
 
   it('asks with origin/main\'s script, not the checkout\'s working tree', async () => {
     const t = await testflight();
-    const call = t.runFake.calls.find((c) => c.argv[0] === 'node');
-    assert.ok(isRevList(call.argv), call.argv.join(' '));
+    const call = t.runFake.calls.find((c) => isKeysList(c.argv));
+    assert.ok(isKeysList(call.argv), call.argv.join(' '));
     assert.equal(call.cwd, join(t.repo, 'scripts'));
     assert.equal(t.started[0].build, NEXT);
-    assert.equal(existsSync(dirname(dirname(call.argv[1]))), false, 'the written-out tree is removed afterwards');
+    assert.equal(existsSync(dirname(dirname(call.argv[4]))), false, 'the written-out tree is removed afterwards');
   });
 
   it('runs the script with the rev\'s helpers and the checkout\'s packages, the checkout behind and on another branch', () => {
@@ -221,15 +222,14 @@ describe('the number from App Store Connect', () => {
     assert.equal(reasonLine('no builds for that app\n'), 'no builds for that app');
   });
 
-  it('names the secrets file in memoro\'s checkout for the script', () => {
+  it('passes original control environment to keys without setting MEMORO_DEV_VARS', () => {
     const runFake = fakeRun();
-    listBuilds({ repoPath: '/repos/memoro', checkout: '/mc/self/memoro', declaration: DECLARATION, run: runFake, env: { HOME: '/h' } });
-    assert.equal(runFake.calls[0].env.MEMORO_DEV_VARS, '/mc/self/memoro/.dev.vars');
-  });
-
-  it('keeps a secrets file the caller named, and names none without a checkout', () => {
-    assert.equal(secretsEnv({ MEMORO_DEV_VARS: '/elsewhere' }, '/mc/self/memoro').MEMORO_DEV_VARS, '/elsewhere');
-    assert.equal(secretsEnv({ HOME: '/h' }, null).MEMORO_DEV_VARS, undefined);
+    const env = { HOME: '/h', MC_KEYS_FILE: '/synthetic/shared.env' };
+    listBuilds({ repoPath: '/repos/memoro', checkout: '/mc/self/memoro', declaration: DECLARATION, run: runFake, env });
+    assert.equal(runFake.calls[0].argv[2], 'keys');
+    assert.equal(runFake.calls[0].env, env);
+    assert.equal(runFake.calls[0].env.MC_KEYS_FILE, '/synthetic/shared.env');
+    assert.equal(runFake.calls[0].env.MEMORO_DEV_VARS, undefined);
   });
 
   it('runs anything but node <relative path> as declared', () => {
@@ -367,7 +367,7 @@ function builder({
     exportTree: noExport,
     codesignDisplay: () => `Executable=/x/App\nIdentifier=test.bundle\n${authority}\nAuthority=Apple Worldwide Developer Relations Certification Authority\n`,
     run: (argv) => {
-      events.push(isRevList(argv) ? 'asc list' : `asc ${argv.join(' ')}`);
+      events.push(isKeysList(argv) ? 'asc list' : `asc ${argv.join(' ')}`);
       return { code: 0, stdout: ascAgain, stderr: '' };
     },
   };
@@ -399,10 +399,11 @@ describe('buildIos --testflight — the builder', () => {
       'xcodebuild', '-exportArchive', '-archivePath', archive,
       '-exportOptionsPlist', join(worktree, 'ios/ExportOptions.plist'), '-exportPath', exportDir, '-allowProvisioningUpdates',
     ]);
-    assert.deepEqual(call('upload').argv, ['node', 'scripts/upload.mjs', ipaPath(b.env)]);
+    assert.deepEqual(call('upload').argv.slice(0, 4), [process.execPath, call('upload').argv[1], 'keys', 'run']);
+    assert.deepEqual(call('upload').argv.slice(4), [join(worktree, 'scripts/upload.mjs'), ipaPath(b.env)]);
     assert.equal(call('upload').cwd, worktree);
     assert.equal(call('upload').timeoutMs, 30 * 60 * 1000);
-    assert.match(call('upload').env.MEMORO_DEV_VARS, /\/\.dev\.vars$/u);
+    assert.equal(call('upload').env.MEMORO_DEV_VARS, undefined);
     assert.match(b.stdout.text, new RegExp(`mc: ${archivedApp(archive).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} says test\\.bundle, 1\\.4 \\(${NEXT}\\)`, 'u'));
     const [row] = readIosBuilds(b.env);
     assert.equal(row.outcome, 'uploaded');
