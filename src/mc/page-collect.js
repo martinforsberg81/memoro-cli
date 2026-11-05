@@ -55,6 +55,7 @@ import {
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
+import { readProgrammePriority } from './programme-priority.js';
 import { FINISHED, goalName, goalSession, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
@@ -1019,7 +1020,7 @@ function phaseSection(goals) {
  */
 export function programmesSection({
   planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
-  strays = [], sessionStrays = [],
+  strays = [], sessionStrays = [], priority = () => 0,
 } = {}) {
 
   const goalList = goalRows.map((goal) => ({ ...goal }))
@@ -1043,6 +1044,7 @@ export function programmesSection({
     const goals = goalList.filter((goal) => goal.programme === name);
     return {
       programme: name,
+      priority: priority(name),
       // A programme with no goal of any status. An open plan session does not
       // make it active: nothing is on it yet. The renderer folds these into
       // one line (Martin, 2026-11-02).
@@ -1275,6 +1277,7 @@ export function readProgrammes({
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
     programmes: Object.keys(homes),
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
+    priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
   });
   return { section, homes };
 }
@@ -1430,6 +1433,7 @@ export async function collectPage({
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
+    priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     strays: readStrays(root, { git }),
   });
   const worktrees = Object.fromEntries(present.map((repo) => [

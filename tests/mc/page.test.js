@@ -2048,6 +2048,7 @@ describe('MC', () => {
 
   it('gives the live loop a key that moves with a goal and not with a clock', () => {
     const key = (over) => pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, ...over }) }));
+    assert.notEqual(key({}), key({ priority: () => 10 }), 'a priority change refreshes programme headings');
     assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, running: true })) }), 'a goal the runner took is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, stage: 'review', state: 'review' })) }), 'a goal that moved is');

@@ -16,38 +16,32 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * With no eligible carry, review and plan tie at the first rank, then legacy
- * project builds, then goal builds. Within a rank, `resumed` sorts first (the
- * current goal caller sets it false), then oldest `since` (goal log time, or
- * the programme wakeup's empty/oldest value), then input order. A surviving
- * carry is chosen before that ordering: it wins within the fair set regardless
- * of rank, age, or `resumed`.
- *
- * **No repository takes every lane while another waits.** Each repository
- * with work, or with a session running, has a share of the lanes:
- * `ceil(lanes / repositories)`. While any repository below its share has work
- * that can start, work on a repository at or above its share is not picked,
- * whatever its kind or its wait — and that includes the project a lane would
- * otherwise carry on with. With two repositories and two lanes or more, the
- * share is at most `lanes − 1`, so one repository can only reach the last
- * lane when the other has nothing to start; and a repository that holds every
- * lane because the other was idle gives up the next lane that frees as soon
- * as the other has work. With one lane, one repository holds it by
- * necessity, and the two take turns by their wait.
+ * Blocked recovery goes first, then finish/merge, review, build and next-step
+ * planning. Within the earliest runnable rank, repository fairness reserves a
+ * share (`ceil(lanes / repositories)`) before programme priority, highest first.
+ * Carry, resumed work and oldest wait break remaining ties. A carried build
+ * never jumps ahead of a review or recovery. A repository with work in the
+ * earliest rank may take every lane while others have only lower-ranked work.
+ * Running sessions are never interrupted.
  */
 
-/** The rank of a kind, finishing first: a plan session unblocks a goal, and ranks with a review. */
+/** Finish work already started before commissioning more. Eligibility is the caller's. */
 function rankOf(item) {
-  if (item.kind === 'review' || item.kind === 'plan') return 0;
-  return item.variant === 'goal' ? 2 : 1;
+  if (item.goal?.reason === 'next_step') return 5;
+  if (item.goal?.status === 'blocked') return 0;
+  if (item.kind === 'plan') return 1;
+  if (item.kind === 'review') return 2;
+  return item.variant === 'goal' ? 4 : 3;
 }
+
+const priorityOf = (item) => Number.isSafeInteger(item.priority) && item.priority >= 0 ? item.priority : 0;
 
 /**
  * `{ items, held, lanes, carry }` → the item to start, or null. `lanes` is
  * the machine-wide lane cap, not a per-repository allowance.
  *
  * `items`: `{ name, repo, kind: 'review'|'plan'|'build', variant: 'project'|'goal'|null,
- * since, resumed }` — caller-approved candidates. `variant: 'project'` and
+ * since, resumed, priority }` — caller-approved candidates. `variant: 'project'` and
  * project build/review kinds are retained for compatibility, although
  * `run.js` currently supplies goal sessions only. `held`: one repository per
  * in-flight session known to the caller. `carry`: the name this lane ran a
@@ -57,15 +51,16 @@ export function pickWork({ items = [], held = [], lanes = 1, carry = null } = {}
   if (!items.length) return null;
   const holding = new Map();
   for (const repo of held) holding.set(repo, (holding.get(repo) || 0) + 1);
-  const active = new Set([...held, ...items.map((item) => item.repo)]);
+  const rank = Math.min(...items.map(rankOf));
+  const ranked = items.filter((item) => rankOf(item) === rank);
+  const active = new Set([...held, ...ranked.map((item) => item.repo)]);
   const share = Math.ceil(Math.max(1, lanes) / Math.max(1, active.size));
   const full = (repo) => (holding.get(repo) || 0) >= share;
   // If any candidate repository is below its share, exclude full repositories;
   // otherwise all candidates remain eligible. Carry cannot bypass this filter.
-  const fair = items.some((item) => !full(item.repo)) ? items.filter((item) => !full(item.repo)) : items;
-  const carried = carry ? fair.find((item) => item.name === carry) : null;
-  if (carried) return carried;
-  const ordered = fair.map((item, index) => ({ item, index })).sort((a, b) => rankOf(a.item) - rankOf(b.item)
+  const fair = ranked.some((item) => !full(item.repo)) ? ranked.filter((item) => !full(item.repo)) : ranked;
+  const ordered = fair.map((item, index) => ({ item, index })).sort((a, b) => priorityOf(b.item) - priorityOf(a.item)
+    || Number(b.item.name === carry) - Number(a.item.name === carry)
     || Number(Boolean(b.item.resumed)) - Number(Boolean(a.item.resumed))
     || waitedSince(a.item) - waitedSince(b.item)
     || a.index - b.index);

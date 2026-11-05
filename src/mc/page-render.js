@@ -599,7 +599,7 @@ export function statusRollup(statuses = {}) {
 
 function programmeLine(c, wide, group, expand) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
-  const label = clipCell(`${group.programme}${metadata}`, wide - 8);
+  const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${metadata}`, wide - 8);
   return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - label.length - 6))}`, 'cyan')}`;
 }
 

@@ -39,6 +39,14 @@ without repeated table headers; programme blocks have opening and closing rules.
 
 ### PROGRAMMES
 
+Nonzero programme priorities appear on the programme heading. Type
+`priority mc inbox --set 10` at the page prompt to set one or several; zero
+resets them. This calls the same verb as `mc programs priority`, then redraws.
+The live refresh key also changes when a priority changes in another terminal.
+Scheduling first prefers blocked recovery, finish/merge, review, build, then
+next-step planning; programme priorities decide within a rank after repository
+shares. See [mc-run.md](mc-run.md#the-pick-in-order).
+
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
 → goal → PR. Each programme is a bounded block with a bold name and cyan
 opening/closing rules. Each phase has its own bold cyan heading. All unfinished

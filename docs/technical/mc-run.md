@@ -70,16 +70,30 @@ order without a model call:
    before judging them. An unreadable goal is not runnable.
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
    or `merge · ready` after its first red or moved head and once it is no
-   longer in the merger's line. `plan`, `done`, `dropped` and `blocked` do
-   not start a session.
+   longer in the merger's line. A blocked goal wakes a recovery plan session;
+   `Martin` waits for the person. `plan · ready`, `done` and `dropped` do not
+   start a goal session.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
 4. Exclude goals already claimed or named by a live current file, and goals
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take reviews and plan work before builds, longest waiting first
-   within the rank. Repository fairness first reserves a share for each
-   repository with runnable work or a running session. Waiting begins at the last log entry.
+5. Take blocked recovery first, then finish/merge, review, build, and finally
+   next-step planning. Within the earliest runnable rank, repository fairness
+   reserves a share before higher programme priority, then carry/resumed work
+   and longest waiting. Waiting begins at the last log entry. A carried build never
+   jumps ahead of recovery or review.
+
+Set one or several programmes with `mc programs priority mc inbox --set 10`.
+Priorities are non-negative safe whole numbers; higher wins, and `--set 0`
+restores the default. The value lives in each programme's `PRIORITY.json` and
+is read on every choice, so changes need no runner restart once this code is
+installed. Running sessions continue. Priority does not bypass eligibility,
+phases or claims. Repository shares apply within the earliest rank; a recovery
+can take the next lane even when its repository already holds its share.
+Equal priorities keep the usual wait order. Continuous higher-priority work may keep lower priorities waiting.
+The page shows nonzero priorities on programme headings; `mc programs list`
+and its JSON include every priority, including zero.
 
 The in-process claim is taken in the same tick as the choice, before any
 await, so two lanes cannot choose the same goal before its current file exists.

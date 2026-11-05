@@ -522,3 +522,19 @@ describe('the menu under the page', () => {
     assert.equal(drawn, 1, 'the page is drawn again under the goal');
   });
 });
+
+it('the page forwards programme priority settings and redraws after the command', async () => {
+  const data = { programmes: { programmes: [] } };
+  const answers = ['priority mc inbox --set 10', 'q'];
+  const orders = [];
+  let redraws = 0;
+  const code = await menu(data, {
+    stdout: { write() {} }, stderr: { write(text) { assert.fail(text); } },
+    reader: { ask: async () => answers.shift(), show: () => { redraws += 1; } },
+    page: async () => ({ data, lines: [], key: 'changed' }),
+    programOrder: async (args) => { orders.push(args); return 0; },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(orders, [['priority', 'mc', 'inbox', '--set', '10']]);
+  assert.equal(redraws, 1);
+});
