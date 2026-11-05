@@ -33,15 +33,15 @@ prerequisite goals too. A plan placeholder also holds later phases back.
   A bounded diagnosis is buildable when its subjects, probe budget, deliverable
   and evidence limits are explicit; a negative result can satisfy diagnosis,
   never implementation or performance acceptance.
-- **Criteria:** each states an observable outcome and pass/fail boundary. Its `check` gives
-  runnable commands, working directory, prerequisites and expected results. For reports, specify
-  reconciliation and evidence; a file, keyword or green gate alone does not prove content. No
-  check waits for Martin. Put policy choices in planning, not acceptance.
+- **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable
+  commands, working directory, prerequisites and expected results. For reports, specify reconciliation
+  and evidence; a file, keyword or green gate alone does not prove content. No check waits for Martin;
+  put policy choices in planning, not acceptance.
 - **Evidence:** distinguish measured, historical and missing proof. Record revision, scope and logs;
   partial, skipped or unavailable evidence is not green. Mark criteria met only after the whole check
   holds. Follow writing-tests.md for costs; moving work between clocks is not a saving.
-- **Bounded live evidence:** specify total runs, duration/run, serial/concurrency limits,
-  build/review/finish allocations, prerequisites and run consumption (including failed/timeouts).
+- **Bounded live evidence:** specify total live runs (offline checks excluded), duration/run,
+  serial/concurrency limits, build/review/finish allocations, prerequisites and run consumption (failures/timeouts count).
   Reserve any required independent-review run before build; build spends only its allocation. An
   account/binary restores none. With no run left, commission executable offline reconciliation
   (command/procedure, evidence, expected result, limits). Inspected traces are not reproduced;

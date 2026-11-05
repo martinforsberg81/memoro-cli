@@ -32,7 +32,7 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    consumes its allocated run; account or binary availability is not a new
    prerequisite run. Use only a review run reserved before build. If none
    remains, execute only the goal's explicitly commissioned offline
-   reconciliation and report its evidence limits. A build trace you inspect
+   reconciliation (not a live run) and report its evidence limits. A build trace you inspect
    is an inspected observation, never an independently reproduced live fact.
    Do not retry, expand the budget or treat missing essential proof as
    acceptance. Send unresolved proof to finish/plan under the existing
