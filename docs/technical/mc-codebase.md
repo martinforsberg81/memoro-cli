@@ -76,13 +76,18 @@ commit that touches nothing else.
 
 ## The door to main
 
-`mc merge <repo> <pr>` runs the round in `src/mc/repo-gate.js`; there is no way
-to merge a red one — no flag, option or environment variable
+Ordinary `mc merge <repo> <pr>` jobs run `runMergeRound` in
+`src/mc/repo-gate.js`; that route does not land a red round
 (`src/mc/repo-merge.js`). Red is a set of failing test names against a ratchet
 floor (`src/mc/tap-red.js`, `src/mc/red-ratchet.js`), never a count, so a
-standing red name does not block an unrelated change and a new one does. The
-runner lands through the same door: `runMergeRound`, in its own process, and a
-row reads `merged` only when GitHub says the base it landed on was `main`.
+standing red name does not block an unrelated change and a new one does.
+
+Goal jobs take a different route: `mc goal stage merge` authorizes direct
+landing in `src/mc/merger.js`, without another gate or head/base validation.
+Before that decision, review or finish must complete the affected-selection
+measurement required by the canonical
+[publish-and-merge task](../../canon/tasks/publish-and-merge.md).
+See [mc-merge.md](mc-merge.md) for both landing routes and their bookkeeping.
 
 ## Credential boundary (normative)
 
