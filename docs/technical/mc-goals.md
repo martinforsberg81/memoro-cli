@@ -520,8 +520,12 @@ checks, in order:
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
 output som ingen läser."* Its output is exactly three things:
 
-- **The stage, always one of two.** OK: `mc goal stage merge`, which queues
-  all registered pull requests (*The verbs*). Not OK: `REVIEW.md` in
+- **The stage, always one of two.** OK: `mc goal stage merge`, which directly
+  lands all registered pull requests. Before authorizing it, the review or
+  finish session must complete GREEN `mc gate --whole-selection` on the judged
+  worktrees; landing adds no gate or head validation. See the canonical
+  [publication and direct landing procedure](../../canon/tasks/publish-and-merge.md).
+  Not OK: `REVIEW.md` in
   the goal's directory — the head sha judged, what is wrong and where — then
   `mc goal stage finish`. Nobody reads a review that went to `merge`, so it
   writes no REVIEW.md then.
