@@ -24,59 +24,53 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` in `src/mc/page-render.js` draws PROGRAMMES, MAINTENANCE,
-SESSIONS, DEV, MERGES, PULL REQUESTS, DEPLOY, LANGUAGE, CHECKS, the optional
-Docker line, MC, and BILLING directly below MC. A stopped language run
-inside an open gap puts its red warning above them all. Optional sections
-with nothing to say are not drawn. What changes less sits above what changes
-more, so activity stays within reach of the prompt; DEV changes as often as
-the sessions do, so it stands right under them.
+`renderPageLines` draws PROGRAMMES, MAINTENANCE, DEV, MERGE, PULL REQUESTS,
+DEPLOY, LANGUAGE, CHECKS, Docker when present, MC and BILLING. There is no
+separate SESSIONS section. A stopped language run inside an open gap still
+puts its warning above everything else.
+
+One `a` / `all` toggles all folded content and details across the page;
+the next press returns to the normal view. Current sessions, blockers,
+malformed goals, open PRs, merge failures and process/resource warnings
+remain visible in both modes. Normal headings use spacing and indentation,
+without horizontal rules or repeated table headers.
 
 ### PROGRAMMES
 
-`programmesSection` and `goalsOf` (`page-collect.js`) build a tree:
-programme → phase → goal → PR. `page-programmes.js` draws it with its own
-columns, independent of the lane grid. Each programme carries `current_phase`,
-numeric `phases[]` with their goals, and `availability` counts. The flat
-`goals[]` and raw `statuses` remain in JSON for existing consumers. Goals
-carry their title, phase, stage, status and derived availability.
+`programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
+→ goal → PR. `page-programmes.js` renders that structure with a flexible title
+column, stage and availability. Repository, technical name, session count and
+latest log detail appear with `a`. Stage is secondary grey; running/startable
+availability is green and blocked/invalid work is red. Programme names use
+bold terminal foreground, phases and folded summaries grey. The normal
+section heading leaves aggregate bookkeeping to `a`; the brand retains the
+running, startable and blocked counts.
 
-The lowest unfinished, valid phase is current. All unfinished goals within
-that phase appear together. Quiet future phases collapse into a numbered
-summary; finished goals collapse into a Finished group. `a` expands future
-phases, finished goals, detail rows and dormant programmes, and toggles them
-back. A future phase with a blocker, malformed record, running work, a goal
-awaiting merge or an open PR stays visible. Finished goals with open PRs
-also stay visible. Malformed goals have no inferred phase and appear under
-NEEDS ATTENTION. Collapsed and expanded phases retain numeric order.
+The lowest unfinished valid phase is current. Quiet future phases and finished
+goals fold into summary rows. Blockers, malformed goals, running work, goals
+awaiting merge and goals with open PRs stay visible even in later phases.
+Malformed goals have no inferred phase and appear under NEEDS ATTENTION.
+Menu numbers remain stable in programme/name order across folding and phase
+moves; a number opens that goal's detail.
 
-Each goal row has its stable menu number, title (falling back to its name),
-stage and state. Repository is secondary and appears from 100 columns up;
-expanded metadata includes all repositories, the technical name and session
-count. Numbers remain stable in programme/name order across phase grouping
-and folding. `<n>` opens that goal's detail. Latest Next or Comment appears
-only in expanded detail; finished detail shows Done or Comment instead of
-an obsolete Next. Blocker questions and parse errors remain visible by default.
+Each live runner session is matched by its explicit programme/goal identity
+(`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
+PRs. The activity row carries kind, elapsed time, tool/model and credits when
+used. A check-in and its yellow clock remain visible without expansion;
+repository, advisor, pid and zero check-ins are expanded details. A session
+with no matching goal appears under UNASSIGNED ACTIVITY, including its name
+and PR references, so removing SESSIONS cannot hide it. Rendering joins the
+existing `runner.sessions` and programme records; their JSON shapes remain.
 
-Availability distinguishes running, can start, waiting for phase, needs plan,
-needs criteria, awaiting merge, blocked, invalid and finished. The summary
-and brand's ready count use phase eligibility, excluding running and finished
-goals, future phases, planning and builds without criteria. This uses
-`goalSession` for eligibility; runtime resource holds remain in SESSIONS.
-Summary parts wrap at terminal width without losing blocker counts or colours.
+Foreground plan/programme sessions appear directly below their programme
+heading, including programmes that otherwise count as dormant. Quiet dormant
+programmes fold into a single count; `a` shows every programme. The collector's
+active/dormant classification and full JSON listing remain unchanged.
 
-Every open PR is a child row under its goal, showing the full repository/PR
-reference, title and state. Programme PRs without a goal have their own
-PRs WITHOUT A GOAL group. Explicit `plan/<programme>` branches retain their
-association in scratch worktrees. Attached PRs carry `programme` in JSON and
-are omitted from loose PULL REQUESTS rows. `mc prs` still lists every PR.
-
-Programme headings retain plan sessions, goal and proposal counts, and a
-cyan rule. Cyan marks structural headings; running/startable work is green,
-phase waits yellow and blockers red. Names use the terminal foreground.
-Dormant programmes have no goals or standalone PRs and fold into one line;
-a planning session alone does not make one active. Strays follow under
-`not an area mc knows`, with the facts needed to inspect them.
+Every open PR remains a child of its goal, or in PRs without a goal under its
+programme. Explicit plan branches retain ownership even in scratch worktrees.
+Attached PRs carry `programme` in JSON and are excluded from the loose PR list.
+Unowned sessions and directories remain visible as strays.
 
 ### MAINTENANCE
 
@@ -92,98 +86,60 @@ way. Untagged root proposals and open helper/brief sessions follow the table.
 Programme-owned proposals remain on their programme headings. Full error
 messages and proposal filenames remain in JSON and the digest.
 
-### SESSIONS and BILLING
-
-The heading says `n of N lanes` (bold green while nonzero), or `not running`
-in bold yellow. One grid row per lane: idle is its number and `idle`; a live
-session is `PLAN`, `BUILD` or `REVIEW`, `programme/goal`, repository, `running`,
-elapsed time and the goal's PRs (`#N+2` for more). The grey tail is model,
-`credits` for API billing, advisor and check-ins. Elapsed turns yellow past a
-check-in; nothing on a lane row is bold and length alone kills nothing.
-
-Rows fill oldest first. A pending STOP, stale current files, GitHub failures,
-disk or memory holds and quota observations follow the lanes, then the day's
-outcomes by session kind and list-price estimate. JSON carries
-`runner.sessions`, `runner.lanes` and `runner.day.by_kind`. Session kinds are
-plan, build and review; builds and reviews carry variant `goal`. The tool
-and pid stay in JSON, not on the row. BILLING is a line showing both providers'
-plan usage and next billing route, directly below MC at the foot of the page.
-
 ### DEV
 
-The dev servers, and the session that holds each (goal `mc/dev-section`,
-Martin 2026-11-03). The heading is `DEV  3 running · 1 leased · 2 queued`
-with `mc dev list` on the right: `running` is the servers that answer (not
-`starting`), bold green while not zero; `starting` is said only when one is,
-and `queued` only while somebody waits, in yellow. No server at all: `DEV
-none running`, grey.
+`page-operations.js` groups environments by repository. Each row shows MAIN or
+SLOT, its port/address and the server's recorded state. The holder follows as
+a child; `holder gone` is a separate yellow warning, independent of idle state.
+`a` adds full URL, service, last-use age, branch and worktree. Ports no longer
+occupy a PR column. Queue rows show the recorded holder and elapsed wait in
+queue order, the first three normally and all with `a`.
 
-Under it one grid row per live server: a large status circle at the left
-margin, green while leased, yellow while starting or when its holder is gone,
-grey while idle; `MAIN` for the shared checkout's standing server (`mainCheckout`),
-`SLOT` for one lent to a worktree; the holder in the name column —
-`BUILD mc/no-work`, `REVIEW mc/email-compose`, `plan mc`, `brief`, or the
-verb (`shot`, `test`, `open`) when no session ran it; the repository;
-`leased`, `idle` or `starting`; how long since mc used it; the port in the PR
-column; the branch and the worktree in the tail. A holder that is a session
-whose pid is gone says `holder gone`, yellow, first in the tail, and its
-server is `idle`. A bare verb's holder never does: it was over when it
-answered. The waiters are one yellow row under the servers, `2 queued · BUILD
-hero-detail-objects first`.
+All fields come from `devSection` / `readPool` (`dev-pool.js`), using recorded
+holders rather than guessing from worktree paths. The JSON registry and queue
+projection is unchanged. The collector still distinguishes running, leased
+and starting, and does not sweep or rewrite records during collection.
 
-**Who holds a server is written when it is taken**, never guessed from the
-worktree: `ensureDevServer` — under `mc shot dev`, `mc test dev` and `mc dev
-open` — writes `holder: { kind, owner, name, pid }` (`leaseHolder`,
-`dev-holder.js`) and `held_since` into mc's copy of the registration on
-every use, and a waiter's queue ticket carries the same as `session`. The
-pid is the coding agent's, found by walking up from the verb
-(`MC_SESSION_PID` overrides); a bare verb's is its own. `leased` is a living
-holder that used the server within `MC_DEV_HOLDER_STALE_MINUTES` (5).
+### MERGE
 
-JSON carries `dev`: `{ running, starting, leased, queued, servers: [{ kind,
-holder, holder_alive, holder_gone, name, repo, state, idle_seconds, progress,
-port, url, worktree, branch, instance_id, service }], queue: [{ holder, name,
-worktree, service, gate, waited_seconds }] }`, read through one function,
-`readPool` (`dev-pool.js`), which reads the registry and the queue without
-sweeping or rewriting either. The page draws from `dev` and nothing else. The
-Docker line's `N leases` are leases on the container runtime (`mc docker
-ensure`), not on a dev server, and DEV does not say them.
+Each repository has a short heading with active, queued and red counts, or
+idle. Pause reasons and stopped-merger warnings belong to that repository.
+Active landing rounds and every red entry remain visible; the normal queue
+shows its first six waiting entries in recorded order and a folded count.
+`a` shows the entire queue plus titles, queue ages and 24-hour landing history.
 
-### MERGES
+Each item shows whole PR references, actual state, age and its recorded name.
+Failures get their measured reason on a separate red child row; batch members
+name their lead PR. Long reasons wrap rather than being lost at the terminal
+edge. The sole source is `merges.repos[]`; legacy aggregates are not rendered.
 
-Two queues, one per repository. The heading names counts, not PR numbers.
-A red pause names the merger's actual barrier: deploy, gate round or held
-lease; queued work with no live merger says `merger stopped` in red.
+### DEPLOY
 
-Under each repository, one grid row per PR, in order: the landing round
-(`GATE`), reds (`RED`), then queued work (`WAIT`), at most six rows before
-`… N more`. The name is its branch, the state `gate`, `rebase`, `landing`,
-`red`, `queued`, or `stopped` without a merger, and progress is its age.
-The PR has its own colour. The tail names a batch member (`with #N`), queue
-age, red reason and title, with the title giving way first. An empty queue is
-one `IDLE` row named by repository, with its last landing's age and PR.
-The first row carries `N merges in 24 h`, counted from landed round records,
-not build outcomes.
+Separate rows show LIVE (the cached `/api/version` observation and age),
+RECORDED (the last successful deployment and age) and ATTEMPT (latest outcome,
+SHA and age, with a failure location beneath). Missing readings say unknown;
+a recorded deployment is never substituted for a live observation. Different
+commits retain both readings and an explicit yellow mismatch warning.
 
-The exact input is `merges.repos[]`: repo, state, pause, merger_stopped,
-landing, landings, waiting, reds, day_count, last, and the idle grid fields.
-Each queue item carries kind, name, repo, state, progress and prs. The drawing
-uses these repository queues, not the older aggregate fields.
+A running attempt with a dead recorded pid, or an old pid-less record, says
+no end recorded. A failed or refused first attempt remains visible even before
+any deployment/version observation exists. `runner.production.attempt` adds
+latest-attempt evidence to JSON; existing `running`, `failed` and successful
+record fields remain. `a` adds builds and the recorded timestamp. Collection
+uses existing local records; rendering initiates no production request.
 
-### PULL REQUESTS, DEPLOY, LANGUAGE, CHECKS and MC
+### PULL REQUESTS, LANGUAGE, CHECKS, MC and BILLING
 
-PULL REQUESTS draws open PRs not already represented by a goal or the merger.
-Ownership comes from `prOwner` (`open-prs.js`): plan session, workarea,
-worktree elsewhere or nobody. The heading counts all; nobody's mark is yellow,
-as is quiet time past a day. `mc prs` reads all of them grouped by owner.
+Loose PULL REQUESTS retains open PRs not represented by a goal, programme,
+running session or merger; `mc prs` still lists every PR. LANGUAGE and CHECKS
+retain their existing cached readings.
 
-DEPLOY leads with a running or failed deploy, then the last deployed sha and
-age. A mismatch with the helper's `/api/version` reading names both in yellow.
-LANGUAGE reads cached language status and run records: unresolved selectors,
-grammar waiting, readings at least seven days old, and the last run. CHECKS
-shows cached dependency readings and their age. MC shows the installed code,
-runner handover and processes still on another commit. The Docker line reads
-its state file alone; drawing a page must never start the runtime.
+MC retains installed-code/update/draining information. Immediately below it,
+the runner summary shows process liveness and occupied/configured lanes,
+without one row per idle lane. STOP, stale records, GitHub failures, disk and
+memory holds and quota warnings remain visible. Reasons wrap at narrow widths.
+Daily session counts remain compact; `a` shows the full outcome/cost breakdown.
+BILLING follows this MC block, retaining both providers' usage and next route.
 
 ## Where the facts come from
 
@@ -211,27 +167,19 @@ file above a reduced setting still gets a row until its session ends.
 Foreground records (`foreground.js`) make inherited-stdio conversations
 visible without pretending they are tmux sessions.
 
-## The grid
+## Layout and width
 
-`page-grid.js` defines `GRID`, `gridColumns` and `gridRow` for SESSIONS, DEV
-and MERGES. PROGRAMMES uses the independent phase tree described above.
+Each surface uses a layout suited to its information: the programme tree,
+environment addresses, repository queues and version evidence. The retired
+lane/PR grid has no remaining renderer. `page-grid.js` retains the shared
+palette, duration and numeric-safe clipping helpers.
 
-| column | width ≥ 90 / < 90 | SESSIONS | DEV | MERGES |
-|---|---|---|---|---|
-| mark + nr | 6 | status circle and lane number | status circle | status circle |
-| kind | 8 | `PLAN` `BUILD` `REVIEW` | `MAIN` `SLOT` | `GATE` `WAIT` `RED` `IDLE` |
-| name | 28 / 20, floor 10 | programme/goal | holder | branch or repository |
-| repo | 12 / 0 | repository | repository | repository |
-| state | 9 | running or idle | leased, idle or starting | round phase or queue state |
-| progress | 10 | elapsed | time since used | state age |
-| PR | 9 | goal's open PRs | port | queue item or last landing |
-| tail | remainder | model and check-ins | branch and worktree | reason and title |
-
-The tail gives way first, then the repository below 90 columns, then the
-name. The state, progress and PR widths hold. `clipCell` clips with `…`
-before an entire numeric token rather than halfway through it. `#14709`
-never becomes `#147…`; a PR's `+N` gives way before its number. Width is
-clamped between 60 and 160 columns. Under 60 columns the page is not live.
+Widths stay clamped to 60–160 columns. Programme titles use remaining width
+after stage and availability; repository metadata is in expansion. Whole PR
+references get child rows. Operational reasons wrap and ordinary title cells
+clip with an ellipsis without splitting numeric tokens. Colour is applied
+after measurement, so painted and plain frames have identical text/width.
+Below 60 columns the existing non-live terminal path remains.
 
 ## The palette
 
@@ -293,7 +241,7 @@ painted rows occupy the same columns.
 | answer | action |
 |---|---|
 | a goal's number | `mc goal show` for that numbered goal, then redraw |
-| `a` | toggle future phases, finished work, detail and dormant programmes |
+| `a` / `all` | toggle all folded rows and details across every surface |
 | `b` | open brief |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
@@ -303,7 +251,7 @@ painted rows occupy the same columns.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.
@@ -522,7 +470,7 @@ checks that routing without opening a coding tool.
 
 - `src/mc/commands/home.js`: page, arguments, menu, freshness and restart on new code.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
-- `src/mc/page-render.js`, `src/mc/page-programmes.js` and `src/mc/page-grid.js`: drawing, widths and palette.
+- `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
 - `src/mc/dev-holder.js`: who holds a dev server — `leaseHolder`, written when a verb takes one, and `holderLabel`.
