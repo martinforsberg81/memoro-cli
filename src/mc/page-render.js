@@ -773,14 +773,23 @@ function headerLines(lines, c, wide, data, version) {
   const brand = `MC${version ? `  ${version}` : ''}`;
   const action = 'mc manager';
   frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
-  frame(paint(c, fitting(trailing([
+  const stats = [
     { text: `${(data.runner?.sessions || []).length} in flight` },
     { text: `${statuses.ready || 0} ready`, styles: ['green'] },
     { text: `${statuses.blocked || 0} blocked`, styles: statuses.blocked ? ['red'] : ['grey'] },
     { text: `${statuses.Martin || 0} Martin`, styles: statuses.Martin ? ['red'] : ['grey'] },
     { text: `${proposals} proposals`, styles: proposals ? ['yellow'] : ['grey'] },
     { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
-  ]), room), room));
+  ];
+  let row = [];
+  for (const part of stats.filter(part => part.text)) {
+    if (row.length && width(paint(c, between([...row, part], ' · '))) > room) {
+      frame(paint(c, between(row, ' · ')));
+      row = [];
+    }
+    row.push(part);
+  }
+  if (row.length) frame(paint(c, between(row, ' · ')));
   frame(paint(c, fitting(trailing([
     { text: 'MANAGER', styles: ['bold', 'cyan'] },
     { text: manager ? `${MARK.running} ${openFor(manager.age_seconds)}` : 'not open', styles: manager ? ['cyan'] : ['grey'] },
