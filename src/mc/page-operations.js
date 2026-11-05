@@ -18,13 +18,16 @@ export function detail(lines, c, wide, indent, value, tone = ['grey']) {
   }
 }
 
-function section(lines, c, wide, name, summary, verb) {
-  const head = `  ${name}${summary ? `  ${summary}` : ''}`;
-  const gap = wide - head.length - verb.length;
-  if (head.length > wide) {
-    lines.push(`  ${c(name, 'bold', 'cyan')}`);
-    detail(lines, c, wide, 4, summary);
-  } else lines.push(`  ${c(name, 'bold', 'cyan')}${summary ? `  ${c(summary, 'grey')}` : ''}${gap >= 2 ? `${' '.repeat(gap)}${c(verb, 'grey')}` : ''}`);
+/** Work panels share the programme frame shape, with orange structural rules. */
+export function panelHeading(lines, c, wide, name, summary = '', verb = '') {
+  const hint = verb && wide - name.length - verb.length >= 10 ? ` ${verb}` : '';
+  const rule = '─'.repeat(Math.max(0, wide - name.length - hint.length - 6));
+  lines.push(`  ${c('┌─ ', 'orange')}${c(name, 'bold')}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}`);
+  if (summary) detail(lines, c, wide, 4, summary);
+}
+
+export function panelEnd(lines, c, wide) {
+  lines.push(`  ${c('└' + '─'.repeat(wide - 3), 'orange')}`);
 }
 
 const shortPath = (path) => String(path || '').replace(/^\/(?:Users|home)\/[^/]+/u, '~').replace(/^~\/mc\/programs\//u, '');
@@ -32,7 +35,7 @@ const shortPath = (path) => String(path || '').replace(/^\/(?:Users|home)\/[^/]+
 export function devLines(lines, c, wide, dev, expand) {
   const servers = dev?.servers || [];
   const queue = dev?.queue || [];
-  section(lines, c, wide, 'DEV', servers.length || dev?.queued
+  panelHeading(lines, c, wide, 'DEV', !dev ? 'not read' : servers.length || dev?.queued
     ? [`${dev.running} running`, `${dev.leased} leased`, dev.starting && `${dev.starting} starting`, dev.queued && `${dev.queued} queued`].filter(Boolean).join(' · ')
     : 'none running', 'mc dev list');
   const repos = [...new Set(servers.map((server) => server.repo || 'unknown'))];
@@ -64,7 +67,7 @@ export function devLines(lines, c, wide, dev, expand) {
 }
 
 export function mergesLines(lines, c, wide, merges, expand) {
-  section(lines, c, wide, 'MERGE', '', 'mc merge <repo> <pr>');
+  panelHeading(lines, c, wide, 'MERGE', '', 'mc merge <repo> <pr>');
   for (const repo of merges?.repos || []) {
     const active = repo.landings || [];
     const reds = repo.reds || [];
@@ -92,7 +95,7 @@ export function mergesLines(lines, c, wide, merges, expand) {
 }
 
 export function deployLines(lines, c, wide, production, expand) {
-  section(lines, c, wide, 'DEPLOY', '', 'mc deploy');
+  panelHeading(lines, c, wide, 'PRODUCTION', '', 'mc deploy');
   const p = production || {};
   detail(lines, c, wide, 4, p.live
     ? `LIVE      ${p.live.short || p.live.commit || 'unknown'} · observed ${age(p.live.age_seconds)}`

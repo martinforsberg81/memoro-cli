@@ -19,6 +19,7 @@ const SGR = {
   red: '[31m',
   green: '[32m',
   yellow: '[33m',
+  orange: '\u001b[38;5;208m',
   blue: '[34m',
   magenta: '[35m',
   cyan: '[36m',

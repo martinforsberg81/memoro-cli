@@ -45,7 +45,7 @@
  * at a row without splitting a page apart again.
  */
 import { activityLines, sessionGoal } from './page-activity.js';
-import { deployLines, devLines, detail, mergesLines } from './page-operations.js';
+import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 export { QUEUED_DRAWN } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
@@ -99,6 +99,21 @@ function paint(c, parts, space = Infinity) {
   const plain = items.map((part) => part.text).join('');
   if (plain.length > space) return c(clip(plain, space), 'grey');
   return items.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
+}
+
+/** Wrap fields before painting so narrow layouts retain results and warnings. */
+function wrappedParts(lines, c, wide, indent, parts) {
+  let current = [];
+  const flush = () => {
+    if (current.length) lines.push(`${' '.repeat(indent)}${paint(c, between(current, ' · '))}`);
+    current = [];
+  };
+  for (const part of parts.filter(part => part.text)) {
+    if (width(paint(c, between([...current, part], ' · '))) > wide - indent) flush();
+    if (part.text.length > wide - indent) detail(lines, c, wide, indent, part.text, part.styles);
+    else current.push(part);
+  }
+  flush();
 }
 
 /**
@@ -318,7 +333,7 @@ export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
 const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
 
 /**
- * LANGUAGE — what `mc language` last read and last ran, right after DEPLOY
+ * LANGUAGE — what `mc language` last read and last ran, inside PRODUCTION
  * because it is the other door to production. Only the languages with
  * something to say are drawn — unresolved selectors, rows waiting, a reading a
  * week old — and the last run rides on the heading. With neither the section
@@ -348,10 +363,16 @@ function languageLines(lines, c, wide, language, at) {
       { text: ` · ${ageWords(ageOf(last.ended || last.started))} ago`, styles: ['grey'] },
     ]
     : 'no run recorded';
-  heading(lines, c, wide, 'LANGUAGE', counts, 'mc language');
+  if (Array.isArray(counts) && width(paint(c, counts)) + 29 > wide) {
+    heading(lines, c, wide, 'LANGUAGE', null, 'mc language');
+    wrappedParts(lines, c, wide, 4, counts.map(part => ({ ...part, text: part.text.replace(/^ · | · $/gu, '') })));
+  } else heading(lines, c, wide, 'LANGUAGE', counts, 'mc language');
   for (const { lang, parts } of rows) {
     const left = `    ${c(pad(lang, 4), 'bold')}`;
-    lines.push(`${left}${paint(c, between(parts, ' · '), wide - width(left))}`);
+    if (width(left) + width(paint(c, between(parts, ' · '))) > wide) {
+      lines.push(`    ${c(lang, 'bold')}`);
+      wrappedParts(lines, c, wide, 6, parts);
+    } else lines.push(`${left}${paint(c, between(parts, ' · '))}`);
   }
   return true;
 }
@@ -366,47 +387,14 @@ function openGapLine(lines, c, wide, gap) {
 /** A daily reading older than this missed a day: its age is drawn yellow. */
 const CHECK_STALE_S = 36 * 60 * 60;
 
-/**
- * CHECKS — per repository, the nightly's last full test and the last daily
- * `mc deps`, each with its age and the commit it read. Drawn whether or not
- * either has run: *"when did the suite last run whole?"* is a question the
- * row answers either way.
- */
-function checksLines(lines, c, wide, checks) {
-  heading(lines, c, wide, 'CHECKS', 'full test and deps, once a day', 'mc test nightly status');
-  for (const repo of checks?.repos || []) {
-    const ageTone = (seconds) => (seconds != null && seconds >= CHECK_STALE_S ? ['yellow'] : ['grey']);
-    const ago = (seconds) => (seconds == null ? '?' : ageWords(seconds));
-    const test = repo.test
-      ? between([
-        { text: `full test ${ago(repo.test.age_seconds)}`, styles: ageTone(repo.test.age_seconds) },
-        { text: repo.test.short || '', styles: ['grey'] },
-        repo.test.red == null ? null : { text: repo.test.red ? `${repo.test.red} red` : 'green', styles: repo.test.red ? ['red'] : ['green'] },
-      ], ' · ')
-      : [{ text: 'full test never run', styles: ['yellow'] }];
-    const counts = repo.deps ? `${repo.deps.critical} critical, ${repo.deps.high} high` : '';
-    const deps = repo.deps
-      ? between([
-        { text: `deps ${ago(repo.deps.age_seconds)}`, styles: ageTone(repo.deps.age_seconds) },
-        { text: repo.deps.short || '', styles: ['grey'] },
-        { text: counts, styles: repo.deps.critical ? ['red'] : (repo.deps.high ? ['yellow'] : ['green']) },
-      ], ' · ')
-      : [{ text: 'deps never read', styles: ['yellow'] }];
-    const left = `       ${pad(clip(repo.repo, DIGEST_REPO - 1), DIGEST_REPO)} `;
-    lines.push(`${left}${paint(c, [...test, { text: '   ' }, ...deps], wide - width(left))}`);
-  }
-}
-
 /** Past this, the age is the thing on the row worth looking at. */
 const STALE_SESSION_S = 24 * 60 * 60;
 const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
 const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
 
-/** The repository column shared by maintenance and checks. */
-const DIGEST_REPO = 11;
-
-/** Repository readings side by side; missing measurements stay unknown. */
-function maintenanceLines(lines, c, wide, sessions, intake, checks) {
+/** Repository maintenance keeps each reading's age and result together. */
+function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
+  panelHeading(lines, c, wide, 'MAINTENANCE');
   const helper = sessions?.desks?.helper;
   const last = intake?.last_run;
   const status = [
@@ -414,35 +402,46 @@ function maintenanceLines(lines, c, wide, sessions, intake, checks) {
     { text: last ? `last run ${ageWords(last.age_seconds)} ago${last.ok ? '' : ' failed'}` : 'no run recorded', styles: last && !last.ok ? ['red'] : ['grey'] },
     { text: helper ? [helper.tool, helper.model].filter(Boolean).join(' ') : '', styles: ['grey'] },
   ];
-  heading(lines, c, wide, 'MAINTENANCE', fitting(trailing(status), wide - 17), null);
-  const compact = wide < 100;
-  const columns = [
-    ['REPO', 11], ['ERRORS', 7], ['NEW', 5], ['LOUD', 5],
-    [compact ? 'C' : 'DEP CRIT', compact ? 3 : 9],
-    [compact ? 'H' : 'HIGH', compact ? 3 : 6],
-    ...(!compact ? [['MOD', 5], ['LOW', 5]] : []),
-    [compact ? 'PROP' : 'PROPOSALS', compact ? 5 : 10],
-  ];
-  const cells = (values) => columns.map(([, size], i) => pad(clip(String(values[i]), size - 1), size)).join('');
-  lines.push(`    ${c(`${cells(columns.map(([label]) => label))}STATUS`, 'grey')}`);
-  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map((r) => r.repo), ...(checks?.repos || []).map((r) => r.repo)])];
+  wrappedParts(lines, c, wide, 4, status);
+  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map(r => r.repo), ...(checks?.repos || []).map(r => r.repo)])];
   for (const name of repos) {
-    const digest = intake?.repos?.find((r) => r.repo === name);
-    const deps = checks?.repos?.find((r) => r.repo === name)?.deps;
+    const digest = intake?.repos?.find(r => r.repo === name);
+    const reading = checks?.repos?.find(r => r.repo === name);
+    const deps = reading?.deps;
+    const test = reading?.test;
     const proposals = intake?.by_system?.[name === 'memoro-cli' ? 'mc' : name] ?? 0;
-    const status = !digest ? 'no digest' : digest.first ? 'no baseline'
+    const tone = digest?.loud || deps?.critical || test?.red ? 'red'
+      : !digest || !deps || !test || digest.first || digest.age_seconds == null || digest.age_seconds >= STALE_SESSION_S
+        || deps.high || deps.age_seconds == null || test.age_seconds == null || test.red == null
+        || deps.age_seconds >= CHECK_STALE_S || test.age_seconds >= CHECK_STALE_S ? 'yellow' : 'green';
+    lines.push(`    ${c(MARK.running, tone)} ${c(clipCell(name, wide - 8), 'bold')}`);
+    const digestAge = !digest ? 'no digest' : digest.first ? 'no baseline'
       : digest.age_seconds == null ? (digest.date || 'age unknown') : `${ageWords(digest.age_seconds)} old`;
-    const values = [name, digest?.errors_total ?? '?', digest && !digest.first ? digest.new_errors : '?',
-      digest && !digest.first ? digest.loud : '?', deps?.critical ?? '?', deps?.high ?? '?',
-      ...(!compact ? [deps?.moderate ?? '?', deps?.low ?? '?'] : []), proposals];
-    const tone = digest?.loud || deps?.critical ? 'red'
-      : !digest || !deps || digest.first || digest.age_seconds == null || digest.age_seconds >= STALE_SESSION_S || deps.high ? 'yellow' : 'green';
-    lines.push(`  ${c('●', tone)} ${cells(values)}${c(clip(status, wide - 4 - width(cells(values))), 'grey')}`);
+    detail(lines, c, wide, 6, `Errors ${digest?.errors_total ?? '?'} · new ${digest && !digest.first ? digest.new_errors : '?'} · loud ${digest && !digest.first ? digest.loud : '?'} · ${digestAge}`,
+      digest?.loud ? ['red'] : ['grey']);
+    const ago = seconds => seconds == null ? 'age unknown' : ageWords(seconds);
+    const ageStyle = seconds => seconds == null || seconds >= CHECK_STALE_S ? ['yellow'] : ['grey'];
+    const testParts = test ? [
+      { text: `full test ${ago(test.age_seconds)}`, styles: ageStyle(test.age_seconds) },
+      { text: test.short || '', styles: ['grey'] },
+      { text: test.red == null ? 'result unknown' : test.red ? `${test.red} red` : 'green', styles: test.red == null ? ['yellow'] : test.red ? ['red'] : ['green'] },
+    ] : [{ text: 'full test never run', styles: ['yellow'] }];
+    wrappedParts(lines, c, wide, 6, testParts);
+    const depParts = deps ? [
+      { text: `deps ${ago(deps.age_seconds)}`, styles: ageStyle(deps.age_seconds) },
+      { text: deps.short || '', styles: ['grey'] },
+    ] : [{ text: 'deps never read', styles: ['yellow'] }];
+    wrappedParts(lines, c, wide, 6, depParts);
+    if (deps) detail(lines, c, wide, 8, `${deps.critical} critical · ${deps.high} high · ${deps.moderate ?? 0} moderate · ${deps.low ?? 0} low`,
+      deps.critical ? ['red'] : deps.high ? ['yellow'] : ['grey']);
+    if (proposals) detail(lines, c, wide, 6, `${proposals} proposal${proposals === 1 ? '' : 's'} waiting`, ['yellow']);
+    if (expand) for (const error of digest?.loud_lines || []) {
+      detail(lines, c, wide, 8, [error.message, error.fingerprint, error.count].filter(Boolean).join(' · '), ['red']);
+    }
   }
-  if (compact) say(lines, c, wide, 2, 'C/H: dependency critical/high · errors: fingerprints', ['grey']);
-  else say(lines, c, wide, 2, 'errors: fingerprints · DEP: dependency vulnerabilities', ['grey']);
   const untagged = intake?.by_system?.untagged || 0;
   if (untagged) say(lines, c, wide, 7, `${untagged} proposal${untagged === 1 ? '' : 's'} · untagged ${untagged}`, ['yellow']);
+  panelEnd(lines, c, wide);
 }
 
 
@@ -479,43 +478,34 @@ function ownerWords(owner) {
 }
 
 /**
- * PULL REQUESTS — every open pull request no goal row already draws.
+ * MERGE's loose PR group — open pull requests no programme or session draws.
  *
  * A goal's pull requests are on its row in PROGRAMMES, and the merger's are in
  * MERGES. What is left is what the page could not
  * see at all before: a plan session's, one opened from a terminal, and one
  * nobody holds any more — the last with the waiting mark in yellow, because it
- * is a person's and nobody knows it (Martin, 2026-10-09). The heading counts
- * them all, so the answer to *how many are open* is one place.
+ * is a person's and nobody knows it (Martin, 2026-10-09). The summary counts
+ * only this group; the standalone `mc prs` still lists every open PR.
  */
-function prsLines(lines, c, wide, prs) {
+function prsLines(lines, c, wide, prs, sessionPrs = []) {
   if (!prs) return;
-  // Attached PRs are accounted for by their programme, even when no local
-  // worktree holds the branch. Only the remainder can be nobody's here.
-  const attached = (prs.items || []).filter((pr) => pr.programme).length;
-  const counts = attached ? {} : (prs.counts || {});
-  if (attached) for (const pr of prs.items || []) {
-    if (!pr.programme) counts[pr.owner.kind] = (counts[pr.owner.kind] || 0) + 1;
-  }
+  const assigned = new Set(sessionPrs.map(pr => `${pr.repo}#${pr.number}`));
+  const items = (prs.items || []).filter(pr => !pr.programme && !pr.merging && !pr.merge_red
+    && !assigned.has(`${pr.repo}#${pr.number}`));
+  if (!items.length) return;
+  const counts = {};
+  for (const pr of items) counts[pr.owner?.kind || 'none'] = (counts[pr.owner?.kind || 'none'] || 0) + 1;
   const words = [
-    attached ? `${attached} in programmes` : '',
+    `${items.length} open`,
     counts.plan ? `${counts.plan} plan` : '',
     counts.workarea ? `${counts.workarea} in a workarea` : '',
     counts.worktree ? `${counts.worktree} checked out elsewhere` : '',
+    counts.none ? `${counts.none} nobody's` : '',
+    prs.age_seconds >= 15 * 60 ? `as of ${ageWords(prs.age_seconds)} ago` : '',
   ].filter(Boolean);
-  const parts = [
-    { text: `${prs.count} open`, styles: ['grey'] },
-    ...words.map((text) => ({ text, styles: ['grey'] })),
-    counts.none ? { text: `${counts.none} nobody's`, styles: ['yellow', 'bold'] } : null,
-    prs.age_seconds != null && prs.age_seconds >= 15 * 60
-      ? { text: `as of ${ageWords(prs.age_seconds)} ago`, styles: ['yellow'] }
-      : null,
-  ].filter(Boolean);
-  heading(lines, c, wide, 'PULL REQUESTS', prs.fetched ? between(parts, ' · ') : 'not asked yet — mc prs asks GitHub', 'mc prs');
-  for (const pr of prs.items || []) {
-    if (pr.programme || pr.merging || pr.merge_red) continue;
-    lines.push(prRow(c, wide, pr, ownerWords(pr.owner)));
-  }
+  detail(lines, c, wide, 4, 'PRs outside goals', ['bold']);
+  detail(lines, c, wide, 6, `${words.join(' · ')} · mc prs`);
+  for (const pr of items) lines.push(`  ${prRow(c, wide - 2, pr, ownerWords(pr.owner || { kind: 'none' }))}`);
 }
 
 /**
@@ -819,31 +809,34 @@ export function renderPageLines(data, {
   openGapLine(lines, c, wide, data.language?.open_gap);
 
   const sessions = data.sessions || { desks: {} };
-  // Work and its activity first; shared process diagnostics stay beside MC.
-  programmesLines(lines, c, wide, data.programmes, expand, data.runner?.sessions || []);
+  const runner = data.runner || {};
+  // Surface the effect of resource holds beside the work, with readings in SYSTEM.
+  if (runner.process?.alive) {
+    if (runner.disk?.line) detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
+    if (runner.memory?.line) detail(lines, c, wide, 2, 'New sessions paused — low memory', ['yellow']);
+    if (runner.stop) detail(lines, c, wide, 2, 'New sessions paused — runner stopping', ['yellow']);
+  } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);
+  programmesLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
   lines.push('');
-  maintenanceLines(lines, c, wide, sessions, data.intake, data.checks);
-  lines.push('');
-  // Environment availability follows the work and maintenance.
-  if (data.dev) {
-    devLines(lines, c, wide, data.dev, expand);
-    lines.push('');
-  }
   mergesLines(lines, c, wide, data.merges, expand);
+  prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
+  panelEnd(lines, c, wide);
   lines.push('');
-  if (data.prs) {
-    prsLines(lines, c, wide, data.prs);
-    lines.push('');
-  }
-  deployLines(lines, c, wide, data.runner?.production, expand);
+  devLines(lines, c, wide, data.dev, expand);
+  panelEnd(lines, c, wide);
   lines.push('');
-  if (languageLines(lines, c, wide, data.language, at)) lines.push('');
-  checksLines(lines, c, wide, data.checks);
+  deployLines(lines, c, wide, runner.production, expand);
+  const language = [];
+  if (languageLines(language, c, wide - 2, data.language, at)) lines.push(...language.map(line => `  ${line}`));
+  panelEnd(lines, c, wide);
   lines.push('');
-  dockerLine(lines, c, wide, data.docker);
+  maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);
+  lines.push('');
+  lines.push(`  ${c('── SYSTEM ' + '─'.repeat(wide - 12), 'grey')}`);
   mcLine(lines, c, wide, data.mc, data.caches, version);
-  runnerLines(lines, c, wide, { ...data.runner, at_ms: at }, expand);
-  if (data.billing) lines.push(`  ${c('BILLING', 'cyan')}  ${c(clip(data.billing, wide - 11), 'grey')}`);
+  runnerLines(lines, c, wide, { ...runner, at_ms: at }, expand);
+  dockerLine(lines, c, wide, data.docker);
+  if (data.billing) detail(lines, c, wide, 2, `BILLING  ${data.billing}`);
   for (const note of data.notes || []) {
     // How old the PR cache is was the page's last line, every time, and it was
     // never what anybody came for; `mc --json` has it under `caches`.

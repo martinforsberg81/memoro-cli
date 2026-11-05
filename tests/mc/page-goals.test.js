@@ -291,8 +291,8 @@ describe('programme pull requests', () => {
     ]);
     for (const columns of [60, 80, 120, 160]) {
       const lines = renderPageLines(pageData({ programmes, prs: pulls }), { columns, now: NOW });
-      const divider = lines.findIndex((line) => line.includes('PULL REQUESTS'));
-      if (columns >= 120) assert.match(lines[divider], /3 in programmes .*1 nobody's/u);
+      const divider = lines.findIndex((line) => line.includes('PRs outside goals'));
+      assert.match(lines[divider + 1], /1 open · 1 nobody's/u);
       for (const number of [31, 32, 33, 34]) {
         const own = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.includes(`#${number}`));
         assert.equal(own.length, 1, `#${number} appears once at ${columns} columns`);

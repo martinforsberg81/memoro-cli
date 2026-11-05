@@ -24,8 +24,10 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` draws PROGRAMMES, MAINTENANCE, DEV, MERGE, PULL REQUESTS,
-DEPLOY, LANGUAGE, CHECKS, Docker when present, MC and BILLING. There is no
+`renderPageLines` draws PROGRAMMES followed by four work panels: MERGE, DEV,
+PRODUCTION and MAINTENANCE. Orange opening and closing rules distinguish these
+panels from cyan programme boundaries. SYSTEM follows a horizontal separator
+at the bottom, containing MC, runner diagnostics, Docker when present and BILLING. There is no
 separate SESSIONS section. A stopped language run inside an open gap still
 puts its warning above everything else.
 
@@ -79,18 +81,20 @@ Unowned sessions and directories remain visible as strays.
 
 ### MAINTENANCE
 
-One row per repository, always including memoro and memoro-cli. Each starts
-with a large `●`: red for loud errors or critical dependencies, yellow for
-missing or old readings or high vulnerabilities, green for a current reading
-without those findings. Columns show total error fingerprints in the digest,
-new and loud errors, dependency vulnerabilities by severity, root proposals
-by system (`mc` belongs to memoro-cli), and the digest's age or missing state.
-Unknown measurements are `?`, including new counts before a baseline exists.
-Below 100 columns, dependency critical/high become C/H and moderate/low give
-way. Untagged root proposals follow the table. Helper status and its last
-recorded collection appear on the Maintenance title; Manager is in the header.
-Programme-owned proposals remain on their programme headings. Full error
-messages and proposal filenames remain in JSON and the digest.
+Each repository has a named block, always including memoro and memoro-cli.
+Its status dot is red for loud errors, critical dependencies or failed full
+tests; yellow for missing/old measurements or high vulnerabilities; green for
+current readings without those findings. Child rows show error fingerprints
+(total, new and loud, with digest age), the last full test (age, commit and
+result), and the dependency reading (age, commit and severity counts).
+Unknown measurements stay unknown, including new counts before a baseline.
+These replace the separate CHECKS section and the maintenance column table.
+
+Helper status and its last recorded collection sit below the panel title.
+Root proposals appear under their repository; untagged root proposals follow
+the repository blocks. Programme-owned proposals stay on their programmes.
+`a` adds the recorded loud error details. Missing readings and failures stay
+visible in both modes; long details wrap at narrow terminal widths.
 
 ### DEV
 
@@ -128,7 +132,7 @@ Failures get their measured reason on a separate red child row; batch members
 name their lead PR. Long reasons wrap rather than being lost at the terminal
 edge. The sole source is `merges.repos[]`; legacy aggregates are not rendered.
 
-### DEPLOY
+### PRODUCTION
 
 Separate rows show LIVE (the cached `/api/version` observation and age),
 RECORDED (the last successful deployment and age) and ATTEMPT (latest outcome,
@@ -143,18 +147,24 @@ latest-attempt evidence to JSON; existing `running`, `failed` and successful
 record fields remain. `a` adds builds and the recorded timestamp. Collection
 uses existing local records; rendering initiates no production request.
 
-### PULL REQUESTS, LANGUAGE, CHECKS, MC and BILLING
+### Related work and system details
 
-Loose PULL REQUESTS retains open PRs not represented by a goal, programme,
-running session or merger; `mc prs` still lists every PR. LANGUAGE and CHECKS
-retain their existing cached readings.
+MERGE includes a conditional **PRs outside goals** group for open PRs not
+represented by a programme, running session or merger. Its counts describe
+that group only; `mc prs` still lists every PR. Empty groups disappear.
+LANGUAGE lives inside PRODUCTION when cached readings or a run have something
+to report. The stopped-language-gap warning remains above the work.
 
-MC retains installed-code/update/draining information. Immediately below it,
-the runner summary shows process liveness and occupied/configured lanes,
-without one row per idle lane. STOP, stale records, GitHub failures, disk and
-memory holds and quota warnings remain visible. Reasons wrap at narrow widths.
-Daily session counts remain compact; `a` shows the full outcome/cost breakdown.
-BILLING follows this MC block, retaining both providers' usage and next route.
+A horizontal SYSTEM separator places installed-code/update/draining information,
+runner liveness and occupied/configured lanes, resource holds, Docker,
+provider usage and daily statistics below the work. STOP, stale records,
+GitHub failures and quota warnings remain visible; reasons and billing wrap.
+Disk and memory values still come from the runner's hold records, not a new
+resource sampler. A dead runner's old resource holds do not describe now.
+While a live runner stops new sessions for disk, memory or STOP, a short
+consequence also appears above PROGRAMMES; full readings remain in SYSTEM.
+A stopped runner has the same nearby warning with its restart command.
+`a` shows the full daily outcome/cost breakdown.
 
 ## Where the facts come from
 
@@ -250,7 +260,8 @@ day, grey once landed, and cyan bold otherwise. Primary text uses the
 terminal's own foreground. The page maps the shared palette's `grey`
 bookkeeping tone to standard ANSI white (SGR 37), not dark grey (SGR 90),
 so secondary text stays legible on dark backgrounds. There is no dim text.
-Exact RGB colours still depend on the terminal palette. Painting
+Work-panel rules use orange (256-colour SGR 38;5;208). Other colours still
+depend on the terminal palette; NO_COLOR and non-TTY output carry no escapes. Painting
 happens after clipping plain text so no escape sequence is cut. Plain and
 painted rows occupy the same columns.
 
@@ -510,6 +521,6 @@ fits. `mc manager` (or `m` at the page prompt) opens the session for priorities,
 blockers and proposals across all programmes. Manager's open state is shown in
 the header, including foreground records from before the rename.
 
-Maintenance keeps repository measurements in its table. Its title carries the
-interactive helper's open state and the last recorded helper collection from
+Maintenance groups repository measurements beneath their names. Below its
+title it carries the interactive helper's open state and last collection from
 runs.tsv, including a failed run or an explicit absence of a record.
