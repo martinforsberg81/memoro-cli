@@ -12,17 +12,24 @@ nothing in mc's runner, CLI or page changes here.
 | Codex | normal | **supported** for a future mc-owned `codex app-server` launch | `turn/steer` with `expectedTurnId` and `clientUserMessageId` on the bound thread |
 | Codex | urgent | **supported**, same mechanism | as normal; precedence is mc's own pending-queue order, Codex has no separate priority |
 | Codex | either, on today's `codex exec` launch | **unsupported** | stdin closed, no control endpoint; no evidence any app-server can attach to an `exec` process |
-| Claude | normal | **supported** on mc's existing stream-json launch, with one flag added | a stream-json `user` line with a `uuid`, observed through `--replay-user-messages` and `command_lifecycle` |
-| Claude | urgent | **supported**, same mechanism, with a measured wait | input is taken at the next model-input boundary inside the active turn; a foreground Bash command finishes first |
+| Claude | normal | **delivery observed; receiver mechanism inconclusive** | stream-json `user` with `uuid`, `--replay-user-messages` and `command_lifecycle`; no compliant entire-message receipt demonstrated |
+| Claude | urgent | **delivery observed; receiver mechanism inconclusive**, same measured wait | next tool-result boundary inside the active turn; foreground Bash finishes first; entire-message acknowledgement remains unproved |
 | Claude | either, on today's launch without the flag/uuid | **unsupported as a receipt path** | `streamSession.send` writes stdin but has no delivery observation |
 
-Both supported paths were demonstrated live, twice per provider, serially, each
-run under 300 s: the build command ran to its own exit (status 3, output
-intact), both messages were delivered inside the same instance and
-conversation, and each was acknowledged and answered by a receiver-authored
-envelope before the build session ended. Four gaps remain open and are listed
-under [Known gaps](#known-gaps); two of them (turn-end/result drain and the
-credits route) are **inconclusive**, not supported.
+Codex's future-launch path has positive whole-message receipt/reply evidence
+in both runs. Claude has positive same-instance input delivery and tool
+preservation, but **no demonstrated compliant entire-message receiver event**.
+Run 1 combined JSON and prose; run 2 emitted envelope text followed by a tool
+block with the **same assistant message ID**. Neither is an entire assistant
+message consisting only of an envelope. They remain delivered but
+unacknowledged/unreplied under the commissioned mechanism. No line-extraction
+fallback is acceptable. This is an inconclusive receiver result, not proof
+that Claude cannot support a compliant mechanism.
+
+All four serial runs were under 300 s; command output and exit 3 survived.
+The build's Claude run-1 guard sent SIGTERM only after its provider result,
+not as a delivery operation; that run does not establish clean session exit.
+The gaps below preclude activating phase 2 unchanged.
 
 Positive transport evidence does not deliver the feature. Phase 2
 (`mc/live-session-messages`) stays in plan until plan has taken this decision
@@ -44,7 +51,8 @@ in.
 Provider keys were not inspected. The probe children ran with every `MC_*`
 variable removed except `MC_HEADLESS=1` for Claude, and with
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_API_KEY` and
-`OPENAI_API_KEY` removed — the same list `runGoal` unsets.
+`OPENAI_API_KEY` removed. `runGoal` also unsets `MC_CODEX_API_KEY`,
+covered here by removal of all `MC_*` variables.
 
 ## The mc launch boundary today
 
@@ -126,8 +134,9 @@ provider's mc role channel, and one task: run `./build.sh` once in the
 foreground and end with `BUILD RESULT exit=<status> last=<line>`. When the
 build's tool call starts, the probe sends a normal message after 4 s and an
 urgent one after 9 s; run 2 also sends a late normal message the moment the
-build's result is observed. A receiver answers with one envelope JSON line per
-message. The probe kills nothing except at its own 290 s guard.
+build's result is observed. The role asks for an entire assistant message
+containing only one envelope JSON object per input message (compliance is
+judged below). The probe kills nothing except at its own 290 s guard.
 
 Launch flags equal mc's `headlessArgs` session/role flags:
 
@@ -147,8 +156,8 @@ Launch flags equal mc's `headlessArgs` session/role flags:
 | Run | Started (UTC) | Elapsed | Outcome | Usage |
 | --- | --- | --- | --- | --- |
 | codex-run1 | 17:28:37 | 268.2 s to turn end, 271.7 s to exit 0 | positive; `initialize` took 122.8 s (stderr: `timed out negotiating with the code-mode host`) | 134 955 tokens: 134 433 in (115 840 cached), 522 out |
-| claude-run1 | 17:34:40 | 74.9 s to `result`; probe guard SIGTERM at 290.2 s, exit 143 | delivery and replies positive; probe's whole-message parser missed two envelopes in one text block, so it kept stdin open until its guard — the session had already finished its turn | 4 in, 271 out, 17 015 cache read, 3 705 cache write; reported $0.0274 |
-| claude-run2 | 17:41:20 | 88.7 s to `result`, 91.1 s to exit 0 | positive, mc-faithful stdin end at first `result` | 10 in, 659 out, 49 529 cache read, 4 315 cache write; reported $0.0447 |
+| claude-run1 | 17:34:40 | 74.9 s to `result`; probe guard SIGTERM at 290.2 s, exit 143 | delivery positive; no valid whole-message receipt/reply; parser correctly rejected combined JSON/prose, leaving stdin open until the guard after the result | 4 in, 271 out, 17 015 cache read, 3 705 cache write; reported $0.0274 |
+| claude-run2 | 17:41:20 | 88.7 s to `result`, 91.1 s to exit 0 | delivery/tool preservation positive; envelope text shares message IDs with tool blocks, so whole-message receipt/reply inconclusive; mc-faithful stdin end at first `result` | 10 in, 659 out, 49 529 cache read, 4 315 cache write; reported $0.0447 |
 | codex-run2 | 17:43:13 | 63.8 s to turn end, 64.9 s to exit 0 | positive, including the late message | 108 238 tokens: 107 782 in (97 152 cached), 456 out |
 
 Total: four runs, two per provider, serial, none over 300 s. No retry.
@@ -181,12 +190,12 @@ Total: four runs, two per provider, serial, none over 300 s. No retry.
 | Next model boundary | claude-run1 t=68.5–68.9 s, claude-run2 t=52.6–58.7 s | `user isReplay uuid=<uuid>` and `command_lifecycle started` come **after** the foreground Bash `tool_result` (34–39 s after the write) and before the next assistant output, inside the same turn (`num_turns` 2 / 5, one `result`). |
 | Active-turn steering | as above | Input written mid-turn is injected at the next tool-result boundary of the same turn; a foreground command is waited for, not interrupted. |
 | Legacy launch | source | Today's lines carry no `uuid` and the launch lacks `--replay-user-messages`: no delivery observation. Unsupported as a receipt path. |
-| Receiver event | `assistant` text block, envelope line(s) | Receiver-authored on the bound `session_id`. Run 1: both envelopes and the final line in one text block. Run 2: one block each. |
+| Receiver event | entire completed `assistant.message` must contain only an envelope | Not demonstrated. Run 1 combines JSON/prose. Run 2 emits separate envelope text blocks, but each shares `message.id` with a later `tool_use` block; isolated stream rows are not whole messages. No acknowledged/replied fact follows. |
 | Correlation | input `uuid` ↔ replay `uuid` ↔ `command_uuid`; envelope `message_id` | Delivery observed independently of acknowledgement. |
-| Result handling | run 2: `result` at 88.7 s, stdin ended as `onResultLine` does, exit 0 at 91.1 s | All three envelopes (incl. the late one) preceded `result`. |
+| Result handling | run 2: `result` at 88.7 s, stdin ended as `onResultLine` does, exit 0 at 91.1 s | All three envelope text observations (incl. the late one) preceded `result`; none proves a compliant whole-message receipt. |
 | Tool preservation | `tool_result is_error=true "Exit code 3 … BUILD-TOKEN-… BUILD-END …"` | Command ran its full 40 s, output and exit intact. |
 | Ownership | one `session_id` per run; tools used: Bash only (run 2: three extra `true` calls, see gaps) | No Agent, no second worker, no resume. |
-| Role / permissions / hooks / billing / accounting | envelope rule only in `--append-system-prompt`, followed; `permissionMode=acceptEdits`; `SessionStart:startup` hook ran (`hook_started`/`hook_response`); `apiKeySource=none`; `result.usage` as today | Preserved; `--replay-user-messages` adds `user` echo lines the result parsers must tolerate. Credits gateway: not probed. |
+| Role / permissions / hooks / billing / accounting | envelope rule only in `--append-system-prompt`, not fully followed; `permissionMode=acceptEdits`; `SessionStart:startup` hook ran (`hook_started`/`hook_response`); `apiKeySource=none`; `result.usage` as today | Preserved; `--replay-user-messages` adds `user` echo lines the result parsers must tolerate. Credits gateway: not probed. |
 
 ## Delivery modes against the contract
 
@@ -226,11 +235,14 @@ Total: four runs, two per provider, serial, none over 300 s. No retry.
    this machine, so neither launch would show one. The protocol does report
    `hook/started`/`hook/completed`; phase 2 must check them with mc's Codex
    hook installed.
-5. **Receiver compliance — measured.** Claude run 1 merged two envelopes and
-   the final line into one text block; run 2 inserted three no-op `true` Bash
-   calls "to separate envelope messages". The envelope must be one whole line,
-   several allowed per message, and the role must say so; a parser keyed on
-   whole messages loses receipts.
+5. **Receiver compliance — incomplete on Claude.** Run 1 merged two
+   envelopes and final prose. Its strict parser correctly rejected the message;
+   this was model noncompliance, not a parser bug. Run 2 separated envelope
+   text using no-op `true` calls, but raw stream rows bind each text and the
+   following tool call to the same `message.id` (see finish reconciliation).
+   The historical line parser is unsafe and rejected. Keep unacknowledged
+   facts; do not extract JSON lines from prose or mistake one content block
+   for an entire message. Codex's completed agentMessage objects qualify.
 6. **Partial output — measured.** Codex abandoned an in-flight
    `agentMessage` on steer. Only `item/completed` items count; deltas never.
 7. **Codex startup — measured.** `initialize` took 122.8 s in run 1 and 4.0 s
@@ -241,7 +253,11 @@ Total: four runs, two per provider, serial, none over 300 s. No retry.
 
 ## Implementation decision
 
-Recommendation for plan, within the approved scope. Both providers: adopt.
+Recommendation for plan, within the approved scope. Codex: candidate for
+future owned launches once integration gaps close. Claude: retain the input
+path as a candidate, but do not activate messaging until an entire-message or
+supported structured receiver mechanism is demonstrated. No contract
+relaxation is authorized.
 
 **Address and envelope (both).** At launch `runGoal` mints an immutable
 `session_instance` id and writes it, with provider and (once known) the
@@ -250,12 +266,16 @@ conversation is bound from the provider's own first event: Codex
 `thread/start` response `thread.id`; Claude `system/init` `session_id`. A
 message is submitted only by the runner process holding the child's stdio —
 the draining predecessor included; a new runner cannot reach that pipe, which
-is the fence. Receiver envelope v1: one line, entire, of a completed receiver
-text item, outside a code fence:
+is the fence. Receiver envelope v1 must occupy the **entire completed
+assistant message**, not one line or one content block extracted from it:
 `{"mc_envelope":1,"message_id":"<id>","kind":"ack"|"reply","ack":true,"reply":"…"}`.
 Accept it only when `message_id` is pending for this instance and the item is
 on the bound thread/session. Never from deltas, tool output, user/replay lines
-or sender text. Repeated identical envelopes are idempotent; a conflicting
+or sender text. Reject mixed prose, multiple JSON objects, fences and mixed
+text/tool messages. For Claude, assemble all content for a `message.id` and
+prove completion before parsing; stream rows with that ID are not separately
+completed messages. That assembly/completion mechanism is still unproved.
+Repeated identical envelopes are idempotent; a conflicting
 second reply is refused and recorded.
 
 **Codex — future launches only.**
@@ -285,7 +305,9 @@ second reply is refused and recorded.
   `userMessageLine` (prompt, check-ins, messages) a `uuid`.
 - Transport accepted = `command_lifecycle queued` for that uuid;
   delivered = `user isReplay` with that uuid (or `command_lifecycle started`);
-  acknowledged/replied = envelope in an `assistant` text block.
+  acknowledged/replied = envelope occupying the entire completed assistant
+  message, after grouping by `message.id`; no such event has been proved in
+  these runs. An isolated text block cannot establish receipt.
 - `scan` in `streamSession` must parse these lines in addition to `result`
   and `background_tasks_changed`; result parsers must ignore replay lines.
 - Drain: `send` already refuses after `result`. Messages `queued` but not
@@ -297,7 +319,9 @@ second reply is refused and recorded.
 `tests/mc/run-session.test.js`: fake child emitting the recorded JSON-RPC
 notifications (Codex) and stream-json lines (Claude) — accepted without
 `clientId`/replay leaves delivered unset; envelope in a delta, tool output or
-replay is ignored; urgent submitted during an active command leaves the
+replay is ignored; quoted standalone JSON in prose, merged envelopes and
+mixed text/tool messages remain unacknowledged; urgent submitted during an
+active command leaves the
 command's completion and exit untouched and sends no signal; send after
 `turn/completed`/`result` is refused. `tests/mc/run-codex.test.js`: app-server
 argument composition keeps `project_doc_max_bytes=0`,
@@ -308,8 +332,10 @@ SESSION-MESSAGES.md names (acceptance-as-ack, stale-instance routing, urgent
 command cancellation) stand.
 
 **Follow-up commands.** Prerequisites: Codex ≥ 0.166.0 and Claude ≥ 2.1.318
-on the subscription route, a disposable directory, and the probe budget of
-the goal that runs them. Extract and run the probes below:
+on the subscription route, a disposable directory, and an unconsumed probe
+budget in the goal that runs them. This goal has none left. The historical
+live commands below are for a later explicitly commissioned investigation;
+only extraction/schema and the offline command are permitted here:
 
 ```sh
 mkdir -p "$MC_SCRATCH/probes" "$MC_SCRATCH/out"
@@ -319,15 +345,116 @@ node "$MC_SCRATCH/probes/codex-probe.mjs" "$MC_SCRATCH/out" 1   # ≤ 290 s
 node "$MC_SCRATCH/probes/claude-probe.mjs" "$MC_SCRATCH/out" 2  # ≤ 290 s, mc-faithful stdin end
 ```
 
-Run `2` adds the late message and line-level envelope parsing; `1` is the
-whole-message parser of the first runs. Each writes
+These are **historical reproducer scripts, not the implementation parser**.
+Run `2` adds the late message and the unsafe line parser, retained verbatim
+only to reproduce the recorded experiment. `1` uses strict text parsing, but
+the Claude probe still processes blocks, not assembled assistant messages.
+Neither Claude parser is the commissioned receiver mechanism. Each writes
 `<provider>-run<n>.trace.jsonl` (condensed, timestamped) and `.raw.jsonl`
 (every protocol line) to the out directory. Each run is a paid model call.
+**Do not run these live commands again for this goal: all two runs per provider are consumed across build/review/finish.**
+Available binaries/accounts are not remaining budget. Review and finish use
+source/schema inspection and offline raw-event reconciliation, not independent
+live reproduction. A later goal needs its own explicitly commissioned budget.
 
 Before phase 2 activation plan must still settle: gap 1 policy (close vs.
 hold on result), whether to authorise one credits-route probe (gap 2), and
-the Codex resume path (gap 3). Until then `mc/live-session-messages` stays in
+the Codex resume path (gap 3), and demonstrate a contract-compliant Claude
+receiver mechanism (gap 5). Until then `mc/live-session-messages` stays in
 plan.
+
+## Finish reconciliation (2026-11-05)
+
+Review correctly rejected line extraction: standalone JSON quoted in ordinary
+prose is not receipt, even on the bound stream with a pending ID. Keep the
+whole-message contract unchanged. Offline inspection of the original raw
+streams additionally found Claude run 2's text/tool grouping:
+
+| Bound Claude message ID (suffix) | Text at | Same-ID tool block at | Strict result |
+| --- | --- | --- | --- |
+| `YcE1Mr1cj9` | 57.5 s, normal envelope | 57.5 s, Bash `true` | unacknowledged |
+| `FfGmwzudHD` | 62.5 s, urgent envelope | 62.7 s, Bash `true` | unacknowledged |
+| `qnCVersZ1B` | 76.4 s, late envelope | 76.8 s, Bash `true` | unacknowledged |
+
+All have session `0e9d3ce8-c854-40fa-a29e-07741dace438`; the original
+stream's `message.stop_reason` is null on these rows. No independent
+message-completion mechanism was demonstrated. The separate text envelopes
+are useful model-authorship/correlation observations, not whole-message proof.
+Claude run 1's one text message cannot be parsed as a single JSON object.
+Codex run 1 and run 2 supply respectively two and three entire completed
+`agentMessage` envelope objects. Thus only Codex currently has the full
+receiver mechanism demonstrated. Input delivery/tool preservation on Claude
+remain positive; compliant receipt/reply and production launch equivalence
+remain incomplete. Phase 2 must not narrow its provider scope or activate on
+these observations alone.
+
+### Executable offline reconciliation
+
+No provider calls, permanent tests or new suite. Extract the historical
+scripts using the command above, then save/extract this script beside
+`common.mjs`. With access to the retained original scratch evidence:
+
+```sh
+node "$MC_SCRATCH/probes/offline-reconcile.mjs" \
+  /Users/martinforsberg/mc/runner/scratch/goal-mc-session-message-transport-20261105T171437Z/out
+```
+
+Observed during finish: assertions passed; Codex whole-message candidates
+were the two run-1 IDs and three run-2 IDs above; both Claude candidate lists
+were empty. The quoted example was rejected by strict parsing and falsely
+accepted by the historical fallback. The replay prints SHA-256 of each raw
+file to identify the local evidence; no live run was made.
+
+If those local raw files have been removed, the redacted traces above retain
+the observations, but do not claim this raw replay was reproduced. The replay
+uses message grouping across an ended recorded run; it is not a production
+completion detector, address validator or delivery reducer.
+
+<!-- probe:offline-reconcile.mjs -->
+```js
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { parseEnvelope, parseEnvelopeLines } from './common.mjs';
+const root = process.argv[2];
+const envelope = JSON.stringify({mc_envelope:1, message_id:'pending-message', kind:'reply', ack:true, reply:'quoted example, not an acknowledgement'});
+const quoted = `Here is an example (not a receipt):\n${envelope}\nEnd of example.`;
+assert.equal(parseEnvelope(quoted), null);
+assert.equal(parseEnvelopeLines(quoted).length, 1); // demonstrates rejected fallback
+assert.ok(parseEnvelope(envelope));
+assert.equal(parseEnvelope(`${envelope}\n${envelope}`), null);
+assert.equal(parseEnvelope('```json\n' + envelope + '\n```'), null);
+console.log('Quoted prose, merged JSON and fences rejected by whole-text parse; historical line fallback falsely accepts quote.');
+for (const [name, expected] of [['codex-run1',2], ['codex-run2',3], ['claude-run1',0], ['claude-run2',0]]) {
+  const raw = readFileSync(join(root, `${name}.raw.jsonl`), 'utf8');
+  const events = raw.split('\n').filter(l => l.startsWith('<< ')).flatMap(l => { try { return [JSON.parse(l.slice(3))]; } catch { return []; } });
+  let accepted = [];
+  if (name.startsWith('codex')) {
+    accepted = events.filter(e => e.method === 'item/completed' && e.params?.item?.type === 'agentMessage').map(e => parseEnvelope(e.params.item.text)).filter(Boolean);
+  } else {
+    const messages = new Map();
+    for (const e of events.filter(e => e.type === 'assistant')) {
+      const key = `${e.session_id}/${e.message.id}`;
+      messages.set(key, [...(messages.get(key) ?? []), ...e.message.content]);
+    }
+    // Conservative full-content check: any tool/thinking block disqualifies.
+    accepted = [...messages.values()].filter(bs => bs.every(b => b.type === 'text')).map(bs => parseEnvelope(bs.map(b => b.text).join(''))).filter(Boolean);
+  }
+  assert.equal(accepted.length, expected, name);
+  console.log(name, 'whole-message candidates:', accepted.map(e => e.message_id), 'raw sha256:', createHash('sha256').update(raw).digest('hex'));
+}
+```
+
+Protection decision: this remains report-only; no permanent automated test
+is commissioned. The bounded offline replay checks the disputed evidence,
+not a new product parser. A later implementation must validate version,
+message kind/ack/reply shape, sender/instance/conversation/pending-ID binding,
+duplicates and completion; the historical helper validates only part of that.
+Residual risk is explicit model noncompliance and unproved Claude completion,
+not a reason to infer receipt. No additional paid run or cancellation was
+performed during review/finish. Live results are inspected build observations,
+not independently reproduced live results.
 
 ## Redacted traces
 
@@ -498,6 +625,11 @@ in the table above). `t=` citations above refer to the second column.
 
 ## Probe source
 
+**Historical, non-authoritative parsers:** `parseEnvelopeLines` is rejected
+because it accepts quoted standalone JSON in arbitrary prose. Claude also
+requires whole-message assembly, absent from these scripts. Preserve these
+sources as evidence, not as the recommended implementation.
+
 The exact scripts of the runs above (run 1 used the same files before the run-2
 additions, which are gated on `run === '2'`). The extraction command in
 [Implementation decision](#implementation-decision) writes them back out.
@@ -569,7 +701,8 @@ export function parseEnvelope(text) {
 }
 
 /**
- * Run-2 fallback: every line of one completed receiver text block that is, in
+ * UNSAFE historical run-2 fallback (rejected; never use for receipt):
+ * every line of one completed receiver text block that is, in
  * its entirety, an envelope object. Lines inside ``` fences do not count.
  */
 export function parseEnvelopeLines(text) {
