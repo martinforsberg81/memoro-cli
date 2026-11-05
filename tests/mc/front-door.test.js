@@ -401,7 +401,7 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show that goal', 'a  every programme', 'b  brief', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show that goal', 'a  all phases and finished', 'b  brief', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');

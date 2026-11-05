@@ -71,7 +71,7 @@ export async function run(argv, deps = {}) {
 
   const collect = deps.collect || collectPage;
   const version = await getPackageVersion().catch(() => '');
-  // Whether the page draws every programme or folds the dormant ones into one
+  // Whether the page expands phases, finished work and dormant programmes into
   // line. It lives here rather than in the menu because the live loop refreshes
   // through this same closure (`page-live.js`): a frame that did not know the
   // mode would fold them again, thirty seconds after somebody asked to see
@@ -234,7 +234,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
 export function pageKey(data) {
   const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
   return goals
-    .map((g) => [g.programme, g.name, g.stage, g.status, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
+    .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
     .join('|');
 }
 
@@ -253,7 +253,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  every programme   ·   b  brief',
+  '  <n>  show that goal   ·   a  all phases and finished   ·   b  brief',
   '  p  plan a programme   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
@@ -323,7 +323,7 @@ export async function menu(first, {
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
 
-    // The page again with every programme drawn, the dormant ones too. `a`
+    // The page again with every phase, finished goal and dormant programme. `a`
     // again folds them.
     if (answer === 'a' || answer === 'all') {
       all = !all;

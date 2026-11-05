@@ -55,7 +55,7 @@ import {
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { criteriaCount } from './criteria.js';
-import { FINISHED, goalName, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
+import { FINISHED, goalName, goalSession, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -987,27 +987,47 @@ function statusesOf(goals) {
   return out;
 }
 
+/** Phase structure and eligibility carried by JSON and drawn by the tree. */
+function phaseSection(goals) {
+  const unfinished = goals.filter((goal) => !FINISHED.includes(goal.stage ?? goal.status) && !goal.problems?.length);
+  const current = unfinished.length ? Math.min(...unfinished.map((goal) => goal.phase ?? 1)) : null;
+  const phases = new Map();
+  for (const goal of goals) {
+    const finished = FINISHED.includes(goal.stage ?? goal.status);
+    goal.phase = goal.problems?.length ? null : goal.phase ?? 1;
+    goal.held = !finished && goal.phase != null && current != null && goal.phase > current;
+    goal.availability = goal.problems?.length ? 'invalid'
+      : finished ? 'finished'
+      : goal.running ? 'running'
+      : goal.status === 'blocked' ? 'blocked'
+      : goal.held ? 'waiting'
+      : goal.stage === 'plan' ? 'planning'
+      : goal.stage === 'merge' ? 'merging'
+      : goal.runnable === false ? 'incomplete'
+      : 'ready';
+    if (!phases.has(goal.phase)) phases.set(goal.phase, []);
+    phases.get(goal.phase).push(goal);
+  }
+  return {
+    current_phase: current,
+    phases: [...phases].sort(([a], [b]) => a == null ? 1 : b == null ? -1 : a - b)
+      .map(([number, own]) => ({ number, state: number == null ? 'invalid'
+        : own.every((goal) => goal.availability === 'finished') ? 'finished'
+        : number === current ? 'current' : 'waiting', goals: own })),
+    availability: availabilityCounts(goals),
+  };
+}
+
+function availabilityCounts(goals) {
+  const counts = { ready: 0, running: 0, waiting: 0, blocked: 0, invalid: 0, planning: 0, merging: 0, incomplete: 0, finished: 0 };
+  for (const goal of goals) counts[goal.availability] += 1;
+  return counts;
+}
+
 /**
- * One heading per **programme**, its goals under it, sorted programme then
- * goal.
- *
- * A programme is what `mc plan` opens on and what a goal belongs to, so it is
- * the shape of the section; a goal's repository is a column on its own row.
- * Projects went on 2026-11-03 (goal mc/projects-to-goals): a project's steps
- * are goals in phases now, and this section draws goals only.
- *
- * The programme heading carries its **planning session**, open or not — that
- * is the room `mc plan <programme>` fills, and a programme with none is a
- * programme nobody is thinking about right now (Martin, 2026-09-02). A
- * programme is drawn whether or not it has a goal, and a programme that exists
- * *only* as an open planning session is drawn too.
- *
- * Numbering runs through the goals in the order the page draws them
- * (programme, then name), so the menu reaches each by the number beside it.
- *
- * What no kind explains is a stray (`strays`): a directory under `~/mc` that is
- * no area (`listStrays`), and a session with no owner (`sessionsSection`).
- * Nothing on the page removes one; `mc tidy` lists what is left.
+ * Programme → phases → goals. Flat goals retain their stable menu numbers
+ * (programme then name); phase groups reference those same goal objects.
+ * Plans, proposals and otherwise unexplained sessions remain programme facts.
  */
 export function programmesSection({
   planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
@@ -1040,6 +1060,7 @@ export function programmesSection({
       // one line (Martin, 2026-11-02).
       dormant: goals.length === 0,
       goals,
+      ...phaseSection(goals),
       proposals: proposalCounts[name] || 0,
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
@@ -1053,6 +1074,7 @@ export function programmesSection({
   const dormant = groups.filter((group) => group.dormant).length;
   return {
     count: goalList.length,
+    availability: availabilityCounts(goalList),
     programmes: groups,
     active: groups.length - dormant,
     dormant,
@@ -1084,15 +1106,15 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     const sessions = goalSessions(goal.log);
     return {
     name: goal.goal,
+    title: goal.title || null,
+    runnable: goalSession(goal) !== null,
     programme: goal.programme,
     repos: goal.repos,
     stage: goal.stage,
     status: goal.status,
-    // The grid's fields (page-grid.js), as a project row has them: its kind,
-    // its first repository, its state — its stage, which says where in the
-    // order it is; the status is beside it, and a blocked one leads its tail —
-    // how many sessions it has had, and its open pull requests (`goal/<goal>`,
-    // put here by `attachPrs`).
+    // Flat fields remain available to JSON consumers. PROGRAMMES draws the
+    // title, stage and availability in its own phase tree; attachPrs fills
+    // each goal's PR children after both sections have been collected.
     kind: 'goal',
     repo: goal.repos?.[0] ?? null,
     state: goal.stage ?? null,
