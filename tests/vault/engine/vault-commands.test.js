@@ -1131,13 +1131,21 @@ describe('mc vault — full lifecycle (in-process)', () => {
         method: 'POST', body: { secretType: 'api_key', ...encrypted },
       });
     }
+    const legacyRows = server.inspect().secrets.filter((row) => row.schema_version !== 2);
+    assert.equal(legacyRows.length, 2);
+    assert.match(legacyRows[0].row_revision, /^[0-9a-f]{32}$/u);
+    const invalidId = legacyRows[1].id;
     const before = server.inspect().secrets.map((row) => [row.id, row.encrypted_data]);
     const legacyPortal = {
       ...custodyPortal,
       memoroFetch: async (apiUrl, path, opts) => {
         const result = await custodyPortal.memoroFetch(apiUrl, path, opts);
         if (path === '/api/vault/secrets' && opts?.method !== 'POST') {
-          return { ...result, secrets: result.secrets.map(({ row_revision, ...secret }) => secret) };
+          return { ...result, secrets: result.secrets.map((row) => {
+            if (row.id !== invalidId) return row;
+            const { row_revision, ...secret } = row;
+            return secret;
+          }) };
         }
         return result;
       },
@@ -1147,9 +1155,9 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const rc = await vaultRun(['migrate', '--json'], { portal: legacyPortal });
     cap.restore();
     assert.equal(rc, 1);
-    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
     assert.deepEqual(server.inspect().secrets.map((row) => [row.id, row.encrypted_data]), before);
-    assert.equal(server.calls.slice(callsBefore).filter((call) => call.method === 'PUT').length, 0);
+    assert.deepEqual(server.calls.slice(callsBefore).filter((call) => call.method === 'PUT'), []);
+    assert.match(JSON.parse(cap.out.join('\n')).error, /valid row_revision/);
   });
 
   it('migrate stops at a revision conflict, says so, and writes nothing to that row', async () => {
