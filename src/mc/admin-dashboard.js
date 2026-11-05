@@ -1,5 +1,7 @@
 const BASE = 'https://meetmemoro.app/admin';
-const SOURCES = { health: `${BASE}/health`, operations: `${BASE}/operations/status` };
+import { projectUsage, projectCosts, renderUsageCosts } from './admin-usage-costs.js';
+
+const SOURCES = { health: `${BASE}/health`, operations: `${BASE}/operations/status`, usage: `${BASE}/usage-summary`, costs: `${BASE}/costs/summary` };
 const SERVICE_NAMES = ['secrets', 'd1', 'r2', 'kv', 'universeVectors', 'queues'];
 // Explicit aggregate names from the operations status contract. New fields
 // need review before entering either output mode.
@@ -75,7 +77,8 @@ async function readSource(name, token, fetchImpl) {
     const response = await fetchImpl(SOURCES[name], { method:'GET', cache:'no-store', redirect:'error', signal: AbortSignal.timeout(10_000), headers: { 'Cache-Control':'no-store', 'X-Operator-Purpose':'maintenance', Authorization:`Bearer ${token}` } });
     if (!response.ok) return sourceRecord('unavailable', `http_${response.status}`, null, null);
     const body = JSON.parse(await bodyText(response));
-    const data = name === 'health' ? healthProjection(body) : operationsProjection(body);
+    const project = { health: healthProjection, operations: operationsProjection, usage: projectUsage, costs: projectCosts }[name];
+    const data = project(body);
     const timestamp = sourceTime(name === 'health' ? body.checkedAt : body.generatedAt);
     return sourceRecord('available', null, timestamp, data);
   } catch (error) {
@@ -84,19 +87,21 @@ async function readSource(name, token, fetchImpl) {
   }
 }
 export async function collectDashboard({ token, fetch: fetchImpl = globalThis.fetch, clock = () => new Date() } = {}) {
-  const [health, operations] = await Promise.all(['health','operations'].map(n => readSource(n, token, fetchImpl)));
+  const records = await Promise.all(Object.keys(SOURCES).map(n => readSource(n, token, fetchImpl)));
+  const sources = Object.fromEntries(Object.keys(SOURCES).map((name, i) => [name, records[i]]));
   const nowDate = clock(); const now = nowDate.getTime(); const fetchedAt = nowDate.toISOString();
-  for (const source of [health, operations]) Object.assign(source, age(source.timestamp, now));
-  const model = { schemaVersion:1, environment:'production', fetchedAt, sources:{ health, operations } };
-  return { model, exitCode: health.availability === 'available' && operations.availability === 'available' ? 0 : 1 };
+  for (const source of records) Object.assign(source, age(source.timestamp, now));
+  const model = { schemaVersion:2, environment:'production', fetchedAt, sources };
+  return { model, exitCode: records.every(source => source.availability === 'available') ? 0 : 1 };
 }
 const order = { action:0, watch:1, unknown:2, ok:3 };
 export function renderDashboard(model) {
-  const { health, operations } = model.sources;
+  const { health, operations, usage, costs } = model.sources;
+  const entries = Object.entries(model.sources);
   const ageText = s => s.ageSeconds === null ? 'unknown' : `${s.ageSeconds}s${s.future ? ' (future timestamp)' : ''}`;
-  const out = [`MEMORO ADMIN — production — fetched ${model.fetchedAt}`, `Sources: health ${health.availability}; operations ${operations.availability}`, `Source times: health ${health.timestamp || 'unknown'} (age ${ageText(health)}); operations ${operations.timestamp || 'unknown'} (age ${ageText(operations)})`, '', 'ATTENTION'];
-  if (health.availability !== 'available') out.push(`- health unavailable (${health.errorCode})`);
-  if (operations.availability !== 'available') out.push(`- operations unavailable (${operations.errorCode})`);
+  const out = [`MEMORO ADMIN — production — fetched ${model.fetchedAt}`, `Sources: ${entries.map(([name, s]) => `${name} ${s.availability}`).join('; ')}`, ...entries.map(([name, s]) => `Source time ${name}: ${s.timestamp || 'unknown'} (age ${ageText(s)})`), '', 'ATTENTION'];
+  for (const [name, source] of entries) if (source.availability !== 'available') out.push(`- ${name} unavailable (${source.errorCode})`);
+  if (costs.availability === 'available' && costs.data.vendor.usd === null) out.push('- Vendor cost data unavailable for this month; no zero total inferred.');
   if (health.availability === 'available') {
     if (health.data.status !== 'healthy') out.push(`- health status ${health.data.status}`);
     for (const service of health.data.services) if (service.status !== 'healthy') out.push(`- service ${service.name}: ${service.status}`);
@@ -108,6 +113,7 @@ export function renderDashboard(model) {
     for (const g of operations.data.incidents.groups) if (['new','regressed','acknowledged'].includes(g.status)) out.push(`- incidents ${g.status}: ${g.count ?? 'unknown'} groups / ${g.occurrences ?? 'unknown'} occurrences`);
   }
   if (out[out.length-1] === 'ATTENTION') out.push('- No reported attention signals; unknown source or conclusion remains unknown.');
+  out.push(...renderUsageCosts(usage, costs));
   out.push('', 'OPERATIONS');
   if (operations.availability === 'available') for (const op of [...operations.data.operations].sort((a,b)=>(order[a.level]??2)-(order[b.level]??2)||a.key.localeCompare(b.key))) out.push(`${op.key} — ${op.label} — ${op.state} — ${op.level} — reasons: ${op.reasons.join(',')||'none'} — counts: ${Object.entries(op.counts).map(([k,v])=>`${k}=${v}`).join(',')||'unknown'} — run: ${op.startedAt||'unknown'} / ${op.finishedAt||'unknown'}`);
   out.push('', 'INCIDENTS');
@@ -116,6 +122,6 @@ export function renderDashboard(model) {
   out.push('', 'SERVICES');
   if (health.availability === 'available') for (const s of health.data.services) out.push(`${s.name}: ${s.status}${s.latency === null ? '' : `; ${s.latency} ms`}${s.counts.present !== undefined || s.counts.total !== undefined ? `; ${s.counts.present ?? 'unknown'}/${s.counts.total ?? 'unknown'}` : ''}${s.counts.vectorCount === undefined ? '' : `; vectorCount=${s.counts.vectorCount ?? 'unknown'}`}${s.note ? `; ${s.note}` : ''}${s.name === 'queues' ? ' (binding availability only; not delivery health or backlog)' : ''}`);
   else out.push('unknown (health source unavailable)');
-  out.push('', 'WEB DETAIL', 'https://meetmemoro.app/admin/operations', 'https://meetmemoro.app/admin/', 'Financial, user, content, identity and security dashboards are not connected yet.');
+  out.push('', 'WEB DETAIL', 'https://meetmemoro.app/admin/operations', 'https://meetmemoro.app/admin/', 'https://meetmemoro.app/admin/finance', 'https://meetmemoro.app/admin/users', 'Content, identity, security and support detail are not connected yet.');
   return out.join('\n');
 }

@@ -50,9 +50,9 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 
 ## Commands
 
-### `mc-admin` — read-only production operations snapshot
+### `mc-admin` — read-only production admin snapshot
 
-`mc-admin` reads the fixed admin health and operations token routes once and exits; rerun to refresh. `mc-admin --json` prints the safe versioned aggregate projection. It delegates credentials only to the fixed trusted child through `mc keys run`; live reads refuse in `MC_HEADLESS=1`. No writes, polling, or other admin dashboards are connected. See [mc-admin](docs/technical/mc-admin.md).
+`mc-admin` reads the fixed admin health, operations, usage-summary and costs/summary token routes once and exits; rerun to refresh. `mc-admin --json` prints the safe versioned aggregate projection. It delegates credentials only to the fixed trusted child through `mc keys run`; live reads refuse in `MC_HEADLESS=1`. It shows account groups, session activity and selected vendor/AI cost aggregates; no writes or polling. See [mc-admin](docs/technical/mc-admin.md).
 
 ### `mc` — coordinator + worktree lifecycle
 
