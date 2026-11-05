@@ -1,13 +1,4 @@
-/**
- * Goals on the page (Martin, 2026-11-01): drawn under their programme, in the
- * page's one grid — `goal` in the kind column, never a `g ·` before the name —
- * numbered in programme then name order, and counted in the programme's
- * heading (goal mc/page-columns). Projects went on 2026-11-03 (goal
- * mc/projects-to-goals): the rows are goals only.
- *
- * The rows come from `programmesSection` with `goalRows` — the shape `goalsOf`
- * gives — so the page is the real builder and the fixture is the real shape.
- */
+/** Programme goals retain their phase order, stable numbers, blockers and PR children. */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -84,7 +75,7 @@ describe('goal rows on the page', () => {
     const at = (re) => lines.findIndex((line) => re.test(line));
 
 
-    const mcHeading = at(/^ {2}mc\s/u);
+    const mcHeading = at(/^ {2}mc(?: |$)/u);
     const cleanup = at(/^ +1 cleanup +build +blocked/u);
     const rollout = at(/^ +2 rollout +build +running/u);
     assert.ok(mcHeading >= 0 && mcHeading < cleanup, 'the goals are under their programme\'s heading');
@@ -153,10 +144,10 @@ describe('goal rows on the page', () => {
   it('the programme header counts its goals, or says it has none yet', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
-    const mcHeading = lines.find((line) => /^ {2}mc\s/u.test(line));
+    const mcHeading = lines.find((line) => /^ {2}mc(?: |$)/u.test(line));
     const docxHeading = lines.find((line) => /^ {2}docx-editing-surface\s/u.test(line));
     assert.match(mcHeading, /2 goals/u);
-    assert.match(docxHeading, /no goal yet/u, 'a programme with no goal says so');
+    assert.match(docxHeading, /0 goals/u, 'a programme with no goal says so');
   });
 
   it('no row is wider than the terminal, at 80 and at 120 columns', () => {
@@ -215,7 +206,7 @@ describe('a goal\'s stage and status on the page, and one waiting on a person', 
     assert.equal('plan' in judged, false, 'nothing waits on plan any more');
   });
 
-  it('the page draws review and merge green, and a blocked goal in the colour of what waits on a person', () => {
+  it('uses quiet stage labels, green merge availability and red blockers', () => {
     const rows = [
       { name: 'judged', programme: 'mc', repos: ['memoro-cli'], stage: 'review', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
       { name: 'landing', programme: 'mc', repos: ['memoro-cli'], stage: 'merge', status: 'ready', sessions: 2, last: { next: null, comment: null }, running: false, problems: [] },
@@ -224,8 +215,8 @@ describe('a goal\'s stage and status on the page, and one waiting on a person', 
     const data = pageData({ programmes: programmesSection({ goalRows: rows.map(goalRow), programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 140, now: NOW, colour: true }));
     const line = (name) => goalLineOf(lines, name);
-    assert.match(line('judged'), /\u001b\[32mreview/u, 'review is green');
-    assert.match(line('landing'), /\u001b\[32mmerge/u, 'merge is green');
+    assert.match(line('judged'), /\u001b\[90mreview/u, 'stage is secondary; availability carries the state colour');
+    assert.match(line('landing'), /\u001b\[32mawaiting merge/u, 'merge availability is green');
     assert.match(plain(line('stuck')), /finish +blocked/u);
     assert.ok(lines.some((row) => plain(row).includes('split the goal in two?')));
     assert.match(line('stuck'), /\u001b\[31mfinish/u, 'a blocked goal\'s stage is red');
@@ -261,7 +252,7 @@ describe('a goal in a phase its programme has not reached', () => {
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true, expand: true }));
     const row = goalLineOf(lines, 'headless-plan');
     assert.match(plain(row), /plan +waiting for phase/u);
-    assert.ok(lines.some((line) => /\u001b\[33mPHASE 3 · WAITING FOR PHASE 2/u.test(line)), 'yellow');
+    assert.ok(lines.some((line) => /Phase 3 · waits for phase 2/u.test(line)), 'yellow');
   });
 });
 

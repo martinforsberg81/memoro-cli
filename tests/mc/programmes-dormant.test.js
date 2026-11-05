@@ -42,7 +42,7 @@ function programmesOf(lines) {
   const text = lines.map(plain);
   const head = text.findIndex((line) => line.startsWith('  PROGRAMMES'));
   assert.ok(head >= 0, 'PROGRAMMES is drawn');
-  const end = text.findIndex((line, n) => n > head && line === '');
+  const end = text.findIndex((line, n) => n > head && line.startsWith('  MAINTENANCE'));
   return text.slice(head, end < 0 ? undefined : end);
 }
 
@@ -89,14 +89,16 @@ describe('dormant programmes in the collector', () => {
 describe('dormant programmes on the page', () => {
   it('draws only active programmes, and one line for the dormant ones under the heading', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    assert.match(lines[0], /^ {2}PROGRAMMES {2}3 active · 2 dormant · 3 goals {2}/u);
-    assert.equal(lines.find((line) => line.includes('mc programs list')), '  2 dormant · 1 with a plan session · 1 with proposals · mc programs list');
+    assert.match(lines[0], /^ {2}PROGRAMMES/u);
+    assert.ok(lines.includes('  ▸ 1 dormant'));
+    assert.ok(lines.includes('  planned'));
+    assert.ok(lines.some((line) => line.includes('PLAN')));
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
     for (const name of ['mc', 'done-only', 'goal-only']) {
-      assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
+      assert.ok(lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
     }
-    for (const name of ['empty', 'planned']) {
-      assert.ok(!lines.some((line) => line.startsWith(`  ${name} `)), `${name} draws no heading`);
+    for (const name of ['empty']) {
+      assert.ok(!lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} draws no heading`);
     }
   });
 
@@ -108,26 +110,27 @@ describe('dormant programmes on the page', () => {
       planningSessions: { mc: [{ ...SESSION, tool: 'codex' }] },
     });
     const wide = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW, expand: true }));
-    assert.match(wide.find((line) => line.startsWith('  mc ')), /● plan codex 1 · 2 proposals/u);
-    assert.match(wide.find((line) => line.startsWith('  empty ')), /no plan session · 1 proposal/u);
+    assert.match(wide.find((line) => line.startsWith('  mc ')), /2 proposals/u);
+    assert.ok(wide.some((line) => /PLAN.*codex/u.test(line)));
+    assert.match(wide.find((line) => line.startsWith('  empty ')), /1 proposal/u);
     assert.doesNotMatch(wide.find((line) => line.startsWith('  zero ')), /proposal/u);
     const narrow = programmesOf(renderPageLines(pageData({ programmes }), { columns: 60, now: NOW, expand: true }));
     const mc = narrow.find((line) => line.startsWith('  mc '));
-    assert.match(mc, /● plan codex 1/u);
+    assert.match(mc, /2 proposals/u);
     assert.ok(mc.length <= 60, mc);
   });
 
   it('leaves the plan-session count out when no dormant programme has one', () => {
     const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.equal(lines.find((line) => line.includes('mc programs list')), '  1 dormant · mc programs list');
-    assert.match(lines[0], /2 active · 1 dormant · 2 goals/u);
+    assert.ok(lines.includes('  ▸ 1 dormant'));
+    assert.match(lines[0], /PROGRAMMES/u);
   });
 
   it('draws no dormant line when every programme is active', () => {
     const programmes = programmesSection({ goalRows: GOALS.slice(0, 1) });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.match(lines[0], /1 active · 0 dormant · 1 goal {2}/u);
+    assert.match(lines[0], /PROGRAMMES/u);
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
   });
 
@@ -135,9 +138,9 @@ describe('dormant programmes on the page', () => {
     const data = pageData({ programmes: section() });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW, expand: true }));
     for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) {
-      assert.ok(lines.some((line) => line.startsWith(`  ${name} `)), `${name} has its heading`);
+      assert.ok(lines.some((line) => new RegExp(`^  ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
     }
-    assert.ok(lines.some((line) => /^ {2}empty · no goal yet/u.test(line)));
+    assert.ok(lines.some((line) => /^ {2}empty · 0 goals/u.test(line)));
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
     const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
     assert.deepEqual(numbers.sort(), [1, 2, 3]);

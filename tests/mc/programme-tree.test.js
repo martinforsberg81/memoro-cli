@@ -8,18 +8,18 @@ const NOW = new Date('2026-11-05T09:00:00Z');
 const goal = (name, phase, over = {}) => ({ programme: 'inbox', goal: name, title: `Title ${name}`, phase,
   stage: 'build', status: 'ready', repos: ['memoro'], log: [], problems: [],
   success_criteria: [{ criterion: 'works', check: 'observe', met: false }], ...over });
-function fixture({ finishedPr = false } = {}) {
+function fixture({ finishedPr = false, currents = [] } = {}) {
   const goals = [goal('later', 3), goal('parallel-b', 1), goal('parallel-a', 1),
     goal('finished', 1, { stage: 'done' }), goal('stuck-later', 4, { status: 'blocked' }),
     goal('pr-later', 5), goal('far-future', 10), goal('plan', 1, { stage: 'plan' }), goal('empty-build', 1, { success_criteria: [] })];
-  const programmes = programmesSection({ goalRows: goalsOf({ goals }), programmes: ['empty'] });
+  const programmes = programmesSection({ goalRows: goalsOf({ goals, currents, alive: () => true }), programmes: ['empty'] });
   const prs = prsSection({ now: NOW, fetched: NOW.toISOString(), prs: [
     { repo: 'memoro', number: 14857, headRefName: 'goal/pr-later', title: 'Open later PR' },
     { repo: 'memoro', number: 14858, headRefName: 'plan/standalone', title: 'Standalone change' },
     ...(finishedPr ? [{ repo: 'memoro', number: 14859, headRefName: 'goal/finished', title: 'Open PR on finished goal' }] : []),
   ] });
   attachPrs({ programmes, pulls: prs });
-  return { programmes, prs, runner: runnerSection({ now: NOW }), sessions: sessionsSection({ now: NOW }),
+  return { programmes, prs, runner: runnerSection({ now: NOW, currents, runner: { pid: 7 }, alive: () => true }), sessions: sessionsSection({ now: NOW }),
     merges: mergesSection({}), intake: intakeSection({ now: NOW }), language: {}, notes: [] };
 }
 const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
@@ -41,7 +41,7 @@ describe('PROGRAMMES phase tree', () => {
     ]);
     assert.equal(data.programmes.availability.ready, 2, 'later phases, planning and missing criteria cannot start');
     const lines = draw(data);
-    const phase = lines.findIndex((line) => line.includes('PHASE 1 · CURRENT'));
+    const phase = lines.findIndex((line) => line.includes('Phase 1'));
     const names = ['Title parallel-a', 'Title parallel-b'];
     for (const name of names) assert.ok(lines.findIndex((line) => line.includes(name)) > phase);
     assert.ok(!lines.slice(0, lines.findIndex((line) => line.includes('MAINTENANCE'))).some((line) => line.includes('LATEST') || line.includes('SESS')));
@@ -56,14 +56,14 @@ describe('PROGRAMMES phase tree', () => {
     assert.ok(folded.some((line) => /▸ Phases 3 · 1 goal/u.test(line)));
     assert.ok(folded.some((line) => /▸ Finished · 1 goal/u.test(line)));
     assert.ok(folded.some((line) => line.includes('Title stuck-later')));
-    assert.ok(folded.some((line) => line.includes('PHASE 4 · WAITING FOR PHASE 1')));
-    assert.ok(folded.findIndex((line) => line.includes('▸ Phases 3')) < folded.findIndex((line) => line.includes('PHASE 4')), 'folded and expanded phases retain numeric order');
+    assert.ok(folded.some((line) => line.includes('Phase 4 · waits for phase 1')));
+    assert.ok(folded.findIndex((line) => line.includes('▸ Phases 3')) < folded.findIndex((line) => line.includes('Phase 4')), 'folded and expanded phases retain numeric order');
     const owner = folded.findIndex((line) => line.includes('Title pr-later'));
     assert.ok(owner > 0);
     assert.match(folded[owner + 1], /memoro#14857/u, 'PR is a child row of its goal');
     assert.equal(folded.filter((line) => line.includes('#14857')).length, 1);
     assert.equal(folded.filter((line) => line.includes('#14858')).length, 1);
-    assert.ok(folded.some((line) => line.includes('PRs WITHOUT A GOAL')));
+    assert.ok(folded.some((line) => line.includes('PRs without a goal')));
     const expanded = draw(data, { expand: true });
     for (const name of ['later', 'far-future', 'finished']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)));
     assert.deepEqual(data.programmes.programmes.flatMap((p) => p.goals.map((g) => g.number)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -71,6 +71,27 @@ describe('PROGRAMMES phase tree', () => {
     const finishedAt = withFinishedPr.findIndex((line) => line.includes('Title finished'));
     assert.ok(finishedAt > 0, 'an open PR keeps even its finished goal visible');
     assert.match(withFinishedPr[finishedAt + 1], /memoro#14859/u);
+  });
+
+  it('puts live sessions beneath their goals, exposes future activity and retains unassigned sessions', () => {
+    const current = (name, kind) => ({ name: `goal:inbox/${name}`, kind, repo: 'memoro', pid: 7,
+      tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 });
+    const data = fixture({ currents: [current('parallel-a', 'build'), current('far-future', 'review'), current('missing-goal', 'plan')] });
+    for (const columns of [60, 80, 120, 160]) {
+      const lines = draw(data, { columns });
+      assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
+      for (const title of ['Title parallel-a', 'Title far-future']) {
+        const at = lines.findIndex((line) => line.includes(title));
+        assert.ok(at >= 0, title);
+        assert.match(lines[at + 1], /● · (BUILD|REVIEW) · 12 min · codex · sol/u);
+        assert.match(lines[at + 2], /1 check-in/u);
+      }
+      const unmatched = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
+      assert.ok(unmatched > 0);
+      assert.ok(lines.slice(unmatched).some((line) => line.includes('inbox/missing-goal')));
+      assert.equal(lines.filter((line) => line.includes('● · REVIEW')).length, 1);
+      assert.ok(lines.every((line) => width(line) <= columns));
+    }
   });
 
   it('keeps the whole tree within terminal width with and without colour and leaves malformed goals visible', () => {

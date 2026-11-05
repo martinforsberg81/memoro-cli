@@ -77,7 +77,7 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'SESSIONS', 'DEV', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'DEV', 'MERGE', 'DEPLOY', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // No WORK heading: every session is a programme's or a desk's, and the
@@ -141,7 +141,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'SESSIONS', 'DEV', 'MERGES', 'DEPLOY', 'MC']) {
+      for (const section of ['PROGRAMMES', 'MAINTENANCE', 'DEV', 'MERGE', 'DEPLOY', 'MC']) {
         const seen = printed[''].match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
@@ -401,7 +401,7 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show that goal', 'a  all phases and finished', 'b  brief', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show that goal', 'a  all / collapse', 'b  brief', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');
