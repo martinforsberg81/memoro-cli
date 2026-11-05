@@ -40,6 +40,9 @@ import { writeJsonAtomic } from './atomic-write.js';
 import {
   devQueuePath, joinQueue, leaveQueue, placeOf, queueOrder, readQueue, ticketView,
 } from './dev-queue.js';
+import {
+  consumeReservation, devPoolPath, LockError, newReservation, PoolStateError, reservationFor, SLOT_LIMIT, slotCapOf, updateReservations,
+} from './dev-reservations.js';
 import { log } from './logger.js';
 import { devServersRoot, shotSessionsDir } from './paths.js';
 import { pidAlive } from './status-collect.js';
@@ -163,7 +166,7 @@ function readJson(path) {
  * ordinary — a restart keeps the instance id — so it replaces rather than
  * refusing.
  */
-export function registerManifest(sourcePath, { root = devServersRoot(), now = () => new Date() } = {}) {
+export function registerManifest(sourcePath, { root = devServersRoot(), now = () => new Date(), lock = {} } = {}) {
   const path = resolve(sourcePath);
   if (!existsSync(path)) return { ok: false, reason: 'no-manifest', error: `no manifest at ${path}` };
   const manifest = readJson(path);
@@ -173,19 +176,38 @@ export function registerManifest(sourcePath, { root = devServersRoot(), now = ()
   if (!checked.ok) return { ok: false, reason: 'invalid', error: checked.problems.join('; '), problems: checked.problems };
 
   const target = registeredPath(manifest.instance_id, root);
-  const existing = readJson(target);
-  const stamp = now().toISOString();
-  const record = {
-    ...manifest,
-    source_manifest_path: path,
-    registered_at: text(existing?.registered_at) || stamp,
-    updated_at: stamp,
-    // mc's own last use survives a re-registration: a restart is not a use.
-    ...(text(existing?.last_used_at) ? { last_used_at: existing.last_used_at } : {}),
-  };
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  writeJsonAtomic(target, record);
-  return { ok: true, instance_id: manifest.instance_id, path: target, replaced: Boolean(existing) };
+  // The record and the reservation it fulfils change under one lock, so a
+  // server is never counted twice (record and reservation) nor not at all.
+  try {
+    return updateReservations(devPoolPath(root), (held) => {
+      const existing = readJson(target);
+      const stamp = now().toISOString();
+      const record = {
+        ...manifest,
+        source_manifest_path: path,
+        registered_at: text(existing?.registered_at) || stamp,
+        updated_at: stamp,
+        // mc's own last use survives a re-registration: a restart is not a use.
+        ...(text(existing?.last_used_at) ? { last_used_at: existing.last_used_at } : {}),
+      };
+      mkdirSync(root, { recursive: true, mode: 0o700 });
+      writeJsonAtomic(target, record);
+      // A re-registration fulfils only the reservation it names: matched by
+      // service and worktree it could be another starter's.
+      const { reservations, consumed } = existing && !manifest.reservation_id
+        ? { reservations: held, consumed: null }
+        : consumeReservation(held, manifest);
+      return {
+        reservations,
+        result: {
+          ok: true, instance_id: manifest.instance_id, path: target, replaced: Boolean(existing), ...(consumed ? { reservation: consumed } : {}),
+        },
+      };
+    }, { lock });
+  } catch (error) {
+    if (error instanceof LockError || error instanceof PoolStateError) return { ok: false, reason: 'lock', error: error.message };
+    throw error;
+  }
 }
 
 /**
@@ -303,14 +325,15 @@ export function listServers({ root = devServersRoot(), reap = true, now = () => 
 }
 
 /**
- * How many app servers may run at once, and the free-memory floor under which none starts.
+ * How many servers other than MAIN may run or be starting at once, and the
+ * free-memory floor under which none starts.
  *
- * Two until 2026-11-03. From 31 Oct to 3 Nov 72 starts waited for a slot
- * (median ~200 s) and 26 were refused after fifteen minutes, every one on the
- * cap and none on memory (36–41 % free), so the cap was raised to four and the
- * memory floor is what keeps the machine out of swap.
+ * Two until 2026-11-03, then four, which counted neither `light` servers nor
+ * starts that had not registered yet. Since 2026-11-05 it is a hard three
+ * (`SLOT_LIMIT`, dev-reservations.js) of every resource class, starting ones
+ * included; `MC_DEV_MAX_SERVERS` may lower it and never raise it.
  */
-export const DEFAULT_MAX_SERVERS = 4;
+export const DEFAULT_MAX_SERVERS = SLOT_LIMIT;
 export const DEFAULT_MIN_FREE_PERCENT = 15;
 
 /**
@@ -340,13 +363,14 @@ export function mainIdleSecondsOf(env = process.env) {
 
 /**
  * Is `server` the shared checkout's main server? `main` is `{ worktree, service }`
- * (`mainCheckout`), or null for none. Matched by path, and by service too when the
- * checkout names one.
+ * (`mainCheckout`), or null for none. Matched by path and service both: only the
+ * configured app service is MAIN, so the checkout's static server takes a slot,
+ * and a checkout whose declaration names no service has no MAIN at all.
  */
 export function isMainServer(server, main) {
-  if (!main?.worktree || !server?.worktree_path) return false;
+  if (!main?.worktree || !main.service || !server?.worktree_path) return false;
   if (resolve(server.worktree_path) !== resolve(main.worktree)) return false;
-  return !main.service || server.service === main.service;
+  return server.service === main.service;
 }
 
 /**
@@ -395,27 +419,42 @@ const ADMIT_SAY_MS = 60_000;
  *
  * Measured 12–26 Sep 2026 on this 8 GB machine: 141 of 571 memoro dev-server
  * starts died unexpectedly, and on 2026-09-26 seven registered servers sat
- * beside 6.8–8.2 GB of swap. `resource_class` had been carried in every
- * manifest since #561 and read by nothing; this is its reader.
+ * beside 6.8–8.2 GB of swap.
  *
- * A server counts when it is live and not `light`. The asker's own worktree
- * *and* service does not count, because a restart replaces itself. Memory is
- * asked first — a machine already short is refused whatever the count — and a
- * `freePercent` of null (no sysctl) skips it rather than guessing.
+ * In this order:
+ *
+ * - A live server for the asker's service and worktree is reused, not
+ *   started again: `{ ok: true, reuse }`, which takes no slot.
+ * - A reservation for them that has not registered yet is a start in
+ *   progress: `reason: 'starting'`, so two callers for one worktree never
+ *   start two servers.
+ * - Memory: a machine already short is refused whatever the count, and a
+ *   `freePercent` of null (no sysctl) skips it rather than guessing.
+ * - The cap: every live server that is not MAIN, of any resource class, and
+ *   every reservation that is not MAIN and has no live server yet. MAIN takes
+ *   no slot (`capped: false` for a request for it).
  *
  * A refusal on the cap names the holders mc may stop to make room, oldest use
  * first, in `evictable`: those mc last used before `staleBefore` (an epoch ms;
- * null names none) and that declare a stop command. Never the asker's own.
+ * null names none) and that declare a stop command. A reservation is never
+ * evictable: there is nothing to stop yet.
  */
 export function admission({
-  servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null, main = null, capped = true,
+  servers, reservations = [], service, worktree, cap, minFreePercent, freePercent, staleBefore = null, main = null, capped = true,
 }) {
-  const holders = holdersOf(servers, { service, worktree, main });
+  const own = (servers || []).find((server) => server.live !== false && isOwn(server, { service, worktree }));
+  if (own) return { ok: true, reuse: own.instance_id };
+  const holders = holdersOf(servers, { main });
+  const pending = pendingOf(servers, reservations, { main });
   const free = Number.isFinite(freePercent) ? freePercent : null;
-  if (free !== null && free < minFreePercent) {
-    return { ok: false, reason: 'memory', holders, free_percent: free, cap };
+  const starting = reservations.find((item) => reservationFor(item, { service, worktree }));
+  if (starting) {
+    return { ok: false, reason: 'starting', reservation: starting.id, holders, pending, free_percent: free, cap };
   }
-  if (capped && holders.length >= cap) {
+  if (free !== null && free < minFreePercent) {
+    return { ok: false, reason: 'memory', holders, pending, free_percent: free, cap };
+  }
+  if (capped && holders.length + pending.length >= cap) {
     const evictable = Number.isFinite(staleBefore)
       ? (servers || [])
         .filter((server) => holders.some((holder) => holder.instance_id === server.instance_id))
@@ -424,7 +463,9 @@ export function admission({
         .sort((a, b) => lastUsedAt(a) - lastUsedAt(b))
         .map((server) => server.instance_id)
       : [];
-    return { ok: false, reason: 'cap', holders, free_percent: free, cap, ...(evictable.length ? { evictable } : {}) };
+    return {
+      ok: false, reason: 'cap', holders, pending, free_percent: free, cap, ...(evictable.length ? { evictable } : {}),
+    };
   }
   return { ok: true };
 }
@@ -435,24 +476,43 @@ function isOwn(server, { service, worktree }) {
 }
 
 /**
- * The live servers that count against the cap, as a refusal names them: not
- * `light`, and not the asker's own. `last_used_at` is mc's last use of each
+ * The live servers that take a slot, as a refusal names them: every one but
+ * MAIN, whatever its `resource_class`. `last_used_at` is mc's last use of each
  * (`lastUsedAt`), so a waiter can see which holder is idle.
  */
-export function holdersOf(servers, { service, worktree, main = null } = {}) {
+export function holdersOf(servers, { main = null } = {}) {
   return (servers || [])
-    .filter((server) => server.live !== false && server.resource_class !== 'light' && !isOwn(server, { service, worktree }) && !isMainServer(server, main))
+    .filter((server) => server.live !== false && !isMainServer(server, main))
     .map((server) => {
       const used = lastUsedAt(server);
       return {
         instance_id: server.instance_id,
         service: server.service,
         worktree_path: server.worktree_path,
+        resource_class: server.resource_class ?? null,
         started_at: server.started_at ?? null,
         last_used_at: used === null ? null : new Date(used).toISOString(),
         url: server.url ?? null,
       };
     });
+}
+
+/**
+ * The reservations that take a slot: not MAIN, and not yet a live server —
+ * one that has registered is counted as the server, once.
+ */
+export function pendingOf(servers, reservations, { main = null } = {}) {
+  const live = (servers || []).filter((server) => server.live !== false);
+  return (reservations || [])
+    .filter((item) => !item.main && !isMainServer({ worktree_path: item.worktree_path, service: item.service }, main))
+    .filter((item) => !live.some((server) => reservationFor(item, { service: server.service, worktree: server.worktree_path })))
+    .map((item) => ({
+      reservation: item.id,
+      service: item.service,
+      worktree_path: item.worktree_path,
+      created_at: item.created_at ?? null,
+      pids: item.pids || [],
+    }));
 }
 
 /** `kern.memorystatus_level` — the percentage of memory free, on macOS — or null. */
@@ -468,64 +528,77 @@ export function freeMemoryPercent(run = spawnSync) {
 }
 
 /**
- * Ask, and wait up to `waitSeconds` for a yes — in turn.
+ * Ask, and wait up to `waitSeconds` for a yes — in turn — and hold the slot.
+ *
+ * A yes is `{ ok: true, reservation }`: a reservation written in
+ * `.pool/reservations.json` under the same lock that read the count, held by
+ * `pid` until the server registers (which fulfils it) or until no process it
+ * names is alive. Whoever spawns the server adds the child's pid
+ * (`addReservationPid`) and passes the id on in `MC_DEV_ADMITTED`; whoever
+ * gives up disowns it (`disownReservation`). A request whose service and
+ * worktree already has a live server is `{ ok: true, reuse }` and reserves
+ * nothing; one whose start is already in progress waits for it, unqueued, and
+ * is then a reuse.
  *
  * A wait takes a ticket in `dev-queue.json` (`dev-queue.js`), and only the
  * ticket at the head is admitted when `admission` says yes; the others keep
- * waiting, told their place. Before 2026-11-03 every waiter polled and the
- * first to look after a holder left won, so a later request could overtake one
- * that had waited fifteen minutes. A request whose worktree and service
- * already has a live server is not queued: a restart replaces itself. A
- * request that does not wait is not queued either, and is refused with reason
- * `queue` while others wait, so it cannot overtake them.
+ * waiting, told their place. A request that does not wait is not queued, and
+ * is refused with reason `queue` while others wait, so it cannot overtake
+ * them. A request for MAIN is not queued and takes no slot.
  *
  * The registry is read afresh on every turn, through `listServers`, so a
  * holder that died is swept rather than waited for. With `evict`, the head —
  * and only the head — stops a holder mc has not used for
- * `MC_DEV_HOLDER_STALE_MINUTES` (5; 30 until 2026-11-03) through its own stop
- * command to make room, one at a time, each tried once; without it nothing
- * running is stopped and the wait is for a holder to leave by itself. Before
- * 2026-10-19 nothing was ever stopped, and a measure server kept alive by a
- * forgotten browser tab held a slot for two hours while `mc shot dev` waited
- * out its fifteen minutes three times. A gate round's priority is a place in
+ * `MC_DEV_HOLDER_STALE_MINUTES` (5) through its own stop command to make
+ * room, one at a time, each tried once, never one a kept browser stepped on
+ * within the last minute and never MAIN. A gate round's priority is a place in
  * the queue, never a stopped server.
+ *
+ * A lock that cannot be taken, or a reservation file that does not parse, is
+ * a refusal with reason `lock`: nothing is admitted on a guess.
  */
 export async function admit({
   service, worktree, waitSeconds = 0, env = process.env, root, queueFile, sleep, now, onWaiting,
   freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer, pid = process.pid,
-  main = null, sessionsDir = null, session = null,
+  main = null, sessionsDir = null, session = null, lock = {},
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
-  const cap = Number(env.MC_DEV_MAX_SERVERS) || DEFAULT_MAX_SERVERS;
+  const cap = slotCapOf(env);
   const minFreePercent = minFreePercentOf(env);
   const startedAt = clock();
   const deadline = startedAt + Math.max(0, Number(waitSeconds) || 0) * 1000;
   const waits = deadline > startedAt;
   const staleMs = (Number(env.MC_DEV_HOLDER_STALE_MINUTES) || DEFAULT_HOLDER_STALE_MINUTES) * 60_000;
-  const file = queueFile || devQueuePath(root || devServersRoot());
+  const registry = root || devServersRoot();
+  const file = queueFile || devQueuePath(registry);
+  const poolFile = devPoolPath(registry);
   // The session files a kept browser writes: the hold it puts on its server (`keptHolds`).
   const keptDir = sessionsDir || shotSessionsDir(env);
-  // The main server counts for nothing, and a request for it is not capped either.
+  // The main server takes no slot, and a request for it is not capped either.
   const mainRequest = isMainServer({ worktree_path: worktree, service }, main);
+  const onSwept = (gone) => logEvent('dev-reservation-swept', {
+    reservation: gone.id, service: gone.service ?? null, worktree_path: gone.worktree_path ?? null, pids: gone.pids ?? [],
+  });
+  const pool = (fn) => updateReservations(poolFile, (held) => fn(held, listServers({ root: registry }).servers), { onSwept, lock });
   const tried = new Set();
   let said = null;
   let ticket = null;
   let placeAtJoin = null;
   try {
     for (;;) {
-      const { servers } = listServers(root ? { root } : {});
-      const own = servers.some((server) => server.live !== false && isOwn(server, { service, worktree }));
+      const snapshot = pool((held, servers) => ({ result: { held, servers } }));
+      const own = snapshot.servers.find((server) => server.live !== false && isOwn(server, { service, worktree }));
+      if (own) return { ok: true, reuse: own.instance_id };
+      const starting = snapshot.held.some((item) => reservationFor(item, { service, worktree }));
       // Where this request stands: null when it is not queued at all. The queue
-      // orders the capped slots, and the main server takes none, so a request
-      // for it is not queued either: "how is it now" never waits behind worktree
-      // servers for a slot it does not use. The memory floor still applies.
+      // orders the capped slots; MAIN takes none, and a start already in
+      // progress for this worktree is waited on, not queued behind.
       let standing = null;
-      if (!own && !mainRequest) {
+      if (!starting && !mainRequest) {
         if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt, session });
         let tickets = readQueue({ file });
         if (ticket && !tickets.some((item) => item.id === ticket.id)) {
-          // Lost to a write that went ahead of a held lock: taken again, in the same place.
           joinQueue({ file, pid, worktree, service, env, now: startedAt, id: ticket.id, session });
           tickets = readQueue({ file });
         }
@@ -540,9 +613,29 @@ export async function admit({
         }
       }
       const head = !standing || standing.place === 1;
-      const asked = admission({
-        servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(), staleBefore: evict && head ? clock() - staleMs : null,
-        main, capped: !mainRequest,
+      const free = freeMemory();
+      // Count and reserve under one lock: nobody else can take the slot between.
+      const { servers, asked } = pool((held, fresh) => {
+        const verdict = admission({
+          servers: fresh, reservations: held, service, worktree, cap, minFreePercent, freePercent: free,
+          staleBefore: evict && head ? clock() - staleMs : null, main, capped: !mainRequest,
+        });
+        if (!verdict.ok || verdict.reuse) return { result: { servers: fresh, asked: verdict } };
+        if (!head) {
+          // A yes that is not this request's turn is a wait behind the queue.
+          return {
+            result: {
+              servers: fresh,
+              asked: {
+                ok: false, reason: 'queue', holders: holdersOf(fresh, { main }), pending: pendingOf(fresh, held, { main }), free_percent: freeOrNull(free), cap,
+              },
+            },
+          };
+        }
+        const reservation = newReservation({
+          service, worktree, pid, main: mainRequest, session, now: clock(),
+        });
+        return { reservations: [...held, reservation], result: { servers: fresh, asked: { ok: true, reservation: reservation.id } } };
       });
       // A holder a kept browser stepped on within the last minute is not stopped under it.
       const victim = (asked.evictable || []).find((id) => !tried.has(id) && !keptHolds({ instance_id: id }, { now: clock(), dir: keptDir }));
@@ -563,33 +656,24 @@ export async function admit({
         if (stopped.ok) await pause(ADMIT_POLL_MS);
         continue;
       }
-      if (asked.ok && head) {
+      if (asked.ok) {
         if (said !== null) {
           logEvent('dev-server-admitted', {
             service,
             worktree_path: worktree,
             waited_s: Math.round((clock() - startedAt) / 1000),
             ...(placeAtJoin !== null ? { place_at_join: placeAtJoin } : {}),
+            ...(asked.reuse ? { reuse: asked.reuse } : {}),
           });
         }
         return asked;
       }
-      // A yes that is not this request's turn is a wait behind the queue.
       const verdict = {
-        ...(asked.ok
-          ? { ok: false, reason: 'queue', holders: holdersOf(servers, { service, worktree, main }), free_percent: freeOrNull(freeMemory()), cap }
-          : asked),
+        ...asked,
         ...(standing ? { place: standing.place, queue: standing.order.map((item) => ticketView(item, clock())) } : {}),
       };
       if (clock() >= deadline) {
-        logEvent('dev-server-refused', {
-          service,
-          worktree_path: worktree,
-          reason: verdict.reason,
-          holders: verdict.holders.map((holder) => holder.instance_id),
-          free_percent: verdict.free_percent,
-          ...(standing ? { place: standing.place } : {}),
-        });
+        refused(logEvent, { service, worktree, verdict, standing });
         return verdict;
       }
       if (said === null || clock() - said >= ADMIT_SAY_MS) {
@@ -598,9 +682,29 @@ export async function admit({
       }
       await pause(ADMIT_POLL_MS);
     }
+  } catch (error) {
+    if (!(error instanceof LockError || error instanceof PoolStateError)) throw error;
+    const verdict = { ok: false, reason: 'lock', error: error.message, holders: [], pending: [], free_percent: null, cap };
+    refused(logEvent, { service, worktree, verdict, standing: null });
+    return verdict;
   } finally {
-    if (ticket) leaveQueue(ticket.id, { file });
+    if (ticket) {
+      try { leaveQueue(ticket.id, { file }); } catch { /* the ticket is swept when this pid is gone */ }
+    }
   }
+}
+
+function refused(logEvent, { service, worktree, verdict, standing }) {
+  logEvent('dev-server-refused', {
+    service,
+    worktree_path: worktree,
+    reason: verdict.reason,
+    holders: (verdict.holders || []).map((holder) => holder.instance_id),
+    ...(verdict.pending?.length ? { pending: verdict.pending.map((item) => item.reservation) } : {}),
+    free_percent: verdict.free_percent ?? null,
+    ...(standing ? { place: standing.place } : {}),
+    ...(verdict.error ? { error: verdict.error } : {}),
+  });
 }
 
 function freeOrNull(value) {
@@ -626,9 +730,17 @@ export function refusalText(verdict, { env = process.env } = {}) {
     return `only ${verdict.free_percent}% memory free (floor ${minFreePercentOf(env)}%)${at}`;
   }
   if (verdict.reason === 'queue') {
-    return `${Math.max(0, (verdict.place ?? 1) - 1)} waiting ahead for an app server${at} — mc dev status shows the queue`;
+    return `${Math.max(0, (verdict.place ?? 1) - 1)} waiting ahead for a dev-server slot${at} — mc dev status shows the queue`;
   }
-  return `${verdict.holders.length} of ${verdict.cap} app servers already running${at} — ${holdersText(verdict)};`
+  if (verdict.reason === 'starting') {
+    return `a server for this service and worktree is already starting (${verdict.reservation}) — wait for it and reuse it`;
+  }
+  if (verdict.reason === 'lock') {
+    return `could not take the dev-server pool lock, so nothing was admitted — ${verdict.error}`;
+  }
+  const pending = verdict.pending || [];
+  const starting = pending.length ? ` and ${pending.length} starting (${pending.map((item) => `${item.reservation} for ${item.worktree_path}`).join(', ')})` : '';
+  return `${verdict.holders.length} running${starting} of ${verdict.cap} dev-server slots${at} — ${holdersText(verdict)};`
     + ' stop one with mc test dev --stop in its worktree';
 }
 
