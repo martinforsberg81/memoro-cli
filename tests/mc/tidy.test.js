@@ -129,7 +129,7 @@ function machine() {
   const projects = join(claude, 'projects');
   const reposHome = join(home, 'repos');
   for (const dir of [work, projects, join(reposHome, 'memoro'), join(reposHome, 'memoro-cli')]) mkdirSync(dir, { recursive: true });
-  const env = { ...process.env, MC_WORK_ROOT: work, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(home, 'codex'), MC_REPOS_HOME: reposHome, MC_HOME: join(home, 'mchome') };
+  const env = { ...process.env, HOME: home, MC_WORK_ROOT: work, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(home, 'codex'), MC_REPOS_HOME: reposHome, MC_HOME: join(home, 'mchome') };
   const worktrees = { memoro: [], 'memoro-cli': [] };
   const nameOf = (cwd) => (cwd.endsWith('memoro-cli') ? 'memoro-cli' : 'memoro');
   const m = {
@@ -814,7 +814,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 8);
+      assert.equal(written.rules_version, 9);
       assert.equal(written.person, false, 'the list says whose run it was');
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
@@ -1145,5 +1145,124 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.match(outsideRoots({ kind: 'scratch-derived', path: join(dir, 'replay') }, roots), /^not the shape a scratch-derived has/u);
       assert.match(outsideRoots({ kind: 'scratch-worktree', path: dir }, roots), /^not the shape a scratch-worktree has/u);
     } finally { s.m.cleanup(); }
+  });
+});
+
+describe('(F) old Wrangler logs, MC shots and Codex generated images', () => {
+  function generated(m) {
+    const logs = join(m.home, 'Library', 'Preferences', '.wrangler', 'logs');
+    const shots = join(m.env.MC_HOME, 'shots');
+    const codex = join(m.env.CODEX_HOME, 'generated_images');
+    const oldLog = join(logs, 'old.log');
+    const oldShot = join(shots, 'nested', 'old.png');
+    const boundaryShot = join(shots, 'nested', 'boundary.png');
+    const oldGroup = join(codex, ID(70));
+    const oldImage = join(oldGroup, 'image.webp');
+    const recentGroup = join(codex, ID(71));
+    const recentImage = join(recentGroup, 'new.jpeg');
+    const recentMetadataGroup = join(codex, ID(72));
+    const recentMetadataImage = join(recentMetadataGroup, 'old.png');
+    const recentMetadata = join(recentMetadataGroup, 'metadata.json');
+    for (const [path, at] of [[oldLog, OLD], [oldShot, OLD], [boundaryShot, NOW - 72 * HOUR], [oldImage, OLD], [recentImage, RECENT], [recentMetadataImage, OLD], [recentMetadata, RECENT]]) m.write(path, 'not inspected', at);
+    m.write(join(shots, '.browser-profile', 'cookie.png'), 'protected', OLD);
+    m.write(join(shots, 'sessions', 'state.png'), 'protected', OLD);
+    m.write(join(shots, 'nested', 'not-image.jpg'), 'protected', OLD);
+    m.write(join(logs, 'nested', 'not-direct.log'), 'protected', OLD);
+    m.write(join(oldGroup, 'metadata.json'), 'protected', OLD);
+    m.write(join(recentGroup, 'new.jpeg'), 'not inspected', RECENT);
+    utimesSync(oldGroup, new Date(OLD), new Date(OLD));
+    utimesSync(recentGroup, new Date(RECENT), new Date(RECENT));
+    utimesSync(recentMetadataGroup, new Date(OLD), new Date(OLD));
+    return { logs, shots, codex, oldLog, oldShot, boundaryShot, oldGroup, oldImage, recentGroup, recentImage, recentMetadataImage, recentMetadata };
+  }
+
+  it('previews only old approved regular files, preserves the exact cutoff and recent Codex group, and does not mutate', () => {
+    const m = machine();
+    try {
+      const f = generated(m);
+      const { list } = runTidy(m.doors({ openIn: () => [] }));
+      const selected = list.targets.filter((item) => item.rule === 'F');
+      assert.deepEqual(selected.map((item) => item.path).sort(), [f.oldImage, f.oldLog, f.oldShot].sort());
+      assert.ok(selected.every((item) => item.bytes > 0 && /older than 72 hours/u.test(item.why)));
+      assert.equal(list.person, false, 'unattended passes still preview eligible file candidates');
+      for (const path of [f.oldImage, f.oldLog, f.oldShot, f.boundaryShot, f.recentImage, f.recentMetadataImage, join(f.oldGroup, 'metadata.json'), join(f.shots, '.browser-profile', 'cookie.png'), join(f.shots, 'sessions', 'state.png'), join(f.shots, 'nested', 'not-image.jpg'), join(f.logs, 'nested', 'not-direct.log')]) assert.ok(existsSync(path), `${path} remains after preview`);
+      assert.match(keptOf(list, f.boundaryShot).why, /last 72 hours/u);
+      assert.match(keptOf(list, f.recentImage).why, /session group was touched/u);
+      assert.match(keptOf(list, f.recentMetadataImage).why, /session group was touched/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('apply removes eligible files but refuses files touched, replaced or opened since the preview', () => {
+    const m = machine();
+    try {
+      const f = generated(m);
+      const preview = runTidy(m.doors({ openIn: () => [] }));
+      assert.deepEqual(preview.list.targets.filter((item) => item.rule === 'F').map((item) => item.path).sort(), [f.oldImage, f.oldLog, f.oldShot].sort());
+      utimesSync(f.oldLog, new Date(NOW - HOUR), new Date(NOW - HOUR));
+      rmSync(f.oldShot);
+      m.write(f.oldShot, 'replacement', OLD);
+      const applying = applyTidy({ listPath: preview.listPath, ...m.doors({ openIn: (path) => path === f.oldGroup ? [77] : [] }) });
+      const result = new Map(applying.applied.map((item) => [item.path, item]));
+      assert.equal(result.get(f.oldLog).ok, false);
+      assert.match(result.get(f.oldLog).why, /touched in the last 72 hours/u);
+      assert.equal(result.get(f.oldShot).ok, false);
+      assert.match(result.get(f.oldShot).why, /identity changed/u);
+      assert.equal(result.get(f.oldImage).ok, false);
+      assert.match(result.get(f.oldImage).why, /process 77 holds/u);
+      for (const path of [f.oldLog, f.oldShot, f.oldImage]) assert.ok(existsSync(path), `${path} is preserved`);
+    } finally { m.cleanup(); }
+  });
+
+  it('deletes only regular in-root targets and keeps active or uncertain inventories', () => {
+    const m = machine();
+    try {
+      const f = generated(m);
+      const outside = join(m.home, 'outside.png');
+      m.write(outside, 'outside', OLD);
+      symlinkSync(outside, join(f.shots, 'nested', 'escape.png'));
+      const dry = runTidy(m.doors({ openIn: () => [] }));
+      assert.deepEqual(dry.list.targets.filter((item) => item.rule === 'F').map((item) => item.path).sort(), [f.oldImage, f.oldLog, f.oldShot].sort());
+      const written = JSON.parse(readFileSync(dry.listPath, 'utf8'));
+      written.targets.push({ path: join(f.shots, 'nested', 'escape.png'), kind: 'mc-shot', rule: 'F', why: 'injected escaped path', bytes: 1 });
+      writeFileSync(dry.listPath, JSON.stringify(written));
+      const result = applyTidy({ listPath: dry.listPath, ...m.doors({ openIn: (path) => path === f.logs ? null : [] }) });
+      assert.equal(result.applied.find((item) => item.path === f.oldImage).ok, true);
+      assert.equal(result.applied.find((item) => item.path === f.oldShot).ok, true);
+      assert.equal(result.applied.find((item) => item.path === f.oldLog).ok, false);
+      assert.equal(result.applied.find((item) => item.path === join(f.shots, 'nested', 'escape.png')).ok, false);
+      assert.ok(existsSync(f.oldLog) && existsSync(outside));
+      assert.equal(existsSync(f.oldImage), false);
+      assert.equal(existsSync(f.oldShot), false);
+      assert.ok(existsSync(f.oldGroup) && existsSync(join(f.oldGroup, 'metadata.json')), 'the Codex group directory and metadata stay');
+      assert.match(outsideRoots({ kind: 'mc-shot', path: join(f.shots, 'nested', 'escape.png') }, tidyRoots(m.env)), /symbolic link/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('keeps an old image when a process cwd is inside its Codex session subtree', () => {
+    const m = machine();
+    try {
+      const f = generated(m);
+      m.cwds = [{ pid: 88, cwd: join(f.oldGroup, 'writer') }];
+      const { list } = runTidy(m.doors({ openIn: () => [] }));
+      assert.equal(list.targets.some((item) => item.path === f.oldImage), false);
+      assert.match(keptOf(list, f.oldImage).why, /cwd in the approved subtree/u);
+      assert.ok(existsSync(f.oldImage));
+    } finally { m.cleanup(); }
+  });
+
+  it('skips missing approved roots and reports a generated-root read failure as kept', () => {
+    const m = machine();
+    try {
+      const absent = gatherTidyFacts(m.doors({ openIn: () => [] }));
+      assert.deepEqual(absent.generated_files, [], 'missing roots are ordinary and safe');
+      const f = generated(m);
+      const { list } = runTidy(m.doors({ openIn: () => [], readDir: (path, options) => {
+        if (path === f.shots) throw new Error('EACCES');
+        return readdirSync(path, options);
+      } }));
+      assert.equal(list.targets.some((item) => item.kind === 'mc-shot'), false);
+      assert.match(keptOf(list, f.shots).why, /error: EACCES/u);
+      assert.ok(existsSync(f.oldShot));
+    } finally { m.cleanup(); }
   });
 });
