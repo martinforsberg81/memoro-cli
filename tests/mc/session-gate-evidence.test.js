@@ -12,6 +12,23 @@ import { runShell } from '../../src/mc/child-async.js';
 import { main as selectorMain } from '../../scripts/affected-tests.js';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
+/**
+ * A test child that reports each file it ran through the round's tracker, as node's
+ * reporter does: track the times file, write a started and a done line per file,
+ * complete it. A run with a gate that reports nothing is a run whose files never
+ * started (`outputCut`), so a substitute that stands for a finished run reports one.
+ */
+const reporting = (run) => async ({ files = [], times } = {}) => {
+  if (times?.track) {
+    const path = join(tmpdir(), `mc-evidence-times-${process.pid}-${Math.random().toString(36).slice(2)}.jsonl`);
+    times.track(path);
+    writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true }, { file: `/fixture/${file}`, done: true, ms: 1 }])
+      .map((line) => JSON.stringify(line)).join('\n') + '\n');
+    times.complete(path);
+    rmSync(path, { force: true });
+  }
+  return run;
+};
 const git = (cwd, ...args) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -46,7 +63,7 @@ it('recovery before and after receipt persistence never invents or loses a compl
       sessionRun: req.measurement.session_run, goalRevision: req.measurement.goal_revision,
       configuration: req.measurement.configuration };
     const options = { ...quiet, select: async () => ({ ok: true, files: ['a.test.js'], commands: [] }),
-      tests: async () => ({ code: 0, tap: GREEN }) };
+      tests: reporting({ code: 0, tap: GREEN }) };
     let saved;
     await assert.rejects(runSessionGate(req, { ...options, persist: (args) => {
       if (window === 'after') saved = persistGateReceipt(args);
@@ -79,7 +96,7 @@ it('a reuse-cache failure leaves a durable discoverable receipt and the complete
   const result = await runSessionGate(req, {
     write: (line) => { output += line; },
     select: async () => ({ ok: true, files: ['a.test.js'], commands: [] }),
-    tests: async () => ({ code: 0, tap: GREEN }),
+    tests: reporting({ code: 0, tap: GREEN }),
     record: () => { throw new Error('cache unavailable'); },
   });
   assert.equal(result.ok, true);
@@ -168,7 +185,7 @@ it('raw mutations invalidate evidence even when git normalizes them to the same 
 it('a completed measurement persists immutable identity, base, scope, version, times and outcome', async (t) => {
   const { request } = fixture(t);
   const req = request();
-  const result = await runSessionGate(req, { ...quiet, tests: async () => ({ code: 0, tap: GREEN }) });
+  const result = await runSessionGate(req, { ...quiet, tests: reporting({ code: 0, tap: GREEN }) });
   const receipt = receiptOf(result);
   assert.equal(receipt.outcome, 'green');
   assert.equal(receipt.gate_version, GATE_MEASUREMENT_VERSION);
@@ -188,10 +205,10 @@ it('changes while waiting or testing invalidate the measurement, including gener
     const req = request();
     let calls = 0;
     if (when === 'waiting') writeFileSync(join(cwd, 'a.test.js'), 'changed');
-    const result = await runSessionGate(req, { ...quiet, tests: async () => {
+    const result = await runSessionGate(req, { ...quiet, tests: async (args) => {
       calls++;
       writeFileSync(join(cwd, 'generated.js'), 'generated during test');
-      return { code: 0, tap: GREEN };
+      return reporting({ code: 0, tap: GREEN })(args);
     } });
     assert.equal(calls, when === 'waiting' ? 0 : 1);
     assert.equal(result.ok, false);
@@ -210,7 +227,7 @@ it('running, empty, unknown-exit, interrupted and red attempts never mint green'
   for (const run of attempts) {
     const { request } = fixture(t);
     const req = request();
-    const result = await runSessionGate(req, { ...quiet, tests: async () => run });
+    const result = await runSessionGate(req, { ...quiet, tests: reporting(run) });
     assert.equal(result.ok, false);
     assert.notEqual(receiptOf(result).outcome, 'green');
     assert.equal(existsSync(join(req.gate.root, 'gate-greens.jsonl')), false);
@@ -284,7 +301,7 @@ it('named or pattern-filtered runs never populate broader selector coverage; com
     if (mode === 'affected' || mode === 'flag-filter') req.files = null;
     const selected = { ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint', passBaseRef: true }] };
     const result = await runSessionGate(req, { ...quiet, select: async () => selected,
-      tests: async () => ({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }) });
+      tests: reporting({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }) });
     const receipt = receiptOf(result);
     assert.equal(receipt.outcome, 'green');
     assert.equal(receipt.coverage.pattern, req.pattern);
@@ -327,7 +344,7 @@ it('interruption during the final content observation cannot mint green', async 
       if (++observations === 2) controller.abort();
       return snapshot;
     },
-    tests: async () => ({ code: 0, tap: GREEN }),
+    tests: reporting({ code: 0, tap: GREEN }),
   });
   assert.equal(result.ok, false);
   assert.equal(receiptOf(result).outcome, 'red');
@@ -339,7 +356,7 @@ async function measured(t, { files = null, pattern = null, flags = [], commands 
   const req = { ...fx.request(), files, pattern, flags, select: 'selector' };
   const result = await runSessionGate(req, { ...quiet,
     select: async () => ({ ok: true, files: ['a.test.js'], commands }),
-    tests: async () => ({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }),
+    tests: reporting({ code: 0, tap: GREEN }), shell: async () => ({ status: 0 }),
   });
   const receipt = receiptOf(result);
   const context = { root: req.gate.root, repo: 'repo', repository: receipt.repository, run: req.measurement.run,
@@ -359,7 +376,7 @@ it('publication accepts the measured uncommitted content after an equal-tree com
   writeFileSync(join(fx.cwd, 'b.test.js'), 'export {};');
   const req = { ...fx.request(), files: null, select: 'selector' };
   const selected = { ok: true, files: ['b.test.js'], commands: [] };
-  const result = await runSessionGate(req, { ...quiet, select: async () => selected, tests: async () => ({ code: 0, tap: GREEN }) });
+  const result = await runSessionGate(req, { ...quiet, select: async () => selected, tests: reporting({ code: 0, tap: GREEN }) });
   const receipt = receiptOf(result);
   const args = { root: req.gate.root, cwd: fx.cwd, repo: 'repo', run: 'gate-one', sessionRun: 'session-one',
     goalRevision: 3, configuration: req.measurement.configuration, selection: selected };
@@ -495,7 +512,7 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const configuration = gateConfiguration({ select: command });
     const req = { ...fx.request(), files: null, select: selectorCommand(command, { base }),
       measurement: { ...fx.request().measurement, base, configuration } };
-    const result = await runSessionGate(req, { ...quiet, select: (options) => selectFiles({ ...options, run: inProcess }), tests: async () => ({ code: 0, tap: GREEN }) });
+    const result = await runSessionGate(req, { ...quiet, select: (options) => selectFiles({ ...options, run: inProcess }), tests: reporting({ code: 0, tap: GREEN }) });
     const receipt = receiptOf(result);
     assert.deepEqual(receipt.coverage.files, ['a.test.js']);
     git(fx.cwd, 'add', '.');
