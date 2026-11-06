@@ -508,7 +508,7 @@ it('the real gate request and worker preserve whole affected selection, costly f
         output.alive.clear();
       },
     };
-    const args = whole ? ['--whole-selection'] : [];
+    const args = Array.isArray(whole) ? whole : whole ? ['--whole-selection'] : [];
     assert.equal(await gateCommand(args, deps), 0, output.stderr);
     return JSON.parse(files.get(output.spawned[0][1]));
   }
@@ -532,6 +532,8 @@ it('the real gate request and worker preserve whole affected selection, costly f
 
   try {
     const wholeRequest = await requestFor(true);
+    assert.equal(wholeRequest.fresh, false);
+    assert.equal((await requestFor(['--whole-selection', '--fresh'])).fresh, true, '--fresh reaches the worker');
     const whole = await execute(wholeRequest);
     assert.deepEqual(whole.actual.files, selectedFiles);
     assert.equal(wholeRequest.defer, false);
@@ -603,4 +605,227 @@ it('a command ceiling retains reporter and pending or unavailable evidence witho
       assert.equal(result.execution.commands.at(-1).state, 'running');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
+});
+
+/**
+ * Resume on unchanged content (Martin, 2026-11-06). Each attempt persists its
+ * receipt into one temporary state root, and the next reads it back from there.
+ * The test child writes the reporter's own lines per file, through the tracker:
+ * `pass`, `fail`, `cancel` and `timeout` end their file, `hang` starts it and
+ * never ends it, `absent` never starts it.
+ */
+const BASE = 'b'.repeat(40);
+const CONTENT = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
+const COMMANDS = [{ packageScript: 'lint', passBaseRef: true }, { id: 'db', packageScript: 'check:db', unavailableExitCode: 69 }];
+const reporterLines = (file, outcome) => {
+  const at = `/work/${file}`;
+  if (outcome === 'absent') return [];
+  if (outcome === 'hang') return [{ file: at, started: true }];
+  const test = { name: `${file} ${outcome}`, line: 3, ms: 4 };
+  if (outcome !== 'pass') test.failed = true;
+  if (outcome === 'timeout') test.timeout = 30000;
+  return [{ file: at, started: true }, { file: at, test }, { file: at, done: true, ms: 4 }];
+};
+function resumable(t) {
+  const root = mkdtempSync(join(tmpdir(), 'mc-session-resume-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let attempts = 0;
+  let tick = 0;
+  const attempt = async ({ files = ['a.test.js', 'b.test.js', 'c.test.js'], commands = COMMANDS, outcomes = {}, status = {},
+    content = CONTENT, flags = [], pattern = null, named = false, base = BASE, configuration = 'config', fresh = false,
+    stop = null, timed = {} } = {}) => {
+    const run = `run-${++attempts}`;
+    const ran = { files: null, commands: [] };
+    let output = '';
+    const controller = new AbortController();
+    const request = { cwd: '/work', select: 'selector', files: named ? files : null, flags, pattern, base, fresh, timed,
+      gate: { root, repo: 'repo' }, ...(stop === 'ceiling' ? { round_timeout_ms: 1 } : {}),
+      measurement: { repo: 'repo', run, base, candidate: content, configuration } };
+    const result = await runSessionGate(request, {
+      snapshot: () => content, record: () => {}, signal: controller.signal,
+      now: () => new Date(Date.UTC(2026, 10, 6, 12, 0, tick++)).toISOString(),
+      write: (text) => { output += text; },
+      select: async () => ({ ok: true, files, commands: named ? [] : commands }),
+      tests: ({ files: chosen, times, signal }) => {
+        ran.files = [...chosen];
+        const path = join(root, `${run}.jsonl`);
+        times.track(path);
+        writeFileSync(path, chosen.flatMap((file) => reporterLines(file, outcomes[file] || 'pass')).map((line) => JSON.stringify(line)).join('\n') + '\n');
+        if (stop) {
+          // The run is still going when the ceiling comes or the worker is stopped.
+          if (stop === 'interrupt') controller.abort();
+          return new Promise((resolve) => signal.addEventListener('abort', () => resolve({ code: null, tap: '', aborted: true }), { once: true }));
+        }
+        times.complete(path);
+        const red = chosen.some((file) => (outcomes[file] || 'pass') !== 'pass');
+        return Promise.resolve({ code: red ? 1 : 0, tap: red ? 'not ok 1 - x\n1..1\n# tests 1\n# pass 0\n# fail 1\n' : GREEN,
+          tests: chosen.filter((file) => Object.hasOwn(timed, file)).map((file) => ({ file, name: `${file} pass`, line: 3, seconds: 0.004 })) });
+      },
+      shell: async (command) => { ran.commands.push(command); return { status: status[command] ?? 0 }; },
+    });
+    const receipt = JSON.parse(readFileSync(result.evidence.path, 'utf8'));
+    const reused = /^reused .*$/mu.exec(output)?.[0] ?? null;
+    return { run, result, receipt, ran, output, reused, path: result.evidence.path };
+  };
+  return { root, attempt };
+}
+const LINT = `npm run 'lint' -- --base-ref '${BASE}'`;
+const DB = "npm run 'check:db'";
+const fileMembers = (receipt) => receipt.members.files.map(({ file, how, from, outcome }) => ({ file, how, from, outcome }));
+const commandMembers = (receipt) => receipt.members.commands.map(({ packageScript, how, from, outcome }) => ({ packageScript, how, from, outcome }));
+
+it('a whole selection stopped at the ceiling or by an interrupt resumes on the same content and completes green', async (t) => {
+  for (const stop of ['ceiling', 'interrupt']) {
+    const { attempt } = resumable(t);
+    const first = await attempt({ stop, outcomes: { 'b.test.js': 'hang', 'c.test.js': 'absent' } });
+    assert.equal(first.receipt.outcome, 'red', stop);
+    assert.equal(first.receipt.stopped_at, stop === 'ceiling' ? 'timeout' : 'interrupted');
+    assert.deepEqual(fileMembers(first.receipt), [
+      { file: 'a.test.js', how: 'ran', from: null, outcome: 'passed' },
+      { file: 'b.test.js', how: 'ran', from: null, outcome: 'unfinished' },
+      { file: 'c.test.js', how: 'ran', from: null, outcome: 'not-started' },
+    ], stop);
+    // At the ceiling both commands had passed; the interrupt came before they started.
+    const ceiling = stop === 'ceiling';
+    assert.deepEqual(commandMembers(first.receipt).map((member) => member.outcome), ceiling ? ['passed', 'passed'] : ['pending', 'pending']);
+    const second = await attempt();
+    assert.deepEqual(second.ran.files, ['b.test.js', 'c.test.js'], stop);
+    assert.deepEqual(second.ran.commands, ceiling ? [] : [LINT, DB], stop);
+    assert.equal(second.reused, `reused 1 file and ${ceiling ? 2 : 0} commands from ${first.run}; running ${ceiling ? 2 : 4}`);
+    assert.equal(second.receipt.outcome, 'green', stop);
+    assert.equal(second.result.ok, true);
+    assert.deepEqual(second.receipt.coverage.files, ['a.test.js', 'b.test.js', 'c.test.js']);
+    assert.deepEqual(fileMembers(second.receipt), [
+      { file: 'a.test.js', how: 'reused', from: first.run, outcome: 'passed' },
+      { file: 'b.test.js', how: 'ran', from: null, outcome: 'passed' },
+      { file: 'c.test.js', how: 'ran', from: null, outcome: 'passed' },
+    ]);
+    assert.deepEqual(commandMembers(second.receipt), ['lint', 'check:db'].map((packageScript) => (ceiling
+      ? { packageScript, how: 'reused', from: first.run, outcome: 'passed' } : { packageScript, how: 'ran', from: null, outcome: 'passed' })));
+    assert.deepEqual(second.receipt.resumed, { from: [first.run], files: { 'a.test.js': first.run },
+      commands: ceiling ? [{ packageScript: 'lint', from: first.run }, { packageScript: 'check:db', from: first.run }] : [] });
+    assert.ok(readGreenReceipt({ root: second.path.split('/gate-evidence/')[0], repo: 'repo', repository: CONTENT.repository,
+      run: second.run, configuration: 'config' }), 'the resumed green reads as a green receipt');
+  }
+});
+
+it('a red attempt resumes with only its failed members, and reuse draws on two earlier attempts', async (t) => {
+  const { attempt } = resumable(t);
+  const first = await attempt({ outcomes: { 'b.test.js': 'fail', 'c.test.js': 'fail' }, status: { [LINT]: 1 } });
+  assert.equal(first.receipt.outcome, 'red');
+  const second = await attempt({ outcomes: { 'c.test.js': 'fail' } });
+  assert.deepEqual(second.ran.files, ['b.test.js', 'c.test.js']);
+  assert.deepEqual(second.ran.commands, [LINT]);
+  assert.equal(second.reused, `reused 1 file and 1 command from ${first.run}; running 3`);
+  assert.equal(second.receipt.outcome, 'red', 'a member still failing keeps the resumed attempt red');
+  const third = await attempt();
+  assert.deepEqual(third.ran.files, ['c.test.js']);
+  assert.deepEqual(third.ran.commands, []);
+  assert.equal(third.reused, `reused 2 files and 2 commands from ${first.run}, ${second.run}; running 1`);
+  assert.equal(third.receipt.outcome, 'green');
+  assert.deepEqual(fileMembers(third.receipt), [
+    { file: 'a.test.js', how: 'reused', from: first.run, outcome: 'passed' },
+    { file: 'b.test.js', how: 'reused', from: second.run, outcome: 'passed' },
+    { file: 'c.test.js', how: 'ran', from: null, outcome: 'passed' },
+  ]);
+  assert.deepEqual(commandMembers(third.receipt), [
+    { packageScript: 'lint', how: 'reused', from: second.run, outcome: 'passed' },
+    { packageScript: 'check:db', how: 'reused', from: first.run, outcome: 'passed' },
+  ]);
+  // Everything already passed: nothing runs, and that is still a completed green.
+  const fourth = await attempt();
+  assert.equal(fourth.ran.files, null, 'no test child for an all-reused selection');
+  assert.deepEqual(fourth.ran.commands, []);
+  assert.equal(fourth.reused, `reused 3 files and 2 commands from ${first.run}, ${second.run}, ${third.run}; running 0`);
+  assert.equal(fourth.receipt.outcome, 'green');
+  assert.deepEqual(fourth.receipt.members.files.map((member) => member.from), [first.run, second.run, third.run],
+    'a reuse names the run that ran it, never a run that reused it');
+});
+
+it('--fresh and a newly selected file: fresh reuses nothing, a new member runs', async (t) => {
+  const { attempt } = resumable(t);
+  const first = await attempt();
+  assert.equal(first.receipt.outcome, 'green');
+  const fresh = await attempt({ fresh: true });
+  assert.deepEqual(fresh.ran.files, ['a.test.js', 'b.test.js', 'c.test.js']);
+  assert.deepEqual(fresh.ran.commands, [LINT, DB]);
+  assert.equal(fresh.reused, null);
+  assert.equal(fresh.receipt.resumed, null);
+  assert.deepEqual(fresh.receipt.members.files.map((member) => member.how), ['ran', 'ran', 'ran']);
+  const wider = await attempt({ files: ['a.test.js', 'b.test.js', 'c.test.js', 'd.test.js'] });
+  assert.deepEqual(wider.ran.files, ['d.test.js']);
+  assert.deepEqual(wider.receipt.coverage.files, ['a.test.js', 'b.test.js', 'c.test.js', 'd.test.js']);
+  const narrower = await attempt({ files: ['b.test.js'], commands: [] });
+  assert.equal(narrower.ran.files, null);
+  assert.deepEqual(narrower.receipt.coverage.files, ['b.test.js'], 'only the current selection counts');
+  assert.deepEqual(narrower.receipt.members.commands, []);
+});
+
+it('a reused file is timed from its source run and says so; nothing is measured twice', async (t) => {
+  const { attempt, root } = resumable(t);
+  const timed = { 'a.test.js': null };
+  await attempt({ timed, outcomes: { 'b.test.js': 'fail' } });
+  const second = await attempt({ timed });
+  assert.deepEqual(second.ran.files, ['b.test.js']);
+  assert.deepEqual(second.result.timed_tests, [{ file: 'a.test.js', name: 'a.test.js pass', line: 3, seconds: 0.004, reused: 'run-1' }]);
+  assert.equal(existsSync(join(root, 'test-times')), false, 'a reused file adds no measured time');
+});
+
+it('nothing is reused across a content change, other flags, a name pattern, configuration or measurement version', async (t) => {
+  const changes = {
+    tree: { content: { ...CONTENT, tree: 'c'.repeat(40) } },
+    fingerprint: { content: { ...CONTENT, fingerprint: 'other bytes' } },
+    repository: { content: { ...CONTENT, repository: '/other/.git' } },
+    flags: { flags: ['--import', './other.mjs'] },
+    configuration: { configuration: 'other config' },
+    pattern: { named: true, pattern: 'a' },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const { attempt } = resumable(t);
+    await attempt(change.named ? { named: true } : {});
+    const again = await attempt(change);
+    assert.equal(again.reused, null, name);
+    assert.deepEqual(again.ran.files, ['a.test.js', 'b.test.js', 'c.test.js'], name);
+    assert.deepEqual(again.ran.commands, change.named ? [] : [LINT, DB], name);
+  }
+  // A source measured under a name pattern resumes nothing either.
+  const { attempt } = resumable(t);
+  await attempt({ named: true, pattern: 'a' });
+  assert.deepEqual((await attempt({ named: true })).ran.files, ['a.test.js', 'b.test.js', 'c.test.js']);
+  // A receipt from another measurement version is not a source.
+  const versioned = resumable(t);
+  const old = await versioned.attempt();
+  writeFileSync(old.path, JSON.stringify({ ...old.receipt, gate_version: old.receipt.gate_version - 1 }));
+  const after = await versioned.attempt();
+  assert.equal(after.reused, null);
+  assert.deepEqual(after.ran.files, ['a.test.js', 'b.test.js', 'c.test.js']);
+});
+
+it('a base-passing command is not reused across bases; files and other commands are', async (t) => {
+  const { attempt } = resumable(t);
+  const first = await attempt();
+  const other = 'e'.repeat(40);
+  const moved = await attempt({ base: other });
+  assert.equal(moved.ran.files, null);
+  assert.deepEqual(moved.ran.commands, [`npm run 'lint' -- --base-ref '${other}'`]);
+  assert.deepEqual(commandMembers(moved.receipt), [
+    { packageScript: 'lint', how: 'ran', from: null, outcome: 'passed' },
+    { packageScript: 'check:db', how: 'reused', from: first.run, outcome: 'passed' },
+  ]);
+});
+
+it('failed, cancelled, timed-out, unfinished and never-started files and failed or unavailable commands always rerun', async (t) => {
+  const { attempt } = resumable(t);
+  const files = ['ok.test.js', 'fail.test.js', 'cancel.test.js', 'timeout.test.js', 'hang.test.js', 'absent.test.js'];
+  const first = await attempt({ files, status: { [LINT]: 2, [DB]: 69 }, outcomes: { 'fail.test.js': 'fail',
+    'cancel.test.js': 'cancel', 'timeout.test.js': 'timeout', 'hang.test.js': 'hang', 'absent.test.js': 'absent' } });
+  assert.deepEqual(fileMembers(first.receipt).map(({ file, outcome }) => [file, outcome]), [['ok.test.js', 'passed'],
+    ['fail.test.js', 'failed'], ['cancel.test.js', 'failed'], ['timeout.test.js', 'failed'], ['hang.test.js', 'unfinished'],
+    ['absent.test.js', 'not-started']]);
+  assert.deepEqual(commandMembers(first.receipt).map(({ outcome }) => outcome), ['failed', 'unavailable']);
+  const second = await attempt({ files });
+  assert.deepEqual(second.ran.files, files.slice(1));
+  assert.deepEqual(second.ran.commands, [LINT, DB]);
+  assert.equal(second.reused, `reused 1 file and 0 commands from ${first.run}; running 7`);
+  assert.equal(second.receipt.outcome, 'green');
 });

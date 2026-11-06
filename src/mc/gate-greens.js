@@ -24,8 +24,10 @@ import { mcHome } from './paths.js';
  * Bumped whenever what either side measures changes — what `mc gate` runs or
  * records, what the round's selection is, what the merger skips on a match —
  * so a green measured under the old meaning is never read under the new one.
+ * 4: a receipt names each member as ran or reused (`members`), and a resumed
+ * green's reused files need no test run of their own (`filesComplete`).
  */
-export const GATE_MEASUREMENT_VERSION = 3;
+export const GATE_MEASUREMENT_VERSION = 4;
 
 /** How many greens the file keeps: the last ones, which are the ones still unmerged. */
 export const GATE_GREENS_KEPT = 2000;
@@ -148,11 +150,28 @@ export function readGreenReceipt({ root = mcHome(), repo, repository, run, sessi
     || coverage.flags.some((flag) => typeof flag !== 'string')
     || !(coverage.files.length || coverage.commands.length) || !Array.isArray(execution?.commands)
     || execution.commands.length !== coverage.commands.length
-    || execution.commands.some((command) => !command || command.exit !== 0 || command.ok !== true || command.error)) return null;
-  const tests = execution.tests;
-  if (coverage.files.length && !(tests?.exit === 0 && tests.finished === true && tests.totals?.tests > 0
-    && tests.totals?.pass > 0 && tests.totals?.fail === 0 && !tests.totals?.cancelled)) return null;
+    || execution.commands.some((command) => !command || command.exit !== 0 || command.ok !== true || command.error
+      || (command.state === 'reused' && (typeof command.from !== 'string' || !command.from)))) return null;
+  if (!filesComplete(coverage, execution, receipt.members)) return null;
   return receipt;
+}
+
+/**
+ * Whether every covered test file has a passing result: the files this attempt
+ * ran passed in its own finished run, and each file it reused names the earlier
+ * run it passed in. A reused member that did not pass, or names no source, or is
+ * not covered, is never complete. No `members` is a run that reused nothing.
+ */
+export function filesComplete(coverage, execution, members = null) {
+  if (!Array.isArray(coverage?.files)) return false;
+  const claims = members == null ? [] : Array.isArray(members.files) ? members.files.filter((member) => member?.how === 'reused') : null;
+  if (!claims || claims.some((member) => member.outcome !== 'passed' || typeof member.from !== 'string' || !member.from
+    || !coverage.files.includes(member.file))) return false;
+  const reused = new Set(claims.map((member) => member.file));
+  const ran = coverage.files.filter((file) => !reused.has(file));
+  const tests = execution?.tests;
+  return !ran.length || (tests?.exit === 0 && tests.finished === true && tests.totals?.tests > 0
+    && tests.totals?.pass > 0 && tests.totals?.fail === 0 && !tests.totals?.cancelled);
 }
 
 function receiptMatches(entry, { root, evidence, version, checks = null }) {

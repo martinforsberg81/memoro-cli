@@ -212,16 +212,73 @@ export function runProgress(paths) {
   return { unfinished: unfinished.sort(), finished };
 }
 
+/**
+ * What the reporter's per-test lines say of each file, beside `runProgress`:
+ * `failed` is every file with a test that failed, was cancelled or reached its
+ * time limit (the reporter marks all three `failed`), and `tests` every test it
+ * named, `{ file, name, line, seconds }`, the file absolute as node reports it.
+ * A resumed gate reuses only a file `runProgress` finished and this never failed.
+ */
+export function runOutcomes(paths) {
+  const failed = new Set();
+  const tests = [];
+  for (const path of paths || []) {
+    let text = '';
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      const test = entry?.test;
+      if (typeof entry?.file !== 'string' || !test || typeof test.name !== 'string') continue;
+      if (test.failed === true || test.timeout > 0) failed.add(entry.file);
+      if (test.line > 0) tests.push({ file: entry.file, name: test.name, line: Number(test.line), seconds: test.ms >= 0 ? test.ms / 1000 : null });
+    }
+  }
+  return { failed: [...failed].sort(), tests };
+}
+
+/**
+ * Each asked file's outcome in one run, as it was asked for (matched by tail, as
+ * `outputCut` matches): `passed` when its top-level tests all ended and none of
+ * its tests failed, `failed`, `unfinished` when one never ended, and
+ * `not-started` when the reporter named none of it.
+ */
+export function fileOutcomes(files, { progress, outcomes }) {
+  const asked = [...new Set((files || []).map(String).filter(Boolean))];
+  const name = (path) => asked.find((file) => path === file || path.endsWith(`/${file}`)) || null;
+  const unfinished = new Set((progress?.unfinished || []).map(name));
+  const finished = new Map((progress?.finished || []).map((one) => [name(one.file), one.seconds]));
+  const failed = new Set((outcomes?.failed || []).map(name));
+  const tests = new Map();
+  for (const test of outcomes?.tests || []) {
+    const file = name(test.file);
+    if (file) tests.set(file, [...(tests.get(file) || []), { ...test, file }]);
+  }
+  return asked.map((file) => ({
+    file,
+    outcome: unfinished.has(file) ? 'unfinished' : !finished.has(file) ? 'not-started' : failed.has(file) ? 'failed' : 'passed',
+    seconds: finished.get(file) ?? null,
+    tests: tests.get(file) || [],
+  }));
+}
+
 /** Keep compact snapshots before reporter files are deleted at batch completion.
  * A timeout in a later batch or command must not forget the earlier evidence. */
 export function progressTracker() {
   const active = new Set();
   const completed = [];
+  const outcomes = [];
   return {
     track: (file) => active.add(file),
     complete: (file) => {
       if (!active.delete(file)) return;
       completed.push(runProgress([file]));
+      outcomes.push(runOutcomes([file]));
+    },
+    /** The failed files and named tests of every run, completed or still going (`runOutcomes`). */
+    outcomes: () => {
+      const all = [...outcomes, runOutcomes(active)];
+      return { failed: [...new Set(all.flatMap((one) => one.failed))].sort(), tests: all.flatMap((one) => one.tests) };
     },
     read: () => {
       const snapshots = [...completed, runProgress(active)];

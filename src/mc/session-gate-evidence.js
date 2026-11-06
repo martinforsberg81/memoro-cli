@@ -1,10 +1,10 @@
 /** Immutable local measurements. A receipt describes checks, not permission to
  * publish or merge. Limited runs never enter the merger's full-selection cache. */
 import { createHash } from 'node:crypto';
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, checksHash, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, filesComplete, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -83,13 +83,15 @@ export function sameContent(a, b) {
 export function gateReceipt({ measurement, before, after, result, started, ended }) {
   const coverage = result.coverage || null;
   const execution = result.execution || null;
-  const tests = execution?.tests;
   const commands = execution?.commands || [];
+  // A resumed attempt is complete when every reused member passed earlier on this
+  // content and its own work completed (`filesComplete`).
+  const members = result.members ?? null;
   const complete = Boolean(coverage && (coverage.files.length || coverage.commands.length)
-    && (!coverage.files.length || (tests?.exit === 0 && tests.finished === true
-      && tests.totals?.tests > 0 && tests.totals?.pass > 0 && tests.totals?.fail === 0 && !tests.totals?.cancelled))
+    && filesComplete(coverage, execution, members)
     && commands.length === coverage.commands.length
-    && commands.every((command) => command.exit === 0 && command.ok === true && !command.error));
+    && commands.every((command) => command.exit === 0 && command.ok === true && !command.error
+      && (command.state !== 'reused' || (typeof command.from === 'string' && command.from))));
   const unchanged = sameContent(measurement.candidate, before) && sameContent(before, after);
   const valid = Boolean(measurement.repo && measurement.run && /^[0-9a-f]{40,64}$/u.test(measurement.base || '')
     && Number.isFinite(Date.parse(started)) && Date.parse(ended) >= Date.parse(started));
@@ -102,7 +104,7 @@ export function gateReceipt({ measurement, before, after, result, started, ended
     configuration: measurement.configuration ?? null,
     base: measurement.base, tree: measurement.candidate.tree, fingerprint: measurement.candidate.fingerprint,
     started, ended, outcome, coverage, execution, exit: result.code ?? null,
-    stopped_at: result.stopped_at ?? null,
+    stopped_at: result.stopped_at ?? null, members, resumed: result.resumed ?? null,
   })));
 }
 
@@ -118,7 +120,75 @@ export function persistGateReceipt({ root, receipt }) {
   catch (error) {
     if (error.code !== 'EEXIST' || readFileSync(path, 'utf8') !== bytes) throw error;
   }
+  // The content index a later attempt resumes from (`findResumable`): one empty
+  // marker per run under its content key. Losing one costs only the reuse.
+  if (receipt.members && receipt.outcome !== 'invalid' && receipt.repository && receipt.tree && receipt.fingerprint) {
+    try {
+      const index = join(dir, 'content', contentKey(receipt.repo, receipt));
+      mkdirSync(index, { recursive: true, mode: 0o700 });
+      writeFileSync(join(index, receipt.run), '', { flag: 'wx', mode: 0o600 });
+    } catch { /* the next attempt on this content measures in full */ }
+  }
   return path;
+}
+
+/** One directory name for one repository's exact content: repository, tree and raw-byte fingerprint. */
+export function contentKey(repo, content) {
+  return hash(JSON.stringify([repo, content.repository, content.tree, content.fingerprint]));
+}
+
+const FILTERING = /^--test-(name-pattern|skip-pattern|only|shard)(=|$)/u;
+
+/**
+ * What earlier attempts on this exact content already proved passing (Martin,
+ * 2026-11-06: a rerun on unchanged content resumes; any change runs it all).
+ * A source is a persisted receipt of another run with the same repo and
+ * repository, the same tree and fingerprint, the same measurement version,
+ * configuration and test flags, no name pattern, and valid content. From it, a
+ * test file it ran and saw pass (`fileOutcomes`), and a command it ran to exit
+ * 0, ok and available; a command that passes the base is a source only on the
+ * same base. What it reused itself is not a source: every reuse names the run
+ * that ran it. Later attempts win. Returns `{ files, commands }`, maps of file
+ * and `commandIdentity` to `{ from, … }`; empty when the request may not resume.
+ */
+export function findResumable({ root, measurement, flags = [], pattern = null } = {}) {
+  const found = { files: new Map(), commands: new Map() };
+  const candidate = measurement?.candidate;
+  if (!root || !measurement?.repo || !measurement.configuration || !candidate?.repository || !candidate.tree || !candidate.fingerprint
+    || pattern != null || !Array.isArray(flags) || flags.some((flag) => FILTERING.test(flag))) return found;
+  const dir = join(root, 'gate-evidence');
+  let runs = [];
+  try { runs = readdirSync(join(dir, 'content', contentKey(measurement.repo, candidate))); } catch { return found; }
+  const receipts = [];
+  for (const run of runs) {
+    if (!/^[a-zA-Z0-9-]+$/u.test(run) || run === measurement.run) continue;
+    let receipt = null;
+    try { receipt = JSON.parse(readFileSync(join(dir, `${run}.json`), 'utf8')); } catch { continue; }
+    if (receipt?.schema !== 'mc-session-gate-evidence' || receipt.version !== 1 || receipt.gate_version !== GATE_MEASUREMENT_VERSION
+      || receipt.run !== run || receipt.repo !== measurement.repo || !sameContent(receipt, candidate)
+      || receipt.configuration !== measurement.configuration || receipt.outcome === 'invalid'
+      || ['content-changed', 'evidence'].includes(receipt.stopped_at)
+      || receipt.coverage?.pattern !== null || JSON.stringify(receipt.coverage?.flags) !== JSON.stringify(flags)
+      || !Array.isArray(receipt.members?.files) || !Array.isArray(receipt.members?.commands)
+      || !Array.isArray(receipt.coverage?.commands) || !Number.isFinite(Date.parse(receipt.ended))) continue;
+    receipts.push(receipt);
+  }
+  receipts.sort((a, b) => Date.parse(a.ended) - Date.parse(b.ended) || a.run.localeCompare(b.run));
+  for (const receipt of receipts) {
+    for (const member of receipt.members.files) {
+      if (member?.how !== 'ran' || member.outcome !== 'passed' || typeof member.file !== 'string') continue;
+      found.files.set(member.file, { from: receipt.run, seconds: member.seconds ?? null, tests: Array.isArray(member.tests) ? member.tests : [] });
+    }
+    receipt.members.commands.forEach((member, index) => {
+      const command = receipt.coverage.commands[index];
+      const ran = receipt.execution?.commands?.[index];
+      if (member?.how !== 'ran' || member.outcome !== 'passed' || !command || command.packageScript !== member.packageScript
+        || ran?.exit !== 0 || ran.ok !== true || ran.unavailable || ran.error) return;
+      if (command.passBaseRef && receipt.base !== measurement.base) return;
+      found.commands.set(commandIdentity(command), { from: receipt.run, packageScript: command.packageScript });
+    });
+  }
+  return found;
 }
 
 /** Only an entire unfiltered selector result is compatible with the existing
