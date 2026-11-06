@@ -50,11 +50,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
 
    When the commissioned criterion requires a source mutation, use the bounded
    [independent fault replay procedure](../tasks/scratch-and-probes.md#independent-fault-replay).
-   The reviewed worktree remains read-only; replay on an exact-HEAD disposable
-   scratch worktree (or use only its guarded invocation-local loader alternative).
-   Require the relevant assertion to fail, then restore the fault and verify
-   the normal check on the clean judged head. This changes neither reviewer
-   authority nor the requirement to independently run each criterion.
+   The replay runs in the goal's worktree and returns it to exactly the judged
+   HEAD with clean status, verified before and after (or use only its guarded
+   invocation-local loader alternative). Require the relevant assertion to
+   fail, then restore the fault and verify the normal check on the clean judged
+   head. This changes neither reviewer authority nor the requirement to
+   independently run each criterion.
 
 **OK** is every criterion met with evidence and nothing in structure or bugs
 that should stop it landing. Anything else is **not OK**. You decide; the

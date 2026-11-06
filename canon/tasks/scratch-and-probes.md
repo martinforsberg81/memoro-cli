@@ -22,38 +22,51 @@ For a worktree's `mc skills sync` or `mc hook install`, also isolate `HOME` and
 
 ## Independent fault replay
 
-For a commissioned source fault, keep the reviewed worktree read-only. Before
-replay, record its `git rev-parse HEAD` and `git status --short`; require the
-prompted judged SHA and a clean status. Start a disposable scratch worktree at
-that SHA, never current `main`:
+For a commissioned source fault, replay in the goal's own worktree — the one
+checkout of the goal branch, `goals/<goal>/<repo>`. No step adds a git worktree
+or any other checkout. Name the judged SHA, the worktree and the source file,
+then record HEAD and status:
 ```sh
 sha=<judged-sha>
-reviewed=<reviewed-worktree>
-scratch="$MC_SCRATCH/fault-replay"
+reviewed=<goal-worktree>
+source=<source-path>
 git -C "$reviewed" rev-parse HEAD
 git -C "$reviewed" status --short
-git -C "$reviewed" diff --exit-code
-git worktree add --detach "$scratch" "$sha"
-git -C "$scratch" rev-parse HEAD
-git -C "$scratch" status --short
 ```
-Stop unless both worktrees are clean and scratch HEAD equals judged SHA. Put
-only the commissioned original/deliberate delta and all logs in `$MC_SCRATCH`.
-Capture source-before (`git -C "$scratch" show "$sha:<source-path>" >
-"$MC_SCRATCH/source.before"`) and delta (`git -C "$scratch" diff --
-<source-path> > "$MC_SCRATCH/fault.patch"`); inspect and record the changed
-paths and before/after source. Run only the commissioned check with `mc gate
-<test-files…>`. Record its printed full log path and observed assertion
-failures. Import/setup failures are insufficient: the relevant assertion must
-fail.
+Stop unless HEAD equals `$sha` and the status is empty. Stop too if another
+process stands in the worktree: `lsof -a -d cwd -Fpn` lists each process with
+its working directory, and the only one in `$reviewed` may be this session's
+own shell. Then save the source before the fault and record the pre-replay
+state:
+```sh
+before=$(git -C "$reviewed" rev-parse HEAD)
+cp "$reviewed/$source" "$MC_SCRATCH/source-before"
+```
+Apply only the commissioned deliberate delta to `$source`, then save and
+inspect it:
+```sh
+git -C "$reviewed" diff -- "$source" > "$MC_SCRATCH/fault.patch"
+git -C "$reviewed" status --short
+```
+`status --short` must list only `$source`. Record the changed path and the
+before/after source. Run only the commissioned check from the worktree:
+`mc gate <test-files…>`. Record its printed full log path and the observed
+assertion failure. Import/setup failures are insufficient: the relevant
+assertion must fail.
 An invocation-local loader is an alternative only with guards for its target
 URL and exact source match. Record both guards, source identity and activation.
 If the source guard fails, stop; never fall back silently. Keep loader and
 output in `$MC_SCRATCH`.
-Restore source/remove loader. Verify source matches saved original (`git -C
-"$scratch" diff --exit-code "$sha" -- <source-path>`) and scratch diff is
-empty; rerun the corresponding normal `mc gate <test-files…>` and record its
-log and green result. Repeat HEAD/status in both trees and compare reviewed
-values to the saved pre-replay values. Leave reviewed tree untouched. mc-code
-probes also isolate `MC_HOME`/`MC_WORK_ROOT`; skill-install probes isolate
-`HOME`/`CLAUDE_CONFIG_DIR` above. This is bounded evidence, not a mutation framework or repeated full-suite requirement.
+Restore the source (or remove the loader), then verify the worktree is back at
+the judged HEAD with a clean status:
+```sh
+git -C "$reviewed" checkout -- "$source"
+git -C "$reviewed" diff --exit-code
+test -z "$(git -C "$reviewed" status --short)"
+test "$(git -C "$reviewed" rev-parse HEAD)" = "$before"
+```
+Rerun the corresponding normal `mc gate <test-files…>` and record its log and
+green result. Repeat the HEAD and status checks after it. mc-code probes also
+isolate `MC_HOME`/`MC_WORK_ROOT`; skill-install probes isolate
+`HOME`/`CLAUDE_CONFIG_DIR` above. This is bounded evidence, not a mutation
+framework or repeated full-suite requirement.
