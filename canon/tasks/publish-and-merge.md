@@ -7,7 +7,6 @@ The verbs replace `node --test`, `npm test`, `npm run ci`,
 `git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
-
 ## `mc gate` — the tests your change reaches
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
@@ -18,11 +17,9 @@ in it and say why in the reply.
   the same RUNNING request. Named reruns, deferred green, red, timeout,
   interruption or incomplete results are not acceptance. Direct landing adds no
   gate or base/head validation.
-- A rerun on content identical to an earlier measured attempt resumes it: it
-  reuses every selected file and command gate that passed there (it prints
-  `reused N files and M commands from <runs>; running K`) and runs only the
-  rest. A resumed whole selection on identical content is a completed GREEN.
-  Any content change means a new whole selection. `--fresh` forces a full run.
+- A rerun on identical content reuses each file and command gate that passed
+  there and runs the rest; a resumed whole selection is a completed GREEN. Any
+  content change means a new whole selection. `--fresh` forces a full run.
 - It answers within 540 s with GREEN/RED, failing lines and log path; give the
   Bash call `timeout: 600000`. Past budget: `RUNNING`, exit 3; `mc gate --wait`
   reads the same log. Do not poll or run in the background. Red: fix, then run
@@ -31,7 +28,6 @@ in it and say why in the reply.
   refused: the whole suite is the merger's. Never run `npm ci`/`npm install`;
   memoro re-attaches its cache with `npm run deps:ensure`.
 - Never lower a threshold, or skip, weaken or delete a test to turn it green.
-
 ## `mc publish` — push and open the pull request
 - Refuses on `main`, a dirty tree or moved origin; never forces. Then pushes and
   opens a PR, or edits only requested fields (`--title`, `--body`, `--body-file`,
@@ -41,7 +37,6 @@ in it and say why in the reply.
 - The body says what changed, why, impact, root cause, what did and did not run,
   known gaps and each changed test's `mc gate` timing (`test <file> › <name> —
   0.xyz s`). Never claim a run you did not make; "suite not run" is acceptable.
-
 ## `mc merge <repo> <pr>` — the one door to main
 `mc goal stage merge` directly merges every registered PR, without gate,
 criteria or head checks; the goal is done after all land.
