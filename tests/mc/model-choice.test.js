@@ -47,7 +47,11 @@ test('fast: either provider is chosen, the one with more headroom', () => {
 test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
   let unknown = codex(empty(), win(0.1));
   const classes = ['fast', 'large', 'review'];
-  const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude' }));
+  const mixedReview = { ...DEFAULT_CATALOG, review: [
+    { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+    DEFAULT_CATALOG.review[0],
+  ] };
+  const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: cls === 'review' ? mixedReview : DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude' }));
   const missing = bootstrap(unknown);
   assert.deepEqual(missing.map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'unknown usage honors priority for all classes');
   assert.deepEqual(missing.map((chosen) => chosen.basis), ['bootstrap', 'bootstrap', 'bootstrap']);
