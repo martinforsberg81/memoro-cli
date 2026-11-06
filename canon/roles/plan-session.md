@@ -55,8 +55,13 @@ Proposals for this programme wait in `~/mc/programs/<programme>/proposals/`;
 the start context says how many when there are some. Read them when you
 start and take a stand on each, with the whole programme as context:
 
-- **Work.** A goal. Then move the file to `proposals/archive/` with first
-  line `Utfall: <the goal>`.
+- **Work.** Apply tasks/writing-a-goal.md in the mc skill before proposing or
+  creating a goal. When the implementation is defined, write the goal and
+  move the file to `proposals/archive/` with first line `Utfall: <the goal>`.
+- **Needs investigation.** Investigate here and record findings and remaining
+  uncertainty in the proposal. Do not turn an unexplained symptom into an
+  implementation goal. A separate diagnosis goal requires Martin's explicit
+  agreement to that investigation and its bounded deliverable.
 - **Not now.** Move it to `proposals/archive/` with first line
   `Utfall: ej aktuellt — <why>`.
 - **Another programme's.** Move it to that programme's `proposals/` and say
