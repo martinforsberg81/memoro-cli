@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
@@ -206,6 +209,61 @@ test('mc goal log refuses without a goal, without anything to log, and with a go
   assert.equal(await run(['log', 'mc/plain', '--done', 'x'], broken.deps), 1);
   assert.match(broken.err(), /mc\/plain: GOAL\.json is not JSON/u);
   assert.equal(broken.store[`${DIR}/LOG.md`], LOG_TEXT, 'a goal that does not parse gets no entry');
+});
+
+test('mc goal log --done-file keeps a file\'s text verbatim, read by the real command in a temporary programme', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'mc-goal-log-'));
+  try {
+    const dir = join(home, 'mc', 'goals', 'plain');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'GOAL.json'), GOAL_TEXT);
+    writeFileSync(join(dir, 'LOG.md'), LOG_TEXT);
+    const done = join(home, 'done.txt');
+    writeFileSync(done, 'a `x` $(y) "q"\nline2\n');
+    const comment = join(home, 'comment.txt');
+    writeFileSync(comment, 'Comment with $HOME and `date`\n');
+    const out = [];
+    const err = [];
+    const code = await run(['log', 'mc/plain', '--done-file', done, '--comment-file', comment, '--next', 'the page'], {
+      home, env: { MC_TOOL: 'claude', MC_MODEL: 'claude-haiku-5-5' }, now: () => new Date('2026-11-01T20:00:00Z'),
+      stdout: { write: (text) => out.push(text) }, stderr: { write: (text) => err.push(text) },
+    });
+    assert.equal(code, 0, err.join(''));
+    const log = readFileSync(join(dir, 'LOG.md'), 'utf8');
+    assert.ok(log.endsWith('Done: a `x` $(y) "q"\nline2\nComment: Comment with $HOME and `date`\nNext: the page\n'), log);
+    assert.deepEqual(parseLog(log).at(-1), {
+      at: '2026-11-01T20:00Z', tool: 'claude', model: 'claude-haiku-5-5', stage: 'build', status: 'ready',
+      done: 'a `x` $(y) "q"\nline2', comment: 'Comment with $HOME and `date`', next: 'the page',
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('mc goal log --done-file - reads stdin verbatim; a field given both ways, stdin twice, a missing or an empty file are refused and write nothing', async () => {
+  const files = { '-': 'a `x` $(y) "q"\nline2\n', 'note.txt': 'the note $(z)\n', 'empty.txt': '\n' };
+  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'claude' } });
+  f.deps.readFile = (path) => {
+    if (!Object.hasOwn(files, path)) throw new Error('ENOENT');
+    return files[path];
+  };
+  const refusals = [
+    [['log', '--done', 'x', '--done-file', 'note.txt'], 2, /--done and --done-file are one or the other, not both/u],
+    [['log', '--next-file', 'note.txt', '--next', 'x'], 2, /--next and --next-file are one or the other, not both/u],
+    [['log', '--done-file', '-', '--comment-file', '-'], 2, /stdin is read once/u],
+    [['log', '--next-file', 'missing.txt'], 1, /--next-file missing\.txt cannot be read/u],
+    [['log', '--comment-file', 'empty.txt'], 2, /--comment-file empty\.txt is empty/u],
+  ];
+  for (const [argv, code, message] of refusals) {
+    assert.equal(await run(argv, f.deps), code, argv.join(' '));
+    assert.match(f.err(), message);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, `${argv.join(' ')} writes nothing`);
+  }
+  assert.equal(await run(['log', '--done-file', '-', '--comment-file', 'note.txt'], f.deps), 0, f.err());
+  assert.deepEqual(parseLog(f.store[`${DIR}/LOG.md`]).at(-1), {
+    at: '2026-11-01T20:00Z', tool: 'claude', model: null, stage: 'build', status: 'ready',
+    done: 'a `x` $(y) "q"\nline2', comment: 'the note $(z)', next: null,
+  });
 });
 
 test('mc goal log --status and --stage rewrite GOAL.json and log the entry with both; an unknown one is refused naming the field', async () => {
