@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { Writable, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { run as keysCommand, handlesHelp } from '../../src/mc/commands/keys.js';
@@ -83,37 +84,55 @@ test('shared dotenv server command receives keys and names with filtered output 
   assert.deepEqual(invocationShape(['keys', 'serve', 'node', script]), { verb: 'keys', sub: 'serve', args: [], flags: [], argc: 4 });
 });
 
+/**
+ * A child that starts, writes nothing and leaves at once, with `exit` or `signal`. `seen` runs while it is
+ * still running: what the file held then. The boundary keys-run crosses is the spawn, so this stands in for
+ * the process rather than launching one.
+ */
+function leavingChild({ pid, exit = null, signal = null, seen = null }) {
+  const child = new EventEmitter();
+  child.pid = pid; child.exitCode = null; child.signalCode = null;
+  child.stdout = Readable.from([]); child.stderr = Readable.from([]);
+  child.kill = () => true;
+  setImmediate(() => {
+    seen?.();
+    child.exitCode = exit; child.signalCode = signal;
+    child.emit('exit', exit, signal);
+    child.emit('close', exit, signal);
+  });
+  return child;
+}
+
 test('keys serve names its child to the caller: the pid is written as it starts and its exit as it leaves', async t => {
   const f = await fixture(t);
-  // The child reads the pid file as it stands, then exits with 3: the wrapper wrote the pid before the exit.
-  const script = write(f.cwd, 'reads-then-exits.mjs', `
-    import { existsSync, readFileSync } from 'node:fs';
-    const file = process.argv[2];
-    const until = Date.now() + 5000;
-    while (!existsSync(file) && Date.now() < until) { /* the wrapper writes it right after spawn */ }
-    process.stdout.write(JSON.stringify({ pid: process.pid, seen: existsSync(file) ? readFileSync(file, 'utf8') : null }));
-    process.exit(3);`);
   const file = join(f.directory, 'child.json');
-  const out = capture(); const err = capture();
-  const exit = await keysCommand(['serve', process.execPath, script, file], {
-    cwd: f.cwd, env: { ...f.env, MC_KEYS_CHILD_FILE: file }, stdout: out.stream, stderr: err.stream,
+  let held = null;
+  const exit = await keysCommand(['serve', process.execPath, 'server.mjs'], {
+    cwd: f.cwd, env: { ...f.env, MC_KEYS_CHILD_FILE: file }, stdout: capture().stream, stderr: capture().stream,
+    spawn: () => leavingChild({ pid: 4321, exit: 3, seen: () => { held = readFileSync(file, 'utf8'); } }),
   });
-  assert.equal(exit, 3, err.text());
-  const { pid, seen } = JSON.parse(out.text());
-  assert.deepEqual(JSON.parse(seen), { pid }, 'the pid was in the file before the child left');
+  assert.equal(exit, 3);
+  assert.deepEqual(JSON.parse(held), { pid: 4321 }, 'the pid was in the file while the child ran');
   const record = readFileSync(file, 'utf8');
-  assert.deepEqual(JSON.parse(record), { pid, exit: 3, signal: null });
+  assert.deepEqual(JSON.parse(record), { pid: 4321, exit: 3, signal: null });
   absent(record, SECRET);
 
+  // A child ended by a signal records the signal, not a code.
+  const killed = await keysCommand(['serve', process.execPath, 'server.mjs'], {
+    cwd: f.cwd, env: { ...f.env, MC_KEYS_CHILD_FILE: file }, stdout: capture().stream, stderr: capture().stream,
+    spawn: () => leavingChild({ pid: 4322, signal: 'SIGTERM' }),
+  });
+  assert.equal(killed, 128 + 15);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { pid: 4322, exit: null, signal: 'SIGTERM' });
 });
 
 test('keys serve writes no child file when the caller names none', async t => {
   const f = await fixture(t);
-  const script = write(f.cwd, 'exits.mjs', 'process.exit(3);');
   const plain = { ...f.env };
   delete plain.MC_KEYS_CHILD_FILE;
-  const exit = await keysCommand(['serve', process.execPath, script], {
+  const exit = await keysCommand(['serve', process.execPath, 'server.mjs'], {
     cwd: f.cwd, env: plain, stdout: capture().stream, stderr: capture().stream,
+    spawn: () => leavingChild({ pid: 4323, exit: 3 }),
   });
   assert.equal(exit, 3);
   assert.deepEqual(readdirSync(join(f.env.MC_HOME, 'keys')).sort(), ['runs.jsonl'], 'the run leaves only its audit record');

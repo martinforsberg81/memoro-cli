@@ -85,7 +85,7 @@ export function serveWithKeys(command, args = [], options = {}) {
 }
 
 async function runWithKeys(script, args = [], { cwd = process.cwd(), env = process.env,
-  stdout = process.stdout, stderr = process.stderr, home = process.env.HOME } = {}, nodeScript) {
+  stdout = process.stdout, stderr = process.stderr, home = process.env.HOME, spawn: spawnChild = spawn } = {}, nodeScript) {
   const record = { run: randomUUID(), script, content_hash: null, names: [], time: new Date().toISOString(), exit: null };
   let audit;
   let values = null;
@@ -100,7 +100,7 @@ async function runWithKeys(script, args = [], { cwd = process.cwd(), env = proce
     const entry = nodeScript ? resolve(cwd, script) : script;
     if (nodeScript && !['.js', '.mjs', '.cjs'].includes(extname(entry))) throw new KeysDotenvError('only Node .js, .mjs and .cjs scripts are supported');
     writeSync(audit, `${JSON.stringify({ ...record, event: 'start' })}\n`);
-    const child = spawn(nodeScript ? process.execPath : entry, nodeScript ? [entry, ...args] : args, {
+    const child = spawnChild(nodeScript ? process.execPath : entry, nodeScript ? [entry, ...args] : args, {
       cwd, env: childEnvironment(env, values), stdio: ['ignore', 'pipe', 'pipe'],
     });
     // A caller that keeps the wrapper alive needs the child's pid while it starts, and its exit when it leaves.
