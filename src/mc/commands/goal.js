@@ -15,8 +15,9 @@
  *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
  *                                  (`project-convert.js`); a finished one is refused
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
- *   mc goal log [<programme>/<goal>] [--done "…"] [--comment "…"] [--next "…"] [--stage <stage>] [--status ready|blocked|Martin]
- *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too
+ *   mc goal log [<programme>/<goal>] [--done "…"|--done-file <path|->] [--comment "…"|--comment-file <path|->] [--next "…"|--next-file <path|->] [--stage <stage>] [--status ready|blocked|Martin]
+ *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
+ *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
@@ -46,7 +47,7 @@
  * with no holes.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, unlinkSync } from 'node:fs';
+import { appendFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
@@ -67,7 +68,7 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--comment', '--next', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
   new: ['--repo', '--class', '--title', '--phase', '--stage'],
@@ -79,7 +80,7 @@ const VERB_FLAGS = {
   'criterion unmet': [],
   convert: [],
   'from-project': [],
-  log: ['--done', '--comment', '--next', '--stage', '--status'],
+  log: ['--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--stage', '--status'],
   stage: ['--reason'],
   status: ['--reason'],
   pr: [],
@@ -125,6 +126,7 @@ export async function run(argv, deps = {}) {
     move: deps.move || moveDir,
     appendText: deps.appendText || appendText,
     remove: deps.remove || unlinkSync,
+    readFile: deps.readFile || readEntryFile,
   };
   const { flags } = scanned;
 
@@ -136,7 +138,11 @@ export async function run(argv, deps = {}) {
   if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
-  if (verb === 'log') return logEntry(rest, { stage: flags.stage, status: flags.status, done: flags.done, comment: flags.comment, next: flags.next }, ctx);
+  if (verb === 'log') {
+    const texts = entryTexts(flags, ctx);
+    if (texts.error) { stderr.write(`mc: ${texts.error}\n`); return texts.code; }
+    return logEntry(rest, { stage: flags.stage, status: flags.status, ...texts.fields }, ctx);
+  }
   if (verb === 'stage') {
     if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
     const stage = rest.pop();
@@ -279,6 +285,42 @@ function logEntry(args, fields, ctx) {
   }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
+}
+
+/**
+ * The entry's `done`, `comment` and `next` texts: each inline flag's value, or
+ * each `--<field>-file` read verbatim (`-` is stdin) with one final newline
+ * left out, as a line's end is not part of its text. A field given both ways,
+ * stdin given for two fields, a file that cannot be read and an empty text are
+ * refused before anything is written: `{ code, error }`; else `{ fields }`.
+ */
+function entryTexts(flags, ctx) {
+  const names = ['done', 'comment', 'next'];
+  const both = names.find((name) => flags[name] !== null && flags[`${name}-file`] !== null);
+  if (both) return { code: 2, error: `--${both} and --${both}-file are one or the other, not both` };
+  if (names.filter((name) => flags[`${name}-file`] === '-').length > 1) {
+    return { code: 2, error: 'stdin is read once: only one of --done-file, --comment-file and --next-file may be -' };
+  }
+  const fields = {};
+  for (const name of names) {
+    const path = flags[`${name}-file`];
+    if (path === null) { fields[name] = flags[name]; continue; }
+    let text;
+    try {
+      text = ctx.readFile(path);
+    } catch (error) {
+      return { code: 1, error: `--${name}-file ${path} cannot be read — ${error.message}` };
+    }
+    const verbatim = text.replace(/\n$/u, '');
+    if (verbatim === '') return { code: 2, error: `--${name}-file ${path} is empty — nothing to log` };
+    fields[name] = verbatim;
+  }
+  return { fields };
+}
+
+/** A file's text as it is; `-` is stdin's. */
+function readEntryFile(path) {
+  return readFileSync(path === '-' ? 0 : path, 'utf8');
 }
 
 /** Execute the session's merge decision for every PR it registered on the goal. */

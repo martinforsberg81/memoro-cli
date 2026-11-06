@@ -19,7 +19,17 @@ with ✓/✗ and its check, and each worktree's state.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
-  goal. The next session starts from the last entry's `Next`.
+  goal. The next session starts from the last entry's `Next`. Text with
+  backticks, `$( )` or quotes goes through `--done-file`, `--comment-file` or
+  `--next-file` (`-` is stdin) instead of its inline flag: read verbatim, never
+  both. Pass a quoted heredoc, so the shell leaves the text alone:
+  ```sh
+  mc goal log --done-file - <<'EOF'
+  gate: `mc gate tests/mc/commands/goal.test.js` — green, $(date) as run
+  EOF
+  mc goal show <programme>/<goal>
+  ```
+  Read the entry back with `mc goal show` before moving the stage.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `plan → build
   → review → finish → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, each stage with one owner: a plan
   session writes it in `plan` and moves it to `build`; a build session moves
