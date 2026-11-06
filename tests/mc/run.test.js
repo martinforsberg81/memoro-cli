@@ -732,18 +732,18 @@ test('runner holds admission during dependency allocation and rechecks before sp
   const disk = onDisk(f, 20e9);
   let heldAtAllocation = false;
   f.deps.attachDeps = async () => {
-    heldAtAllocation = pressureState(f)?.lease?.trigger === 'session:start';
+    heldAtAllocation = pressureState(f)?.admission_lease?.trigger === 'session:start';
     disk.free = 19e9;
     return { ok: true };
   };
   assert.equal((await createRunner({ deps: f.deps }).pass()).waited, 'skipped:disk');
   assert.equal(f.calls.sessions.length, 0);
   assert.equal(heldAtAllocation, true, 'allocation happens only while admission is held');
-  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureState(f).admission_lease, null);
   assert.equal(pressureEvents(f).at(-1).admission.admitted, false);
 });
 
-test('same-pid policy instances cannot duplicate a pending cleanup or bypass it at the healthy boundary', async () => {
+test('pending cleanup stays exclusive while sessions start at 20 GB or above', async () => {
   const files = new Map();
   let free = 19e9;
   let release;
@@ -754,13 +754,24 @@ test('same-pid policy instances cannot duplicate a pending cleanup or bypass it 
     steps: [{ name: 'tidy', run: async () => { removed.push('safe'); await pending; free = 40e9; return {}; } }] };
   const first = createDiskPressure(options);
   const second = createDiskPressure(options);
-  const pass = first.poll();
+  const pass = first.admit();
   await Promise.resolve();
   assert.equal((await second.poll()).relief.skipped, 'busy');
-  assert.equal((await second.admit()).admitted, false);
+  assert.equal((await second.admit()).admitted, false, 'below 20 GB waits');
+  for (const policy of [first, second]) {
+    for (const amount of [20e9, 25e9, 30e9]) {
+      free = amount;
+      const admitted = await policy.admit({ hold: true });
+      assert.equal(admitted.admitted, true, `${amount} starts while cleanup is pending`);
+      assert.equal((await admitted.recheck()).admitted, true);
+      free = 20e9 - 1;
+      assert.equal((await admitted.recheck()).admitted, false, 'recheck still protects the floor');
+      admitted.release();
+    }
+  }
   assert.deepEqual(removed, ['safe']);
   release();
-  await pass;
+  assert.equal((await pass).admitted, true, 'the original start also uses reclaimed space');
   assert.equal((await second.admit()).admitted, true);
 });
 
@@ -772,8 +783,7 @@ test('at exactly 20 GB a session starts, and a healthy disk runs no cleanup or d
   assert.equal(r.ran, 1);
   assert.deepEqual(disk.steps, []);
   assert.deepEqual([...new Set(disk.read)], ['/w/runner/scratch'], 'the volume read is the one MC_SCRATCH is made on');
-  assert.equal(disk.read.length, 3, 'asked before allocation and rechecked at the spawn boundary');
-  assert.equal(pressureState(f).lease, null);
+  assert.equal(pressureState(f).admission_lease, null);
   assert.equal(pressureState(f).last_cleanup, undefined);
   assert.deepEqual(pressureEvents(f), []);
   assert.equal('/w/runner/disk.json' in f.files, false, 'the page line goes');

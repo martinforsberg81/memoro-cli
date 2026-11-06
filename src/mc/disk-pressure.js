@@ -22,10 +22,10 @@
  *   - **Unknown is not room.** A reading that fails is written down, shown,
  *     and refuses admission; cleanup and `mc tidy` still work.
  *   - **One pass at a time.** In a process, callers share one flight; across
- *     processes cleanup and admissions hold a lease in `disk-pressure.json`,
- *     taken under
- *     the runner lock, and a second process that finds it held does not run
- *     its own. A live holder excludes even another instance in the same process.
+ *     processes cleanup holds `lease` and admissions hold `admission_lease` in
+ *     `disk-pressure.json`, taken under the runner lock. Cleanup never excludes
+ *     admission at or above 20 GB. Each lease excludes other holders of the
+ *     same kind, including another instance in the same process.
  *     Admission holds exclusion through allocation and spawn, then releases it;
  *     competing starts defer and remeasure on retry, never sharing a stale reading.
  *   - **A pass that cannot help waits.** One that ends below the pressure line
@@ -175,17 +175,17 @@ export function createDiskPressure({
   }
 
   /** The lease: true when this process holds it now, else the holder. */
-  function takeLease(trigger) {
+  function takeLease(trigger, field = 'lease') {
     return critical(() => {
       const state = readState();
-      const held = state?.lease;
+      const held = state?.[field];
       if (held && (held.pid === pid || alive(held.pid))) return { ok: false, holder: held };
-      writeState({ lease: { pid, token, since: iso(), trigger } });
+      writeState({ [field]: { pid, token, since: iso(), trigger } });
       return { ok: true };
     });
   }
-  function dropLease() {
-    critical(() => { if (readState()?.lease?.token === token) writeState({ lease: null }); });
+  function dropLease(field = 'lease') {
+    critical(() => { if (readState()?.[field]?.token === token) writeState({ [field]: null }); });
   }
 
   let flight = null;
@@ -194,17 +194,17 @@ export function createDiskPressure({
    * One pressure pass, shared: a caller that finds one in flight in this
    * process gets the same answer. Resolves `{ ran, skipped?, event?, after }`.
    */
-  function relieve({ trigger = 'pressure', admission = null, leased = false } = {}) {
+  function relieve({ trigger = 'pressure' } = {}) {
     if (flight) return flight;
     flight = (async () => {
-      try { return await pass({ trigger, admission, leased }); } finally { flight = null; }
+      try { return await pass({ trigger }); } finally { flight = null; }
     })();
     return flight;
   }
 
-  async function pass({ trigger, leased = false }) {
+  async function pass({ trigger }) {
     const before = measure();
-    const lease = leased ? { ok: true } : takeLease(trigger);
+    const lease = takeLease(trigger);
     if (!lease.ok) return { ran: false, skipped: 'busy', holder: lease.holder, after: before };
     try {
       if (!before.known) { unknown(readState()); return { ran: false, skipped: 'unknown', after: before }; }
@@ -267,7 +267,7 @@ export function createDiskPressure({
         + `${shortfall ? `, ${gb(shortfall)} short of ${gb(RECOVERY_BYTES)}` : ''}${failed ? ` · failed: ${errors.slice(0, 3).join('; ') || 'a step failed'}` : ''}`
         + `${cool ? ` · next pass after ${COOLDOWN_MS / 60000} min` : ''}`);
       return { ran: true, event, after };
-    } finally { if (!leased) dropLease(); }
+    } finally { dropLease(); }
   }
 
   /**
@@ -293,49 +293,62 @@ export function createDiskPressure({
 
   /**
    * Whether new heavy work (`what`) may start now. Serialized in this
-   * process and excluded across instances/processes by the shared lease.
+   * process and excluded across instances/processes by the admission lease.
+   * Cleanup has a separate lease and cannot prevent a start above the floor.
    * With `hold`, the caller MUST release in finally after allocation/spawn,
    * not after running work completes. Competing starts defer. Resolves `{ admitted, available, reason, line }`.
    */
-  function admit({ trigger = 'admission', what = 'new work', hold = false } = {}) {
+  async function admit({ trigger = 'admission', what = 'new work', hold = false } = {}) {
+    // Cleanup runs outside the admission queue and lease. Other lanes can start
+    // as soon as a fresh reading reaches 20 GB, even before this pass finishes.
+    const reading = measure();
+    let relief = null;
+    if (reading.known && reading.available < ADMISSION_BYTES) {
+      const held = readState()?.lease;
+      try {
+        relief = held && (held.pid === pid || alive(held.pid))
+          ? { skipped: 'busy', holder: held }
+          : await relieve({ trigger });
+      } catch (error) { return lockRefusal(error, what); }
+    }
     const answer = queue.then(async () => {
-      let lease;
-      try { lease = takeLease(trigger); } catch (error) {
-        const reason = `disk policy lock unavailable: ${message(error)}`;
-        return { admitted: false, available: null, reason, line: `disk: unknown free — ${what} not started: ${reason}` };
-      }
-      if (!lease.ok) {
-        const reading = measure();
-        const reason = `pid ${lease.holder.pid} is reclaiming space now or admitting work`;
-        appendEvent({ at: iso(), volume: path, trigger, before_bytes: reading.available, after_bytes: reading.available, measured_delta_bytes: 0, estimate_bytes: 0, steps: [], errors: [], outcome: 'busy', admission: { admitted: false, trigger, what, available: reading.available, reason } });
-        return { admitted: false, available: reading.available, reason, line: `disk: ${gb(reading.available)} free — ${what} not started: ${reason}` };
-      }
+      const lease = takeAdmission(trigger, what);
+      if (!lease.ok) return lease.answer;
       let retained = false;
       try {
-        const result = await decide({ trigger, what });
+        const result = await decide({ trigger, what, relief });
         retained = result.admitted && hold;
         let released = false;
-        return retained ? { ...result, recheck: () => decide({ trigger, what }), release: () => { if (!released) { released = true; dropLease(); } } } : result;
-      } finally { if (!retained) dropLease(); }
+        return retained ? { ...result, recheck: () => decide({ trigger, what }), release: () => { if (!released) { released = true; dropLease('admission_lease'); } } } : result;
+      } finally { if (!retained) dropLease('admission_lease'); }
     });
     queue = answer.catch(() => {});
     return answer;
   }
 
-  async function decide({ trigger, what }) {
-    let reading = measure();
+  function lockRefusal(error, what) {
+    const reason = `disk policy lock unavailable: ${message(error)}`;
+    return { admitted: false, available: null, reason, line: `disk: unknown free — ${what} not started: ${reason}` };
+  }
+
+  function takeAdmission(trigger, what) {
+    let lease;
+    try { lease = takeLease(trigger, 'admission_lease'); } catch (error) {
+      return { ok: false, answer: lockRefusal(error, what) };
+    }
+    if (lease.ok) return lease;
+    const reading = measure();
+    const reason = `pid ${lease.holder.pid} is admitting work`;
+    appendEvent({ at: iso(), volume: path, trigger, before_bytes: reading.available, after_bytes: reading.available, measured_delta_bytes: 0, estimate_bytes: 0, steps: [], errors: [], outcome: 'busy', admission: { admitted: false, trigger, what, available: reading.available, reason } });
+    return { ok: false, answer: { admitted: false, available: reading.available, reason, line: `disk: ${gb(reading.available)} free — ${what} not started: ${reason}` } };
+  }
+
+  async function decide({ trigger, what, relief = null }) {
+    const reading = measure();
     if (reading.known && reading.available >= ADMISSION_BYTES) {
       if (reading.available >= PRESSURE_BYTES) healthy(reading, readState());
+      if (relief?.event) recordAdmission(relief.event, { admitted: true, trigger, what, available: reading.available });
       return { admitted: true, available: reading.available, reason: null };
-    }
-    let relief = null;
-    if (reading.known) {
-      relief = await relieve({ trigger, leased: true });
-      reading = measure();
-      if (reading.known && reading.available >= ADMISSION_BYTES) {
-        if (relief.event) recordAdmission(relief.event, { admitted: true, trigger, what, available: reading.available });
-        return { admitted: true, available: reading.available, reason: null };
-      }
     }
     const reason = !reading.known
       ? 'free space could not be measured'
@@ -418,6 +431,6 @@ export function describe(state, reading, events = [], nowMs = Date.now()) {
   return {
     available_bytes: available, status, pressure: status === 'pressure', admission_blocked: admissionBlocked, cooldown_until: cooldownUntil,
     last_cleanup: last, shortfall_bytes: last && known ? Math.max(0, RECOVERY_BYTES - available) : null, last_refusal: state?.last_refusal || null,
-    lease: state?.lease || null, events: Array.isArray(events) ? events.length : 0, policy: POLICY, limitation: LIMITATION, lines,
+    lease: state?.lease || null, admission_lease: state?.admission_lease || null, events: Array.isArray(events) ? events.length : 0, policy: POLICY, limitation: LIMITATION, lines,
   };
 }
