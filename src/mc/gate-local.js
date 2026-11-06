@@ -182,8 +182,9 @@ const RERUN_NAMES = 5;
  * The output boiled down: `ok`, the counts the reporter printed (summed over
  * every block — each lane prints its own), the failed command gates by name,
  * the failing lines (each with the first location line under it), and how
- * many failing lines were left unnamed. `ok` is the exit code's, not the
- * text's — a suite that crashes before its summary is red with no counts.
+ * many failing lines were left unnamed. `process_ok` preserves a permitted
+ * process exit when unavailable command evidence is present; `ok` still means
+ * complete passing evidence. A crash before its summary is red with no counts.
  */
 export function summarizeGate(output, { exitCode, unavailableCommands = [] }) {
   const lines = String(output || '').split('\n');
