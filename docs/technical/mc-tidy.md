@@ -102,6 +102,22 @@ there and not in the checkout. Removed the same way as X, and `mc plan
 <programme>` adds it back when it next opens the programme. An lsof that fails
 keeps every one, with its error.
 
+**P — unused plan goal worktrees.** In layout 2, a registered checkout at
+`programs/<programme>/goals/<goal>/<declared-repo>` may be released automatically
+while its valid `GOAL.json` still says `stage: plan`, once its goal and checkout
+have been untouched for 72 hours. It must be on `goal/<goal>`, have no commits
+beyond `origin/main`, no tracked/untracked/ignored files, and no live cwd, open
+file, or uncertain process evidence in the goal or checkout. Goal metadata,
+checkout ownership, HEAD, and activity are recorded in the preview and fully
+rechecked under the shared runner lock before each removal. Git removes only
+the checkout without `--force`; its branch and every goal document, including
+`GOAL.json` and `LOG.md`, stay unchanged. When the goal starts, the runner's
+existing `placeGoalWorktrees` recovery calls `addGoalWorktree` on that branch.
+During a disk-pressure pass only the 72-hour age condition is relaxed; all
+other checks remain identical. Invalid or unreadable metadata, ignored local
+state, active work, unknown ownership, or changed preview evidence means keep.
+Nested cache targets are omitted when the checkout itself is selected.
+
 **W — what is left under `~/mc/work/`.** The workareas were retired on
 2026-11-03 (goal `mc/no-work`, [`mc-work.md`](mc-work.md)), and nothing makes
 one any more. Every directory there is listed under W, never as routine, with
@@ -350,8 +366,12 @@ neither Docker nor any other writer is named as its cause here.
 
 Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`
 with `writeJsonAtomic` before anything is removed:
-`{ at, rules_version, days, person, targets: [{ path, kind, rule, why, bytes, identity? }], kept: [{ path, rule, why }] }`.
+`{ at, rules_version, days, person, pressure, targets: [{ path, kind, rule, why, bytes, identity? }], kept: [{ path, rule, why }] }`.
 `person` says whose run it was (W); the apply reads it back from the file.
+`pressure` is true only for a disk-pressure recovery pass; it permits younger P
+worktrees and changes no other retention rule. A P target also records goal
+stage/status and exact metadata, branch, HEAD, owner, Git common directory,
+worktree identity, and activity time.
 `--apply` reads that file back and acts on its `targets` only. Each one is
 asked again: its realpath must lie under the root its kind allows, in the
 shape that kind has, and its rule must still say so on facts read now. For F,

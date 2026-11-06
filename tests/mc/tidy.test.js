@@ -158,6 +158,7 @@ function machine() {
     env, now: NOW, git: m.git, cwds: () => m.cwds, inspect: m.inspect, pullAtTip: () => null, command: () => 'claude',
     filesOpen: (paths) => new Map(paths.map((path) => [path, []])),
     release: (wt) => { m.released.push(wt.path); rmSync(wt.path, { recursive: true }); return true; },
+    removeWorktree: (owner, path) => { m.released.push(path); rmSync(path, { recursive: true }); return true; },
     prune: (repoPaths) => { m.pruned.push(...repoPaths); },
     ...over,
   });
@@ -481,6 +482,171 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
 function layout2(m) {
   m.write(join(m.work, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }), NOW);
 }
+
+/** A registered, synthetic goal worktree and the Git/process answers it needs. */
+function planGoalTree(m, { name = 'draft', stage = 'plan', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', cwd = '/', open = [], registration = true, metadata = null } = {}) {
+  layout2(m);
+  const dir = join(m.work, 'programs', 'mc', 'goals', name);
+  const path = join(dir, 'memoro');
+  const owner = join(m.home, 'repos', 'memoro');
+  mkdirSync(owner, { recursive: true });
+  const json = metadata ?? goalJson({ stage, status, repos: ['memoro'] });
+  m.write(join(dir, 'GOAL.json'), json, recent ? NOW : OLD);
+  m.write(join(dir, 'LOG.md'), '# Goal\n', recent ? NOW : OLD);
+  m.write(join(path, '.git'), 'gitdir: /fake/admin/worktrees/draft\n', recent ? NOW : OLD);
+  ageTree(dir, recent ? NOW : OLD);
+  m.planGoalStates ||= new Map();
+  m.planGoalStates.set(path, { name, owner, ignored, dirty, own, cwd, open, registration, branch: `goal/${name}`, head: 'a'.repeat(40) });
+  m.cwds = [{ pid: 1, cwd: '/' }, ...[...m.planGoalStates.values()].filter((state) => state.cwd !== '/').map((state, index) => ({ pid: 9001 + index, cwd: state.cwd }))];
+  const prior = m.git;
+  const git = (at, args) => {
+    if (at === owner && args[0] === 'worktree' && args[1] === 'list') return `${owner}\n` + [...m.planGoalStates.values()].filter((state) => state.registration).map((state) => `worktree ${join(m.work, 'programs', 'mc', 'goals', state.name, 'memoro')}\nHEAD ${'a'.repeat(40)}\n`).join('\n');
+    const state = m.planGoalStates.get(at);
+    if (state && args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return state.branch;
+    if (state && args[0] === 'rev-parse' && args.includes('HEAD')) return state.head;
+    if (state && args[0] === 'rev-parse' && args.includes('--git-common-dir')) return owner;
+    if (state && args[0] === 'status') return args.includes('--ignored=matching') ? state.ignored : state.dirty;
+    if (state && args[0] === 'rev-list') return state.own;
+    return prior(at, args);
+  };
+  return {
+    dir, path, owner, metadata: json,
+    doors: (over = {}) => m.doors({ repos: [{ name: 'memoro', path: owner }], git, openIn: (candidate) => m.planGoalStates.get(candidate)?.open || [], goalWorktreeLock: (fn) => fn(), ...over }),
+  };
+}
+
+function ageTree(directory, at) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory()) ageTree(join(directory, entry.name), at);
+  utimesSync(directory, new Date(at), new Date(at));
+}
+
+describe('(P) automatic plan goal worktree release', () => {
+  it('selects a clean old plan checkout unattended and receipts its identity without changing goal documents or branch policy', () => {
+    const m = machine();
+    try {
+      const f = planGoalTree(m);
+      const docs = [readFileSync(join(f.dir, 'GOAL.json')), readFileSync(join(f.dir, 'LOG.md'))];
+      const preview = runTidy(f.doors());
+      const target = preview.list.targets.find((item) => item.kind === 'plan-goal-worktree');
+      assert.deepEqual(preview.list.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), [f.path], JSON.stringify(preview.list.kept.filter((item) => item.path.includes('/goals/'))));
+      assert.equal(preview.list.person, false);
+      assert.deepEqual([target.stage, target.status, target.branch, target.head, target.owner], ['plan', 'ready', 'goal/draft', 'a'.repeat(40), f.owner]);
+      assert.equal(target.metadata, f.metadata);
+      assert.ok(target.identity && target.activity < NOW - 72 * HOUR);
+      const applied = applyTidy({ listPath: preview.listPath, ...f.doors() });
+      assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[f.path, true]], JSON.stringify(applied.applied));
+      assert.equal(existsSync(f.path), false);
+      assert.deepEqual([readFileSync(join(f.dir, 'GOAL.json')), readFileSync(join(f.dir, 'LOG.md'))], docs);
+      assert.equal(m.released.includes(f.path), true, 'removal uses the checkout-only worktree door');
+    } finally { m.cleanup(); }
+  });
+
+  it('keeps a candidate at the 72-hour boundary in ordinary tidy, retains recent ones, and allows younger safe trees only in pressure', () => {
+    const m = machine();
+    try {
+      const recent = planGoalTree(m, { name: 'recent', recent: true });
+      const atBoundary = planGoalTree(m, { name: 'boundary' });
+      // Bring the newest activity on the boundary goal exactly to the cutoff.
+      utimesSync(join(atBoundary.dir, 'GOAL.json'), new Date(NOW - 72 * HOUR), new Date(NOW - 72 * HOUR));
+      utimesSync(join(atBoundary.dir, 'LOG.md'), new Date(NOW - 72 * HOUR), new Date(NOW - 72 * HOUR));
+      const regular = runTidy(recent.doors());
+      assert.deepEqual(regular.list.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), []);
+      assert.equal(keptOf(regular.list, recent.path).why, 'goal/worktree touched within the last 72 hours');
+      assert.equal(keptOf(regular.list, atBoundary.path).why, 'goal/worktree touched within the last 72 hours', 'exactly 72 hours is retained');
+      const pressured = runTidy({ ...recent.doors(), pressure: true });
+      assert.deepEqual(pressured.list.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path).sort(), [recent.path, atBoundary.path].sort());
+      assert.match(pressured.list.targets.find((item) => item.path === recent.path).why, /pressure pass; age exception/u);
+      const withoutPressureAuthority = applyTidy({ listPath: pressured.listPath, ...recent.doors() });
+      assert.equal(withoutPressureAuthority.applied[0].ok, false, 'a pressure preview alone cannot authorize a younger apply');
+      assert.equal(existsSync(recent.path), true);
+      const pressureApply = runTidy({ ...recent.doors(), pressure: true, apply: true });
+      assert.deepEqual(pressureApply.outcome.applied.filter((item) => item.ok).map((item) => item.path).sort(), [recent.path, atBoundary.path].sort());
+    } finally { m.cleanup(); }
+  });
+
+  it('keeps invalid/missing metadata, non-plan stage, dirty, untracked, ignored, ahead, active and uncertain candidates', () => {
+    const m = machine();
+    try {
+      const cases = [
+        planGoalTree(m, { name: 'wrong-stage', stage: 'build' }),
+        planGoalTree(m, { name: 'wrong-branch' }),
+        planGoalTree(m, { name: 'dirty', dirty: ' M source.js\n' }),
+        planGoalTree(m, { name: 'untracked', dirty: '?? note.txt\n' }),
+        planGoalTree(m, { name: 'ignored', ignored: '!! local.db\n' }),
+        planGoalTree(m, { name: 'ahead', own: '1' }),
+        planGoalTree(m, { name: 'active', cwd: join(m.work, 'programs', 'mc', 'goals', 'active') }),
+        planGoalTree(m, { name: 'open', open: [44] }),
+        planGoalTree(m, { name: 'uncertain-owner', registration: false }),
+      ];
+      const invalid = planGoalTree(m, { name: 'invalid', metadata: '{not json' });
+      const missing = planGoalTree(m, { name: 'missing' });
+      unlinkSync(join(missing.dir, 'GOAL.json'));
+      m.planGoalStates.get(cases[1].path).branch = 'main';
+      const facts = runTidy(cases[0].doors()).list;
+      assert.deepEqual(facts.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), []);
+      for (const item of [...cases, invalid, missing]) assert.ok(keptOf(facts, item.path) || facts.kept.some((entry) => entry.path === item.dir), item.path);
+      for (const [item, reason] of [
+        [cases[0], /stage is build/u], [cases[2], /tracked or untracked changes/u], [cases[3], /tracked or untracked changes/u],
+        [cases[4], /ignored files/u], [cases[5], /commits beyond origin\/main/u], [cases[6], /live session cwd/u],
+        [cases[7], /holds a goal\/worktree file open/u], [cases[8], /registered worktree/u],
+      ]) assert.match(keptOf(facts, item.path).why, reason, item.path);
+      const wrongBranch = runTidy(cases[1].doors()).list;
+      assert.match(keptOf(wrongBranch, cases[1].path).why, /branch is main/u);
+      assert.match(facts.kept.find((entry) => entry.path === invalid.dir).why, /metadata invalid/u);
+      assert.match(facts.kept.find((entry) => entry.path === missing.dir).why, /metadata unreadable/u);
+
+      const safe = planGoalTree(m, { name: 'safe' });
+      const uncertain = runTidy(safe.doors({ cwds: () => { throw new Error('lsof unavailable'); } })).list;
+      assert.deepEqual(uncertain.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), []);
+      assert.match(keptOf(uncertain, safe.path).why, /could not establish live session cwd evidence/u);
+      const openUnknown = runTidy(safe.doors({ openIn: () => null })).list;
+      assert.match(keptOf(openUnknown, safe.path).why, /open-file evidence is uncertain/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('rechecks metadata, stage, HEAD, identity and activity after preview, and suppresses a nested cache target', () => {
+    const m = machine();
+    try {
+      const f = planGoalTree(m);
+      const preview = runTidy(f.doors());
+      const state = m.planGoalStates.get(f.path);
+      state.head = 'b'.repeat(40);
+      const changedHead = applyTidy({ listPath: preview.listPath, ...f.doors() });
+      assert.equal(changedHead.applied[0].ok, false);
+      assert.match(changedHead.applied[0].why, /HEAD|identity|activity/u);
+      state.head = 'a'.repeat(40);
+      const changedStage = runTidy(f.doors());
+      m.write(join(f.dir, 'GOAL.json'), goalJson({ stage: 'build', status: 'ready', repos: ['memoro'] }), OLD);
+      const stageRefused = applyTidy({ listPath: changedStage.listPath, ...f.doors() });
+      assert.match(stageRefused.applied[0].why, /stage/u);
+      m.write(join(f.dir, 'GOAL.json'), f.metadata, OLD);
+      ageTree(f.dir, OLD);
+      const changedMetadata = runTidy(f.doors());
+      m.write(join(f.dir, 'GOAL.json'), goalJson({ stage: 'plan', status: 'blocked', repos: ['memoro'] }), OLD);
+      ageTree(f.dir, OLD);
+      assert.match(applyTidy({ listPath: changedMetadata.listPath, ...f.doors() }).applied[0].why, /metadata/u);
+      m.write(join(f.dir, 'GOAL.json'), f.metadata, OLD);
+      ageTree(f.dir, OLD);
+      const changedIdentity = runTidy(f.doors());
+      m.write(join(f.path, '.git'), 'gitdir: /fake/admin/worktrees/replaced\n', OLD);
+      assert.match(applyTidy({ listPath: changedIdentity.listPath, ...f.doors() }).applied[0].why, /identity/u);
+      m.write(join(f.path, '.git'), 'gitdir: /fake/admin/worktrees/draft\n', OLD);
+      ageTree(f.dir, OLD);
+      const changedActivity = runTidy(f.doors());
+      utimesSync(join(f.dir, 'LOG.md'), new Date(NOW - HOUR), new Date(NOW - HOUR));
+      assert.match(applyTidy({ listPath: changedActivity.listPath, ...f.doors() }).applied[0].why, /72 hours|activity/u);
+      assert.deepEqual(m.released, []);
+      assert.equal(existsSync(f.path), true);
+
+      // A cache fact beneath a selected checkout contributes no duplicate removal or estimate.
+      const second = planGoalTree(m, { name: 'nested' });
+      const nestedFacts = gatherTidyFacts(second.doors());
+      nestedFacts.cache_items = [{ path: join(second.path, 'DerivedData'), kind: 'spm-cache', active: false, open: [], newest_ms: OLD, bytes: 9, identity: 'nested' }];
+      const plan = tidyPlan(nestedFacts);
+      assert.deepEqual(plan.targets.filter((item) => item.path.startsWith(second.path)).map((item) => item.path), [second.path]);
+    } finally { m.cleanup(); }
+  });
+});
 
 describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
   it('every spelling is its own area, never one bucket for programs/ or runner/', () => {
@@ -815,8 +981,9 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 10);
+      assert.equal(written.rules_version, 11);
       assert.equal(written.person, false, 'the list says whose run it was');
+      assert.equal(written.pressure, false);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
       assert.ok(written.targets.length > 0, 'it has a target to list');
