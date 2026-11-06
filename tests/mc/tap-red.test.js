@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { killedFiles, redNames, redNamesIn, tapTotals } from '../../src/mc/tap-red.js';
+import { killedFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -170,5 +170,112 @@ describe('killedFiles — a file ended by a signal from outside the run', () => 
   it('redNamesIn gives the red names a killed file accounts for, and no others', () => {
     assert.deepEqual(redNamesIn(killedTap, ['tests/scripts/build-bundle.test.js']), ['tests/scripts/build-bundle.test.js']);
     assert.deepEqual(redNamesIn(killedTap, []), []);
+  });
+});
+
+// Captured from node v24.10.0 (`node --test --test-reporter=tap <files>`, in a
+// scratch directory, paths shortened to the fixture's name). The captures were
+// trimmed: the stack frames of the first are left out after the third, and the hook
+// fixtures keep only the lines the reader uses. A file that fails to load writes its
+// own diagnostic as `#` comments BEFORE its `# Subtest:` entry, not under it.
+describe('a file that failed to load, and a hook that failed — node v24.10.0 TAP', () => {
+  const duplicateConst = [
+    'TAP version 13',
+    '# file:///tmp/fixture/dup.test.js:3',
+    '# const a = 2;',
+    '#       ^',
+    "# SyntaxError: Identifier 'a' has already been declared",
+    '#     at compileSourceTextModule (node:internal/modules/esm/utils:357:16)',
+    '#     at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:109:18)',
+    '# Node.js v24.10.0',
+    '# Subtest: dup.test.js',
+    'not ok 1 - dup.test.js',
+    '  ---',
+    '  duration_ms: 142.807875',
+    "  type: 'test'",
+    "  location: '/tmp/fixture/dup.test.js:1:1'",
+    "  failureType: 'testCodeFailure'",
+    '  exitCode: 1',
+    '  signal: ~',
+    "  error: 'test failed'",
+    "  code: 'ERR_TEST_FAILURE'",
+    '  ...',
+    '# Subtest: passes',
+    'ok 2 - passes',
+    '  ---',
+    '  duration_ms: 1.419625',
+    "  type: 'test'",
+    '  ...',
+    '1..2',
+    '# tests 2',
+    '# suites 0',
+    '# pass 1',
+    '# fail 1',
+    '# cancelled 0',
+  ].join('\n');
+
+  it('a file that failed to load names its own diagnostic, not only "test failed"', () => {
+    const [failed, ...rest] = redTests(duplicateConst, ['dup.test.js']);
+    assert.equal(rest.length, 0, 'the passing file is not red');
+    assert.equal(failed.file, 'dup.test.js');
+    assert.equal(failed.name, 'dup.test.js');
+    assert.ok(failed.error.includes("SyntaxError: Identifier 'a' has already been declared"), failed.error.join('\n'));
+    assert.ok(failed.error.includes('const a = 2;'), failed.error.join('\n'));
+  });
+
+  // A `before` hook that throws, and one that runs past its timeout. Both cancel
+  // their suite's test (`cancelledByParent`), which is not a red test of its own.
+  const hookThrows = [
+    'TAP version 13',
+    '# Subtest: hooked',
+    '    # Subtest: child',
+    '    not ok 1 - child',
+    '      ---',
+    "      type: 'test'",
+    "      location: '/tmp/fixture/hook.test.js:4:3'",
+    "      failureType: 'cancelledByParent'",
+    "      error: 'test did not finish before its parent and was cancelled'",
+    '      ...',
+    '    1..1',
+    'not ok 1 - hooked',
+    '  ---',
+    "  type: 'suite'",
+    "  location: '/tmp/fixture/hook.test.js:2:1'",
+    "  failureType: 'hookFailed'",
+    "  error: 'seed failed'",
+    "  code: 'ERR_TEST_FAILURE'",
+    '  stack: |-',
+    '    SuiteContext.<anonymous> (file:///tmp/fixture/hook.test.js:3:24)',
+    '    TestHook.run (node:internal/test_runner/test:1106:25)',
+    '  ...',
+    '# tests 2',
+    '# cancelled 1',
+  ].join('\n');
+  const hookTimesOut = [
+    'TAP version 13',
+    '# Subtest: hooked',
+    'not ok 1 - hooked',
+    '  ---',
+    "  type: 'suite'",
+    "  location: '/tmp/fixture/hook2.test.js:2:1'",
+    "  failureType: 'hookFailed'",
+    "  error: 'failed running before hook'",
+    "  code: 'ERR_TEST_FAILURE'",
+    '  ...',
+    '# tests 1',
+    '# cancelled 1',
+  ].join('\n');
+
+  it('a hook that threw names the suite it failed in, the hook\'s own frame, and the error', () => {
+    const [hook] = redTests(hookThrows, ['hook.test.js']);
+    assert.equal(hook.name, 'hooked');
+    assert.equal(hook.at, 'hook.test.js:3:24');
+    assert.deepEqual(hook.error, ['hook of hooked failed:', 'seed failed']);
+  });
+
+  it('a hook that timed out names which hook it was', () => {
+    const [hook] = redTests(hookTimesOut, ['hook2.test.js']);
+    assert.equal(hook.name, 'hooked');
+    assert.deepEqual(hook.error, ['before hook of hooked failed']);
   });
 });

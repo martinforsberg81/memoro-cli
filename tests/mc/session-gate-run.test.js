@@ -116,22 +116,31 @@ it('receipt measurement preserves resource batching, lane counts and execution o
   const candidate = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
   const files = ['standard.test.js', 'db.test.js', 'heavy.test.js'];
   const batches = [];
+  const dir = mkdtempSync(join(tmpdir(), 'mc-receipt-batches-'));
   let saved;
-  const result = await runSessionGate({ cwd: '/repo', select: 'selector', flags: ['--no-warnings'],
-    gate: { root: '/state', repo: 'repo' }, measurement: { repo: 'repo', run: 'resources', base: 'b'.repeat(40), candidate } }, {
-    snapshot: () => candidate, write: () => {},
-    select: async () => ({ ok: true, files, commands: [], classes: { 'db.test.js': 'sqlite', 'heavy.test.js': 'heavy' } }),
-    tests: (options) => realTests({ ...options, lanes: 4, runBatch: async ({ files: batch, lanes, flags }) => {
-      batches.push({ files: batch, lanes, flags });
-      return { code: 0, tap: GREEN };
-    } }),
-    persist: ({ receipt }) => { saved = receipt; return '/state/receipt.json'; }, record: () => {},
-  });
-  assert.equal(result.ok, true);
-  assert.equal(saved.outcome, 'green');
-  assert.deepEqual(batches, files.map((file, i) => ({ files: [file], lanes: i === 2 ? 1 : 4, flags: ['--no-warnings'] })));
-  assert.equal(saved.execution.tests.totals.runs, 3);
-  assert.deepEqual(saved.coverage.files, files);
+  try {
+    const result = await runSessionGate({ cwd: '/repo', select: 'selector', flags: ['--no-warnings'],
+      gate: { root: '/state', repo: 'repo' }, measurement: { repo: 'repo', run: 'resources', base: 'b'.repeat(40), candidate } }, {
+      snapshot: () => candidate, write: () => {},
+      select: async () => ({ ok: true, files, commands: [], classes: { 'db.test.js': 'sqlite', 'heavy.test.js': 'heavy' } }),
+      tests: (options) => realTests({ ...options, lanes: 4, runBatch: async ({ files: batch, lanes, flags, times }) => {
+        batches.push({ files: batch, lanes, flags });
+        // The batch as node's reporter leaves it when each of its files finishes, through the round's tracker.
+        const path = join(dir, `batch-${batches.length}.jsonl`);
+        writeFileSync(path, batch.flatMap((file) => [{ file: `/repo/${file}`, started: true }, { file: `/repo/${file}`, done: true, ms: 1 }])
+          .map((line) => JSON.stringify(line)).join('\n') + '\n');
+        times.track(path);
+        times.complete(path);
+        return { code: 0, tap: GREEN };
+      } }),
+      persist: ({ receipt }) => { saved = receipt; return '/state/receipt.json'; }, record: () => {},
+    });
+    assert.equal(result.ok, true);
+    assert.equal(saved.outcome, 'green');
+    assert.deepEqual(batches, files.map((file, i) => ({ files: [file], lanes: i === 2 ? 1 : 4, flags: ['--no-warnings'] })));
+    assert.equal(saved.execution.tests.totals.runs, 3);
+    assert.deepEqual(saved.coverage.files, files);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 it('the automatic gate runs affected tests and command gates, including a project larger than 30 files', async () => {
@@ -329,6 +338,59 @@ it('a nonzero test process is not green just because it printed passing counts',
     write: () => {}, tests: async () => ({ tap: GREEN, code: 1 }),
   });
   assert.equal(result.ok, false);
+});
+
+it('a run that exits 0 with its summary is red when the tracker says a requested file was cut short', async () => {
+  // What node's reporter left, written through the real tracker: a file that never
+  // started, a file with a top-level test that never ended, and a file that finished.
+  const cases = [
+    { files: ['tests/done.test.js', 'tests/cut.test.js'], lines: [
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
+      { file: '/work/tests/cut.test.js', started: true },
+    ], cut: 'tests/cut.test.js' },
+    { files: ['tests/done.test.js', 'tests/absent.test.js'], lines: [
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
+    ], cut: 'tests/absent.test.js' },
+    { files: ['tests/done.test.js', 'tests/two.test.js'], lines: [
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
+      { file: '/work/tests/two.test.js', started: true }, { file: '/work/tests/two.test.js', done: true, ms: 5 },
+    ], cut: null },
+  ];
+  for (const { files, lines, cut } of cases) {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-session-cut-'));
+    let output = '';
+    try {
+      const result = await runSessionGate({ cwd: '/work', files, gate: { root: dir, repo: 'work' } }, {
+        write: (text) => { output += text; },
+        tests: async ({ times }) => {
+          const path = join(dir, 'times.jsonl');
+          writeFileSync(path, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+          times.track(path);
+          times.complete(path);
+          rmSync(path);
+          return { code: 0, tap: GREEN };
+        },
+      });
+      if (cut) {
+        assert.equal(result.ok, false, cut);
+        assert.equal(result.code, 1);
+        assert.match(output, new RegExp(`Error: output cut: ${cut.replace(/[.]/gu, '\\.')}\\n`, 'u'));
+      } else {
+        assert.equal(result.ok, true, output);
+        assert.doesNotMatch(output, /output cut/u);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+it('a cancelled test is counted on its own line, and the run is red', async () => {
+  let output = '';
+  const result = await runSessionGate({ cwd: '/work', files: ['a.test.js'] }, {
+    write: (text) => { output += text; },
+    tests: async () => ({ code: 1, tap: '# tests 82\n# pass 66\n# fail 0\n# cancelled 16\n# skipped 0\n' }),
+  });
+  assert.equal(result.ok, false);
+  assert.match(output, /^ℹ cancelled 16$/mu);
 });
 
 it('new untracked tests are included even when the selector only knows tracked files', async () => {

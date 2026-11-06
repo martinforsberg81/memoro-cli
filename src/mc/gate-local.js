@@ -158,7 +158,7 @@ function shellQuote(text) {
 // first line. Location lines (`at file:line`) are kept only right after one.
 const FAILURE = /^\s*(✖|not ok\b|\s*status: fail|\s*command [\w:-]+: fail|AssertionError|Error:|TypeError|ReferenceError|SyntaxError|FAIL\b)/u;
 const LOCATION = /^\s+at .*\((.*?:\d+):\d+\)|^\s+at (\S+:\d+):\d+/u;
-const COUNTS = /^ℹ (tests|pass|fail|skipped) (\d+)$/u;
+const COUNTS = /^ℹ (tests|pass|fail|skipped|cancelled) (\d+)$/u;
 const CI_TESTS = /^\s*tests: ran (\d+)\/(\d+) files/u;
 // memoro's ci prints one `ℹ tests` block per lane; a failed command gate is
 // `command sql:pr-ci: fail`; a refused selection is `ci runner:` and the paths.
@@ -252,7 +252,7 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null, la
   const c = summary.counts;
   const gates = summary.gates ?? [];
   let counted = c.tests != null
-    ? `${c.tests} tests, ${c.fail ?? 0} failed${c.skipped ? `, ${c.skipped} skipped` : ''}`
+    ? `${c.tests} tests, ${c.fail ?? 0} failed${c.cancelled ? `, ${c.cancelled} cancelled` : ''}${c.skipped ? `, ${c.skipped} skipped` : ''}`
     : c.files != null ? `${c.files}/${c.selected} files` : 'no counts in the output';
   if (!summary.ok && gates.length) {
     counted += `; command gate${gates.length === 1 ? '' : 's'} failed: ${gates.join(', ')}`;

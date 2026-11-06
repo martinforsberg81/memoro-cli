@@ -65,7 +65,7 @@ import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, recordTestTimes, recordTooSlow, progressTracker, testsMeasured } from './test-times.js';
+import { TIMES_REPORTER, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -1366,6 +1366,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
+  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
   }
@@ -1696,6 +1697,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
+  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
   }
@@ -2110,6 +2112,7 @@ async function ownTests({ tests, cwd, changed, say, flags = [] }) {
   const totals = tapTotals(run.tap);
   const red = redNames(run.tap);
   const result = { files, totals, red, exit_code: run.code };
+  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut), result };
   if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
   if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
   if (red.length) {
@@ -2343,21 +2346,23 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   let stderr = '';
   let code = 0;
   const tests = [];
+  const cut = [];
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
     const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal, times });
     tap += ran.tap;
     stderr += ran.stderr || '';
     tests.push(...(ran.tests || []));
-    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests };
-    // A batch with an unknown exit or no summary cannot disappear behind the
-    // passing totals of another resource class.
+    cut.push(...(ran.cut || []));
+    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests, cut };
+    // A batch with an unknown exit, no summary, or a file its tracker says was cut
+    // short cannot disappear behind the passing totals of another resource class.
     const totals = tapTotals(ran.tap);
-    if (!code && (ran.code !== 0 || !totals.finished || !totals.tests)) code = ran.code || -1;
-    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests };
-    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests };
+    if (!code && (ran.code !== 0 || !totals.finished || !totals.tests || ran.cut?.length)) code = ran.code || -1;
+    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests, cut };
+    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests, cut };
   }
-  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests };
+  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests, cut };
 }
 
 function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
@@ -2389,14 +2394,17 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     // What the run measured, each test by name (`testsMeasured`), read before the
     // file goes; the tests cut at their limit go to the too-slow file (`recordTooSlow`).
     const noteTimes = () => {
-      if (!timesFile) return [];
+      if (!timesFile) return { tests: [], cut: [] };
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       times.complete?.(timesFile);
+      // What this batch's own times file says it finished, read before the file goes:
+      // a file it never started, or with a top-level test that never ended, was cut.
+      const cut = outputCut(files, { progress: runProgress([timesFile]) });
       rmSync(timesFile, { force: true });
       const tests = testsMeasured(text, cwd);
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
-      return tests;
+      return { tests, cut };
     };
     const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
       cwd,
@@ -2430,7 +2438,12 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { const tests = noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null, tests }); });
+    // A batch whose output was cut short exits as an unknown exit, whatever its code said.
+    child.on('close', (code) => {
+      const { tests, cut } = noteTimes();
+      settle(); signal?.removeEventListener('abort', onAbort);
+      resolve({ code: cut.length && code === 0 ? -1 : code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null, tests, cut });
+    });
   });
 }
 
@@ -2485,6 +2498,11 @@ function gateSide(outcome) {
   };
 }
 
+/** A run whose output was cut short names the files it never finished: a file never started, or a test in it never ended. */
+function cutReason(files) {
+  return `output cut: ${files.join(', ')} — the run did not finish ${files.length === 1 ? 'this file' : 'these files'}`;
+}
+
 /** A few names, and how many were not named. */
 function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
@@ -2528,12 +2546,15 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     if (timesFile) times.track?.(timesFile);
     const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
     const noteTimes = () => {
-      if (!timesFile) return;
+      if (!timesFile) return [];
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       times.complete?.(timesFile);
+      // A whole suite names no files, so what its times file can show is a file whose top-level test started and never ended.
+      const cut = outputCut([], { progress: runProgress([timesFile]) });
       rmSync(timesFile, { force: true });
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests: testsMeasured(text, cwd) });
+      return cut;
     };
     const child = spawn(command, {
       cwd,
@@ -2573,6 +2594,11 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
-    child.on('close', (code) => { noteTimes(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code, tap, timedOut, timeoutMs, aborted }); });
+    // A suite whose output was cut short exits as an unknown exit, whatever its code said.
+    child.on('close', (code) => {
+      const cut = noteTimes();
+      settle(); signal?.removeEventListener('abort', onAbort);
+      resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut });
+    });
   });
 }

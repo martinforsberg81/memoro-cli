@@ -240,6 +240,24 @@ export function progressTracker() {
   };
 }
 
+/**
+ * The requested files a run did not finish, as they were asked for: a file no
+ * test of it ever started, and a file with a top-level test that started and
+ * never ended. `progress` is what the run's tracker read (`runProgress`). A run
+ * that exits 0 and prints its summary can still have been cut short — its exit
+ * code and its totals say nothing about a file whose tests never ended. Matched
+ * by tail, as `redFiles` matches: node reports the real path of a file, and a
+ * worktree may be reached through a link.
+ */
+export function outputCut(files, { progress }) {
+  const asked = [...new Set((files || []).map(String).filter(Boolean))];
+  const name = (path) => asked.find((file) => path === file || path.endsWith(`/${file}`)) || path;
+  const unfinished = new Set((progress?.unfinished || []).map(name));
+  const finished = new Set((progress?.finished || []).map((one) => name(one.file)));
+  const cut = asked.filter((file) => unfinished.has(file) || !finished.has(file));
+  return [...cut, ...[...unfinished].filter((file) => !asked.includes(file))];
+}
+
 /** A courtesy: a table that cannot be written costs the next gate its estimate, never this run its verdict. */
 export function recordTestTimes({ root, repo, cwd, text }) {
   try {
