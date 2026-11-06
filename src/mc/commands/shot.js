@@ -41,7 +41,8 @@ import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
   SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, actionGap, buildLoginRequest, buildRequest, outPath,
-  errorLines, parseActions, parseSafeArea, parseScroll, parseTimeout, parseViewport, readShotDeclaration, reportLines, resolveAccount,
+  errorLines, parseActions, parseSafeArea, parseScroll, parseTimeout, parseViewport, predatesWaitFor, readShotDeclaration, reportLines,
+  resolveAccount,
   resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
@@ -237,7 +238,6 @@ export async function run(argv, deps = {}) {
     locale: flags.locale,
     out,
     safeArea: safeArea.safeArea,
-    waitFor: flags['wait-for'],
     scroll: scroll.scroll,
     measure: flags.measure,
     onboarding: resolved?.state === 'fresh',
@@ -303,6 +303,10 @@ export function answer(result, {
   request, served = null, who = null, json = false, open = false, picture = true,
   scrub = (text) => String(text), stdout, stderr, deps = {}, worktree = '<unknown worktree>', script = '<unknown script>',
 }) {
+  if (predatesWaitFor(request, result)) {
+    stderr.write(`mc: ${scrub(`the capture script ${script} in ${worktree} predates wait-for; rebase onto main and try again`)}\n`);
+    return 1;
+  }
   if (!result.ok) {
     stderr.write(`mc: ${scrub(result.error || result.code || 'the capture failed')}\n`);
     // A page that crashed before the picture still says why.
