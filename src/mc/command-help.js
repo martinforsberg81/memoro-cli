@@ -474,6 +474,13 @@ export const COMMAND_USAGE = Object.freeze({
     "Blocked recovery, finish/merge, review, build, then programme planning; repository fairness within a rank.\n",
     "Stored per programme in PRIORITY.json; read live for the next choice, without interrupting sessions.\n",
   ].join(''),
+  proposals: [
+    "usage — mc proposals [--json]   waiting proposal counts by programme, plus unassigned and total\n",
+    "\n",
+    "Counts direct Markdown files in ~/mc/programs/<programme>/proposals/ and ~/mc/proposals/.\n",
+    "Includes dormant and local-only programmes; archives and other files are excluded.\n",
+    "Reads names only, with no network or proposal changes. --json includes directory paths.\n",
+  ].join(''),
   prs: [
     "usage — mc prs                        every open pull request, and whose it is — asks GitHub\n",
     "        mc prs --offline              the same, from the page's cache\n",
