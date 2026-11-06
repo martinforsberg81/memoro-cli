@@ -2,11 +2,19 @@
  * `mc publish` — the publication sequence (`canon/tasks/publish-and-merge.md`), each rule a check.
  */
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
 
 import { describedBody, messageParts, publishLines, readBody, refusal } from '../../src/mc/publish.js';
 import { pushBranch, repoName, run } from '../../src/mc/commands/publish.js';
+import { checkAgainstMain } from '../../src/mc/main-conflict.js';
 import { goalField, goalJson } from './_helpers/goal-file.js';
+
+/** The merge check's answer when the branch merges cleanly and the fetch works. */
+const CLEAN_MAIN = { fetch: { ok: true, text: '' }, paths: [] };
 
 describe('readBody and describedBody', () => {
   it('readBody and describedBody round-trip, and a second publish changes nothing', () => {
@@ -61,7 +69,7 @@ describe('messageParts and publishLines', () => {
 });
 
 describe('mc publish', () => {
-  function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n', body = '', log = '' } = {}) {
+  function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n', body = '', log = '', check = CLEAN_MAIN } = {}) {
     const out = { stdout: '', stderr: '', gh: [], pushed: [], pushOpts: [], merged: [] };
     const git = (args) => {
       const key = args.join(' ');
@@ -93,9 +101,24 @@ describe('mc publish', () => {
       stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
       cwd: '/w/x', git, gh, push: (name, opts) => { out.pushed.push(name); out.pushOpts.push(opts); return { ok: true, text: '' }; },
       merge: async (argv, { stdout }) => { out.merged.push(argv); stdout.write(`queued for the merger: ${argv.join(' ')}\n`); return 0; },
+      mainCheck: () => check,
     };
     return { out, deps };
   }
+
+  it('a fetch that fails is a warning, and the branch is checked against the origin/main it holds: published', async () => {
+    const { out, deps } = fixture({ check: { fetch: { ok: false, text: 'could not read from remote' }, paths: [] } });
+    assert.equal(await run(['--no-merge'], deps), 0);
+    assert.equal(out.stderr, 'mc: warning: git fetch origin failed (could not read from remote) — checked against the origin/main already held\n');
+    assert.deepEqual(out.pushed, ['step-x']);
+  });
+
+  it('a branch whose merge with origin/main conflicts is refused before anything is pushed, and the path is named', async () => {
+    const { out, deps } = fixture({ check: { fetch: { ok: true, text: '' }, paths: ['canon/tasks/scratch-and-probes.md'] } });
+    assert.equal(await run([], deps), 1);
+    assert.equal(out.stderr, 'mc: the branch conflicts with origin/main in canon/tasks/scratch-and-probes.md — rebase onto origin/main, then run this again\n');
+    assert.deepEqual([out.pushed, out.gh, out.merged], [[], [], []]);
+  });
 
   it('pushes, creates the pull request from the last commit, views it once, and queues it for the merger', async () => {
     const { out, deps } = fixture();
@@ -277,6 +300,61 @@ describe('mc publish', () => {
     assert.equal(await run([], deps), 1);
     assert.match(out.stderr, /on HEAD/u);
     assert.deepEqual([out.pushed, out.gh], [[], []]);
+  });
+
+  describe('against a real origin/main', () => {
+    // One origin and one clone, real git, built once: `step-x` edits shared.md, which main edits
+    // later (a conflict once the clone fetches); `step-y` is behind main and edits only other.md.
+    let root;
+    let workX;
+    let workY;
+    const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    const write = (dir, name, text) => writeFileSync(join(dir, name), text);
+    const commit = (dir, subject) => git(dir, ['commit', '-q', '-am', subject]);
+
+    before(() => {
+      root = mkdtempSync(join(tmpdir(), 'mc-publish-main-'));
+      const origin = join(root, 'origin.git');
+      const seed = join(root, 'seed');
+      workX = join(root, 'work-x');
+      workY = join(root, 'work-y');
+      git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
+      git(root, ['init', '-q', '-b', 'main', seed]);
+      write(seed, 'shared.md', 'one\ntwo\n');
+      write(seed, 'other.md', 'x\n');
+      git(seed, ['add', '.']);
+      git(seed, ['commit', '-q', '-m', 'base']);
+      git(seed, ['remote', 'add', 'origin', origin]);
+      git(seed, ['push', '-q', 'origin', 'main']);
+      git(root, ['clone', '-q', origin, workX]);
+      git(workX, ['checkout', '-q', '-b', 'step-x']);
+      write(workX, 'shared.md', 'BRANCH\ntwo\n');
+      commit(workX, 'branch edits the shared line');
+      git(root, ['clone', '-q', origin, workY]);
+      git(workY, ['checkout', '-q', '-b', 'step-y']);
+      write(workY, 'other.md', 'y\n');
+      commit(workY, 'branch edits another file');
+      write(seed, 'shared.md', 'MAIN\ntwo\n');
+      git(seed, ['commit', '-q', '-am', 'main edits the shared line']);
+      git(seed, ['push', '-q', 'origin', 'main']);
+    });
+
+    after(() => rmSync(root, { recursive: true, force: true }));
+
+    // The merge check is the real one, on the clone; GitHub, the push and the merger stay the fixture's.
+    it('a branch that conflicts with origin/main, fetched just now, is refused: exit 1, the path named, nothing pushed or opened', async () => {
+      const { out, deps } = fixture({ branch: 'step-x', check: checkAgainstMain(workX) });
+      assert.equal(await run([], deps), 1);
+      assert.equal(out.stderr, 'mc: the branch conflicts with origin/main in shared.md — rebase onto origin/main, then run this again\n');
+      assert.deepEqual([out.pushed, out.gh, out.merged], [[], [], []]);
+    });
+
+    it('a branch only behind origin/main, with no conflict, publishes as before', async () => {
+      const { out, deps } = fixture({ branch: 'step-y', check: checkAgainstMain(workY) });
+      assert.equal(await run(['--no-merge'], deps), 0, out.stderr);
+      assert.deepEqual(out.pushed, ['step-y']);
+      assert.equal(out.stderr, '');
+    });
   });
 });
 

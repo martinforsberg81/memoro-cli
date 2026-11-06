@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 
 import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, GOAL_FILE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { goalField, goalJson, withGoal } from '../_helpers/goal-file.js';
@@ -65,6 +66,7 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN } = {}) {
       calls.push({ cwd, args });
       return git(cwd, args);
     },
+    mainCheck: () => ({ fetch: { ok: true, text: '' }, paths: [] }),
   };
   return { deps, store, calls, out: () => out.join(''), err: () => err.join('') };
 }
@@ -476,6 +478,78 @@ test('a partial merge enqueue does not release its session before all PRs are ha
   f.deps.queue = () => {};
   assert.equal(await run(['stage', 'merge'], f.deps), 0);
   assert.deepEqual(JSON.parse(f.store['/scratch/.mc-merge-handoff.json']), { goal: 'mc/plain' });
+});
+
+describe('mc goal stage against a real origin/main', () => {
+  // One origin, main at its first commit. Goal g's worktree edits shared.md, which main then edits: a conflict.
+  // Goal h's worktree edits only other.md, so it is behind main and merges cleanly. Real git and real files.
+  let root;
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  const goalDir = (goal) => join(root, 'home', 'prog', 'goals', goal);
+  const worktree = (goal) => join(goalDir(goal), 'memoro');
+  const stageOf = (goal) => parseGoal(readFileSync(join(goalDir(goal), GOAL_FILE), 'utf8')).stage;
+  const deps = (sink) => ({
+    home: join(root, 'home'), env: {}, now: () => new Date('2026-11-01T20:00:00Z'),
+    stdout: { write() {} }, stderr: { write: (text) => { sink.text += text; } },
+  });
+
+  before(() => {
+    root = mkdtempSync(join(tmpdir(), 'mc-goal-main-'));
+    const origin = join(root, 'memoro.git');
+    const seed = join(root, 'seed');
+    git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
+    git(root, ['init', '-q', '-b', 'main', seed]);
+    writeFileSync(join(seed, 'shared.md'), 'one\ntwo\n');
+    writeFileSync(join(seed, 'other.md'), 'x\n');
+    git(seed, ['add', '.']);
+    git(seed, ['commit', '-q', '-m', 'base']);
+    git(seed, ['remote', 'add', 'origin', origin]);
+    git(seed, ['push', '-q', 'origin', 'main']);
+    for (const goal of ['g', 'h']) {
+      mkdirSync(goalDir(goal), { recursive: true });
+      writeFileSync(join(goalDir(goal), GOAL_FILE), goalJson({ repos: ['memoro'], stage: 'build', status: 'ready' }));
+      git(goalDir(goal), ['clone', '-q', origin, 'memoro']);
+      git(worktree(goal), ['checkout', '-q', '-b', `goal/${goal}`]);
+    }
+    writeFileSync(join(worktree('g'), 'shared.md'), 'BRANCH\ntwo\n');
+    git(worktree('g'), ['commit', '-q', '-am', 'g edits the shared line']);
+    writeFileSync(join(worktree('h'), 'other.md'), 'y\n');
+    git(worktree('h'), ['commit', '-q', '-am', 'h edits another file']);
+    writeFileSync(join(seed, 'shared.md'), 'MAIN\ntwo\n');
+    git(seed, ['commit', '-q', '-am', 'main edits the shared line']);
+    git(seed, ['push', '-q', 'origin', 'main']);
+  });
+
+  after(() => rmSync(root, { recursive: true, force: true }));
+
+  test('review is refused for a goal whose branch conflicts with origin/main, naming the path; the goal stays where it was', async () => {
+    const review = { text: '' };
+    assert.equal(await run(['stage', 'prog/g', 'review'], deps(review)), 1);
+    assert.equal(review.text, 'mc: prog/g is not moved to review — the branch conflicts with origin/main in memoro/shared.md — rebase onto origin/main, then run this again\n');
+    assert.equal(stageOf('g'), 'build');
+  });
+
+  test('merge is refused for the same conflicting goal, naming the path; the goal stays where it was', async () => {
+    const merge = { text: '' };
+    assert.equal(await run(['stage', 'prog/g', 'merge'], deps(merge)), 1);
+    assert.match(merge.text, /^mc: prog\/g is not moved to merge — the branch conflicts with origin\/main in memoro\/shared\.md/u);
+    assert.equal(stageOf('g'), 'build');
+  });
+
+  test('a branch only behind origin/main, with no conflict, moves to review', async () => {
+    const sink = { text: '' };
+    assert.equal(await run(['stage', 'prog/h', 'review'], deps(sink)), 0, sink.text);
+    assert.equal(stageOf('h'), 'review');
+    assert.equal(sink.text, '');
+  });
+});
+
+test('a failed fetch before review is a warning: the goal moves, and its merge is checked against the origin/main it holds', async () => {
+  const f = fixture({ files: seededGoal() });
+  f.deps.mainCheck = () => ({ fetch: { ok: false, text: 'could not read from remote' }, paths: [] });
+  assert.equal(await run(['stage', 'mc/plain', 'review'], f.deps), 0, f.err());
+  assert.equal(f.err(), 'mc: warning: memoro-cli: git fetch origin failed (could not read from remote) — checked against the origin/main already held\n');
+  assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'review');
 });
 
 test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merge or finish', async () => {

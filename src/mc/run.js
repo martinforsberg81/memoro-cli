@@ -1529,11 +1529,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (now.stage !== 'review') { say(`${name}: the review moved it to ${now.stage}`); return; }
     if (now.status !== 'ready') return;
     const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
+    // What the dead review left in the trees (its fault replay, say) is written down here: the next review will not start on it.
+    const dirty = dirtyWorktrees(goal);
+    const left = dirty.length ? `; worktree not clean — ${dirtySentence(dirty)}` : '';
     if (reviewDiedBefore(log)) {
-      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a blocked plan session takes it` });
+      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a blocked plan session takes it${left}` });
       return;
     }
-    goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again` });
+    goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again${left}` });
   }
 
   /**
@@ -1625,6 +1628,34 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
+   * The goal's worktrees with uncommitted changes, each as `{ worktree, changed }`
+   * — the paths `git status --porcelain` names. One git cannot read is dirty
+   * too, as `{ worktree, changed: [], failed }`: a tree whose state is not
+   * known is not vouched clean.
+   */
+  function dirtyWorktrees(goal) {
+    const dirty = [];
+    for (const repoName of goal.repos) {
+      const worktree = join(goal.dir, repoName);
+      const status = deps.git(worktree, ['status', '--porcelain']);
+      if (!status.ok) {
+        dirty.push({ worktree, changed: [], failed: String(status.stderr ?? '').trim().split('\n').at(-1) || 'git status failed' });
+        continue;
+      }
+      const changed = String(status.stdout ?? '').split('\n').filter(Boolean).map((line) => line.slice(3));
+      if (changed.length) dirty.push({ worktree, changed });
+    }
+    return dirty;
+  }
+
+  /** `dirtyWorktrees` said for a LOG.md entry: each worktree, and up to ten of its changed paths. */
+  function dirtySentence(dirty) {
+    return dirty.map(({ worktree, changed, failed }) => (failed
+      ? `${worktree}: git status failed (${failed})`
+      : `${worktree} has ${changed.length} uncommitted path${changed.length === 1 ? '' : 's'} — ${changed.slice(0, 10).join(', ')}${changed.length > 10 ? `, and ${changed.length - 10} more` : ''}`)).join('; ');
+  }
+
+  /**
    * The runner's own log entry, for a build session that left none: stage
    * and status unchanged. Three of them in a row in `build` move the goal to
    * `finish · ready`, for a plan session to finish or let go — the guard
@@ -1709,6 +1740,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (!programmeTurn) {
         const lost = placeGoalWorktrees(goal, name);
         if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+        // A review starts on a clean tree only: a dirty one holds a fault or work nobody has judged (a dead review's fault replay was left there, 2026-11-06).
+        const dirty = review ? dirtyWorktrees(goal) : [];
+        if (dirty.length) {
+          goalState(goal, name, { status: 'blocked' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; plan inspects it` });
+          return 'skipped:dirty';
+        }
       }
       // A plan session stands in the programme's directory (`cwd`), beside the planning checkouts.
       if (planning) await placePlanCheckouts(cwd, goal.programme, name);

@@ -3610,6 +3610,47 @@ test('a review that dies leaves review · ready and a review runs again; a secon
   assert.equal(f.calls.sessions.length, 3);
 });
 
+/** Makes `worktree`'s `git status --porcelain` answer `tree.lines`, as a fault left in it would; `tree` is mutable. */
+function dirtyTree(f, worktree, lines = []) {
+  const tree = { lines };
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (cwd === worktree && args.join(' ') === 'status --porcelain'
+    ? { ok: true, stdout: tree.lines.map((line) => `${line}\n`).join(''), stderr: '' }
+    : git(cwd, args));
+  return tree;
+}
+
+test('a review on a dirty goal worktree starts no session: the goal is review · blocked, its reason naming the worktree and the changed paths; clean, it is reviewed', async () => {
+  const f = reviewFixture();
+  f.answer = judges(f, 'merge');
+  const worktree = `${GOALS}/judged/memoro`;
+  const tree = dirtyTree(f, worktree, [' M src/mc/runner-lock.js', '?? probe.js']);
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.length, 0, 'no session of any kind starts on the dirty tree');
+  assert.equal(where(f, 'judged'), 'review · blocked');
+  const reason = goalEntries(f).at(-1).comment;
+  assert.match(reason, /^the review did not start: /u);
+  assert.ok(reason.includes(worktree) && reason.includes('src/mc/runner-lock.js') && reason.includes('probe.js'), reason);
+  tree.lines = [];
+  f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'review', status: 'ready' });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'review-session:goal', 'a clean tree is reviewed as before');
+});
+
+test('a review that dies with its tree left dirty logs the dirty paths in the entry the runner writes', async () => {
+  const f = reviewFixture();
+  const tree = dirtyTree(f, `${GOALS}/judged/memoro`);
+  f.answer = () => {
+    tree.lines = [' M src/mc/runner-lock.js'];
+    return { status: 1, stdout: '', stderr: '', timedOut: false };
+  };
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(where(f, 'judged'), 'review · ready');
+  assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review — a review runs again; worktree not clean — .*src\/mc\/runner-lock\.js$/u);
+});
+
 test('a goal in review with no open pull request goes to finish, and no review starts', async () => {
   const f = reviewFixture({ pr: null });
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
