@@ -36,6 +36,7 @@
  * the round's subject: a batch, whose pull requests were named on the command
  * line.
  */
+import { isNetworkFailure } from './network-failure.js';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -77,7 +78,11 @@ export async function freshenBranchForLanding({
   const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askShell = shell || ((command, options = {}) => runShell(command, { cwd: options.cwd, env }));
   const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
-  await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+  // A fetch that fails read nothing: the network's, not the branch's (`offline`).
+  const fetched = await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+  if (fetched && Number.isInteger(fetched.status) && fetched.status !== 0) {
+    return { ok: false, offline: true, reason: `git fetch origin --prune failed before freshening ${branch} (${trim(fetched.stderr) || `exit ${fetched.status}`})` };
+  }
   rmSync(workspace, { recursive: true, force: true });
   await askGit(['worktree', 'prune'], { cwd: repoPath });
   const added = await askGit(['worktree', 'add', '--detach', workspace, `origin/${branch}`], { cwd: repoPath });
@@ -104,7 +109,10 @@ export async function freshenBranchForLanding({
       if (fresh.commit) say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} on ${branch}`);
     }
     const pushed = await askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
-    if (pushed.status !== 0) return { ok: false, reason: trim(pushed.stderr) || 'push refused' };
+    if (pushed.status !== 0) {
+      const error = trim(pushed.stderr);
+      return { ok: false, ...(isNetworkFailure(error) ? { offline: true } : {}), reason: error || 'push refused' };
+    }
     // The whole sha is what the squash is pinned to (`--match-head-commit`);
     // the seven characters are only what the progress line shows.
     const sha = trim((await askGit(['rev-parse', 'HEAD'], { cwd: workspace })).stdout);

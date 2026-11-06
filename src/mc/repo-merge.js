@@ -33,6 +33,7 @@ import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
+import { isNetworkFailure } from './network-failure.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
@@ -43,6 +44,7 @@ import { declarationFor } from './repo-gate-table.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
+
 
 /**
  * Where a repository's merge log lives.
@@ -214,6 +216,11 @@ export async function runMergeRound({
       return finish(null, null);
     }
     if (!verdict.ok) {
+      // The gate's own fetch is the round's fetch: a failed one measured nothing
+      // and says nothing about the change. Its read of the pull request is the
+      // same: a connection that did not happen is not a verdict on the pull request.
+      if (verdict.stopped_at === 'fetch') return finish('offline', `git fetch origin --prune failed in the gate, so nothing was measured (${verdict.reason})`);
+      if (verdict.stopped_at === 'pr' && isNetworkFailure(verdict.reason)) return finish('offline', `gh pr view could not reach GitHub (${verdict.reason})`);
       // The gate stops the round and there is nothing here that can overrule
       // it. A red gate is reported and the change stays where it is. Its red
       // files and whose red they are go on the round's own report: the mend
@@ -236,7 +243,10 @@ export async function runMergeRound({
     // base has moved since, the verdict is about a tree that no longer exists.
     const base = `origin/${verdict.pr.base}`;
     const fetched = await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
-    if (fetched.status !== 0) return finish('drift', 'could not re-check the base before merging');
+    // A failed fetch is the network's until shown otherwise: nothing was read, so
+    // the base is unknown and nothing merges. A fetch that works and shows the
+    // base moved is still drift, below.
+    if (fetched.status !== 0) return finish('offline', `git fetch origin --prune failed, so ${base} could not be re-checked before merging (${trim(fetched.stderr) || `exit ${fetched.status}`})`);
     const nowAt = trim((await askGit(['rev-parse', base], { cwd: repoPath })).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     let groundNote = `${base} unmoved`;
@@ -305,7 +315,7 @@ export async function runMergeRound({
           });
           if (!ready.ok) {
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
-            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
+            return finish(ready.offline ? 'offline' : 'merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
           }
           pin = ready.sha || null;
         }
@@ -316,9 +326,11 @@ export async function runMergeRound({
       if (pin) {
         const seen = await headAsGitHubSeesIt({ gh: askGh, repoPath, pr: number, expected: pin, sleep });
         if (!seen.ok) {
-          const reason = `#${number} is at ${short(seen.actual)} on GitHub, not the ${short(pin)} this round measured — not merged`;
+          const reason = seen.unreachable
+            ? `gh pr view ${number} could not reach GitHub to read the head (${seen.unreachable}) — #${number} not merged`
+            : `#${number} is at ${short(seen.actual)} on GitHub, not the ${short(pin)} this round measured — not merged`;
           if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: reason });
-          return finish('drift', batch ? `${reason}; ${index} of ${numbers.length} landed before it` : reason);
+          return finish(seen.unreachable ? 'offline' : 'drift', batch ? `${reason}; ${index} of ${numbers.length} landed before it` : reason);
         }
       } else {
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
@@ -336,6 +348,12 @@ export async function runMergeRound({
           report.merge_error = error;
           say(`gh pr merge failed (${error}) — but GitHub says #${number} is merged, so it is`);
         } else if (actual.state === 'open') {
+          // A call that could not connect, with GitHub still saying open: nothing merged, and not the change's.
+          if (isNetworkFailure(error)) {
+            const why = `gh pr merge #${number} could not reach GitHub (${error}) — GitHub still has it open, so nothing merged`;
+            if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: why });
+            return finish('offline', batch ? `${why}; ${index} of ${numbers.length} landed before it` : why);
+          }
           if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error });
           return finish('merge', batch ? `#${number}: ${error} — ${index} of ${numbers.length} landed before it` : error);
         } else {
@@ -562,12 +580,17 @@ async function headAsGitHubSeesIt({ gh, repoPath, pr, expected, sleep }) {
   for (let read = 1; read <= HEAD_READS; read += 1) {
     if (read > 1) await sleep(HEAD_READ_GAP_MS);
     const asked = await gh(['pr', 'view', String(pr), '--json', 'headRefOid'], { cwd: repoPath });
+    // A read that could not connect says nothing about the head: stop reading
+    // now, and let the round be answered offline rather than read six times.
+    if (asked?.status !== 0 && isNetworkFailure(asked?.stderr)) {
+      return { ok: false, actual, unreachable: trim(asked.stderr) };
+    }
     if (asked?.status === 0) {
       try { actual = JSON.parse(asked.stdout)?.headRefOid || null; } catch { actual = null; }
     }
     if (actual === expected) return { ok: true };
   }
-  return { ok: false, actual };
+  return { ok: false, actual, unreachable: null };
 }
 
 const HEAD_READS = 6;

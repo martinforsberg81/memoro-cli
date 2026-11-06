@@ -25,12 +25,16 @@ import { parseMergeArgs } from '../../src/mc/commands/repo.js';
 
 const parseArgs = (argv) => parseMergeArgs(argv.slice(1));
 import { runMergeRound } from '../../src/mc/repo-merge.js';
+import { landJob, serve } from '../../src/mc/merger.js';
+import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
 const BASE = 'aaaa111';
 const HEAD = 'bbbb222';
 const LANDED = 'cccc333';
+// What gh prints when the forge cannot be reached at all (not a refusal from GitHub).
+const CONNECT = 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com';
 
 /** A green gate verdict, in the shape `runGate` returns one. */
 function green({ baseCommit = BASE } = {}) {
@@ -72,7 +76,7 @@ function red() {
  * candidate files readable — which is a refusal, so every test written before
  * this still means what it meant.
  */
-function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main', ancestor = true, movedFiles = [], candidateFiles = [] } = {}) {
+function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main', ancestor = true, movedFiles = [], candidateFiles = [], net = { fetch: false, forge: false, merge: false } } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-merge-'));
   const repoPath = join(root, 'repo');
   const mcHome = join(root, 'home');
@@ -88,6 +92,8 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   const forge = { head: verdict.pr.head_sha };
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
+    // `net` is the network failing under the round: switched by a test while it runs.
+    if (args[0] === 'fetch' && net.fetch) return { status: 128, stderr: "fatal: unable to access 'https://github.com/example/memoro-cli.git/': Could not resolve host: github.com" };
     if (args[0] === 'symbolic-ref') {
       return defaultBranch ? { status: 0, stdout: `${defaultBranch}\n` } : { status: 1, stdout: '', stderr: 'not a symbolic ref' };
     }
@@ -111,6 +117,8 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   };
   const gh = (args, opts = {}) => {
     calls.push({ tool: 'gh', args, cwd: opts.cwd });
+    if (net.forge && args[0] === 'pr' && args[1] === 'view') return { status: 1, stderr: CONNECT };
+    if (net.merge && args[0] === 'pr' && args[1] === 'merge') return { status: 1, stderr: CONNECT };
     if (args[0] === 'pr' && args[1] === 'view') {
       if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: forge.head }) };
       // What the forge says after a failed merge call: the truth, or nothing.
@@ -134,6 +142,7 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
     logPath,
     calls,
     forge,
+    net,
     ran: (tool) => calls.filter((call) => call.tool === tool),
     log: () => readFileSync(logPath, 'utf8'),
     lease: () => readLease(repoPath, { root: mcHome }),
@@ -242,6 +251,142 @@ describe('the squash lands the head the round measured', () => {
       assert.equal(report.merged, false);
       assert.equal(fx.ran('gh').filter((call) => call.args[1] === 'view' && call.args.includes('headRefOid')).length, 6, 'read six times, then stopped');
       assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The network failing under a round is not the change's stop (merger-offline-requeue):
+ * a failed fetch or a gh call that cannot connect is `offline`, read nothing, and
+ * merges nothing; a fetch that works and shows the base moved is still `drift`.
+ */
+describe('a round the network stops is offline: nothing read, nothing merged', () => {
+  it('a failed fetch after a green gate is offline, names the fetch, and merges nothing', async () => {
+    const fx = fixture({ net: { fetch: true, forge: false, merge: false } });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /^git fetch origin --prune failed, so origin\/main could not be re-checked before merging \(fatal: unable to access/u);
+      assert.equal(report.merged, false);
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the gate’s own fetch failing is offline too, and nothing is measured', async () => {
+    const fx = fixture();
+    try {
+      const report = await fx.run({
+        gate: async () => ({ ...green(), ok: false, stopped_at: 'fetch', reason: 'fatal: unable to access \'https://github.com/example/memoro-cli.git/\': Could not resolve host: github.com' }),
+      });
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /git fetch origin --prune failed in the gate, so nothing was measured/u);
+      assert.equal(report.merged, false);
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the gate’s read of the pull request that cannot connect is offline, and names gh pr view', async () => {
+    const fx = fixture();
+    try {
+      const report = await fx.run({ gate: async () => ({ ...green(), ok: false, stopped_at: 'pr', reason: CONNECT }) });
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /^gh pr view could not reach GitHub \(error connecting to api\.github\.com/u);
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a pull request GitHub refuses keeps its own stop: a refusal is not the network', async () => {
+    const fx = fixture();
+    try {
+      const report = await fx.run({ gate: async () => ({ ...green(), ok: false, stopped_at: 'pr', reason: '#400 is closed, so there is nothing to gate' }) });
+      assert.equal(report.stopped_at, 'pr');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a head read that cannot connect is offline after one read, not drift, and nothing merges', async () => {
+    const fx = fixture({ net: { fetch: false, forge: true, merge: false } });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /^gh pr view 400 could not reach GitHub to read the head/u);
+      assert.equal(fx.ran('gh').filter((call) => call.args.includes('headRefOid')).length, 1, 'no six-times reading through a dead connection');
+      assert.equal(report.merged, false);
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a merge call that cannot connect, with GitHub still saying open, is offline and nothing merged', async () => {
+    const fx = fixture({ net: { fetch: false, forge: false, merge: true } });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /^gh pr merge #400 could not reach GitHub \(error connecting to api\.github\.com/u);
+      assert.equal(report.merged, false);
+      assert.equal(report.merge_error, null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a fetch that works and shows the base moved is still drift', async () => {
+    const fx = fixture({ baseAfterGate: 'eeee555' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'drift');
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('through the merger: a round whose fetch fails leaves the goal and the requeue budget alone, and the next reachable round lands', async () => {
+    const fx = fixture({ net: { fetch: true, forge: false, merge: false } });
+    const queued = join(fx.root, 'queue');
+    mkdirSync(join(queued, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(queued), JSON.stringify([{ repo: 'memoro-cli', repo_path: fx.repoPath, pr: 400, branch: 'feature', since: '2026-11-06T11:00:00Z', holder: AREA }]));
+    const GOAL = { programme: 'mc', goal: 'g', dir: join(fx.root, 'goal') };
+    const goal = { ...GOAL, stage: 'review', status: 'ready', prs: [{ repo: 'memoro-cli', pr: 400 }], log: [] };
+    const goalWrites = [];
+    let at = Date.parse('2026-11-06T12:00:00Z');
+    const now = () => new Date(at);
+    const land = (batch, lane, extra) => landJob(batch, {
+      root: queued, lane, say: () => {}, now, sleep: async () => {}, lock: (_root, fn) => fn(),
+      mergeRound: (options) => fx.run({ onProgress: options.onProgress, signal: options.signal }),
+      gh: () => ({ status: 0, stdout: JSON.stringify({ headRefOid: fx.forge.head }) }),
+      readRunningRound: () => null, readRunningDeploy: () => null, readLeaseFn: () => ({ held: false }),
+      recordStart: () => {}, record: () => {}, goalsOf: () => [goal],
+      setGoal: (change) => { goalWrites.push(change); return { goal }; },
+      noteGoal: (change) => { goalWrites.push(change); },
+      ...extra,
+    });
+    const serveOnce = () => serve({
+      root: queued, lock: (_root, fn) => fn(), take: () => true, release: () => {},
+      lanes: ['memoro-cli'], laneOf: () => 'memoro-cli', now, land,
+    });
+    try {
+      await serveOnce();
+      const [entry] = parseQueue(readFileSync(mergesPath(queued), 'utf8'));
+      assert.equal(entry.state, 'queued', 'back in line, not red');
+      assert.equal(entry.offline, 1);
+      assert.equal(entry.requeues, 0, 'no requeue used');
+      assert.equal(entry.not_before, '2026-11-06T12:01:00.000Z');
+      assert.deepEqual(goalWrites, [], 'the goal is left as it was');
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), [], 'nothing merged');
+
+      fx.net.fetch = false;
+      at = Date.parse('2026-11-06T12:01:00Z');
+      await serveOnce();
+      assert.deepEqual(parseQueue(readFileSync(mergesPath(queued), 'utf8')), [], 'the next reachable round landed it');
+      assert.equal(fx.ran('gh').filter((call) => call.args[1] === 'merge').length, 1);
+    } finally { fx.cleanup(); }
+  });
+
+  it('after a failed fetch, the round that reaches the forge again lands', async () => {
+    const fx = fixture({ net: { fetch: true, forge: false, merge: false } });
+    try {
+      assert.equal((await fx.run()).stopped_at, 'offline');
+      fx.net.fetch = false;
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.merged, true);
+      assert.equal(report.merge_commit, LANDED);
     } finally { fx.cleanup(); }
   });
 });
@@ -943,6 +1088,17 @@ describe('a gate that regenerated derived artifacts', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'merge');
       assert.match(report.reason, /#400 could not be freshened for landing \(regen failed\)/u);
+      assert.equal(fx.ran('gh').some((call) => call.args[1] === 'merge'), false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a freshen the network stopped answers offline, not merge', async () => {
+    const verdict = { ...green(), declaration: { derived: [{ command: 'regen', paths: ['docs/sql/'] }] }, derived: { commit: 'eeee555', regenerated: ['docs/sql/x.json'] } };
+    const fx = fixture({ verdict });
+    try {
+      const report = await fx.run({ refresh: () => ({ ok: false, offline: true, reason: 'git fetch origin --prune failed before freshening h400 (exit 128)' }) });
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /git fetch origin --prune failed before freshening/u);
       assert.equal(fx.ran('gh').some((call) => call.args[1] === 'merge'), false);
     } finally { fx.cleanup(); }
   });
