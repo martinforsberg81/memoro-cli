@@ -1,6 +1,6 @@
 # mc manager — the session across all programmes
 
-`mc manager [--new] [--codex|--claude] [--model <model>]` is the person's
+`mc manager [--new|--resume [<id>]] [--codex|--claude] [--model <model>]` is the person's
 entrance to the Manager desk in `~/mc/manager/`. It opens or resumes a foreground
 conversation with the `manager` role. It gathers nothing and supplies no opening
 words: Martin types what he wants help with. A session already running never
@@ -18,7 +18,13 @@ no transcript or active session is moved or rewritten.
 `src/mc/commands/manager.js` reads the canon role, makes the desk directory and
 calls `openInWorkArea` (`src/mc/work-open.js`) with inherited stdio. No Git
 checkout is required in the desk. `pick: null` resumes the existing
-conversation; `--new` starts fresh. The role's overlay and model default ride
+conversation; `--new` starts fresh. `--resume` offers compatible conversations
+from both providers, with IDs, last update times and labels; an explicit tool
+flag filters the list. `--resume <id>` selects a full ID or unique prefix.
+Ambiguous, missing or incompatible selections fail without starting fresh.
+A cancelled picker opens nothing. Without a terminal, the command prints the
+available conversations and asks for an explicit ID. `mc helper` and
+`mc plan <programme>` use the same selection. The role's overlay and model default ride
 through the same assembler as the other interactive roles
 ([mc-roles.md](mc-roles.md)). The foreground record makes the desk visible on
 the page while it holds the terminal.

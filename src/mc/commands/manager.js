@@ -14,10 +14,13 @@ export function usage() {
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--new', '--headless'], strictValues: ['--model', '--prompt', '--minutes'], toolSugar: true, check: managerArguments } };
+export const ROUTES = { '': { booleans: ['--new', '--headless', '--resume'], strictValues: ['--model', '--prompt', '--minutes'], toolSugar: true, check: managerArguments } };
 
 function managerArguments({ flags, positional }) {
-  if (positional.length) return `unknown argument ${positional[0]}`;
+  if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;
+  if (flags.resume && flags.new) return '--resume and --new cannot be combined';
+  if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
+  if (flags.resume && flags.headless) return '--resume requires an interactive session';
   if (flags.headless && !flags.prompt?.trim()) return '--headless requires --prompt';
   if (!flags.headless && (flags.prompt !== null || flags.minutes !== null)) return '--prompt and --minutes require --headless';
   if (flags.minutes !== null && (!Number.isFinite(Number(flags.minutes)) || Number(flags.minutes) <= 0 || Number(flags.minutes) > 1440)) return '--minutes must be greater than 0 and at most 1440';
@@ -33,7 +36,7 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  const { flags } = scanned;
+  const { flags, positional } = scanned;
 
   if (flags.headless) {
     const { runManagerTurn } = await import('../manager-turn.js');
@@ -55,7 +58,10 @@ export async function run(argv, deps = {}) {
     conversationRoots: [root, join(workRoot(), 'brief')],
     worktree: { repo: null, path: root, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
-    pick: flags.new ? 'new' : null,
+    pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
+    resumeTool: flags.tool,
+    stdout: deps.stdout || process.stdout,
+    stderr,
     // NOW says "mc manager" while this is up. Its room is nobody's workarea,
     // so there is no area name to give it.
     verb: 'manager',

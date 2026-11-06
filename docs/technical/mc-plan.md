@@ -1,7 +1,7 @@
 # mc plan — a programme's interactive session
 
 ```
-mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]
+mc plan [<programme>] [--new|--resume [<id>]] [--codex|--claude] [--model <model>]
 mc plan <programme> --archive
 ```
 
@@ -55,15 +55,22 @@ their existing selection; they do not establish role provenance.
 
 Skipped candidates are explained on stderr. With no compatible conversation,
 the opener starts fresh with the requested role instructions and opening
-prompt. `--new` always starts fresh. An explicitly selected incompatible or
+prompt. `--new` always starts fresh. `mc plan <programme> --resume` offers a numbered
+list of compatible conversations from both tools (filtered by an explicit
+`--codex` or `--claude`). `--resume <id>` selects an ID or unique prefix.
+An explicit resume never falls back to a new conversation; a missing or
+ambiguous ID fails and cancellation opens nothing. An explicitly selected incompatible or
 unknown conversation is refused, with a fresh-session route (`mc plan
 <programme> --new` for planning); it is not silently replaced by another id.
 A named id still selects its own tool; tool/model flags retain their existing
 precedence. Compatible continuation has no introductory user message.
 
-Evidence is deliberately bounded, and missing evidence means **unknown**:
+Evidence is deliberately bounded, and missing evidence means **unknown**.
+Codex identity reads have a separate 1 MiB bound because native tool schemas
+can push the first developer message beyond the 64 KiB used for labels:
 
-- **Codex:** the first 64 KiB of the native rollout must contain mc's
+
+- **Codex:** the first 1 MiB of the native rollout must contain mc's
   versioned role/programme launch marker in a `response_item` developer
   message or a `turn_context.developer_instructions` field. A marker in user
   text, a cwd or a label is ignored. Conflicting markers are unknown.

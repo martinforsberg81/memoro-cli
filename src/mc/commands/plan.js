@@ -178,7 +178,9 @@ export async function run(argv, deps = {}) {
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },
     tool: opts.tool || role.tools?.[0] || 'claude',
-    pick: opts.fresh ? 'new' : null,
+    pick: opts.fresh ? 'new' : opts.resume,
+    resumeTool: opts.tool,
+    stdout,
     verb: 'plan',
     areaName: planArea(programme, env),
     roleName: role.name || PLAN_ROLE,
@@ -401,10 +403,13 @@ export function parseArgs(argv) {
   if (argv.includes('--repo')) {
     return { error: 'a programme spans both repositories — mc plan takes no --repo' };
   }
-  const scanned = scanArgs(argv, { booleans: ['--new', '--archive'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--new', '--archive', '--resume'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error) return { error: scanned.error };
   const words = scanned.positional;
-  if (words.length > 1) return { error: `unexpected argument ${words[1]}` };
+  if (words.length > (scanned.flags.resume ? 2 : 1)) return { error: `unexpected argument ${words[scanned.flags.resume ? 2 : 1]}` };
+  if (scanned.flags.resume && scanned.flags.new) return { error: '--resume and --new cannot be combined' };
+  if (scanned.flags.resume && words[1] === 'new') return { error: '--resume expects a conversation ID or prefix' };
+  if (scanned.flags.resume && scanned.flags.archive) return { error: '--resume requires an interactive session' };
   // Archiving starts no session, so the session's flags have nothing to do —
   // and a picker is no way to choose what to remove.
   if (scanned.flags.archive) {
@@ -418,6 +423,7 @@ export function parseArgs(argv) {
     model: scanned.flags.model || null,
     tool: scanned.flags.tool || null,
     fresh: Boolean(scanned.flags.new),
+    resume: scanned.flags.resume ? words[1] || true : null,
     archive: Boolean(scanned.flags.archive),
   };
 }
