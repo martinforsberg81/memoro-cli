@@ -53,7 +53,7 @@
  *     directory stay. A directory with no record is legacy and is kept: its age
  *     says nothing about whether it is idle.
  *   - (B) Exact rebuildable caches (tidy-caches.js): five native-phone output
- *     paths in ended runner scratch, idle registered worker bundles, and four
+ *     paths in ended runner scratch whose owning goal has finished, idle worker bundles, and four
  *     named per-user caches. Shared caches/bundles retain 72 hours. Every
  *     removal rechecks ownership, process/open-file evidence and tree identity.
  */

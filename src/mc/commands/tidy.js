@@ -7,7 +7,7 @@
  *                            each target asked again first
  *   mc tidy --json           the list object
  *   Rebuildable caches use rule B: exact paths, fresh inactivity/identity
- *   checks, 72 hours for shared caches, ended ownership for native outputs.
+ *   checks, 72 hours for shared caches, finished-goal ownership for native outputs.
  *
  *   mc tidy --days <n>       how old a loose transcript must be (default 14)
  *   mc tidy --docker         Docker only: images unused for three days;

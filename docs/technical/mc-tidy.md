@@ -43,7 +43,7 @@ stays.
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
 | `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
-| Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with ended ownership or 72-hour retention and fresh inactivity/identity checks |
+| Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
@@ -168,9 +168,12 @@ paths. This is used by ordinary unattended tidy and disk-pressure passes.
   `native-phone/authorization-home/Library/Caches/org.swift.swiftpm`, and
   `native-phone/host/ios/App/App/public`. The regular `.mc-scratch.json` must
   identify the runner, match the stem, and record valid ordered start/end
-  times. A cwd or open file anywhere in the session retains its caches.
+  times. Its owning `goal:<programme>/<goal>` must also be `done` or `dropped`
+  in a valid active or archived GOAL.json. An ended build may still supply
+  compilation evidence to review, so unfinished, missing, invalid or reopened
+  goals retain the outputs. A cwd or open file anywhere in the session retains its caches.
   Source checkouts, source web assets, logs, manifests, authentication files
-  and the ownership record stay. These ended-session outputs need no age delay.
+  and the ownership record stay. These finished-goal outputs need no age delay.
 - In Git-registered worktrees under `~/mc/`: only
   `.wrangler/dev-server/measure/bundle`. A live registered dev server or a
   process cwd anywhere in that worktree keeps it; so does an open bundle file.
@@ -187,7 +190,8 @@ judged by the newest mtime anywhere in the cache, directories included. Every
 cache needs complete cwd and open-file evidence. Symlinks in the path to a
 cache are refused; links inside a cache are unlinked without following them.
 Unexpected file types and unreadable metadata retain the cache. Discovery
-reads directory/file metadata only, plus the runner ownership record.
+reads directory/file metadata, the runner ownership record and the owning
+goal metadata; cache payloads and authentication files are never read.
 
 The preview records a hash of the complete tree metadata and its owner.
 Apply inventories the candidates again and, immediately before each removal,

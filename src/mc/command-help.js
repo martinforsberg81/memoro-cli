@@ -107,7 +107,7 @@ export const COMMAND_USAGE = Object.freeze({
     "is up. --docker is Docker only, and with --apply starts the runtime when\n",
     "it is down.\n",
     "Rebuildable caches and idle worker bundles retain 72 hours; exact native-phone outputs\n",
-    "may go once their runner session has ended. Busy or uncertain data stays.\n",
+    "may go once their session and owning goal have finished. Busy or uncertain data stays.\n",
     "\n",
     "It begins with the disk as measured (statfs available bytes, decimal GB): healthy at 20 GB\n",
     "and above. Below it the runner, the deployer and a Docker start run a pressure pass toward\n",

@@ -1441,6 +1441,7 @@ describe('(B) exact rebuildable caches', () => {
     const marker = { schema: 'mc-scratch', version: 1, owner: 'runner', session: 'goal:phone/probe', stem: 'ended',
       started: new Date(NOW - 2 * HOUR).toISOString(), ended: new Date(NOW - HOUR).toISOString(), exit: 0 };
     m.write(join(dir, '.mc-scratch.json'), JSON.stringify(marker), NOW - HOUR);
+    goal(m, 'probe', 'done', { programme: 'phone' });
     const native = nativePaths.map((rel) => join(dir, rel));
     const wt = join(m.work, 'self/memoro');
     m.worktrees.memoro.push(wt);
@@ -1470,6 +1471,8 @@ describe('(B) exact rebuildable caches', () => {
       const preview = runTidy(s.doors());
       assert.deepEqual(ruled(preview.list, 'B').map((x) => x.path).sort(), [...s.targets].sort());
       assert.ok(s.targets.every(existsSync), 'preview does not delete');
+      const goals = join(s.m.work, 'programs/phone/goals');
+      mkdirSync(join(goals, '.archive')); renameSync(join(goals, 'probe'), join(goals, '.archive/probe'));
       const result = applyTidy({ listPath: preview.listPath, ...s.doors() });
       assert.ok(result.applied.filter((x) => s.targets.includes(x.path)).every((x) => x.ok));
       for (const path of s.targets) assert.equal(existsSync(path), false, path);
@@ -1480,10 +1483,26 @@ describe('(B) exact rebuildable caches', () => {
     } finally { s.m.cleanup(); }
   });
 
+  it('retains native compilation evidence while its goal needs review and rechecks reopened goals at removal', () => {
+    const s = cacheMachine();
+    try {
+      goal(s.m, 'probe', 'review', { programme: 'phone' });
+      assert.deepEqual(ruled(runTidy(s.doors()).list, 'B').filter((x) => x.kind === 'native-cache'), [], 'an ended build session may still supply the next review');
+      goal(s.m, 'probe', 'done', { programme: 'phone' });
+      const preview = runTidy(s.doors());
+      goal(s.m, 'probe', 'build', { programme: 'phone' });
+      const applied = applyTidy({ listPath: preview.listPath, ...s.doors() });
+      for (const path of s.native) {
+        assert.equal(applied.applied.find((x) => x.path === path).ok, false, path);
+        assert.ok(existsSync(path));
+      }
+    } finally { s.m.cleanup(); }
+  });
+
   it('keeps native outputs without ended ownership, with active/open owners, and when process evidence is incomplete', () => {
     const s = cacheMachine();
     try {
-      const cases = ['running', 'missing', 'malformed', 'foreign', 'future', 'active', 'open', 'uncertain'];
+      const cases = ['running', 'missing', 'malformed', 'foreign', 'version', 'future', 'active', 'open', 'uncertain', 'goal-missing', 'goal-invalid'];
       const paths = new Map();
       for (const name of cases) {
         const dir = join(s.m.work, 'runner/scratch', name);
@@ -1492,7 +1511,10 @@ describe('(B) exact rebuildable caches', () => {
         const marker = { ...s.marker, stem: name };
         if (name === 'running') delete marker.ended;
         if (name === 'foreign') marker.owner = 'someone-else';
+        if (name === 'version') marker.version = 2;
         if (name === 'future') marker.ended = new Date(NOW + HOUR).toISOString();
+        if (name.startsWith('goal-')) marker.session = 'goal:phone/' + name;
+        if (name === 'goal-invalid') goal(s.m, name, 'done', { programme: 'phone', text: '{invalid' });
         if (name !== 'missing') s.m.write(join(dir, '.mc-scratch.json'), name === 'malformed' ? '{broken' : JSON.stringify(marker));
       }
       s.m.cwds.push({ pid: 50, cwd: join(s.m.work, 'runner/scratch/active/other') });

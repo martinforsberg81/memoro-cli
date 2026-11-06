@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
+import { ARCHIVE_DIR, FINISHED, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
+import { PROGRAMS_HOME } from './paths.js';
 
 const CACHE_KEEP_MS = 72 * 60 * 60 * 1000;
 export const CACHE_KIND_ROOT = Object.freeze({
@@ -26,6 +28,28 @@ const SHARED_PATHS = Object.freeze({
   'media-model-cache': 'Containers/com.apple.mediaanalysisd/Data/Library/Caches/com.apple.mediaanalysisd/com.apple.e5rt.e5bundlecache',
 });
 const BUNDLE_PATH = '.wrangler/dev-server/measure/bundle';
+
+/** A completed build can still supply compilation evidence to review; the owning goal must finish too. */
+function finishedGoalIdentity(session, roots) {
+  const match = /^goal:([a-z0-9][a-z0-9_-]*)\/([a-z0-9][a-z0-9_-]*)$/iu.exec(session);
+  if (!match) throw new Error('native output needs an identifiable owning goal');
+  const dir = join(roots.root, PROGRAMS_HOME, match[1], GOALS_DIR);
+  for (const file of [join(dir, match[2], GOAL_FILE), join(dir, ARCHIVE_DIR, match[2], GOAL_FILE)]) {
+    try {
+      let cursor = roots.root;
+      for (const part of relative(roots.root, file).split('/')) {
+        cursor = join(cursor, part);
+        if (lstatSync(cursor).isSymbolicLink()) throw new Error('symbolic link in owning goal path');
+      }
+      if (!lstatSync(file).isFile()) throw new Error('owning goal is not a regular file');
+    } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const text = readFileSync(file, 'utf8');
+    const goal = parseGoal(text);
+    if (goal.problems || !FINISHED.includes(goal.stage)) throw new Error('owning goal is unfinished or unreadable; compilation evidence stays');
+    return createHash('sha256').update(text).digest('hex');
+  }
+  throw new Error('finished owning goal could not be established');
+}
 
 /** Both discovery and apply use this allowlist; a list cannot nominate a broader parent. */
 export function cachePathAllowed({ kind, path }, roots) {
@@ -83,13 +107,13 @@ export function gatherCacheFacts({ roots, repos, git, running, openIn, servers, 
           throw new Error('scratch ownership record is not a regular file');
         }
         const marker = JSON.parse(readFileSync(join(guard, '.mc-scratch.json'), 'utf8'));
-        if (marker?.schema !== 'mc-scratch' || marker.owner !== 'runner' || !marker.session
+        if (marker?.schema !== 'mc-scratch' || marker.version !== 1 || marker.owner !== 'runner' || !marker.session
           || marker.stem !== basename(guard)
           || !Number.isFinite(Date.parse(marker.started)) || !Number.isFinite(Date.parse(marker.ended))
           || Date.parse(marker.ended) < Date.parse(marker.started) || Date.parse(marker.ended) > now) {
           throw new Error('scratch cache needs a valid ended runner ownership record');
         }
-        item.owner_id = JSON.stringify([marker.session, marker.started, marker.ended, marker.stem]);
+        item.owner_id = JSON.stringify([marker.session, marker.started, marker.ended, marker.stem, finishedGoalIdentity(marker.session, roots)]);
       }
       if (running === null) throw new Error('could not establish process cwd evidence');
       item.active = running.some((p) => typeof p.cwd === 'string' && (p.cwd === guard || p.cwd.startsWith(guard + '/')));
@@ -147,5 +171,5 @@ export function rebuildableCache(item, now) {
   if (item.kind !== 'native-cache' && item.newest_ms >= now - CACHE_KEEP_MS) return { target: false, why: 'cache touched in the last 72 hours' };
   if (!Array.isArray(item.open)) return { target: false, why: 'error: open-file evidence is unavailable' };
   if (item.open.length) return { target: false, why: 'a file is open in its owner directory' };
-  return { target: true, why: item.kind === 'native-cache' ? 'rebuildable output of an ended runner session' : 'unused rebuildable cache untouched for 72 hours' };
+  return { target: true, why: item.kind === 'native-cache' ? 'rebuildable output of an ended runner session with a finished owning goal' : 'unused rebuildable cache untouched for 72 hours' };
 }
