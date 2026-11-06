@@ -46,22 +46,18 @@ test('fast: either provider is chosen, the one with more headroom', () => {
 
 test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
   let unknown = codex(empty(), win(0.1));
-  for (const cls of ['fast', 'large', 'review']) {
-    const chosen = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: unknown, now: NOW, priority: 'claude' });
-    assert.equal(chosen.candidate.tool, 'claude', `${cls} honors the saved priority`);
-    assert.equal(chosen.basis, 'bootstrap');
-  }
+  const classes = ['fast', 'large', 'review'];
+  const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude' }));
+  const missing = bootstrap(unknown);
+  assert.deepEqual(missing.map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'unknown usage honors priority for all classes');
+  assert.deepEqual(missing.map((chosen) => chosen.basis), ['bootstrap', 'bootstrap', 'bootstrap']);
   const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
   unknown = codex(claude(empty(), win(0.1), win(0.1), old), win(0.1));
-  for (const cls of ['fast', 'large', 'review']) {
-    assert.equal(chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: unknown, now: NOW, priority: 'claude' }).candidate.tool, 'claude');
-  }
+  assert.deepEqual(bootstrap(unknown).map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'stale usage honors priority for all classes');
   const reset = codex(claude(empty(), win(0.9, PAST), win(0.95, PAST)), win(0.1));
-  for (const cls of ['fast', 'large', 'review']) {
-    const chosen = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: reset, now: NOW, priority: 'claude' });
-    assert.equal(chosen.candidate.tool, 'claude', `${cls} treats reset windows as unknown, not zero or Codex preference`);
-    assert.equal(chosen.basis, 'bootstrap');
-  }
+  const expired = bootstrap(reset);
+  assert.deepEqual(expired.map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'expired windows honor priority for all classes');
+  assert.deepEqual(expired.map((chosen) => chosen.basis), ['bootstrap', 'bootstrap', 'bootstrap']);
 });
 
 test('billing status names stale and failed usage without claiming plan availability', () => {
