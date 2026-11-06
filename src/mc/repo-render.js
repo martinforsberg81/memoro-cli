@@ -348,7 +348,7 @@ export function livenessRow(c, lease, liveness, now = Date.now()) {
   if (!liveness.known) {
     return `${c('liveness unknown', 'yellow')}  ${c(liveness.reason || 'mc cannot see this holder', 'grey')}`;
   }
-  if (liveness.source === 'process') return processLivenessRow(c, liveness);
+  if (liveness.source === 'process') return processLivenessRow(c, lease, liveness);
   const since = liveness.last_seen_ms === null ? null : Math.max(0, now - liveness.last_seen_ms);
   const seen = since === null ? 'nothing has run there'
     : since < 60_000 ? 'last seen just now'
@@ -361,14 +361,21 @@ export function livenessRow(c, lease, liveness, now = Date.now()) {
  * A holder answered by its recorded process: the merger's pid, the PR of its
  * round and how long it has held, or that the process is gone. The board never
  * saw these, so no "last seen" is printed for them.
+ *
+ * An orphaned lease already says its process is gone, on the lease row
+ * (`orphanLine`), so the dead row is not printed beside it: the same sentence twice.
+ * A live process is `holder alive`; `working` is the board's word for a board answer.
  */
-function processLivenessRow(c, liveness) {
+function processLivenessRow(c, lease, liveness) {
   const who = liveness.round ? `merger pid ${liveness.pid}` : `pid ${liveness.pid}`;
-  if (liveness.state === 'dead') return `${c('holder dead', 'yellow')}  ${c(`${who} is gone`, 'grey')}`;
-  const facts = [`${who} alive`];
+  if (liveness.state === 'dead') {
+    if (lease?.orphaned) return null;
+    return `${c('holder dead', 'yellow')}  ${c(`${who} is gone`, 'grey')}`;
+  }
+  const facts = [who];
   if (liveness.round) facts.push(`round for ${liveness.round}`);
   if (liveness.held_ms !== null) facts.push(`held ${duration(liveness.held_ms)}`);
-  return `${c('holder working', 'green')}  ${c(facts.join(' · '), 'grey')}`;
+  return `${c('holder alive', 'green')}  ${c(facts.join(' · '), 'grey')}`;
 }
 
 function duration(ms) {
