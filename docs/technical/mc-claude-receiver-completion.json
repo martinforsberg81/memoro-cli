@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "goal": "mc/claude-receiver-completion",
+  "date": "2026-11-06",
+  "source_head": "27fc553d9c4e4ee608f390b6dfe72e53f62db1f3",
+  "conclusion": "inconclusive",
+  "demonstrated_safe_mechanism": false,
+  "feature_activation_authorized": false,
+  "feature_acceptance_live_runs_authorized": 0,
+  "budget": {
+    "additional_total_max": 2,
+    "build_consumed": 1,
+    "build_remaining": 0,
+    "independent_review_consumed": 0,
+    "independent_review_reserved": 1,
+    "finish_max": 0,
+    "codex_additional_max": 0,
+    "historical_codex_consumed": 2,
+    "historical_claude_consumed": 2,
+    "per_run_limit_s": 300,
+    "whole_tree_deadline_compliance_proved": false
+  },
+  "review": {
+    "performed": false,
+    "criterion_2_met": false,
+    "safe_confirmation_candidate": false,
+    "recommendation": "Offline audit only; leave reserved run unused unless independent review establishes the exact retained proposal meets the contract without a new hypothesis."
+  },
+  "limitations": [
+    "Watchdog raised PermissionError and did not record group-empty; Bash descendants used separate PGID 3453. Whole-tree deadline enforcement not established.",
+    "Child close observed about 169 seconds from allocation; later process snapshot empty, not a timely full-tree certificate.",
+    "Provider auto-backgrounded intended foreground command at 120 s; command output/exit 3 retained but foreground-preservation contract failed.",
+    "Normal text-only envelope positively completed; urgent thinking+text rejected. No complete normal+urgent safe mechanism independently confirmed.",
+    "First result arrived while background task existed: unlike current mc task-aware drain, probe obeyed commissioned first-result closure. Task notification caused further same-child output after stdin end.",
+    "No queued-but-not-started identified request at first result; its safety remains unknown.",
+    "No API/credits, credential access, account/model changes, retries, cancellation, resume, replacement worker, product or permanent test changes."
+  ],
+  "artifacts": [
+    {
+      "name": "build.raw.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/build.raw.jsonl",
+      "sha256": "ffd5148fc7d3ff873679e804956105228bc2b47fc974955492e0a2648678d32c"
+    },
+    {
+      "name": "build.trace.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/build.trace.jsonl",
+      "sha256": "4392fb6d0534f7c3cf9f2277c36c9ae0289c7faa517ecdafc44c309cc9733bf1"
+    },
+    {
+      "name": "inputs.json",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/inputs.json",
+      "sha256": "3eea0e3a3d2cf813b663c4373fb017cd1597c7e27af3b5287065d5ea4fa4a323"
+    },
+    {
+      "name": "budget.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/budget.jsonl",
+      "sha256": "b41a985bf6710626ddb952bede2268a8e83ec98a95c559b1956c1c706ce9daf7"
+    },
+    {
+      "name": "completion-probe.mjs",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/completion-probe.mjs",
+      "sha256": "aeddc10a44e0d4d92fd5a82518e2ea1a2c1a4d24d4f446d729f78717fa2e961c"
+    },
+    {
+      "name": "supervise.py",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/supervise.py",
+      "sha256": "754ecf620b9693b804eac568054db62d9cf2d86a025d1590904845fe3e166cd2"
+    },
+    {
+      "name": "offline-replay.mjs",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/offline-replay.mjs",
+      "sha256": "b74617aa27fc414663aea9395da6556637ac67959b2bb32dfc9f1f67051e34cb"
+    },
+    {
+      "name": "tool-result-transcript.txt",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/tool-result-transcript.txt",
+      "sha256": "85b06c8f5354ae58f2b47a407cacb9b88422ecf8171a022d3411555a9d463ccf"
+    },
+    {
+      "name": "supervisor-output.log",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/supervisor-output.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "post-close-process-check.json",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/post-close-process-check.json",
+      "sha256": "8c369aea6f63e25d758954ae8081fe17b12fdda1fe0371708bfa641c727e022f"
+    },
+    {
+      "name": "build-task-output.txt",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/build-task-output.txt",
+      "sha256": "4df795100e662b71e80f7c7ea6fdaa7451d757c83dc4403c06c04f109ac301f8"
+    },
+    {
+      "name": "fixture/build.sh",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/fixture/build.sh",
+      "sha256": "91c83ce526edd0e7766582519291158a20f65f5bcefffc25fc3ff4270c50ac33"
+    },
+    {
+      "name": "claude-help.txt",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/claude-help.txt",
+      "sha256": "5ca3a9dac2026e56c221fdd34380c7d7d45ebbb51c1d01b7c17c75cb076a0be8"
+    },
+    {
+      "name": "historical-reconcile.log",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/historical-reconcile.log",
+      "sha256": "7fcee91a7a9bf2f5917c9b43afc458959779084b6a92e6d4e7f79e17b90096d0"
+    },
+    {
+      "name": "sources/run-plan.js",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/sources/run-plan.js",
+      "sha256": "dab450ab58eb3fc496bf6c70236f2a1f960decdb24bc2a3f3faf959840c1e93e"
+    },
+    {
+      "name": "sources/run.js",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/sources/run.js",
+      "sha256": "41a1a620995195f942779ca85e5709ea46b1ca8663e9cde970952a03bfbc6979"
+    },
+    {
+      "name": "sources/claude-code.js",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-claude-receiver-completion-20261106T052417Z/sources/claude-code.js",
+      "sha256": "f78fd1427c6bdc9b5c8331f73a28f95f79dc1ce40575282bd8b1ab863089c281"
+    },
+    {
+      "name": "claude-run1.raw.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-session-message-transport-20261105T171437Z/out/claude-run1.raw.jsonl",
+      "sha256": "116e05a7eff295768d916aca8e1370776d109b4f06fa04bb04bbd5a990a3102c"
+    },
+    {
+      "name": "claude-run2.raw.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-session-message-transport-20261105T171437Z/out/claude-run2.raw.jsonl",
+      "sha256": "badf9c3de82d10e678b3b790017d21d04bb835436d2bea7ca0e6718b5c017518"
+    },
+    {
+      "name": "claude-run1.trace.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-session-message-transport-20261105T171437Z/out/claude-run1.trace.jsonl",
+      "sha256": "2aff6b266a1fff341f50d483cf4ff699b34dfcebb06989c6dfab9daab047c3ec"
+    },
+    {
+      "name": "claude-run2.trace.jsonl",
+      "path": "/Users/martinforsberg/mc/runner/scratch/goal-mc-session-message-transport-20261105T171437Z/out/claude-run2.trace.jsonl",
+      "sha256": "a6fc0342745f0cf245bb6c3e88145d09ec5daa84513b09155300e2a6f15b079b"
+    }
+  ],
+  "observations": {
+    "session": "1083cc6b-ce2d-4f90-af6a-418dba680a53",
+    "model": "claude-opus-5-5",
+    "apiKeySource": "none",
+    "owner": 2999,
+    "child": 3087,
+    "inputs": [
+      {
+        "id": "m-normal-42995c4e-5fed-48e8-93c0-fec5f1a86531",
+        "uuid": "21334238-0e0f-46a8-86f5-36ff12e2b25b",
+        "priority": "normal"
+      },
+      {
+        "id": "m-urgent-c00d663f-2e92-4d2a-aa13-0a2bfb4821b2",
+        "uuid": "67133d94-ed0c-4240-ade8-079e3889d203",
+        "priority": "urgent"
+      }
+    ],
+    "ordered_output_uuids": [
+      "149762ea-8fdd-40b5-bf69-2b0f6916a3eb",
+      "572a7465-b092-45bf-86c1-372430867cef",
+      "ddf0bbd0-75d9-4852-b499-036dd7c7ab64",
+      "bc746ee5-b074-436e-a049-4fc50cb546d2",
+      "ab237515-64c1-4aaf-a246-5a2b056b8392",
+      "d346bb4e-fdc8-4fd9-82c6-9c86f17bc03f",
+      "3dd3335b-f4eb-4eb0-99db-4c547af73f6f",
+      "d032aa7c-c875-42ee-8573-28df0b32f7bd",
+      "a86cc82a-cb02-416b-9555-6dbc689088b3",
+      "da350d67-b6c0-4a8a-bd28-e2ea79c9fa3b",
+      "e7e786b8-1f50-49c9-ad46-f9027f8255dc",
+      "ec3a4e5e-662a-49cd-98d0-19a65b53146a",
+      "57218348-9881-4da6-8084-1797bc16e9ca",
+      "b5cb201e-cd74-45c7-bc5c-2688cf3907e6",
+      "20f8d8ec-1e67-48af-9ed9-2c9cc04b73a2",
+      "d4bc30d4-2c35-4100-a26b-a9c8737090fe",
+      "0220e633-2adf-40e9-bf45-065cb6e95d66",
+      "74180f82-cf7e-405a-85f0-6e4bd4066ca7",
+      "ad1764d3-4ca8-4b4c-ad89-4399304036e4",
+      "002b9e97-b338-46d4-8dda-1cbbb5a4deaa",
+      "92cbf006-35b8-48fb-8440-624ed698c5db",
+      "6108efb9-baf5-447d-8675-57839d99c509",
+      "4d5e7a80-1bcf-4c28-ac82-c29dea9a7990",
+      "e7556158-cb13-4124-8a9f-3b65db9f1fff",
+      "718c0e82-84a8-4433-a621-cbc03d671667",
+      "2410bf9d-b65c-45e5-909f-966d7637e0d4",
+      "53fbb8ff-4cf9-4fcf-8f78-6dd5a4e11b3f",
+      "23ccb539-85cc-4243-a82a-d634e92783bb",
+      "21334238-0e0f-46a8-86f5-36ff12e2b25b",
+      "67133d94-ed0c-4240-ade8-079e3889d203",
+      "d3cfeb81-418f-4f85-bbc2-2bb5e80bec4c",
+      "e28bb312-1432-4322-bcea-f20520640b5d",
+      "ebe54389-fe1f-4b89-b294-96dfdad4941a",
+      "ee3fd789-427b-424a-b854-a29a8579cdcb",
+      "fe64079b-27dd-4900-a5c9-2ec9864dd7b0",
+      "082effcb-354a-4a39-972a-e717bbf6cb71",
+      "d2f88ee5-58e5-42d6-9fb9-1c1412ae6201",
+      "c97af00f-165f-4ef9-9f4b-c00393332406",
+      "d9621f63-87dd-442d-8e8a-e0dc96685927",
+      "264245ba-4dd2-401b-a610-ba62d465bedb",
+      "6dacabdc-7140-4318-9917-ec20f9f23354",
+      "d8a7f9b3-5e14-4bc5-9ba1-571bee0ddfc4",
+      "c4b341b9-95c7-4798-9c95-9999471fc527",
+      "d83dd6ad-1d8c-41e6-a062-065b646a9ef6",
+      "8d5f6b3e-f2ce-4f18-bec5-d6b20e05be70",
+      "20b1658a-ba57-4a33-887d-bd5014610cc2",
+      "3e3881a0-e53a-4dc3-8edb-f92dc8f8f3e5",
+      "bc693154-a4c9-4a07-bc04-0fe34a07ec42",
+      "9aecafed-a242-4bf4-9824-d65dbaa2fa69",
+      "798636de-658b-4c15-aa57-3bfa00b2824f",
+      "ab8581f0-0d53-497e-a16e-26498d6a2042",
+      "4d8f9bc6-97f7-43c2-a0da-90ccb05f248b",
+      "5b8fc03e-0ff8-4e67-a6e3-05c4999e7c74",
+      "a4ad8670-ce90-4e2e-ac61-36321b904b03",
+      "17d07dc2-f877-45e0-87cb-9fce6356386d",
+      "b145760f-8bca-4e96-88dd-b8f077da5877",
+      "dbca0244-a14a-4e0e-83cf-d2ac58a3fcaf",
+      "dc7962fd-d441-4672-a78a-3428f8d4ae6d",
+      "702ee6a1-3b58-4564-bc6d-e27a87258d4c",
+      "27c2f70f-6262-4c6d-816d-30c3d28f47ec",
+      "fb2e21aa-57a3-4beb-98cd-b30fb2e59730",
+      "4a9f1096-3547-447b-ba88-06eab6e57df7",
+      "7b74952f-32f7-40a8-b108-6c469bb6047a",
+      "d65b6231-14e6-4821-a314-03207d15cb55",
+      "8dcb48bc-2ca2-4396-b755-5511df7dc204",
+      "543b589e-6b89-4672-946b-14155f21285c",
+      "513967ee-7cc3-4909-9729-b763a29417c1",
+      "20bc3916-16a6-4567-b2f6-7c0dad6bbaba",
+      "466254bb-e501-4829-b602-80832897f3b4",
+      "eadbeda4-4279-4b45-9c99-aac72e56187b",
+      "d21bed35-0282-4ad3-a9e2-ad4d50cbd031",
+      "e5563466-8935-4b10-8c68-c8ea547ea73f",
+      "240e1a44-fc2d-4c51-a4cb-9cee2c2eaa35",
+      "543e39d0-aaaa-4bd3-a0b5-58f059ed0b86",
+      "9899c906-689f-4914-afb3-f44a8565f819",
+      "11baff4c-4658-4337-bbd2-b1cf151f3d31",
+      "a24f4a69-b023-4e1a-9643-ab460181643d",
+      "013cf090-8acd-40b7-9630-6b7fe574033d",
+      "9bbaff36-5ff6-4096-925c-709337a67c04",
+      "f950caf1-fef5-47db-aedb-023a48d9274b",
+      "8bb396aa-c8e0-4527-83cd-6d2217cb4dcb",
+      "fc10441e-7a43-418e-8077-0d35bcc967f8",
+      "1d019852-0732-49f1-a750-a5917a04b749",
+      "0a9155c0-4c18-46b5-b62c-d891f9f22207",
+      "ccfc9ebc-24b2-4652-bddf-709d4cb03ba4",
+      "7ff62f3d-324a-4f3c-ad6d-dc76355907df",
+      "077374c9-a6ed-4f7d-ab5a-c3d9ce751e36",
+      "1cfccc61-4106-450b-9d86-8c8f8ff91b62",
+      "2402f9a5-e91c-41a4-bc5b-dfa19439796f",
+      "c2478779-4ffa-42c7-9a12-8e1e44a5aed5",
+      "c2837463-e2bb-48de-9795-6f9beeebc8cd",
+      "4e0e59c3-fd25-4de8-98d1-86e3121763c4",
+      "96d4341d-638e-4280-8e41-7200c6e93ea2",
+      "5d454a54-30b4-4438-a062-915715a37b83",
+      "19273445-af73-4f4a-a3a0-b629cb41435f",
+      "17621a2b-b684-4e7f-9c5a-ab9749702c9f",
+      "aa9a1058-1369-4b86-8bd3-85f30fb6b285",
+      "ed64cb75-40a8-4922-bb59-6b803d14ccd2",
+      "dbfbd251-a301-40e7-b68d-5e0a6658aa6d",
+      "ca480418-8e8c-40ef-94e5-365727e70ada"
+    ],
+    "completed": [
+      {
+        "id": "msg_011Cgm7vGqBhkiWNfBJDzwLd",
+        "start_seq": 11,
+        "stop_seq": 23,
+        "stop_reason": "tool_use",
+        "block_types": [
+          "tool_use"
+        ],
+        "assistant_uuids": [
+          "0220e633-2adf-40e9-bf45-065cb6e95d66"
+        ],
+        "request_ids": [
+          "req_011Cgm7vGN9zVKSBrcM7ntKS"
+        ],
+        "envelope": null
+      },
+      {
+        "id": "msg_011Cgm86zz16uJ6agHQWwfs2",
+        "start_seq": 41,
+        "stop_seq": 64,
+        "stop_reason": "end_turn",
+        "block_types": [
+          "text"
+        ],
+        "assistant_uuids": [
+          "a4ad8670-ce90-4e2e-ac61-36321b904b03"
+        ],
+        "request_ids": [
+          "req_011Cgm86zWidH8VR2js9dNDY"
+        ],
+        "envelope": {
+          "mc_envelope": 1,
+          "message_id": "m-normal-42995c4e-5fed-48e8-93c0-fec5f1a86531",
+          "kind": "reply",
+          "ack": true,
+          "reply": "I'm not editing a file; the only thing running is ./build.sh in the fixture directory."
+        }
+      },
+      {
+        "id": "msg_011Cgm887hbJ3q9WMRRoynnL",
+        "start_seq": 75,
+        "stop_seq": 107,
+        "stop_reason": "end_turn",
+        "block_types": [
+          "thinking",
+          "text"
+        ],
+        "assistant_uuids": [
+          "543e39d0-aaaa-4bd3-a0b5-58f059ed0b86",
+          "17621a2b-b684-4e7f-9c5a-ab9749702c9f"
+        ],
+        "request_ids": [
+          "req_011Cgm887Uxb7AmyxvbPv7At"
+        ],
+        "envelope": null
+      }
+    ],
+    "accepted": [
+      {
+        "assistant_id": "msg_011Cgm86zz16uJ6agHQWwfs2",
+        "message_id": "m-normal-42995c4e-5fed-48e8-93c0-fec5f1a86531",
+        "stop_seq": 64,
+        "kind": "reply",
+        "ack": true,
+        "reply": "I'm not editing a file; the only thing running is ./build.sh in the fixture directory."
+      }
+    ],
+    "tool": {
+      "id": "toolu_01R6RxEwhcibgDFusxfzraTT",
+      "assistant_id": "msg_011Cgm7vGqBhkiWNfBJDzwLd",
+      "tool_result_seq": 35,
+      "foreground_preserved": false,
+      "notification_seq": 71,
+      "exit": 3,
+      "token": "BUILD-TOKEN-efc081e0"
+    },
+    "results": [
+      {
+        "seq": 67,
+        "uuid": "27c2f70f-6262-4c6d-816d-30c3d28f47ec",
+        "index": 0,
+        "num_turns": 2,
+        "total_cost_usd": 0.028145999999999997,
+        "origin": null
+      },
+      {
+        "seq": 108,
+        "uuid": "ca480418-8e8c-40ef-94e5-365727e70ada",
+        "index": 1,
+        "num_turns": 1,
+        "total_cost_usd": 0.0366976,
+        "origin": {
+          "kind": "task-notification",
+          "producer": "session-task",
+          "runId": "0mw4j8byl-9b6a11e2"
+        }
+      }
+    ],
+    "stdin_end_seq": 68,
+    "close_seq": 109,
+    "close_at": "2026-11-06T05:29:29.977Z",
+    "observed_allocation_to_close_s": 168.977,
+    "watchdog_compliance": false,
+    "queued_not_started_at_first_result": []
+  },
+  "verification": {
+    "final_gate": "Recorded externally in goal LOG and PR on the final clean report commit; documentation GREEN cannot establish provider safety.",
+    "criterion_1": "unmet: whole-tree bound and foreground-preservation evidence deficient",
+    "criterion_2": "unmet: independent review not performed",
+    "criterion_3": "Final clean report revision, completed whole-selection GREEN and publication are recorded in goal LOG and PR (not a live-provider safety certificate)."
+  }
+}
