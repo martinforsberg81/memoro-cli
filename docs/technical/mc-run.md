@@ -344,12 +344,14 @@ is decided locally, before a tool is launched, from the catalog
 account. The snapshot is refreshed by sessions that run anyway, and by
 independent read-only collectors due at startup and every 15 minutes for both
 providers. `review` is a class too, but only a goal's review
-takes it. Provider priority ranks subscriptions before headroom and review
-build-model avoidance; candidate/model ranking applies within the preferred
-provider. Codex needs a fresh successful capacity observation listing the
-model and effort. Auto mode retains unknown-Claude bootstrap only when no
-candidate has measured usable capacity. With no usable subscription, priority
-orders API reserve candidates. The review waits when the selected API is off.
+takes it. Review ranks usable subscriptions by provider priority, then
+headroom; ties avoid the build model, then follow catalog order. Codex needs a
+fresh successful capacity observation listing the model and effort. Auto mode
+retains unknown-Claude bootstrap only when no candidate has measured usable
+capacity. Explicit Claude priority may also attempt its subscription with
+unknown, stale, failed or reset usage ahead of known Codex capacity; unknown
+does not mean zero. With no usable subscription, priority orders API reserve
+candidates. The review waits when the selected API is off.
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
@@ -407,6 +409,7 @@ never zero.
   Claude request/auth contract was matched to inspected installed-tool code.
   No live provider request, login or model run was made. Codex account type is
   inferred from the successful capacity response.
+- The retired cadence was: Codex was read once an hour from the chore pass.
 
 **The choice at launch.** `chooseCandidate` judges each candidate of the class
 at that instant:
