@@ -45,7 +45,7 @@ test('fast: either provider is chosen, the one with more headroom', () => {
 });
 
 test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
-  let unknown = codex(empty(), win(0.1));
+  const unknown = codex(empty(), win(0.1));
   const classes = ['fast', 'large', 'review'];
   const mixedReview = { ...DEFAULT_CATALOG, review: [
     { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
@@ -53,15 +53,17 @@ test('explicit Claude priority bootstraps unknown or stale usage ahead of known 
   ] };
   const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: cls === 'review' ? mixedReview : DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude' }));
   const missing = bootstrap(unknown);
-  assert.deepEqual(missing.map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'unknown usage honors priority for all classes');
-  assert.deepEqual(missing.map((chosen) => chosen.basis), ['bootstrap', 'bootstrap', 'bootstrap']);
   const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
-  unknown = codex(claude(empty(), win(0.1), win(0.1), old), win(0.1));
-  assert.deepEqual(bootstrap(unknown).map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'stale usage honors priority for all classes');
+  const stale = bootstrap(codex(claude(empty(), win(0.1), win(0.1), old), win(0.1)));
   const reset = codex(claude(empty(), win(0.9, PAST), win(0.95, PAST)), win(0.1));
   const expired = bootstrap(reset);
-  assert.deepEqual(expired.map((chosen) => chosen.candidate.tool), ['claude', 'claude', 'claude'], 'expired windows honor priority for all classes');
-  assert.deepEqual(expired.map((chosen) => chosen.basis), ['bootstrap', 'bootstrap', 'bootstrap']);
+  const expected = ['claude', 'claude', 'claude'];
+  assert.deepEqual({
+    unknown: missing.map((chosen) => chosen.candidate.tool),
+    stale: stale.map((chosen) => chosen.candidate.tool),
+    reset: expired.map((chosen) => chosen.candidate.tool),
+  }, { unknown: expected, stale: expected, reset: expected }, 'unknown, stale and reset Claude usage honors priority for fast, large and review');
+  assert.deepEqual([...missing, ...stale, ...expired].map((chosen) => chosen.basis), Array(9).fill('bootstrap'));
 });
 
 test('billing status names stale and failed usage without claiming plan availability', () => {
