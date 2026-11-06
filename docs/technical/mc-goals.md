@@ -57,8 +57,12 @@ any      ── only a person moves a stage backward, logged ─────▶ 
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
-One worktree per repository the goal names. Anyone may work in one: a person,
-a plan session, or the runner's build and review sessions on the goal. `<programme>` must be a directory under
+One worktree per repository the goal names, made at the goal's first use: the
+runner makes it before the first session on the goal that needs it (build,
+review, or plan), and `mc goal new` makes none. `mc tidy` releases a checkout no
+session can use; its branch stays, and the next use re-adds it on that branch.
+Anyone may work in one: a person, a plan session, or the runner's build and
+review sessions on the goal. `<programme>` must be a directory under
 `~/mc/programs/`; `<programme>` and `<goal>` are lower-case letters, digits and
 hyphens. mc keeps nothing else for a goal.
 

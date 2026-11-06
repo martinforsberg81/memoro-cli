@@ -2,9 +2,13 @@
 
 A goal is a directory, `~/mc/programs/<programme>/goals/<goal>/`: `GOAL.json`
 (the goal, contract, out of scope, documents, and success criteria, each with a
-check and a `met`), `LOG.md` (one entry per session), and a worktree per
-repository on branch `goal/<goal>`. `mc goal --help` is the reference; `mc goal
-show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its check.
+check and a `met`) and `LOG.md` (one entry per session). A worktree per
+repository on branch `goal/<goal>` is made at the goal's first use: the runner
+makes it before the first session that needs it (a build, review, or plan
+session on the goal), and `mc tidy` releases it when no session can use it. Its
+branch stays, and the next use re-adds it as it was. `mc goal --help` is the
+reference; `mc goal show <programme>/<goal>` renders one goal, each criterion
+with ✓/✗ and its check, and each worktree's state.
 
 - **Written by verbs.** Never edit GOAL.json by hand. `mc goal set <p>/<g>
   title|goal|contract|out-of-scope --text "…"` (a blank line parts paragraphs),
@@ -52,5 +56,6 @@ show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and its c
   session on `plan · ready`, on `Martin`, or a build session on a goal with no criterion, and the
   merger does not land a goal with one unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|large --title "…" [--stage plan|build]` makes one; `mc goal drop
+  fast|large --title "…" [--stage plan|build]` makes one: GOAL.json and
+  LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` lets one go without landing.

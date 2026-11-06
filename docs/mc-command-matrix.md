@@ -30,8 +30,8 @@ The page and the two surfaces that print it are described in full in
 [`docs/technical/mc-ui.md`](technical/mc-ui.md) — what each section says,
 which file every fact comes from, and why there is no third surface.
 
-A goal is GOAL.json, LOG.md and one worktree per repository under
-`~/mc/programs/<programme>/goals/<goal>/`, on `goal/<goal>`. Its stages move
+A goal is GOAL.json, LOG.md and, from its first use, one worktree per repository
+under `~/mc/programs/<programme>/goals/<goal>/`, on `goal/<goal>`. Its stages move
 forward and its status is ready or blocked. Phases order work across a programme.
 Projects went on 2026-11-03; see [mc-goals.md § From a project](technical/mc-goals.md#from-a-project).
 
@@ -46,7 +46,7 @@ Projects went on 2026-11-03; see [mc-goals.md § From a project](technical/mc-go
 | `mc roles check [<role>]` | **Session / person**: What a launch would hand a session for that role **today** — profile, `_common.md` and the overlay with its includes expanded, exactly as `instructionsFor` joins them — and, against it, the digests every live session recorded when it started. A session running a role file that has been edited since is named by pid. Without a role it checks every live session against the role each one names. `--json`. |
 | `mc deploy [--dry-run] [--follow]` | **Person**: Deploys main to production after asking. Read-only preview/follow may be used by a session; no session initiates a deploy without Martin's instruction. |
 | `mc plan [<programme>]` | **Person**: Open or resume the programme's foreground plan session, starting in `~/mc/programs/<programme>/` with `plan/<programme>` repository worktrees beside its goals. The role is `plan` (Opus by default); launch sets MC_ROLE and MC_PROGRAMME. Refused inside an existing session: use `mc goal` there. No name asks which programme; `--new`, `--codex\|--claude`, `--model` select the conversation. `--archive` ends a programme only after unfinished goals and held work are resolved. |
-| `mc goal new <p>/<g> --repo <r>[,<r>] --class fast\|large --title "…" [--phase <n>] [--stage plan\|build]` | **Session / person**: Makes a goal: `GOAL.json` (a skeleton: the title, no criterion yet) and `LOG.md` under `~/mc/programs/<p>/goals/<g>/`, and a worktree per repository on `goal/<g>`, from `origin/main`. Fetches first; refuses a goal that exists or a repository mc does not know. It starts in stage plan (or build when named) and phase `<n>`, 1 by default; a phase more than one past the programme's highest is refused. See [`docs/technical/mc-goals.md`](technical/mc-goals.md). |
+| `mc goal new <p>/<g> --repo <r>[,<r>] --class fast\|large --title "…" [--phase <n>] [--stage plan\|build]` | **Session / person**: Makes a goal: `GOAL.json` (a skeleton: the title, no criterion yet) and `LOG.md` under `~/mc/programs/<p>/goals/<g>/`. No worktree: the runner makes each repository's worktree on `goal/<g>`, from `origin/main`, at the goal's first session. Fetches first; refuses a goal that exists or a repository mc does not know. It starts in stage plan (or build when named) and phase `<n>`, 1 by default; a phase more than one past the programme's highest is refused. See [`docs/technical/mc-goals.md`](technical/mc-goals.md). |
 | `mc goal set <p>/<g> title\|goal\|contract\|out-of-scope --text "…"` | **Plan / person**: Replaces that field of `GOAL.json`; a blank line parts paragraphs. Every write is validated, and an invalid one is refused unwritten. |
 | `mc goal document add <p>/<g> --label "…" --path "…"` | **Plan / person**: Appends a document the goal sends its reader to. |
 | `mc goal criterion add <p>/<g> --criterion "…" --check "…"` | **Plan / person**: Appends a success criterion, not met; one without a check is refused. |

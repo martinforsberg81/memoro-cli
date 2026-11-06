@@ -33,12 +33,21 @@
  *     mtime, which `compareTree` touches on every reuse — and no dev server
  *     runs in them, through `git worktree remove` in the repository that
  *     owns each one.
- *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when
- *     their programme has no goal that is not finished, judged as (X) judges an
- *     extra worktree. `mc plan` adds them back when it next opens the programme.
- *   - (P) A clean inactive registered goal checkout in `stage: plan` may go
- *     after 72 hours (younger only in pressure); its branch and goal directory
- *     stay, and the runner re-adds the checkout on that branch when activated.
+ *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when no
+ *     planning session of their programme is running (a foreground `mc plan`, a
+ *     runner plan session in flight, or a process standing in the programme's
+ *     directory) and they have been untouched for 72 hours (younger only in
+ *     pressure), judged as (X) judges an extra worktree: nothing uncommitted and
+ *     nothing main lacks. `mc plan` and the runner's plan sessions add them back.
+ *   - (P) A clean inactive registered goal checkout may go after 72 hours
+ *     (younger only in pressure) when its goal cannot start a build or review
+ *     session now: in `stage: plan`, or with `status: Martin`, or in a phase
+ *     above its programme's lowest unfinished phase (`phaseOpen`). A goal with
+ *     `status: blocked` keeps its checkout. Clean means no tracked, untracked
+ *     or ignored entry, except the `node_modules/` dependency link the runner
+ *     attaches (it carries `.memoro-deps.json` and is re-attached at the next
+ *     session); any other ignored entry keeps the checkout. Its branch and goal directory stay,
+ *     and the runner re-adds the checkout on that branch when it next needs it.
  *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
  *     repository's path moved and left it — goes when untouched for a day and no
@@ -64,7 +73,7 @@
  *     removal rechecks ownership, process/open-file evidence and tree identity.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -75,7 +84,7 @@ import { run as runGit } from './git.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
-import { FINISHED, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
+import { currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, parseGoal, phaseOpen, programsGoals } from './goals.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
@@ -83,6 +92,7 @@ import {
 } from './paths.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
+import { ATTACHED_MARK } from './shared-deps.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
@@ -253,15 +263,15 @@ export function gatherTidyFacts({
   try { running = cwds(); } catch { running = null; }
   if (running && (running.length === 0 || running.complete === false)) running = null;
   const tip = pullAtTip || ((wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {}));
+  const plansRunning = runningPlanSessions(roots.root);
   for (const programme of listNames(roots.plan)) {
     const area = join(roots.plan, programme);
-    const active = programmeHasOpenGoal(area);
     for (const name of listNames(area)) {
       const path = join(area, name);
       if (!present(join(path, '.git'))) continue;
       if (PLAN_CHECKOUTS.has(name)) {
         // (I) asks who stands anywhere in the programme's directory: a planning session stands there, not in the checkout.
-        const item = { path, programme, name, active, wt: null, verdict: null, bytes: 0 };
+        const item = { path, programme, name, active: null, wt: null, verdict: null, activity: null, bytes: 0 };
         facts.plan_checkouts.push(item);
         try {
           if (!running) throw new Error('lsof could not say who stands in it');
@@ -269,8 +279,11 @@ export function gatherTidyFacts({
           if (!wt.is_git) throw new Error('not a git worktree');
           item.wt = wt;
           const pids = [...new Set(processesStandingIn([area], { cwds: running }).map((p) => p.pid))];
-          item.verdict = releaseVerdict(wt, { inUse: [...new Set(pids.map(command))], pullAtTip: tip });
-          if (idlePlanCheckout(item).target) item.bytes = treeBytes(path);
+          const names = [...new Set(pids.map(command))];
+          item.verdict = releaseVerdict(wt, { inUse: names, pullAtTip: tip });
+          item.active = names.length ? `in use by ${names.join(', ')}` : plansRunning.get(programme) ?? null;
+          // Weighed and last touched only where the rule might release it: the age is judged by the rule.
+          if (!item.active && item.verdict.remove) { item.activity = newestMtime(path); item.bytes = treeBytes(path); }
         } catch (error) { item.error = message(error); }
         continue;
       }
@@ -500,9 +513,31 @@ export function gatherTidyFacts({
   return facts;
 }
 
+/**
+ * A goal's place in its programme's phases, by the runner's own rule (`phaseOpen`,
+ * over `programsGoals` as the runner reads them): `phase`, the programme's
+ * `current_phase` (its lowest unfinished one) and `phase_open`. Reads GOAL.json
+ * and LOG.md of the programme's goals; no git and no process.
+ */
+function phaseStanding(programs, programme, parsed, cache) {
+  if (!cache.has(programme)) {
+    cache.set(programme, programsGoals({
+      home: programs, list: (path) => (path === programs ? [programme] : listNames(path)), read: readUtf8OrNull,
+    }));
+  }
+  const goals = cache.get(programme);
+  const phase = parsed.phase ?? 1;
+  return { phase, current_phase: currentPhase(goals, programme), phase_open: phaseOpen({ programme, phase }, goals) };
+}
+
+function readUtf8OrNull(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+
 function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command, only = null }) {
   const addError = (path, why) => facts.goal_worktrees.push({ path, error: why, bytes: 0 });
   const programs = roots.plan;
+  const phases = new Map();
   if (basename(programs) !== 'programs') return; // goal worktrees exist only in layout 2.
   let programmes;
   try { programmes = only ? [only.programme] : readdirSync(programs, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
@@ -520,13 +555,13 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
       try { raw = readFileSync(metadataPath, 'utf8'); parsed = parseGoal(raw); }
       catch (error) { addError(dir, `goal metadata unreadable: ${message(error)}`); continue; }
       if (parsed.problems) { addError(dir, `goal metadata invalid: ${parsed.problems.join('; ')}`); continue; }
+      const standing = phaseStanding(programs, programme, parsed, phases);
       for (const repoName of parsed.repos.filter((name) => !only || name === only.repo)) {
         const path = join(dir, repoName);
         if (!present(path)) continue;
-        const item = { path, programme, goal, repo: repoName, metadata: raw, stage: parsed.stage, status: parsed.status, wt: null, bytes: 0 };
+        const item = { path, programme, goal, repo: repoName, metadata: raw, stage: parsed.stage, status: parsed.status, ...standing, wt: null, bytes: 0 };
         facts.goal_worktrees.push(item);
         try {
-          if (parsed.stage !== 'plan') throw new Error(`goal stage is ${parsed.stage}, not plan`);
           if (!running) throw new Error('could not establish live session cwd evidence');
           const repo = repos.find((entry) => entry.name === repoName);
           if (!repo?.path) throw new Error(`owning repository ${repoName} is unknown`);
@@ -544,7 +579,8 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           if (status.trim()) throw new Error('checkout has tracked or untracked changes');
           const ignored = git(path, ['status', '--porcelain', '--ignored=matching', '--untracked-files=all']);
           if (ignored === null) throw new Error('Git could not establish ignored-file state');
-          if (ignored.trim()) throw new Error('checkout contains ignored files');
+          const kept = ignoredBeyondAttachedDeps(path, ignored);
+          if (kept.length) throw new Error(`checkout contains ignored files (${kept.slice(0, 3).map((line) => line.slice(3)).join(', ')}${kept.length > 3 ? ', …' : ''})`);
           const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
           if (own === null || !/^0\s*$/u.test(own)) throw new Error('checkout has commits beyond origin/main or Git could not verify them');
           const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
@@ -566,6 +602,18 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
       }
     }
   }
+}
+
+/**
+ * Ignored entries that keep a goal checkout. The one exception is the
+ * dependency link the runner attaches at every session (`node_modules/`
+ * holding shared-deps.js's ATTACHED_MARK): it is rebuilt from the lockfile
+ * at the next session, so it holds nothing a person made. Anything else
+ * ignored (local databases, build output, .wrangler state) still keeps it.
+ */
+function ignoredBeyondAttachedDeps(path, porcelain) {
+  return porcelain.split('\n').filter((line) => line.trim())
+    .filter((line) => !(line === '!! node_modules/' && existsSync(join(path, 'node_modules', ATTACHED_MARK))));
 }
 
 function goalWorktreeIdentity(path, common) {
@@ -676,20 +724,33 @@ function gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, r
 }
 
 /**
- * Whether a programme has a goal that is not finished: a `goals/<goal>/GOAL.json`
- * whose status is not done or dropped. One that cannot be read or parsed counts
- * as not finished.
+ * The planning sessions running now, by programme: a foreground `mc plan` whose
+ * process lives (`runner/foreground/<pid>.json`), and a runner plan session
+ * whose record names a live session (`runner/current-*.json`, written while the
+ * session runs). A record of a dead process is nothing. The reason says which.
  */
-function programmeHasOpenGoal(area) {
-  const goals = join(area, GOALS_DIR);
-  for (const goal of listNames(goals)) {
-    const file = join(goals, goal, GOAL_FILE);
-    if (!present(file)) continue;
-    let parsed = null;
-    try { parsed = parseGoal(readFileSync(file, 'utf8')); } catch { return true; }
-    if (parsed?.problems || !FINISHED.includes(parsed?.stage)) return true;
+function runningPlanSessions(root) {
+  const running = new Map();
+  const foreground = join(root, 'runner', 'foreground');
+  for (const file of listNames(foreground)) {
+    const held = readJsonOrNull(join(foreground, file));
+    if (held?.verb === 'plan' && typeof held.programme === 'string' && pidAlive(held.pid)) {
+      running.set(held.programme, 'a foreground plan session of it is running');
+    }
   }
-  return false;
+  const runner = join(root, 'runner');
+  for (const file of listNames(runner)) {
+    if (!/^current-.+\.json$/u.test(file)) continue;
+    const record = readJsonOrNull(join(runner, file));
+    if (record?.kind === 'plan' && typeof record.programme === 'string' && pidAlive(record.session_pid ?? record.pid)) {
+      running.set(record.programme, 'a runner plan session of it is running');
+    }
+  }
+  return running;
+}
+
+function readJsonOrNull(path) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 /** The names in a directory; none when it cannot be read. */
@@ -892,14 +953,23 @@ export function planWorktree(item) {
   return { target: true, why: pr ? `#${pr} merged at this tip` : 'its content is on main' };
 }
 
-/** (I) A planning area's own checkout: idle once its programme has no goal that is not finished. */
-export function idlePlanCheckout(item) {
+/**
+ * (I) A planning area's own checkout: released when no planning session of its
+ * programme is running (`item.active` names the one that is) and it has been
+ * untouched for 72 hours, the age waived in a pressure pass. The release verdict
+ * still decides what may go: nothing uncommitted, nothing main lacks.
+ */
+export function idlePlanCheckout(item, { now, pressure = false } = {}) {
   if (item.error) throw new Error(item.error);
-  if (item.active) return { target: false, why: 'its programme has a goal that is not finished' };
+  if (item.active) return { target: false, why: item.active };
   if (!item.verdict?.remove || item.verdict.what !== 'worktree and branch') {
     return { target: false, why: item.verdict?.why || 'not a git worktree' };
   }
-  return { target: true, why: 'its programme has no goal that is not finished; mc plan adds it back' };
+  if (typeof item.activity !== 'number') throw new Error('could not tell when it was last touched');
+  if (!pressure && item.activity >= now - GENERATED_KEEP_MS) return { target: false, why: 'touched within the last 72 hours' };
+  return { target: true, why: pressure
+    ? 'no planning session of its programme is running (pressure pass; age exception); mc plan adds it back'
+    : 'no planning session of its programme is running, untouched for 72 hours; mc plan adds it back' };
 }
 
 /**
@@ -1083,7 +1153,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
 
   // (I) a planning area's own checkouts, then (X) its extra worktrees.
   for (const item of facts.plan_checkouts || []) {
-    const verdict = judge(idlePlanCheckout, item);
+    const verdict = judge(idlePlanCheckout, item, { now: facts.now, pressure });
     if (verdict.target) targets.push({ path: item.path, kind: 'plan-checkout', rule: 'I', why: verdict.why, bytes: item.bytes || 0 });
     else keep(item.path, 'plan-checkout', verdict.why);
   }
@@ -1202,14 +1272,42 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
   return { days, person, targets, kept };
 }
 
+/**
+ * (P) A registered goal checkout that may go: its goal cannot start a build or
+ * review session now (`goalCannotStart`), or it is in `plan` (as before). A
+ * blocked goal keeps its checkout: a plan session is what resolves it.
+ */
 export function planGoalWorktree(item, { now, pressure = false } = {}) {
   if (item.error) return { target: false, why: `error: ${item.error}` };
-  if (item.stage !== 'plan') return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not plan` };
   if (!item.wt) return { target: false, why: 'error: goal checkout identity could not be established' };
+  const cannot = item.stage === 'plan' ? 'plan' : item.status === 'blocked' ? null : goalCannotStart(item);
+  if (!cannot) {
+    if (FINISHED.includes(item.stage)) return { target: false, why: `goal stage is ${item.stage}, which no session starts on` };
+    if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays for the plan session that resolves it' };
+    return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not plan, and a session can start it` };
+  }
   if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };
+  if (cannot === 'plan') {
+    return { target: true, why: pressure
+      ? 'clean inactive plan goal checkout (pressure pass; age exception)'
+      : 'clean inactive plan goal checkout, untouched for 72 hours' };
+  }
   return { target: true, why: pressure
-    ? 'clean inactive plan goal checkout (pressure pass; age exception)'
-    : 'clean inactive plan goal checkout, untouched for 72 hours' };
+    ? `clean inactive goal checkout, ${cannot} (pressure pass; age exception)`
+    : `clean inactive goal checkout, ${cannot}, untouched for 72 hours` };
+}
+
+/**
+ * Why a goal cannot start a build or review session now, or null. Martin's
+ * goals wait on him; a goal in a phase above its programme's lowest unfinished
+ * one waits for the phases below it (`phaseOpen`, the runner's own rule). A
+ * finished goal is not reached here.
+ */
+function goalCannotStart(item) {
+  if (FINISHED.includes(item.stage)) return null;
+  if (item.status === 'Martin') return 'status Martin, which waits on a person';
+  if (item.phase_open === false) return `phase ${item.phase} is above the programme's lowest unfinished phase ${item.current_phase}`;
+  return null;
 }
 
 /* ------------------------------------------------------------ executing */
