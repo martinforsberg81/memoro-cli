@@ -300,18 +300,21 @@ The build cache is never pruned (§ Docker): no `builder prune`, no `system
 prune`, no cap. A pass that ends below 30 GB — exhausted, no progress, failed
 — sets `cooldown_until` five minutes ahead, persisted, so a restart does not
 repeat it; a healthy reading clears it and the pressure state. Passes are
-single-flight in a policy instance. Cleanup and admissions share a persisted
-lease taken under a strict runner lock: lock failure refuses new work. A live
-holder excludes other instances, including ones with the same pid, without
-an age-based takeover. Only a dead holder is replaced. An admission keeps
-the lease through allocation and the synchronous spawn boundary, not the
-lifetime of the work. Competing callers defer and remeasure on retry.
+single-flight in a policy instance. Cleanup and admissions use separate
+persisted leases (`lease` and `admission_lease`) taken under a strict runner
+lock: lock failure refuses new work. Cleanup never blocks a new session when
+at least 20 GB is available. Each lease excludes other holders of its own
+kind, including ones with the same pid, without an age-based takeover. Only
+a dead holder is replaced. An admission keeps its lease through allocation
+and the synchronous spawn boundary, not the lifetime of the work. Competing
+admissions defer and remeasure on retry. Below 20 GB, a pending cleanup does
+not admit work; the next attempt measures available space again.
 
 A person's `mc tidy --docker --apply` is recovery and may start the runtime
 under pressure; nothing else starts one to inspect or to clean.
 
 **What it writes.** `~/mc/runner/disk-pressure.json`: `{ status, available_bytes,
-volume, policy, cooldown_until, cooldown_why, lease, last_cleanup,
+volume, policy, cooldown_until, cooldown_why, lease, admission_lease, last_cleanup,
 shortfall_bytes, last_refusal }`. `~/mc/runner/disk-pressure-events.json`: the
 newest 100 events (`EVENTS_KEEP`), each `{ at, volume, trigger, before_bytes,
 after_bytes, measured_delta_bytes, estimate_bytes, steps: [{ name, ok,
