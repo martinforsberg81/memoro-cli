@@ -1,5 +1,6 @@
 /** Repository-specific operational views; a port is an address, never a PR cell. */
 import { mergeFailureSummary } from './merge-red.js';
+import { deployBar } from './deploy-progress.js';
 import { width } from './status-render.js';
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
@@ -126,10 +127,10 @@ export function mergesLines(lines, c, wide, merges, expand) {
     for (const item of active) {
       const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
       const label = `merging ${refs}`;
-      const status = [mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
+      const status = [item.state || 'unknown', item.progress, item.pid && `pid ${item.pid}`].filter(Boolean).join(' · ');
       operationFrame(lines, c, wide, 'green', (body, room) => {
-        detail(body, c, room, 6, `${label}${item.pid ? ` · pid ${item.pid}` : ''}`);
-        detail(body, c, room, 6, status);
+        detail(body, c, room, 6, `${label} · ${status}`);
+        detail(body, c, room, 6, `${mergeBar(item.phase ? item.state : null)} · ${item.phase || 'progress unknown'}`);
         if (item.batch_of) detail(body, c, room, 6, `with #${item.batch_of}`);
         if (expand) {
           detail(body, c, room, 6, item.name || item.title || '');
@@ -179,10 +180,14 @@ export function deployLines(lines, c, wide, production, expand) {
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
     operationFrame(lines, c, wide, p.running?.late || state === 'refused' ? 'yellow' : state === 'failed' ? 'red' : p.running ? 'green' : 'grey', (body, room) => {
-      detail(body, c, room, 6, `ATTEMPT   ${attempt.short || 'unknown'} · ${age(attempt.age_seconds)}${attempt.pid ? ` · pid ${attempt.pid}` : ''}`);
-      detail(body, c, room, 6, [state, attempt.stopped_at,
-        p.running && !p.running.late && !attempt.stopped_at ? 'progress unknown' : ''].filter(Boolean).join(' · '),
-      state === 'failed' ? ['red'] : ['grey']);
+      const identity = `ATTEMPT   ${attempt.short || 'unknown'} · ${state}`;
+      const pid = attempt.pid ? ` · pid ${attempt.pid}` : '';
+      const header = `${identity} · ${age(attempt.age_seconds)}${pid}`;
+      detail(body, c, room, 6, width(header) <= room - 6 ? header : `${identity}${pid}`);
+      const progress = p.progress;
+      const step = state === 'deployed' ? 'complete' : attempt.stopped_at || progress?.step || 'progress unknown';
+      detail(body, c, room, 6, `${deployBar(progress?.stage, state)} · ${step}`,
+        state === 'failed' ? ['red'] : ['grey']);
     });
   }
   if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');

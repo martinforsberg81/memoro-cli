@@ -54,6 +54,7 @@ import {
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
+import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
@@ -174,7 +175,7 @@ function sameCommit(a, b) {
  * about production, and a line saying "unknown" is worse than no line.
  */
 export function productionSection({
-  deploy = null, attempt = null, live = null, now = new Date(), alive = pidAlive,
+  deploy = null, attempt = null, live = null, progress = null, now = new Date(), alive = pidAlive,
 } = {}) {
   // Keep the first attempt even when it failed or was refused before any
   // successful deployment or production reading.
@@ -224,6 +225,7 @@ export function productionSection({
     // was a mismatch.
     differs: Boolean(live?.commit && deploy?.sha && !sameCommit(live.commit, deploy.sha)),
     running,
+    progress,
     failed: since?.outcome === 'failed' ? attemptState(since) : null,
     attempt: attempt ? { ...attemptState(attempt), outcome: attempt.outcome } : null,
   };
@@ -233,7 +235,7 @@ export function runnerSection({
   runner = null, currents = [], stop = false, rows = [],
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
-  deploy = null, attempt = null, live = null, repos = REPO_NAMES,
+  deploy = null, attempt = null, live = null, progress = null, repos = REPO_NAMES,
   // What `mc run lanes` set: how many sessions run at once, across every
   // repository. The rows are one per lane, so the page needs the number.
   lanes: setting = { lanes: DEFAULT_LANES },
@@ -286,7 +288,7 @@ export function runnerSection({
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
-    production: productionSection({ deploy, attempt, live, now, alive }),
+    production: productionSection({ deploy, attempt, live, progress, now, alive }),
     day: {
       ...summariseRuns(rows),
       by_kind: dayByKind(rows),
@@ -1446,6 +1448,7 @@ export async function collectPage({
   const laneSetting = laneCount({ root: home, repos: present.length });
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
   const currents = readCurrents(join(root, 'runner'));
+  const deployAttempt = lastAttempt(env);
   const runner = runnerSection({
     runner: runnerFile,
     currents,
@@ -1460,10 +1463,11 @@ export async function collectPage({
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
     memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
     pressure: diskSummary({ path: runnerScratchDir(env), stateDir: join(root, 'runner'), read: (path) => readText(path), freeBytes: diskFreeBytes, nowMs: now.getTime() }),
-    // Three file reads, no network: the record `mc deploy` wrote and the
-    // version the helper's last collect cached.
+    // Local records only: deployment, its matching progress snapshot, and
+    // the version the helper's last collect cached.
     deploy: lastDeploy(env),
-    attempt: lastAttempt(env),
+    attempt: deployAttempt,
+    progress: readDeployProgress(deployAttempt, env),
     live: readLiveVersion(env, now),
     now,
     alive,

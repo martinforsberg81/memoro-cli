@@ -73,6 +73,7 @@ import {
   runningDeploy,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
+import { deployProgress } from '../deploy-progress.js';
 import { mcDiskPressure } from '../disk-admission.js';
 import { POLL_MS as DISK_POLL_MS } from '../disk-pressure.js';
 import { BUILD_LANE, releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
@@ -827,10 +828,13 @@ export async function ship(job, deps = {}) {
   const env = deps.env || process.env;
   const git = deps.git || tryGit;
   const { key, sha, worktree, own } = job;
+  const progress = deployProgress(job, { env });
   let tail = '';
   let holding = false;
   try {
+    progress.report('waiting', 'Waiting for deployment lane');
     holding = await holdBuildLane(job, { ...deps, stdout });
+    progress.report('prepare', 'Preparing deploy worktree');
     // The one movement of somebody else's checkout this verb may make.
     // `origin/main` is what ships — whatever is on `main` is meant to — so it
     // is fast-forwarded to `origin/main` as it is now, which may be later than
@@ -886,6 +890,7 @@ export async function ship(job, deps = {}) {
     const disk = deps.disk !== undefined ? deps.disk : (deps.spawnDeploy ? null : mcDiskPressure({ env, say: (line) => stdout.write(`mc: ${line}\n`) }));
     let diskAdmission;
     if (disk) {
+      progress.report('prepare', 'Checking disk capacity');
       const admitted = diskAdmission = await disk.admit({ trigger: 'deploy', what: 'the deploy script', hold: true });
       if (!admitted.admitted) {
         recordEnd(key, { outcome: FAILED, stopped_at: 'disk', note: `mc: ${admitted.line}` }, env);
@@ -895,6 +900,7 @@ export async function ship(job, deps = {}) {
     }
     const onOutput = (chunk) => {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
+      progress.output(chunk);
     };
     // While the script runs, the disk is read every minute even with no
     // runner, and a pressure pass starts below 30 GB. The deploy is never
@@ -903,6 +909,7 @@ export async function ship(job, deps = {}) {
     const stopMonitor = disk ? every(DISK_POLL_MS, () => disk.poll({ trigger: 'deploy-monitor' }).catch(() => null)) : null;
     let result;
     try {
+      progress.report('prepare', 'Starting deploy script');
       const pending = spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
       diskAdmission?.release?.();
       result = await pending;

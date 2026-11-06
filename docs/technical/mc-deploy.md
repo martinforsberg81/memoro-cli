@@ -2,8 +2,8 @@
 
 `mc deploy` is the verb a person types to put memoro's `main` in production, the
 way `mc merge` is the verb that puts a pull request on `main`. It is not a
-deploy tool. memoro's own `npm run deploy` — `scripts/deploy.mjs`, 820 lines and
-seventeen steps ending in *Verify live version* — is the deploy, and this verb
+deploy tool. memoro's own `npm run deploy` — `scripts/deploy.mjs`, ending in
+*Verify live version* — is the deploy, and this verb
 reimplements no part of it, passes it no flag it does not already take, and does
 not edit it.
 
@@ -291,7 +291,7 @@ way*.
 
 The spawn pipes stdout and stderr and echoes every chunk straight on, rather than
 inheriting them, so the row can say what happened while the person still watches
-the seventeen steps as they happen. Four lines are matched, after the colours are
+the steps as they happen. Four lines are matched, after the colours are
 stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04:
 
 | line | where | what it fills |
@@ -307,6 +307,29 @@ must never be recorded as a failure because mc could not parse the banner it
 printed**, so a line that is not there is an empty cell and the exit code alone
 decides the outcome.
 
+The deployer also publishes complete `▸ <label>` lines as they arrive in
+`runner/log/deploy-progress.json`. Split UTF-8 and colour sequences are buffered
+until the line is complete; noisy output never displaces the last observed
+step. Each atomic snapshot names the attempt's start time and deployer pid.
+The page accepts it only when both match its latest deployment record.
+
+The progress bar groups the current script's steps by phase:
+
+| Phase | Script steps |
+|---|---|
+| Prepare `[●···]` | Source, dependency, Wrangler auth/API and pending-migration preflights; container image pins |
+| Build `[━●··]` | Ajv validators, CSS, assistant 3D avatar runtime, public-page pre-rendering, app bundle/shell and retaining the previous generation |
+| Publish `[━━●·]` | Post-build git preflight, version and service-worker stamps, reviewed language grammar, main Worker deployment, optional after-build migrations and tail-worker deployment |
+| Verify `[━━━●]` | Verify live version |
+
+Before the script starts, the same snapshot shows waiting for the deployment
+lane, preparing the worktree, checking disk capacity or starting the script.
+The empty bar `[····]` means waiting or an unknown phase. An unfamiliar script
+step is still shown by its actual label, with no guessed position. `[━━━━]`
+requires a successful deployment record, never merely reaching verification.
+The bar marks phases rather than time or a percentage; optional migrations
+and retries therefore do not distort an estimated total.
+
 The cost of piping is that the child sees a pipe and not a terminal, so a tool
 inside the deploy that draws a progress bar only for a TTY prints plain lines
 instead. stdin stays inherited: `deploy.mjs` asks nothing, but wrangler's own
@@ -316,9 +339,8 @@ login flow might. If that ever matters, the fix is a pty, not a smaller record.
 
 Three readers, and they agree because they read the same row.
 
-- **The page** — one line in the RUNNER block, `production <sha> · deployed
-  <age> ago by <holder>`, drawn by `productionLine` in
-  [`src/mc/page-render.js`](../../src/mc/page-render.js) from `productionSection`
+- **The page** — the DEPLOY frame in MERGE & DEPLOY, drawn by `deployLines` in
+  [`src/mc/page-operations.js`](../../src/mc/page-operations.js) from `productionSection`
   in [`src/mc/page-collect.js`](../../src/mc/page-collect.js). It also draws a
   deploy running now, a deploy that failed after the last good one with the step
   it stopped at, and — when the two sources disagree — the difference, in yellow.

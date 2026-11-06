@@ -23,6 +23,7 @@ import {
   worktreeState,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
+import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
 import { startRun } from '../../../src/mc/language-runs.js';
@@ -714,6 +715,69 @@ describe('mc deploy — the question', () => {
 });
 
 describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
+  it('publishes observed script steps while the deploy runs, retaining progress through noisy output', async () => {
+    const env = { MC_WORK_ROOT: work };
+    const { stdout, stderr } = io();
+    const observed = [];
+    let rounds = 0;
+    let waited = false;
+    const code = await run([], {
+      ...deps({
+        runningRound: () => rounds++ === 0 ? { repo: 'memoro', pr: 42, pid: 99 } : null,
+        readMerger: () => null,
+        sleep: async () => {
+          waited = true;
+          assert.equal(readDeployProgress(lastAttempt(env), env)?.stage, 'waiting');
+        },
+        spawnDeploy: async ({ onOutput }) => {
+          const current = () => readDeployProgress(lastAttempt(env), env);
+          observed.push(current()?.stage);
+          for (const [step, stage] of [
+            ['Container image pins', 'prepare'],
+            ['Build the app bundle and shell', 'build'],
+            ['wrangler deploy', 'publish'],
+            ['Apply migrations after the build', 'publish'],
+            ['wrangler deploy (tail-worker)', 'publish'],
+            ['Verify live version', 'verify'],
+          ]) {
+            const bytes = Buffer.from(stepLine(step));
+            // Including a split inside ▸ and its ANSI prefix.
+            for (let i = 0; i < bytes.length; i += 2) onOutput(bytes.subarray(i, i + 2));
+            assert.equal(current()?.step, step);
+            assert.equal(current()?.stage, stage);
+            onOutput('bundle details '.repeat(30_000) + '\n');
+            assert.equal(current()?.step, step, 'verbose tool output must not replace the step');
+            observed.push(current()?.stage);
+          }
+          return { code: 0 };
+        },
+      }), stdout, stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(waited, true);
+    assert.deepEqual(observed, ['prepare', 'prepare', 'build', 'publish', 'publish', 'publish', 'verify']);
+  });
+
+  it('binds progress to the attempt and pid, leaving unknown script stages unestimated', () => {
+    const env = { MC_WORK_ROOT: work };
+    const row = { started: '2026-11-06T10:00:00Z', pid: String(process.pid) };
+    assert.equal(readDeployProgress(row, env), null);
+    const progress = deployProgress({ key: row, root: work }, { env });
+    progress.report('waiting', 'Waiting for deployment lane');
+    assert.equal(readDeployProgress(row, env).stage, 'waiting');
+    assert.equal(readDeployProgress({ ...row, started: 'next attempt' }, env), null);
+    assert.equal(readDeployProgress({ ...row, pid: String(process.pid + 1) }, env), null);
+    progress.output('▸ A new deploy step\n');
+    const current = readDeployProgress(row, env);
+    assert.equal(current.step, 'A new deploy step');
+    assert.equal(current.stage, null);
+    assert.equal(deployBar(current.stage), '[····]');
+    assert.deepEqual(['prepare', 'build', 'publish', 'verify'].map((stage) => deployBar(stage)),
+      ['[●···]', '[━●··]', '[━━●·]', '[━━━●]']);
+    assert.equal(deployBar('verify', 'failed'), '[━━━●]');
+    assert.equal(deployBar('verify', 'deployed'), '[━━━━]');
+  });
+
   it('runs npm run deploy in the worktree that is main, with the environment, the row written first naming the deployer', async () => {
     const { stdout, stderr } = io();
     const seen = [];
