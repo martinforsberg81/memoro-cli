@@ -436,8 +436,10 @@ export function sessionsSection({
     .filter((item) => alive(item.pid))
     .map((item) => ({ ...item, age_seconds: age(item.started), owner: ownerOf(item) }));
 
-  const desks = {};
-  for (const verb of DESKS) desks[verb] = open.find((item) => item.owner?.kind === 'desk' && item.owner.name === verb) || null;
+  const deskSessions = Object.fromEntries(DESKS.map((verb) => [verb,
+    open.filter((item) => item.owner?.kind === 'desk' && item.owner.name === verb),
+  ]));
+  const desks = Object.fromEntries(DESKS.map((verb) => [verb, deskSessions[verb][0] || null]));
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
   // that programme's own heading — which is the whole reason `mc plan` puts
@@ -476,6 +478,7 @@ export function sessionsSection({
   const owned = open.filter((item) => item.owner);
   return {
     desks,
+    desk_sessions: deskSessions,
     planning,
     planning_sessions: planningSessions,
     programme_sessions: programmeSessions,
@@ -1088,9 +1091,16 @@ function phaseSection(goals) {
  */
 export function programmesSection({
   planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
-  strays = [], sessionStrays = [], priority = () => 0,
+  strays = [], sessionStrays = [], runnerSessions = [], priority = () => 0,
 } = {}) {
 
+  const runnerPlanning = {};
+  for (const session of runnerSessions) {
+    // Programme turns have a plan: identity; goal recovery keeps its goal identity.
+    if (session.kind !== 'plan' || !session.name?.startsWith('plan:')) continue;
+    const programme = session.programme || session.name.slice('plan:'.length);
+    if (programme) (runnerPlanning[programme] ||= []).push(session);
+  }
   const goalList = goalRows.map((goal) => ({ ...goal }))
     .sort((a, b) => String(a.programme).localeCompare(String(b.programme)) || a.name.localeCompare(b.name));
   let number = 0;
@@ -1103,6 +1113,7 @@ export function programmesSection({
   const names = [...new Set([
     ...Object.keys(planning),
     ...Object.keys(planningSessions),
+    ...Object.keys(runnerPlanning),
     ...Object.keys(programmeSessions),
     ...goalList.map((goal) => goal.programme),
     ...programmes,
@@ -1122,7 +1133,7 @@ export function programmesSection({
       proposals: proposalCounts[name] || 0,
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
-      planning_sessions: planningSessions[name] || (planning[name] ? [planning[name]] : []),
+      planning_sessions: [...(planningSessions[name] || (planning[name] ? [planning[name]] : [])), ...(runnerPlanning[name] || [])],
       // The programme's other sessions, somebody's open in one of its rooms.
       sessions: programmeSessions[name] || [],
       statuses: statusesOf(goals),
@@ -1333,6 +1344,7 @@ export function readProgrammes({
   const root = workRoot(env);
   const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
   const sessions = sessionsSection({ foreground: readForeground(join(root, 'runner', 'foreground')), now, alive });
+  const currents = readCurrents(join(root, 'runner'));
   // Which repository's tree each programme is a directory in: the one fact a
   // programme with no goal has about where it lives.
   const homes = {};
@@ -1342,7 +1354,8 @@ export function readProgrammes({
   const section = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
-    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents: readCurrents(join(root, 'runner')), alive }),
+    runnerSessions: runnerSection({ currents, now, alive }).sessions,
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
     programmes: Object.keys(homes),
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
@@ -1504,6 +1517,7 @@ export async function collectPage({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     programmeSessions: sessions.programme_sessions,
+    runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),

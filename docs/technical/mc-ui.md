@@ -78,8 +78,14 @@ with no matching goal appears under UNASSIGNED ACTIVITY, including its name
 and PR references, so removing SESSIONS cannot hide it. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
 
-Foreground plan/programme sessions appear directly below their programme
-heading, including programmes that otherwise count as dormant. Quiet dormant
+Foreground plan/programme sessions and runner programme planning turns appear
+directly below their programme heading, including programmes that otherwise
+count as dormant. Programme turns show their trigger (for example
+`daily_proposals`) and omit the redundant `plan:<programme>` location.
+Goal recovery still appears under its goal, or as unassigned activity when the
+goal is missing. Each open Manager session has its own rounded activity frame
+directly below the hero, with its trigger when recorded; the hero keeps the
+`mc manager` entry point. Quiet dormant
 programmes fold into a single count; `a` shows every programme. The collector's
 active/dormant classification and full JSON listing remain unchanged.
 
