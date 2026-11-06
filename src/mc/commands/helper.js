@@ -47,10 +47,16 @@ export function usage() {
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
 export const ROUTES = {
   '': {
-    booleans: ['--intake', '--collect', '--new'],
+    booleans: ['--intake', '--collect', '--new', '--resume'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
-    check: ({ positional }) => (positional.length ? `unknown argument ${positional[0]}` : null),
+    check: ({ flags, positional }) => {
+      if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;
+      if (flags.resume && flags.new) return '--resume and --new cannot be combined';
+      if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
+      if (flags.resume && (flags.intake || flags.collect)) return '--resume requires an interactive session';
+      return null;
+    },
   },
 };
 
@@ -64,11 +70,11 @@ export async function run(argv, deps = {}) {
     stderr.write(USAGE);
     return 2;
   }
-  const { flags } = scanned;
+  const { flags, positional } = scanned;
 
   // The desk. `--collect` still reaches the digest on its own, because it
   // always has and a script that says it wants only the file means it.
-  if (!flags.intake && !flags.collect) return openDesk({ flags, stdout, stderr, deps });
+  if (!flags.intake && !flags.collect) return openDesk({ flags, resume: flags.resume ? positional[0] || true : null, stdout, stderr, deps });
 
   const since = parseSince(flags.since);
   if (flags.since && !since) {
@@ -165,7 +171,7 @@ export async function run(argv, deps = {}) {
  * The directories are made here rather than by the session: a session told to
  * write into a path that does not exist has one avoidable way to fail.
  */
-async function openDesk({ flags, stdout, stderr, deps }) {
+async function openDesk({ flags, resume, stdout, stderr, deps }) {
   const stray = DIGEST_FLAGS.filter((name) => flags[name.slice(2)] !== null);
   if (stray.length) {
     stderr.write(`mc: ${stray[0]} is the digest's flag — say mc helper --intake ${stray[0]} …\n`);
@@ -194,7 +200,10 @@ async function openDesk({ flags, stdout, stderr, deps }) {
     areaRoot: dir,
     worktree: { repo: null, path: dir, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
-    pick: flags.new ? 'new' : null,
+    pick: flags.new ? 'new' : resume,
+    resumeTool: flags.tool,
+    stdout,
+    stderr,
     // NOW says "mc helper" while this is up. Its room is nobody's workarea,
     // so there is no area name to give it.
     verb: 'helper',

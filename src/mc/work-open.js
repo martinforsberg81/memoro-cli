@@ -7,9 +7,10 @@
  * remembering it. Nothing is written here. There is no runtime host, no
  * journal, no generation: the tool inherits this terminal and mc waits.
  *
- * What the second word means, when there is one:
+ * Conversation selection (`pick`):
  *   (nothing)   the most recent conversation here, or a new one if there is none
  *   new         a new one regardless
+ *   true        choose from compatible conversations
  *   <id prefix> that one, as the conversation picker shows it
  *
  * `prompt` is the conversation's opening words, given to a new conversation
@@ -22,6 +23,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
+import { interactive, select } from './prompt.js';
 import { resolveLaunch } from '../adapters/index.js';
 import { SESSION_IDENTITY_ENV, normalizeSessionRole, sessionLaunchEnvironment } from './session-role.js';
 import { conversationIdentityReader, conversationModel, launchIdentityMarker, listConversations } from './conversations.js';
@@ -44,6 +46,10 @@ export async function openInWorkArea({
   worktree,
   tool = null,
   pick = null,
+  resumeTool = null,
+  choose = select,
+  isInteractive = interactive,
+  stdout = process.stdout,
   model = null,
   overlay = null,
   prompt = null,
@@ -78,8 +84,10 @@ export async function openInWorkArea({
   // A named conversation decides its own tool: asking for one by id and being
   // given a different tool's conversation would be a worse answer than either.
   let chosen = null;
-  if (pick && pick !== 'new') {
-    chosen = before.find((item) => item.id.startsWith(pick)) || null;
+  if (typeof pick === 'string' && pick !== 'new') {
+    const matches = before.filter((item) => item.id.startsWith(pick));
+    if (matches.length > 1) return { ok: false, reason: `ambiguous conversation prefix ${pick}; use a longer id` };
+    chosen = matches[0] || null;
     if (!chosen) return { ok: false, reason: `no conversation here starting with ${pick}` };
   }
 
@@ -100,6 +108,23 @@ export async function openInWorkArea({
     return `requested role=${requestedRole || 'unknown'} programme=${requestedProgramme || 'none'}; `
       + `identified role=${identity?.role || 'unknown'} programme=${identity ? identity.programme || 'none' : 'unknown'}`;
   };
+  if (pick === true) {
+    const candidates = before.filter((item) => (!resumeTool || item.tool === (resumeTool === 'claude' ? 'claude-code' : resumeTool))
+      && (!guarded || compatible(identify(item))));
+    if (!candidates.length) return { ok: false, reason: 'no compatible conversation here to resume' };
+    const items = candidates.map((item, index) => ({
+      key: index + 1, name: item.id, value: item.id,
+      label: `${item.id}  ${item.tool}  ${new Date(item.updated_ms || 0).toISOString()}  ${String(item.label || '(no title)').replace(/\s+/gu, ' ').slice(0, 160)}`,
+    }));
+    if (!isInteractive(env)) {
+      for (const item of items) stdout.write(`${item.label}\n`);
+      return { ok: false, reason: 'choose a conversation with --resume <id> in a terminal' };
+    }
+    const id = choose('which conversation?', items, { stdout });
+    if (!id) return { ok: true, code: 0, cancelled: true };
+    chosen = candidates.find((item) => item.id === id) || null;
+    if (!chosen) return { ok: false, reason: 'the selected conversation is not available' };
+  }
   if (chosen && guarded) {
     const identity = identify(chosen);
     if (!compatible(identity)) {
@@ -151,6 +176,7 @@ export async function openInWorkArea({
     ? (model || (launch.id === 'codex' ? 'gpt-6.1-sol' : 'opus'))
     : chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
+  if (chosen && !resuming) return { ok: false, reason: `cannot resume a ${toolId} conversation with this adapter` };
   // Claude's append-system-prompt is launch configuration, not transcript
   // history: supply it on compatible resumes too. Codex uses its native
   // developer instruction setting (ordinary resume text cannot replace it).

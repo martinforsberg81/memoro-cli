@@ -35,6 +35,9 @@ import { log, logPath } from './logger.js';
 import { normalizeSessionRole } from './session-role.js';
 
 const HEAD_BYTES = 65536;
+// Native tool definitions can precede developer messages by more than 64 KiB.
+// Keep identity discovery bounded independently of the short label reader.
+const IDENTITY_BYTES = 1024 * 1024;
 
 /**
  * The only name a Claude conversation's own files carry: `<uuid>.jsonl` and,
@@ -301,8 +304,8 @@ function readHeadEntries(path) {
   let fd = null;
   try {
     fd = openSync(path, 'r');
-    const buffer = Buffer.alloc(HEAD_BYTES);
-    const read = readSync(fd, buffer, 0, HEAD_BYTES, 0);
+    const buffer = Buffer.alloc(IDENTITY_BYTES);
+    const read = readSync(fd, buffer, 0, IDENTITY_BYTES, 0);
     return buffer.subarray(0, read).toString('utf8').split('\n').flatMap((line) => {
       try { return [JSON.parse(line)]; } catch { return []; }
     });

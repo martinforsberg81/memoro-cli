@@ -10,7 +10,7 @@
  * written and read back.
  */
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -1459,16 +1459,15 @@ describe('a deploy that was stopped', () => {
     // A script that does what deploy.mjs does on a signal: say so, then exit
     // 130. Were mc to die with the signal, nothing would read that summary.
     const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-signal-'));
-    // A shell script rather than a second node, which npm's start already costs.
+    // The real npm invocation/tee is covered above. At this boundary use a
+    // real direct child to prove OS signal delivery, waiting and pipe draining
+    // without npm startup or an intermediate command shell orphaning the trap.
     writeFileSync(join(dir, 'script.sh'), [
       "trap 'echo \"✗ Deploy failed\"; echo \"Production unchanged\"; exit 130' TERM",
       'echo ready',
       'while :; do sleep 0.05; done',
       '',
     ].join('\n'));
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({
-      name: 'not-really-memoro', private: true, scripts: { deploy: 'sh script.sh' },
-    }));
     const signals = new EventEmitter();
     let captured = '';
     const { out, stdout, stderr } = io();
@@ -1476,6 +1475,14 @@ describe('a deploy that was stopped', () => {
       cwd: dir,
       env: process.env,
       signals,
+      spawnProcess: (command, args, options) => {
+        assert.equal(command, 'npm');
+        assert.deepEqual(args, ['run', 'deploy']);
+        assert.equal(options.cwd, dir);
+        assert.equal(options.env, process.env);
+        assert.deepEqual(options.stdio, ['inherit', 'pipe', 'pipe']);
+        return spawn('sh', ['script.sh'], options);
+      },
       stdout,
       stderr,
       onOutput: (chunk) => {
