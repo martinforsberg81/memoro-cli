@@ -171,26 +171,26 @@ export function deployLines(lines, c, wide, production, expand) {
   detail(lines, c, wide, 4, 'DEPLOY · memoro · mc deploy', ['orange', 'bold']);
   const p = production || {};
   operation(lines, c, wide, 'LIVE', p.live
-    ? `${p.live.short || p.live.commit || 'unknown'} · observed ${age(p.live.age_seconds)}`
+    ? `${p.live.short || p.live.commit || 'unknown'} · ${p.live.source === 'deploy' ? 'verified by deploy' : 'observed'} ${age(p.live.age_seconds)}`
     : 'unknown · no version reading', p.differs ? ['yellow'] : []);
   operation(lines, c, wide, 'RECORDED', p.sha
     ? `${p.short} · deployed ${age(p.age_seconds)}`
     : 'none');
-  const attempt = p.running || p.failed || p.attempt;
+  const attempt = p.running || p.failed || (p.attempt?.outcome === 'deployed' ? null : p.attempt);
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
     operationFrame(lines, c, wide, p.running?.late || state === 'refused' ? 'yellow' : state === 'failed' ? 'red' : p.running ? 'green' : 'grey', (body, room) => {
       const identity = `ATTEMPT   ${attempt.short || 'unknown'} · ${state}`;
-      const pid = attempt.pid ? ` · pid ${attempt.pid}` : '';
+      const pid = p.running && !p.running.late && attempt.pid ? ` · pid ${attempt.pid}` : '';
       const header = `${identity} · ${age(attempt.age_seconds)}${pid}`;
       detail(body, c, room, 6, width(header) <= room - 6 ? header : `${identity}${pid}`);
       const progress = p.progress;
-      const step = state === 'deployed' ? 'complete' : attempt.stopped_at || progress?.step || 'progress unknown';
+      const step = attempt.stopped_at || progress?.step || 'progress unknown';
       detail(body, c, room, 6, `${deployBar(progress?.stage, state)} · ${step}`,
         state === 'failed' ? ['red'] : ['grey']);
     });
   }
-  if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');
+  if (!attempt) operation(lines, c, wide, 'idle', 'no deploy running');
   if (p.differs) detail(lines, c, wide, 4, 'version mismatch · live and recorded commits differ', ['yellow']);
   if (expand) {
     if (p.build) detail(lines, c, wide, 4, `recorded build ${p.build}${p.at ? ` · ${p.at}` : ''}`);

@@ -467,6 +467,47 @@ describe('DEPLOY', () => {
     assert.doesNotMatch(strip(line()), /martin@laptop/u);
   });
 
+  it('removes successful deploy frames and shows pids only for a live attempt', () => {
+    const done = { ...DEPLOYED, pid: '84970' };
+    const text = strip(line({ deploy: done, attempt: done }));
+    assert.match(text, /RECORDED +1a2b3c4/u);
+    assert.equal(text.includes('ATTEMPT'), false);
+    assert.equal(text.includes('pid 84970'), false);
+    assert.equal(text.includes('[━━━━]'), false);
+    const failed = { ...done, sha: OTHER, outcome: 'failed', stopped_at: 'wrangler deploy' };
+    const red = line({ attempt: failed });
+    assert.match(strip(red), /ATTEMPT +b3e65b6 · failed/u);
+    assert.match(strip(red), /wrangler deploy/u);
+    assert.match(rowWith(red.split('\n'), '╭'), /\x1b\[31m/u);
+    assert.doesNotMatch(strip(red), /pid 84970/u);
+    const running = { ...failed, outcome: 'running', ended: '', stopped_at: '' };
+    assert.match(strip(line({ attempt: running, alive: () => true })), /pid 84970/u);
+    assert.doesNotMatch(strip(line({ attempt: running, alive: () => false })), /pid 84970/u);
+    assert.doesNotMatch(strip(line({ deploy: done, attempt: done })), /ATTEMPT/u);
+  });
+
+  it('uses deploy verification when the cached version predates the deploy, preserving later mismatch evidence', () => {
+    const stale = version(OTHER, 4 * 3600);
+    const p = section({ live: stale });
+    assert.equal(p.live.commit, SHA);
+    assert.equal(p.live.build, '813');
+    assert.equal(p.live.source, 'deploy');
+    assert.equal(p.differs, false);
+    assert.doesNotMatch(strip(line({ live: stale })), /version mismatch/u);
+    assert.match(strip(line({ live: stale })), /LIVE +1a2b3c4 · verified by deploy/u);
+    assert.equal(section({ live: null }).live.commit, SHA);
+    // A cache read during or after the deploy may be newer than its actual
+    // live verification. End time alone cannot establish their order.
+    for (const ageSeconds of [3600, 2 * 3600 + 10 * 60]) {
+      const newer = section({ live: version(OTHER, ageSeconds) });
+      assert.equal(newer.live.commit, OTHER);
+      assert.equal(newer.differs, true);
+    }
+    const unverified = { ...DEPLOYED, live_commit: '', live_build: '' };
+    assert.equal(section({ deploy: unverified, attempt: unverified, live: stale }).live.commit, OTHER);
+    assert.equal(section({ deploy: unverified, attempt: unverified, live: stale }).differs, true);
+  });
+
   /**
    * The two readings are the same commit at different lengths — `deploys.tsv`
    * writes the whole 40 characters and `/api/version` answers 7 — and `!==`

@@ -294,11 +294,20 @@ starts on the second row and wraps across the frame's full width. Deploy age
 gives way on a narrow terminal so pid and status stay together. Deployment stays
 visible in MERGE & DEPLOY while the page continues to accept commands.
 
+A successful deploy removes its attempt frame. Failed attempts remain red with
+their stop reason; only a running attempt whose process is alive shows a pid.
+Completed pids remain in the diagnostic record, not as active page state.
+LIVE uses a deploy's recorded live verification when the cached version read
+predates that deploy's start, labelled `verified by deploy`. Cache readings
+during or after the deploy remain independent evidence: end time cannot prove
+which verification came later, so a differing version still warns. A deployment
+with no recorded live verification cannot replace the cached reading.
+
 Deploy progress comes from the script's actual `▸ <step>` output, published by
 the deployer in `runner/log/deploy-progress.json`, matched to the attempt's
 start time and pid. Its bar marks preparation `[●···]`, building `[━●··]`,
-publishing `[━━●·]`, and verification `[━━━●]`; `[━━━━]` requires a successful
-deployment record. Waiting, unknown steps and missing/old snapshots have an
+publishing `[━━●·]`, and verification `[━━━●]`. Success removes the frame.
+Waiting, unknown steps and missing/old snapshots have an
 empty bar. This shows phases, not elapsed-time percentages. Noise and retries
 retain the last observed step; an unfamiliar step is shown without guessing
 its phase. Like the rest of the page, progress refreshes every 30 seconds or
