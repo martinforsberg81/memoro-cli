@@ -332,56 +332,6 @@ const PR_NUMBER = 7;
 /** The repository's cell on a PULL REQUESTS row. */
 const LANE_REPO = 11;
 
-/** A language reading older than this is one worth taking again. */
-export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
-
-/** A language run's outcome, one colour each: what stopped waits on a person. */
-const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
-
-/**
- * LANGUAGE — what `mc language` last read and last ran, inside MERGE & DEPLOY
- * because it is the other door to production. Only the languages with
- * something to say are drawn — unresolved selectors, rows waiting, a reading a
- * week old — and the last run rides on the heading. With neither the section
- * is not drawn at all: the empty page gains no line.
- */
-function languageLines(lines, c, wide, language, at) {
-  const ageOf = (iso) => {
-    const ms = at - Date.parse(iso);
-    return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : null;
-  };
-  const rows = (language?.languages || []).map((entry) => {
-    const age = entry.read_at ? ageOf(entry.read_at) : null;
-    const stale = age === null || age >= LANGUAGE_STALE_S;
-    const parts = [];
-    if (entry.unresolved) parts.push({ text: `${entry.unresolved} unresolved selector${entry.unresolved === 1 ? '' : 's'}`, styles: ['yellow'] });
-    if (entry.waiting_rows) parts.push({ text: `${entry.waiting_rows} rows waiting · mc language promote`, styles: ['yellow'] });
-    if (!parts.length && !stale) return null;
-    parts.push({ text: entry.read_at ? `read ${ageWords(age)} ago` : 'never read', styles: stale ? ['yellow'] : ['grey'] });
-    return { lang: entry.lang, parts };
-  }).filter(Boolean);
-  const last = language?.last_run;
-  if (!rows.length && !last) return false;
-  const counts = last
-    ? [
-      { text: `last run ${last.manifest}${last.dry_run ? ' (dry run)' : ''} · ` },
-      { text: last.outcome, styles: RUN_TONE[last.outcome] || ['grey'] },
-      { text: ` · ${ageWords(ageOf(last.ended || last.started))} ago`, styles: ['grey'] },
-    ]
-    : 'no run recorded';
-  if (Array.isArray(counts) && width(paint(c, counts)) + 29 > wide) {
-    heading(lines, c, wide, 'LANGUAGE', null, 'mc language');
-    wrappedParts(lines, c, wide, 4, counts.map(part => ({ ...part, text: part.text.replace(/^ · | · $/gu, '') })));
-  } else heading(lines, c, wide, 'LANGUAGE', counts, 'mc language');
-  for (const { lang, parts } of rows) {
-    const left = `    ${c(pad(lang, 4), 'bold')}`;
-    if (width(left) + width(paint(c, between(parts, ' · '))) > wide) {
-      lines.push(`    ${c(lang, 'bold')}`);
-      wrappedParts(lines, c, wide, 6, parts);
-    } else lines.push(`${left}${paint(c, between(parts, ' · '))}`);
-  }
-  return true;
-}
 
 /** The red line above every section while a run is stopped inside a gap. */
 function openGapLine(lines, c, wide, gap) {
@@ -840,13 +790,11 @@ export function renderPageLines(data, {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
   const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
-  const wide = Math.max(60, Math.min(columns, 160));
+  const wide = Math.max(60, Math.min(columns, 160)) - 2;
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
 
   headerLines(lines, c, wide, data, version);
-  // A language run stopped inside a gap is production half-way between two
-  // states: above every section, until `mc language resume` closes it.
   openGapLine(lines, c, wide, data.language?.open_gap);
 
   const sessions = data.sessions || { desks: {} };
@@ -863,8 +811,6 @@ export function renderPageLines(data, {
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
   lines.push('');
   deployLines(lines, c, wide, runner.production, expand);
-  const language = [];
-  if (languageLines(language, c, wide - 2, data.language, at)) lines.push(...language.map(line => `  ${line}`));
   panelEnd(lines, c, wide);
   lines.push('');
   devLines(lines, c, wide, data.dev, expand);

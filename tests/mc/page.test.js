@@ -182,7 +182,7 @@ describe('SESSIONS', () => {
     assert.equal(dayAt(160), `${counts} · ≈$8.07 list (opus, 2026-06)`);
     // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
     assert.equal(dayAt(140), `${counts} · ≈$8.07 list`);
-    assert.equal(dayAt(120), counts);
+    assert.equal(dayAt(122), counts);
   });
 
   // The section is the machine and nothing else now: a person's session is
@@ -537,7 +537,7 @@ describe('DEPLOY', () => {
     assert.equal(section({ attempt: failed }).failed.stopped_at, 'Deploy source preflight');
     for (const columns of [100, 120]) {
       assert.match(strip(line({ attempt: failed }, { columns })),
-        /ATTEMPT + b3e65b6 · failed · 30 min ago\n +Deploy source preflight/u);
+        /ATTEMPT + b3e65b6 · failed · 30 min ago *│\n +│ Deploy source preflight/u);
     }
   });
 
@@ -565,7 +565,7 @@ describe('DEPLOY', () => {
     assert.equal(quiet.filter((row) => strip(row).includes('production')).length, 0,
       'a machine that has never deployed and never collected says nothing about production');
     // The section is there all the same, as the desks are: one of it, always.
-    assert.match(strip(rowWith(quiet, 'DEPLOY     ')), /^ {4}DEPLOY + memoro/u);
+    assert.match(strip(rowWith(quiet, 'DEPLOY ·')), /^ {4}DEPLOY · memoro/u);
   });
 });
 
@@ -591,27 +591,9 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
     assert.deepEqual(renderPageLines(without, { columns: 120, now: NOW }), empty);
   });
 
-  it('draws only the languages with something to say, and the last run on its heading', () => {
-    const lines = drawn({
-      languages: [
-        READ({ lang: 'de' }),
-        READ({ lang: 'fr', read_at: '2026-08-20T10:00:00Z' }),
-        READ({ waiting_rows: 724, unresolved: 3 }),
-      ],
-      last_run: LAST,
-      open_gap: null,
-    });
-    const head = rowWith(lines, 'LANGUAGE');
-    assert.match(strip(head), /^ {4}LANGUAGE {2}last run sv-forms-cutover · stopped · 60 min ago +mc language$/u);
-    assert.deepEqual(signature(head).split(' '), ['bold+cyan', 'yellow', 'white', 'white'],
-      'a section title, and a stopped run waits on a person');
-    assert.match(strip(rowWith(lines, 'rows waiting')), /^ {6}sv {2}3 unresolved selectors · 724 rows waiting · mc language promote · read 2 h ago$/u);
-    assert.match(strip(rowWith(lines, ' fr ')), /^ {6}fr {2}read 9 d ago$/u, 'a reading a week old is worth taking again');
-    assert.ok(!lines.some((line) => /^ {6}de /u.test(strip(line))), 'a fresh reading with nothing waiting is not drawn');
-    // Language remains inside MERGE & DEPLOY, before MAINTENANCE.
-    const text = lines.map(strip).join('\n');
-    assert.ok(text.indexOf('\n  ┌─ MERGE & DEPLOY') < text.indexOf('\n    LANGUAGE'));
-    assert.ok(text.indexOf('\n    LANGUAGE') < text.indexOf('\n  ┌─ MAINTENANCE'));
+  it('omits language readings and runs from the work panels, including stale readings', () => {
+    const lines = drawn({ languages: [READ({ lang: 'fr', read_at: '2026-08-20T10:00:00Z' }), READ({ waiting_rows: 724 })], last_run: LAST });
+    assert.doesNotMatch(lines.map(strip).join('\n'), /LANGUAGE|rows waiting|read 9 d ago|last run sv-forms/u);
   });
 
   it('puts one red line above every section while a run is stopped inside a gap', () => {
@@ -886,15 +868,15 @@ describe('MERGES', () => {
       assert.ok(lines.some((line) => /memoro-cli +/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns));
     }
-    assert.match(drawing(section()).join('\n'), /memoro + queue empty[\s\S]*idle/u);
+    assert.match(drawing(section()).join('\n'), /memoro · 0 in queue[\s\S]*idle/u);
   });
 
   it('puts counts on the heading, PR numbers in landing order on their repository row', () => {
     const merges = section({ queued: [job(3, { repo: 'memoro-cli' }), job(2), job(1, { since: '2026-08-29T11:00:00Z' })] });
     assert.deepEqual(merges.repos.map((repo) => repo.waiting.map((item) => item.pr)), [[1, 2], [3]]);
     const lines = drawing(merges);
-    assert.match(lines.join('\n'), /memoro + 2 in queue: #1 #2/u);
-    assert.deepEqual(lines.filter((line) => /in queue:/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []), ['#1', '#2', '#3']);
+    assert.match(lines.join('\n'), /memoro · 2 in queue[\s\S]*Queue: #1 #2/u);
+    assert.deepEqual(lines.filter((line) => /Queue:/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []), ['#1', '#2', '#3']);
     assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [3600, 600, 600]);
   });
 
@@ -910,7 +892,7 @@ describe('MERGES', () => {
       const lines = drawing(merges, columns);
       assert.match(lines.join('\n'), /merging #11651 + \[━●·\] · gate · 4 min/u);
       assert.match(renderPageLines(pageData({ merges }), { columns, expand: true }).join('\n'), /feature/u);
-      assert.match(lines.join('\n'), /1 in queue: #11652/u);
+      assert.match(lines.join('\n'), /Queue: #11652/u);
       assert.match(lines.join('\n'), /pid 4242/u);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
@@ -927,7 +909,7 @@ describe('MERGES', () => {
   it('keeps two concurrent landing queues separate', () => {
     const merges = section({ landing: [LANDING, { ...LANDING, repo: 'memoro-cli', pr: 838 }] });
     const text = drawing(merges).join('\n');
-    assert.match(text, /memoro + queue empty[\s\S]*merging #11651 + \[━●·\] · gate[\s\S]*memoro-cli + queue empty[\s\S]*merging #838 + \[━●·\] · gate/u);
+    assert.match(text, /memoro · 0 in queue[\s\S]*merging #11651 + \[━●·\] · gate[\s\S]*memoro-cli · 0 in queue[\s\S]*merging #838 + \[━●·\] · gate/u);
   });
 
   it('keeps legacy batch members in their repository\'s round, never as waiting', () => {
@@ -946,7 +928,7 @@ describe('MERGES', () => {
   it('draws a queued pull request in words, never in symbols', () => {
     const merges = section({ queued: [job(10)] });
     const row = drawing(merges, 120, true).find((line) => strip(line).includes('#10'));
-    assert.match(strip(row), /1 in queue: #10/u);
+    assert.match(strip(row), /Queue: #10/u);
     assert.doesNotMatch(strip(row), /⏸|↻|→/u);
   });
 
@@ -961,7 +943,7 @@ describe('MERGES', () => {
     assert.doesNotMatch(lines.join('\n'), /mending/u);
     assert.match(strip(rowWith(lines, 'failed #1')), /failed #1 + no recovery session · failed 5 min/u);
     assert.match(rowWith(lines, 'tests red'), /\x1b\[31m/u);
-    assert.match(lines.map(strip).join('\n'), /1 in queue: #2/u);
+    assert.match(lines.map(strip).join('\n'), /Queue: #2/u);
   });
 
 
@@ -989,7 +971,7 @@ describe('MERGES', () => {
       assert.match(text, /failed #2 +waiting for recovery/u);
       assert.match(text, /failed #3 +waits on Martin/u);
       assert.match(text, /failed #4 +no recovery session/u);
-      assert.equal(lines.filter((line) => line.trim() === 'Merge conflict').length, 4);
+      assert.equal(lines.filter((line) => line.includes('Merge conflict')).length, 4);
       assert.doesNotMatch(text, /--auto|gh pr checkout|not mergeable/u);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
@@ -1101,7 +1083,7 @@ describe('MERGES', () => {
       assert.ok(folded.every((line) => width(line) <= columns));
       assert.deepEqual(folded.map(strip).filter((line) => /failed #\d+/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
         Array.from({ length: 8 }, (_, i) => `#${13507 - i}`), 'all failures stay visible beyond the normal queue limit');
-      assert.deepEqual(folded.map(strip).filter((line) => /in queue:|^ +#/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []),
+      assert.deepEqual(folded.map(strip).filter((line) => /Queue:|^ +#/u.test(line)).flatMap((line) => line.match(/#\d+/gu) || []),
         Array.from({ length: 30 }, (_, i) => `#${13200 + i}`));
       const all = renderPageLines(pageData({ merges }), { columns, expand: true, now: NOW });
       assert.deepEqual(all.filter((line) => /#\d+ +queued/u.test(line)).map((line) => line.match(/#\d+/u)[0]),
@@ -1115,7 +1097,7 @@ describe('MERGES', () => {
     const parsed = JSON.parse(JSON.stringify(merges));
     parsed.queued.items = [job(99)];
     assert.equal(parsed.repos[0].waiting[0].pr, 1);
-    assert.match(drawing(parsed).join('\n'), /1 in queue: #1/u);
+    assert.match(drawing(parsed).join('\n'), /Queue: #1/u);
     assert.doesNotMatch(drawing(parsed).join(''), /#99/u);
     assert.deepEqual(mergesSection({ queued: null }).repos.map((repo) => repo.waiting), [[], []]);
   });
@@ -1381,7 +1363,7 @@ describe('operational panels', () => {
       assert.ok(footer > panels[2]);
       for (const [text, start, end] of [
         ['PRs outside goals', panels[0], panels[1]], ['#99901', panels[0], panels[1]],
-        ['724 rows waiting', panels[0], panels[1]], ['full test 60 min', panels[2], footer],
+        ['full test 60 min', panels[2], footer],
         ['deps 2 h', panels[2], footer], ['2 red', panels[2], footer],
         ['codex plan available', footer, lines.length], ['disk: 16.0 GB free', footer, lines.length],
       ]) assert.ok(lines.slice(start, end).some(line => line.includes(text)), text);
@@ -1401,7 +1383,7 @@ describe('the page', () => {
       billing: 'plan · available',
       mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', main: 'def5678', behind: 2, now: NOW }),
     }, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['PROGRAMMES', '┌─ MERGE & DEPLOY', '    LANGUAGE', '┌─ DEV', '┌─ MAINTENANCE', '── SYSTEM', 'MC  ', 'BILLING'].map(head => text.indexOf(`\n${head.startsWith('    ') ? head : `  ${head}`}`));
+    const at = ['PROGRAMMES', '┌─ MERGE & DEPLOY', '┌─ DEV', '┌─ MAINTENANCE', '── SYSTEM', 'MC  ', 'BILLING'].map(head => text.indexOf(`\n${head.startsWith('    ') ? head : `  ${head}`}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);

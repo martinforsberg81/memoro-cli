@@ -136,47 +136,32 @@ a writer. These semantics describe the current projection, not server health.
 ### MERGE & DEPLOY
 
 One panel groups both repository merge lanes and memoro deployment evidence.
-Columns are separated by whitespace; middle dots separate data only within a
-column. Repository names occupy an aligned column; their queue summaries show `queue
-empty` or `4 in queue: #1 #2 #3 #4` in landing order. Every waiting reference
-is visible in the normal view, wrapping within the terminal width; the active
-merge is excluded from that queue. `a` adds branches, queue ages and 24-hour
-landing history. Queued entries without a PR
-number remain counted and say `PR unknown`.
+Repository headings use the phase indentation and orange text, such as
+`memoro-cli · 1 in queue`. A separate `Queue: #1 #2` row shows every waiting
+reference in landing order, wrapping within the available width. Active merges
+are excluded from the queue. Expanded details add branches, queue ages and
+24-hour history.
 
-Indented operation rows align the action/PR with its status: `merging #123`,
-a phase bar, short state, elapsed time and the recorded phase message. The bar
-marks prepare `[●··]`, gate `[━●·]` or land `[━━●]`; it is a stage indicator,
-not test completion or a time-based percentage. Missing phase evidence uses
-`[···]`. Active rounds and every failure remain visible. Pauses, stopped
-mergers and batch membership retain their own rows. Each repository has a
-conditional FAILED MERGES area: every failed PR shows live plan recovery
-(tool/model, elapsed time and PID), waiting for recovery, waits on Martin, or
-no recovery session. Activity must match the owning goal and a live plan runner;
-an unrelated or dead session is not recovery. A short one-line reason replaces
-CLI instructions; complete diagnostics stay in JSON and logs. Requeued PRs
-leave the failed area. Empty
-lanes explicitly say idle; queued lanes without an active round say waiting.
-Direct goal merges have no gate round: a `landing` queue record owned by a
-live merger supplies their active row. A dead owner remains in the waiting
-queue. A ready goal in `merge` also supplies any PR missing from the queue
-during handoff, excluding recorded failures and PRs already logged as landed.
+Each active merge has a green rounded session frame with PR, phase bar,
+elapsed time, phase message and PID. Failed merges have red frames beneath
+active work and remain until their PR is handled or queued again. Recovery
+status and concise failure reasons remain visible. The phase bar marks prepare
+`[●··]`, gate `[━●·]` or land `[━━●]`, with `[···]` for missing evidence.
+Pauses, stopped mergers and batch membership retain their own rows. Direct
+goal merges use the live merger's queue record; dead owners remain waiting.
 
-DEPLOY is a subsection of the same panel, for memoro. Its aligned LIVE,
-RECORDED and ATTEMPT rows keep the cached version reading, successful deploy
-record and last attempt distinct. A live attempt says running and `progress
-unknown`: the record supplies no completion fraction. Failed/refused attempts,
-missing end records and live/recorded mismatches stay visible. Expanded details
-include build numbers and record timestamps. Language status remains inside
-this combined panel. DEV follows it as a separate panel.
+DEPLOY uses an orange subsection heading, LIVE and RECORDED version evidence,
+and a rounded attempt frame: green while running, red after failure, yellow
+for a refusal or missing end record. Expanded details include builds and
+timestamps. Language readings and last runs are omitted from this panel.
+DEV follows as a separate panel.
 
 ### Related work and system details
 
 MERGE & DEPLOY includes a conditional **PRs outside goals** group for open PRs not
 represented by a programme, running session or merger. Its counts describe
 that group only; `mc prs` still lists every PR. Empty groups disappear.
-LANGUAGE lives inside MERGE & DEPLOY when cached readings or a run have something
-to report. The stopped-language-gap warning remains above the work.
+The stopped-language-gap warning remains above the work.
 
 A horizontal SYSTEM separator places installed-code/update/draining information,
 runner liveness and occupied/configured lanes, resource holds, Docker,
@@ -222,7 +207,8 @@ environment addresses, repository queues and version evidence. The retired
 lane/PR grid has no remaining renderer. `page-grid.js` retains the shared
 palette, duration and numeric-safe clipping helpers.
 
-Widths stay clamped to 60–160 columns. Programme titles use their own line, with stage, status and criteria directly below; repository metadata is in expansion. Whole PR
+Widths stay clamped to 60–160 columns. The page reserves two columns at the
+right edge to match its two-column left inset. Programme titles use their own line, with stage, status and criteria directly below; repository metadata is in expansion. Whole PR
 references get child rows. Operational reasons wrap and ordinary title cells
 clip with an ellipsis without splitting numeric tokens. Colour is applied
 after measurement, so painted and plain frames have identical text/width.
