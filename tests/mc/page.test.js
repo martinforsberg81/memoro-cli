@@ -1177,9 +1177,44 @@ describe('INTAKE', () => {
       assert.match(header, /mc manager/u);
       assert.match(header, /● · MANAGER · 60 min/u);
       assert.match(header, /3 proposals/u);
-      assert.match(lines.find((line) => line.includes('helper not open')), /helper not open · last run 26 h ago failed/u);
+      assert.ok(lines.some(line => /Last collection failed · 26 h ago/u.test(line)));
+      assert.ok(!lines.some(line => /HELPER/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns), `${columns} columns`);
     }
+  });
+
+  it('aggregates queues and recorded priorities without treating volume or dependency severity as error priority', () => {
+    const intake = intakeSection({
+      now: NOW, proposals: ['unassigned.md'], programmeProposals: { mc: 2, photos: 3 },
+      intakeFiles: ['report.md', 'screenshot.png', 'errors-memoro-2026-08-29.md', 'errors-2026-08-29.md'],
+      digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', mtime_ms: NOW.getTime(),
+        text: `${DIGEST}\n## Analysis items\n\n| priority | title | occurrences | files |\n|---|---|---|---|\n| critical | lost data | 1 | a.js |\n| high | failed job | 900 | b.js |\n| high | stuck job | 2 | c.js |\n## AI-provider errors\n` }],
+    });
+    assert.deepEqual([intake.proposals, intake.unhandled, intake.other_intake], [1, 5, 2]);
+    assert.deepEqual([intake.repos[0].critical, intake.repos[0].high], [1, 2]);
+    const quiet = intakeSection({ digests: [{ repo: 'memoro', text: '## Analysis items\n\n_no items_\n' }] });
+    assert.deepEqual([quiet.repos[0].critical, quiet.repos[0].high], [0, 0]);
+    const missing = intakeSection({ digests: [{ repo: 'memoro', text: '## Analysis items\n\n_could not read: offline_\n' }] });
+    assert.deepEqual([missing.repos[0].critical, missing.repos[0].high], [null, null]);
+    const first = intakeSection({ digests: [{ repo: 'memoro', text: '## New since the last digest\n\n_first digest — no baseline_\n' }] });
+    const sessions = sessionsSection({ foreground: [
+      { verb: 'helper', pid: 103, tool: 'claude', model: 'sonnet', started: '2026-08-29T11:57:00Z' },
+      { verb: 'helper', pid: 104, tool: 'codex', model: 'sol', started: '2026-08-29T11:58:00Z' },
+    ], now: NOW, alive: () => true });
+    for (const columns of [60, 80, 120, 160]) {
+      const checks = { repos: [{ repo: 'memoro', deps: { critical: 88, high: 99 } }] };
+      const lines = renderPageLines(pageData({ intake, sessions, checks }), { columns });
+      const text = lines.join('\n');
+      assert.match(text, /New \/ unassigned 1 · Unhandled 5/u);
+      assert.match(text, /memoro\s+2\s+1\s+2/u);
+      assert.match(text, /memoro-cli\s+\?\s+\?\s+\?/u);
+      assert.equal(lines.filter(line => /● · HELPER/u.test(line)).length, 2);
+      assert.ok(lines.some(line => /╭─/u.test(line)));
+      assert.ok(lines.every(line => width(line) <= columns));
+      const painted = renderPageLines(pageData({ intake, sessions }), { columns, colour: true }).join('\n');
+      for (const title of ['Proposals', 'Errors', 'Other intake']) assert.ok(painted.includes(`\x1b[38;5;208m\x1b[1m${title}\x1b[0m`));
+    }
+    assert.match(renderPageLines(pageData({ intake: first }), { columns: 80 }).join('\n'), /memoro\s+\?\s+\?\s+\?/u);
   });
 
   it('counts the bullets under "New since the last digest", and the loud ones apart', () => {
@@ -1208,13 +1243,11 @@ describe('INTAKE', () => {
     assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'mc-one'] });
     const checks = checksSection({ repos: [{name: 'memoro', deps: {read_at: NOW.toISOString(), audit: {counts: {critical: 2, high: 4, moderate: 6, low: 8}}}}], now: NOW });
     const lines = renderPageLines(pageData({ intake, checks }), { columns: 100 });
-    const repo = lines.indexOf('    ● memoro');
-    assert.match(lines[repo + 1], /Errors 3 · new 2 · loud 1 · 2 h old/u);
-    assert.ok(lines.some(line => /2 critical · 4 high · 6 moderate · 8 low/u.test(line)));
-    const cli = lines.indexOf('    ● memoro-cli');
-    assert.match(lines[cli + 1], /Errors \? · new \? · loud \? · no digest/u);
-    assert.ok(lines.slice(cli).some(line => /1 proposal waiting/u.test(line)));
-    assert.ok(lines.some((line) => /1 proposal · untagged 1/u.test(line)));
+    assert.ok(lines.some(line => /memoro\s+2\s+\?\s+\?/u.test(line)));
+    assert.ok(lines.some(line => /collected 2 h ago/u.test(line)));
+    assert.ok(lines.some(line => /New \/ unassigned 2 · Unhandled 0/u.test(line)));
+    assert.ok(!lines.some(line => /moderate|loud|untagged/u.test(line)));
+
   });
 
   /**
@@ -1249,7 +1282,7 @@ describe('INTAKE', () => {
     // The table counts the delta; full messages remain available in JSON.
     for (const columns of [60, 100, 160]) {
       const lines = renderPageLines(pageData({ intake }), { columns });
-      assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 5 · loud 4/u);
+      assert.ok(lines.some(line => /memoro\s+5\s+\?\s+\?/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns));
     }
   });
@@ -1260,7 +1293,7 @@ describe('INTAKE', () => {
     });
     assert.deepEqual(intake.repos[0].loud_lines, []);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 0 · loud 0/u);
+    assert.ok(lines.some(line => /memoro\s+0\s+\?\s+\?/u.test(line)));
   });
 
   it('names today\'s digest with the digests present only in the archive', () => {
@@ -1285,8 +1318,8 @@ describe('INTAKE', () => {
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     assert.ok(!lines.some((line) => /no digest yet/u.test(line)), 'the collect has run');
     // One row each, and neither repository is hidden behind the other.
-    assert.match(lines[lines.indexOf('    ● memoro') + 1], /Errors \? · new 2 · loud 1/u);
-    assert.ok(lines.includes('    ● memoro-cli'));
+    assert.ok(lines.some(line => /memoro\s+2\s+\?\s+\?/u.test(line)));
+    assert.ok(lines.some(line => /memoro-cli/u.test(line)));
   });
 
   it('has no digest to name when nothing has been collected at all', () => {
@@ -1300,10 +1333,10 @@ describe('INTAKE', () => {
     assert.equal(intake.digests, 0);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     for (const name of ['memoro', 'memoro-cli']) {
-      const at = lines.indexOf(`    ● ${name}`);
+      const at = lines.findIndex(line => line.startsWith(`      ${name} `));
       assert.ok(at > 0);
-      assert.match(lines[at + 1], /Errors \? · new \? · loud \? · no digest/u);
-      assert.match(lines[at + 3], /deps never read/u);
+      assert.match(lines[at], /\?\s+\?\s+\?/u);
+      assert.match(lines[at + 1], /no digest/u);
     }
   });
 });
@@ -1407,8 +1440,8 @@ describe('operational panels', () => {
       assert.ok(footer > panels[2]);
       for (const [text, start, end] of [
         ['PRs outside goals', panels[0], panels[1]], ['#99901', panels[0], panels[1]],
-        ['full test 60 min', panels[2], footer],
-        ['deps 2 h', panels[2], footer], ['2 red', panels[2], footer],
+        ...(expand ? [['full test 60 min', panels[2], footer], ['deps 2 h', panels[2], footer], ['2 red', panels[2], footer]] : []),
+        ['Proposals', panels[2], footer], ['Other intake', panels[2], footer],
         ['codex plan available', footer, lines.length], ['disk: 16.0 GB free', footer, lines.length],
       ]) assert.ok(lines.slice(start, end).some(line => line.includes(text)), text);
       assert.equal(lines.filter(line => line.includes('#99901')).length, 1);
@@ -1440,7 +1473,7 @@ describe('the page', () => {
     assert.match(text, /runner running · 1\/2 lanes/u);
     assert.match(text, /UNASSIGNED ACTIVITY/u);
     assert.match(text, /start takes over now/u);
-    assert.match(text, /helper ● open 60 min · no run recorded · claude sonnet/u);
+    assert.match(text, /● · HELPER · 60 min · claude · sonnet/u);
     assert.doesNotMatch(text, /^  (HELPER|BRIEF)\b/mu);
     // No WORK: every session is a programme's or a desk's, and a tmux session
     // nobody's is a stray under PROGRAMMES (goal mc/no-work).
@@ -1452,8 +1485,8 @@ describe('the page', () => {
     assert.doesNotMatch(text, /^  NEXT /mu);
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
     assert.doesNotMatch(text, /DECISIONS/u);
-    assert.match(text, /^ {6}Errors \? · new 1 · loud 1 · 60 min old$/mu);
-    assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
+    assert.match(text, /^ {6}memoro\s+1\s+\?\s+\?$/mu);
+    assert.match(text, /New \/ unassigned 1 · Unhandled 0/u);
     // Goal titles retain their numbers; canonical metadata follows on a child row.
     assert.match(text, /^ +1 avatar-self-serve$/mu);
     assert.match(text, /^ +2 docx-editor$/mu);
@@ -1817,6 +1850,9 @@ describe('collectPage', () => {
     mkdirSync(join(root, 'proposals'), { recursive: true });
     mkdirSync(join(root, 'intake'), { recursive: true });
     writeFileSync(join(root, 'intake', 'errors-2026-08-29.md'), '# Errors\n\n## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n');
+    writeFileSync(join(root, 'intake', 'screenshot.png'), 'pending');
+    mkdirSync(join(root, 'intake', 'archive'), { recursive: true });
+    writeFileSync(join(root, 'intake', 'archive', 'old.md'), 'archived');
     writeFileSync(join(root, 'proposals', '2026-08-29-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
     for (const area of ['mc-ui', 'docx-editor']) mkdirSync(join(root, area, 'memoro-cli', '.git'), { recursive: true });
     // One goal under the programmes home: PROGRAMMES reads it from there.
@@ -2009,6 +2045,8 @@ describe('collectPage', () => {
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);
+    assert.equal(data.intake.unhandled, 2);
+    assert.equal(data.intake.other_intake, 1);
     assert.equal(data.programmes.programmes.find((group) => group.programme === 'mc').proposals, 2,
       'the programme count includes its direct files, not its archive');
     let json = '';
@@ -2458,17 +2496,14 @@ describe('CHECKS — the daily full test and deps, per repository', () => {
     assert.deepEqual(checks.repos[1], { repo: 'memoro-cli', test: null, deps: null });
   });
 
-  it('draws one row per repository, above the MC line', () => {
-    const lines = renderPageLines(pageData({ checks }), { columns: 120 }).map(strip);
-    const at = lines.indexOf('    ● memoro');
-    assert.ok(at > 0);
-    assert.match(lines[at + 2], /full test 4 h · bc82e81 · 2 red/u);
-    assert.match(lines[at + 3], /deps 40 h · 03d63dd/u);
-    assert.match(lines[at + 4], /0 critical · 12 high/u);
-    const cli = lines.indexOf('    ● memoro-cli');
-    assert.match(lines[cli + 2], /full test never run/u);
-    assert.match(lines[cli + 3], /deps never read/u);
-    assert.ok(cli < lines.findIndex(line => line.startsWith('  ── SYSTEM ')));
+  it('keeps test and dependency measurements in expanded maintenance', () => {
+    const normal = renderPageLines(pageData({ checks }), { columns: 120 }).map(strip).join('\n');
+    assert.doesNotMatch(normal, /full test|deps 40 h/u);
+    const text = renderPageLines(pageData({ checks }), { columns: 120, expand: true }).map(strip).join('\n');
+    assert.match(text, /full test 4 h · bc82e81 · 2 red/u);
+    assert.match(text, /deps 40 h · 03d63dd · 0 critical · 12 high/u);
+    assert.match(text, /full test never run/u);
+    assert.match(text, /deps never read/u);
   });
 });
 

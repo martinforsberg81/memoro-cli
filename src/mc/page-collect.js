@@ -63,7 +63,7 @@ import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
-import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
+import { HELPER_REPOS, digestDirs, findDigest, intakeDir, proposalsDir } from './helper-collect.js';
 import {
   inLine, mergesPath, queueEntries, queueOrder, redEntries,
 } from './merge-queue.js';
@@ -931,13 +931,14 @@ export function countNewErrors(text) {
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
  */
-export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED, runs = [] } = {}) {
+export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED, runs = [], programmeProposals = {}, intakeFiles = [] } = {}) {
   const repos = digests.map((digest) => {
     const { lines, first } = newErrorLines(digest.text);
     const loud = lines.filter((line) => line.loud);
     const age = digest.mtime_ms == null ? null : Math.max(0, Math.round((now.getTime() - digest.mtime_ms) / 1000));
     return {
       repo: digest.repo,
+      ...analysisPriorities(digest.text),
       digest: digest.name,
       // The date is read off the end of the name: `errors-<repo>-<date>.md`
       // does not match a pattern anchored on `errors-` and a digit, which is
@@ -965,7 +966,21 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
   const last = runs.reduce((latest, row) => row.kind === 'helper' && Number.isFinite(Date.parse(row.ts))
     && (!latest || Date.parse(row.ts) >= Date.parse(latest.ts)) ? row : latest, null);
   const last_run = last ? { at: last.ts, age_seconds: Math.max(0, Math.round((now.getTime() - Date.parse(last.ts)) / 1000)), ok: String(last.exit) === '0' } : null;
-  return { last_run, repos, digests: repos.length, proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
+  return { last_run, repos, digests: repos.length,
+    unhandled: Object.values(programmeProposals).reduce((sum, count) => sum + count, 0),
+    other_intake: intakeFiles.filter(name => !/^errors-(?:(?:memoro|memoro-cli)-)?\d{4}-\d{2}-\d{2}\.md$/u.test(name)).length,
+    proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
+}
+
+/** Severity comes from recorded analysis priorities, never hit counts or dependency audits. */
+function analysisPriorities(text) {
+  const section = String(text || '').split(/^## Analysis items[ \t]*\r?\n/mu)[1]?.split(/^## /mu)[0];
+  if (!section || /_could not read:/u.test(section)) return { critical: null, high: null };
+  if (/_no items/u.test(section)) return { critical: 0, high: 0 };
+  const priorities = [...section.matchAll(/^\|\s*(critical|high|medium|low)\s*\|/gimu)].map(match => match[1].toLowerCase());
+  if (!priorities.length) return { critical: null, high: null };
+  return { critical: priorities.filter(priority => priority === 'critical').length,
+    high: priorities.filter(priority => priority === 'high').length };
 }
 
 /** How many of the newest proposals BRIEF names. */
@@ -1513,6 +1528,7 @@ export async function collectPage({
     merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
     alive, goals, recoverySessions: runner.sessions,
   });
+  const programmeProposals = readProgrammeProposalCounts(programsHome(env));
   const programmes = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
@@ -1521,7 +1537,7 @@ export async function collectPage({
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive }),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
-    proposalCounts: readProgrammeProposalCounts(programsHome(env)),
+    proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     strays: readStrays(root, { git }),
   });
@@ -1561,7 +1577,7 @@ export async function collectPage({
     }),
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
-    intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
+    intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
     programmes,
     // File reads only, as DEPLOY's are: the page never runs a read.
     language: languageState(env),
@@ -1615,6 +1631,11 @@ function mcReading(checkout, base, git) {
   const main = git(checkout, ['rev-parse', '--short', 'origin/main']);
   const count = main ? git(checkout, ['rev-list', '--count', `${base || 'HEAD'}..origin/main`]) : null;
   return { head, main, behind: count != null && /^\d+$/u.test(count) ? Number(count) : null };
+}
+
+/** Direct files only: archive directories and nested files are not pending intake. */
+function directFiles(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name); } catch { return []; }
 }
 
 /** The proposal files, by name. A count is all mc does with a proposal. */

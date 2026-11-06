@@ -340,66 +340,53 @@ function openGapLine(lines, c, wide, gap) {
   lines.push('');
 }
 
-/** A daily reading older than this missed a day: its age is drawn yellow. */
-const CHECK_STALE_S = 36 * 60 * 60;
-
 /** Past this, the age is the thing on the row worth looking at. */
 const STALE_SESSION_S = 24 * 60 * 60;
 const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
 const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
 
-/** Repository maintenance keeps each reading's age and result together. */
+/** Aggregated maintenance queues and recorded error priorities. */
 function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
   panelHeading(lines, c, wide, 'MAINTENANCE');
-  const helper = sessions?.desks?.helper;
-  const last = intake?.last_run;
-  const status = [
-    { text: helper ? `helper ${MARK.running} ${openFor(helper.age_seconds)}` : 'helper not open', styles: helper ? ['cyan'] : ['grey'] },
-    { text: last ? `last run ${ageWords(last.age_seconds)} ago${last.ok ? '' : ' failed'}` : 'no run recorded', styles: last && !last.ok ? ['red'] : ['grey'] },
-    { text: helper ? [helper.tool, helper.model].filter(Boolean).join(' ') : '', styles: ['grey'] },
-  ];
-  wrappedParts(lines, c, wide, 4, status);
-  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map(r => r.repo), ...(checks?.repos || []).map(r => r.repo)])];
+  const countTone = count => count == null || count > 0 ? ['yellow'] : ['grey'];
+  detail(lines, c, wide, 4, 'Proposals', ['orange', 'bold']);
+  wrappedParts(lines, c, wide, 6, [
+    { text: `New / unassigned ${intake?.proposals ?? '?'}`, styles: countTone(intake?.proposals) },
+    { text: `Unhandled ${intake?.unhandled ?? '?'}`, styles: countTone(intake?.unhandled) },
+  ]);
+  lines.push('');
+  detail(lines, c, wide, 4, 'Errors', ['orange', 'bold']);
+  // Fixed numeric cells keep priorities aligned; paint after padding.
+  const repoWidth = 14;
+  lines.push(`      ${pad('', repoWidth)}${'New'.padStart(7)}${'Critical'.padStart(10)}${'High'.padStart(7)}`);
+  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map(repo => repo.repo)])];
   for (const name of repos) {
-    const digest = intake?.repos?.find(r => r.repo === name);
-    const reading = checks?.repos?.find(r => r.repo === name);
-    const deps = reading?.deps;
-    const test = reading?.test;
-    const proposals = intake?.by_system?.[name === 'memoro-cli' ? 'mc' : name] ?? 0;
-    const tone = digest?.loud || deps?.critical || test?.red ? 'red'
-      : !digest || !deps || !test || digest.first || digest.age_seconds == null || digest.age_seconds >= STALE_SESSION_S
-        || deps.high || deps.age_seconds == null || test.age_seconds == null || test.red == null
-        || deps.age_seconds >= CHECK_STALE_S || test.age_seconds >= CHECK_STALE_S ? 'yellow' : 'green';
-    lines.push(`    ${c(MARK.running, tone)} ${c(clipCell(name, wide - 8), 'bold')}`);
-    const digestAge = !digest ? 'no digest' : digest.first ? 'no baseline'
-      : digest.age_seconds == null ? (digest.date || 'age unknown') : `${ageWords(digest.age_seconds)} old`;
-    detail(lines, c, wide, 6, `Errors ${digest?.errors_total ?? '?'} · new ${digest && !digest.first ? digest.new_errors : '?'} · loud ${digest && !digest.first ? digest.loud : '?'} · ${digestAge}`,
-      digest?.loud ? ['red'] : ['grey']);
-    const ago = seconds => seconds == null ? 'age unknown' : ageWords(seconds);
-    const ageStyle = seconds => seconds == null || seconds >= CHECK_STALE_S ? ['yellow'] : ['grey'];
-    const testParts = test ? [
-      { text: `full test ${ago(test.age_seconds)}`, styles: ageStyle(test.age_seconds) },
-      { text: test.short || '', styles: ['grey'] },
-      { text: test.red == null ? 'result unknown' : test.red ? `${test.red} red` : 'green', styles: test.red == null ? ['yellow'] : test.red ? ['red'] : ['green'] },
-    ] : [{ text: 'full test never run', styles: ['yellow'] }];
-    wrappedParts(lines, c, wide, 6, testParts);
-    const depParts = deps ? [
-      { text: `deps ${ago(deps.age_seconds)}`, styles: ageStyle(deps.age_seconds) },
-      { text: deps.short || '', styles: ['grey'] },
-    ] : [{ text: 'deps never read', styles: ['yellow'] }];
-    wrappedParts(lines, c, wide, 6, depParts);
-    if (deps) detail(lines, c, wide, 8, `${deps.critical} critical · ${deps.high} high · ${deps.moderate ?? 0} moderate · ${deps.low ?? 0} low`,
-      deps.critical ? ['red'] : deps.high ? ['yellow'] : ['grey']);
-    if (proposals) detail(lines, c, wide, 6, `${proposals} proposal${proposals === 1 ? '' : 's'} waiting`, ['yellow']);
-    if (expand) for (const error of digest?.loud_lines || []) {
-      detail(lines, c, wide, 8, [error.message, error.fingerprint, error.count].filter(Boolean).join(' · '), ['red']);
+    const digest = intake?.repos?.find(repo => repo.repo === name);
+    const fresh = digest && !digest.first ? digest.new_errors : null;
+    const number = (value, size, tone) => c(String(value ?? '?').padStart(size), ...(value == null ? ['yellow'] : value > 0 ? tone : ['grey']));
+    lines.push(`      ${c(pad(clipCell(name, repoWidth), repoWidth), 'bold')}${number(fresh, 7, [])}${number(digest?.critical, 10, ['red'])}${number(digest?.high, 7, ['yellow'])}`);
+    const age = !digest ? 'no digest' : digest.age_seconds == null ? 'age unknown' : `collected ${ageWords(digest.age_seconds)} ago`;
+    detail(lines, c, wide, 8, `${age}${digest?.first ? ' · no baseline' : ''}`, ['grey']);
+    if (expand) {
+      const reading = checks?.repos?.find(repo => repo.repo === name);
+      const test = reading?.test;
+      const deps = reading?.deps;
+      detail(lines, c, wide, 8, test ? `full test ${ageWords(test.age_seconds)} · ${test.short || '?'} · ${test.red == null ? 'unknown' : test.red ? `${test.red} red` : 'green'}` : 'full test never run', test?.red ? ['red'] : ['grey']);
+      detail(lines, c, wide, 8, deps ? `deps ${ageWords(deps.age_seconds)} · ${deps.short || '?'} · ${deps.critical} critical · ${deps.high} high` : 'deps never read', deps?.critical ? ['red'] : deps?.high ? ['yellow'] : ['grey']);
     }
   }
-  const untagged = intake?.by_system?.untagged || 0;
-  if (untagged) say(lines, c, wide, 7, `${untagged} proposal${untagged === 1 ? '' : 's'} · untagged ${untagged}`, ['yellow']);
+  const last = intake?.last_run;
+  if (last && !last.ok) detail(lines, c, wide, 6, `Last collection failed · ${ageWords(last.age_seconds)} ago`, ['red']);
+  lines.push('');
+  detail(lines, c, wide, 4, 'Other intake', ['orange', 'bold']);
+  detail(lines, c, wide, 6, `${intake?.other_intake ?? '?'} waiting`, countTone(intake?.other_intake));
+  const helpers = sessions?.desk_sessions?.helper || (sessions?.desks?.helper ? [sessions.desks.helper] : []);
+  for (const helper of helpers) {
+    lines.push('');
+    lines.push(...activityLines(c, wide, { ...helper, kind: 'helper' }, { indent: 4, expand }));
+  }
   panelEnd(lines, c, wide);
 }
-
 
 /**
  * What no kind explains (`programmes.strays`): a directory under `~/mc` that
