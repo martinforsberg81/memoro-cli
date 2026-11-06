@@ -92,7 +92,7 @@ describe('goal rows on the page', () => {
       assert.match(programme, /memoro-cli#32 · in queue/u);
       assert.match(programme, /memoro-cli#33 · in queue/u);
       assert.doesNotMatch(programme, /╭|REVIEW|BUILD/u);
-      assert.match(text, /2 in queue: #32 #33/u);
+      assert.match(text, /Queue: #32 #33/u);
       assert.match(text, /merging #31/u);
     }
     const dead = mergesSection({ goals: [goal], queued, now: NOW, alive: () => false });

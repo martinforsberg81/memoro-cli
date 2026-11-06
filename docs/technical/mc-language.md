@@ -210,17 +210,8 @@ other's record under the register's lock before writing its own:
 
 ## On the page and in `mc deploy --dry-run`
 
-The `mc` page has a **LANGUAGE** section after DEPLOY
-([`mc-ui.md`](mc-ui.md)). It reads the cache and the run records and nothing
-else:
-
-- **the heading:** the last run, with its outcome;
-- **the rows:** a row only for a language with something to say — unresolved
-  selectors, rows waiting (`· mc language promote`), or a reading older than
-  seven days.
-
-With nothing to say and no run recorded, the section is not drawn at all.
-While a gap is open, one red line comes above every section: `language:
+The `mc` page omits language readings and last runs; `mc language` owns that
+status ([`mc-ui.md`](mc-ui.md)). While a gap is open, one red line comes above every section: `language:
 <manifest> stopped after <act> — <says> · mc language resume`.
 
 `mc deploy --dry-run` adds one language line from the same cache, before its
