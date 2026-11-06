@@ -91,7 +91,7 @@ export const COMMAND_USAGE = Object.freeze({
     "  mc goal log --done-file - --next \"the next step\" <<'EOF'\n",
     "  gate: `mc gate tests/mc/commands/goal.test.js` — green, $(date) as run\n",
     "  EOF\n",
-    "  mc goal show mc/goal-log-literal-text   reads the entry back: check it before the stage moves\n",
+    "  mc goal show <programme>/<goal>   reads the entry back: check it before the stage moves\n",
     "A goal has a stage — plan → build → review → finish → merge → done, or dropped — and a status, ready or blocked.\n",
     "The stage only moves forward: a session's backward move is refused, naming both stages; only a person (MC_TOOL=person, or unset) moves it back, and that is logged.\n",
     "A build session moves build to review, or sets blocked; a review moves review to merge (OK) or finish (not OK, REVIEW.md written first); a plan session any stage forward.\n",
