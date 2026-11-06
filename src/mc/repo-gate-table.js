@@ -175,8 +175,8 @@ export const SHIPPED = Object.freeze({
     round_timeout_why: 'measured 2026-11-01 (128 s in a session gate) and 2026-11-03 (247 s and 273 s quiet, 568 s under load): 15 min is above the slowest measured round and bounds a stuck one',
   }),
   memoro: Object.freeze({
-    round_timeout_ms: 900_000,
-    round_timeout_why: 'set 2026-11-03 by Martin after merger gate round #14760 held the lane for over 30 min; 15 min is the repository ceiling',
+    round_timeout_ms: 1_200_000,
+    round_timeout_why: 'set 2026-11-06 by Martin to 20 min (was 15 min, set 2026-11-03 after round #14760 held the lane for over 30 min): memoro #14946 reaches 778 test files and its suite took 768 s and 817 s under load, so 15 min turned it red with no red test',
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
     // in the operator table 2026-08-21, shipped here 2026-08-22). A clean
     // checkout without `npm ci`: exit 1, ~30 files fail with
