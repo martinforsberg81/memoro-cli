@@ -541,6 +541,14 @@ describe('mc goal stage against a real origin/main', () => {
   });
 });
 
+test('a failed fetch before review is a warning: the goal moves, and its merge is checked against the origin/main it holds', async () => {
+  const f = fixture({ files: seededGoal() });
+  f.deps.mainCheck = () => ({ fetch: { ok: false, text: 'could not read from remote' }, paths: [] });
+  assert.equal(await run(['stage', 'mc/plain', 'review'], f.deps), 0, f.err());
+  assert.equal(f.err(), 'mc: warning: memoro-cli: git fetch origin failed (could not read from remote) — checked against the origin/main already held\n');
+  assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'review');
+});
+
 test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merge or finish', async () => {
   const f = reviewed({ files: inStage('review') });
   assert.equal(await run(['stage', 'finish'], f.deps), 2);
