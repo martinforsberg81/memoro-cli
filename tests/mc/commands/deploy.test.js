@@ -809,6 +809,29 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(calls[0].options.stdio[0], 'ignore', 'the deployer asks nothing');
   });
 
+  it('the page can start a confirmed deploy without waiting, while a no still starts nothing', async () => {
+    const asks = [];
+    let starts = 0;
+    for (const answer of ['n', 'y']) {
+      const { out, stdout, stderr } = io();
+      const code = await run([], {
+        ...deps({
+          follow: false,
+          ask: (prompt) => { asks.push(prompt); return answer; },
+          startDeployer: () => { starts += 1; return { pid: 31337, log: deployLogPath(work) }; },
+          alive: () => false,
+          sleep: async () => assert.fail('the page must not wait for the deployer'),
+        }),
+        stdout, stderr,
+      });
+      assert.equal(code, answer === 'y' ? 0 : 1);
+      assert.equal(starts, answer === 'y' ? 1 : 0);
+      assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, answer === 'y' ? 'running' : 'refused');
+      assert.doesNotMatch(out.stdout, /\^C stops watching/u);
+    }
+    assert.deepEqual(asks, Array(2).fill('deploy 1a2b3c4 to production? [y/N]'));
+  });
+
   it('the terminal that asked follows the deployer\'s log, and answers with the row', async () => {
     const env = { MC_WORK_ROOT: work };
     const log = deployLogPath(work);

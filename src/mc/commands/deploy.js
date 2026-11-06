@@ -731,6 +731,9 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   stdout.write(`mc: deploying ${plan.short} in its own process (pid ${deployer.pid}) — after the gate round in flight, if any; the merge queue waits for it\n`);
+  // The live page resumes as soon as the confirmed deploy has started. The
+  // shell command still follows by default; explicit --follow stays available.
+  if (deps.follow === false) return 0;
   stdout.write(`mc: ^C stops watching, not the deploy; mc deploy --follow watches again\n`);
   return followDeploy({ log: deployer.log, pid: deployer.pid, key, env, stdout, deps });
 }
