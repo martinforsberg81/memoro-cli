@@ -1261,6 +1261,8 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     const refs = {};
     const refWrites = [];
     const actions = [];
+    // The processes that exist, by pid, with their command lines: a runner pid is alive only when it is here.
+    const processes = { 4242: 'node /opt/homebrew/bin/mc run', 5151: 'zsh -l' };
     const marker = (over = {}) => JSON.stringify({ schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: 'goal:mc/x', kind: 'build', stem: 's', started: '2026-10-12T08:00:00Z', ended: '2026-10-12T09:00:00Z', exit: 0, ...over });
     const area = (stem, { record = marker(), worktree = null, derived = false, evidence = true } = {}) => {
       const dir = join(root, stem);
@@ -1303,9 +1305,11 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
     const doors = (over = {}) => m.doors({
       git, openIn: (path) => (path in opens ? opens[path] : []),
       removeWorktree: (owner, path) => { removed.push([owner, path]); actions.push(['remove', owner, path]); rmSync(path, { recursive: true }); return true; },
+      alive: (pid) => pid in processes,
+      commandLine: (pid) => { if (!(pid in processes)) throw new Error(`no process ${pid}`); return processes[pid]; },
       ...over,
     });
-    return { m, root, area, marker, answers, opens, removed, refs, refWrites, actions, doors };
+    return { m, root, area, marker, answers, opens, removed, refs, refWrites, actions, doors, processes };
   }
   const exists = (path) => existsSync(path);
 
@@ -1365,6 +1369,32 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.equal(why(join(unknownOpen, 'DerivedData')), 'error: could not tell whether a file in it is open');
       for (const dir of [live, running, legacy, unreadable, foreign, open, unknownOpen]) assert.ok(exists(join(dir, 'DerivedData')), `${dir} keeps its DerivedData`);
       for (const dir of [dirty, noReceipt]) assert.ok(exists(join(dir, 'replay', 'src.js')), `${dir} keeps its worktree`);
+    } finally { s.m.cleanup(); }
+  });
+
+  it('a session with no recorded end counts as ended once its runner is gone, and a live runner, a standing process, an open file or an uncommitted change keeps it', () => {
+    const s = scratchMachine();
+    try {
+      const gone = s.area('gone', { record: s.marker({ ended: undefined, runner_pid: 5150 }), worktree: {}, derived: true });
+      const reused = s.area('reused', { record: s.marker({ ended: undefined, runner_pid: 5151 }), worktree: {} });
+      const standing = s.area('standing', { record: s.marker({ ended: undefined, runner_pid: 5152 }), derived: true });
+      s.m.cwds.push({ pid: 50, cwd: join(standing, 'sub') });
+      const dirty = s.area('dirty', { record: s.marker({ ended: undefined, runner_pid: 5153 }), worktree: { status: ' M src.js\n' } });
+      const open = s.area('open', { record: s.marker({ ended: undefined, runner_pid: 5154 }), derived: true });
+      s.opens[join(open, 'DerivedData')] = [77];
+      const live = s.area('live', { record: s.marker({ ended: undefined }), derived: true });
+
+      const { list } = runTidy(s.doors());
+      assert.deepEqual(ruled(list, 'S').map((item) => item.path).sort(), [join(gone, 'DerivedData'), join(gone, 'replay'), join(reused, 'replay')].sort());
+      const targetOf = (path) => ruled(list, 'S').find((item) => item.path === path)?.why;
+      assert.equal(targetOf(join(gone, 'DerivedData')), 'rebuildable DerivedData of session goal:mc/x, whose owning runner is gone (runner pid 5150 is not alive)');
+      assert.equal(targetOf(join(gone, 'replay')), 'a clean worktree of session goal:mc/x, whose owning runner is gone (runner pid 5150 is not alive), its HEAD on refs/heads/goal/x');
+      assert.equal(targetOf(join(reused, 'replay')), 'a clean worktree of session goal:mc/x, whose owning runner is gone (runner pid 5151 now runs zsh, not an mc runner), its HEAD on refs/heads/goal/x');
+      assert.equal(keptOf(list, join(live, 'DerivedData'))?.why, 'goal:mc/x has not recorded an end');
+      assert.equal(keptOf(list, join(standing, 'DerivedData'))?.why, 'process 50 stands in its scratch directory');
+      assert.equal(keptOf(list, join(dirty, 'replay'))?.why, '1 uncommitted change(s)');
+      assert.equal(keptOf(list, join(open, 'DerivedData'))?.why, 'process 77 holds a file open in it');
+      for (const dir of [gone, reused, standing, dirty, open, live]) assert.ok(exists(dir), `${dir} is not removed by a list`);
     } finally { s.m.cleanup(); }
   });
 

@@ -50,11 +50,14 @@
  *     (`~/mc/runner/scratch/<stem>/`), a git worktree and a `DerivedData`
  *     directory are the two things that may go, and only when the directory's
  *     ownership record (`.mc-scratch.json`, written by the runner when it made
- *     it) says its session has ended, no process stands in it or holds a file
- *     open in the candidate, and — for a worktree — nothing is uncommitted and
- *     its HEAD is on a branch or tag. Logs, patches and everything else in the
- *     directory stay. A directory with no record is legacy and is kept: its age
- *     says nothing about whether it is idle.
+ *     it) says its session has ended, or records no end while the runner that
+ *     owned it is gone (its `runner_pid` is not alive, or now runs something
+ *     other than `mc run`). In both cases no process stands in it or holds a
+ *     file open in the candidate, and — for a worktree — nothing is uncommitted
+ *     and its HEAD is on a branch or tag, or retained first. Logs, patches and
+ *     everything else in the directory stay. A directory with no record is
+ *     legacy and is kept: its age says nothing about whether it is idle. A
+ *     session whose runner is alive and has recorded no end is kept.
  *   - (B) Exact rebuildable caches (tidy-caches.js): five native-phone output
  *     paths in ended runner scratch whose owning goal has finished, idle worker bundles, and four
  *     named per-user caches. Shared caches/bundles retain 72 hours. Every
@@ -83,6 +86,7 @@ import { rmTree } from './rm-tree.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { pidAlive } from './status-collect.js';
 import { serversFor } from './test-environment.js';
 import {
   inspectWorktree, listStepAreas, pruneWorktrees, releaseVerdict, releaseWorktree,
@@ -232,7 +236,7 @@ function realGit(cwd, args) {
 export function gatherTidyFacts({
   env = process.env, now = Date.now(), gh = null, git = realGit, cwds = cwdsOfUser,
   inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf, readDir = readdirSync,
-  servers = serversFor, openIn = openFilesIn, filesOpen = openFilesAmong,
+  servers = serversFor, openIn = openFilesIn, filesOpen = openFilesAmong, alive = pidAlive, commandLine = commandLineOf,
 } = {}) {
   const roots = tidyRoots(env);
   const root = roots.root;
@@ -400,11 +404,15 @@ export function gatherTidyFacts({
       const item = {
         path, stem, session_dir: dir, marker, marker_error: markerError, marker_absent: markerAbsent,
         kind: worktree ? 'scratch-worktree' : 'scratch-derived', live: null, open: null,
-        dirty: null, refs: null, owner: null, head: null, evidence: null, identity: null, bytes: 0,
+        dirty: null, refs: null, owner: null, head: null, evidence: null, identity: null, bytes: 0, runner_gone: null,
       };
       facts.scratch_items.push(item);
       try {
-        if (markerError || (!marker && !markerAbsent) || (marker && !marker.ended)) continue;
+        if (markerError || (!marker && !markerAbsent)) continue;
+        if (marker && !marker.ended) {
+          item.runner_gone = runnerGone(marker, { alive, commandLine });
+          if (!item.runner_gone) continue;
+        }
         if (!running) throw new Error('lsof could not say who stands in it');
         item.live = [...new Set(processesStandingIn([dir], { cwds: running }).map((p) => p.pid))];
         if (item.live.length) continue;
@@ -809,6 +817,31 @@ function commandOf(pid) {
   } catch { return `pid ${pid}`; }
 }
 
+/** A process's whole command line. It throws when `ps` cannot say, so the question keeps its item. */
+function commandLineOf(pid) {
+  return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+/** An mc runner runs as `mc run` (or `mc-cli.js run`), with only the flags it was started with after that. `mc run lanes` is not one. */
+const MC_RUNNER = /(?:^|[\s/])(?:mc|mc-cli\.js) run(?:\s+-\S*(?:\s.*)?)?$/u;
+
+/**
+ * Why the runner that owned a session with no recorded end is gone, or null
+ * while it still stands for the session. A pid that runs something other
+ * than an mc runner was reused, so its runner is gone too. Only a whole pid
+ * is judged; anything else stays null, and the session stays unended.
+ */
+function runnerGone(marker, { alive, commandLine }) {
+  const pid = marker.runner_pid;
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (!alive(pid)) return `runner pid ${pid} is not alive`;
+  const line = commandLine(pid);
+  if (MC_RUNNER.test(line)) return null;
+  return `runner pid ${pid} now runs ${line.split(/\s+/u)[0].split('/').pop() || 'another process'}, not an mc runner`;
+}
+
 /** false only for "there is nothing there"; any other failure throws. */
 function directoryExists(path) {
   try { statSync(path); return true; } catch (error) {
@@ -984,7 +1017,7 @@ export function scratchItem(item) {
   if (marker && (marker.schema !== SCRATCH_SCHEMA || marker.owner !== 'runner' || !marker.session || !marker.started)) {
     return { target: false, why: 'its scratch directory\'s owner is not clear' };
   }
-  if (marker && !marker.ended) return { target: false, why: marker.session + ' has not recorded an end' };
+  if (marker && !marker.ended && !item.runner_gone) return { target: false, why: marker.session + ' has not recorded an end' };
   if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
   if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in its scratch directory` };
   if (!marker && Array.isArray(item.open) && item.open.length) {
@@ -998,11 +1031,14 @@ export function scratchItem(item) {
   }
   if (!Array.isArray(item.open)) throw new Error('could not tell whether a file in it is open');
   if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds a file open in it` };
+  // A session with no recorded end whose runner is gone is named so: the why says the owning runner is gone.
+  const session = !marker ? null : marker.ended ? `ended session ${marker.session}`
+    : `session ${marker.session}, whose owning runner is gone (${item.runner_gone})`;
   return item.kind === 'scratch-worktree'
     ? { target: true, why: marker
-      ? (item.refs.length ? 'a clean worktree of ended session ' + marker.session + ', its HEAD on ' + item.refs[0] : 'a clean detached worktree of ended session ' + marker.session + '; its HEAD will be retained before removal')
+      ? (item.refs.length ? `a clean worktree of ${session}, its HEAD on ${item.refs[0]}` : `a clean detached worktree of ${session}; its HEAD will be retained before removal`)
       : 'a clean registered replay worktree with finalized runner receipts; its HEAD will be retained before removal' }
-    : { target: true, why: `rebuildable DerivedData of ended session ${marker.session}` };
+    : { target: true, why: `rebuildable DerivedData of ${session}` };
 }
 
 /* ------------------------------------------------------------- deciding */

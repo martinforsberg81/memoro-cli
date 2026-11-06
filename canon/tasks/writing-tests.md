@@ -50,6 +50,7 @@ replacement or the residual risk recorded in planning. Slowness, age and a
 red result alone are not reasons to delete. Follow the publish-and-merge skill
 for gate and publication mechanics.
 
-When demonstrating a source fault, use the bounded [independent replay procedure](scratch-and-probes.md#independent-fault-replay)
-so the reviewed worktree stays read-only and the normal check runs again on
-the clean judged head.
+When demonstrating a source fault, use the bounded [independent replay procedure](scratch-and-probes.md#independent-fault-replay).
+It runs in the goal's worktree and returns that worktree to exactly the judged
+HEAD with clean status, verified before and after; the normal check runs again
+there on the clean judged head.

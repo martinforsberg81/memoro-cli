@@ -30,5 +30,14 @@ planning question, not permission to create a suite.
 Before test design, modification or retirement, read `tasks/writing-tests.md`
 in the mc skill.
 
+## One worktree per goal
+
+Work on a goal happens in that goal's worktree, `goals/<goal>/<repo>` on
+`goal/<goal>`, and every session on the goal uses it. A session never makes
+another checkout of a goal branch, in `$MC_SCRATCH` or anywhere else. To read a
+goal branch whose worktree is not present, use `git show` or `git diff` against
+`goal/<goal>` from the programme's planning checkout of that repository; another
+checkout is not the answer.
+
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
 plans — and every goal and its log: English.
