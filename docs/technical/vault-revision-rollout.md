@@ -47,3 +47,34 @@ backup, using that backup's read token.
 No deployment, remote migration, live-provider test or production verification
 is performed by either code goal. Client auto-upgrade policy is not defined
 here.
+
+## Recovery-code client upgrade (`mc vault recovery`)
+
+Creating or replacing a recovery code now needs a fresh current-password proof
+from every client that sends it. This is a client change with server-side
+consequences; it is code-readiness evidence only.
+
+- **Client (memoro-cli `cmdRecovery`, `api.setRecoveryKey`).** The verb reads
+  the current master password once (masked prompt or `MC_VAULT_PASSPHRASE`),
+  even when this device holds a cached vault key. It derives `currentAuthHash`
+  and the vault key with the server's current salt and iteration count, verifies
+  them through the normal unlock, and reopens the current custody root with
+  that key. Every `POST /api/vault/recovery-key` then carries `currentAuthHash`,
+  including the first creation. `setRecoveryKey` refuses to send without it.
+- **No root side effects.** The verb never adopts or replaces a custody root.
+  A missing or unreadable root refuses before any recovery write. The request
+  sets `curlFallback: false`, and there is no automatic retry: a transport
+  failure without an explicit refusal prints no code and reports the outcome
+  as unknown. A previous code may already have been replaced.
+- **Unchanged.** The custody root (CRK), its server wrap and the secret
+  ciphertext are not rewritten. The recovery AAD and the shown-once code output
+  are unchanged; the code is printed only after the server confirms the write.
+- **Server compatibility (pending).** The server still accepts a first code
+  without `currentAuthHash` (`docs/technical/vault.md`, "The server's rule for
+  `POST /api/vault/recovery-key`"). Removing that first-code compatibility is a
+  separate rollout decision, and it waits until supported clients are confirmed.
+  It is not part of this change.
+- **Deployed clients (unverified).** No audit of which deployed first-party
+  clients send `currentAuthHash` has been performed. Until one is recorded,
+  this change does not certify any deployed client, and no production claim is
+  made.

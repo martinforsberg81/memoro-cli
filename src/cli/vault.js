@@ -1591,47 +1591,81 @@ async function cmdRecovery(argv, opts = {}) {
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
   if (!config) return 1;
-  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
-  if (!got) return 1;
-  const { vaultKey, crk } = got;
-  if (!crk) {
+
+  // Creating or replacing a code is a fresh proof of the current password.
+  // A cached vault key never stands in for it, and no cached auth material is
+  // used as the proof: the password is read once and derived here.
+  if (!canPromptForVaultKey({ flags, opts })) {
+    emit(flags.json, { ok: false, error: `current master password required; set ${PASSPHRASE_ENV} for non-interactive use` });
+    return 1;
+  }
+  const password = await readMasterPassword('Current master password:        ', opts);
+  const { vaultKey, vaultKeyBytes, authHash: currentAuthHash } =
+    await keyDeps(opts).deriveVaultKeys(password, config.salt, config.iterations);
+  let unlock = null;
+  try {
+    unlock = await VaultApi.unlockVault(portal, { authHash: currentAuthHash });
+  } catch {
+    unlock = null;
+  }
+  if (!unlock?.ok) {
+    emit(flags.json, { ok: false, error: 'could not verify the current master password; no recovery code was created or changed.' });
+    return 1;
+  }
+  // The verified key refreshes the device cache for the next verb. Best-effort.
+  await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps }).catch(() => {});
+
+  // This verb never adopts or replaces a custody root: absent custody refuses.
+  const status = await VaultApi.getStatus(portal).catch(() => null);
+  const info = status?.vault;
+  if (!info?.wrapped_crk || !info?.crk_iv) {
     emit(flags.json, { ok: false, error: 'custody root unavailable — run `mc vault unlock` to adopt the envelope first' });
     return 1;
   }
 
-  // Fetch the current CRK wrap and reopen it as raw bytes for re-wrapping.
-  const status = await VaultApi.getStatus(portal);
-  if (!status?.vault?.wrapped_crk) {
-    emit(flags.json, { ok: false, error: 'no custody root on the server — run `mc vault unlock` first' });
-    return 1;
-  }
-  let crkBytes;
+  let crkBytes = null;
+  let code = null;
+  let res = null;
   try {
-    crkBytes = await unwrapCustodyRootBytes(vaultKey, status.vault.wrapped_crk, status.vault.crk_iv);
-  } catch {
-    emit(flags.json, { ok: false, error: 'could not open the custody root with this password' });
-    return 1;
+    try {
+      crkBytes = await unwrapCustodyRootBytes(vaultKey, info.wrapped_crk, info.crk_iv);
+    } catch {
+      emit(flags.json, { ok: false, error: 'could not open the custody root with this password' });
+      return 1;
+    }
+
+    // The recovery code is a second master password to the KDF: same split,
+    // its own salt. Its auth-hash half is the server-side verifier.
+    code = generateRecoveryCode();
+    const recoverySalt = bytesToBase64(keyDeps(opts).getRandomValues(new Uint8Array(32)));
+    const { vaultKey: ruk, authHash: recoveryAuthHash } =
+      await keyDeps(opts).deriveVaultKeys(code, recoverySalt, config.iterations);
+    const { wrapped, iv } = await wrapCustodyRootBytes(ruk, crkBytes, CRK_RECOVERY_AAD);
+
+    try {
+      res = await VaultApi.setRecoveryKey(portal, {
+        wrappedCrkRecovery: wrapped, recoveryIv: iv, recoverySalt, recoveryAuthHash, currentAuthHash,
+      });
+    } catch (err) {
+      // Raw remote text is not echoed: it can carry request material.
+      if (err?.status >= 400 && err.status < 500) {
+        emit(flags.json, { ok: false, ...(err.data?.code ? { code: err.data.code } : {}), error: 'the server refused the recovery code; the previous recovery configuration is unchanged.' });
+      } else {
+        emit(flags.json, { ok: false, code: 'RECOVERY_OUTCOME_UNKNOWN', error: 'the recovery code outcome is unknown; no code was shown and no automatic retry was made. A previous code may have been replaced: run `mc vault recovery` again to create a new one.' });
+      }
+      return 1;
+    }
+  } finally {
+    crkBytes?.fill(0);
   }
 
-  // The recovery code is a second master password to the KDF: same split,
-  // its own salt. Its auth-hash half is the server-side verifier.
-  const code = generateRecoveryCode();
-  const saltBytes = keyDeps(opts).getRandomValues(new Uint8Array(32));
-  const recoverySalt = bytesToBase64(saltBytes);
-  const { vaultKey: ruk, authHash: recoveryAuthHash } =
-    await keyDeps(opts).deriveVaultKeys(code, recoverySalt, config.iterations);
-  const { wrapped, iv } = await wrapCustodyRootBytes(ruk, crkBytes, CRK_RECOVERY_AAD);
-  crkBytes.fill(0);
-
-  const res = await VaultApi.setRecoveryKey(portal, {
-    wrappedCrkRecovery: wrapped, recoveryIv: iv, recoverySalt, recoveryAuthHash,
-  });
-  if (!res?.ok) {
-    emit(flags.json, { ok: false, error: res?.error || 'storing the recovery wrap failed' });
+  if (res?.ok !== true) {
+    emit(flags.json, { ok: false, ...(res?.code ? { code: res.code } : {}), error: 'the server refused the recovery code; the previous recovery configuration is unchanged.' });
     return 1;
   }
+  const replaced = !!info.recovery_set;
   if (flags.json) {
-    emit(true, { ok: true, recovery_code: code, replaced: !!status.vault.recovery_set });
+    emit(true, { ok: true, recovery_code: code, replaced });
   } else {
     console.log('');
     console.log('  Recovery code (shown ONCE — store it somewhere safe, offline):');
@@ -1640,7 +1674,7 @@ async function cmdRecovery(argv, opts = {}) {
     console.log('');
     console.log('  Anyone with this code and your Memoro sign-in can reset the vault');
     console.log('  password. Memoro cannot recover a lost password without it.');
-    if (status.vault.recovery_set) console.log('  Your previous recovery code is now invalid.');
+    if (replaced) console.log('  Your previous recovery code is now invalid.');
   }
   return 0;
 }

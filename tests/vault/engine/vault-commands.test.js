@@ -19,11 +19,12 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 import { memoroFetch } from '../../../src/lib/api.js';
 import { run as vaultRunRaw } from '../../../src/cli/vault.js';
 import { PBKDF2_ITERATIONS, bytesToBase64, deriveVaultKeys, encryptSecretPayload } from '../../../src/vault/engine/client-crypto.js';
-import { decryptEnvelopeSecret, mintCustodyRoot, unwrapCustodyRoot } from '../../../src/vault/engine/custody-crypto.js';
+import { CRK_RECOVERY_AAD, decryptEnvelopeSecret, mintCustodyRoot, unwrapCustodyRoot, unwrapCustodyRootBytes } from '../../../src/vault/engine/custody-crypto.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
 
 const PW = 'this-is-a-long-test-master-password';
@@ -1369,4 +1370,292 @@ describe('mc vault — a token Memoro rejects', () => {
       }
     });
   }
+});
+
+describe('mc vault recovery — current-password proof and custody root', () => {
+  let server, portal;
+
+  before(() => { process.env.MC_VAULT_PASSPHRASE = PW; });
+  after(() => { delete process.env.MC_VAULT_PASSPHRASE; });
+
+  beforeEach(() => {
+    server = createMockVaultServer();
+    portal = makeTestPortal(server);
+    activeCacheDeps = makeMemCacheDeps();
+  });
+
+  // Runs a verb with its console captured; the console is restored before returning.
+  async function runVerb(argv, opts) {
+    const cap = captureConsole();
+    try {
+      const rc = await vaultRun(argv, opts);
+      return { rc, out: cap.out.join('\n'), err: cap.err.join('\n') };
+    } finally {
+      cap.restore();
+    }
+  }
+
+  // Records every key derivation the verb makes, with its result, so a test
+  // opens a wrap with the key the verb itself derived instead of deriving again.
+  // The test's own passwords use the memoised production derivation. A recovery
+  // code is random on each run, so its memo can never hit: it is derived through
+  // the same real `deriveVaultKeys` at one iteration, because the production
+  // count costs seconds per test. The verb's request (salt, iterations) is
+  // still recorded exactly as sent, and the tests assert that request.
+  function recordingKeys() {
+    const derivations = [];
+    return {
+      derivations,
+      keyDeps: {
+        async deriveVaultKeys(password, salt, iterations) {
+          const memoised = [PW, WRONG_PW, NEW_PW].includes(password);
+          const result = memoised
+            ? await keys.deriveVaultKeys(password, salt, iterations)
+            : await deriveVaultKeys(password, salt, 1);
+          derivations.push({ password, salt, iterations, result });
+          return result;
+        },
+        getRandomValues: keys.getRandomValues,
+      },
+    };
+  }
+
+  function typedPassword(password) {
+    const prompts = [];
+    return {
+      prompts,
+      stub: (prompt) => { prompts.push(prompt); return Promise.resolve(password); },
+    };
+  }
+
+  const recoveryCalls = () => server.calls.filter((c) => c.path === '/api/vault/recovery-key');
+  const derivationFor = (rec, password) => rec.derivations.find((d) => d.password === password);
+  const codeDerivedBy = (rec) => rec.derivations.find((d) => d.password !== PW)?.password ?? null;
+  const rowsOf = () => server.inspect().secrets.map(({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv }) =>
+    ({ encrypted_label, label_iv, encrypted_data, iv, wrapped_dek, dek_iv }));
+
+  async function custodyOf(p) {
+    const status = await p.memoroFetch('x', '/api/vault/status');
+    return { wrapped_crk: status.vault.wrapped_crk, crk_iv: status.vault.crk_iv };
+  }
+
+  // A status response carrying the given custody root, as a foreign or stale root would.
+  function withStatusCustody(base, custody) {
+    return {
+      ...base,
+      memoroFetch: async (apiUrl, path, opts) => {
+        const result = await base.memoroFetch(apiUrl, path, opts);
+        if (path !== '/api/vault/status') return result;
+        return { ...result, vault: { ...result.vault, wrapped_crk: custody.wrapped_crk, crk_iv: custody.crk_iv } };
+      },
+    };
+  }
+
+  // A portal whose recovery-key POST fails with `failure()`; every other call passes through.
+  function failingRecoveryPortal(base, failure, attempts) {
+    return {
+      ...base,
+      memoroFetch: async (apiUrl, path, opts) => {
+        if (path !== '/api/vault/recovery-key') return base.memoroFetch(apiUrl, path, opts);
+        attempts.push(path);
+        throw failure();
+      },
+    };
+  }
+
+  async function setUpCustodyVault() {
+    await runVerb(['setup', '--json'], { portal });
+    await runVerb(['unlock', '--json'], { portal });
+    return portalWithCustody(server, portal);
+  }
+
+  it('a cached key does not stand in for the typed password: creation sends the current proof and wraps the same root', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    assert.notEqual(activeCacheDeps.snapshot().length, 0, 'the device holds a cached key before the verb runs');
+    const crkBefore = await custodyOf(custodyPortal);
+    const typed = typedPassword(PW);
+    const rec = recordingKeys();
+    const { rc, out, err } = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typed.stub, keyDeps: rec.keyDeps });
+    assert.equal(rc, 0, err || out);
+    assert.equal(typed.prompts.length, 1, 'one password prompt even with a cached key');
+
+    const { config } = server.inspect();
+    const proof = derivationFor(rec, PW);
+    assert.equal(proof.salt, config.salt, 'the proof is derived with the current server salt');
+    assert.equal(proof.iterations, config.iterations, 'and the current server iterations');
+    assert.equal(recoveryCalls().length, 1);
+    assert.equal(recoveryCalls()[0].body.currentAuthHash, proof.result.authHash);
+    assert.deepEqual(await custodyOf(custodyPortal), crkBefore, 'the custody root is not rewrapped');
+
+    const code = JSON.parse(out).recovery_code;
+    const stored = server.inspect().recovery;
+    const codeKey = derivationFor(rec, code);
+    assert.equal(stored.recovery_salt, codeKey.salt);
+    const viaRecovery = await unwrapCustodyRootBytes(codeKey.result.vaultKey, stored.wrapped_crk_recovery, stored.recovery_iv, CRK_RECOVERY_AAD);
+    const viaCurrent = await unwrapCustodyRootBytes(proof.result.vaultKey, crkBefore.wrapped_crk, crkBefore.crk_iv);
+    assert.deepEqual([...viaRecovery], [...viaCurrent], 'the recovery wrap opens the original root');
+  });
+
+  it('on a cache miss the typed password is read once, verified, and the verified key is cached', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    activeCacheDeps = makeMemCacheDeps();
+    const typed = typedPassword(PW);
+    const rec = recordingKeys();
+    const { rc, out, err } = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typed.stub, keyDeps: rec.keyDeps });
+    assert.equal(rc, 0, err || out);
+    assert.equal(typed.prompts.length, 1);
+    assert.equal(recoveryCalls().length, 1);
+    assert.equal(recoveryCalls()[0].body.currentAuthHash, derivationFor(rec, PW).result.authHash);
+    assert.notEqual(activeCacheDeps.snapshot().length, 0, 'the verified key refreshes the cache');
+  });
+
+  it('a wrong typed password is refused even with a cached key: no write, no code', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    const cacheBefore = activeCacheDeps.snapshot();
+    const typed = typedPassword(WRONG_PW);
+    const rec = recordingKeys();
+    const { rc, out } = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typed.stub, keyDeps: rec.keyDeps });
+    assert.equal(rc, 1);
+    assert.equal(typed.prompts.length, 1);
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.recovery_code, undefined);
+    assert.equal(recoveryCalls().length, 0);
+    assert.equal(server.inspect().recovery, null);
+    assert.deepEqual(activeCacheDeps.snapshot(), cacheBefore);
+    assert.deepEqual(rec.derivations.map((d) => d.password), [WRONG_PW], 'no recovery code is derived');
+  });
+
+  it('without a noninteractive password source the verb refuses before any prompt, unlock or write', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    const rec = recordingKeys();
+    const unlocksBefore = server.calls.filter((c) => c.path === '/api/vault/unlock').length;
+    delete process.env.MC_VAULT_PASSPHRASE;
+    let result;
+    try {
+      result = await runVerb(['recovery', '--json'], { portal: custodyPortal, keyDeps: rec.keyDeps });
+    } finally {
+      process.env.MC_VAULT_PASSPHRASE = PW;
+    }
+    assert.equal(result.rc, 1);
+    assert.match(JSON.parse(result.out).error, /MC_VAULT_PASSPHRASE/);
+    assert.equal(rec.derivations.length, 0);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/unlock').length, unlocksBefore);
+    assert.equal(recoveryCalls().length, 0);
+  });
+
+  it('a replacement sends the current proof, keeps the root and secret ciphertext, and retires the old code', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    await runVerb(['set', 'enveloped-one', '--no-confirm', '--json'], { portal: custodyPortal });
+
+    const firstRec = recordingKeys();
+    const first = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typedPassword(PW).stub, keyDeps: firstRec.keyDeps });
+    assert.equal(first.rc, 0, first.err || first.out);
+    const firstCode = JSON.parse(first.out).recovery_code;
+    const firstStored = server.inspect().recovery;
+    const crkBefore = await custodyOf(custodyPortal);
+    const rowsBefore = rowsOf();
+
+    const secondRec = recordingKeys();
+    const typed = typedPassword(PW);
+    const second = await runVerb(['recovery'], { portal: custodyPortal, promptStub: typed.stub, keyDeps: secondRec.keyDeps });
+    assert.equal(second.rc, 0, second.err || second.out);
+    assert.equal(typed.prompts.length, 1);
+    const secondCode = codeDerivedBy(secondRec);
+    assert.ok(second.out.includes(secondCode), 'the replacement code is shown in text mode');
+    assert.match(second.out, /previous recovery code is now invalid/);
+
+    const calls = recoveryCalls();
+    assert.equal(calls.length, 2);
+    const { config } = server.inspect();
+    assert.equal(calls[1].body.currentAuthHash, (await keys.deriveVaultKeys(PW, config.salt, config.iterations)).authHash);
+    assert.equal(calls[1].body.recoveryAuthHash, derivationFor(secondRec, secondCode).result.authHash);
+
+    const stored = server.inspect().recovery;
+    assert.equal(stored.recovery_auth_hash, createHash('sha256').update(calls[1].body.recoveryAuthHash, 'utf8').digest('hex'));
+    assert.notEqual(stored.recovery_auth_hash, firstStored.recovery_auth_hash, 'the first code verifier is no longer stored');
+    assert.deepEqual(await custodyOf(custodyPortal), crkBefore, 'the custody root is unchanged');
+    assert.deepEqual(rowsOf(), rowsBefore, 'secret ciphertext is unchanged');
+    const viaRecovery = await unwrapCustodyRootBytes(derivationFor(secondRec, secondCode).result.vaultKey,
+      stored.wrapped_crk_recovery, stored.recovery_iv, CRK_RECOVERY_AAD);
+    const current = derivationFor(firstRec, PW).result;
+    assert.deepEqual([...viaRecovery], [...await unwrapCustodyRootBytes(current.vaultKey, crkBefore.wrapped_crk, crkBefore.crk_iv)],
+      'the replacement wrap opens the original root');
+    assert.notEqual(firstCode, secondCode);
+  });
+
+  it('a missing or unreadable custody root refuses before any recovery write and never adopts a root', async () => {
+    await runVerb(['setup', '--json'], { portal });
+    await runVerb(['unlock', '--json'], { portal });
+    const adoptsBefore = server.calls.filter((c) => c.path === '/api/vault/custody-key').length;
+    const missing = recordingKeys();
+    const r1 = await runVerb(['recovery', '--json'], { portal, promptStub: typedPassword(PW).stub, keyDeps: missing.keyDeps });
+    assert.equal(r1.rc, 1);
+    assert.equal(JSON.parse(r1.out).recovery_code, undefined);
+    assert.equal(recoveryCalls().length, 0);
+    assert.equal(server.calls.filter((c) => c.path === '/api/vault/custody-key').length, adoptsBefore, 'the recovery verb adopts no custody root');
+    assert.equal(server.inspect().recovery, null);
+
+    const { config } = server.inspect();
+    const { vaultKey: otherKey } = await keys.deriveVaultKeys(WRONG_PW, config.salt, config.iterations);
+    const foreignPortal = withStatusCustody(portal, await mintCustodyRoot(otherKey));
+    const unreadable = recordingKeys();
+    const r2 = await runVerb(['recovery', '--json'], { portal: foreignPortal, promptStub: typedPassword(PW).stub, keyDeps: unreadable.keyDeps });
+    assert.equal(r2.rc, 1);
+    assert.match(JSON.parse(r2.out).error, /could not open the custody root/);
+    assert.equal(recoveryCalls().length, 0);
+    assert.equal(server.inspect().recovery, null);
+    assert.ok(!unreadable.derivations.some((d) => d.password !== PW), 'no recovery code is derived');
+  });
+
+  it('a wrong typed password on replacement leaves the prior code and wrap untouched', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    const first = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typedPassword(PW).stub, keyDeps: recordingKeys().keyDeps });
+    assert.equal(first.rc, 0, first.err || first.out);
+    const storedBefore = server.inspect().recovery;
+    const crkBefore = await custodyOf(custodyPortal);
+    const rec = recordingKeys();
+    const replace = await runVerb(['recovery', '--json'], { portal: custodyPortal, promptStub: typedPassword(WRONG_PW).stub, keyDeps: rec.keyDeps });
+    assert.equal(replace.rc, 1);
+    assert.equal(JSON.parse(replace.out).recovery_code, undefined);
+    assert.equal(recoveryCalls().length, 1, 'only the first creation reached the server');
+    assert.deepEqual(server.inspect().recovery, storedBefore);
+    assert.deepEqual(await custodyOf(custodyPortal), crkBefore);
+  });
+
+  it('an explicit server refusal returns nonzero, prints no code, and is not retried', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    const attempts = [];
+    const refusing = failingRecoveryPortal(custodyPortal, () => {
+      const err = new Error('Memoro 401: Invalid master password');
+      err.status = 401; err.data = { ok: false, code: 'INVALID_PASSWORD' };
+      return err;
+    }, attempts);
+    const rec = recordingKeys();
+    const { rc, out, err } = await runVerb(['recovery', '--json'], { portal: refusing, promptStub: typedPassword(PW).stub, keyDeps: rec.keyDeps });
+    assert.equal(rc, 1);
+    assert.equal(attempts.length, 1, 'one attempt, no automatic retry');
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.code, 'INVALID_PASSWORD');
+    assert.equal(parsed.recovery_code, undefined);
+    assert.ok(!(out + err).includes(codeDerivedBy(rec)), 'the derived code is not printed');
+    assert.doesNotMatch(out + err, /Invalid master password/, 'raw remote text is not echoed');
+    assert.equal(server.inspect().recovery, null);
+  });
+
+  it('an uncertain write (no explicit refusal) prints no code and makes no automatic retry', async () => {
+    const custodyPortal = await setUpCustodyVault();
+    const attempts = [];
+    const broken = failingRecoveryPortal(custodyPortal, () => new Error('fetch failed'), attempts);
+    const rec = recordingKeys();
+    const { rc, out, err } = await runVerb(['recovery', '--json'], { portal: broken, promptStub: typedPassword(PW).stub, keyDeps: rec.keyDeps });
+    assert.equal(rc, 1);
+    assert.equal(attempts.length, 1, 'no automatic retry of a write whose outcome is unknown');
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.code, 'RECOVERY_OUTCOME_UNKNOWN');
+    assert.equal(parsed.recovery_code, undefined);
+    assert.ok(!(out + err).includes(codeDerivedBy(rec)), 'the derived code is not printed');
+    assert.equal(server.inspect().recovery, null);
+  });
 });
