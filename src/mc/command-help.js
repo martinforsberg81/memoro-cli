@@ -63,7 +63,7 @@ export const COMMAND_USAGE = Object.freeze({
     "keep their selections. The catalog does not poll capacity. --json is for list.\n",
   ].join(''),
   goal: [
-    "usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title \"<title>\" [--phase <n>] [--stage plan|build]   a goal: GOAL.json (a skeleton), LOG.md, and a worktree per repository on goal/<goal>, from origin/main; in phase <n>, 1 by default; in stage plan, or build\n",
+    "usage — mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title \"<title>\" [--phase <n>] [--stage plan|build]   a goal: GOAL.json (a skeleton) and LOG.md, no worktree yet (the runner makes each repository's worktree on goal/<goal> at the goal's first session); in phase <n>, 1 by default; in stage plan, or build\n",
     "        mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text \"…\"   replace that field; a blank line parts paragraphs\n",
     "        mc goal document add <programme>/<goal> --label \"…\" --path \"…\"   a document the goal sends its reader to\n",
     "        mc goal criterion add <programme>/<goal> --criterion \"…\" --check \"…\"   a success criterion and how it is checked, not met\n",

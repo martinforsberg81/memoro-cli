@@ -2,8 +2,9 @@
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
  *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--phase <n>] [--stage plan|build]
- *                                  GOAL.json (a skeleton), LOG.md and a worktree per repository on goal/<goal>,
- *                                  from origin/main; in phase <n> (1 by default), at most one past the last;
+ *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
+ *                                  repository's worktree on goal/<goal> at the goal's first session;
+ *                                  in phase <n> (1 by default), at most one past the last;
  *                                  in stage plan (by default) or build
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
@@ -55,7 +56,7 @@ import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addGoalWorktree, addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -156,8 +157,9 @@ export async function run(argv, deps = {}) {
  * a fetch that fails leaves nothing behind; then GOAL.json — a skeleton with
  * the title and no criterion, which the runner starts no session on, in phase
  * `--phase` (1 by default; at most one past the programme's last) — and
- * LOG.md are written, and a worktree of each repository on `goal/<goal>`,
- * from origin/main, or on that branch as it is when it already exists.
+ * LOG.md are written. No worktree is made: the runner makes each repository's
+ * worktree on `goal/<goal>` before the goal's first session (`placeGoalWorktrees`),
+ * so a goal several phases away holds no checkout until it can be used.
  */
 function newGoal(args, flags, ctx) {
   const { stdout, stderr, home, now } = ctx;
@@ -205,16 +207,7 @@ function newGoal(args, flags, ctx) {
   ctx.write(join(dir, GOAL_FILE), renderGoal({ stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] }));
   ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
-
-  for (const { repo, bare } of bares) {
-    const path = join(dir, repo);
-    const added = addGoalWorktree({ git: ctx.git, bare, path, goal });
-    if (!added.ok) {
-      stderr.write(`mc: ${repo}'s worktree is not made — ${added.stderr.trim()}; the goal's files stand in ${dir}\n`);
-      return 1;
-    }
-    stdout.write(`  ${repo}  ${path}  ${added.existed ? `${added.branch}, as it was` : `${added.branch} from origin/main`}\n`);
-  }
+  stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
   stdout.write(`${GOAL_FILE} is to be filled in by verbs: mc goal set ${programme}/${goal} goal|contract|out-of-scope --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
   return 0;
 }

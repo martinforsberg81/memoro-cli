@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { goalField, goalJson, withGoal } from '../_helpers/goal-file.js';
@@ -71,7 +71,7 @@ function seededGoal(extra = {}) {
   return { [`${DIR}/GOAL.json`]: GOAL_TEXT, [`${DIR}/LOG.md`]: LOG_TEXT, ...extra };
 }
 
-test('mc goal new writes a GOAL.json skeleton, LOG.md and one worktree per repo from origin/main', async () => {
+test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
   const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain'], f.deps);
   assert.equal(code, 0, f.err());
@@ -89,12 +89,10 @@ test('mc goal new writes a GOAL.json skeleton, LOG.md and one worktree per repo 
   assert.deepEqual(f.calls, [
     { cwd: '/home/m/memoro-cli.git', args: ['fetch', '-q', 'origin'] },
     { cwd: '/home/m/memoro', args: ['fetch', '-q', 'origin'] },
-    { cwd: '/home/m/memoro-cli.git', args: ['show-ref', '--verify', '--quiet', 'refs/heads/goal/plain'] },
-    { cwd: '/home/m/memoro-cli.git', args: ['worktree', 'add', '-q', '-b', 'goal/plain', `${DIR}/memoro-cli`, 'origin/main'] },
-    { cwd: '/home/m/memoro', args: ['show-ref', '--verify', '--quiet', 'refs/heads/goal/plain'] },
-    { cwd: '/home/m/memoro', args: ['worktree', 'add', '-q', '-b', 'goal/plain', `${DIR}/memoro`, 'origin/main'] },
-  ]);
+  ], 'no worktree, and no branch looked at: nothing is added');
+  assert.deepEqual(listUnder(f.store, DIR), [], 'no <goal>/<repo> directory');
   assert.match(f.out(), new RegExp(`mc: mc/plain · plan · ready · phase 1 — ${DIR}`, 'u'));
+  assert.match(f.out(), /no worktree yet: the runner makes memoro-cli, memoro on goal\/plain at the goal's first session/u);
   assert.equal(goal.phase, 1, 'phase 1 when --phase is not given');
   assert.match(f.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain/u);
 });
@@ -109,10 +107,27 @@ test('mc goal new --stage build makes a goal ready to be built; no other stage i
   assert.equal(g.store[`${DIR}/GOAL.json`], undefined);
 });
 
-test('mc goal new uses a goal/<goal> branch that already exists as it is', async () => {
+test('mc goal new makes no worktree even when goal/<goal> already exists: the runner re-adds it at the first session', async () => {
   const f = fixture({ git: (cwd, args) => (args[0] === 'show-ref' ? ok() : allOk()) });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'Again'], f.deps), 0);
-  assert.deepEqual(f.calls.at(-1), { cwd: '/home/m/memoro', args: ['worktree', 'add', '-q', `${DIR}/memoro`, 'goal/plain'] });
+  assert.deepEqual(f.calls.map((call) => call.args[0]), ['fetch'], 'only the fetch');
+});
+
+test('addGoalWorktree adds an existing goal/<goal> as it is, after a prune, and makes a new one from origin/main', () => {
+  const calls = [];
+  const exists = { value: true };
+  const git = (cwd, args) => {
+    calls.push([cwd, ...args]);
+    return args[0] === 'show-ref' ? { ok: exists.value, stdout: '', stderr: '' } : { ok: true, stdout: '', stderr: '' };
+  };
+  const again = addGoalWorktree({ git, bare: '/b/memoro', path: `${DIR}/memoro`, goal: 'plain' });
+  assert.deepEqual([again.existed, again.branch], [true, 'goal/plain']);
+  assert.deepEqual(calls.slice(1), [['/b/memoro', 'worktree', 'prune'], ['/b/memoro', 'worktree', 'add', '-q', `${DIR}/memoro`, 'goal/plain']]);
+  calls.length = 0;
+  exists.value = false;
+  const fresh = addGoalWorktree({ git, bare: '/b/memoro', path: `${DIR}/memoro`, goal: 'plain' });
+  assert.deepEqual([fresh.existed, fresh.ok], [false, true]);
+  assert.deepEqual(calls.slice(1), [['/b/memoro', 'worktree', 'add', '-q', '-b', 'goal/plain', `${DIR}/memoro`, 'origin/main']]);
 });
 
 test('mc goal new refuses a programme with no directory, a goal that exists, a repository mc does not know, and a class that is neither fast nor large', async () => {
@@ -159,10 +174,10 @@ test('mc goal new leaves nothing behind when a repository cannot be fetched', as
   assert.equal(f.store[`${DIR}/LOG.md`], undefined);
 });
 
-test('mc goal new says which worktree could not be made, and where the goal\'s files stand', async () => {
+test('mc goal new cannot fail on a worktree, since it makes none: a git that refuses worktrees changes nothing', async () => {
   const f = fixture({ git: (cwd, args) => (args[0] === 'worktree' ? failed('branch in use') : allOk()) });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 1);
-  assert.match(f.err(), /memoro's worktree is not made — branch in use; the goal's files stand in/u);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.equal(f.calls.some((call) => call.args[0] === 'worktree'), false);
   assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'plan');
 });
 

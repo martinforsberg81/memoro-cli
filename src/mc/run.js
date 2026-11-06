@@ -68,7 +68,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1567,9 +1567,47 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
+   * Every repository's planning checkout of a programme is there on
+   * `plan/<programme>`, or the reason one is not. A plan session stands beside
+   * them (`canon/roles/plan-session.md`), so they are made before it starts,
+   * as `mc plan` makes them: from origin/main, or on the branch as it is. Only
+   * the add holds the runner lock; dependencies are attached after it is let
+   * go, awaited, so a cold install does not hold the event loop. Non-fatal: a
+   * checkout that cannot be made is said, and the session starts without it.
+   */
+  async function placePlanCheckouts(programmeDir, programme, name) {
+    const branch = `plan/${programme}`;
+    for (const repo of repos) {
+      const path = join(programmeDir, repo.name);
+      if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) continue;
+      if (!deps.exists(repo.path)) { say(`${name}: no ${repo.name} checkout at ${repo.path} — planning without it`); continue; }
+      if (!deps.git(repo.path, ['fetch', '-q', 'origin']).ok) say(`${name}: git fetch in ${repo.path} failed — origin/main may be stale`);
+      let added;
+      try {
+        added = deps.lock(root, () => {
+          // Another session may have made it since the check above.
+          if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) return { ok: true, existed: true, reused: true };
+          return addBranchWorktree({ git: deps.git, bare: repo.path, path, branch });
+        }, { strict: true });
+      } catch (error) {
+        added = { ok: false, stderr: error?.message || String(error) };
+      }
+      if (!added.ok) {
+        say(`${name}: ${repo.name}'s planning checkout ${path} is not made — ${String(added.stderr ?? '').trim() || 'git failed'}; the session starts without it`);
+        continue;
+      }
+      if (added.reused) continue;
+      say(`${name}: ${path} made on ${branch}${added.existed ? ', as it was' : ' from origin/main'}`);
+      const attached = await deps.attachDeps(path);
+      if (!attached.ok) say(`${name}: dependencies could not be attached in ${path} — ${attached.why}`);
+    }
+  }
+
+  /**
    * Every repository's worktree of a goal is there, or the reason one is not.
    * Anyone may work in a goal's worktree, so one that has gone is made again
-   * rather than refused.
+   * rather than refused. Made before a goal's first session of any kind but a
+   * programme turn, which has no goal (`runGoal`).
    */
   function placeGoalWorktrees(goal, name) {
     for (const repoName of goal.repos) {
@@ -1668,8 +1706,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return 'skipped:disk';
     }
     try {
-      const lost = planning ? null : placeGoalWorktrees(goal, name);
-      if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      if (!programmeTurn) {
+        const lost = placeGoalWorktrees(goal, name);
+        if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      }
+      // A plan session stands in the programme's directory (`cwd`), beside the planning checkouts.
+      if (planning) await placePlanCheckouts(cwd, goal.programme, name);
       // A goal's branch is made when it can start: one made at `mc goal new` in a
       // later phase is remade from origin/main before its first build, if unbuilt.
       if (kind === 'build' && !lastBuildEntry(goal.log)) {

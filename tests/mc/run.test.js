@@ -3262,6 +3262,115 @@ test('a goal that has lost its worktree gets it back on its branch, and says so'
   assert.equal(f.calls.sessions.length, 1);
 });
 
+/**
+ * Records each `worktree add` the runner makes, with the path it adds and how
+ * many sessions had started by then: the order the runner's own proof rests on.
+ */
+function sessionsAtAdd(f) {
+  const adds = [];
+  const { git } = f.deps;
+  f.deps.git = (cwd, args) => {
+    if (args[0] === 'worktree' && args[1] === 'add') adds.push({ cwd, args, path: args.find((arg) => arg.startsWith('/w/')), sessionsBefore: f.calls.sessions.length });
+    return git(cwd, args);
+  };
+  return adds;
+}
+
+/** The fixture's git with no branch yet: `show-ref` finds none, so a goal's branch is made from origin/main. */
+function noBranches(f) {
+  const { git } = f.deps;
+  f.deps.git = (cwd, args) => (args[0] === 'show-ref' ? { ok: false, stdout: '', stderr: '' } : git(cwd, args));
+}
+
+test('a build session on a goal with no worktree makes it on goal/<goal> before the session starts', async () => {
+  const f = goalFixture({ fresh: { worktree: false } });
+  noBranches(f);
+  const adds = sessionsAtAdd(f);
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  const [goalAdd] = adds.filter((add) => add.path === `${GOALS}/fresh/memoro`);
+  assert.deepEqual([goalAdd.cwd, goalAdd.args], ['/home/memoro', ['worktree', 'add', '-q', '-b', 'goal/fresh', `${GOALS}/fresh/memoro`, 'origin/main']]);
+  assert.equal(goalAdd.sessionsBefore, 0, 'made before the session');
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('a finish session on a goal with no worktree makes the goal\'s worktree and the planning checkouts, before it starts', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish', worktree: false } });
+  noBranches(f);
+  f.dirs.add('/home/memoro');
+  const adds = sessionsAtAdd(f);
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  const goalAdd = adds.find((add) => add.path === `${GOALS}/stuck/memoro`);
+  assert.deepEqual(goalAdd?.args, ['worktree', 'add', '-q', '-b', 'goal/stuck', `${GOALS}/stuck/memoro`, 'origin/main']);
+  assert.equal(goalAdd.sessionsBefore, 0);
+  assert.equal(f.calls.sessions[0].cwd, '/w/programs/prog', 'a plan session still stands beside the goal');
+});
+
+test('a released goal worktree comes back on its own existing branch, as it was: added without -b, after a prune', async () => {
+  const f = goalFixture({ lost: { worktree: false } });
+  const { git } = f.deps;
+  f.deps.git = (cwd, args) => (args[0] === 'show-ref' ? { ok: true, stdout: '', stderr: '' } : git(cwd, args));
+  const adds = sessionsAtAdd(f);
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const [goalAdd] = adds.filter((add) => add.path === `${GOALS}/lost/memoro`);
+  assert.deepEqual(goalAdd.args, ['worktree', 'add', '-q', `${GOALS}/lost/memoro`, 'goal/lost']);
+});
+
+test('a programme planning turn makes no goal worktree, but the programme\'s planning checkouts before it starts', async () => {
+  const f = goalFixture({ a: { stage: 'done', worktree: false } });
+  noBranches(f);
+  f.dirs.add('/home/memoro');
+  const adds = sessionsAtAdd(f);
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions[0].env.MC_PLAN_REASON, 'no_goals_remaining');
+  assert.equal(adds.some((add) => add.path?.startsWith(`${GOALS}/`)), false, 'no goal worktree');
+  const planAdd = adds.find((add) => add.path === '/w/programs/prog/memoro');
+  assert.deepEqual(planAdd?.args, ['worktree', 'add', '-q', '-b', 'plan/prog', '/w/programs/prog/memoro', 'origin/main']);
+  assert.equal(planAdd.sessionsBefore, 0);
+});
+
+test('a goal whose worktree cannot be added starts no session, and its log says why', async () => {
+  const f = goalFixture({ lost: { worktree: false } });
+  const { git } = f.deps;
+  f.deps.git = (cwd, args) => (args[0] === 'worktree' && args.includes(`${GOALS}/lost/memoro`) ? { ok: false, stdout: '', stderr: 'branch in use' } : git(cwd, args));
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  const last = parseLog(f.files[`${GOALS}/lost/LOG.md`]).at(-1);
+  assert.deepEqual([last.tool, last.comment], ['runner', 'no session started: memoro\'s worktree could not be made (branch in use)']);
+});
+
+test('a plan session makes the programme\'s planning checkouts on plan/<programme> before it launches, and attaches the new ones', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish' } });
+  noBranches(f);
+  f.dirs.add('/home/memoro');
+  const adds = sessionsAtAdd(f);
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  const planAdd = adds.find((add) => add.path === '/w/programs/prog/memoro');
+  assert.deepEqual(planAdd?.args, ['worktree', 'add', '-q', '-b', 'plan/prog', '/w/programs/prog/memoro', 'origin/main']);
+  assert.equal(planAdd.sessionsBefore, 0, 'added before the session launched');
+  assert.ok(f.calls.attached.some((item) => item.worktree === '/w/programs/prog/memoro' && item.sessionsBefore === 0), 'attached through the async door, before launch');
+});
+
+test('an existing planning checkout is reused, not added again', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish' } });
+  f.dirs.add('/w/programs/prog/memoro');
+  const adds = sessionsAtAdd(f);
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(adds.some((add) => add.path === '/w/programs/prog/memoro'), false);
+  assert.equal(f.calls.attached.some((item) => item.worktree === '/w/programs/prog/memoro'), false);
+});
+
+test('a planning checkout that cannot be added is named in the runner\'s line, and the plan session starts without it', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish' } });
+  noBranches(f);
+  f.dirs.add('/home/memoro');
+  const { git } = f.deps;
+  f.deps.git = (cwd, args) => (args[0] === 'worktree' && args.includes('/w/programs/prog/memoro') ? { ok: false, stdout: '', stderr: 'branch in use' } : git(cwd, args));
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.length, 1, 'the session launches all the same');
+  assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/stuck: memoro's planning checkout \/w\/programs\/prog\/memoro is not made — branch in use; the session starts without it/u);
+});
+
 test('a goal whose worktree was deleted is pruned from git before its branch is added again', async () => {
   const f = goalFixture({ lost: { worktree: false } });
   f.answer = logsItself(f, 'lost');

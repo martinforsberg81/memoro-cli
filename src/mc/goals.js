@@ -548,21 +548,28 @@ export function noCriteria(goal) {
 }
 
 /**
- * A worktree of the repository at `bare` at `path`, on `goal/<goal>`: from
+ * A worktree of the repository at `bare` at `path`, on `branch`: from
  * origin/main, or on that branch as it is when it already exists. Gives git's
- * answer with `branch` and `existed` beside it. `mc goal new` makes a goal's
- * worktrees this way, and the runner makes one a goal has lost. A directory
- * deleted by hand stays registered with git, which then refuses to add its
- * branch anywhere, so an existing branch is added after a prune.
+ * answer with `branch` and `existed` beside it. A directory deleted by hand
+ * stays registered with git, which then refuses to add its branch anywhere, so
+ * an existing branch is added after a prune.
  */
-export function addGoalWorktree({ git, bare, path, goal }) {
-  const branch = `goal/${goal}`;
+export function addBranchWorktree({ git, bare, path, branch }) {
   const existed = git(bare, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).ok;
   if (existed) git(bare, ['worktree', 'prune']);
   const added = git(bare, existed
     ? ['worktree', 'add', '-q', path, branch]
     : ['worktree', 'add', '-q', '-b', branch, path, 'origin/main']);
   return { ...added, branch, existed };
+}
+
+/**
+ * A goal's worktree of the repository at `bare` at `path`, on `goal/<goal>` (`addBranchWorktree`).
+ * The runner makes it at a goal's first session that needs it, and again when a
+ * release has taken it away; `mc goal new` makes none.
+ */
+export function addGoalWorktree({ git, bare, path, goal }) {
+  return addBranchWorktree({ git, bare, path, branch: `goal/${goal}` });
 }
 
 /**
