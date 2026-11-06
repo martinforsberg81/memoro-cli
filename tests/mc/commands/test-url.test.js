@@ -44,12 +44,14 @@ async function urlRun(t, declaration) {
   mkdirSync(join(worktree, '.mc'));
   writeFileSync(join(worktree, '.mc', 'test.json'), JSON.stringify(declaration));
 
+  const asked = [];
   const servers = {
     'memoro-static': { instance_id: 'static-1', url: 'http://127.0.0.1:8910' },
     'memoro-worker': { instance_id: 'measure-1', url: 'http://127.0.0.1:8920/' },
   };
   const ensureDevServer = async (_worktree, _declaration, options) => {
     const service = options.service || 'memoro-worker';
+    asked.push(service);
     if (service === 'memoro-worker') {
       options.onWaiting?.({ holders: [{ instance_id: 'measure-0', worktree_path: '/elsewhere' }] });
       options.onRegistered?.(servers[service]);
@@ -60,7 +62,9 @@ async function urlRun(t, declaration) {
   const stdout = sink();
   const stderr = sink();
   const code = await run(['dev', '--here', '--url'], { cwd: worktree, stdout, stderr, ensureDevServer });
-  return { code, stdout: stdout.text(), stderr: stderr.text() };
+  return {
+    code, stdout: stdout.text(), stderr: stderr.text(), asked,
+  };
 }
 
 test('--url prints the URL alone on stdout; the wait for a slot and the start go to stderr', async (t) => {
@@ -71,9 +75,10 @@ test('--url prints the URL alone on stdout; the wait for a slot and the start go
   assert.match(stderr, /started one — http:\/\/127\.0\.0\.1:8920/u);
 });
 
-test('--url with a static tier: its line goes to stderr too, and stdout is still the app URL alone', async (t) => {
-  const { code, stdout, stderr } = await urlRun(t, DECLARATION);
+test('--url with a static tier: no static server is started or held for it, and stdout is the app URL alone', async (t) => {
+  const { code, stdout, stderr, asked } = await urlRun(t, DECLARATION);
   assert.equal(code, 0, stderr);
   assert.equal(stdout, 'http://127.0.0.1:8920\n');
-  assert.match(stderr, /static tier — http:\/\/127\.0\.0\.1:8910/u);
+  assert.deepEqual(asked, ['memoro-worker'], 'the static service was never asked for');
+  assert.doesNotMatch(stderr, /static tier/u);
 });

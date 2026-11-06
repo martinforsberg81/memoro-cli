@@ -223,6 +223,8 @@ async function askAdmission(opts, { stdout, root, deps }) {
       verdict = { ok: false, reason: 'lock', error: error.message, holders: [], pending: [], free_percent: null, cap: slotCapOf(env) };
     }
   }
+  // The wrapper that named itself, when it still lives: a waiting admission gives up once it is gone.
+  const named = Number(env.MC_DEV_OWNER_PID);
   verdict ||= await (deps.admit || admit)({
     service: opts.service,
     worktree: opts.worktree,
@@ -230,6 +232,8 @@ async function askAdmission(opts, { stdout, root, deps }) {
     env,
     root,
     pid: owner,
+    owner: Number.isInteger(named) && named > 1 ? named : null,
+    alive,
     ...(deps.queueFile ? { queueFile: deps.queueFile } : {}),
     main: deps.main !== undefined ? deps.main : mainCheckout(env),
     sleep: deps.sleep,
