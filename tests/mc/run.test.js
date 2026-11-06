@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
-import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
+import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { programmeWorkKey } from '../../src/mc/programme-plan.js';
@@ -687,6 +687,24 @@ const pressureState = (f) => JSON.parse(f.files['/w/runner/disk-pressure.json'] 
 const pressureEvents = (f) => JSON.parse(f.files['/w/runner/disk-pressure-events.json'] ?? '[]');
 const GBYTES = 1e9;
 
+test('cleanup starts below 30 GB while admission stays at 20 GB and preserves cleanup cooldown', async () => {
+  const files = new Map(); let free = 30e9; let passes = 0;
+  const policy = createDiskPressure({ path: '/disk', stateDir: '/state', pid: 1,
+    freeBytes: () => free, read: (path) => files.get(path), writeJson: (path, value) => files.set(path, JSON.stringify(value)),
+    now: () => Date.parse('2026-11-06T12:00:00Z'),
+    steps: [{ name: 'tidy', run: async () => { passes += 1; return {}; } }],
+  });
+  await policy.poll(); assert.equal(passes, 0, '30 GB does not trigger cleanup');
+  free = 30e9 - 1; await policy.poll(); assert.equal(passes, 1, 'cleanup begins below 30 GB');
+  const cooldown = policy.readState().cooldown_until; assert.ok(cooldown);
+  for (const amount of [25e9, 20e9]) {
+    free = amount; assert.equal((await policy.admit()).admitted, true, `${amount} admits work`);
+    assert.equal(policy.readState().cooldown_until, cooldown, 'admission does not clear cleanup pressure');
+  }
+  free = 20e9 - 1; assert.equal((await policy.admit()).admitted, false, 'below 20 GB still refuses');
+  assert.equal(passes, 1, 'cooldown prevents repeated unsuccessful cleanup');
+});
+
 test('shared admission excludes other policy instances through allocation/start, and lock failure refuses', async () => {
   for (const otherPid of [1, 2]) {
     const files = new Map();
@@ -764,7 +782,7 @@ test('at exactly 20 GB a session starts, and a healthy disk runs no cleanup or d
 
 test('20 GB minus one byte runs one pressure pass before the session, stops at 40 GB, and records measured beside estimated', async () => {
   const f = goalFixture({ alpha: {} });
-  const disk = onDisk(f, PRESSURE_BYTES - 1, { tidyFrees: 22 * GBYTES, tidyEstimate: 30 * GBYTES });
+  const disk = onDisk(f, 20e9 - 1, { tidyFrees: 22 * GBYTES, tidyEstimate: 30 * GBYTES });
   const r = await createRunner({ deps: f.deps }).pass();
   assert.equal(r.ran, 1);
   assert.deepEqual(disk.steps, ['tidy'], 'at 40 GB Docker is not asked');
@@ -773,13 +791,13 @@ test('20 GB minus one byte runs one pressure pass before the session, stops at 4
     trigger: event.trigger, before: event.before_bytes, after: event.after_bytes, delta: event.measured_delta_bytes, estimate: event.estimate_bytes,
     outcome: event.outcome, steps: event.steps.map((step) => step.name), admitted: event.admission?.admitted, shortfall: event.shortfall_bytes,
   }, {
-    trigger: 'session:lane', before: PRESSURE_BYTES - 1, after: PRESSURE_BYTES - 1 + 22 * GBYTES, delta: 22 * GBYTES, estimate: 30 * GBYTES,
+    trigger: 'session:lane', before: 20e9 - 1, after: 20e9 - 1 + 22 * GBYTES, delta: 22 * GBYTES, estimate: 30 * GBYTES,
     outcome: 'recovered', steps: ['archive', 'tidy'], admitted: true, shortfall: 0,
   });
   assert.equal(event.steps[1].kept[0].why, 'its scratch directory has no ownership record — legacy scratch is kept');
   const state = pressureState(f);
   assert.deepEqual([state.status, state.cooldown_until, state.last_cleanup.outcome, state.lease], ['healthy', null, 'recovered', null]);
-  assert.match(f.files['/w/runner/log/runner.log'], /disk: 19\.9 GB free, below 20\.0 GB \(session:lane\) — tidying toward 40\.0 GB/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /disk: 19\.9 GB free, below 30\.0 GB \(session:lane\) — tidying toward 40\.0 GB/u);
 });
 
 test('below 20 GB with safe candidates exhausted: refused with free bytes and reason, a persisted cooldown a restart obeys, a pass again after it', async () => {
@@ -812,7 +830,7 @@ test('below 20 GB with safe candidates exhausted: refused with free bytes and re
   const after = await createRunner({ deps: f.deps }).pass();
   assert.equal(after.ran, 1);
   state = pressureState(f);
-  assert.deepEqual([state.status, state.cooldown_until, state.last_cleanup.outcome, state.shortfall_bytes], ['healthy', null, 'above-pressure', 19 * GBYTES]);
+  assert.deepEqual([state.status, state.cooldown_until, state.last_cleanup.outcome, state.shortfall_bytes], ['pressure', '2026-08-29T10:10:00.000Z', 'shortfall', 19 * GBYTES]);
   assert.equal('/w/runner/disk.json' in f.files, false);
 });
 
@@ -902,7 +920,7 @@ test('the monitor reads the disk every minute on its own timer and relieves pres
   await timers[0].fn();
   assert.deepEqual(disk.steps, ['tidy', 'docker']);
   const [event] = pressureEvents(f);
-  assert.deepEqual([event.trigger, event.before_bytes, event.after_bytes, event.outcome], ['monitor', 18 * GBYTES, 28 * GBYTES, 'above-pressure']);
+  assert.deepEqual([event.trigger, event.before_bytes, event.after_bytes, event.outcome], ['monitor', 18 * GBYTES, 28 * GBYTES, 'shortfall']);
   assert.equal(f.calls.sessions.length, 1, 'the session in flight goes on');
   f.files['/w/runner/STOP'] = '';
   release();

@@ -261,11 +261,12 @@ reclaimable estimate. Gigabytes are decimal (1 GB = 1e9 bytes).
 | | bytes | what it means |
 |---|---|---|
 | reserve | 20e9 | the floor kept for mc's operations |
-| pressure and admission | 20e9 | below it a pressure pass starts; no new heavy work is admitted until it is back |
+| automatic cleanup | 30e9 | below it a pressure pass starts |
+| admission | 20e9 | new heavy work is allowed at or above this independent floor |
 | recovery target | 40e9 | a pass stops here, or when its safe steps are exhausted |
 
 Admission uses the 20 GB reserve directly; there is no additional admission
-headroom. The cleanup target remains 40 GB. **This is a
+headroom. Automatic cleanup starts below 30 GB and still targets 40 GB. **This is a
 controlled-workload policy.** It holds back mc's own new work: a headless
 session, a deploy script, a stopped Docker runtime's start. It does not stop
 other applications, it does not cap a build that is already running, and it
@@ -283,7 +284,7 @@ deployer at the spawn; by `ensure` before it starts a stopped runtime. An
 up runtime is not asked. A reading that fails is written as `unknown`, shown,
 and refuses admission; cleanup and `mc tidy` still work.
 
-**The pass.** Below 20 GB a pass runs at once, unless a cooldown holds. Its
+**The pass.** Below 30 GB a pass runs at once, unless a cooldown holds. Its
 steps, each measured after it, stop at 40 GB:
 
 1. (runner only) finished goals archived through `archiveGoal` without the 24
@@ -296,7 +297,7 @@ steps, each measured after it, stop at 40 GB:
    does not prune through the runtime it is starting.
 
 The build cache is never pruned (§ Docker): no `builder prune`, no `system
-prune`, no cap. A pass that ends below 20 GB — exhausted, no progress, failed
+prune`, no cap. A pass that ends below 30 GB — exhausted, no progress, failed
 — sets `cooldown_until` five minutes ahead, persisted, so a restart does not
 repeat it; a healthy reading clears it and the pressure state. Passes are
 single-flight in a policy instance. Cleanup and admissions share a persisted
@@ -324,8 +325,12 @@ page state.
 
 **Where it shows.** `diskSummary` reads the state file and takes one fresh
 statfs measurement; that reading alone supplies the current disk text in the
-page and `mc tidy`. At 20 GB or more the human output is one concise measured
-line, including the healthy interval from 20 GB to the 40 GB cleanup target.
+page and `mc tidy`. At 30 GB or more the output is one healthy measured line.
+Between 20 and 30 GB it shows cleanup pressure while explicitly allowing new
+work. Below 20 GB, or with an unknown reading, new work waits. The structured
+`admission_blocked` flag keeps the page from labelling cleanup-only pressure
+as paused sessions. Admission between 20 and 30 GB does not clear the cleanup
+cooldown; the monitor continues retrying toward 40 GB.
 It does not repeat a past refusal, cleanup outcome, measured/estimated gain,
 protected-data note, target shortfall or expired cooldown. Under pressure or
 when measurement fails, it shows the current measured value or measurement

@@ -894,7 +894,7 @@ export async function ship(job, deps = {}) {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
     };
     // While the script runs, the disk is read every minute even with no
-    // runner, and a pressure pass starts below 20 GB. The deploy is never
+    // runner, and a pressure pass starts below 30 GB. The deploy is never
     // stopped for it: what it already writes is its own.
     const every = deps.every || ((ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); });
     const stopMonitor = disk ? every(DISK_POLL_MS, () => disk.poll({ trigger: 'deploy-monitor' }).catch(() => null)) : null;

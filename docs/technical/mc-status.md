@@ -50,9 +50,10 @@ accounting and nothing else is counted.
 
 The page's current disk row is the fresh `diskSummary` measurement collected
 in `page-collect.js` and drawn by `page-render.js`; the runner's `disk.json`
-refusal is kept only as historical structured data. A measured 20 GB or more
-is healthy for admission even below the 40 GB cleanup target, so stale refusal
-and cleanup details do not appear as current warnings. Current pressure and a
+refusal is kept only as historical structured data. Cleanup pressure starts
+below 30 GB, but the page pauses new sessions only when `admission_blocked`
+is true: below 20 GB or with an unknown reading. Between 20 and 30 GB cleanup
+can retry toward 40 GB while sessions remain allowed. Current pressure and a
 failed measurement remain visible, with a future retry time only while active
 at the page collection observation time.
 The state is shared with `mc tidy`; see [mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure).
