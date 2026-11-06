@@ -147,3 +147,10 @@ export function writeRedDetail({ root, repo, pr, report, now = new Date() }) {
 export function removeRedDetail({ root, repo, pr }) {
   try { rmSync(mergeRedPath(root, repo, pr), { force: true }); } catch { /* nothing kept it */ }
 }
+
+/** A compact display reason; the complete diagnostic stays in the report/log. */
+export function mergeFailureSummary(reason) {
+  const first = String(reason || 'failure reason unavailable').split(/\r?\n/u).find((line) => line.trim()) || 'failure reason unavailable';
+  if (/not mergeable|merge conflict|CONFLICT \(/iu.test(first)) return 'Merge conflict';
+  return first.replace(/^merge:\s*(?:X\s*)?/u, '').trim();
+}

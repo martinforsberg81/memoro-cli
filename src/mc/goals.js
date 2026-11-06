@@ -406,11 +406,10 @@ export function inStage(log, stage) {
 }
 
 /**
- * Whether a goal in `merge` has a red (or a moved head) for one plan
- * session: `merge · ready`, the last entry the merger's answer
- * (`mergeAnswered`), and none of its pull requests in the merger's line
- * (`inLine`, merge-queue.js). A second red in `merge` is `merge · blocked`
- * (`merger.js`), so this is true at most once per goal.
+ * Compatibility for an older merger's `merge · ready` failure: start plan
+ * recovery while its last entry is the merger's answer and no PR is queued.
+ * New merger failures set `merge · blocked` immediately and use the ordinary
+ * blocked recovery path in goalSession.
  */
 export function mergeRetryDue(goal, inLine = []) {
   if (goal.stage !== 'merge' || goal.status !== 'ready' || !mergeAnswered(goal.log.at(-1))) return false;

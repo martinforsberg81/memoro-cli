@@ -1,4 +1,5 @@
 /** Repository-specific operational views; a port is an address, never a PR cell. */
+import { mergeFailureSummary } from './merge-red.js';
 import { width } from './status-render.js';
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
@@ -109,19 +110,32 @@ export function mergesLines(lines, c, wide, merges, expand) {
     if (!active.length && !repo.pause && !repo.merger_stopped) {
       operation(lines, c, wide, waiting.length ? 'waiting' : 'idle', waiting.length ? 'ready for merger' : 'no merge running');
     }
-    for (const item of [...active, ...reds]) {
+    for (const item of active) {
       const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
-      const red = item.kind === 'red' || item.state === 'red';
-      const label = `${red ? 'failed' : 'merging'} ${refs}`;
-      const status = [!red && mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
+      const label = `merging ${refs}`;
+      const status = [mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
       operation(lines, c, wide, label, status, stateTone(item.state));
-      if (!red && item.pid) detail(lines, c, wide, 8, `pid ${item.pid}`);
-      if (red) detail(lines, c, wide, 8, item.said || item.reason || 'failure reason unavailable', ['red']);
+      if (item.pid) detail(lines, c, wide, 8, `pid ${item.pid}`);
       if (item.batch_of) detail(lines, c, wide, 8, `with #${item.batch_of}`);
       if (expand) {
         detail(lines, c, wide, 8, item.name || item.title || '');
         if (item.title && item.title !== item.name) detail(lines, c, wide, 8, item.title);
         if (item.queue_age_seconds != null) detail(lines, c, wide, 8, `queued ${duration(item.queue_age_seconds)}`);
+      }
+    }
+    if (reds.length) {
+      operation(lines, c, wide, 'FAILED MERGES', `${reds.length}`, ['red', 'bold']);
+      for (const item of reds) {
+        const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
+        const recovery = item.recovery || {};
+        const status = recovery.state === 'running'
+          ? ['recovery running', recovery.elapsed_seconds != null && duration(recovery.elapsed_seconds), recovery.tool, recovery.model,
+            recovery.pid && `pid ${recovery.pid}`].filter(Boolean).join(' · ')
+          : recovery.state === 'Martin' ? 'waits on Martin'
+          : recovery.state === 'waiting' ? 'waiting for recovery' : 'no recovery session';
+        operation(lines, c, wide, `failed ${refs}`, [status, item.progress && `failed ${item.progress} ago`].filter(Boolean).join(' · '), ['red']);
+        const summary = mergeFailureSummary(item.said || item.reason);
+        lines.push(`        ${c(clipCell(summary, Math.max(0, wide - 8)), 'red')}`);
       }
     }
     if (expand) {

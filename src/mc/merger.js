@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { appendEntry, goalOfPr, inStage, logStamp, mergeAnswered, prRef, redMergeText, setGoalState } from './goals.js';
+import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setGoalState } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -669,12 +669,9 @@ export function goalOfJob(job, goalsOf) {
  * request and the landed sha — unless the goal carries another pull request
  * (`prs`) than this one, when the landing is written with no change and the
  * runner sets `done` once the rest has landed (`settleLanded`, run.js). Not
- * landed — red, or moved past the head its review judged — a goal in
- * `merge` stays there: the first time `merge · ready`, for one plan
- * session (`mergeRetryDue`), a second time in `merge` `merge ·
- * blocked`, for blocked recovery. A goal in another stage (a person queued it)
- * gets the answer written and does not move. A requeue says nothing yet: the
- * next round answers it.
+ * landed — red, or moved past the reviewed head — sets `merge · blocked`
+ * immediately, for plan recovery. A goal in another stage keeps its stage.
+ * A requeue says nothing yet: the next round answers it.
  */
 function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued }) {
   if (requeued) return;
@@ -700,10 +697,8 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
     }
-    const again = !landed && inStage(goal.log ?? [], 'merge').some(mergeAnswered);
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : again ? { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — the second in merge: a blocked plan session takes it`) }
-      : { stage: 'merge', status: 'ready', entry: entry(red, `${why} — one plan session takes it and queues it again`) };
+      : { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — a plan session resolves the obstacle`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);
