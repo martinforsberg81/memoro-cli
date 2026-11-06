@@ -1042,6 +1042,8 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
   // (B) Exact rebuildable caches, with ownership/age and inactivity evidence.
   for (const item of facts.cache_items || []) {
     const verdict = rebuildableCache(item, facts.now);
+    // A containing worktree/area already includes this cache in its removal and byte estimate.
+    if (verdict.target && targets.some((parent) => item.path.startsWith(parent.path + '/'))) continue;
     if (verdict.target) targets.push({ path: item.path, kind: item.kind, rule: 'B', why: verdict.why,
       bytes: item.bytes || 0, identity: item.identity, owner_id: item.owner_id ?? null });
     else keep(item.path, 'B', verdict.why);

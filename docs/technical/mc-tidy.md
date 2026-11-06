@@ -198,7 +198,9 @@ Apply inventories the candidates again and, immediately before each removal,
 rechecks that candidate's ownership, process/server state, open files and full
 tree hash. A replaced directory, nested edit, new writer, changed owner or
 unregistered worktree is retained. Only exact cache shapes can be removed,
-even if a list is edited to name a broader parent.
+even if a list is edited to name a broader parent. A cache inside a worktree
+or area already selected for removal is omitted as a separate target, avoiding
+double removal and double counting.
 
 The OS-managed simulator dyld cache is not automatically purged: tidy has no
 writer-ownership/idle receipt for it. Arbitrary temporary test fixtures without

@@ -1483,6 +1483,23 @@ describe('(B) exact rebuildable caches', () => {
     } finally { s.m.cleanup(); }
   });
 
+  it('removes a selected parent worktree without separately listing its nested bundle cache', () => {
+    const s = cacheMachine();
+    try {
+      const area = join(tidyRoots(s.m.env).plan, 'idle'); mkdirSync(area, { recursive: true });
+      const wt = join(area, 'memoro'); renameSync(s.wt, wt); s.m.worktrees.memoro = [wt];
+      s.m.write(join(wt, '.git'), 'gitdir: /fake');
+      const bundle = join(wt, '.wrangler/dev-server/measure/bundle');
+      const preview = runTidy(s.doors({ person: true }));
+      assert.ok(preview.list.targets.some((x) => x.path === wt && x.rule === 'I'), 'the containing checkout is eligible');
+      assert.equal(preview.list.targets.some((x) => x.path === bundle), false, 'the parent already accounts for this cache');
+      const applied = applyTidy({ listPath: preview.listPath, ...s.doors() });
+      assert.ok(applied.applied.every((x) => x.ok), 'removing the parent must not leave a false missing-cache failure');
+      assert.equal(existsSync(wt), false);
+      assert.equal(applied.kept, 0);
+    } finally { s.m.cleanup(); }
+  });
+
   it('retains native compilation evidence while its goal needs review and rechecks reopened goals at removal', () => {
     const s = cacheMachine();
     try {
