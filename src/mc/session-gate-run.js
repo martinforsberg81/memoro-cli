@@ -17,6 +17,10 @@ import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, s
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
 
+// A stop invalidates successful progress metadata, not the evidence collected.
+const stoppedResult = (result, stopped_at) => ({ ...result, stopped_at,
+  ok: false, code: 1, process_ok: false, complete: false, verdict: 'red' });
+
 export function selectorCommand(command, { base = 'origin/main', changed = [] } = {}) {
   // Both repositories' selectors accept explicit changed paths. This includes
   // unstaged and untracked changes and both sides of a rename.
@@ -67,7 +71,7 @@ export async function runSessionGate(request, {
             if (files.length) pendingFiles = files;
           }, onProgress: (next) => { live = next; } }), cut,
       ]);
-      if (!timedOut) return result ?? { ...live, ok: false, code: 1, stopped_at: 'interrupted' };
+      if (!timedOut) return result ?? stoppedResult(live, 'interrupted');
       // What did not finish is the red, and is named; the slowest files that did
       // finish are for the reader. Asked files that never started are unfinished too.
       const prefix = `${request.cwd}/`;
@@ -88,27 +92,27 @@ export async function runSessionGate(request, {
         ...(pendingCommands.length ? [`pending commands: ${pendingCommands.join(', ')}`] : [])];
       const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}`;
       (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}\n`);
-      return { ...timedOutSnapshot, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest,
-        timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands };
+      return stoppedResult({ ...timedOutSnapshot, reason, red_files: unfinished, slowest_files: slowest,
+        timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands }, 'timeout');
     } finally { clearTimeout(timeout); }
   };
   if (!request.measurement) return execute();
   const started = now();
   let before = null;
   let after = null;
-  let result = { ok: false, code: 1, stopped_at: 'content-changed' };
+  let result = stoppedResult(null, 'content-changed');
   try {
     before = snapshot(request.cwd);
     if (sameContent(request.measurement.candidate, before)) result = await execute();
     after = snapshot(request.cwd);
   } catch (error) {
-    result = { ok: false, code: 1, stopped_at: 'evidence', error: error.message };
+    result = stoppedResult({ ...result, error: error.message }, 'evidence');
   }
   if (!sameContent(request.measurement.candidate, before) || !sameContent(before, after)) {
     (deps.write || ((text) => process.stdout.write(text)))('Error: worktree content changed or could not be fingerprinted — measurement invalid\n');
-    result = { ...result, ok: false, code: 1, stopped_at: 'content-changed' };
+    result = stoppedResult(result, 'content-changed');
   }
-  if (deps.signal?.aborted) result = { ...result, ok: false, code: 1, stopped_at: 'interrupted' };
+  if (deps.signal?.aborted) result = stoppedResult(result, 'interrupted');
   const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now() });
   const path = persist({ root: request.gate.root, receipt });
   try { record({ root: request.gate.root, receipt, path }); }

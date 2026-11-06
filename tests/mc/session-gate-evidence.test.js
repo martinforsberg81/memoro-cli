@@ -195,6 +195,7 @@ it('changes while waiting or testing invalidate the measurement, including gener
     } });
     assert.equal(calls, when === 'waiting' ? 0 : 1);
     assert.equal(result.ok, false);
+    assert.deepEqual([result.code, result.process_ok, result.complete, result.verdict], [1, false, false, 'red']);
     assert.equal(receiptOf(result).outcome, 'invalid');
   }
 });
@@ -235,6 +236,7 @@ it('a concurrent ceiling receipt retains active evidence and cannot be reused as
   });
   const receipt = receiptOf(result);
   assert.equal(result.stopped_at, 'timeout');
+  assert.deepEqual([result.code, result.ok, result.process_ok, result.complete, result.verdict], [1, false, false, false, 'red']);
   assert.equal(result.timeout_phase, 'tests, command first');
   assert.deepEqual(result.red_files, ['a.test.js']);
   assert.deepEqual(result.running_commands, ["npm run 'first'"]);
@@ -329,6 +331,7 @@ it('interruption during the final content observation cannot mint green', async 
   });
   assert.equal(result.ok, false);
   assert.equal(receiptOf(result).outcome, 'red');
+  assert.deepEqual([result.code, result.process_ok, result.complete, result.verdict], [1, false, false, 'red']);
 });
 
 async function measured(t, { files = null, pattern = null, flags = [], commands = [] } = {}) {
