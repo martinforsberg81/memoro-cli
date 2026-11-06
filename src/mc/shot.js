@@ -13,6 +13,7 @@
  * did. Its path reaches the script through `MEMORO_SHOT_REQUEST`, never argv.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import {
   closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
@@ -342,11 +343,21 @@ function stamp(date) {
     + `-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
 }
 
-/** `<YYYYMMDD-HHMMSS>-<dev|prod>[-me]-<target>[-<shell>|-el]-<viewport>[-<theme>].png` under `dir`. */
+/** Two hex digits' worth of chance: what tells two default names taken in the same millisecond apart. */
+export function uniqueSuffix() {
+  return randomBytes(2).toString('hex');
+}
+
+/**
+ * `<YYYYMMDD-HHMMSS>-<mmm>-<xxxx>-<dev|prod>[-me]-<target>[-<shell>|-el]-<viewport>[-<theme>].png`
+ * under `dir`. The milliseconds and the random part keep two default names
+ * from one second apart; `--out` names its file itself and is not this.
+ */
 export function outPath({
   dir, now = new Date(), where, me = false, target, shell = null, element = null, viewport, theme = null,
+  random = uniqueSuffix,
 }) {
-  const parts = [stamp(now), where];
+  const parts = [stamp(now), String(now.getMilliseconds()).padStart(3, '0'), random(), where];
   if (me) parts.push('me');
   parts.push(target);
   if (element) parts.push('el');

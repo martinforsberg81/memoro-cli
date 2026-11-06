@@ -236,12 +236,26 @@ describe('mc shot — the pieces', () => {
 
   it('names the file', () => {
     const now = new Date(2026, 8, 26, 14, 3, 9);
-    assert.equal(outPath({ dir: '/s', now, where: 'dev', target: 'home', viewport: 'desktop' }), '/s/20260926-140309-dev-home-desktop.png');
+    const random = () => 'beef';
+    assert.equal(outPath({ dir: '/s', now, where: 'dev', target: 'home', viewport: 'desktop', random }), '/s/20260926-140309-000-beef-dev-home-desktop.png');
     assert.equal(
-      outPath({ dir: '/s', now, where: 'prod', me: true, target: 'app-people', shell: 'base', viewport: '390x844', theme: 'dark' }),
-      '/s/20260926-140309-prod-me-app-people-base-390x844-dark.png',
+      outPath({ dir: '/s', now, where: 'prod', me: true, target: 'app-people', shell: 'base', viewport: '390x844', theme: 'dark', random }),
+      '/s/20260926-140309-000-beef-prod-me-app-people-base-390x844-dark.png',
     );
-    assert.equal(outPath({ dir: '/s', now, where: 'dev', target: 'home', element: '.x', viewport: 'iphone' }), '/s/20260926-140309-dev-home-el-iphone.png');
+    assert.equal(
+      outPath({ dir: '/s', now, where: 'dev', target: 'home', element: '.x', viewport: 'iphone', random }),
+      '/s/20260926-140309-000-beef-dev-home-el-iphone.png',
+    );
+  });
+
+  it('gives two default names taken in the same second different paths', () => {
+    const now = new Date(2026, 8, 26, 14, 3, 9, 427);
+    const args = { dir: '/s', now, where: 'dev', target: 'home', viewport: 'iphone' };
+    const first = outPath({ ...args, random: () => '0a1b' });
+    const second = outPath({ ...args, random: () => '0c2d' });
+    assert.equal(first, '/s/20260926-140309-427-0a1b-dev-home-iphone.png');
+    assert.equal(second, '/s/20260926-140309-427-0c2d-dev-home-iphone.png');
+    assert.notEqual(first, second);
   });
 
   it('reads the last non-empty line, and nothing else', () => {
@@ -334,7 +348,7 @@ describe('mc shot — the run', () => {
     assert.equal(first, side.request.out);
     assert.equal(second, 'http://127.0.0.1:8787/app/');
     assert.ok(existsSync(first));
-    assert.match(first, /shots\/20260926-140309-dev-home-desktop\.png$/u);
+    assert.match(first, /shots\/20260926-140309-\d{3}-[0-9a-f]{4}-dev-home-desktop\.png$/u);
     assert.deepEqual(side.request.sign_in, { kind: 'url', url: 'http://127.0.0.1:8787/dev/login?account=seeded&ready=1' });
     assert.equal(side.request.account, 'seeded');
     assert.equal(side.request.base_url, 'http://127.0.0.1:8787');
