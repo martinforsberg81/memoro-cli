@@ -72,6 +72,8 @@ function normalise(entry) {
     // A red only under load is put back in line rather than answered
     // (`markRequeued`): how often, and not before when it is taken again.
     requeues: Number.isInteger(entry.requeues) && entry.requeues > 0 ? entry.requeues : 0,
+    // Rounds the network stopped in a row for this job (`markOffline`): not a requeue, not an attempt.
+    offline: Number.isInteger(entry.offline) && entry.offline > 0 ? entry.offline : 0,
     not_before: entry.state === 'queued' && typeof entry.not_before === 'string' ? entry.not_before : null,
     // A red answer's words and when it came (`markRed`).
     reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
@@ -214,7 +216,7 @@ export function nextBatch(entries, {
 
 /** The entry back in line, as `queued`, its place (`since`) kept. */
 export function markQueued(entries, job) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null, merger: null } : entry));
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null, merger: null, offline: 0 } : entry));
 }
 
 /**
@@ -225,7 +227,19 @@ export function markQueued(entries, job) {
  */
 export function markRequeued(entries, job, { notBefore = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, merger: null, requeues: (entry.requeues || 0) + 1, not_before: notBefore }
+    ? { ...entry, state: 'queued', started: null, merger: null, requeues: (entry.requeues || 0) + 1, offline: 0, not_before: notBefore }
+    : entry));
+}
+
+/**
+ * The entry back in line after a round the network stopped: `queued`, its
+ * place kept, one more `offline` in a row, and not taken before `notBefore`.
+ * Not a requeue: nothing in the change was measured, so the requeue budget
+ * stays for the change's own reds, and no session is started.
+ */
+export function markOffline(entries, job, { notBefore = null } = {}) {
+  return entries.map((entry) => (samePr(entry, job)
+    ? { ...entry, state: 'queued', started: null, merger: null, offline: (entry.offline || 0) + 1, not_before: notBefore }
     : entry));
 }
 

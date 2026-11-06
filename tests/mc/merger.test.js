@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import {
-  landerFor, landJob, MAX_REQUEUES, mergerPath, queueMerge, readMerger, releaseMerger, serve, startMerger, SUBJECT_POLL_MS, succeed,
+  landerFor, landJob, MAX_REQUEUES, mayOffline, mergerPath, OFFLINE_BLOCK_AFTER, offlineBackoffMs, queueMerge, readMerger, releaseMerger,
+  serve, startMerger, SUBJECT_POLL_MS, succeed,
   sweepMergedReds, takeMerger, watchSubject,
 } from '../../src/mc/merger.js';
 
@@ -252,6 +253,106 @@ describe('landJob — one job, landed or answered', () => {
     await landJob(JOB, m.deps);
     assert.equal(m.rounds.length, 1);
     assert.equal(m.rows[0].name, 'memoro-cli');
+  });
+});
+
+/** A round the network stopped, as `runMergeRound` answers it: nothing was read, so nothing is wrong with the pull request. */
+const OFFLINE = {
+  ok: false, merged: false, stopped_at: 'offline',
+  reason: 'git fetch origin --prune failed, so origin/main could not be re-checked before merging (exit 128)',
+};
+const AT = '2026-11-06T12:00:00Z';
+
+describe('an offline round is put back in line, not answered red', () => {
+  it('the backoff is a minute, doubling, at most 15 minutes', () => {
+    assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map(offlineBackoffMs), [60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000]);
+    assert.equal(OFFLINE_BLOCK_AFTER, 6);
+  });
+
+  it('one offline answer: no requeue used, no goal said, one merger.log line, and the row says offline', async () => {
+    const m = machine([OFFLINE]);
+    const answers = await landJob(JOB, m.deps);
+    assert.equal(answers[0].offline, true);
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].requeued, undefined);
+    assert.equal(m.rows[0].note, 'offline');
+    assert.equal(m.said.filter((line) => /: offline: /u.test(line)).length, 1, 'one line per answer');
+    assert.ok(m.said.some((line) => /^memoro-cli #671: offline: git fetch origin --prune failed.* — back in line in 1 min \(offline 1 of 6\), no session started$/u.test(line)), m.said.join('\n'));
+  });
+
+  it('serve: the job is queued again a minute on, its place and its requeue budget kept', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: '2026-11-06T11:00:00Z' }]));
+    const m = machine([OFFLINE]);
+    const now = () => new Date(AT);
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, now,
+      land: (batch, lane, extra) => landJob(batch, { ...m.deps, ...extra, now }),
+    });
+    const [entry] = queue();
+    assert.equal(entry.state, 'queued');
+    assert.equal(entry.offline, 1);
+    assert.equal(entry.requeues, 0);
+    assert.equal(entry.since, '2026-11-06T11:00:00Z');
+    assert.equal(entry.not_before, '2026-11-06T12:01:00.000Z');
+    assert.equal(m.rounds.length, 1, 'no second round before the backoff has passed');
+  });
+
+  it('serve: a later reachable round lands once the backoff has passed', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: '2026-11-06T11:00:00Z', offline: 1, not_before: '2026-11-06T12:01:00.000Z' }]));
+    const m = machine([green]);
+    const now = () => new Date('2026-11-06T12:01:00Z');
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, now,
+      land: (batch, lane, extra) => landJob(batch, { ...m.deps, ...extra, now }),
+    });
+    assert.equal(m.rounds.length, 1);
+    assert.deepEqual(queue(), []);
+  });
+
+  it('an offline answer leaves its goal as it is: no status, no note, no session', async () => {
+    const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
+    const goal = { ...GOAL, stage: 'review', status: 'ready', prs: [{ repo: 'memoro-cli', pr: 671 }], log: [] };
+    const writes = [];
+    const notes = [];
+    const m = machine([OFFLINE], {
+      goalsOf: () => [goal], setGoal: (change) => { writes.push(change); return { goal }; }, noteGoal: (change) => { notes.push(change); },
+    });
+    // A goal's review-queued pull request: no `job.goal`, its goal found by its `prs`, so the round runs.
+    const answers = await landJob(JOB, m.deps);
+    assert.equal(answers[0].offline, true);
+    assert.equal(m.rounds.length, 1);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(notes, []);
+  });
+
+  it('the fifth offline answer in a row is put back in line, the next backoff on', async () => {
+    const m = machine([OFFLINE]);
+    const answers = await landJob({ ...JOB, offline: 4 }, m.deps);
+    assert.equal(answers[0].offline, true);
+    assert.ok(m.said.some((line) => /back in line in 15 min \(offline 5 of 6\), no session started/u.test(line)), m.said.join('\n'));
+    assert.equal(mayOffline({ offline: 4 }, OFFLINE), true);
+    assert.equal(mayOffline({ offline: 5 }, OFFLINE), false);
+    assert.equal(mayOffline({ offline: 0 }, { ...OFFLINE, stopped_at: 'pr' }), false, 'only the network answer waits');
+  });
+
+  it('the sixth offline answer in a row is answered as it stands, and the goal is blocked saying the network was down for that long', async () => {
+    const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
+    const goal = { ...GOAL, stage: 'review', status: 'ready', prs: [{ repo: 'memoro-cli', pr: 671 }], log: [] };
+    const writes = [];
+    const m = machine([OFFLINE], {
+      goalsOf: () => [goal], setGoal: (change) => { writes.push(change); return { goal }; }, noteGoal: () => {},
+    });
+    const answers = await landJob({ ...JOB, offline: 5 }, m.deps);
+    assert.equal(answers[0].offline, undefined);
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].report.stopped_at, 'offline');
+    assert.match(answers[0].report.reason, /the network has been unreachable for at least 30 min \(6 rounds in a row\)/u);
+    assert.equal(m.rows[0].note, 'red,offline');
+    assert.equal(writes.length, 1);
+    assert.deepEqual([writes[0].stage, writes[0].status], ['merge', 'blocked']);
+    assert.match(writes[0].entry.comment, /unreachable for at least 30 min \(6 rounds in a row\)/u);
   });
 });
 
