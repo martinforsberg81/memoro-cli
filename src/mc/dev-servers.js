@@ -440,8 +440,8 @@ const ADMIT_SAY_MS = 60_000;
  * - A reservation for them that has not registered yet is a start in
  *   progress: `reason: 'starting'`, so two callers for one worktree never
  *   start two servers.
- * - Memory: a machine already short is refused whatever the count, and a
- *   `freePercent` of null (no sysctl) skips it rather than guessing.
+ * - Memory: a machine already short is refused whatever the count, and an
+ *   unknown `freePercent` skips the check rather than guessing.
  * - The cap: every live server that is not MAIN, of any resource class, and
  *   every reservation that is not MAIN and has no live server yet. MAIN takes
  *   no slot (`capped: false` for a request for it).
@@ -527,8 +527,39 @@ export function pendingOf(servers, reservations, { main = null } = {}) {
     }));
 }
 
-/** `kern.memorystatus_level` — the percentage of memory free, on macOS — or null. */
-export function freeMemoryPercent(run = spawnSync) {
+/**
+ * Host memory available to start more work, or null when telemetry is unknown.
+ * Linux uses MemAvailable (including reclaimable memory), not MemFree, from
+ * /proc/meminfo; Darwin keeps its existing sysctl reading. Other platforms
+ * are deliberately not probed.
+ */
+export function freeMemoryPercent(run = spawnSync, { platform = process.platform, readFile = readFileSync } = {}) {
+  if (platform === 'linux') {
+    try {
+      const contents = String(readFile('/proc/meminfo', 'utf8'));
+      const fields = new Map([['MemAvailable', []], ['MemTotal', []]]);
+      for (const line of contents.split(/\r?\n/u)) {
+        const name = /^(MemAvailable|MemTotal):/u.exec(line)?.[1];
+        if (name) fields.get(name).push(line);
+      }
+      const parse = (name) => {
+        const entries = fields.get(name);
+        if (entries.length !== 1) return null;
+        const match = /^\w+:\s+(\d+)\s+kB\s*$/u.exec(entries[0]);
+        if (!match) return null;
+        const value = Number(match[1]);
+        return Number.isSafeInteger(value) ? value : null;
+      };
+      const available = parse('MemAvailable');
+      const total = parse('MemTotal');
+      if (available === null || total === null || total <= 0 || available < 0 || available > total) return null;
+      const percent = 100 * available / total;
+      return Number.isFinite(percent) ? percent : null;
+    } catch {
+      return null;
+    }
+  }
+  if (platform !== 'darwin') return null;
   try {
     const asked = run('sysctl', ['-n', 'kern.memorystatus_level'], { encoding: 'utf8' });
     if (asked?.status !== 0) return null;

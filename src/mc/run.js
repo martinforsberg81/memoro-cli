@@ -134,7 +134,7 @@ const HEADLESS_PLAN_CANDIDATES = Object.freeze([
  */
 
 /**
- * Below this `kern.memorystatus_level` (percent of memory free), no
+ * Below this host available-memory percentage, no
  * session starts. Above the dev servers' 15 (`DEFAULT_MIN_FREE_PERCENT`,
  * dev-servers.js), so a session does not start into a machine its gate's own dev
  * server would be refused on (2026-10-10: 30 % free, swap 2.4 of 3 GB, on
@@ -498,7 +498,8 @@ export function realDeps(env = process.env) {
     // never starts a runtime that is down (`tidyDocker` without `start`).
     pressureTidy: async () => runTidy({ apply: true, env }),
     pressureDocker: async () => tidyDocker({ apply: true, env }),
-    // `kern.memorystatus_level`, the percent of memory free; null off macOS.
+    // Host available-memory percentage (Linux MemAvailable or the existing
+    // Darwin sysctl); unknown telemetry remains fail-open in memoryRoom.
     freeMemoryPercent: () => freeMemoryPercent(),
     // Read-only files and directories go too (rm-tree.js): memoro's dependency cache is read-only.
     rmTree: (path) => rmTree(path),

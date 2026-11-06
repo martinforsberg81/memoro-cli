@@ -406,11 +406,88 @@ describe('admission — may one more server start', () => {
     assert.deepEqual(ask([], { freePercent: null }), { ok: true });
   });
 
-  it('reads kern.memorystatus_level, and null on any failure', () => {
-    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: '31\n' })), 31);
-    assert.equal(freeMemoryPercent(() => ({ status: 1, stdout: '' })), null);
-    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: 'nope' })), null);
-    assert.equal(freeMemoryPercent(() => { throw new Error('no sysctl'); }), null);
+  it('keeps the Darwin sysctl behavior and does not read Linux meminfo', () => {
+    let read = false;
+    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: '31\n' }), {
+      platform: 'darwin', readFile: () => { read = true; throw new Error('must not read'); },
+    }), 31);
+    assert.equal(freeMemoryPercent(() => ({ status: 1, stdout: '' }), { platform: 'darwin' }), null);
+    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: 'nope' }), { platform: 'darwin' }), null);
+    assert.equal(freeMemoryPercent(() => { throw new Error('no sysctl'); }, { platform: 'darwin' }), null);
+    assert.equal(read, false);
+  });
+
+  it('uses one valid host MemAvailable and MemTotal entry on Linux without invoking sysctl', () => {
+    let command = false;
+    let path;
+    const result = freeMemoryPercent(() => { command = true; throw new Error('must not run'); }, {
+      platform: 'linux', readFile: (file, encoding) => {
+        path = [file, encoding];
+        return 'MemTotal: 1000 kB\nMemFree: 900 kB\nMemAvailable: 150 kB\nCached: 700 kB\n';
+      },
+    });
+    assert.equal(result, 15);
+    assert.deepEqual(path, ['/proc/meminfo', 'utf8']);
+    assert.equal(command, false);
+  });
+
+  it('reports zero, exact-floor and fractional Linux percentages without rounding', () => {
+    const sample = (available, total = 100) => freeMemoryPercent(undefined, {
+      platform: 'linux', readFile: () => `MemAvailable: ${available} kB\nMemTotal: ${total} kB\n`,
+    });
+    assert.equal(sample(0), 0);
+    assert.equal(sample(15), 15);
+    assert.equal(sample(100, 300), 100 / 3);
+  });
+
+  it('returns null for missing, duplicate, malformed, unsafe or inconsistent Linux fields and read failures', () => {
+    const samples = [
+      'MemTotal: 100 kB\n',
+      'MemAvailable: 10 kB\n',
+      'MemAvailable: 10 kB\nMemAvailable: 11 kB\nMemTotal: 100 kB\n',
+      'MemAvailable: 10 kB\nMemTotal: 100 kB\nMemTotal: 100 kB\n',
+      'MemAvailable: 10 MB\nMemTotal: 100 kB\n',
+      'MemAvailable: -1 kB\nMemTotal: 100 kB\n',
+      'MemAvailable: 10.5 kB\nMemTotal: 100 kB\n',
+      'MemAvailable: 9007199254740992 kB\nMemTotal: 9007199254740992 kB\n',
+      'MemAvailable: 10 kB\nMemTotal: 0 kB\n',
+      'MemAvailable: 101 kB\nMemTotal: 100 kB\n',
+    ];
+    for (const contents of samples) {
+      assert.equal(freeMemoryPercent(undefined, { platform: 'linux', readFile: () => contents }), null, contents);
+    }
+    assert.equal(freeMemoryPercent(undefined, { platform: 'linux', readFile: () => { throw new Error('unreadable'); } }), null);
+  });
+
+  it('does not probe either mechanism on unsupported platforms', () => {
+    let command = false;
+    let read = false;
+    assert.equal(freeMemoryPercent(() => { command = true; }, {
+      platform: 'freebsd', readFile: () => { read = true; },
+    }), null);
+    assert.equal(command, false);
+    assert.equal(read, false);
+  });
+
+  it('feeds the real Linux reading through dev admission at the unchanged 15 percent floor', async () => {
+    const root = scratch();
+    const reading = (available) => freeMemoryPercent(undefined, {
+      platform: 'linux', readFile: () => `MemAvailable: ${available} kB\nMemTotal: 100 kB\n`,
+    });
+    const ask = (available, worktree) => admit({
+      service: 'memoro-worker', worktree, waitSeconds: 0, root, freeMemory: () => reading(available), logEvent: () => {},
+    });
+    const low = await ask(14, '/w/low');
+    assert.equal(low.ok, false);
+    assert.equal(low.reason, 'memory');
+    assert.equal(low.free_percent, 14);
+    assertReserved(await ask(15, '/w/at-floor'), 'the real sampler admits at the dev floor');
+    const unknown = await admit({
+      service: 'memoro-worker', worktree: '/w/unknown', waitSeconds: 0, root,
+      freeMemory: () => freeMemoryPercent(undefined, { platform: 'freebsd' }), logEvent: () => {},
+    });
+    assertReserved(unknown, 'unknown sampler output keeps the existing fail-open behavior');
+    rmSync(root, { recursive: true, force: true });
   });
 });
 
