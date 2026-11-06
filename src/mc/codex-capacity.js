@@ -33,8 +33,6 @@ import { runnerDir, workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
 
 export const CODEX_TIMEOUT_MS = 20 * 1000;
-/** Provider polling cadence for both read-only capacity collectors. */
-export const CODEX_POLL_MS = 15 * 60 * 1000;
 export const CODEX_MAX_BYTES = 1 << 20;
 /** Pages of `model/list` read before the list is called incomplete. */
 export const MODEL_PAGES = 5;

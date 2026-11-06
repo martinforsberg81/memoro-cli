@@ -96,9 +96,9 @@ import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
-import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
+import { refreshCodexCapacity } from './codex-capacity.js';
 import { collectClaudeCapacity } from './claude-capacity.js';
-import { applyCollectedCapacity, applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
@@ -808,7 +808,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (!refresh || inFlight.has(provider)) continue;
         const item = capacity.read().providers[provider];
         const attempts = [item.observed_at, item.failure?.at, lastAttempt.get(provider)].map((at) => typeof at === 'number' ? at : Date.parse(at || '')).filter(Number.isFinite);
-        if (attempts.length && deps.now().getTime() - Math.max(...attempts) < CODEX_POLL_MS) continue;
+        if (attempts.length && deps.now().getTime() - Math.max(...attempts) < CAPACITY_POLL_MS) continue;
         lastAttempt.set(provider, deps.now().getTime());
         inFlight.add(provider);
         Promise.resolve().then(refresh).then((got) => {
@@ -817,7 +817,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
     };
     const stop = () => { if (stopped) return; stopped = true; stopTimer?.(); };
-    stopTimer = deps.every(CODEX_POLL_MS, tick);
+    stopTimer = deps.every(CAPACITY_POLL_MS, tick);
     tick();
     return stop;
   }
