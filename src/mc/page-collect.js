@@ -168,9 +168,10 @@ function sameCommit(a, b) {
  * rolled back — every one of them shows up here as two shas that are not the
  * same, and nothing else on the page would say so.
  *
- * Nothing is fetched: the page is offline and instant, so the version is
- * whatever `mc helper --collect` last wrote (`live-version.js`) and its age is
- * carried so a reader can weigh it. Null when neither source has anything —
+ * Nothing is fetched: the version is the helper's cached reading or a deploy's
+ * recorded live verification when that deploy began after the cache reading.
+ * A cache read during the deploy cannot be ordered against its verification
+ * from end time alone, so it is preserved. Null when neither source has anything —
  * a machine that has never deployed and never collected has nothing to say
  * about production, and a line saying "unknown" is worse than no line.
  */
@@ -186,6 +187,18 @@ export function productionSection({
     return Number.isNaN(t) ? null : Math.max(0, Math.round((at - t) / 1000));
   };
   const when = deploy ? (deploy.ended || deploy.started || null) : null;
+  let observed = live;
+  const endedAt = Date.parse(deploy?.ended);
+  const startedAt = Date.parse(deploy?.started);
+  const cachedAt = Date.parse(live?.fetched);
+  if (deploy?.outcome === 'deployed' && deploy.live_commit && Number.isFinite(endedAt)
+    && (!live || (Number.isFinite(cachedAt) && Number.isFinite(startedAt) && cachedAt < startedAt))) {
+    observed = {
+      commit: deploy.live_commit, short: shortSha(deploy.live_commit),
+      build: deploy.live_build || null, build_time: null,
+      fetched: deploy.ended, age_seconds: age(deploy.ended), source: 'deploy',
+    };
+  }
 
   // The last attempt matters only when it is not the deploy row itself: a
   // deploy in flight, or one that failed after the last good one.
@@ -217,13 +230,13 @@ export function productionSection({
     holder: deploy?.holder || null,
     at: when,
     age_seconds: when ? age(when) : null,
-    live,
+    live: observed,
     // Yellow on the page: what mc last shipped is not what production answers,
     // and no machine here can tell which of the two is the one to believe. On
     // the shorter of the two, which is `/api/version`'s seven characters
     // against `deploys.tsv`'s forty — compared whole, every deploy mc ever made
     // was a mismatch.
-    differs: Boolean(live?.commit && deploy?.sha && !sameCommit(live.commit, deploy.sha)),
+    differs: Boolean(observed?.commit && deploy?.sha && !sameCommit(observed.commit, deploy.sha)),
     running,
     progress,
     failed: since?.outcome === 'failed' ? attemptState(since) : null,

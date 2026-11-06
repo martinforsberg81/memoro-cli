@@ -325,8 +325,10 @@ The progress bar groups the current script's steps by phase:
 Before the script starts, the same snapshot shows waiting for the deployment
 lane, preparing the worktree, checking disk capacity or starting the script.
 The empty bar `[····]` means waiting or an unknown phase. An unfamiliar script
-step is still shown by its actual label, with no guessed position. `[━━━━]`
-requires a successful deployment record, never merely reaching verification.
+step is still shown by its actual label, with no guessed position. A successful
+deployment removes its attempt frame; a failed attempt stays red with its stop
+reason. The page shows a pid only while that attempt is alive. The completed
+record retains its historical pid without holding any process or deployment lane.
 The bar marks phases rather than time or a percentage; optional migrations
 and retries therefore do not distort an estimated total.
 
