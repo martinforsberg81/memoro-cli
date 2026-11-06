@@ -2517,7 +2517,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
+export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
