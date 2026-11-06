@@ -289,9 +289,20 @@ painted rows occupy the same columns.
 | `q`, empty | quit |
 | anything else | explain the unrecognised or retired verb, then redraw |
 
-Merge and deploy frames put identity and pid on the first row. Status starts
-on the second row and wraps across the frame's full width. Deployment stays
+Merge and deploy frames put identity, status and pid on the first row. Progress
+starts on the second row and wraps across the frame's full width. Deploy age
+gives way on a narrow terminal so pid and status stay together. Deployment stays
 visible in MERGE & DEPLOY while the page continues to accept commands.
+
+Deploy progress comes from the script's actual `▸ <step>` output, published by
+the deployer in `runner/log/deploy-progress.json`, matched to the attempt's
+start time and pid. Its bar marks preparation `[●···]`, building `[━●··]`,
+publishing `[━━●·]`, and verification `[━━━●]`; `[━━━━]` requires a successful
+deployment record. Waiting, unknown steps and missing/old snapshots have an
+empty bar. This shows phases, not elapsed-time percentages. Noise and retries
+retain the last observed step; an unfamiliar step is shown without guessing
+its phase. Like the rest of the page, progress refreshes every 30 seconds or
+immediately with `r`.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal; it starts no coding session. `pageKey` includes every goal's
