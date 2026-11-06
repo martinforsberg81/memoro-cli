@@ -35,7 +35,7 @@ export function tidyStep(ran) {
   const applied = ran?.outcome?.applied || [];
   const kept = [
     ...applied.filter((item) => !item.ok),
-    ...(list.kept || []).filter((item) => item.rule === 'S' || item.rule === 'error'),
+    ...(list.kept || []).filter((item) => item.rule === 'S' || item.rule === 'B' || item.rule === 'error'),
   ];
   return {
     ok: true, estimate_bytes: (list.targets || []).reduce((sum, item) => sum + (item.bytes || 0), 0),

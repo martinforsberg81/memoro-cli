@@ -43,12 +43,14 @@ stays.
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
 | `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
+| Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with ended ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
 In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
 
-Rule P was removed with projects; rules version 9 reads no execution
-register, adds S, and includes the narrowly approved generated-file rule F.
+Rule P was removed with projects; rules version 10 reads no execution
+register, retains S and F, and adds the rebuildable-cache rule B approved by
+Martin on 2026-11-06.
 Scratch cleanup follows S below; transcripts and logs outside F's exact
 root and shape remain governed by their existing rules.
 
@@ -68,6 +70,13 @@ uncertain roots and process/open-file evidence fail closed. A cwd in the
 relevant subtree or an open file keeps candidates; lsof snapshots are bounded
 to the approved inventory root or Codex session group. These rules never read
 image contents or Wrangler log payloads and do not inspect credentials.
+MC screenshots use bounded batches of exact file paths in `lsof`, never a
+recursive open-file walk of the shots root. An unrelated inaccessible hidden
+browser profile cannot block closed screenshots. An opened file stays; failed,
+malformed or warning-bearing evidence keeps its entire batch. macOS `lsof`
+returns exit 1 for a mixed batch of open and closed requested files; valid
+NUL-delimited matches with no diagnostics identify the open files. Other
+failures keep the batch.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
@@ -151,6 +160,47 @@ and `memoro-cli.git-365b96c6`.
 
 **A — gate-cache entries.** `~/mc/gate-cache/<slug>/<key>/` is the gate's dependency cache (`prepare-cache.js`): a `node_modules` a green `npm ci` left, with a `meta.json` whose `at` a store sets and every hit renews. Under a slug a repository mc knows has, an entry no round has used for fourteen days (`PREPARE_CACHE_MAX_AGE_MS`) goes, judged by `meta.at` or, without a meta, by the directory's own mtime; a `<key>.tmp-<pid>` staging directory goes once it is a day old, since a store that is running renews its mtime. Removal is through `rmTree`. A round that is cloning an entry as it goes falls back to `npm ci`, which is why no lock is taken. An entry under a slug no repository knows is K's, and goes whole with its slug.
 
+**B — rebuildable caches.** `src/mc/tidy-caches.js` enumerates only the following
+paths. This is used by ordinary unattended tidy and disk-pressure passes.
+
+- Under `~/mc/runner/scratch/<stem>/`: `native-phone/derived`,
+  `native-phone/packages/repositories`, `native-phone/packages/artifacts`,
+  `native-phone/authorization-home/Library/Caches/org.swift.swiftpm`, and
+  `native-phone/host/ios/App/App/public`. The regular `.mc-scratch.json` must
+  identify the runner, match the stem, and record valid ordered start/end
+  times. A cwd or open file anywhere in the session retains its caches.
+  Source checkouts, source web assets, logs, manifests, authentication files
+  and the ownership record stay. These ended-session outputs need no age delay.
+- In Git-registered worktrees under `~/mc/`: only
+  `.wrangler/dev-server/measure/bundle`. A live registered dev server or a
+  process cwd anywhere in that worktree keeps it; so does an open bundle file.
+  Local databases, settings and server state stay.
+- `~/Library/Caches/org.swift.swiftpm`;
+  `${MC_HOME}/build/ios-derived`;
+  `~/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas`;
+  `~/Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches/com.apple.mediaanalysisd/com.apple.e5rt.e5bundlecache`.
+  Only these generated caches are eligible. iOS archives and the simulator
+  runtime stay; a cwd elsewhere in `${MC_HOME}/build` keeps its derived cache.
+
+Shared caches and worker bundles retain **72 hours**, independent of `--days`,
+judged by the newest mtime anywhere in the cache, directories included. Every
+cache needs complete cwd and open-file evidence. Symlinks in the path to a
+cache are refused; links inside a cache are unlinked without following them.
+Unexpected file types and unreadable metadata retain the cache. Discovery
+reads directory/file metadata only, plus the runner ownership record.
+
+The preview records a hash of the complete tree metadata and its owner.
+Apply inventories the candidates again and, immediately before each removal,
+rechecks that candidate's ownership, process/server state, open files and full
+tree hash. A replaced directory, nested edit, new writer, changed owner or
+unregistered worktree is retained. Only exact cache shapes can be removed,
+even if a list is edited to name a broader parent.
+
+The OS-managed simulator dyld cache is not automatically purged: tidy has no
+writer-ownership/idle receipt for it. Arbitrary temporary test fixtures without
+ownership records are not adopted. The existing 14-day gate-cache policy and
+Docker BuildKit cache protection remain unchanged.
+
 **S — completed runner scratch replay worktrees.** The runner makes
 `~/mc/runner/scratch/<stem>/` for each session (`MC_SCRATCH`) and writes
 `.mc-scratch.json` into it: `{ schema: "mc-scratch", owner: "runner",
@@ -185,7 +235,8 @@ without `--force`, after apply rechecks registration, clean state, identity,
 HEAD, any legacy receipts, process/open-file state and retention. A changed
 tree, session directory identity (device/inode/birth time), worktree identity
 or receipt stays. `DerivedData` uses `rmTree`. Logs, patches,
-receipts, memory, other scratch children and the parent directory stay. Apply
+receipts, memory, other scratch children (except B's exact generated-cache
+paths) and the parent directory stay. Apply
 also requires the canonical target path to remain inside the scratch root and
 have its exact allowed shape. Age and pid absence alone are never proof. This
 rule runs in routine unattended tidy, including disk-pressure passes;

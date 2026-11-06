@@ -6,6 +6,9 @@
  *   mc tidy --apply          the same list written, then removed from —
  *                            each target asked again first
  *   mc tidy --json           the list object
+ *   Rebuildable caches use rule B: exact paths, fresh inactivity/identity
+ *   checks, 72 hours for shared caches, ended ownership for native outputs.
+ *
  *   mc tidy --days <n>       how old a loose transcript must be (default 14)
  *   mc tidy --docker         Docker only: images unused for three days;
  *                            with --apply it starts the runtime
@@ -121,7 +124,7 @@ export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyD
       stdout.write(`  ${item.rule}  ${shortPath(item.path)} — ${describeSize(item.bytes || 0)} — ${item.why}\n`);
     }
   }
-  const told = list.kept.filter((item) => !ROUTINE.has(item.rule));
+  const told = list.kept.filter((item) => !ROUTINE.has(item.rule) || (item.rule === 'B' && item.why.startsWith('error:')));
   if (told.length) {
     stdout.write('\nkept\n');
     for (const item of told) stdout.write(`  ${item.rule}  ${shortPath(item.path)} — ${item.why}\n`);

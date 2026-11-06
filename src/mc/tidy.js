@@ -52,6 +52,10 @@
  *     its HEAD is on a branch or tag. Logs, patches and everything else in the
  *     directory stay. A directory with no record is legacy and is kept: its age
  *     says nothing about whether it is idle.
+ *   - (B) Exact rebuildable caches (tidy-caches.js): five native-phone output
+ *     paths in ended runner scratch, idle registered worker bundles, and four
+ *     named per-user caches. Shared caches/bundles retain 72 hours. Every
+ *     removal rechecks ownership, process/open-file evidence and tree identity.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
@@ -73,6 +77,7 @@ import {
 } from './paths.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
+import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -80,7 +85,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 9;
+export const RULES_VERSION = 10;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
@@ -103,7 +108,7 @@ const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** mc's own files in a workarea: never what keeps one, and gone with it. */
 const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S', 'B']);
 /** The ownership record the runner writes into each session's scratch directory (`run.js`). */
 export const SCRATCH_MARKER = '.mc-scratch.json';
 export const SCRATCH_SCHEMA = 'mc-scratch';
@@ -116,6 +121,8 @@ export function tidyRoots(env = process.env) {
   const runner = runnerDir(env);
   return {
     root,
+    mc_home: mcHome(env),
+    user_library: join(env.HOME || homedir(), 'Library'),
     plan: planAreaRoot({ root }),
     step: stepAreaRoot({ root }),
     work: join(root, WORK_HOME),
@@ -136,6 +143,7 @@ export function tidyRoots(env = process.env) {
 
 /** The root each kind of target must lie under, by `tidyRoots` key. */
 const KIND_ROOT = {
+  ...CACHE_KIND_ROOT,
   transcript: 'claude',
   leftover: 'claude',
   'plan-checkout': 'plan',
@@ -219,7 +227,7 @@ function realGit(cwd, args) {
 export function gatherTidyFacts({
   env = process.env, now = Date.now(), gh = null, git = realGit, cwds = cwdsOfUser,
   inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf, readDir = readdirSync,
-  servers = serversFor, openIn = openFilesIn,
+  servers = serversFor, openIn = openFilesIn, filesOpen = openFilesAmong,
 } = {}) {
   const roots = tidyRoots(env);
   const root = roots.root;
@@ -227,7 +235,7 @@ export function gatherTidyFacts({
     now, work_root: root, projects_root: roots.claude, roots,
     plan_checkouts: [], plan_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
-    scratch_items: [], generated_files: [],
+    scratch_items: [], generated_files: [], cache_items: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
@@ -467,7 +475,8 @@ export function gatherTidyFacts({
       }
     }
   }
-  gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir });
+  facts.cache_items = gatherCacheFacts({ roots, now, repos, git, running, openIn, servers: (wt) => servers(wt, { root: mcHome(env) }) });
+  gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, readDir });
   return facts;
 }
 
@@ -480,7 +489,7 @@ function generatedStat(path) {
 }
 
 /** Gather only the three approved file shapes; directory and lsof failures become kept entries. */
-function gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir }) {
+function gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, readDir }) {
   const addError = (path, kind, error) => facts.generated_files.push({ path, kind, error: message(error) });
   const walkShots = (dir, active, open) => {
     let entries;
@@ -496,11 +505,11 @@ function gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir }) {
       catch (error) { addError(path, 'mc-shot', error); }
     }
   };
-  const snapshot = (root) => {
+  const snapshot = (root, inspectOpen = true) => {
     try { const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('approved root is not a regular directory'); }
     catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { missing: true }; addError(root, null, error); return { error: true }; }
     let open;
-    try { open = openIn(root); } catch { open = null; }
+    try { open = inspectOpen ? openIn(root) : []; } catch { open = null; }
     if (!Array.isArray(open)) open = null;
     const active = running === null ? null : running.some((process) => typeof process.cwd === 'string' && (process.cwd === root || process.cwd.startsWith(`${root}/`)));
     return { open, active };
@@ -520,10 +529,18 @@ function gatherGeneratedFiles(facts, { roots, now, running, openIn, readDir }) {
       }
     }
   }
-  const shots = snapshot(roots.shots);
+  const shots = snapshot(roots.shots, false);
   if (!shots.missing && !shots.error) {
     if (shots.open === null || shots.active === null) addError(roots.shots, null, new Error('could not establish process/open-file evidence'));
-    else walkShots(roots.shots, shots.active, shots.open);
+    else {
+      walkShots(roots.shots, shots.active, shots.open);
+      const old = facts.generated_files.filter((item) => item.kind === 'mc-shot' && !item.error && !item.active && item.mtime_ms < now - GENERATED_KEEP_MS);
+      if (old.length) {
+        let opened = null;
+        try { opened = filesOpen(old.map((item) => item.path)); } catch { /* uncertainty keeps every candidate */ }
+        for (const item of old) item.open = opened instanceof Map && Array.isArray(opened.get(item.path)) ? opened.get(item.path) : null;
+      }
+    }
   }
   let codexRoot = true;
   try { const stat = lstatSync(roots.codex_images); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('approved root is not a regular directory'); }
@@ -589,11 +606,48 @@ function listNames(dir) {
  */
 function openFilesIn(path) {
   const r = spawnSync('lsof', ['-t', '+D', path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
-  if (r.error) return null;
+  if (r.error || String(r.stderr || '').trim()) return null;
   const pids = String(r.stdout || '').split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
   if (r.status === 0) return [...new Set(pids)];
   if (r.status === 1 && !pids.length && !String(r.stderr || '').trim()) return [];
   return null;
+}
+
+/** File-scoped, bounded lsof evidence; hidden browser profiles are never traversed. */
+export function openFilesAmong(paths, { run = spawnSync } = {}) {
+  const opened = new Map(paths.map((path) => [path, []]));
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const batch = paths.slice(offset, offset + 100);
+    let canonical;
+    try { canonical = new Map(batch.map((path) => [realpathSync(path), path])); } catch { return null; }
+    let r;
+    try {
+      r = run('lsof', ['-nP', '-F0pn', '--', ...canonical.keys()], {
+        encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch { return null; }
+    const stdout = String(r.stdout || '');
+    if (r.error || String(r.stderr || '').trim()) return null;
+    if (r.status === 1 && !stdout.trim()) continue;
+    // On macOS, a mixed batch returns 1 when some requested files are closed.
+    // Actual errors/warnings are on stderr (lsof DIAGNOSTICS); valid matches still identify the open files.
+    if (![0, 1].includes(r.status) || !stdout.trim()) return null;
+    let pid = null;
+    let named = false;
+    for (const raw of stdout.split('\0')) {
+      const field = raw.replace(/^\n+/u, '');
+      if (!field) continue;
+      if (field.startsWith('p') && /^[1-9]\d*$/u.test(field.slice(1))) pid = Number(field.slice(1));
+      else if (field.startsWith('f') && pid) continue; // lsof emits a file marker even with -F0pn.
+      else if (field.startsWith('n') && pid && canonical.has(field.slice(1))) {
+        const pids = opened.get(canonical.get(field.slice(1)));
+        if (!pids.includes(pid)) pids.push(pid);
+        named = true;
+      } else return null;
+    }
+    if (!named) return null;
+  }
+  return opened;
 }
 
 /** A legacy receipt exists only when both finalized runner files are regular files inside runner/log. */
@@ -985,6 +1039,14 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     else keep(item.path, verdict.rule || 'error', verdict.why);
   }
 
+  // (B) Exact rebuildable caches, with ownership/age and inactivity evidence.
+  for (const item of facts.cache_items || []) {
+    const verdict = rebuildableCache(item, facts.now);
+    if (verdict.target) targets.push({ path: item.path, kind: item.kind, rule: 'B', why: verdict.why,
+      bytes: item.bytes || 0, identity: item.identity, owner_id: item.owner_id ?? null });
+    else keep(item.path, 'B', verdict.why);
+  }
+
   // (F) These approved file inventories use an independent 72-hour window.
   for (const item of facts.generated_files || []) {
     if (item.error) { keep(item.path, item.kind || 'generated-file', `error: ${item.error}`); continue; }
@@ -1027,12 +1089,12 @@ export function outsideRoots(target, roots) {
   const key = KIND_ROOT[target?.kind];
   if (!key || typeof target.path !== 'string') return `not a kind tidy removes: ${target?.kind}`;
   if (!roots[key]) return `no ${key} root in this layout`;
-  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
     const rootStat = lstatSync(roots[key]);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return 'approved root is not a regular directory';
   }
   const base = realpathSync(roots[key]);
-  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
     const relative = target.path.startsWith(`${roots[key]}/`) ? target.path.slice(roots[key].length + 1) : null;
     if (relative === null) return `not under ${roots[key]}`;
     let cursor = roots[key];
@@ -1046,7 +1108,7 @@ export function outsideRoots(target, roots) {
   if (lstatSync(target.path).isSymbolicLink()) return `symbolic link is not a target`;
   const name = basename(real);
   const parent = dirname(real);
-  const shaped = {
+  const shaped = Object.hasOwn(CACHE_KIND_ROOT, target.kind) ? cachePathAllowed(target, roots) : {
     transcript: dirname(parent) === base && SESSION_ID.test(TRANSCRIPT.exec(name)?.[1] || ''),
     leftover: dirname(parent) === base && SESSION_ID.test(name) && lstatSync(real).isDirectory(),
     // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
@@ -1110,6 +1172,7 @@ export function applyTidy({
   const workAreas = new Map([...(facts.work_areas || []), ...(facts.step_areas || []).filter((item) => item.worktrees)].map((item) => [item.path, item]));
   const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
   const scratch = new Map((facts.scratch_items || []).map((item) => [item.path, item]));
+  const caches = new Map((facts.cache_items || []).map((item) => [item.path, item]));
 
   const applied = [];
   let freed = 0;
@@ -1134,7 +1197,24 @@ export function applyTidy({
         applied.push({ path, ok: false, why: 're-check: its worktree identity, HEAD or runner receipts changed since the list' });
         continue;
       }
-      if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+      if (Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
+        const cache = caches.get(path);
+        if (!cache) { applied.push({ path, ok: false, why: 're-check: cache disappeared' }); continue; }
+        // Other removals may take time: refresh this cache's process, owner and complete tree metadata at deletion.
+        let running = null;
+        try { running = (doors.cwds || cwdsOfUser)(); } catch { /* fail closed */ }
+        if (!running?.length || running.complete === false) running = null;
+        const [current] = gatherCacheFacts({ roots, now, running, only: cache,
+          repos: doors.repos || defaultRepos(env), git: doors.git || realGit, openIn: doors.openIn || openFilesIn,
+          servers: (wt) => (doors.servers || serversFor)(wt, { root: mcHome(env) }) });
+        const verdict = current && rebuildableCache(current, now);
+        if (!verdict?.target || current.identity !== target.identity || current.identity !== again.identity
+          || (current.owner_id ?? null) !== target.owner_id || (current.owner_id ?? null) !== again.owner_id) {
+          applied.push({ path, ok: false, why: `re-check: ${!verdict?.target ? verdict?.why || 'cache disappeared' : 'cache identity or owner changed since the list'}` });
+          continue;
+        }
+        remove(path);
+      } else if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
         const stat = lstatSync(path);
         const identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs };
         if (!stat.isFile() || stat.isSymbolicLink() || JSON.stringify(identity) !== JSON.stringify(target.identity)
