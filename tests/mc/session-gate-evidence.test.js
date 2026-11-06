@@ -195,6 +195,7 @@ it('changes while waiting or testing invalidate the measurement, including gener
     } });
     assert.equal(calls, when === 'waiting' ? 0 : 1);
     assert.equal(result.ok, false);
+    assert.deepEqual([result.code, result.process_ok, result.complete, result.verdict], [1, false, false, 'red']);
     assert.equal(receiptOf(result).outcome, 'invalid');
   }
 });
@@ -235,6 +236,7 @@ it('a concurrent ceiling receipt retains active evidence and cannot be reused as
   });
   const receipt = receiptOf(result);
   assert.equal(result.stopped_at, 'timeout');
+  assert.deepEqual([result.code, result.ok, result.process_ok, result.complete, result.verdict], [1, false, false, false, 'red']);
   assert.equal(result.timeout_phase, 'tests, command first');
   assert.deepEqual(result.red_files, ['a.test.js']);
   assert.deepEqual(result.running_commands, ["npm run 'first'"]);
@@ -253,13 +255,24 @@ it('an empty selection and an aborted command sequence cannot mint green', async
     const req = { ...request(), files: null, select: 'selector' };
     const controller = new AbortController();
     const result = await runSessionGate(req, { ...quiet, signal: controller.signal,
-      select: async () => ({ ok: true, files: [], commands: mode === 'empty' ? [] : [{ packageScript: 'check', unavailableExitCode: 69 }] }),
+      select: async () => ({ ok: true, files: [], commands: mode === 'empty' ? [] : [{ id: 'check:postgres', packageScript: 'check', unavailableExitCode: 69 }] }),
       shell: async () => {
         if (mode === 'interrupted') controller.abort();
         return { status: mode === 'unknown' ? null : mode === 'unavailable' ? 69 : 0 };
       },
     });
-    assert.notEqual(receiptOf(result).outcome, 'green');
+    const receipt = receiptOf(result);
+    assert.notEqual(receipt.outcome, 'green');
+    if (mode === 'unavailable') {
+      assert.deepEqual([result.code, result.process_ok, result.ok, result.complete, result.verdict], [0, true, false, false, 'incomplete']);
+      assert.equal(receipt.outcome, 'incomplete');
+      assert.deepEqual(result.unavailable_commands, [{ id: 'check:postgres', packageScript: 'check', command: "npm run 'check'", exit: 69 }]);
+      assert.deepEqual(receipt.execution.commands[0], { id: 'check:postgres', packageScript: 'check', command: "npm run 'check'",
+        exit: 69, ok: false, state: 'unavailable', unavailable: true });
+      assert.equal(existsSync(join(req.gate.root, 'gate-greens.jsonl')), false);
+      assert.equal(findGreen({ root: req.gate.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(receipt.coverage) }), null);
+      assert.equal(findGreenForHead({ root: req.gate.root, repo: 'repo', headTree: receipt.tree }), null);
+    }
   }
 });
 
@@ -318,6 +331,7 @@ it('interruption during the final content observation cannot mint green', async 
   });
   assert.equal(result.ok, false);
   assert.equal(receiptOf(result).outcome, 'red');
+  assert.deepEqual([result.code, result.process_ok, result.complete, result.verdict], [1, false, false, 'red']);
 });
 
 async function measured(t, { files = null, pattern = null, flags = [], commands = [] } = {}) {

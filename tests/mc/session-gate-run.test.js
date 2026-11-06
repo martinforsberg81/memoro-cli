@@ -195,6 +195,51 @@ it('starts the serial command sequence beside tests without waiting additively',
   assert.deepEqual(result.execution.commands.map((entry) => entry.exit), [0, 0]);
 });
 
+it('classifies only an exact declared command exit as unavailable and keeps later commands running', async () => {
+  const cases = [
+    { name: 'declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69 }, verdict: 'incomplete', code: 0 },
+    { name: 'ordinary success', command: { id: 'lint', packageScript: 'lint', unavailableExitCode: 69 }, result: { status: 0 }, verdict: 'green', code: 0 },
+    { name: 'undeclared exit', command: { id: 'lint', packageScript: 'lint' }, result: { status: 69 }, verdict: 'red', code: 1 },
+    { name: 'different failure', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 70 }, verdict: 'red', code: 1 },
+    { name: 'error with declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69, error: { code: 'ENOENT' } }, verdict: 'red', code: 1 },
+    { name: 'signal with declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69, signal: 'SIGTERM' }, verdict: 'red', code: 1 },
+  ];
+  for (const item of cases) {
+    const output = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: (line) => output.push(line), select: async () => ({ ok: true, files: [], commands: [item.command] }),
+      shell: async () => item.result,
+    });
+    assert.equal(result.code, item.code, item.name);
+    assert.equal(result.verdict, item.verdict, item.name);
+    assert.equal(result.process_ok, item.code === 0, item.name);
+    assert.deepEqual(result.unavailable_commands || [], item.verdict === 'incomplete'
+      ? [{ id: 'db:postgres', packageScript: 'db:postgres', command: "npm run 'db:postgres'", exit: 69 }] : [], item.name);
+    assert.equal(result.execution.commands[0].exit, item.result.status, item.name);
+    assert.equal(result.execution.commands[0].id, item.command.id, item.name);
+    assert.equal(result.execution.commands[0].state, item.verdict === 'incomplete' ? 'unavailable' : 'completed', item.name);
+    assert.equal(output.some((line) => line.includes('unavailable (exit 69)')), item.verdict === 'incomplete', item.name);
+  }
+
+  for (const failing of ['test', 'command', 'none']) {
+    const calls = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: () => {}, select: async () => ({ ok: true, files: ['a.test.js'], commands: [
+        { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, { id: 'lint:after', packageScript: 'lint:after' },
+      ] }),
+      tests: async () => ({ tap: failing === 'test' ? '# tests 1\n# pass 0\n# fail 1\n' : GREEN, code: failing === 'test' ? 1 : 0 }),
+      shell: async (command) => { calls.push(command); return { status: command.includes('db:postgres') ? 69 : failing === 'command' ? 3 : 0 }; },
+    });
+    assert.equal(result.code, failing === 'test' || failing === 'command' ? 1 : 0);
+    assert.equal(result.verdict, failing === 'test' || failing === 'command' ? 'red' : 'incomplete');
+    assert.deepEqual(calls, ["npm run 'db:postgres'", "npm run 'lint:after'"]);
+    assert.deepEqual(result.unavailable_commands.map(({ id, exit }) => ({ id, exit })), [{ id: 'db:postgres', exit: 69 }]);
+    assert.deepEqual(result.execution.commands.map(({ id, exit, state }) => ({ id, exit, state })), [
+      { id: 'db:postgres', exit: 69, state: 'unavailable' }, { id: 'lint:after', exit: failing === 'command' ? 3 : 0, state: 'completed' },
+    ]);
+  }
+});
+
 it('both concurrent halves contribute failures and thrown failures settle the collaborator', async () => {
   const calls = [];
   const failed = await runSessionGate({ cwd: '/work', select: 'selector' }, {
@@ -252,17 +297,22 @@ it('both concurrent halves contribute failures and thrown failures settle the co
   }
 });
 
-it('an abort stops the serial sequence before the next selected command', async () => {
-  const controller = new AbortController();
-  const invoked = [];
-  const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
-    write: () => {}, signal: controller.signal,
-    select: async () => ({ ok: true, files: [], commands: [{ packageScript: 'first' }, { packageScript: 'second' }] }),
-    shell: async (command) => { invoked.push(command); controller.abort(); return { status: 0 }; },
-  });
-  assert.equal(result.ok, false);
-  assert.deepEqual(invoked, ["npm run 'first'"]);
-  assert.deepEqual(result.execution.commands.map((entry) => entry.state), ['completed', 'pending']);
+it('an abort stops the serial sequence after passing or unavailable evidence', async () => {
+  for (const unavailable of [false, true]) {
+    const controller = new AbortController();
+    const invoked = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: () => {}, signal: controller.signal,
+      select: async () => ({ ok: true, files: [], commands: [{ packageScript: 'first', unavailableExitCode: 69 }, { packageScript: 'second' }] }),
+      shell: async (command) => { invoked.push(command); controller.abort(); return { status: unavailable ? 69 : 0 }; },
+    });
+    assert.equal(result.ok, false);
+    assert.deepEqual([result.code, result.process_ok, result.complete, result.verdict], [1, false, false, 'red']);
+    assert.deepEqual(invoked, ["npm run 'first'"]);
+    assert.deepEqual(result.execution.commands.map((entry) => entry.state), [unavailable ? 'unavailable' : 'completed', 'pending']);
+    assert.deepEqual(result.unavailable_commands || [], unavailable
+      ? [{ id: 'first', packageScript: 'first', command: "npm run 'first'", exit: 69 }] : []);
+  }
 });
 
 it('an empty, failed or invalid selection never reports green', async () => {
@@ -458,30 +508,37 @@ it('unknown exits and zero-test summaries are not completed green tests', async 
   }
 });
 
-it('a timeout in a command retains completed reporter evidence without naming those files unfinished', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-session-command-ceiling-'));
-  try {
-    const result = await runSessionGate({ cwd: '/work', select: 'selector', round_timeout_ms: 30, gate: { root: dir, repo: 'work' } }, {
-      write: () => {},
-      select: async () => ({ ok: true, files: ['tests/done.test.js'], commands: [{ packageScript: 'lint:x' }] }),
-      tests: async ({ times }) => {
-        const path = join(dir, 'times.jsonl');
-        times.track(path);
-        writeFileSync(path, [
-          { file: '/work/tests/done.test.js', started: true },
-          { file: '/work/tests/done.test.js', done: true, ms: 1500 },
-        ].map(line => JSON.stringify(line)).join('\n'));
-        times.complete(path);
-        rmSync(path);
-        return { code: 0, tap: GREEN };
-      },
-      shell: () => new Promise(() => {}),
-    });
-    assert.equal(result.stopped_at, 'timeout');
-    assert.deepEqual(result.red_files, []);
-    assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 1.5 }]);
-    assert.equal(result.timeout_phase, 'command lint:x');
-    assert.deepEqual(result.running_commands, ["npm run 'lint:x'"]);
-    assert.equal(result.execution.commands[0].state, 'running');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+it('a command ceiling retains reporter and pending or unavailable evidence without claiming success', async () => {
+  for (const unavailable of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-session-command-ceiling-'));
+    try {
+      const result = await runSessionGate({ cwd: '/work', select: 'selector', round_timeout_ms: 30, gate: { root: dir, repo: 'work' } }, {
+        write: () => {},
+        select: async () => ({ ok: true, files: ['tests/done.test.js'], commands: [
+          ...(unavailable ? [{ id: 'db', packageScript: 'db', unavailableExitCode: 69 }] : []), { packageScript: 'lint:x' },
+        ] }),
+        tests: async ({ times }) => {
+          const path = join(dir, 'times.jsonl');
+          times.track(path);
+          writeFileSync(path, [
+            { file: '/work/tests/done.test.js', started: true },
+            { file: '/work/tests/done.test.js', done: true, ms: 1500 },
+          ].map(line => JSON.stringify(line)).join('\n'));
+          times.complete(path);
+          rmSync(path);
+          return { code: 0, tap: GREEN };
+        },
+        shell: (command) => command === "npm run 'db'" ? Promise.resolve({ status: 69 }) : new Promise(() => {}),
+      });
+      assert.equal(result.stopped_at, 'timeout');
+      assert.deepEqual([result.code, result.ok, result.process_ok, result.complete, result.verdict], [1, false, false, false, 'red']);
+      assert.deepEqual(result.unavailable_commands || [], unavailable
+        ? [{ id: 'db', packageScript: 'db', command: "npm run 'db'", exit: 69 }] : []);
+      assert.deepEqual(result.red_files, []);
+      assert.deepEqual(result.slowest_files, [{ file: 'tests/done.test.js', seconds: 1.5 }]);
+      assert.equal(result.timeout_phase, 'command lint:x');
+      assert.deepEqual(result.running_commands, ["npm run 'lint:x'"]);
+      assert.equal(result.execution.commands.at(-1).state, 'running');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
 });

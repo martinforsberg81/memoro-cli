@@ -268,9 +268,9 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     return 1;
   }
   const output = readText(io, lock.log);
-  const summary = summarizeGate(output, { exitCode: outcome.code });
   let result = null;
   try { result = JSON.parse(readText(io, `${lock.request}.result`)); } catch { /* an older gate or interrupted worker */ }
+  const summary = summarizeGate(output, { exitCode: outcome.code, unavailableCommands: result?.unavailable_commands || [] });
   if (result?.files) lock.command.files = result.files;
   // A gate that reached the repository's ceiling was stopped, not failed: its
   // verdict names what did not finish and the slowest files that did, and the
@@ -291,7 +291,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   } else {
     stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests) })}${left}\n`);
   }
-  return summary.ok ? 0 : 1;
+  return (summary.process_ok ?? summary.ok) ? 0 : 1;
 }
 
 /**

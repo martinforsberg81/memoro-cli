@@ -17,6 +17,10 @@ import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, s
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
 
+// A stop invalidates successful progress metadata, not the evidence collected.
+const stoppedResult = (result, stopped_at) => ({ ...result, stopped_at,
+  ok: false, code: 1, process_ok: false, complete: false, verdict: 'red' });
+
 export function selectorCommand(command, { base = 'origin/main', changed = [] } = {}) {
   // Both repositories' selectors accept explicit changed paths. This includes
   // unstaged and untracked changes and both sides of a rename.
@@ -67,7 +71,7 @@ export async function runSessionGate(request, {
             if (files.length) pendingFiles = files;
           }, onProgress: (next) => { live = next; } }), cut,
       ]);
-      if (!timedOut) return result ?? { ...live, ok: false, code: 1, stopped_at: 'interrupted' };
+      if (!timedOut) return result ?? stoppedResult(live, 'interrupted');
       // What did not finish is the red, and is named; the slowest files that did
       // finish are for the reader. Asked files that never started are unfinished too.
       const prefix = `${request.cwd}/`;
@@ -88,27 +92,27 @@ export async function runSessionGate(request, {
         ...(pendingCommands.length ? [`pending commands: ${pendingCommands.join(', ')}`] : [])];
       const reason = `repository gate ceiling reached after ${Math.ceil(timeoutMs / 1000)} s; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}`;
       (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}\n`);
-      return { ...timedOutSnapshot, ok: false, code: 1, stopped_at: 'timeout', reason, red_files: unfinished, slowest_files: slowest,
-        timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands };
+      return stoppedResult({ ...timedOutSnapshot, reason, red_files: unfinished, slowest_files: slowest,
+        timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands }, 'timeout');
     } finally { clearTimeout(timeout); }
   };
   if (!request.measurement) return execute();
   const started = now();
   let before = null;
   let after = null;
-  let result = { ok: false, code: 1, stopped_at: 'content-changed' };
+  let result = stoppedResult(null, 'content-changed');
   try {
     before = snapshot(request.cwd);
     if (sameContent(request.measurement.candidate, before)) result = await execute();
     after = snapshot(request.cwd);
   } catch (error) {
-    result = { ok: false, code: 1, stopped_at: 'evidence', error: error.message };
+    result = stoppedResult({ ...result, error: error.message }, 'evidence');
   }
   if (!sameContent(request.measurement.candidate, before) || !sameContent(before, after)) {
     (deps.write || ((text) => process.stdout.write(text)))('Error: worktree content changed or could not be fingerprinted — measurement invalid\n');
-    result = { ...result, ok: false, code: 1, stopped_at: 'content-changed' };
+    result = stoppedResult(result, 'content-changed');
   }
-  if (deps.signal?.aborted) result = { ...result, ok: false, code: 1, stopped_at: 'interrupted' };
+  if (deps.signal?.aborted) result = stoppedResult(result, 'interrupted');
   const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now() });
   const path = persist({ root: request.gate.root, receipt });
   try { record({ root: request.gate.root, receipt, path }); }
@@ -160,13 +164,21 @@ async function executeSessionGate(request, {
   let testResult = null;
   let timed = [];
   const commands = selectedCommands.map((command) => ({
+    id: command.id || command.packageScript, packageScript: command.packageScript,
     command: `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`,
     exit: null, ok: false, state: 'pending',
   }));
   const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selectedCommands,
     flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
-  const snapshot = () => ({ ok: code === 0, code, files, deferred, commands, red_tests: details, timed_tests: timed,
-    coverage, execution: { tests: testResult, commands } });
+  const snapshot = () => {
+    const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
+      id, packageScript, command: invocation, exit,
+    }));
+    return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
+      verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
+      ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed,
+      coverage, execution: { tests: testResult, commands } };
+  };
   const progress = () => onProgress(snapshot());
   progress();
 
@@ -212,10 +224,12 @@ async function executeSessionGate(request, {
       try {
         const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
         write(`${result.stdout || ''}${result.stderr || ''}`);
-        const ok = !result.error && !result.signal && (result.status === 0 || (command.unavailableExitCode != null && result.status === command.unavailableExitCode));
-        Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(result.error ? { error: result.error.code || result.error.message } : {}) });
-        write(`command ${command.id || command.packageScript}: ${ok ? 'pass' : 'fail'}\n`);
-        if (!ok) code = 1;
+        const unavailable = !result.error && !result.signal && command.unavailableExitCode != null && result.status === command.unavailableExitCode;
+        const ok = !result.error && !result.signal && result.status === 0;
+        Object.assign(evidence, { exit: result.status ?? null, ok, state: unavailable ? 'unavailable' : 'completed',
+          ...(unavailable ? { unavailable: true } : {}), ...(result.error ? { error: result.error.code || result.error.message } : {}) });
+        write(`command ${command.id || command.packageScript}: ${unavailable ? `unavailable (exit ${result.status})` : ok ? 'pass' : 'fail'}\n`);
+        if (!ok && !unavailable) code = 1;
       } catch (error) {
         Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
         code = 1;
