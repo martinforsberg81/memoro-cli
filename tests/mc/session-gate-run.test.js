@@ -195,6 +195,51 @@ it('starts the serial command sequence beside tests without waiting additively',
   assert.deepEqual(result.execution.commands.map((entry) => entry.exit), [0, 0]);
 });
 
+it('classifies only an exact declared command exit as unavailable and keeps later commands running', async () => {
+  const cases = [
+    { name: 'declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69 }, verdict: 'incomplete', code: 0 },
+    { name: 'ordinary success', command: { id: 'lint', packageScript: 'lint', unavailableExitCode: 69 }, result: { status: 0 }, verdict: 'green', code: 0 },
+    { name: 'undeclared exit', command: { id: 'lint', packageScript: 'lint' }, result: { status: 69 }, verdict: 'red', code: 1 },
+    { name: 'different failure', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 70 }, verdict: 'red', code: 1 },
+    { name: 'error with declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69, error: { code: 'ENOENT' } }, verdict: 'red', code: 1 },
+    { name: 'signal with declared exit', command: { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, result: { status: 69, signal: 'SIGTERM' }, verdict: 'red', code: 1 },
+  ];
+  for (const item of cases) {
+    const output = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: (line) => output.push(line), select: async () => ({ ok: true, files: [], commands: [item.command] }),
+      shell: async () => item.result,
+    });
+    assert.equal(result.code, item.code, item.name);
+    assert.equal(result.verdict, item.verdict, item.name);
+    assert.equal(result.process_ok, item.code === 0, item.name);
+    assert.deepEqual(result.unavailable_commands || [], item.verdict === 'incomplete'
+      ? [{ id: 'db:postgres', packageScript: 'db:postgres', command: "npm run 'db:postgres'", exit: 69 }] : [], item.name);
+    assert.equal(result.execution.commands[0].exit, item.result.status, item.name);
+    assert.equal(result.execution.commands[0].id, item.command.id, item.name);
+    assert.equal(result.execution.commands[0].state, item.verdict === 'incomplete' ? 'unavailable' : 'completed', item.name);
+    assert.equal(output.some((line) => line.includes('unavailable (exit 69)')), item.verdict === 'incomplete', item.name);
+  }
+
+  for (const failing of ['test', 'command', 'none']) {
+    const calls = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: () => {}, select: async () => ({ ok: true, files: ['a.test.js'], commands: [
+        { id: 'db:postgres', packageScript: 'db:postgres', unavailableExitCode: 69 }, { id: 'lint:after', packageScript: 'lint:after' },
+      ] }),
+      tests: async () => ({ tap: failing === 'test' ? '# tests 1\n# pass 0\n# fail 1\n' : GREEN, code: failing === 'test' ? 1 : 0 }),
+      shell: async (command) => { calls.push(command); return { status: command.includes('db:postgres') ? 69 : failing === 'command' ? 3 : 0 }; },
+    });
+    assert.equal(result.code, failing === 'test' || failing === 'command' ? 1 : 0);
+    assert.equal(result.verdict, failing === 'test' || failing === 'command' ? 'red' : 'incomplete');
+    assert.deepEqual(calls, ["npm run 'db:postgres'", "npm run 'lint:after'"]);
+    assert.deepEqual(result.unavailable_commands.map(({ id, exit }) => ({ id, exit })), [{ id: 'db:postgres', exit: 69 }]);
+    assert.deepEqual(result.execution.commands.map(({ id, exit, state }) => ({ id, exit, state })), [
+      { id: 'db:postgres', exit: 69, state: 'unavailable' }, { id: 'lint:after', exit: failing === 'command' ? 3 : 0, state: 'completed' },
+    ]);
+  }
+});
+
 it('both concurrent halves contribute failures and thrown failures settle the collaborator', async () => {
   const calls = [];
   const failed = await runSessionGate({ cwd: '/work', select: 'selector' }, {

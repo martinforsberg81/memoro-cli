@@ -160,13 +160,21 @@ async function executeSessionGate(request, {
   let testResult = null;
   let timed = [];
   const commands = selectedCommands.map((command) => ({
+    id: command.id || command.packageScript, packageScript: command.packageScript,
     command: `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`,
     exit: null, ok: false, state: 'pending',
   }));
   const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selectedCommands,
     flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
-  const snapshot = () => ({ ok: code === 0, code, files, deferred, commands, red_tests: details, timed_tests: timed,
-    coverage, execution: { tests: testResult, commands } });
+  const snapshot = () => {
+    const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
+      id, packageScript, command: invocation, exit,
+    }));
+    return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
+      verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
+      ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed,
+      coverage, execution: { tests: testResult, commands } };
+  };
   const progress = () => onProgress(snapshot());
   progress();
 
@@ -212,10 +220,12 @@ async function executeSessionGate(request, {
       try {
         const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
         write(`${result.stdout || ''}${result.stderr || ''}`);
-        const ok = !result.error && !result.signal && (result.status === 0 || (command.unavailableExitCode != null && result.status === command.unavailableExitCode));
-        Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(result.error ? { error: result.error.code || result.error.message } : {}) });
-        write(`command ${command.id || command.packageScript}: ${ok ? 'pass' : 'fail'}\n`);
-        if (!ok) code = 1;
+        const unavailable = !result.error && !result.signal && command.unavailableExitCode != null && result.status === command.unavailableExitCode;
+        const ok = !result.error && !result.signal && result.status === 0;
+        Object.assign(evidence, { exit: result.status ?? null, ok, state: unavailable ? 'unavailable' : 'completed',
+          ...(unavailable ? { unavailable: true } : {}), ...(result.error ? { error: result.error.code || result.error.message } : {}) });
+        write(`command ${command.id || command.packageScript}: ${unavailable ? `unavailable (exit ${result.status})` : ok ? 'pass' : 'fail'}\n`);
+        if (!ok && !unavailable) code = 1;
       } catch (error) {
         Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
         code = 1;

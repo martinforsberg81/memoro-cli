@@ -185,7 +185,7 @@ const RERUN_NAMES = 5;
  * many failing lines were left unnamed. `ok` is the exit code's, not the
  * text's — a suite that crashes before its summary is red with no counts.
  */
-export function summarizeGate(output, { exitCode }) {
+export function summarizeGate(output, { exitCode, unavailableCommands = [] }) {
   const lines = String(output || '').split('\n');
   const counts = {};
   const gates = [];
@@ -217,7 +217,12 @@ export function summarizeGate(output, { exitCode }) {
       pendingLocation = true;
     }
   }
-  return { ok: exitCode === 0, counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
+  const process_ok = exitCode === 0;
+  const incomplete = process_ok && unavailableCommands.length > 0;
+  return { ok: process_ok && !incomplete, ...(unavailableCommands.length ? {
+    process_ok, complete: false, verdict: process_ok ? 'incomplete' : 'red', incomplete,
+    unavailable_commands: unavailableCommands,
+  } : {}), counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
 }
 
 /** How many timed tests are named before the rest are counted. */
@@ -255,8 +260,11 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null, la
     counted = `${c.tests ?? 0} tests counted — the failure is below`;
   }
   const lines = [
-    `${summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
+    `${summary.incomplete ? 'INCOMPLETE' : summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
   ];
+  for (const unavailable of summary.unavailable_commands || []) {
+    lines.push(`unavailable: ${unavailable.id || unavailable.packageScript} — ${unavailable.command} — exit ${unavailable.exit}`);
+  }
   if (!summary.ok) {
     for (const line of summary.failures) lines.push(line);
     if (summary.more) lines.push(`… and ${summary.more} more failing lines`);

@@ -45,6 +45,22 @@ describe('summarizeGate', () => {
     assert.equal(summarizeGate('✖ looks red but the process said 0', { exitCode: 0 }).ok, true);
   });
 
+  it('distinguishes permitted process success from complete evidence when a check is unavailable', () => {
+    const unavailable = [{ id: 'db:postgres', packageScript: 'sql:pr-ci', command: 'npm run sql:pr-ci', exit: 69 }];
+    const summary = summarizeGate('ℹ tests 1\nℹ pass 1\nℹ fail 0\n', { exitCode: 0, unavailableCommands: unavailable });
+    assert.deepEqual([summary.ok, summary.process_ok, summary.complete, summary.verdict, summary.incomplete], [false, true, false, 'incomplete', true]);
+    assert.deepEqual(summary.unavailable_commands, unavailable);
+    const human = gateLines(summary, { command: 'npm run ci', seconds: 3, logPath: '/s/g.log' });
+    assert.match(human, /^INCOMPLETE — npm run ci/u);
+    assert.match(human, /unavailable: db:postgres — npm run sql:pr-ci — exit 69/u);
+    assert.doesNotMatch(human, /GREEN/u);
+
+    const failed = summarizeGate('ℹ tests 1\nℹ pass 0\nℹ fail 1\n', { exitCode: 1, unavailableCommands: unavailable });
+    assert.equal(failed.verdict, 'red');
+    assert.equal(failed.incomplete, false);
+    assert.match(gateLines(failed, { command: 'npm run ci', seconds: 3, logPath: '/s/g.log' }), /^RED —/u);
+  });
+
   it('names at most FAILURE_LINES lines and counts the rest', () => {
     const output = Array.from({ length: 30 }, (_, i) => `✖ test ${i}`).join('\n');
     const s = summarizeGate(output, { exitCode: 1 });

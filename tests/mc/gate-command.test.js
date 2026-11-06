@@ -162,6 +162,33 @@ describe('mc gate <test files…>', () => {
     assert.equal(result.evidence, undefined);
   });
 
+  it('reports declared unavailable execution as incomplete without changing the permitted zero exit', async () => {
+    const unavailable = [{ id: 'db:postgres', packageScript: 'sql:pr-ci', command: "npm run 'sql:pr-ci'", exit: 69 }];
+    const human = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN,
+      result: { code: 0, ok: false, process_ok: true, complete: false, verdict: 'incomplete', unavailable_commands: unavailable } });
+    assert.equal(await run(['a.test.js'], human.deps), 0);
+    assert.match(human.out.stdout, /^INCOMPLETE —/u);
+    assert.match(human.out.stdout, /unavailable: db:postgres — npm run 'sql:pr-ci' — exit 69/u);
+    assert.doesNotMatch(human.out.stdout, /GREEN/u);
+
+    const json = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN,
+      result: { code: 0, ok: false, process_ok: true, complete: false, verdict: 'incomplete', unavailable_commands: unavailable,
+        commands: [{ id: 'db:postgres', packageScript: 'sql:pr-ci', command: "npm run 'sql:pr-ci'", exit: 69, ok: false, state: 'unavailable', unavailable: true }] } });
+    assert.equal(await run(['a.test.js', '--json'], json.deps), 0);
+    const parsed = JSON.parse(json.out.stdout);
+    assert.deepEqual([parsed.ok, parsed.process_ok, parsed.complete, parsed.verdict, parsed.exit], [false, true, false, 'incomplete', 0]);
+    assert.deepEqual(parsed.unavailable_commands, unavailable);
+    assert.deepEqual(parsed.commands[0], { id: 'db:postgres', packageScript: 'sql:pr-ci', command: "npm run 'sql:pr-ci'", exit: 69,
+      ok: false, state: 'unavailable', unavailable: true });
+  });
+
+  it('does not infer unavailable state from stderr-like log wording', async () => {
+    const h = harness({ tests: ['a.test.js'], finishAfter: 1, output: `unavailable on this machine\n${GREEN}` });
+    assert.equal(await run(['a.test.js'], h.deps), 0);
+    assert.match(h.out.stdout, /^GREEN —/u);
+    assert.doesNotMatch(h.out.stdout, /INCOMPLETE|unavailable:/u);
+  });
+
   it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
     const { out, deps, files } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: GREEN });
     const asked = [];
