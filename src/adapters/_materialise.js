@@ -1,10 +1,10 @@
 /**
- * Shared materialisation helpers used by adapter `materializeToken` /
- * `shredToken` implementations (§12d).
+ * Shared materialisation helpers retained for adapter compatibility and
+ * legacy cleanup; their presence does not mean plaintext materialisation is
+ * currently enabled.
  *
  * Each adapter declares its own `tokenLocations()` shapes; the actual
- * disk writes (mode 0600, atomic) and unlinks land here so they stay
- * uniform across tools.
+ * disk writes and unlinks land here so they stay uniform across tools.
  *
  * No adapter-specific logic — the FILE FORMAT decision lives in the
  * adapter (e.g. claude-code wraps the token as
@@ -27,11 +27,9 @@ import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 
 /**
- * Atomically write `body` to `path` with mode 0600.
- *
- * Atomicity strategy: write to `<path>.tmp`, fsync via the rename hand-
- * off. Same approach `src/mc/registry.js` uses. The rename is the
- * atomic step.
+ * Directly write `body` to `path` with requested mode 0600 and best-effort
+ * chmod. This is not an atomic temp/rename/fsync write and makes no atomicity
+ * or durability guarantee.
  *
  * `body` MUST be a string. Callers serialise their per-format JSON
  * upstream; this helper stays format-agnostic so a leaked token never
@@ -52,11 +50,8 @@ export async function writeProtectedFile(path, body, {
     await mkdir(dir, { recursive: true, mode: 0o700 });
   }
 
-  // Write directly with mode 0600. We don't use a .tmp + rename hand-off
-  // here because (a) credentials.json-shaped files are tiny, (b) tools
-  // that watch this path expect the same path each time, (c) writeFile
-  // already truncates atomically enough for this use. If a partial
-  // write became a problem we'd revisit.
+  // Write directly with requested mode 0600. This does not provide atomic
+  // replacement or durability guarantees.
   await writeFile(path, body, { mode: 0o600 });
   // Belt-and-braces chmod in case the runtime's writeFile ignored mode
   // (some platforms / older Node behaviours).
