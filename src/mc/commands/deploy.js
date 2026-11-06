@@ -128,6 +128,7 @@ const STOP_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGTERM'];
 
 export function spawnDeployDefault({
   cwd, env, onOutput, stdout = process.stdout, stderr = process.stderr, signals = process,
+  spawnProcess = spawn,
 }) {
   return new Promise((resolve) => {
     // The environment goes through untouched: MEMORO_DEPLOY_CONTAINERS and
@@ -140,7 +141,7 @@ export function spawnDeployDefault({
     // and not a terminal, so a tool that draws a progress bar only for a TTY
     // prints plain lines instead. stdin stays inherited: `deploy.mjs` asks
     // nothing, but wrangler's own login flow might.
-    const child = spawn('npm', ['run', 'deploy'], { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
+    const child = spawnProcess('npm', ['run', 'deploy'], { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
     const tee = (stream, sink) => {
       if (!stream) return;
       stream.setEncoding('utf8');
