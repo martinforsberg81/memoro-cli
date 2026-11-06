@@ -446,6 +446,54 @@ describe('the menu under the page', () => {
     assert.equal(runnerOrder('mc-ui'), null);
   });
 
+  it('refreshes on r and refresh, then keeps accepting commands', async () => {
+    const answers = ['r', 'refresh', 'q'];
+    const errors = [];
+    const frames = [];
+    const stdout = { write: () => {} };
+    let drawn = 0;
+    const code = await menu(DATA, {
+      stdout,
+      stderr: { write: (text) => errors.push(text) },
+      page: async () => ({ data: DATA, lines: [`frame ${++drawn}`], key: `key ${drawn}` }),
+      reader: {
+        ask: async () => answers.shift(),
+        show: (lines, key) => frames.push({ lines, key }),
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(frames, [
+      { lines: ['frame 1'], key: 'key 1' },
+      { lines: ['frame 2'], key: 'key 2' },
+    ]);
+  });
+
+  it('delegates deploy to the deploy command and returns to the page after success or refusal', async () => {
+    const answers = ['deploy', 'mc deploy --dry-run', 'deploy --follow', 'q'];
+    const orders = [];
+    const errors = [];
+    const stdout = { write: () => {} };
+    const env = { MC_WORK_ROOT: '/fixture' };
+    let drawn = 0;
+    const code = await menu(DATA, {
+      stdout, env,
+      stderr: { write: (text) => errors.push(text) },
+      page: async () => { drawn += 1; return { data: DATA, lines: ['  PROGRAMMES'] }; },
+      reader: plainReader({ stdout, ask: () => answers.shift() }),
+      deployOrder: async (argv, io) => {
+        assert.equal(io.stdout, stdout);
+        assert.equal(io.env, env);
+        orders.push(argv);
+        return orders.length === 1 ? 0 : 1;
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(orders, [[], ['--dry-run'], ['--follow']]);
+    assert.equal(drawn, 3);
+  });
+
   it('asks GitHub on f, and draws the page again', async () => {
     let asked = 0;
     let drawn = 0;

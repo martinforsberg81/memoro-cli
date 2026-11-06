@@ -283,6 +283,8 @@ painted rows occupy the same columns.
 | `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
+| `r` / `refresh` | collect the current page and redraw immediately |
+| `deploy [<args>]` / `mc deploy [<args>]` | run `mc deploy` with its usual preflight, confirmation and log following, then redraw |
 | `start`, `stop [--force]`, `update [--force]`, `lanes [<n>]` | the runner order, then redraw |
 | `q`, empty | quit |
 | anything else | explain the unrecognised or retired verb, then redraw |

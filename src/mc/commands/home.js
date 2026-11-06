@@ -267,6 +267,7 @@ const KEYS = [
   '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
   '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
   '  priority <programme>... --set <n>   higher number goes first within a stage',
+  '  r  refresh   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -317,6 +318,8 @@ export async function menu(first, {
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
+  // Reuse deploy's preflight, confirmation and log following in this terminal.
+  deployOrder = null,
   // `mc goal <verb>` for a goal's number — a dependency, as runOrder is, so a
   // test drives the menu without a goal on disk.
   showGoal = null,
@@ -352,12 +355,24 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
+    if (answer === 'r' || answer === 'refresh') {
+      data = await redraw();
+      continue;
+    }
     if (['m', 'manager', 'b', 'brief'].includes(answer)) {
       const manager = await import('./manager.js');
       return manager.run([], { stdout, stderr });
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);
+    const command = words[0] === 'mc' ? words.slice(1) : words;
+    if (command[0] === 'deploy') {
+      const deploy = await import('./deploy.js');
+      stdout.write('\n');
+      await (deployOrder || deploy.run)(command.slice(1), { stdout, stderr, env });
+      data = await redraw();
+      continue;
+    }
     if (words[0] === 'priority' && words.length <= 2) {
       const model = await import('./model.js');
       stdout.write('\n');
