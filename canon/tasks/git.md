@@ -9,8 +9,8 @@ and its `index.lock` are every session's at once.
 
 - **Never `git stash`.** The stack is shared, and push/pop has destroyed
   parallel work. Set work aside with a commit (`git reset --soft HEAD~1`
-  later) or in a scratch worktree. `git rebase` autostashes: commit or reset
-  before rebasing.
+  later), never in a scratch checkout of a goal branch. `git rebase`
+  autostashes: commit or reset before rebasing.
 - **One command at a time where it matters.** A failed `git add` in a chain
   has left a pushed branch without its commit; a failed `git checkout` has
   gated the wrong branch. Print `git branch --show-current` before a
