@@ -9,10 +9,10 @@
  * Decimal gigabytes throughout (1 GB = 1e9 bytes).
  *
  *   - `RESERVE_BYTES` (20 GB) is the floor kept for mc's operations.
- *   - Below `PRESSURE_BYTES` (30 GB) a pressure pass starts, and no new heavy
+ *   - Below `PRESSURE_BYTES` (20 GB) a pressure pass starts, and no new heavy
  *     work (a headless session, a deploy script, a stopped Docker runtime) is
- *     admitted unless the pass restores it. The 10 GB between the two is a
- *     policy headroom, not a measured bound on what a deploy writes.
+ *     admitted unless the pass restores the reserve. Admission and the reserve
+ *     share the same floor; cleanup still aims for 40 GB.
  *   - A pass stops at `RECOVERY_BYTES` (40 GB) or when its safe steps are
  *     exhausted, and reports the shortfall.
  *
@@ -46,7 +46,7 @@ import { dirname, join } from 'node:path';
 
 export const GB = 1e9;
 export const RESERVE_BYTES = 20 * GB;
-export const PRESSURE_BYTES = 30 * GB;
+export const PRESSURE_BYTES = 20 * GB;
 export const RECOVERY_BYTES = 40 * GB;
 /** A pass that ends below the pressure line is not tried again for this long. */
 export const COOLDOWN_MS = 5 * 60 * 1000;

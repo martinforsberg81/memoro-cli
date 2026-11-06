@@ -127,7 +127,7 @@ const HEADLESS_PLAN_CANDIDATES = Object.freeze([
 
 /*
  * Disk: no session starts unless the shared policy admits it
- * (disk-pressure.js: 30 GB available, after a pressure pass if need be).
+ * (disk-pressure.js: 20 GB available, after a pressure pass if need be).
  * 2026-10-08 a session hit ENOSPC with 118 MiB free; until 2026-11-05 the
  * line was 5 GiB, and scratch went by age alone after two days. Scratch now
  * goes only by tidy's rule S, which needs proof that its session ended.
@@ -1977,7 +1977,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * Whether the volume where `MC_SCRATCH` is made admits a new session now
    * (disk-pressure.js `admit`): asked at the top of a pass and again at the
    * start itself, so a pass that waited for a slot does not start on an old
-   * reading. A refusal — under 30 GB after a pressure pass, or a reading that
+   * reading. A refusal — under 20 GB after a pressure pass, or a reading that
    * failed — is said once per line and written to `disk.json` for the page.
    * Sessions already running go on. No policy (a fixture) is room.
    */
@@ -1999,7 +1999,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The disk monitor's tick (`runLoop`'s timer, every `POLL_MS`): a cheap
-   * reading, and a pressure pass at once below 30 GB unless the cooldown
+   * reading, and a pressure pass at once below 20 GB unless the cooldown
    * holds. Independent of the chores and lanes, so a nightly or a session in
    * flight does not hide the disk. A tick while the last is running is skipped.
    */

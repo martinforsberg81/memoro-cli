@@ -362,19 +362,19 @@ describe('SESSIONS', () => {
     const rows = (runner) => paintedPage(pageData({ runner })).map(strip).filter((row) => /disk:|New sessions paused/u.test(row)).map((row) => row.trim());
 
     const recovered = model(39.5e9);
-    assert.deepEqual(rows(recovered), ['disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
+    assert.deepEqual(rows(recovered), ['disk: 39.5 GB free (measured) — healthy; pressure below 20.0 GB, reserve 20.0 GB']);
     assert.deepEqual(recovered.disk, { last_refusal: saved }, 'runner refusal remains clearly historical structured data');
     assert.equal(recovered.pressure.last_refusal.available_bytes, 25.3e9);
     assert.equal(recovered.pressure.last_cleanup.failed, true);
 
-    const boundary = model(30e9);
-    assert.equal(boundary.pressure.status, 'healthy', '30 GB is admitted');
-    assert.deepEqual(rows(boundary), ['disk: 30.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
+    const boundary = model(20e9);
+    assert.equal(boundary.pressure.status, 'healthy', '20 GB is admitted');
+    assert.deepEqual(rows(boundary), ['disk: 20.0 GB free (measured) — healthy; pressure below 20.0 GB, reserve 20.0 GB']);
 
-    const pressed = model(26e9);
+    const pressed = model(16e9);
     assert.deepEqual(rows(pressed), [
       'New sessions paused — low disk space',
-      'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+      'disk: 16.0 GB free (measured) — below 20.0 GB: new sessions, deploys and Docker starts wait',
     ]);
     assert.equal(pressed.pressure.last_refusal.available_bytes, 25.3e9, 'old refusal differs from current measured bytes');
 
@@ -395,14 +395,14 @@ describe('SESSIONS', () => {
     const summary = (free, value) => diskSummary({ path: '/w/runner/scratch', stateDir: '/w/runner', read: read(value), freeBytes: () => free, nowMs: NOW.getTime() });
     const rows = (pressure) => paintedPage(pageData({ runner: runnerSection({ runner: RUNNER, now: NOW, alive: live, pressure }) })).map(strip).filter((row) => /disk:/u.test(row)).map((row) => row.trim());
 
-    assert.deepEqual(rows(summary(45.29e9, null)), ['disk: 45.2 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
-    assert.deepEqual(rows(summary(26e9, state)), [
-      'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+    assert.deepEqual(rows(summary(45.29e9, null)), ['disk: 45.2 GB free (measured) — healthy; pressure below 20.0 GB, reserve 20.0 GB']);
+    assert.deepEqual(rows(summary(16e9, state)), [
+      'disk: 16.0 GB free (measured) — below 20.0 GB: new sessions, deploys and Docker starts wait',
       'disk: next pass after 2026-08-29T12:05Z',
     ]);
-    assert.deepEqual(rows(summary(33e9, state)), ['disk: 33.0 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB']);
-    assert.deepEqual(rows(summary(26e9, { ...state, cooldown_until: '2026-08-29T11:59:00.000Z' })), [
-      'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+    assert.deepEqual(rows(summary(33e9, state)), ['disk: 33.0 GB free (measured) — healthy; pressure below 20.0 GB, reserve 20.0 GB']);
+    assert.deepEqual(rows(summary(16e9, { ...state, cooldown_until: '2026-08-29T11:59:00.000Z' })), [
+      'disk: 16.0 GB free (measured) — below 20.0 GB: new sessions, deploys and Docker starts wait',
     ], 'expired cooldown is absent');
     assert.equal(rows(summary(null, state))[0], 'disk: free space could not be measured — new sessions, deploys and Docker starts are refused');
   });
@@ -1317,7 +1317,7 @@ const DATA = pageData({
 
 describe('operational panels', () => {
   it('groups operational work in orange panels above system details without hiding blockers', () => {
-    const disk = 'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait';
+    const disk = 'disk: 16.0 GB free (measured) — below 20.0 GB: new sessions, deploys and Docker starts wait';
     const data = pageData({
       runner: { ...DATA.runner, process: { alive: true }, disk: { last_refusal: { line: 'disk: 25.3 GB free — no session started' } }, pressure: { status: 'pressure', lines: [disk] } },
       dev: { servers: [], queue: [], running: 0, leased: 0, queued: 0 },
@@ -1345,7 +1345,7 @@ describe('operational panels', () => {
         ['PRs outside goals', panels[0], panels[1]], ['#99901', panels[0], panels[1]],
         ['724 rows waiting', panels[0], panels[1]], ['full test 60 min', panels[2], footer],
         ['deps 2 h', panels[2], footer], ['2 red', panels[2], footer],
-        ['codex plan available', footer, lines.length], ['disk: 26.0 GB free', footer, lines.length],
+        ['codex plan available', footer, lines.length], ['disk: 16.0 GB free', footer, lines.length],
       ]) assert.ok(lines.slice(start, end).some(line => line.includes(text)), text);
       assert.equal(lines.filter(line => line.includes('#99901')).length, 1);
       assert.ok(lines.slice(footer).map(line => line.trim()).join(' ').includes(data.billing), 'both provider routes survive billing wrapping');
@@ -1763,7 +1763,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.runner.pressure.last_cleanup, pass);
     const lines = renderPageLines(data, { columns: 100, now: NOW });
     assert.equal(lines.filter((line) => line.includes('disk:')).map((line) => line.trim()).join('\n'),
-      'disk: 39.5 GB free (measured) — healthy; pressure below 30.0 GB, reserve 20.0 GB');
+      'disk: 39.5 GB free (measured) — healthy; pressure below 20.0 GB, reserve 20.0 GB');
     assert.ok(!lines.some((line) => line.includes('New sessions paused — low disk space')));
     for (const [cooldown, expected] of [
       ['2026-08-29T12:05:00.000Z', ['disk: next pass after 2026-08-29T12:05Z']],
@@ -1772,11 +1772,11 @@ describe('collectPage', () => {
       writeFileSync(join(root, 'runner', 'disk-pressure.json'), JSON.stringify({
         status: 'pressure', last_refusal: refusal, last_cleanup: pass, cooldown_until: cooldown,
       }));
-      const pressed = await collectDisk(26e9);
+      const pressed = await collectDisk(16e9);
       assert.equal(pressed.runner.pressure.cooldown_until, expected.length ? cooldown : null);
       const rows = renderPageLines(pressed, { columns: 100, now: NOW });
       assert.deepEqual(rows.filter((line) => line.includes('disk:')).map((line) => line.trim()), [
-        'disk: 26.0 GB free (measured) — below 30.0 GB: new sessions, deploys and Docker starts wait',
+        'disk: 16.0 GB free (measured) — below 20.0 GB: new sessions, deploys and Docker starts wait',
         ...expected,
       ], 'retry visibility follows the observation clock, not the wall clock');
       assert.deepEqual(pressed.runner.pressure.last_cleanup, pass);

@@ -112,7 +112,7 @@ polls every 15 s; admission is FIFO, with waiters visible in
 `runner/waiting.json`. STOP and UPDATE retire their waiting tickets.
 
 No new session starts unless the disk policy admits it
-([mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure)): 30 GB available on
+([mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure)): 20 GB available on
 the scratch volume, after a pressure pass if need be, asked at the top of a
 pass and again at the start itself. A reading that fails refuses. No session
 starts either below 20 percent host available memory. On Linux this is
