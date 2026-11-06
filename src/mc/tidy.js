@@ -492,17 +492,17 @@ export function gatherTidyFacts({
   return facts;
 }
 
-function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command }) {
+function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command, only = null }) {
   const addError = (path, why) => facts.goal_worktrees.push({ path, error: why, bytes: 0 });
   const programs = roots.plan;
   if (basename(programs) !== 'programs') return; // goal worktrees exist only in layout 2.
   let programmes;
-  try { programmes = readdirSync(programs, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
+  try { programmes = only ? [only.programme] : readdirSync(programs, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
   catch (error) { if (error?.code !== 'ENOENT') addError(programs, `could not enumerate programmes: ${message(error)}`); return; }
   for (const programme of programmes) {
     const goalsDir = join(programs, programme, GOALS_DIR);
     let goalDirs;
-    try { goalDirs = readdirSync(goalsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
+    try { goalDirs = only ? [only.goal] : readdirSync(goalsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
     catch (error) { if (error?.code !== 'ENOENT') addError(goalsDir, `could not enumerate goals: ${message(error)}`); continue; }
     for (const goal of goalDirs) {
       const dir = join(goalsDir, goal);
@@ -512,7 +512,7 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
       try { raw = readFileSync(metadataPath, 'utf8'); parsed = parseGoal(raw); }
       catch (error) { addError(dir, `goal metadata unreadable: ${message(error)}`); continue; }
       if (parsed.problems) { addError(dir, `goal metadata invalid: ${parsed.problems.join('; ')}`); continue; }
-      for (const repoName of parsed.repos) {
+      for (const repoName of parsed.repos.filter((name) => !only || name === only.repo)) {
         const path = join(dir, repoName);
         if (!present(path)) continue;
         const item = { path, programme, goal, repo: repoName, metadata: raw, stage: parsed.stage, status: parsed.status, wt: null, bytes: 0 };
@@ -551,7 +551,7 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           const activity = newestMtime(dir);
           if (!Number.isFinite(activity)) throw new Error('could not establish goal/worktree activity');
           item.wt = { path, repo: repoName, branch, head, owner: repo.path, common, identity, activity, metadata_identity: raw };
-          item.bytes = treeBytes(path);
+          if (!only) item.bytes = treeBytes(path);
           item.verdict = { target: true, why: 'eligible plan goal checkout' };
           item.error = null;
         } catch (error) { item.error = message(error); item.verdict = { target: false, why: item.error }; }
@@ -1342,19 +1342,26 @@ export function applyTidy({
         unlinkSync(path);
       } else if (target.kind === 'plan-goal-worktree') {
         const removeUnderLease = () => {
-          const freshFacts = gatherTidyFacts({ env, now, ...doors });
-          const freshPlan = tidyPlan(freshFacts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS, person: list.person === true, pressure: pressurePass });
-          const freshTarget = freshPlan.targets.find((candidate) => candidate.path === path && candidate.kind === target.kind);
-          const item = freshTarget && (freshFacts.goal_worktrees || []).find((candidate) => candidate.path === path);
+          // Only this goal's evidence belongs under the allocation/admission
+          // lock. Never inventory unrelated worktrees, caches or transcripts here.
+          let running = null;
+          try { running = (doors.cwds || cwdsOfUser)(); } catch { /* fail closed */ }
+          if (!running?.length || running.complete === false) running = null;
+          const freshFacts = { goal_worktrees: [] };
+          gatherPlanGoalWorktrees(freshFacts, { roots, running, now, only: {
+            programme: basename(dirname(dirname(dirname(path)))), goal: basename(dirname(path)), repo: basename(path),
+          }, git: doors.git || realGit, repos: doors.repos || defaultRepos(env),
+          openIn: doors.openIn || openFilesIn, command: doors.command || commandOf });
+          const item = freshFacts.goal_worktrees.find((candidate) => candidate.path === path);
+          const verdict = item && planGoalWorktree(item, { now, pressure: pressurePass });
           const wt = item?.wt;
-          if (!freshTarget || !wt || item.metadata !== target.metadata || item.stage !== target.stage || item.status !== target.status
+          if (!verdict?.target || !wt || item.metadata !== target.metadata || item.stage !== target.stage || item.status !== target.status
             || wt.branch !== target.branch || wt.head !== target.head || wt.owner !== target.owner || wt.common !== target.common
             || wt.activity !== target.activity || !sameEvidence(wt.identity, target.identity)) {
-            applied.push({ path, ok: false, why: `re-check: ${freshPlan.kept.find((candidate) => candidate.path === path)?.why || 'goal metadata, stage, worktree identity, HEAD or activity changed since the list'}` });
+            applied.push({ path, ok: false, why: `re-check: ${!verdict?.target ? verdict?.why || 'goal checkout disappeared or is no longer declared' : 'goal metadata, stage, worktree identity, HEAD or activity changed since the list'}` });
             return;
           }
           if (!removeWorktree(wt.owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); return; }
-          // Replace the initial byte estimate with the fresh candidate's value.
           return;
         };
         (doors.goalWorktreeLock || ((fn) => realLock(roots.root, fn, { strict: true })))(removeUnderLease);

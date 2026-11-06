@@ -12,7 +12,7 @@ import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/tidy.js';
@@ -538,6 +538,62 @@ describe('(P) automatic plan goal worktree release', () => {
       assert.equal(existsSync(f.path), false);
       assert.deepEqual([readFileSync(join(f.dir, 'GOAL.json')), readFileSync(join(f.dir, 'LOG.md'))], docs);
       assert.equal(m.released.includes(f.path), true, 'removal uses the checkout-only worktree door');
+    } finally { m.cleanup(); }
+  });
+
+  it('limits lock-held discovery to the selected goal and rechecks changes made at lock acquisition', () => {
+    const m = machine();
+    try {
+      const first = planGoalTree(m, { name: 'first' });
+      const second = planGoalTree(m, { name: 'second' });
+      let locked = null;
+      const locks = [];
+      const base = first.doors();
+      const doors = first.doors({
+        git: (at, args) => {
+          if (locked && at !== first.owner && at !== locked) throw new Error('unrelated Git inventory under runner lock');
+          return base.git(at, args);
+        },
+        openIn: (at) => {
+          if (locked && at !== locked && at !== dirname(locked)) throw new Error('unrelated open-file inventory under runner lock');
+          return [];
+        },
+        filesOpen: () => { assert.equal(locked, null, 'generated-file inventory stays outside runner lock'); return new Map(); },
+        goalWorktreeLock: (fn) => {
+          locked = [first.path, second.path][locks.length];
+          locks.push(locked);
+          try { return fn(); } finally { locked = null; }
+        },
+        removeWorktree: (owner, path) => {
+          assert.equal(locked, path, 'removal must share the candidate recheck lease');
+          return base.removeWorktree(owner, path);
+        },
+      });
+      const preview = runTidy(doors);
+      assert.deepEqual(preview.list.targets.map((item) => item.path), [first.path, second.path]);
+      const applied = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[first.path, true], [second.path, true]], JSON.stringify(applied.applied));
+      assert.deepEqual(locks, [first.path, second.path]);
+
+      const race = planGoalTree(m, { name: 'race' });
+      const state = m.planGoalStates.get(race.path);
+      for (const change of ['head', 'stage', 'dirty', 'ignored', 'own', 'cwd', 'open']) {
+        const previewRace = runTidy(race.doors());
+        const result = applyTidy({ listPath: previewRace.listPath, ...race.doors({
+          goalWorktreeLock: (fn) => {
+            if (change === 'stage') m.write(join(race.dir, 'GOAL.json'), goalJson({ stage: 'build', repos: ['memoro'] }), OLD);
+            else if (change === 'cwd') m.cwds.push({ pid: 90, cwd: race.dir });
+            else state[change] = { head: 'b'.repeat(40), dirty: '?? note', ignored: '!! local.db', own: '1', open: [44] }[change];
+            return fn();
+          },
+        }) });
+        assert.deepEqual(result.applied.map((item) => [item.path, item.ok]), [[race.path, false]], change);
+        assert.equal(existsSync(race.path), true, change);
+        Object.assign(state, { head: 'a'.repeat(40), dirty: '', ignored: '', own: '0', open: [] });
+        m.cwds = [{ pid: 1, cwd: '/' }];
+        m.write(join(race.dir, 'GOAL.json'), race.metadata, OLD);
+        ageTree(race.dir, OLD);
+      }
     } finally { m.cleanup(); }
   });
 

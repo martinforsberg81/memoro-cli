@@ -35,7 +35,7 @@ stays.
 
 | Root | What lives there | What tidy may remove |
 |---|---|---|
-| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no goal that is not finished (I) |
+| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no goal that is not finished (I); clean inactive plan goal checkouts (P) |
 | `~/mc/runner/step/<name>/` | an old execution area | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
@@ -46,11 +46,11 @@ stays.
 | Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
-In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X) and a programme's own checkouts once it is idle (I) ([mc-layout.md](mc-layout.md)).
+In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X), a programme's own checkouts once it is idle (I), and eligible plan goal checkouts (P) ([mc-layout.md](mc-layout.md)).
 
-Rule P was removed with projects; rules version 10 reads no execution
-register, retains S and F, and adds the rebuildable-cache rule B approved by
-Martin on 2026-11-06.
+The old project rule P was removed with projects. Rules version 11 reuses P
+for plan goal checkouts; it reads no execution register and retains S, F and
+the rebuildable-cache rule B approved by Martin on 2026-11-06.
 Scratch cleanup follows S below; transcripts and logs outside F's exact
 root and shape remain governed by their existing rules.
 
@@ -109,7 +109,10 @@ have been untouched for 72 hours. It must be on `goal/<goal>`, have no commits
 beyond `origin/main`, no tracked/untracked/ignored files, and no live cwd, open
 file, or uncertain process evidence in the goal or checkout. Goal metadata,
 checkout ownership, HEAD, and activity are recorded in the preview and fully
-rechecked under the shared runner lock before each removal. Git removes only
+rechecked under the shared runner lock before each removal. The lock-held
+recheck reads only that goal and checkout, without repeating the full tidy
+inventory or byte estimates; unrelated caches, transcripts and checkouts stay
+outside the allocation/admission critical section. Git removes only
 the checkout without `--force`; its branch and every goal document, including
 `GOAL.json` and `LOG.md`, stay unchanged. When the goal starts, the runner's
 existing `placeGoalWorktrees` recovery calls `addGoalWorktree` on that branch.
