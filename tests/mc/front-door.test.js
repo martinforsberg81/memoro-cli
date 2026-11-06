@@ -484,6 +484,7 @@ describe('the menu under the page', () => {
       deployOrder: async (argv, io) => {
         assert.equal(io.stdout, stdout);
         assert.equal(io.env, env);
+        assert.equal(io.follow, false, 'the live page remains responsible for status');
         orders.push(argv);
         return orders.length === 1 ? 0 : 1;
       },

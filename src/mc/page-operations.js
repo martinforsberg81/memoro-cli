@@ -128,8 +128,8 @@ export function mergesLines(lines, c, wide, merges, expand) {
       const label = `merging ${refs}`;
       const status = [mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
       operationFrame(lines, c, wide, 'green', (body, room) => {
-        detail(body, c, room, 6, `${label}   ${status}`);
-        if (item.pid) detail(body, c, room, 6, `pid ${item.pid}`);
+        detail(body, c, room, 6, `${label}${item.pid ? ` · pid ${item.pid}` : ''}`);
+        detail(body, c, room, 6, status);
         if (item.batch_of) detail(body, c, room, 6, `with #${item.batch_of}`);
         if (expand) {
           detail(body, c, room, 6, item.name || item.title || '');
@@ -179,9 +179,10 @@ export function deployLines(lines, c, wide, production, expand) {
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
     operationFrame(lines, c, wide, p.running?.late || state === 'refused' ? 'yellow' : state === 'failed' ? 'red' : p.running ? 'green' : 'grey', (body, room) => {
-      detail(body, c, room, 6, `ATTEMPT   ${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}${p.running && !p.running.late ? ' · progress unknown' : ''}`);
-      if (attempt.pid) detail(body, c, room, 6, `pid ${attempt.pid}`);
-      if (attempt.stopped_at) detail(body, c, room, 6, attempt.stopped_at, ['red']);
+      detail(body, c, room, 6, `ATTEMPT   ${attempt.short || 'unknown'} · ${age(attempt.age_seconds)}${attempt.pid ? ` · pid ${attempt.pid}` : ''}`);
+      detail(body, c, room, 6, [state, attempt.stopped_at,
+        p.running && !p.running.late && !attempt.stopped_at ? 'progress unknown' : ''].filter(Boolean).join(' · '),
+      state === 'failed' ? ['red'] : ['grey']);
     });
   }
   if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');

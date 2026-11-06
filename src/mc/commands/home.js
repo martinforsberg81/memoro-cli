@@ -318,7 +318,7 @@ export async function menu(first, {
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
-  // Reuse deploy's preflight, confirmation and log following in this terminal.
+  // Reuse deploy's preflight and confirmation; the live page shows its status.
   deployOrder = null,
   // `mc goal <verb>` for a goal's number — a dependency, as runOrder is, so a
   // test drives the menu without a goal on disk.
@@ -369,7 +369,7 @@ export async function menu(first, {
     if (command[0] === 'deploy') {
       const deploy = await import('./deploy.js');
       stdout.write('\n');
-      await (deployOrder || deploy.run)(command.slice(1), { stdout, stderr, env });
+      await (deployOrder || deploy.run)(command.slice(1), { stdout, stderr, env, follow: false });
       data = await redraw();
       continue;
     }

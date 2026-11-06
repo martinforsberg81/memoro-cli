@@ -498,11 +498,11 @@ describe('DEPLOY', () => {
     assert.equal(fresh.running.short, 'b3e65b6');
     assert.equal(fresh.running.late, false);
     assert.match(strip(line({ attempt: { ...DEPLOYED, started, ended: '', sha: OTHER, outcome: 'running' } })),
-      /ATTEMPT + b3e65b6 · running · 5 min ago/u);
+      /ATTEMPT + b3e65b6 · 5 min ago *│\n +│ running/u);
 
     const old = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running' };
     assert.equal(section({ attempt: old }).running.late, true);
-    assert.match(strip(line({ attempt: old })), /ATTEMPT + b3e65b6 · no end recorded · 4 h ago/u);
+    assert.match(strip(line({ attempt: old })), /ATTEMPT + b3e65b6 · 4 h ago *│\n +│ no end recorded/u);
   });
 
   it('reads a running deploy\'s pid from the record: alive is running however long, gone is late at once', () => {
@@ -512,7 +512,7 @@ describe('DEPLOY', () => {
     assert.equal(section({ attempt: row, alive }).running.late, false);
     assert.equal(section({ attempt: row, alive }).running.pid, 4242);
     assert.match(strip(line({ attempt: row, alive })), /pid 4242/u);
-    assert.match(strip(line({ attempt: row, alive })), /ATTEMPT + b3e65b6 · running · 4 h ago/u);
+    assert.match(strip(line({ attempt: row, alive })), /ATTEMPT + b3e65b6 · 4 h ago · pid 4242 *│\n +│ running/u);
     assert.equal(section({ attempt: { ...row, started }, alive: () => false }).running.late, true);
 
     // The first deploy there ever was, with nothing collected: still drawn.
@@ -521,7 +521,7 @@ describe('DEPLOY', () => {
     const drawn = paintedPage(pageData({
       runner: runnerSection({ rows: [], now: NOW, deploy: null, attempt: { ...row, started }, live: null, alive }),
     }));
-    assert.match(strip(rowWith(drawn, 'ATTEMPT')), /ATTEMPT + b3e65b6 · running · 5 min ago/u);
+    assert.match(strip(drawn.join('\n')), /ATTEMPT + b3e65b6 · 5 min ago · pid 4242 *│\n +│ running/u);
   });
 
   /**
@@ -537,7 +537,7 @@ describe('DEPLOY', () => {
     assert.equal(section({ attempt: failed }).failed.stopped_at, 'Deploy source preflight');
     for (const columns of [100, 120]) {
       assert.match(strip(line({ attempt: failed }, { columns })),
-        /ATTEMPT + b3e65b6 · failed · 30 min ago *│\n +│ Deploy source preflight/u);
+        /ATTEMPT + b3e65b6 · 30 min ago *│\n +│ failed · Deploy source preflight/u);
     }
   });
 
@@ -890,7 +890,7 @@ describe('MERGES', () => {
     assert.equal(repo.waiting.length, 1);
     for (const columns of [60, 80, 120]) {
       const lines = drawing(merges, columns);
-      assert.match(lines.join('\n'), /merging #11651 + \[━●·\] · gate · 4 min/u);
+      assert.match(lines.join('\n'), /merging #11651 · pid 4242 *│\n +│ \[━●·\] · gate · 4 min/u);
       assert.match(renderPageLines(pageData({ merges }), { columns, expand: true }).join('\n'), /feature/u);
       assert.match(lines.join('\n'), /Queue: #11652/u);
       assert.match(lines.join('\n'), /pid 4242/u);
@@ -902,14 +902,15 @@ describe('MERGES', () => {
     assert.equal(mergePhase('pr-tests'), 'gate');
     for (const [phase, bar] of [['rebase candidate', '[●··]'], ['running tests', '[━●·]'], ['squash merge', '[━━●]'], [null, '[···]']]) {
       const rows = drawing(section({ landing: { ...LANDING, phase } }));
-      assert.ok(rows.find((line) => line.includes('merging #11651')).includes(bar), `observed phase ${phase}`);
+      const header = rows.findIndex((line) => line.includes('merging #11651'));
+      assert.ok(rows[header + 1].includes(bar), `observed phase ${phase}`);
     }
   });
 
   it('keeps two concurrent landing queues separate', () => {
     const merges = section({ landing: [LANDING, { ...LANDING, repo: 'memoro-cli', pr: 838 }] });
     const text = drawing(merges).join('\n');
-    assert.match(text, /memoro · 0 in queue[\s\S]*merging #11651 + \[━●·\] · gate[\s\S]*memoro-cli · 0 in queue[\s\S]*merging #838 + \[━●·\] · gate/u);
+    assert.match(text, /memoro · 0 in queue[\s\S]*merging #11651 · pid 4242 *│\n +│ \[━●·\] · gate[\s\S]*memoro-cli · 0 in queue[\s\S]*merging #838 · pid 4242 *│\n +│ \[━●·\] · gate/u);
   });
 
   it('keeps legacy batch members in their repository\'s round, never as waiting', () => {
@@ -920,8 +921,8 @@ describe('MERGES', () => {
     assert.equal(merges.repos[0].landings.length, 2);
     assert.equal(merges.repos[0].waiting.length, 0);
     const text = drawing(merges).join('\n');
-    assert.match(text, /merging #11651 + \[━●·\] · gate/u);
-    assert.match(text, /merging #11652 + \[···\] · landing/u);
+    assert.match(text, /merging #11651 · pid 4242 *│\n +│ \[━●·\] · gate/u);
+    assert.match(text, /merging #11652[^\n]*\n +│ \[···\] · landing/u);
     assert.match(text, /with #11651/u);
   });
 

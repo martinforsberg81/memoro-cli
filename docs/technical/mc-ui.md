@@ -284,10 +284,14 @@ painted rows occupy the same columns.
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `r` / `refresh` | collect the current page and redraw immediately |
-| `deploy [<args>]` / `mc deploy [<args>]` | run `mc deploy` with its usual preflight, confirmation and log following, then redraw |
+| `deploy [<args>]` / `mc deploy [<args>]` | run deploy preflight and confirmation, then return to the live page as soon as the deploy starts; explicit `--follow` watches the log |
 | `start`, `stop [--force]`, `update [--force]`, `lanes [<n>]` | the runner order, then redraw |
 | `q`, empty | quit |
 | anything else | explain the unrecognised or retired verb, then redraw |
+
+Merge and deploy frames put identity and pid on the first row. Status starts
+on the second row and wraps across the frame's full width. Deployment stays
+visible in MERGE & DEPLOY while the page continues to accept commands.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal; it starts no coding session. `pageKey` includes every goal's
