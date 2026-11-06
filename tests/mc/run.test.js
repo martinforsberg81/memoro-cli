@@ -1169,6 +1169,14 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   timer(); await flush();
   assert.equal(reads.codex.length, 2, 'failed attempt is suppressed for fifteen minutes');
   assert.equal(reads.claude.length, 2, 'Claude has its own fifteen-minute attempt window');
+  clock += 15 * 60 * 1000;
+  f.files['/w/runner/UPDATE'] = '';
+  timer(); await flush();
+  assert.equal(reads.claude.length, 2, 'a pending UPDATE pauses reads');
+  assert.ok(timer, 'an UPDATE alone does not stop the ticker: a failed handover keeps polling');
+  delete f.files['/w/runner/UPDATE'];
+  timer(); await flush();
+  assert.equal(reads.claude.length, 3, 'polling resumes once the UPDATE is gone');
   f.files['/w/runner/STOP'] = '';
   timer();
   assert.equal(timer, null, 'STOP stops the independent ticker');
@@ -2562,6 +2570,10 @@ test('a claude session whose stream carries the plan windows records them in the
   assert.equal(patches[0].plan.seven_day.resets_at, new Date(1792155600 * 1000).toISOString());
   assert.equal(patches[0].plan.five_hour.utilization, 0.08);
   assert.equal(patches[0].plan.seen, '2026-08-29T10:00:00Z');
+  const claude = f.deps.capacity.read().providers.claude;
+  assert.equal(claude.windows.seven_day?.fraction_used, 0.59, 'the stream windows reach the capacity snapshot too');
+  assert.equal(claude.windows.five_hour?.fraction_used, 0.08);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /capacity not recorded/u);
 });
 
 test('a codex session records no plan windows, and neither does a claude stream without them', async () => {
@@ -2679,6 +2691,8 @@ test('a plan refusal is recorded and hands the next launch to the API reserve', 
   const { f, billing, slept, calls } = onRefusal('plan', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until, '2026-08-29T15:00:00.000Z', 'the refusal reaches the capacity snapshot the chooser reads');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /capacity not recorded/u);
   assert.equal(calls.length, 1, 'the refused session is not relaunched: the goal is picked again');
   assert.deepEqual(slept, [], 'no lane sleeps on it');
   const r = await createRunner({ deps: f.deps }).pass();

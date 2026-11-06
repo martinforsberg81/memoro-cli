@@ -29,7 +29,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
 import { applyCollectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
-import { runnerDir } from './paths.js';
+import { runnerDir, workRoot } from './paths.js';
 import { realLock } from './runner-lock.js';
 
 export const CODEX_TIMEOUT_MS = 20 * 1000;
@@ -200,10 +200,11 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
  * Collect once and persist the result: a valid read replaces the codex snapshot,
  * a failed one keeps it and records why. Returns `{ ok, why, state }`.
  */
-export async function refreshCodexCapacity({ root = runnerDir(), now = new Date(), lock = realLock, ...options } = {}) {
+export async function refreshCodexCapacity({ root = runnerDir(), lockRoot = workRoot(), now = new Date(), lock = realLock, ...options } = {}) {
   const before = JSON.stringify(readCapacity({ root }).providers.codex);
   const answer = await collectCodexCapacity(options);
-  const written = lock(root, () => {
+  // The runner's lock lives on the work root, not the runner directory.
+  const written = lock(lockRoot, () => {
     const state = readCapacity({ root });
     const next = applyCollectedCapacity(state, 'codex', answer, now, before);
     return writeCapacity(next, { root });

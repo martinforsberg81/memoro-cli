@@ -36,22 +36,22 @@ test('Claude collector makes only the fixed bounded read and returns subscriptio
   assert.equal(JSON.stringify(got).includes('fixture-secret'), false);
 });
 
-test('Claude auth is read-only from the macOS Keychain or standard credentials file', () => {
+test('Claude auth is read-only from the macOS Keychain or standard credentials file', async () => {
   const seen = [];
-  const keychain = readClaudeCredential({
+  const keychain = await readClaudeCredential({
     platform: 'darwin', home: '/fixture', exists: () => true,
     readKeychain: (service) => { seen.push(service); return JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-token' } }); },
     readFile: () => { throw new Error('Keychain should take precedence'); },
   });
   assert.equal(keychain, 'keychain-token');
   assert.deepEqual(seen, ['Claude Code-credentials']);
-  const file = readClaudeCredential({
+  const file = await readClaudeCredential({
     platform: 'linux', home: '/fixture', exists: (path) => path === '/fixture/.claude/.credentials.json',
     readFile: (path) => { seen.push(path); return JSON.stringify({ claudeAiOauth: { accessToken: 'file-token' } }); },
   });
   assert.equal(file, 'file-token');
   assert.equal(seen.at(-1), '/fixture/.claude/.credentials.json');
-  assert.equal(readClaudeCredential({ platform: 'linux', home: '/fixture', exists: () => false }), null);
+  assert.equal(await readClaudeCredential({ platform: 'linux', home: '/fixture', exists: () => false }), null);
 });
 
 test('a failed collector retains its last snapshot and an older success preserves concurrent provider updates', () => {

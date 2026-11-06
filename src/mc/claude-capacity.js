@@ -1,5 +1,5 @@
 /** Read Claude subscription windows from the installed Claude Code login. */
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -10,10 +10,19 @@ export const CLAUDE_TIMEOUT_MS = 15_000;
 export const CLAUDE_MAX_BYTES = 1 << 20;
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
-export function readClaudeCredential({ platform = process.platform, home = homedir(), readFile = readFileSync, exists = existsSync, readKeychain } = {}) {
+/** The login's item, read without blocking the runner's event loop: bounded to 5 s, no shell, nothing written. */
+function keychainItem(service) {
+  return new Promise((resolve) => {
+    execFile('security', ['find-generic-password', '-s', service, '-w'], { encoding: 'utf8', timeout: 5_000, maxBuffer: 1 << 16 }, (error, stdout) => {
+      resolve(error ? null : stdout);
+    });
+  });
+}
+
+export async function readClaudeCredential({ platform = process.platform, home = homedir(), readFile = readFileSync, exists = existsSync, readKeychain = keychainItem } = {}) {
   if (platform === 'darwin') {
     try {
-      const result = (readKeychain || ((service) => spawnSync('security', ['find-generic-password', '-s', service, '-w'], { encoding: 'utf8', timeout: 5_000 })))(KEYCHAIN_SERVICE);
+      const result = await readKeychain(KEYCHAIN_SERVICE);
       const raw = typeof result === 'string' ? result : result?.status === 0 ? result.stdout : null;
       if (raw) return JSON.parse(raw).claudeAiOauth?.accessToken || null;
     } catch { /* try the tool's standard file below */ }

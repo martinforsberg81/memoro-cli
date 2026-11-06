@@ -516,7 +516,7 @@ export function realDeps(env = process.env) {
     // The model catalog (`models.json`, model-config.js) and capacity snapshot are read at launch.
     catalog: () => readModels(env),
     capacity: { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
-    refreshCodex: () => refreshCodexCapacity({ root: runnerDir(env) }),
+    refreshCodex: () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
     refreshClaude: async () => {
       const now = new Date();
       const before = JSON.stringify(readCapacity({ root: runnerDir(env) }).providers.claude);
@@ -524,7 +524,7 @@ export function realDeps(env = process.env) {
       const root = runnerDir(env);
       // Network is over before the runner lock: patch the latest whole file
       // so stream/refusal observations and the other provider survive.
-      const state = realLock(root, () => {
+      const state = realLock(workRoot(env), () => {
         const atWrite = readCapacity({ root });
         const next = applyCollectedCapacity(atWrite, 'claude', got, now, before);
         return writeCapacity(next, { root });
@@ -756,10 +756,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** One observation or refusal written to the snapshot; a write that fails is said, and the session goes on. */
   function observeCapacity(change) {
     try {
-      const root = runnerDir(env);
-      const write = () => capacity.write(change(capacity.read()));
-      if (deps.lock) deps.lock(root, write);
-      else write();
+      // The runner's own lock (runner-lock.js, on the work root), held only
+      // for this synchronous read-patch-write.
+      lock(root, () => capacity.write(change(capacity.read())));
     } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
   }
   /**
@@ -797,7 +796,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let stopped = false;
     let stopTimer = null;
     const tick = () => {
-      if (stopped || stopRequested() || updateRequested()) { stop(); return; }
+      if (stopped || stopRequested()) { stop(); return; }
+      // An UPDATE pauses reads only: a handover that fails gives the runner
+      // back its ticker; a successful one stops it (`runLoop`'s `update`).
+      if (updateRequested()) return;
       for (const provider of ['claude', 'codex']) {
         const refresh = deps[`refresh${provider[0].toUpperCase()}${provider.slice(1)}`];
         if (!refresh || inFlight.has(provider)) continue;

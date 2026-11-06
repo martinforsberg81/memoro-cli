@@ -390,9 +390,11 @@ never zero.
   (`refuseProvider`). No account read and no extra turn.
 - **Both providers are polled independently** at startup when no recent attempt
   exists, then every 15 minutes, outside chores and lanes. Reads do not overlap
-  per provider; failures suppress retries for 15 minutes. The timer ends when
-  the runner drains or exits. Completion patches the latest snapshot under the
-  short runner lock, preserving other-provider, newer-observation and refusal
+  per provider; failures suppress retries for 15 minutes. A pending UPDATE
+  pauses reads; the timer ends on STOP, a successful handover, a drain or exit,
+  so a failed handover keeps polling. Completion patches the latest snapshot
+  under the short runner lock (on the work root, never over a network wait),
+  preserving other-provider, newer-observation and refusal
   updates. Codex `app-server --stdio` is sent `initialize`, then `account/rateLimits/read` and
   `model/list`, every page of the list up to five. It is never sent a thread or a
   turn, so no model is asked anything and no rate-limit reset is spent, and
