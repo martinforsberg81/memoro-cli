@@ -69,11 +69,15 @@ const gitWith = ({ head = 'origin/main', ahead = '2', remote = null } = {}) => (
   if (args.includes('ls-remote')) return remote;
   return null;
 };
-const ghWith = (answer) => (args, { cwd }) => {
+/** A gh that answers the merged question with `answer` and the open one with `open` — none open unless a test says so. */
+const ghWith = (answer, open = '[]') => (args, { cwd }) => {
   assert.ok(cwd, 'gh is asked in the repository');
   assert.deepEqual(args.slice(0, 5), ['pr', 'list', '--head', 'topic', '--state']);
-  return typeof answer === 'string' ? { ok: true, stdout: answer } : answer;
+  assert.ok(['merged', 'open'].includes(args[5]), args[5]);
+  const asked = args[5] === 'open' ? open : answer;
+  return typeof asked === 'string' ? { ok: true, stdout: asked } : asked;
 };
+const MERGED_1221 = JSON.stringify([{ number: 1221, title: 'help', mergedAt: '2026-11-02T09:00:00Z', mergeCommit: { oid: 'aaaaaaa1' } }]);
 
 describe('the verdict', () => {
   it('refuses when a merged pull request exists and the branch has commits main lacks — with number, age and count', () => {
@@ -90,6 +94,24 @@ describe('the verdict', () => {
     assert.equal(verdict.merge_commit, 'bbbbbbb');
     assert.equal(verdict.ahead, 2);
     assert.equal(verdict.reason, 'topic was merged as #381 50m ago — 2 commits here would go up to a branch nobody reads any more');
+  });
+
+  it('allows a branch whose merged pull request has a newer open one on the same head, and names the open one', () => {
+    // The 2026-11-02 case: #1221 merged early, #1225 opened from the same branch.
+    const open = JSON.stringify([{ number: 1225, title: 'help again' }]);
+    const verdict = pushVerdict({ cwd: '/r', branch: 'topic', now: NOW, git: gitWith(), gh: ghWith(MERGED_1221, open) });
+    assert.equal(verdict.verdict, 'allow');
+    assert.equal(verdict.open_pr, 1225);
+    assert.match(verdict.reason, /topic has open pull request #1225 “help again”/u);
+    assert.match(pushCheckLines(verdict, { branch: 'topic' })[0], /^mc: push allowed — topic has open pull request #1225/u);
+  });
+
+  it('refuses a branch whose only pull requests are merged, and keeps the refusal when the open question fails', () => {
+    assert.equal(pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith(), gh: ghWith(MERGED_1221, '[]') }).verdict, 'refuse');
+    const failed = pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith(), gh: ghWith(MERGED_1221, { ok: false, reason: 'error connecting to api.github.com' }) });
+    assert.equal(failed.verdict, 'refuse');
+    assert.equal(failed.pr, 1221);
+    assert.equal(pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith(), gh: ghWith(MERGED_1221, 'not json') }).verdict, 'refuse');
   });
 
   it('allows when nothing is ahead of main, or when no merged pull request exists', () => {
@@ -372,7 +394,8 @@ const LIVE = template('mc-push-guard-live-', (root) => {
 });
 const LIVE_BIN = template('mc-push-guard-bin-', (bin) => {
   const merged = '[{"number":42,"title":"t","mergedAt":"2026-08-23T13:00:00Z","mergeCommit":{"oid":"abcdef0123"}}]';
-  writeFileSync(join(bin, 'gh'), `#!/bin/sh\nif [ "$MC_TEST_GH" = down ]; then echo 'error connecting to api.github.com' >&2; exit 1; fi\necho '${merged}'\n`, { mode: 0o755 });
+  // The open-PR question (`--state open`) answers none, so the merged refusal stands.
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\nif [ "$MC_TEST_GH" = down ]; then echo 'error connecting to api.github.com' >&2; exit 1; fi\ncase "$*" in *"--state open"*) echo '[]';; *) echo '${merged}';; esac\n`, { mode: 0o755 });
   // The mc the hook finds is this checkout's, not whatever is installed.
   const cli = fileURLToPath(new URL('../../src/mc-cli.js', import.meta.url));
   writeFileSync(join(bin, 'mc'), `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`, { mode: 0o755 });
