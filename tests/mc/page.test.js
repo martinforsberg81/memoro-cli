@@ -1134,7 +1134,7 @@ describe('INTAKE', () => {
       const lines = renderPageLines(pageData({ intake, sessions, programmes }), { columns });
       const header = lines.slice(0, lines.findIndex((line) => line.includes('PROGRAMMES'))).join('\n');
       assert.match(header, /mc manager/u);
-      assert.match(header, /MANAGER · ● open 60 min/u);
+      assert.match(header, /● · MANAGER · 60 min/u);
       assert.match(header, /3 proposals/u);
       assert.match(lines.find((line) => line.includes('helper not open')), /helper not open · last run 26 h ago failed/u);
       assert.ok(lines.every((line) => width(line) <= columns), `${columns} columns`);

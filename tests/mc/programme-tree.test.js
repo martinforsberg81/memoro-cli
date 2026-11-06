@@ -26,6 +26,50 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 const draw = (data, over = {}) => renderPageLines(data, { columns: 120, now: NOW, ...over }).map(plain);
 
 describe('PROGRAMMES phase tree', () => {
+  it('shows each Manager below the hero and programme turns under their owner, with triggers', () => {
+    const runner = runnerSection({ now: NOW, alive: () => true, currents: [
+      ...['inbox', 'empty'].map((programme, index) => ({ name: `plan:${programme}`, programme,
+        kind: 'plan', reason: 'daily_proposals', pid: 200 + index, session_pid: 300 + index,
+        tool: 'codex', model: 'gpt-6.1-sol', started: '2026-11-05T08:45:00Z' })),
+      { name: 'goal:inbox/missing', kind: 'plan', reason: 'blocked', pid: 202, session_pid: 302,
+        started: '2026-11-05T08:45:00Z' },
+    ] });
+    const sessions = sessionsSection({ now: NOW, alive: () => true, foreground: [
+      { verb: 'manager', pid: 400, reason: 'manual_task', tool: 'codex', model: 'gpt-6.1-sol', started: '2026-11-05T08:30:00Z' },
+      { verb: 'brief', pid: 401, tool: 'claude', model: 'opus', started: '2026-11-05T08:40:00Z' },
+      { verb: 'plan', programme: 'inbox', pid: 402, tool: 'codex', started: '2026-11-05T08:50:00Z' },
+    ] });
+    const data = { ...fixture(), runner, sessions,
+      programmes: programmesSection({ runnerSessions: runner.sessions, planningSessions: sessions.planning_sessions }) };
+    for (const columns of [60, 80, 120, 160]) for (const expand of [false, true]) {
+      const lines = draw(JSON.parse(JSON.stringify(data)), { columns, expand });
+      const heroEnd = lines.findIndex(line => line.startsWith('  └'));
+      const programmes = lines.findIndex(line => line.includes('PROGRAMMES'));
+      for (const pid of [400, 401]) {
+        const at = lines.findIndex(line => line.includes(`pid ${pid}`));
+        assert.ok(at > heroEnd && at < programmes, `Manager ${pid} below hero`);
+        const top = lines.findLastIndex((line, index) => index < at && line.startsWith('  ╭'));
+        assert.ok(top > heroEnd, 'Manager has its own rounded frame');
+        assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
+      }
+      assert.ok(lines.slice(heroEnd, programmes).some(line => line.includes('manual_task')));
+      for (const [programme, pid] of [['inbox', 300], ['empty', 301]]) {
+        const heading = lines.findIndex(line => line.startsWith(`  ┌─ ${programme}`));
+        const close = lines.findIndex((line, index) => index > heading && line.startsWith('  └'));
+        const activity = lines.slice(heading, close).join('\n');
+        assert.match(activity, /daily_proposals/u);
+        assert.ok(activity.includes(`pid ${pid}`), `${programme} owns its plan turn`);
+        assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
+      }
+      assert.equal(lines.filter(line => line.includes('pid 402')).length, 1, 'interactive plan stays visible');
+      const unassigned = lines.findIndex(line => line.includes('UNASSIGNED ACTIVITY'));
+      assert.ok(unassigned > programmes);
+      assert.ok(lines.slice(unassigned).some(line => line.includes('inbox/missing')), 'goal recovery without a goal stays unassigned');
+      assert.ok(!lines.some(line => line.includes('plan:inbox') || line.includes('plan:empty')));
+      assert.ok(lines.every(line => width(line) <= columns), `${columns} columns`);
+    }
+  });
+
   it('groups parallel goals by numeric phase and separates phase eligibility from stage and status', () => {
     const data = fixture();
     const inbox = data.programmes.programmes.find((p) => p.programme === 'inbox');

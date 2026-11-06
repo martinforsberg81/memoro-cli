@@ -601,7 +601,10 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
   }
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
-  const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)));
+  // Match identities rather than object references: cached JSON copies sessions.
+  const identity = (session) => JSON.stringify([session.name, session.pid, session.started]);
+  const programmePlans = new Set(groups.flatMap((group) => group.planning_sessions || []).map(identity));
+  const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)) && !programmePlans.has(identity(session)));
   if (unmatched.length) {
     say(lines, c, wide, 4, 'UNASSIGNED ACTIVITY', ['yellow']);
     for (const session of unmatched) {
@@ -710,7 +713,6 @@ function headerLines(lines, c, wide, data, version) {
   const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
   const statuses = data.programmes?.statuses || {};
   const proposals = (data.intake?.proposals || 0) + (data.programmes?.programmes || []).reduce((n, group) => n + (group.proposals || 0), 0);
-  const manager = data.sessions?.desks?.manager;
   lines.push('');
   rule('┌', '┐');
   const brand = `MC${version ? `  ${version}` : ''}`;
@@ -767,13 +769,6 @@ function headerLines(lines, c, wide, data, version) {
     { text: `${(data.merges?.repos || []).reduce((n, repo) => n + (repo.day_count || 0), 0)} merges`, styles: ['green'] },
     { text: `latest deploy: ${data.runner?.production?.at?.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/u, ' UTC') || 'none recorded'}`, styles: ['grey'] },
   ]);
-  frame(paint(c, fitting(trailing([
-    { text: 'MANAGER', styles: ['bold', 'cyan'] },
-    { text: manager ? `${MARK.running} ${openFor(manager.age_seconds)}` : 'not open', styles: manager ? ['cyan'] : ['grey'] },
-    { text: manager ? [manager.tool, manager.model].filter(Boolean).join(' ') : 'all programmes', styles: ['grey'] },
-    { text: manager?.pid ? `pid ${manager.pid}` : '', styles: ['grey'] },
-  ]), room), room));
-  frame(c(clip('Priorities across programmes · blockers · proposals', room), 'grey'));
   rule('└', '┘');
   lines.push('');
 }
@@ -795,6 +790,10 @@ export function renderPageLines(data, {
   const lines = [];
 
   headerLines(lines, c, wide, data, version);
+  const managers = data.sessions?.desk_sessions?.manager
+    || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
+  for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
+  if (managers.length) lines.push('');
   openGapLine(lines, c, wide, data.language?.open_gap);
 
   const sessions = data.sessions || { desks: {} };
