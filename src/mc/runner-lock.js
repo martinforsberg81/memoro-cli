@@ -15,9 +15,11 @@
  * Visibility, so a caller that holds the lock too long, or writes without it,
  * shows in the runner's log (logger.js) with the caller's `name`:
  *   - `runner-lock-held`: `fn` held the lock for more than HELD_LOG_MS.
- *   - `runner-lock-unlocked`: a non-strict caller waited out a live holder and
- *     ran `fn` without the lock. It names both pids, and the holder's name when
- *     the holder recorded one.
+ *   - `runner-lock-unlocked`: a non-strict caller waited out a live holder, or
+ *     could not take the lock at all (`EACCES`, `EROFS`, `ENOSPC`, …), and ran
+ *     `fn` without it. `reason` is `EEXIST` for the holder or the error code of
+ *     the failed open or mkdir. A waited-out holder is named by both pids, and
+ *     by its name when the holder recorded one.
  *
  * The lock file stays exactly the pid, one line. Older mc reads it with
  * `Number(text)`, and a second line would make that NaN — an older reader
@@ -68,7 +70,7 @@ function forgetHolder(path) {
  */
 export function realLock(root, fn, {
   alive = pidAlive, waitMs = LOCK_WAIT_MS, strict = false, name = null,
-  now = () => Date.now(), log = logEvent,
+  now = () => Date.now(), log = logEvent, open = openSync,
 } = {}) {
   const path = lockPath(root);
   const startedAt = now();
@@ -78,7 +80,7 @@ export function realLock(root, fn, {
   for (;;) {
     let fd = null;
     try {
-      fd = openSync(path, 'wx');
+      fd = open(path, 'wx');
       writeSync(fd, String(process.pid));
       closeSync(fd);
       recordHolder(path, name);
@@ -87,15 +89,23 @@ export function realLock(root, fn, {
     } catch (error) {
       if (error?.code === 'ENOENT') {
         // The directory is not there yet: the first lock makes it.
-        try { mkdirSync(dirname(path), { recursive: true }); } catch (mkdirError) { if (strict) throw mkdirError; break; }
+        try { mkdirSync(dirname(path), { recursive: true }); } catch (mkdirError) {
+          if (strict) throw mkdirError;
+          unlocked = { reason: mkdirError?.code ?? null };
+          break;
+        }
         continue;
       }
-      if (error?.code !== 'EEXIST') { if (strict) throw error; break; }
+      if (error?.code !== 'EEXIST') {
+        if (strict) throw error;
+        unlocked = { reason: error?.code ?? null };
+        break;
+      }
       const holder = Number(readText(path));
       if (!alive(holder)) { try { rmSync(path, { force: true }); } catch { /* raced */ } continue; }
       if (now() > deadline) {
         if (strict) throw new Error(`the runner lock is held by pid ${holder} — try again`);
-        unlocked = { holder, holderName: holderName(path, holder) };
+        unlocked = { holder, holderName: holderName(path, holder), reason: 'EEXIST' };
         break;
       }
       sleepSync(LOCK_POLL_MS);
@@ -103,7 +113,12 @@ export function realLock(root, fn, {
   }
   if (unlocked) {
     log('runner-lock-unlocked', {
-      name, pid: process.pid, holder_pid: unlocked.holder, holder_name: unlocked.holderName, waited_ms: now() - startedAt,
+      name,
+      pid: process.pid,
+      holder_pid: unlocked.holder ?? null,
+      holder_name: unlocked.holderName ?? null,
+      reason: unlocked.reason,
+      waited_ms: now() - startedAt,
     });
   }
   const acquiredAt = now();
