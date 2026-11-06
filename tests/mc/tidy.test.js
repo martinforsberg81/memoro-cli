@@ -548,14 +548,15 @@ describe('(P) automatic plan goal worktree release', () => {
       const second = planGoalTree(m, { name: 'second' });
       let locked = null;
       const locks = [];
+      const unrelated = [];
       const base = first.doors();
       const doors = first.doors({
         git: (at, args) => {
-          if (locked && at !== first.owner && at !== locked) throw new Error('unrelated Git inventory under runner lock');
+          if (locked && at !== first.owner && at !== locked) { unrelated.push(['git', at]); throw new Error('unrelated Git inventory under runner lock'); }
           return base.git(at, args);
         },
         openIn: (at) => {
-          if (locked && at !== locked && at !== dirname(locked)) throw new Error('unrelated open-file inventory under runner lock');
+          if (locked && at !== locked && at !== dirname(locked)) { unrelated.push(['open', at]); throw new Error('unrelated open-file inventory under runner lock'); }
           return [];
         },
         filesOpen: () => { assert.equal(locked, null, 'generated-file inventory stays outside runner lock'); return new Map(); },
@@ -574,11 +575,12 @@ describe('(P) automatic plan goal worktree release', () => {
       const applied = applyTidy({ listPath: preview.listPath, ...doors });
       assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[first.path, true], [second.path, true]], JSON.stringify(applied.applied));
       assert.deepEqual(locks, [first.path, second.path]);
+      assert.deepEqual(unrelated, [], 'unrelated inventory must not hold up allocation/admission');
 
       const race = planGoalTree(m, { name: 'race' });
       const state = m.planGoalStates.get(race.path);
+      const previewRace = runTidy(race.doors());
       for (const change of ['head', 'stage', 'dirty', 'ignored', 'own', 'cwd', 'open']) {
-        const previewRace = runTidy(race.doors());
         const result = applyTidy({ listPath: previewRace.listPath, ...race.doors({
           goalWorktreeLock: (fn) => {
             if (change === 'stage') m.write(join(race.dir, 'GOAL.json'), goalJson({ stage: 'build', repos: ['memoro'] }), OLD);
