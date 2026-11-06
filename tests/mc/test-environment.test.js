@@ -20,7 +20,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { registerManifest } from '../../src/mc/dev-servers.js';
+import { admit, registerManifest } from '../../src/mc/dev-servers.js';
+import { devQueuePath, joinQueue } from '../../src/mc/dev-queue.js';
 import { devPoolPath, readReservations } from '../../src/mc/dev-reservations.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
@@ -785,7 +786,7 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
-  it('a spawned wrapper that is dead when its window lapses gets no extension', async () => {
+  it('a spawned wrapper that is dead is named at the first poll, with no extension', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
     let t = 0;
@@ -805,10 +806,10 @@ describe('bringing one up', () => {
     });
 
     assert.equal(ensured.ok, false);
-    assert.match(ensured.error, /within/u);
+    assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
     assert.doesNotMatch(ensured.error, /still alive/u);
     assert.deepEqual(waiting, []);
-    assert.ok(t >= 5_000 && t < 10_000, `gave up after ${t}ms`);
+    assert.equal(t, 1_000, `named after ${t}ms, at the first poll rather than the end of the window`);
     assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -1564,5 +1565,135 @@ describe('ensureAppServer', () => {
     assert.equal(ensured.ok, false);
     assert.ok(said.some((line) => line.includes('held by measure-0 (/elsewhere)')), said.join(''));
     assert.ok(said.some((line) => line.includes('(pid 4242) is still starting')), said.join(''));
+  });
+
+  it('under --json the progress goes to a stream of its own, and not to the answer stream', async () => {
+    const deps = {
+      ensureDevServer: async (_worktree, _declaration, options) => {
+        // Callbacks are absent when progress is quiet, so a caller that has them calls them only if present.
+        options.onWaiting?.({ holders: [{ instance_id: 'measure-0', worktree_path: '/elsewhere' }] });
+        options.onSlowStart?.('mc: memoro (pid 4242) is still starting after 5s — waiting another 5s');
+        return { ok: false, error: 'stub' };
+      },
+    };
+    const progress = [];
+    await ensureAppServer('/w', DECLARATION, {
+      json: true, stdout: { write: (text) => progress.push(text) }, answer: { write: () => assert.fail('the answer stream got progress') }, deps,
+    });
+    assert.ok(progress.some((line) => line.includes('held by measure-0 (/elsewhere)')), progress.join(''));
+    assert.ok(progress.some((line) => line.includes('(pid 4242) is still starting')), progress.join(''));
+
+    // Progress on the answer stream itself is what --json forbids: nothing is written there.
+    const answer = [];
+    const sink = { write: (text) => answer.push(text) };
+    await ensureAppServer('/w', DECLARATION, { json: true, stdout: sink, answer: sink, deps });
+    assert.deepEqual(answer, []);
+  });
+});
+
+describe('a restart keeps its slot, and a dead start is named at once', () => {
+  const git = (head) => () => ({ status: 0, stdout: `${head}\n` });
+  const STALE = { built_from: { commit: 'aaaaaaaaaa1111' }, control: { stop: { argv: ['node', 'stop.mjs', '--stop'] } } };
+  /** A registry root inside a scratch directory, so its queue file is the scratch's and not the system's. */
+  function scratchRoot() {
+    const base = mkdtempSync(join(tmpdir(), 'mc-test-env-'));
+    const root = join(base, 'dev-servers');
+    mkdirSync(root);
+    return { base, root };
+  }
+  /** A clock that moves a second a call, for code that only reads it. */
+  function ticking() {
+    let t = 0;
+    return () => { t += 1000; return t; };
+  }
+
+  it('the slot is asked for before the stale server is stopped, and a restart never queues behind another worktree', async () => {
+    const { base, root } = scratchRoot();
+    const worktree = worktreeWith();
+    const other = worktreeWith();
+    registerServer(root, worktree, { port: 8900, extra: STALE });
+    // Another worktree is already waiting for a slot.
+    joinQueue({ file: devQueuePath(root), pid: process.pid, worktree: other, service: 'memoro-worker', env: {}, now: Date.now() });
+    const order = [];
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      processCwd: () => null,
+      freeMemory: () => 50,
+      git: git('bbbbbbbbbb2222'),
+      sleep: async () => {},
+      now: ticking(),
+      admit: (options) => { order.push('admit'); return admit(options); },
+      stopServer: (server) => { order.push('stop'); unregistered(root, server); return { ok: true, instance_id: server.instance_id }; },
+      spawn: () => {
+        order.push('spawn');
+        registerServer(root, worktree, { port: 8901, extra: { built_from: { commit: 'bbbbbbbbbb2222' } } });
+        return { unref() {} };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.refused, undefined, 'no queue verdict');
+    assert.deepEqual(order, ['admit', 'stop', 'spawn'], 'the slot is asked for before the old server goes');
+    for (const path of [base, worktree, other]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a refused admission leaves the stale server running: nothing is stopped and nothing is started', async () => {
+    const { base, root } = scratchRoot();
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8900, extra: STALE });
+    let stopped = 0;
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      processCwd: () => null,
+      freeMemory: () => 50,
+      git: git('bbbbbbbbbb2222'),
+      admit: async () => ({
+        ok: false, reason: 'cap', holders: [{ instance_id: 'dev-8901', service: 'memoro-worker', worktree_path: '/w/other' }], pending: [], free_percent: 50, cap: 1,
+      }),
+      stopServer: () => { stopped += 1; return { ok: true }; },
+      spawn: () => { spawned += 1; return { unref() {} }; },
+      fetch: async () => ({ ok: true }),
+    });
+    assert.equal(ensured.ok, false);
+    assert.equal(ensured.refused.reason, 'cap');
+    assert.equal(stopped, 0, 'the stale server was not stopped');
+    assert.equal(spawned, 0, 'nothing was started');
+    assert.equal(serversFor(worktree, { root }).length, 1, 'the old one is still registered and running');
+    rmSync(base, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a wrapper that dies while starting is named at the poll that sees it, with the end of its log', async () => {
+    const { base, root } = scratchRoot();
+    const worktree = worktreeWith();
+    const logs = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(logs, { recursive: true });
+    writeFileSync(join(logs, 'dev-2026-11-06.log'), `${Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join('\n')}\n`);
+    let t = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      env: {},
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      spawn: () => ({ pid: 4242, unref() {} }),
+      // Alive for two seconds, then the wrapper is gone and nothing will register.
+      pidAlive: () => t < 2_000,
+      fetch: async () => ({ ok: false }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.ok(t < 3_000, `named after ${t}ms, not at the end of the register window`);
+    assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
+    assert.match(ensured.error, /line 25$/u, 'the last line of the log is in the error');
+    assert.doesNotMatch(ensured.error, /^line 5$/mu, 'only the last twenty lines');
+    assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
+    rmSync(base, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
   });
 });

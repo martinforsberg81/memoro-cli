@@ -162,7 +162,8 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     : declaration.suites;
   const staticService = where === 'dev' ? serviceFor(declaration, 'static') : null;
   const wantsApp = opts.url || chosen.some((suite) => tierOf(suite) === 'app' || !staticService);
-  const wantsStatic = Boolean(staticService) && chosen.some((suite) => tierOf(suite) === 'static');
+  // `--url` is the app URL alone: it starts and holds no static tier for it.
+  const wantsStatic = Boolean(staticService) && !opts.url && chosen.some((suite) => tierOf(suite) === 'static');
 
   // Where to point them.
   let baseUrl = null;
@@ -201,7 +202,9 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       }
     }
     if (wantsApp) {
-      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout: progress, deps: { holderVerb: 'test', ...deps } });
+      const app = await ensureAppServer(worktree, declaration, {
+        json: opts.json, stdout: progress, answer: stdout, deps: { holderVerb: 'test', ...deps },
+      });
       if (!app.ok) {
         stderr.write(`mc: ${app.error}\n`);
         return 1;
@@ -262,7 +265,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       log('dev-server-revived', { tier, instance_id: staticServer.instance_id, worktree_path: worktree });
       return { ok: true, baseUrl: staticBaseUrl };
     }
-    const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout, deps });
+    const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout, answer: stdout, deps });
     if (!app.ok) return app;
     server = app.server;
     baseUrl = app.baseUrl;

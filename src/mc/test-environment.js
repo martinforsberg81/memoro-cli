@@ -26,7 +26,7 @@
  * nobody can work on.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -434,19 +434,18 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const unfollowed = follow?.refused ? follow.why : null;
   let restartedFrom = null;
   let replacedHung = null;
+  // The server this start replaces, when there is one. Its slot is the caller's: admission counts it as
+  // theirs, and it is stopped only once admission has said yes, so a refused start leaves it running.
+  let replacing = null;
   if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
     // A live pid is not an answer. A server that is alive and does not answer
     // its health URL twice in a row is hung, and reusing it hands every suite
     // a connection that never comes back. Stopped through its own stop
-    // command, and started again below.
-    const stop = deps.stopServer || stopServer;
+    // command once its replacement is admitted, and started again below.
     log('dev-server-hung', {
       instance_id: running.instance_id, service: running.service ?? null, worktree_path: running.worktree_path ?? null, server_pid: running.pid ?? null,
     });
-    const stopped = stop(running);
-    if (!stopped.ok) {
-      return { ok: false, error: `${running.instance_id} is alive but does not answer ${running.health_url || running.url}, and it could not be stopped: ${stopped.error}` };
-    }
+    replacing = running;
     replacedHung = running.instance_id;
   } else if (running) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
@@ -456,15 +455,13 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
-    // `--stop` would, and started again below.
-    const stopped = (deps.stopServer || stopServer)(running);
-    if (!stopped.ok) return { ok: false, error: `${running.instance_id} serves ${stale.was}, the worktree is at ${stale.now}, and it could not be stopped: ${stopped.error}` };
+    // `--stop` would, once its replacement is admitted, and started again below.
+    replacing = running;
     restartedFrom = stale;
-    deps.onRestart?.(running, stale);
   }
-  // The one just stopped may still be registered for a moment while its
+  // The one being replaced may still be registered for a moment while its
   // wrapper leaves; it is not the fresh one being waited for.
-  const replaced = replacedHung || restartedFrom ? running.instance_id : null;
+  const replaced = replacing ? replacing.instance_id : null;
   const fresh = () => serversFor(worktree, { root })
     .find((server) => server.service === service && server.instance_id !== replaced) || null;
 
@@ -494,6 +491,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     main,
     sessionsDir: deps.sessionsDir,
     session: holder,
+    replacing: replaced,
   });
   if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   const reservation = admitted.reservation || null;
@@ -507,15 +505,27 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
   };
 
+  // Admitted, so the server being replaced may go now: through its own stop command. A registration still
+  // there after that is not a stop, and nothing is started over it.
+  if (replacing) {
+    const stopped = (deps.stopServer || stopServer)(replacing);
+    if (!stopped.ok) {
+      letGo([process.pid]);
+      return { ok: false, error: replacedHung
+        ? `${replaced} is alive but does not answer ${replacing.health_url || replacing.url}, and it could not be stopped: ${stopped.error}`
+        : `${replaced} serves ${restartedFrom.was}, the worktree is at ${restartedFrom.now}, and it could not be stopped: ${stopped.error}` };
+    }
+    if (serversFor(worktree, { root }).some((server) => server.instance_id === replaced)) {
+      letGo([process.pid]);
+      return { ok: false, error: `${replaced} is still running after its stop command — nothing was started; mc dev stop ${replaced}, then run this again` };
+    }
+    if (restartedFrom) deps.onRestart?.(replacing, restartedFrom);
+  }
   let server = null;
   let started = true;
   if (admitted.reuse) {
     // Another start for this worktree and service registered while this one
-    // waited, or one was already up: taken, not started again. A server that
-    // was just stopped and is still registered is not a reuse.
-    if (admitted.reuse === replaced) {
-      return { ok: false, error: `${replaced} is still running after its stop command — nothing was started; mc dev stop ${replaced}, then run this again` };
-    }
+    // waited, or one was already up: taken, not started again.
     server = serversFor(worktree, { root }).find((item) => item.instance_id === admitted.reuse) || null;
     if (!server) return { ok: false, error: `${admitted.reuse} was registered for ${worktree} and left before it could be reused` };
     started = false;
@@ -551,6 +561,8 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       while (!server && now() < registerBy) {
         await sleep(1000);
         server = fresh();
+        // A wrapper that is gone will not register: the poll that sees it says so, not the end of the window.
+        if (!server && childPid !== null && !alive(childPid)) break;
       }
       if (server || extended || childPid === null || !alive(childPid)) break;
       extended = true;
@@ -564,9 +576,18 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     if (!server) {
       const stillAlive = childPid !== null && alive(childPid);
-      // A child still alive may still register: the slot stays held by it, and
-      // goes when it does. One that is gone will not, and frees it now.
-      letGo(stillAlive ? [process.pid] : [process.pid, ...(childPid !== null ? [childPid] : [])]);
+      if (!stillAlive && childPid !== null) {
+        // Gone, and it will not register: the slot is freed now, and the end of its log says why.
+        letGo([process.pid, childPid]);
+        const tail = newestLogTail(worktree);
+        return {
+          ok: false,
+          error: `${start.service} (pid ${childPid}) exited before it registered for ${worktree}`
+            + (tail ? `; the end of ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/'),
+        };
+      }
+      // A child still alive may still register: the slot stays held by it, and goes when it does.
+      letGo([process.pid]);
       return {
         ok: false,
         error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
@@ -616,27 +637,33 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
  * the same way. `json` keeps the progress off stdout, where a caller reads an
  * answer. Returns `{ ok, server, baseUrl }` or `{ ok: false, error }`.
  */
-export async function ensureAppServer(worktree, declaration, { json = false, stdout = process.stdout, deps = {} } = {}) {
-  if (!json) stdout.write(`mc: a dev server for ${worktree}…\n`);
+export async function ensureAppServer(worktree, declaration, {
+  json = false, stdout = process.stdout, answer = process.stdout, deps = {},
+} = {}) {
+  // With `json` the answer is a JSON document on `answer`, and the progress lines go to `stdout`. They are
+  // dropped only when `stdout` is that answer stream: a caller that sends progress to stderr
+  // (`mc shot next`) gets the lines it waits through, as it does without `json`.
+  const quiet = json && stdout === answer;
+  if (!quiet) stdout.write(`mc: a dev server for ${worktree}…\n`);
   const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, {
     ...deps,
     // A cold start is minutes — build, migrations, then wrangler — and
     // silence for three of them reads as a hang. Say the moment the wrapper
     // registers, which is when mc knows it is alive.
-    onRegistered: json ? null : (registered) => stdout.write(
+    onRegistered: quiet ? null : (registered) => stdout.write(
       `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
     ),
     // A full machine is a wait, not a failure — said once a minute with the
     // place in the queue and who holds the slots, so the wait has a name on it.
-    onWaiting: json ? null : (verdict) => stdout.write(`${waitingLine(verdict, { now: (deps.now || Date.now)() })}\n`),
+    onWaiting: quiet ? null : (verdict) => stdout.write(`${waitingLine(verdict, { now: (deps.now || Date.now)() })}\n`),
     // A wrapper still building when its register window lapses gets one more;
     // the line says so, on stdout with the others.
-    onSlowStart: json ? null : (line) => stdout.write(`${line}\n`),
+    onSlowStart: quiet ? null : (line) => stdout.write(`${line}\n`),
   });
   if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
-  if (!json) {
+  if (!quiet) {
     if (ensured.followed) stdout.write(`mc: fast-forwarded the shared checkout ${ensured.followed.from} → ${ensured.followed.to} (origin/main)\n`);
     if (ensured.unfollowed) stdout.write(`mc: the shared checkout was not fast-forwarded — ${ensured.unfollowed}; serving what it holds\n`);
     if (ensured.held) stdout.write(`${heldLine(ensured)}\n`);
@@ -667,6 +694,39 @@ function heldLine({ server, held }) {
 function seconds(ms) {
   const value = Math.round(ms / 1000);
   return value >= 120 ? `${Math.round(value / 60)} minutes` : `${value}s`;
+}
+
+/**
+ * The end of the newest log a worktree's dev server wrote, or null when it wrote none. The last
+ * twenty lines: what a wrapper printed on its way out is the reason its start failed.
+ */
+export function newestLogTail(worktree, { lines = 20 } = {}) {
+  const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+  let names = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const files = [];
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      const stat = statSync(path);
+      if (stat.isFile()) files.push({ path, mtimeMs: stat.mtimeMs });
+    } catch {
+      // Gone between listing and stat: not a log any more.
+    }
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const newest = files[0];
+  if (!newest) return null;
+  try {
+    const text = readFileSync(newest.path, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
+    return { file: newest.path, text };
+  } catch {
+    return null;
+  }
 }
 
 /**

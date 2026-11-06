@@ -1301,23 +1301,47 @@ describe('reservations: the slot is held from yes to registration', () => {
     const mine = await ask('/w/a', {});
     assert.equal(mine.code, 0);
     assert.deepEqual(readReservations(file).find((item) => item.id === mine.verdict.reservation).pids, [process.pid], 'held by the wrapper, not by the exiting mc');
-    // The owner named is dead: the parent holds it.
+    // The wrapper it was started for is dead: nothing is reserved for it, whoever its parent is.
     const orphan = await ask('/w/b', { MC_DEV_OWNER_PID: String(DEAD_PID) }, { ppid: process.ppid });
-    assert.deepEqual(readReservations(file).find((item) => item.id === orphan.verdict.reservation).pids, [process.ppid]);
+    assert.deepEqual([orphan.code, orphan.verdict.reason], [75, 'owner-gone']);
+    assert.equal(readReservations(file).some((item) => item.worktree_path === '/w/b'), false, 'no slot is held for a gone owner');
     // A third, made by mc for /w/c, is adopted by its wrapper and not doubled.
     const made = await admit({ ...ASK, worktree: '/w/c', root });
     const adopted = await ask('/w/c', { MC_DEV_ADMITTED: made.reservation });
     assert.deepEqual(adopted.verdict, { ok: true, reservation: made.reservation, adopted: true });
     assert.deepEqual(readReservations(file).find((item) => item.id === made.reservation).pids, [process.pid]);
-    assert.equal(readReservations(file).length, 3, 'adopting took no slot');
+    assert.equal(readReservations(file).length, 2, 'adopting took no slot (the gone owner made none)');
     // A second process that inherited the id is no second starter.
     const second = await ask('/w/c', { MC_DEV_ADMITTED: made.reservation, MC_DEV_OWNER_PID: String(process.ppid) });
     assert.deepEqual([second.code, second.verdict.reason], [75, 'starting']);
     // "1", or mc's id for another worktree, is asked like any other request: the pool is full.
+    await admit({ ...ASK, worktree: '/w/e', root });
     for (const handed of ['1', made.reservation]) {
       const other = await ask('/w/d', { MC_DEV_ADMITTED: handed });
       assert.deepEqual([other.code, other.verdict.reason], [75, 'cap'], handed);
     }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('an admission whose owner has gone gives up at its next poll, and reserves nothing', async () => {
+    const { base, root, file } = pool();
+    // Memory is short, so the request waits; its owner is alive until 10 s and gone from then on.
+    let t = 0;
+    const verdict = await admit({
+      ...ASK,
+      worktree: '/w/a',
+      root,
+      owner: 4242,
+      alive: (pid) => pid !== 4242 || t < 10_000,
+      freeMemory: () => 5,
+      waitSeconds: 900,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+    });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.reason, 'owner-gone');
+    assert.equal(t, 10_000, `gave up at ${t}ms — one poll after the owner went, not at the deadline`);
+    assert.deepEqual(readReservations(file), [], 'no reservation was made for it');
     rmSync(base, { recursive: true, force: true });
   });
 

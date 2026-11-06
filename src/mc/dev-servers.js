@@ -603,7 +603,7 @@ export function freeMemoryPercent(run = spawnSync, { platform = process.platform
 export async function admit({
   service, worktree, waitSeconds = 0, env = process.env, root, queueFile, sleep, now, onWaiting,
   freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer, pid = process.pid,
-  main = null, sessionsDir = null, session = null, lock = {},
+  main = null, sessionsDir = null, session = null, lock = {}, replacing = null, owner = null, alive = pidAlive,
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
@@ -624,21 +624,33 @@ export async function admit({
     reservation: gone.id, service: gone.service ?? null, worktree_path: gone.worktree_path ?? null, pids: gone.pids ?? [],
   });
   const pool = (fn) => updateReservations(poolFile, (held) => fn(held, listServers({ root: registry }).servers), { onSwept, lock });
+  // A server this admission replaces (`replacing`, an instance id) is the caller's own slot: it is neither
+  // a server to reuse nor a holder to queue behind, so a restart is never made to wait for another worktree.
+  const without = (list) => (replacing ? (list || []).filter((server) => server.instance_id !== replacing) : list);
   const tried = new Set();
   let said = null;
   let ticket = null;
   let placeAtJoin = null;
   try {
     for (;;) {
+      // The wrapper this admission is for (`owner`, its MC_DEV_OWNER_PID) has gone while it waited: nobody is
+      // left to use the slot, so each poll says so and none is reserved.
+      if (owner !== null && owner !== process.pid && !alive(owner)) {
+        const verdict = {
+          ok: false, reason: 'owner-gone', error: `owner pid ${owner} is gone`, holders: [], pending: [], free_percent: null, cap,
+        };
+        refused(logEvent, { service, worktree, verdict, standing: null });
+        return verdict;
+      }
       const snapshot = pool((held, servers) => ({ result: { held, servers } }));
-      const own = snapshot.servers.find((server) => server.live !== false && isOwn(server, { service, worktree }));
+      const own = without(snapshot.servers).find((server) => server.live !== false && isOwn(server, { service, worktree }));
       if (own) return { ok: true, reuse: own.instance_id };
       const starting = snapshot.held.some((item) => reservationFor(item, { service, worktree }));
       // Where this request stands: null when it is not queued at all. The queue
       // orders the capped slots; MAIN takes none, and a start already in
       // progress for this worktree is waited on, not queued behind.
       let standing = null;
-      if (!starting && !mainRequest) {
+      if (!starting && !mainRequest && !replacing) {
         if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt, session });
         let tickets = readQueue({ file });
         if (ticket && !tickets.some((item) => item.id === ticket.id)) {
@@ -660,7 +672,7 @@ export async function admit({
       // Count and reserve under one lock: nobody else can take the slot between.
       const { servers, asked } = pool((held, fresh) => {
         const verdict = admission({
-          servers: fresh, reservations: held, service, worktree, cap, minFreePercent, freePercent: free,
+          servers: without(fresh), reservations: held, service, worktree, cap, minFreePercent, freePercent: free,
           staleBefore: evict && head ? clock() - staleMs : null, main, capped: !mainRequest,
         });
         if (!verdict.ok || verdict.reuse) return { result: { servers: fresh, asked: verdict } };
@@ -777,6 +789,9 @@ export function refusalText(verdict, { env = process.env } = {}) {
   }
   if (verdict.reason === 'starting') {
     return `a server for this service and worktree is already starting (${verdict.reservation}) — wait for it and reuse it`;
+  }
+  if (verdict.reason === 'owner-gone') {
+    return 'the process that asked for a dev-server slot is gone — nothing was reserved';
   }
   if (verdict.reason === 'lock') {
     return `could not take the dev-server pool lock, so nothing was admitted — ${verdict.error}`;
