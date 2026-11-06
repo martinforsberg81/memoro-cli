@@ -538,9 +538,15 @@ menu routing and piped output. `tests/mc/page-live.test.js` and
 
 ## Manager header
 
-The framed MC header contains the global in-flight, ready and blocked counts,
-waiting proposals across programmes and the root, and the daily cost when it
-fits. `mc manager` (or `m` at the page prompt) opens the session for priorities,
+The framed MC header separates active and dormant programmes, in-flight
+sessions by kind, and goals by status and stage (including zero counts and
+terminal stages). Goal totals cover the current programme goals, excluding
+archives. Waiting proposals include programmes and the root; the daily cost
+uses the existing list-price estimate. Throughput shows completed build,
+review and plan sessions and merged PRs over the last 24 hours, followed by
+the latest successful deploy date in UTC (or `none recorded`). Complete fields
+wrap within the frame on narrow terminals. `mc manager` (or `m` at the page
+prompt) opens the session for priorities,
 blockers and proposals across all programmes. Manager's open state is shown in
 the header, including foreground records from before the rename.
 
