@@ -43,6 +43,20 @@ test('fast: either provider is chosen, the one with more headroom', () => {
   near(second.headroom, 0.8);
 });
 
+test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
+  let unknown = codex(empty(), win(0.1));
+  for (const cls of ['fast', 'large', 'review']) {
+    const chosen = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: unknown, now: NOW, priority: 'claude' });
+    assert.equal(chosen.candidate.tool, 'claude', `${cls} honors the saved priority`);
+    assert.equal(chosen.basis, 'bootstrap');
+  }
+  const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+  unknown = codex(claude(empty(), win(0.1), win(0.1), old), win(0.1));
+  for (const cls of ['fast', 'large', 'review']) {
+    assert.equal(chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: unknown, now: NOW, priority: 'claude' }).candidate.tool, 'claude');
+  }
+});
+
 test('a codex candidate is scored by its most restrictive window', () => {
   const won = choose(codex(claude(empty(), win(0.5), win(0.5)), win(0.1), win(0.75)));
   assert.equal(won.spec, 'claude:haiku:high', 'codex is 0.25 by its secondary, claude 0.5');
