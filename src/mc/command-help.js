@@ -89,7 +89,7 @@ export const COMMAND_USAGE = Object.freeze({
     "--done-file, --comment-file and --next-file read their text verbatim, - from stdin, and take the place of\n",
     "the inline flag, never beside it; one final newline is not kept. Evidence with backticks, $( ) or quotes:\n",
     "  mc goal log --done-file - --next \"the next step\" <<'EOF'\n",
-    "  gate: `mc gate tests/mc/commands/goal.test.js` — 6 passed, $(date) as run\n",
+    "  gate: `mc gate tests/mc/commands/goal.test.js` — green, $(date) as run\n",
     "  EOF\n",
     "  mc goal show mc/goal-log-literal-text   reads the entry back: check it before the stage moves\n",
     "A goal has a stage — plan → build → review → finish → merge → done, or dropped — and a status, ready or blocked.\n",

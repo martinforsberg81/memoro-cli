@@ -25,7 +25,7 @@ with ✓/✗ and its check, and each worktree's state.
   both. Pass a quoted heredoc, so the shell leaves the text alone:
   ```sh
   mc goal log --done-file - <<'EOF'
-  gate: `mc gate tests/mc/commands/goal.test.js` — 6 passed, $(date) as run
+  gate: `mc gate tests/mc/commands/goal.test.js` — green, $(date) as run
   EOF
   mc goal show <programme>/<goal>
   ```
