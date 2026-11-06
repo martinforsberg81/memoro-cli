@@ -74,7 +74,7 @@ export function mcDiskPressure({ env = process.env, docker = true, say = (line) 
     lock: (fn) => realLock(workRoot(env), fn, { strict: true }),
     say,
     steps: [
-      { name: 'tidy', run: async () => tidyStep(runTidy({ apply: true, env })) },
+      { name: 'tidy', run: async () => tidyStep(runTidy({ apply: true, pressure: true, env })) },
       ...(docker ? [{ name: 'docker-images', run: async () => dockerStep(await tidyDocker({ apply: true, env })) }] : []),
     ],
   });

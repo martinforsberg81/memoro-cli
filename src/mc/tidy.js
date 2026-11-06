@@ -36,6 +36,9 @@
  *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when
  *     their programme has no goal that is not finished, judged as (X) judges an
  *     extra worktree. `mc plan` adds them back when it next opens the programme.
+ *   - (P) A clean inactive registered goal checkout in `stage: plan` may go
+ *     after 72 hours (younger only in pressure); its branch and goal directory
+ *     stay, and the runner re-adds the checkout on that branch when activated.
  *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
  *     repository's path moved and left it — goes when untouched for a day and no
@@ -77,6 +80,7 @@ import {
 } from './paths.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
+import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
@@ -85,7 +89,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 10;
+export const RULES_VERSION = 11;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
@@ -148,6 +152,7 @@ const KIND_ROOT = {
   leftover: 'claude',
   'plan-checkout': 'plan',
   'plan-worktree': 'plan',
+  'plan-goal-worktree': 'plan',
   'work-area': 'work',
   'orphan-step-area': 'step',
   'compare-worktree': 'compare',
@@ -233,7 +238,7 @@ export function gatherTidyFacts({
   const root = roots.root;
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
-    plan_checkouts: [], plan_worktrees: [],
+    plan_checkouts: [], plan_worktrees: [], goal_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
     scratch_items: [], generated_files: [], cache_items: [],
   };
@@ -278,6 +283,10 @@ export function gatherTidyFacts({
       } catch (error) { item.error = message(error); }
     }
   }
+
+  // (P) Registered goal checkouts still in plan. Unlike programme planning
+  // worktrees, these retain their branch and the goal directory when released.
+  gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command });
 
   // (W) and (U): an area read the way the release verdict reads one — its
   // checkouts, whatever else it holds, and who stands in it.
@@ -432,12 +441,15 @@ export function gatherTidyFacts({
   }
 
   // Worktrees git knows of outside the work root: listed, never removed.
+  const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
   for (const repo of repos) {
     const text = git(repo.path, ['worktree', 'list', '--porcelain']);
     for (const line of String(text || '').split('\n')) {
       if (!line.startsWith('worktree ')) continue;
       const path = line.slice('worktree '.length).trim();
-      if (path === repo.path || path.startsWith(`${root}/`) || path.startsWith(`${roots.compare}/`)) continue;
+      let real = path;
+      try { real = realpathSync(path); } catch { /* retain the listed path when it is gone */ }
+      if (path === repo.path || path.startsWith(`${root}/`) || real.startsWith(`${realRoot}/`) || path.startsWith(`${roots.compare}/`)) continue;
       facts.foreign.push({ path, repo: repo.name });
     }
   }
@@ -478,6 +490,84 @@ export function gatherTidyFacts({
   facts.cache_items = gatherCacheFacts({ roots, now, repos, git, running, openIn, servers: (wt) => servers(wt, { root: mcHome(env) }) });
   gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, readDir });
   return facts;
+}
+
+function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command, only = null }) {
+  const addError = (path, why) => facts.goal_worktrees.push({ path, error: why, bytes: 0 });
+  const programs = roots.plan;
+  if (basename(programs) !== 'programs') return; // goal worktrees exist only in layout 2.
+  let programmes;
+  try { programmes = only ? [only.programme] : readdirSync(programs, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
+  catch (error) { if (error?.code !== 'ENOENT') addError(programs, `could not enumerate programmes: ${message(error)}`); return; }
+  for (const programme of programmes) {
+    const goalsDir = join(programs, programme, GOALS_DIR);
+    let goalDirs;
+    try { goalDirs = only ? [only.goal] : readdirSync(goalsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
+    catch (error) { if (error?.code !== 'ENOENT') addError(goalsDir, `could not enumerate goals: ${message(error)}`); continue; }
+    for (const goal of goalDirs) {
+      const dir = join(goalsDir, goal);
+      const metadataPath = join(dir, GOAL_FILE);
+      let raw;
+      let parsed;
+      try { raw = readFileSync(metadataPath, 'utf8'); parsed = parseGoal(raw); }
+      catch (error) { addError(dir, `goal metadata unreadable: ${message(error)}`); continue; }
+      if (parsed.problems) { addError(dir, `goal metadata invalid: ${parsed.problems.join('; ')}`); continue; }
+      for (const repoName of parsed.repos.filter((name) => !only || name === only.repo)) {
+        const path = join(dir, repoName);
+        if (!present(path)) continue;
+        const item = { path, programme, goal, repo: repoName, metadata: raw, stage: parsed.stage, status: parsed.status, wt: null, bytes: 0 };
+        facts.goal_worktrees.push(item);
+        try {
+          if (parsed.stage !== 'plan') throw new Error(`goal stage is ${parsed.stage}, not plan`);
+          if (!running) throw new Error('could not establish live session cwd evidence');
+          const repo = repos.find((entry) => entry.name === repoName);
+          if (!repo?.path) throw new Error(`owning repository ${repoName} is unknown`);
+          const real = realpathSync(path);
+          const realGoal = realpathSync(dir);
+          if (!real.startsWith(`${realGoal}/`) || dirname(real) !== realGoal) throw new Error('checkout is not directly under its declared goal directory');
+          const registration = git(repo.path, ['worktree', 'list', '--porcelain']);
+          if (registration === null || !registeredWorktree(registration, path)) throw new Error('owning repository does not confirm this registered worktree');
+          const branch = git(path, ['rev-parse', '--abbrev-ref', 'HEAD'])?.trim();
+          if (branch !== `goal/${goal}`) throw new Error(`branch is ${branch || 'unknown'}, not goal/${goal}`);
+          const head = git(path, ['rev-parse', '--verify', 'HEAD'])?.trim();
+          if (!head || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(head)) throw new Error('HEAD could not be verified');
+          const status = git(path, ['status', '--porcelain', '--untracked-files=all']);
+          if (status === null) throw new Error('Git could not establish checkout cleanliness');
+          if (status.trim()) throw new Error('checkout has tracked or untracked changes');
+          const ignored = git(path, ['status', '--porcelain', '--ignored=matching', '--untracked-files=all']);
+          if (ignored === null) throw new Error('Git could not establish ignored-file state');
+          if (ignored.trim()) throw new Error('checkout contains ignored files');
+          const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
+          if (own === null || !/^0\s*$/u.test(own)) throw new Error('checkout has commits beyond origin/main or Git could not verify them');
+          const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
+          if (!common) throw new Error('owning Git directory could not be verified');
+          const identity = goalWorktreeIdentity(path, common);
+          const pids = [...new Set(processesStandingIn([dir], { cwds: running }).map((process) => process.pid))];
+          if (pids.length) throw new Error(`a live session cwd uses the goal (${pids.map(command).join(', ')})`);
+          const openedGoal = openIn(dir);
+          const openedTree = openIn(path);
+          if (!Array.isArray(openedGoal) || !Array.isArray(openedTree)) throw new Error('open-file evidence is uncertain');
+          if (openedGoal.length || openedTree.length) throw new Error(`a process holds a goal/worktree file open (${[...new Set([...openedGoal, ...openedTree])].join(', ')})`);
+          const activity = newestMtime(dir);
+          if (!Number.isFinite(activity)) throw new Error('could not establish goal/worktree activity');
+          item.wt = { path, repo: repoName, branch, head, owner: repo.path, common, identity, activity, metadata_identity: raw };
+          if (!only) item.bytes = treeBytes(path);
+          item.verdict = { target: true, why: 'eligible plan goal checkout' };
+          item.error = null;
+        } catch (error) { item.error = message(error); item.verdict = { target: false, why: item.error }; }
+      }
+    }
+  }
+}
+
+function goalWorktreeIdentity(path, common) {
+  const real = realpathSync(path);
+  const stat = lstatSync(path);
+  const gitPath = join(path, '.git');
+  const gitStat = lstatSync(gitPath);
+  if (!stat.isDirectory() || !gitStat.isFile() && !gitStat.isDirectory()) throw new Error('worktree identity is not a regular checkout');
+  const gitEntry = gitStat.isFile() ? readFileSync(gitPath, 'utf8') : null;
+  return { real, dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs, git_dev: gitStat.dev, git_ino: gitStat.ino, git_entry: gitEntry, common: realpathSync(common) };
 }
 
 const UUID_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -921,7 +1011,7 @@ export function scratchItem(item) {
  * The list, pure: `{ days, targets: [{ path, kind, rule, why, bytes }],
  * kept: [{ path, rule, why }] }`.
  */
-export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
+export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure = false } = {}) {
   const targets = [];
   const kept = [];
   const root = facts.work_root;
@@ -965,6 +1055,16 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
     const verdict = judge(planWorktree, item);
     if (verdict.target) targets.push({ path: item.path, kind: 'plan-worktree', rule: 'X', why: verdict.why, bytes: item.bytes || 0 });
     else keep(item.path, 'X', verdict.why);
+  }
+  for (const item of facts.goal_worktrees || []) {
+    const verdict = planGoalWorktree(item, { now: facts.now, pressure });
+    if (verdict.target) targets.push({
+      path: item.path, kind: 'plan-goal-worktree', rule: 'P', why: verdict.why, bytes: item.bytes || 0,
+      programme: item.programme, goal: item.goal, repo: item.repo, stage: item.stage, status: item.status,
+      metadata: item.metadata, branch: item.wt.branch, head: item.wt.head, owner: item.wt.owner,
+      common: item.wt.common, identity: item.wt.identity, activity: item.wt.activity,
+    });
+    else keep(item.path, 'P', verdict.why);
   }
 
   // (W) every retired workarea, listed with its verdict.
@@ -1066,6 +1166,16 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false } = {}) {
   return { days, person, targets, kept };
 }
 
+export function planGoalWorktree(item, { now, pressure = false } = {}) {
+  if (item.error) return { target: false, why: `error: ${item.error}` };
+  if (item.stage !== 'plan') return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not plan` };
+  if (!item.wt) return { target: false, why: 'error: goal checkout identity could not be established' };
+  if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };
+  return { target: true, why: pressure
+    ? 'clean inactive plan goal checkout (pressure pass; age exception)'
+    : 'clean inactive plan goal checkout, untouched for 72 hours' };
+}
+
 /* ------------------------------------------------------------ executing */
 
 function present(path) {
@@ -1116,6 +1226,11 @@ export function outsideRoots(target, roots) {
     // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
     'plan-checkout': dirname(parent) === base && PLAN_CHECKOUTS.has(name),
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
+    'plan-goal-worktree': (() => {
+      const relative = real.slice(base.length + 1).split('/');
+      return real.startsWith(`${base}/`) && relative.length === 4 && relative[1] === GOALS_DIR
+        && relative[0] && relative[2] && relative[3] === name && dirname(real) === join(base, relative[0], GOALS_DIR, relative[2]);
+    })(),
     'work-area': parent === base,
     'orphan-step-area': parent === base,
     'compare-worktree': parent === base,
@@ -1140,16 +1255,16 @@ export function outsideRoots(target, roots) {
  * from it. Returns `{ list, listPath, outcome }`; `outcome` is `applyTidy`'s.
  */
 export function runTidy({
-  apply = false, days = DEFAULT_DAYS, person = false, env = process.env, now = Date.now(), write = writeJsonAtomic, ...doors
+  apply = false, days = DEFAULT_DAYS, person = false, pressure = false, env = process.env, now = Date.now(), write = writeJsonAtomic, ...doors
 } = {}) {
   const roots = tidyRoots(env);
-  const plan = tidyPlan(gatherTidyFacts({ env, now, ...doors }), { days, person });
-  const list = { at: new Date(now).toISOString(), rules_version: RULES_VERSION, days, person, targets: plan.targets, kept: plan.kept };
+  const plan = tidyPlan(gatherTidyFacts({ env, now, ...doors }), { days, person, pressure });
+  const list = { at: new Date(now).toISOString(), rules_version: RULES_VERSION, days, person, pressure, targets: plan.targets, kept: plan.kept };
   let listPath = join(roots.tidy, `${listStamp(now)}.json`);
   for (let n = 2; present(listPath); n += 1) listPath = join(roots.tidy, `${listStamp(now)}-${n}.json`);
   write(listPath, list);
   if (!apply) return { list, listPath, outcome: null };
-  const outcome = applyTidy({ listPath, env, now, write, ...doors });
+  const outcome = applyTidy({ listPath, env, now, write, pressure, ...doors });
   return { list: outcome.list, listPath, outcome };
 }
 
@@ -1160,14 +1275,15 @@ export function runTidy({
  * happened is written back into the same file as `applied`.
  */
 export function applyTidy({
-  listPath, env = process.env, now = Date.now(), write = writeJsonAtomic,
+  listPath, env = process.env, now = Date.now(), write = writeJsonAtomic, pressure = false,
   remove = realRemove, release = releaseWorktree, prune = pruneWorktrees, removeWorktree = realRemoveWorktree, ...doors
 } = {}) {
   const roots = tidyRoots(env);
   const list = JSON.parse(readFileSync(listPath, 'utf8'));
   const targets = Array.isArray(list.targets) ? list.targets : [];
   const facts = gatherTidyFacts({ env, now, ...doors });
-  const fresh = tidyPlan(facts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS, person: list.person === true });
+  const pressurePass = pressure === true && list.pressure === true;
+  const fresh = tidyPlan(facts, { days: Number.isInteger(list.days) && list.days >= 1 ? list.days : DEFAULT_DAYS, person: list.person === true, pressure: pressurePass });
   const holds = new Map(fresh.targets.map((item) => [item.path, item]));
   const keptNow = new Map(fresh.kept.map((item) => [item.path, item]));
   const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
@@ -1224,6 +1340,32 @@ export function applyTidy({
           applied.push({ path, ok: false, why: 're-check: file identity changed since the list' }); continue;
         }
         unlinkSync(path);
+      } else if (target.kind === 'plan-goal-worktree') {
+        const removeUnderLease = () => {
+          // Only this goal's evidence belongs under the allocation/admission
+          // lock. Never inventory unrelated worktrees, caches or transcripts here.
+          let running = null;
+          try { running = (doors.cwds || cwdsOfUser)(); } catch { /* fail closed */ }
+          if (!running?.length || running.complete === false) running = null;
+          const freshFacts = { goal_worktrees: [] };
+          gatherPlanGoalWorktrees(freshFacts, { roots, running, now, only: {
+            programme: basename(dirname(dirname(dirname(path)))), goal: basename(dirname(path)), repo: basename(path),
+          }, git: doors.git || realGit, repos: doors.repos || defaultRepos(env),
+          openIn: doors.openIn || openFilesIn, command: doors.command || commandOf });
+          const item = freshFacts.goal_worktrees.find((candidate) => candidate.path === path);
+          const verdict = item && planGoalWorktree(item, { now, pressure: pressurePass });
+          const wt = item?.wt;
+          if (!verdict?.target || !wt || item.metadata !== target.metadata || item.stage !== target.stage || item.status !== target.status
+            || wt.branch !== target.branch || wt.head !== target.head || wt.owner !== target.owner || wt.common !== target.common
+            || wt.activity !== target.activity || !sameEvidence(wt.identity, target.identity)) {
+            applied.push({ path, ok: false, why: `re-check: ${!verdict?.target ? verdict?.why || 'goal checkout disappeared or is no longer declared' : 'goal metadata, stage, worktree identity, HEAD or activity changed since the list'}` });
+            return;
+          }
+          if (!removeWorktree(wt.owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); return; }
+          return;
+        };
+        (doors.goalWorktreeLock || ((fn) => realLock(roots.root, fn, { strict: true })))(removeUnderLease);
+        if (applied.some((entry) => entry.path === path)) continue;
       } else if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }

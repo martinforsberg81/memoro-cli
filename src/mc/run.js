@@ -499,7 +499,7 @@ export function realDeps(env = process.env) {
     every: (ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); },
     // The pressure pass's file and Docker halves (disk-pressure.js). Docker's
     // never starts a runtime that is down (`tidyDocker` without `start`).
-    pressureTidy: async () => runTidy({ apply: true, env }),
+    pressureTidy: async () => runTidy({ apply: true, pressure: true, env }),
     pressureDocker: async () => tidyDocker({ apply: true, env }),
     // Host available-memory percentage (Linux MemAvailable or the existing
     // Darwin sysctl); unknown telemetry remains fail-open in memoryRoom.
@@ -1546,11 +1546,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function placeGoalWorktrees(goal, name) {
     for (const repoName of goal.repos) {
       const path = join(goal.dir, repoName);
-      if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) continue;
       const repo = repos.find((item) => item.name === repoName);
       if (!repo) return `${repoName} is not a repository this runner knows`;
-      say(`${name}: ${path} is not a worktree — creating it on goal/${goal.goal}`);
-      const added = addGoalWorktree({ git: deps.git, bare: repo.path, path, goal: goal.goal });
+      const added = deps.lock(root, () => {
+        if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) return { ok: true };
+        say(`${name}: ${path} is not a worktree — creating it on goal/${goal.goal}`);
+        return addGoalWorktree({ git: deps.git, bare: repo.path, path, goal: goal.goal });
+      }, { strict: true });
       if (!added.ok) return `${repoName}'s worktree could not be made (${String(added.stderr ?? '').trim() || 'git failed'})`;
     }
     return null;

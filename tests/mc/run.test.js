@@ -119,6 +119,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   const scratchAges = {};
   const deps = {
     env,
+    // The runner and tidy share this short owner/allocation lock. Fixture
+    // work stays synchronous while exercising the same critical sections.
+    lock: (_root, fn) => fn(),
     now: () => new Date(now),
     sleep: async () => {},
     // What `lanes.json` says, from the fixture rather than from the machine
