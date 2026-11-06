@@ -1009,7 +1009,7 @@ describe('MERGES', () => {
     for (const columns of [60, 80, 120, 160]) {
       const lines = drawing(merges, columns);
       const text = lines.join('\n');
-      assert.match(text, /FAILED MERGES +4/u);
+      assert.doesNotMatch(text, /FAILED MERGES/u);
       assert.match(text, /failed #1 +recovery running/u);
       assert.match(text, /pid 11/u);
       assert.match(text, /failed #2 +waiting for recovery/u);

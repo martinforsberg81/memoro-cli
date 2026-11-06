@@ -140,7 +140,6 @@ export function mergesLines(lines, c, wide, merges, expand) {
       });
     }
     if (reds.length) {
-      operation(lines, c, wide, 'FAILED MERGES', `${reds.length}`, ['red', 'bold']);
       for (const item of reds) {
         const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
         const recovery = item.recovery || {};
