@@ -717,6 +717,23 @@ describe('(P) automatic plan goal worktree release', () => {
     } finally { m.cleanup(); }
   });
 
+  it('does not count the attached dependency link as ignored files, and still keeps any other ignored entry', () => {
+    const m = machine();
+    try {
+      const attached = planGoalTree(m, { name: 'attached', ignored: '!! node_modules/\n' });
+      m.write(join(attached.path, 'node_modules', '.memoro-deps.json'), '{}\n', OLD);
+      ageTree(attached.dir, OLD);
+      const unmarked = planGoalTree(m, { name: 'unmarked', ignored: '!! node_modules/\n' });
+      const mixed = planGoalTree(m, { name: 'mixed', ignored: '!! node_modules/\n!! .wrangler/\n' });
+      m.write(join(mixed.path, 'node_modules', '.memoro-deps.json'), '{}\n', OLD);
+      ageTree(mixed.dir, OLD);
+      const facts = runTidy(attached.doors()).list;
+      assert.deepEqual(facts.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), [attached.path]);
+      assert.match(keptOf(facts, unmarked.path).why, /ignored files \(node_modules\/\)/u);
+      assert.match(keptOf(facts, mixed.path).why, /ignored files \(\.wrangler\/\)/u);
+    } finally { m.cleanup(); }
+  });
+
   it('rechecks metadata, stage, HEAD, identity and activity after preview, and suppresses a nested cache target', () => {
     const m = machine();
     try {

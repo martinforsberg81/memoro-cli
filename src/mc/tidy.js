@@ -43,7 +43,10 @@
  *     (younger only in pressure) when its goal cannot start a build or review
  *     session now: in `stage: plan`, or with `status: Martin`, or in a phase
  *     above its programme's lowest unfinished phase (`phaseOpen`). A goal with
- *     `status: blocked` keeps its checkout. Its branch and goal directory stay,
+ *     `status: blocked` keeps its checkout. Clean means no tracked, untracked
+ *     or ignored entry, except the `node_modules/` dependency link the runner
+ *     attaches (it carries `.memoro-deps.json` and is re-attached at the next
+ *     session); any other ignored entry keeps the checkout. Its branch and goal directory stay,
  *     and the runner re-adds the checkout on that branch when it next needs it.
  *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
@@ -67,7 +70,7 @@
  *     removal rechecks ownership, process/open-file evidence and tree identity.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -86,6 +89,7 @@ import {
 } from './paths.js';
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
+import { ATTACHED_MARK } from './shared-deps.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
@@ -568,7 +572,8 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           if (status.trim()) throw new Error('checkout has tracked or untracked changes');
           const ignored = git(path, ['status', '--porcelain', '--ignored=matching', '--untracked-files=all']);
           if (ignored === null) throw new Error('Git could not establish ignored-file state');
-          if (ignored.trim()) throw new Error('checkout contains ignored files');
+          const kept = ignoredBeyondAttachedDeps(path, ignored);
+          if (kept.length) throw new Error(`checkout contains ignored files (${kept.slice(0, 3).map((line) => line.slice(3)).join(', ')}${kept.length > 3 ? ', …' : ''})`);
           const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
           if (own === null || !/^0\s*$/u.test(own)) throw new Error('checkout has commits beyond origin/main or Git could not verify them');
           const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
@@ -590,6 +595,18 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
       }
     }
   }
+}
+
+/**
+ * Ignored entries that keep a goal checkout. The one exception is the
+ * dependency link the runner attaches at every session (`node_modules/`
+ * holding shared-deps.js's ATTACHED_MARK): it is rebuilt from the lockfile
+ * at the next session, so it holds nothing a person made. Anything else
+ * ignored (local databases, build output, .wrangler state) still keeps it.
+ */
+function ignoredBeyondAttachedDeps(path, porcelain) {
+  return porcelain.split('\n').filter((line) => line.trim())
+    .filter((line) => !(line === '!! node_modules/' && existsSync(join(path, 'node_modules', ATTACHED_MARK))));
 }
 
 function goalWorktreeIdentity(path, common) {
