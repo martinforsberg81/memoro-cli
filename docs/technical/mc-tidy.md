@@ -241,8 +241,13 @@ worktree list. Each goes only when every applicable condition is proved, and
 stays with the first that is not:
 
 - with a record: it is a readable regular file, names `owner: "runner"`, a
-  session and a start, and has `ended`; invalid, unreadable, foreign or
-  unfinished records are never treated as absent;
+  session and a start, and either has `ended`, or has no `ended` while its
+  `runner_pid` is gone: that pid is not alive, or now runs something other
+  than `mc run` (memoro-cli#1362). Such a session is a gone runner's, and the
+  candidate is judged by the guards below as an ended one is. A `runner_pid`
+  that is not a whole positive number keeps the item, and so does a `ps`
+  failure; a record with no `ended` whose runner still stands is unfinished
+  and kept. Invalid, unreadable or foreign records are never treated as absent;
 - only when the record is absent, a worktree (never marker-less `DerivedData`)
   may use legacy proof: the exact scratch stem has both a regular
   `runner/log/<stem>.json.err` and `<stem>.jsonl`, with canonical paths inside

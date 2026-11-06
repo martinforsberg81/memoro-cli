@@ -34,6 +34,8 @@ export const PROVIDERS = Object.freeze(['claude', 'codex']);
 export const WINDOWS = Object.freeze({ claude: Object.freeze(['five_hour', 'seven_day']), codex: Object.freeze(['primary', 'secondary']) });
 /** An observation older than this is stale: still shown, but never read as current. Codex is polled hourly. */
 export const STALE_MS = 3 * 60 * 60 * 1000;
+/** How often the runner reads each provider's capacity, both collectors alike. */
+export const CAPACITY_POLL_MS = 15 * 60 * 1000;
 
 export function capacityPath(root = runnerDir()) {
   return join(root, CAPACITY_FILE);

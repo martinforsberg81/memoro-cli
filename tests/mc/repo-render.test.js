@@ -161,6 +161,31 @@ describe('the repository view, as a page', () => {
     assert.match(forgotten, /held for 9h/u);
   });
 
+  it('an orphaned lease says once that its process is gone, and a live process holder reads as alive', () => {
+    const since = new Date(NOW - 5 * 60_000).toISOString();
+    // Wide enough that the lease row is not cut at its ellipsis: the sentence is the thing being checked.
+    const orphan = page(report({
+      lease: {
+        held: true, holder: 'mc-repo', holder_kind: 'work-area', errand: 'merge round #338', since, age_ms: 5 * 60_000,
+        owner_pid: 4242, owner_alive: false, orphaned: true,
+        liveness: { known: true, state: 'dead', source: 'process', pid: 4242, round: null, held_ms: null },
+      },
+    }), { columns: 160 });
+    const gone = orphan.split('\n').filter((line) => /is gone/u.test(line));
+    assert.equal(gone.length, 1, 'one line says the process is gone');
+    assert.match(gone[0], /its process \(pid 4242\) is gone — the next claim takes it/u);
+    assert.doesNotMatch(orphan, /holder dead/u);
+
+    const live = page(report({
+      lease: {
+        held: true, holder: 'mc-repo', holder_kind: 'work-area', errand: 'merge round #338', since, age_ms: 5 * 60_000,
+        liveness: { known: true, state: 'working', source: 'process', pid: 79748, round: '#338', held_ms: 5 * 60_000 },
+      },
+    }));
+    assert.match(live, /holder alive/u);
+    assert.doesNotMatch(live, /holder working|is gone/u);
+  });
+
   it('every row fits the terminal, colour and all', () => {
     const text = renderRepoLines(report({
       pull_requests: {

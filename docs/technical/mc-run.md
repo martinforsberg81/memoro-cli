@@ -136,7 +136,8 @@ deployment readiness or reboot/service behavior.
 Each session's scratch directory gets an ownership record,
 `.mc-scratch.json`, with its session and start, and its end and exit once
 the session is over. Scratch is no longer removed by age; tidy's rule S
-reclaims only on that record.
+reclaims only on that record: an ended session, or one whose runner has gone
+with no end recorded (`mc-tidy.md`, rule S).
 
 ## The session
 

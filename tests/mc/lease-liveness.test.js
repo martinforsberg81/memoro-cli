@@ -154,8 +154,9 @@ describe('a lease that recorded its process is answered by that process', () => 
     assert.equal(answer.state, 'working');
     assert.equal(answer.known, true);
     const row = livenessRow(plain, held, answer, NOW);
-    assert.match(row, /holder working/u);
-    assert.match(row, /merger pid 79748 alive/u);
+    assert.match(row, /holder alive/u);
+    assert.doesNotMatch(row, /holder working/u, 'working is the board\'s word; a process that answers alive is alive');
+    assert.match(row, /merger pid 79748/u);
     assert.match(row, /round for #14600/u);
     assert.match(row, /held 13m/u);
     assert.doesNotMatch(row, /unknown/u);
@@ -166,7 +167,11 @@ describe('a lease that recorded its process is answered by that process', () => 
     const answer = livenessOf(held, new Map());
     assert.equal(answer.state, 'dead');
     assert.equal(answer.known, true);
-    const row = livenessRow(plain, held, answer, NOW);
+    // An orphaned lease says its process is gone on the lease row ("the next claim takes it"); the dead row would repeat it.
+    assert.equal(held.orphaned, true);
+    assert.equal(livenessRow(plain, held, answer, NOW), null, 'no second line saying the same thing');
+    const unorphaned = { ...held, orphaned: false };
+    const row = livenessRow(plain, unorphaned, answer, NOW);
     assert.match(row, /holder dead/u);
     assert.match(row, /merger pid 79748 is gone/u);
     assert.doesNotMatch(row, /unknown/u);

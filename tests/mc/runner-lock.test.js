@@ -94,9 +94,25 @@ test('a non-strict caller that proceeds past a live holder logs one unlocked lin
     assert.equal(ran, 'ran anyway', 'fn runs without the lock');
     assert.deepEqual(rec.lines, [{
       event: 'runner-lock-unlocked',
-      fields: { name: 'merges', pid: process.pid, holder_pid: holder, holder_name: 'tidy-pressure', waited_ms: 10 },
+      fields: { name: 'merges', pid: process.pid, holder_pid: holder, holder_name: 'tidy-pressure', reason: 'EEXIST', waited_ms: 10 },
     }]);
     assert.equal(readFileSync(path, 'utf8'), String(holder), 'the holder\'s lock is left as it was');
+  } finally { cleanup(); }
+});
+
+test('a non-strict caller that cannot open the lock (EACCES) runs fn and logs unlocked with that code as the reason', () => {
+  const { root, cleanup } = layout2Root();
+  try {
+    const clock = fakeClock();
+    const rec = recorder();
+    const denied = () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+    const ran = realLock(root, () => 'ran anyway', { name: 'merges', now: clock.now, log: rec.log, open: denied });
+    assert.equal(ran, 'ran anyway', 'fn runs without the lock');
+    assert.deepEqual(rec.lines, [{
+      event: 'runner-lock-unlocked',
+      fields: { name: 'merges', pid: process.pid, holder_pid: null, holder_name: null, reason: 'EACCES', waited_ms: 0 },
+    }]);
+    assert.throws(() => realLock(root, () => 'ran', { strict: true, open: denied }), /EACCES/u, 'strict still refuses to run without the lock');
   } finally { cleanup(); }
 });
 

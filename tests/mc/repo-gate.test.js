@@ -28,7 +28,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
-import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -2928,6 +2928,44 @@ describe('the selected files run in their resource classes', () => {
     assert.deepEqual(run.cut, ['db.test.js']);
     assert.notEqual(run.code, 0);
   });
+
+  it('realTests: a batch whose times file starts a file and never ends it is cut, code -1, whatever its exit said', async () => {
+    // The node the batch spawns is a fake: it writes the times file its `--test-reporter-destination` names, with
+    // `quits.test.js` started and no done line, and exits 0. A real node would have reported the file done.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-cut-batch-')));
+    const realExecPath = process.execPath;
+    try {
+      const fakeNode = join(dir, 'fake-node');
+      writeFileSync(fakeNode, [
+        '#!/bin/sh',
+        'for a in "$@"; do',
+        '  case "$a" in --test-reporter-destination=*.jsonl) dest="${a#--test-reporter-destination=}" ;; esac',
+        'done',
+        `printf '%s\\n' '{"file":"${join(dir, 'quits.test.js')}","started":true}' > "$dest"`,
+        'exit 0',
+      ].join('\n') + '\n', { mode: 0o755 });
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const times = { root: join(dir, 'home'), repo: 'r', where: '#1' };
+      process.execPath = fakeNode;
+      const run = await realTests({ cwd: dir, files: ['quits.test.js'], flags: ['--no-warnings'], env, lanes: 1, times });
+      assert.deepEqual(run.cut, ['quits.test.js']);
+      assert.equal(run.code, -1, 'the exit was 0, and the cut makes it an unknown exit');
+    } finally { process.execPath = realExecPath; rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('realSuite: a whole suite whose times file starts a file and never ends it is cut, code -1, with that file named', async () => {
+    // The same times file, for a suite command that names no files: the file it started is what the cut names.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-cut-suite-')));
+    try {
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const started = () => `${JSON.stringify({ file: join(dir, 'quits.test.js'), started: true })}\n`;
+      const times = { root: join(dir, 'home'), repo: 'r', where: '#1', track: (file) => writeFileSync(file, started()) };
+      const run = await realSuite({ cwd: dir, command: 'node -e 0', env, lanes: 1, times });
+      assert.equal(run.cut.length, 1, 'the one file the times file says never ended');
+      assert.match(run.cut[0], /quits\.test\.js$/u);
+      assert.equal(run.code, -1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
 
   it('realTests: a round already stopped spawns nothing', async () => {
     const controller = new AbortController();

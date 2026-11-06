@@ -648,7 +648,9 @@ export async function admit({
       const starting = snapshot.held.some((item) => reservationFor(item, { service, worktree }));
       // Where this request stands: null when it is not queued at all. The queue
       // orders the capped slots; MAIN takes none, and a start already in
-      // progress for this worktree is waited on, not queued behind.
+      // progress for this worktree is waited on, not queued behind. A restart
+      // (`replacing`) skips the queue even when memory is below the floor: the
+      // slot it would wait for is the one it already holds, so there is nothing to queue for.
       let standing = null;
       if (!starting && !mainRequest && !replacing) {
         if (waits && !ticket) ticket = joinQueue({ file, pid, worktree, service, env, now: startedAt, session });

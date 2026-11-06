@@ -469,8 +469,8 @@ export function predatesWaitFor(request, result) {
 }
 
 export const ERROR_LINES = 20;
-// The session was accepted and the app did not show: sign-in is not what failed.
-const APP_NOT_READY_LINE = 'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again';
+// The session was not refused and the app did not show: sign-in is not what failed. Memoro gives this for a 500 or no answer too, so "accepted" would claim more than was seen.
+const APP_NOT_READY_LINE = 'error  boot  the session was not refused, so sign-in is not the problem; the app did not show — try again';
 const ERROR_TEXT = 300;
 const EVAL_TEXT = 4000;
 

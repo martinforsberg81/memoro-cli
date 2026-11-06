@@ -202,6 +202,10 @@ function status(opts, { stdout, root, deps }) {
  * for this service and worktree, the owner adopts that one instead of asking
  * for another slot (`adoptReservation`); anything else in it — the `1` an older
  * mc wrote — is not a pass, and the request is asked like any other.
+ *
+ * The parent fallback is for adopt only. On admit, a named `MC_DEV_OWNER_PID`
+ * that is dead is not replaced by the parent: the admission answers `owner-gone`
+ * and reserves nothing.
  */
 async function askAdmission(opts, { stdout, root, deps }) {
   const stderr = deps.stderr || process.stderr;
@@ -247,7 +251,11 @@ async function askAdmission(opts, { stdout, root, deps }) {
   return verdict.ok ? 0 : REFUSED_EXIT;
 }
 
-/** Who holds what this process reserves: `MC_DEV_OWNER_PID` when it names a live process, else the parent. */
+/**
+ * Who holds what this process reserves: `MC_DEV_OWNER_PID` when it names a live process, else the parent.
+ * A named pid that is dead falls back to the parent here, which is what adopt uses. Admit does not take that
+ * fallback: it passes the named pid itself as `owner`, and a dead one answers `owner-gone` (dev-servers `admit`).
+ */
 export function ownerPid(env, { alive = pidAlive, parent = process.ppid } = {}) {
   const named = Number(env.MC_DEV_OWNER_PID);
   if (Number.isInteger(named) && named > 1 && alive(named)) return named;
