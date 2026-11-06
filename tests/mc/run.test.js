@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS, PRESSURE_BYTES } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
@@ -938,7 +939,9 @@ test('under pressure a goal done an hour ago is archived without the 24 hours, a
  */
 test('under 20 % free memory no session launches, the line is said once and left for the page', async () => {
   const f = goalFixture({ alpha: {} });
-  f.deps.freeMemoryPercent = () => MEMORY_MIN_FREE_PERCENT - 1;
+  f.deps.freeMemoryPercent = () => freeMemoryPercent(undefined, {
+    platform: 'linux', readFile: () => 'MemAvailable: 19 kB\nMemFree: 90 kB\nMemTotal: 100 kB\n',
+  });
   const r = await createRunner({ deps: f.deps }).pass();
   assert.equal(r.ran, 0);
   assert.equal(r.waited, 'skipped:memory');
@@ -954,7 +957,9 @@ test('under 20 % free memory no session launches, the line is said once and left
 test('at 20 % free memory a session launches, and the memory line is taken off the page', async () => {
   const f = goalFixture({ alpha: {} });
   f.files['/w/runner/memory.json'] = JSON.stringify({ line: 'memory: 12% free, below 20% — no session started' });
-  f.deps.freeMemoryPercent = () => MEMORY_MIN_FREE_PERCENT;
+  f.deps.freeMemoryPercent = () => freeMemoryPercent(undefined, {
+    platform: 'linux', readFile: () => 'MemAvailable: 20 kB\nMemTotal: 100 kB\n',
+  });
   const r = await createRunner({ deps: f.deps }).pass();
   assert.equal(r.ran, 1);
   assert.equal(f.calls.sessions.length, 1);

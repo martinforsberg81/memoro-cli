@@ -115,10 +115,18 @@ No new session starts unless the disk policy admits it
 ([mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure)): 30 GB available on
 the scratch volume, after a pressure pass if need be, asked at the top of a
 pass and again at the start itself. A reading that fails refuses. No session
-starts either with memory status below 20 percent. The runner writes
-disk.json or memory.json and removes it when the hold clears. A timer reads
+starts either below 20 percent host available memory. On Linux this is
+`100 * MemAvailable / MemTotal` from `/proc/meminfo`: `MemAvailable` includes
+memory the kernel estimates can be made available without swapping, including
+reclaimable memory, and is not `MemFree`. Darwin keeps its existing sysctl
+measurement. This is host telemetry, not cgroup/container headroom; an mc
+process constrained by cgroups is not protected by this measurement. Missing,
+unreadable or invalid telemetry is unknown and keeps the existing fail-open
+policy: a session is admitted on unknown memory. The runner writes `disk.json`
+or `memory.json` and removes the hold when the reading recovers. A timer reads
 the disk every minute, beside the lanes and chores. Sessions already running
-and the merger go on.
+and the merger go on. Synthetic fixture evidence does not establish Linux
+deployment readiness or reboot/service behavior.
 
 Each session's scratch directory gets an ownership record,
 `.mc-scratch.json`, with its session and start, and its end and exit once
