@@ -1,4 +1,5 @@
 /** PROGRAMMES' own layout: programme → phase → goal → PR, without lane cells. */
+import { mergeFailureSummary } from './merge-red.js';
 import { clipCell, prTone, stateTone } from './page-grid.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { width } from './status-render.js';
@@ -40,12 +41,13 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   }
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
-    lines.push(line(c, wide, 10, goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a plan session resolves the obstacle'), ['red']));
+    const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a plan session resolves the obstacle');
+    lines.push(line(c, wide, 10, goal.stage === 'merge' ? mergeFailureSummary(reason) : reason, ['red']));
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { expand }));
   for (const pr of goal.prs || []) {
     lines.push(prLine(c, wide, pr));
-    if (pr.merge_red) lines.push(line(c, wide, 12, pr.merge_red, ['red']));
+    if (pr.merge_red) lines.push(line(c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']));
   }
   if (!expand) return;
   const metadata = [goal.name, ...(goal.repos || []), `${goal.sessions ?? 0} sessions`].filter(Boolean).join(' · ');
@@ -76,7 +78,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     lines.push(line(c, wide, 4, 'PRs without a goal', ['grey']));
     for (const pr of group.prs) {
       lines.push(prLine(c, wide, pr));
-      if (pr.merge_red) lines.push(line(c, wide, 12, pr.merge_red, ['red']));
+      if (pr.merge_red) lines.push(line(c, wide, 12, mergeFailureSummary(pr.merge_red), ['red']));
     }
   }
   return lines;

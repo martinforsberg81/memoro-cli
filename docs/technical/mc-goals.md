@@ -41,8 +41,7 @@ review   ── a second review died (runner) ───────────�
 finish   ── plan session: fixed, published ───────────────────▶ merge
 finish   ── plan session ended still in finish (runner) ──────▶ finish · blocked
 merge  ── merger landed ────────────────────────────────────▶ done
-merge  ── merger red, or the head moved ────────────────────▶ merge · ready, one plan session
-merge  ── the next red, or the head moved again ────────────▶ merge · blocked
+merge  ── merger red, or the head moved ────────────────────▶ merge · blocked, plan recovery
 any      ── blocked wakes plan; Martin waits; ready keeps the stage ─▶ the same stage
 any      ── only a person moves a stage backward, logged ─────▶ an earlier stage
 ```
@@ -415,7 +414,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    (*Converting …*), of the goals the runner starts a session on
    (`goalSession`, `goals.js`) — `build · ready` with a criterion (a build),
    `review · ready` (a review), `finish · ready` (a plan session), and
-   `merge · ready` whose last entry is the merger's red and none of whose
+   legacy `merge · ready` whose last entry is the merger's red and none of whose
    pull requests is in the merger's line (a plan session) — never `plan · ready` or `Martin`. Blocked goals wake plan in their
    current stage; eligible work is in the phase their programme is in or an earlier one
    (*Phases*), and not held, on any repository (a lane serves them all), the
@@ -583,8 +582,9 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 A session sends a goal to `merge`. Every registered PR is merged directly,
 without another gate, criterion check or reviewed-head check. Each landing is
 recorded in LOG.md under the shared lock; when the last PR lands the goal is
-`done`. A conflict is reported to a plan session for resolution, and a second
-failure blocks it for a person. The merger does not resolve content conflicts.
+`done`. The first failure sets `merge · blocked` and wakes plan recovery.
+An unresolved recovery waits on Martin under the normal recovery guards.
+The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
 
@@ -599,7 +599,7 @@ Each stage has one owner, and a goal passes each once:
 - `review` — one review session decides; one that dies is run again once.
 - `finish` — one headless plan session finishes it to `merge`.
 - `merge` — the merger's; the runner starts no session, except one plan
-  session after its first merge failure.
+  session for blocked merge recovery.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
 - `dropped` — let go without landing (`mc goal drop`), by a person or plan,
@@ -643,7 +643,7 @@ sessions. Its canonical file remains `canon/roles/plan-session.md`; the old
 
 - `finish`: `finish · ready`, to finish the work and authorize merge.
 - `blocked`: any unfinished goal with status blocked, or a merge failure
-  handed back ready by the merger. Diagnose, repair and retry the same stage
+  handed back ready by an older merger. Diagnose, repair and retry the same stage
   (`mc goal ready`; `mc goal stage merge` re-executes merge). A review may
   report an obstacle with blocked without pretending to have judged the work.
 - `one_goal_remaining`: prepare follow-up with one unfinished goal.

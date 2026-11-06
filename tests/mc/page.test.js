@@ -954,11 +954,44 @@ describe('MERGES', () => {
     assert.deepEqual(repo.waiting.map((item) => item.pr), [2]);
     const lines = drawing(merges, 120, true);
     assert.doesNotMatch(lines.join('\n'), /mending/u);
-    assert.match(strip(rowWith(lines, 'failed #1')), /failed #1 + red · 5 min/u);
+    assert.match(strip(rowWith(lines, 'failed #1')), /failed #1 + no recovery session · failed 5 min/u);
     assert.match(rowWith(lines, 'tests red'), /\x1b\[31m/u);
     assert.match(lines.map(strip).join('\n'), /1 in queue: #2/u);
   });
 
+
+  it('groups failed merges with live recovery, waiting, Martin and unassigned states and compact reasons', () => {
+    const reason = 'merge: X Pull request org/repo#1 is not mergeable: the merge commit cannot be cleanly created.\nTo have the pull request merged, add --auto.\ngh pr checkout 1';
+    const goals = [1, 2, 3].map((pr) => ({ programme: 'mc', goal: `g${pr}`, stage: 'merge',
+      status: pr === 3 ? 'Martin' : 'blocked', prs: [{ repo: 'memoro', pr }] }));
+    const recoverySessions = [
+      { goal: 'mc/g1', kind: 'plan', pid: 10, session_pid: 11, elapsed_seconds: 120, tool: 'claude', model: 'opus' },
+      { goal: 'mc/g2', kind: 'plan', pid: 20 }, // A dead runner is not activity.
+      { goal: 'other/g2', kind: 'plan', pid: 30 },
+      { goal: 'mc/g3', kind: 'build', pid: 30 },
+    ];
+    const queued = [1, 2, 3, 4].map((pr) => job(pr, { state: 'red', reason, answered: '2026-08-29T11:55:00Z' }));
+    const merges = section({ queued, goals, recoverySessions, alive: (pid) => pid !== 20 });
+    assert.deepEqual(merges.repos[0].reds.map((item) => [item.pr, item.recovery.state]).sort((a, b) => a[0] - b[0]),
+      [[1, 'running'], [2, 'waiting'], [3, 'Martin'], [4, 'unassigned']]);
+    assert.equal(merges.red.items[0].reason, reason, 'JSON retains the complete diagnostic');
+    for (const columns of [60, 80, 120, 160]) {
+      const lines = drawing(merges, columns);
+      const text = lines.join('\n');
+      assert.match(text, /FAILED MERGES +4/u);
+      assert.match(text, /failed #1 +recovery running/u);
+      assert.match(text, /pid 11/u);
+      assert.match(text, /failed #2 +waiting for recovery/u);
+      assert.match(text, /failed #3 +waits on Martin/u);
+      assert.match(text, /failed #4 +no recovery session/u);
+      assert.equal(lines.filter((line) => line.trim() === 'Merge conflict').length, 4);
+      assert.doesNotMatch(text, /--auto|gh pr checkout|not mergeable/u);
+      assert.ok(lines.every((line) => width(line) <= columns));
+    }
+    const requeued = section({ queued: [job(1)], goals: [goals[0]], recoverySessions });
+    assert.deepEqual(requeued.repos[0].reds, []);
+    assert.doesNotMatch(drawing(requeued).join('\n'), /FAILED MERGES|recovery running/u);
+  });
 
   it('does not draw a closed red or count a red as waiting', () => {
     const merges = section({ queued: [job(1, { state: 'red' }), job(2, { state: 'red' })],

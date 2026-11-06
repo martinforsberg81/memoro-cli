@@ -1273,14 +1273,14 @@ describe('a session decision to merge a goal', () => {
     assert.equal(d.calls.some(({ args }) => args.includes('headRefOid')), false);
   });
 
-  it('leaves a content conflict to one session, then blocks a second failed attempt', async () => {
+  it('blocks a content conflict on the first attempt and keeps repeated failures blocked', async () => {
     const d = decision({ conflict: true });
     await landJob(jobs[0], d.m.deps);
     const [answer] = await landJob(jobs[1], d.m.deps);
     assert.equal(answer.landed, false);
     assert.equal(answer.report.reason, 'CONFLICT (content): a.js');
     assert.deepEqual(d.pulled, [90], 'a failed merge does not update the installation');
-    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready']);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
     assert.equal(d.goal().log.at(-1).done, 'merger answered red on #14804');
     await landJob(jobs[1], d.m.deps);
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);

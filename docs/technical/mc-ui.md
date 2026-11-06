@@ -149,7 +149,13 @@ a phase bar, short state, elapsed time and the recorded phase message. The bar
 marks prepare `[●··]`, gate `[━●·]` or land `[━━●]`; it is a stage indicator,
 not test completion or a time-based percentage. Missing phase evidence uses
 `[···]`. Active rounds and every failure remain visible. Pauses, stopped
-mergers, failure reasons and batch membership retain their own rows. Empty
+mergers and batch membership retain their own rows. Each repository has a
+conditional FAILED MERGES area: every failed PR shows live plan recovery
+(tool/model, elapsed time and PID), waiting for recovery, waits on Martin, or
+no recovery session. Activity must match the owning goal and a live plan runner;
+an unrelated or dead session is not recovery. A short one-line reason replaces
+CLI instructions; complete diagnostics stay in JSON and logs. Requeued PRs
+leave the failed area. Empty
 lanes explicitly say idle; queued lanes without an active round say waiting.
 Direct goal merges have no gate round: a `landing` queue record owned by a
 live merger supplies their active row. A dead owner remains in the waiting
