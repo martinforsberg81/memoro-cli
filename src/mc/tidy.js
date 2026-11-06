@@ -1364,7 +1364,7 @@ export function applyTidy({
           if (!removeWorktree(wt.owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); return; }
           return;
         };
-        (doors.goalWorktreeLock || ((fn) => realLock(roots.root, fn, { strict: true })))(removeUnderLease);
+        (doors.goalWorktreeLock || ((fn) => realLock(roots.root, fn, { strict: true, name: 'tidy-pressure' })))(removeUnderLease);
         if (applied.some((entry) => entry.path === path)) continue;
       } else if (target.kind === 'plan-worktree' || target.kind === 'plan-checkout') {
         const wt = worktrees.get(path)?.wt;

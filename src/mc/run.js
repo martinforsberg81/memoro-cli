@@ -531,7 +531,7 @@ export function realDeps(env = process.env) {
         const atWrite = readCapacity({ root });
         const next = applyCollectedCapacity(atWrite, 'claude', got, now, before);
         return writeCapacity(next, { root });
-      });
+      }, { name: 'claude-capacity' });
       return { ...got, state };
     },
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
@@ -659,7 +659,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // reader: a deps object without `freeBytes` has no disk policy.
   const disk = deps.freeBytes ? createDiskPressure({
     path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
-    now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true }), say,
+    now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true, name: 'disk-pressure' }), say,
     steps: [
       { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
       ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
@@ -761,7 +761,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try {
       // The runner's own lock (runner-lock.js, on the work root), held only
       // for this synchronous read-patch-write.
-      lock(root, () => capacity.write(change(capacity.read())));
+      lock(root, () => capacity.write(change(capacity.read())), { name: 'capacity-observe' });
     } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
   }
   /**
@@ -1580,7 +1580,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) return { ok: true };
         say(`${name}: ${path} is not a worktree — creating it on goal/${goal.goal}`);
         return addGoalWorktree({ git: deps.git, bare: repo.path, path, goal: goal.goal });
-      }, { strict: true });
+      }, { strict: true, name: 'goal-allocate' });
       if (!added.ok) return `${repoName}'s worktree could not be made (${String(added.stderr ?? '').trim() || 'git failed'})`;
     }
     return null;
