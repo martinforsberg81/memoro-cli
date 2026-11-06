@@ -88,6 +88,19 @@ function operation(lines, c, wide, label, status = '', tone = ['grey'], { indent
   } else detail(lines, c, wide, indent, label, tone);
 }
 
+/** Session-shaped frame with wrapped contents and a state-coloured border. */
+function operationFrame(lines, c, wide, tone, draw) {
+  const body = [];
+  draw(body, wide - 4);
+  const indent = 6;
+  const room = Math.max(0, ...body.map(line => width(line) - indent));
+  const prefix = ' '.repeat(indent);
+  const rule = '─'.repeat(room + 2);
+  lines.push(`${prefix}${c(`╭${rule}╮`, tone)}`);
+  for (const line of body) lines.push(`${prefix}${c('│', tone)} ${line.slice(indent)}${' '.repeat(room - (width(line) - indent))} ${c('│', tone)}`);
+  lines.push(`${prefix}${c(`╰${rule}╯`, tone)}`);
+}
+
 /** A phase marker, never a percentage: prepare, gate, then land. */
 function mergeBar(state) {
   return { rebase: '[●··]', gate: '[━●·]', landing: '[━━●]' }[state] || '[···]';
@@ -103,8 +116,8 @@ export function mergesLines(lines, c, wide, merges, expand) {
     const shown = waiting;
     const refs = shown.flatMap((item) => (item.prs || []).map((pr) => `#${pr.number}`));
     const unknown = shown.filter((item) => !item.prs?.length).length;
-    const queue = waiting.length ? `${waiting.length} in queue: ${refs.join(' ')}${unknown ? ` · ${unknown} PR unknown` : ''}` : 'queue empty';
-    operation(lines, c, wide, repo.repo, queue, ['bold'], { indent: 4, labelWide: 10 });
+    detail(lines, c, wide, 4, `${repo.repo} · ${waiting.length} in queue`, ['orange', 'bold']);
+    detail(lines, c, wide, 6, `Queue: ${refs.join(' ')}${unknown ? ` · ${unknown} PR unknown` : ''}`.trimEnd() + (!waiting.length ? ' empty' : ''));
     if (repo.pause) operation(lines, c, wide, 'paused', repo.pause.reason || repo.pause.kind, ['red']);
     if (repo.merger_stopped) operation(lines, c, wide, 'merger stopped', 'queue waiting', ['red']);
     if (!active.length && !repo.pause && !repo.merger_stopped) {
@@ -114,14 +127,16 @@ export function mergesLines(lines, c, wide, merges, expand) {
       const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';
       const label = `merging ${refs}`;
       const status = [mergeBar(item.phase ? item.state : null), item.state || 'unknown', item.progress, item.phase].filter(Boolean).join(' · ');
-      operation(lines, c, wide, label, status, stateTone(item.state));
-      if (item.pid) detail(lines, c, wide, 8, `pid ${item.pid}`);
-      if (item.batch_of) detail(lines, c, wide, 8, `with #${item.batch_of}`);
-      if (expand) {
-        detail(lines, c, wide, 8, item.name || item.title || '');
-        if (item.title && item.title !== item.name) detail(lines, c, wide, 8, item.title);
-        if (item.queue_age_seconds != null) detail(lines, c, wide, 8, `queued ${duration(item.queue_age_seconds)}`);
-      }
+      operationFrame(lines, c, wide, 'green', (body, room) => {
+        detail(body, c, room, 6, `${label}   ${status}`);
+        if (item.pid) detail(body, c, room, 6, `pid ${item.pid}`);
+        if (item.batch_of) detail(body, c, room, 6, `with #${item.batch_of}`);
+        if (expand) {
+          detail(body, c, room, 6, item.name || item.title || '');
+          if (item.title && item.title !== item.name) detail(body, c, room, 6, item.title);
+          if (item.queue_age_seconds != null) detail(body, c, room, 6, `queued ${duration(item.queue_age_seconds)}`);
+        }
+      });
     }
     if (reds.length) {
       operation(lines, c, wide, 'FAILED MERGES', `${reds.length}`, ['red', 'bold']);
@@ -133,9 +148,10 @@ export function mergesLines(lines, c, wide, merges, expand) {
             recovery.pid && `pid ${recovery.pid}`].filter(Boolean).join(' · ')
           : recovery.state === 'Martin' ? 'waits on Martin'
           : recovery.state === 'waiting' ? 'waiting for recovery' : 'no recovery session';
-        operation(lines, c, wide, `failed ${refs}`, [status, item.progress && `failed ${item.progress} ago`].filter(Boolean).join(' · '), ['red']);
-        const summary = mergeFailureSummary(item.said || item.reason);
-        lines.push(`        ${c(clipCell(summary, Math.max(0, wide - 8)), 'red')}`);
+        operationFrame(lines, c, wide, 'red', (body, room) => {
+          detail(body, c, room, 6, `failed ${refs}   ${[status, item.progress && `failed ${item.progress} ago`].filter(Boolean).join(' · ')}`, ['red']);
+          detail(body, c, room, 6, mergeFailureSummary(item.said || item.reason), ['red']);
+        });
       }
     }
     if (expand) {
@@ -151,7 +167,7 @@ export function mergesLines(lines, c, wide, merges, expand) {
 }
 
 export function deployLines(lines, c, wide, production, expand) {
-  operation(lines, c, wide, 'DEPLOY', 'memoro · mc deploy', ['bold'], { indent: 4, labelWide: 10 });
+  detail(lines, c, wide, 4, 'DEPLOY · memoro · mc deploy', ['orange', 'bold']);
   const p = production || {};
   operation(lines, c, wide, 'LIVE', p.live
     ? `${p.live.short || p.live.commit || 'unknown'} · observed ${age(p.live.age_seconds)}`
@@ -162,10 +178,11 @@ export function deployLines(lines, c, wide, production, expand) {
   const attempt = p.running || p.failed || p.attempt;
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
-    operation(lines, c, wide, 'ATTEMPT', `${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}${p.running && !p.running.late ? ' · progress unknown' : ''}`,
-      p.running?.late || state === 'refused' ? ['yellow'] : stateTone(state));
-    if (attempt.pid) detail(lines, c, wide, 14, `pid ${attempt.pid}`);
-    if (attempt.stopped_at) detail(lines, c, wide, 14, attempt.stopped_at, ['red']);
+    operationFrame(lines, c, wide, p.running?.late || state === 'refused' ? 'yellow' : state === 'failed' ? 'red' : p.running ? 'green' : 'grey', (body, room) => {
+      detail(body, c, room, 6, `ATTEMPT   ${attempt.short || 'unknown'} · ${state} · ${age(attempt.age_seconds)}${p.running && !p.running.late ? ' · progress unknown' : ''}`);
+      if (attempt.pid) detail(body, c, room, 6, `pid ${attempt.pid}`);
+      if (attempt.stopped_at) detail(body, c, room, 6, attempt.stopped_at, ['red']);
+    });
   }
   if (!p.running && !p.failed && !p.attempt) operation(lines, c, wide, 'idle', 'no deploy running');
   if (p.differs) detail(lines, c, wide, 4, 'version mismatch · live and recorded commits differ', ['yellow']);
