@@ -306,7 +306,8 @@ describe('mc publish', () => {
     // One origin and one clone, real git, built once: `step-x` edits shared.md, which main edits
     // later (a conflict once the clone fetches); `step-y` is behind main and edits only other.md.
     let root;
-    let work;
+    let workX;
+    let workY;
     const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
     const write = (dir, name, text) => writeFileSync(join(dir, name), text);
     const commit = (dir, subject) => git(dir, ['commit', '-q', '-am', subject]);
@@ -315,7 +316,8 @@ describe('mc publish', () => {
       root = mkdtempSync(join(tmpdir(), 'mc-publish-main-'));
       const origin = join(root, 'origin.git');
       const seed = join(root, 'seed');
-      work = join(root, 'work');
+      workX = join(root, 'work-x');
+      workY = join(root, 'work-y');
       git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
       git(root, ['init', '-q', '-b', 'main', seed]);
       write(seed, 'shared.md', 'one\ntwo\n');
@@ -324,13 +326,14 @@ describe('mc publish', () => {
       git(seed, ['commit', '-q', '-m', 'base']);
       git(seed, ['remote', 'add', 'origin', origin]);
       git(seed, ['push', '-q', 'origin', 'main']);
-      git(root, ['clone', '-q', origin, work]);
-      git(work, ['checkout', '-q', '-b', 'step-x']);
-      write(work, 'shared.md', 'BRANCH\ntwo\n');
-      commit(work, 'branch edits the shared line');
-      git(work, ['checkout', '-q', '-b', 'step-y', 'main']);
-      write(work, 'other.md', 'y\n');
-      commit(work, 'branch edits another file');
+      git(root, ['clone', '-q', origin, workX]);
+      git(workX, ['checkout', '-q', '-b', 'step-x']);
+      write(workX, 'shared.md', 'BRANCH\ntwo\n');
+      commit(workX, 'branch edits the shared line');
+      git(root, ['clone', '-q', origin, workY]);
+      git(workY, ['checkout', '-q', '-b', 'step-y']);
+      write(workY, 'other.md', 'y\n');
+      commit(workY, 'branch edits another file');
       write(seed, 'shared.md', 'MAIN\ntwo\n');
       git(seed, ['commit', '-q', '-am', 'main edits the shared line']);
       git(seed, ['push', '-q', 'origin', 'main']);
@@ -340,16 +343,14 @@ describe('mc publish', () => {
 
     // The merge check is the real one, on the clone; GitHub, the push and the merger stay the fixture's.
     it('a branch that conflicts with origin/main, fetched just now, is refused: exit 1, the path named, nothing pushed or opened', async () => {
-      git(work, ['checkout', '-q', 'step-x']);
-      const { out, deps } = fixture({ branch: 'step-x', check: checkAgainstMain(work) });
+      const { out, deps } = fixture({ branch: 'step-x', check: checkAgainstMain(workX) });
       assert.equal(await run([], deps), 1);
       assert.equal(out.stderr, 'mc: the branch conflicts with origin/main in shared.md — rebase onto origin/main, then run this again\n');
       assert.deepEqual([out.pushed, out.gh, out.merged], [[], [], []]);
     });
 
     it('a branch only behind origin/main, with no conflict, publishes as before', async () => {
-      git(work, ['checkout', '-q', 'step-y']);
-      const { out, deps } = fixture({ branch: 'step-y', check: checkAgainstMain(work) });
+      const { out, deps } = fixture({ branch: 'step-y', check: checkAgainstMain(workY) });
       assert.equal(await run(['--no-merge'], deps), 0, out.stderr);
       assert.deepEqual(out.pushed, ['step-y']);
       assert.equal(out.stderr, '');

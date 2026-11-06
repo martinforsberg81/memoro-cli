@@ -522,11 +522,14 @@ describe('mc goal stage against a real origin/main', () => {
 
   after(() => rmSync(root, { recursive: true, force: true }));
 
-  test('review and merge are refused for a goal whose branch conflicts with origin/main, naming the path; the goal stays where it was', async () => {
+  test('review is refused for a goal whose branch conflicts with origin/main, naming the path; the goal stays where it was', async () => {
     const review = { text: '' };
     assert.equal(await run(['stage', 'prog/g', 'review'], deps(review)), 1);
     assert.equal(review.text, 'mc: prog/g is not moved to review — the branch conflicts with origin/main in memoro/shared.md — rebase onto origin/main, then run this again\n');
     assert.equal(stageOf('g'), 'build');
+  });
+
+  test('merge is refused for the same conflicting goal, naming the path; the goal stays where it was', async () => {
     const merge = { text: '' };
     assert.equal(await run(['stage', 'prog/g', 'merge'], deps(merge)), 1);
     assert.match(merge.text, /^mc: prog\/g is not moved to merge — the branch conflicts with origin\/main in memoro\/shared\.md/u);
