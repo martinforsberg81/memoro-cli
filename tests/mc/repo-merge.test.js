@@ -1092,6 +1092,17 @@ describe('a gate that regenerated derived artifacts', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a freshen the network stopped answers offline, not merge', async () => {
+    const verdict = { ...green(), declaration: { derived: [{ command: 'regen', paths: ['docs/sql/'] }] }, derived: { commit: 'eeee555', regenerated: ['docs/sql/x.json'] } };
+    const fx = fixture({ verdict });
+    try {
+      const report = await fx.run({ refresh: () => ({ ok: false, offline: true, reason: 'git fetch origin --prune failed before freshening h400 (exit 128)' }) });
+      assert.equal(report.stopped_at, 'offline');
+      assert.match(report.reason, /git fetch origin --prune failed before freshening/u);
+      assert.equal(fx.ran('gh').some((call) => call.args[1] === 'merge'), false);
+    } finally { fx.cleanup(); }
+  });
+
   it('nothing regenerated, nothing freshened — a single round lands as it always did', async () => {
     const fx = fixture();
     let asked = 0;

@@ -33,6 +33,7 @@ import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
+import { isNetworkFailure } from './network-failure.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
@@ -44,14 +45,6 @@ import { declarationFor } from './repo-gate-table.js';
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
 
-/**
- * What git and gh print when the forge or the remote could not be reached at
- * all. A stop with one of these is the network's, not the change's: nothing
- * about the pull request was read, so the round answers `offline`, not `drift`,
- * `pr` or `merge`. A refusal from GitHub (not mergeable, no permission) is not
- * one of these and keeps its own stop.
- */
-const NETWORK_FAILURE = /error connecting to|could not resolve host|name or service not known|temporary failure in name resolution|network is unreachable|no route to host|connection (?:refused|reset)|\btimed? ?out\b|i\/o timeout|ECONN\w*|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/iu;
 
 /**
  * Where a repository's merge log lives.
@@ -227,7 +220,7 @@ export async function runMergeRound({
       // and says nothing about the change. Its read of the pull request is the
       // same: a connection that did not happen is not a verdict on the pull request.
       if (verdict.stopped_at === 'fetch') return finish('offline', `git fetch origin --prune failed in the gate, so nothing was measured (${verdict.reason})`);
-      if (verdict.stopped_at === 'pr' && NETWORK_FAILURE.test(String(verdict.reason || ''))) return finish('offline', `gh pr view could not reach GitHub (${verdict.reason})`);
+      if (verdict.stopped_at === 'pr' && isNetworkFailure(verdict.reason)) return finish('offline', `gh pr view could not reach GitHub (${verdict.reason})`);
       // The gate stops the round and there is nothing here that can overrule
       // it. A red gate is reported and the change stays where it is. Its red
       // files and whose red they are go on the round's own report: the mend
@@ -322,7 +315,7 @@ export async function runMergeRound({
           });
           if (!ready.ok) {
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
-            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
+            return finish(ready.offline ? 'offline' : 'merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
           }
           pin = ready.sha || null;
         }
@@ -356,7 +349,7 @@ export async function runMergeRound({
           say(`gh pr merge failed (${error}) — but GitHub says #${number} is merged, so it is`);
         } else if (actual.state === 'open') {
           // A call that could not connect, with GitHub still saying open: nothing merged, and not the change's.
-          if (NETWORK_FAILURE.test(error)) {
+          if (isNetworkFailure(error)) {
             const why = `gh pr merge #${number} could not reach GitHub (${error}) — GitHub still has it open, so nothing merged`;
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: why });
             return finish('offline', batch ? `${why}; ${index} of ${numbers.length} landed before it` : why);
@@ -589,7 +582,7 @@ async function headAsGitHubSeesIt({ gh, repoPath, pr, expected, sleep }) {
     const asked = await gh(['pr', 'view', String(pr), '--json', 'headRefOid'], { cwd: repoPath });
     // A read that could not connect says nothing about the head: stop reading
     // now, and let the round be answered offline rather than read six times.
-    if (asked?.status !== 0 && NETWORK_FAILURE.test(String(asked?.stderr || ''))) {
+    if (asked?.status !== 0 && isNetworkFailure(asked?.stderr)) {
       return { ok: false, actual, unreachable: trim(asked.stderr) };
     }
     if (asked?.status === 0) {

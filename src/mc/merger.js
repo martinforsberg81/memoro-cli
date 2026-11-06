@@ -52,6 +52,7 @@ import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
 import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
+import { isNetworkFailure } from './network-failure.js';
 import { deployPull, runMergeRound } from './repo-merge.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
@@ -255,10 +256,14 @@ const realGh = (args, options = {}) => runTool('gh', args, { cwd: options.cwd })
  * `MERGED`, `CLOSED` or `OPEN`, or null when `gh` fails or says nothing — a
  * null is no answer, and the round decides as it always did.
  */
-async function prStateOf(job, gh) {
+async function prStateOf(job, gh, failure = {}) {
   try {
     const seen = await gh(['pr', 'view', String(job.pr), '--json', 'state,mergeCommit,baseRefName'], { cwd: job.repo_path });
-    if (!seen || seen.error || (Number.isInteger(seen.status) && seen.status !== 0)) return null;
+    if (!seen || seen.error || (Number.isInteger(seen.status) && seen.status !== 0)) {
+      // Why it could not say, for a caller that tells the network apart (`isNetworkFailure`).
+      failure.error = String(seen?.stderr || seen?.error?.message || seen?.error || '').trim() || null;
+      return null;
+    }
     const facts = JSON.parse(seen.stdout || 'null');
     const state = facts?.state;
     if (state === 'MERGED') return facts.mergeCommit?.oid ? { state, sha: facts.mergeCommit.oid, base: facts.baseRefName || null } : null;
@@ -476,9 +481,21 @@ export async function landJob(batch, {
     } catch (error) { merged = { status: 1, stderr: error.message }; }
     // Read the result, also covering a retry after the previous process landed
     // the PR but died before recording its answer.
-    const facts = await prStateOf(one, ask);
+    const unread = {};
+    const facts = await prStateOf(one, ask, unread);
+    const error = String(merged?.stderr || '').trim();
+    // GitHub could not be reached, and nothing says the PR merged: the network's
+    // answer (`offline`), not the decision's. Back in line; the goal is left as it is.
+    const unreachable = facts?.state !== 'MERGED' && facts?.state !== 'CLOSED'
+      && (merged?.status !== 0 ? isNetworkFailure(error) : !facts && isNetworkFailure(unread.error));
     const report = facts?.state === 'MERGED' ? { ...alreadyMerged(facts), already_merged: merged?.status !== 0 }
-      : { ok: false, merged: false, stopped_at: 'merge', reason: String(merged?.stderr || 'GitHub did not confirm the merge').trim() };
+      : unreachable ? {
+        ok: false, merged: false, stopped_at: OFFLINE_STOP,
+        reason: merged?.status !== 0
+          ? `gh pr merge ${one.pr} --squash could not reach GitHub (${error}) — ${facts?.state === 'OPEN' ? 'GitHub still has it open' : 'its state could not be read'}, so nothing is known to have merged`
+          : `gh pr view ${one.pr} could not reach GitHub to confirm the merge (${unread.error})`,
+      }
+      : { ok: false, merged: false, stopped_at: 'merge', reason: error || 'GitHub did not confirm the merge' };
     if (report.ok && afterLanding) {
       try { await afterLanding(one); } catch (error) { say(`${one.repo}: could not pull the installation (${error.message})`); }
     }
@@ -644,8 +661,8 @@ export function mayRequeue(job, report) {
 }
 
 /**
- * The stop a round gives when the network did not answer (`NETWORK_FAILURE`,
- * repo-merge.js): a failed fetch, or a gh call that could not connect. Nothing
+ * The stop a round gives when the network did not answer (`isNetworkFailure`,
+ * network-failure.js): a failed fetch, or a gh call that could not connect. Nothing
  * about the pull request was read, so nothing is wrong with it. It goes back in
  * line after a backoff — a minute, doubling, at most `REQUEUE_DELAY_MS` — with
  * no session started, the goal left as it is, and no requeue used up. The
@@ -728,16 +745,17 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
     }
     const red = redMergeText(job.pr, moved ? 'moved' : 'red');
     const why = moved ? (report?.reason || 'the branch moved past the reviewed head') : reason;
-    // The sixth offline answer in a row blocks a goal still before merge: the
-    // network is its obstacle now, and a red-style note would leave it running.
-    const blocksGoal = !landed && report?.stopped_at === OFFLINE_STOP && (goal.stage === 'build' || goal.stage === 'review');
+    // The sixth offline answer in a row blocks the goal in the stage it is in:
+    // the network is its obstacle now, and a red-style note would leave it
+    // running. Its stage is kept: a review goal has no verdict yet.
+    const blocksGoal = !landed && report?.stopped_at === OFFLINE_STOP;
     if (!landed && goal.stage && goal.stage !== 'merge' && !blocksGoal) {
       noteGoal({ dir: goal.dir, entry: { ...entry(red, `${why} — the goal is in ${goal.stage}, not merge; it stays there`), ...kept } });
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
     }
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : { stage: 'merge', status: 'blocked', entry: entry(red, `${why} — a plan session resolves the obstacle`) };
+      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: 'blocked', entry: entry(red, `${why} — a plan session resolves the obstacle`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);

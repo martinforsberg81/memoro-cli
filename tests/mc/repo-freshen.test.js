@@ -54,6 +54,7 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
   return {
     repoPath,
     calls,
+    git,
     workRoot: join(root, 'work'),
     // The scratch worktree goes where the gate's does, under the work root.
     run: (over = {}) => freshenBranchForLanding({
@@ -75,6 +76,26 @@ describe('freshening the branch that is landing next in a batch', () => {
       const pushed = fx.calls.find((c) => c.args[0] === 'push');
       assert.deepEqual(pushed.args, ['push', 'origin', 'HEAD:refs/heads/track-two']);
     } finally { fx.cleanup(); }
+  });
+
+  it('a fetch or push the network stopped says offline; a refused push does not', async () => {
+    const fx = fixture();
+    try {
+      const down = (stop) => (args, options) => (args[0] === stop
+        ? { status: 128, stdout: '', stderr: 'fatal: unable to access: Could not resolve host: github.com' }
+        : fx.git(args, options));
+      const fetched = await fx.run({ git: down('fetch') });
+      assert.deepEqual([fetched.ok, fetched.offline], [false, true]);
+      assert.match(fetched.reason, /^git fetch origin --prune failed before freshening track-two \(fatal: unable to access/u);
+      assert.equal(fx.calls.some((c) => c.args[0] === 'merge'), false, 'nothing merged on an unknown base');
+      const pushed = await fx.run({ git: down('push') });
+      assert.deepEqual([pushed.ok, pushed.offline], [false, true]);
+    } finally { fx.cleanup(); }
+    const refused = fixture({ pushFails: true });
+    try {
+      const out = await refused.run();
+      assert.deepEqual([out.ok, out.offline], [false, undefined]);
+    } finally { refused.cleanup(); }
   });
 
   it('never rebases — the convention is merge in, no force-push', async () => {

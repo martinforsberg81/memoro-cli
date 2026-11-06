@@ -351,7 +351,7 @@ describe('an offline round is put back in line, not answered red', () => {
     assert.match(answers[0].report.reason, /the network has been unreachable for at least 30 min \(6 rounds in a row\)/u);
     assert.equal(m.rows[0].note, 'red,offline');
     assert.equal(writes.length, 1);
-    assert.deepEqual([writes[0].stage, writes[0].status], ['merge', 'blocked']);
+    assert.deepEqual([writes[0].stage, writes[0].status], ['review', 'blocked'], 'blocked where it stands: a review goal has no verdict to move it on');
     assert.match(writes[0].entry.comment, /unreachable for at least 30 min \(6 rounds in a row\)/u);
   });
 });
@@ -1394,6 +1394,48 @@ describe('a session decision to merge a goal', () => {
     await landJob(jobs[0], d.m.deps);
     await landJob(jobs[1], d.m.deps);
     assert.equal(d.goal().stage, 'done');
+  });
+
+  // GitHub unreachable for the direct merge: the call failed, or it ran and the confirmation could not be read.
+  function unreachable({ mergeRuns = false } = {}) {
+    const d = decision();
+    const gh = (args) => {
+      d.calls.push({ args });
+      if (args[1] === 'merge' && !mergeRuns) return { status: 1, stderr: 'error connecting to api.github.com' };
+      if (args[1] === 'merge') return { status: 0, stdout: '' };
+      return { status: 1, stderr: 'dial tcp: lookup api.github.com: no such host — Could not resolve host: api.github.com' };
+    };
+    return { d, deps: { ...d.m.deps, gh } };
+  }
+
+  it('a merge decision GitHub cannot be reached for is put back in line, and the goal stays merge · ready', async () => {
+    for (const mergeRuns of [false, true]) {
+      const { d, deps } = unreachable({ mergeRuns });
+      const [answer] = await landJob(jobs[0], deps);
+      assert.equal(answer.landed, false);
+      assert.equal(answer.offline, true, answer.report.reason);
+      assert.equal(answer.report.stopped_at, 'offline');
+      assert.match(answer.report.reason, mergeRuns ? /^gh pr view 90 could not reach GitHub/u : /^gh pr merge 90 --squash could not reach GitHub \(error connecting to api\.github\.com\)/u);
+      assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready'], 'no recovery session for the network');
+      assert.deepEqual(d.writes, []);
+      assert.deepEqual(d.goal().log, []);
+      assert.ok(d.m.said.some((line) => /: offline: .* — back in line in 1 min \(offline 1 of 6\), no session started$/u.test(line)), d.m.said.join('\n'));
+    }
+  });
+
+  it('a merge decision still unreachable on the sixth answer blocks the goal in merge, saying the network was down', async () => {
+    const { d, deps } = unreachable();
+    const [answer] = await landJob({ ...jobs[0], offline: 5 }, deps);
+    assert.equal(answer.offline, undefined);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    assert.match(d.goal().log.at(-1).comment, /unreachable for at least 30 min \(6 rounds in a row\)/u);
+  });
+
+  it('a merge decision GitHub refuses is still red at once, not offline', async () => {
+    const d = decision({ conflict: true });
+    const [answer] = await landJob(jobs[1], d.m.deps);
+    assert.equal(answer.offline, undefined);
+    assert.equal(answer.report.stopped_at, 'merge');
   });
 
   it('a PR linked to a goal uses its merge decision even without job.goal', async () => {
