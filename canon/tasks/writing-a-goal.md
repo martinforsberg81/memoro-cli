@@ -28,11 +28,11 @@ phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later;
 goals of one phase run side by side. Phase numbers may be renumbered; name
 prerequisite goals too. A plan placeholder also holds later phases back.
 
-- **Readiness:** resolve policy decisions before build. A future outline stays
-  in `plan`; do not activate it with unresolved prerequisites or acceptance.
-  A bounded diagnosis is buildable when its subjects, probe budget, deliverable
-  and evidence limits are explicit; a negative result can satisfy diagnosis,
-  never implementation or performance acceptance.
+- **Readiness:** before creating a goal, including a `plan` skeleton, apply
+  [goal design](references/goal-design.md): establish the problem, choose the
+  solution, and define success criteria and exclusions. Missing investigation
+  stays with the proposal. A concrete future goal may wait in `plan` for named
+  prerequisites; resolve policy and acceptance before activating build.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable
   commands, working directory, prerequisites and expected results. For reports, specify reconciliation
   and evidence; a file, keyword or green gate alone does not prove content. No check waits for Martin;
