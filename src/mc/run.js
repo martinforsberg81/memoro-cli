@@ -97,6 +97,7 @@ import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
+import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
@@ -512,12 +513,27 @@ export function realDeps(env = process.env) {
       readApi: () => readBillingApi({ root: runnerDir(env) }),
       patchState: (patch) => patchBillingState(patch, { root: runnerDir(env) }),
     },
-    // The model catalog (`models.json`, model-config.js) and the capacity snapshot (`model-capacity.json`,
-    // model-capacity.js): local files, read at each class-routed launch (ruling 59). Codex's windows and
-    // models are read by `refreshCodex` from the chore pass, once an hour, and by nothing else.
+    // The model catalog (`models.json`, model-config.js) and capacity snapshot are read at launch.
     catalog: () => readModels(env),
     capacity: { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
     refreshCodex: () => refreshCodexCapacity({ root: runnerDir(env) }),
+    refreshClaude: async () => {
+      const now = new Date();
+      const before = JSON.stringify(readCapacity({ root: runnerDir(env) }).providers.claude);
+      const got = await collectClaudeCapacity();
+      const root = runnerDir(env);
+      // Network is over before the runner lock: patch the latest whole file
+      // so stream/refusal observations and the other provider survive.
+      const state = realLock(root, () => {
+        const atWrite = readCapacity({ root });
+        const changedDuringRead = JSON.stringify(atWrite.providers.claude) !== before;
+        const next = got.ok && !changedDuringRead
+          ? applyObservation(atWrite, 'claude', { windows: got.windows, models: null }, now)
+          : got.ok ? atWrite : applyFailure(atWrite, 'claude', { why: got.why }, now);
+        return writeCapacity(next, { root });
+      });
+      return { ...got, state };
+    },
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
     launch: resolveLaunch,
@@ -742,7 +758,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const capacity = deps.capacity ?? { read: () => normaliseCapacity(null), write: () => {} };
   /** One observation or refusal written to the snapshot; a write that fails is said, and the session goes on. */
   function observeCapacity(change) {
-    try { capacity.write(change(capacity.read())); } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
+    try {
+      const root = runnerDir(env);
+      const write = () => capacity.write(change(capacity.read()));
+      if (deps.lock) deps.lock(root, write);
+      else write();
+    } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
   }
   /**
    * A provider refused a session until the reset the refusal named, or the
@@ -771,24 +792,32 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return { ok: false, transient: true, class: cls, reason: error?.message || String(error) };
     }
   }
-  /**
-   * Codex's windows and models, read at most once an hour (`CODEX_POLL_MS`).
-   * Called by the chore pass, which is also the start: with no snapshot ever
-   * taken, the first call is due. Read-only, and no session asks it anything. A
-   * failed read is kept as the snapshot's failure and said; it never stops the
-   * chores.
-   */
-  async function refreshCodexDue() {
-    if (!deps.refreshCodex) return;
-    const codex = capacity.read().providers.codex;
-    const tried = [codex.observed_at, codex.failure?.at].map((at) => Date.parse(at || '')).filter(Number.isFinite);
-    if (tried.length && deps.now().getTime() - Math.max(...tried) < CODEX_POLL_MS) return;
-    try {
-      const got = await deps.refreshCodex();
-      say(got?.ok ? 'codex capacity read — its windows and models are noted' : `codex capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
-    } catch (error) {
-      say(`codex capacity not read: ${error?.message || error} — the chores go on`);
-    }
+  /** Independent, provider-local polling; never waits for chores or a lane. */
+  function startCapacityTicker() {
+    if (!deps.every || (!deps.refreshCodex && !deps.refreshClaude)) return () => {};
+    const inFlight = new Set();
+    const lastAttempt = new Map();
+    let stopped = false;
+    let stopTimer = null;
+    const tick = () => {
+      if (stopped || stopRequested() || updateRequested()) { stop(); return; }
+      for (const provider of ['claude', 'codex']) {
+        const refresh = deps[`refresh${provider[0].toUpperCase()}${provider.slice(1)}`];
+        if (!refresh || inFlight.has(provider)) continue;
+        const item = capacity.read().providers[provider];
+        const attempts = [item.observed_at, item.failure?.at, lastAttempt.get(provider)].map((at) => typeof at === 'number' ? at : Date.parse(at || '')).filter(Number.isFinite);
+        if (attempts.length && deps.now().getTime() - Math.max(...attempts) < CODEX_POLL_MS) continue;
+        lastAttempt.set(provider, deps.now().getTime());
+        inFlight.add(provider);
+        Promise.resolve().then(refresh).then((got) => {
+          say(got?.ok ? `${provider} capacity read — its subscription windows are noted` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
+        }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
+      }
+    };
+    const stop = () => { if (stopped) return; stopped = true; stopTimer?.(); };
+    stopTimer = deps.every(CODEX_POLL_MS, tick);
+    tick();
+    return stop;
   }
 
   /* --------------------------------------------------------------- sessions */
@@ -2052,7 +2081,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
-    await refreshCodexDue();
     await runTidyDaily();
     // Last: the nightly is the long one, and nothing above should wait twenty
     // minutes behind it. The deps reading goes first: a minute a repository,
@@ -2161,7 +2189,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested,
+    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, markRunner, dropPredecessor, clearRunner,
   };
 }
@@ -2267,6 +2295,7 @@ export async function runLoop({
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
   runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
+  let stopCapacityTicker = () => {};
   // A handover is the one exit that must not clear runner.json: the runner it
   // handed to has already written its own, and removing it on the way out
   // would leave the page saying nothing is running while something is.
@@ -2289,6 +2318,7 @@ export async function runLoop({
     // started the runner runner.json now names. Nothing to spawn.
     const by = runner.replaced();
     if (by) {
+      stopCapacityTicker();
       handedOver = true;
       drainMark = deps.now().getTime();
       runner.say(`taken over by pid ${by.pid} — finishing ${ownInFlight().length} session(s) in flight, taking nothing new`);
@@ -2297,7 +2327,7 @@ export async function runLoop({
     const handed = await (deps.handOver || handOver)({
       paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, finishing: ownInFlight().length,
     });
-    if (handed.ok) { handedOver = true; drainMark = deps.now().getTime(); return true; }
+    if (handed.ok) { stopCapacityTicker(); handedOver = true; drainMark = deps.now().getTime(); return true; }
     runner.holdUpdate(false);
     deps.remove(runner.paths.update);
     handing = null;
@@ -2310,6 +2340,7 @@ export async function runLoop({
   const stopMonitor = !once && deps.every ? deps.every(DISK_POLL_MS, () => runner.diskTick()) : null;
   try {
     if (!once) {
+      stopCapacityTicker = runner.startCapacityTicker();
       // The unattended run: `mc run lanes <n>` loops, each on its own clock,
       // each taking the next work of any kind on any repository (`pass`). The
       // chores a round used to do around its lanes run in their own loop
@@ -2495,6 +2526,7 @@ export async function runLoop({
     runner.say(r.ran ? 'once: exiting' : 'once: nothing to run');
     return 0;
   } finally {
+    stopCapacityTicker();
     stopMonitor?.();
     if (!handedOver) runner.clearRunner();
   }

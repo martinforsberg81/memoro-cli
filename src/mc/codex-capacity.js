@@ -30,10 +30,11 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { applyFailure, applyObservation, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir } from './paths.js';
+import { realLock } from './runner-lock.js';
 
 export const CODEX_TIMEOUT_MS = 20 * 1000;
-/** How often the runner reads Codex's windows and models: once an hour, from the chore pass (run.js `refreshCodexDue`). */
-export const CODEX_POLL_MS = 60 * 60 * 1000;
+/** Provider polling cadence for both read-only capacity collectors. */
+export const CODEX_POLL_MS = 15 * 60 * 1000;
 export const CODEX_MAX_BYTES = 1 << 20;
 /** Pages of `model/list` read before the list is called incomplete. */
 export const MODEL_PAGES = 5;
@@ -199,12 +200,16 @@ export function collectCodexCapacity({ spawn = spawnChild, bin = 'codex', timeou
  * Collect once and persist the result: a valid read replaces the codex snapshot,
  * a failed one keeps it and records why. Returns `{ ok, why, state }`.
  */
-export async function refreshCodexCapacity({ root = runnerDir(), now = new Date(), ...options } = {}) {
+export async function refreshCodexCapacity({ root = runnerDir(), now = new Date(), lock = realLock, ...options } = {}) {
+  const before = JSON.stringify(readCapacity({ root }).providers.codex);
   const answer = await collectCodexCapacity(options);
-  const state = readCapacity({ root });
-  const next = answer.ok
-    ? applyObservation(state, 'codex', { windows: answer.windows, models: answer.models }, now)
-    : applyFailure(state, 'codex', { why: answer.why }, now);
-  const written = writeCapacity(next, { root });
+  const written = lock(root, () => {
+    const state = readCapacity({ root });
+    const changedDuringRead = JSON.stringify(state.providers.codex) !== before;
+    const next = answer.ok && !changedDuringRead
+      ? applyObservation(state, 'codex', { windows: answer.windows, models: answer.models }, now)
+      : answer.ok ? state : applyFailure(state, 'codex', { why: answer.why }, now);
+    return writeCapacity(next, { root });
+  });
   return { ok: answer.ok, why: answer.why ?? null, state: written };
 }

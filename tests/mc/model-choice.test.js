@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyFailure, applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { PLAN_LIMIT_UTILIZATION, chooseCandidate } from '../../src/mc/model-choice.js';
+import { billingStatus, billingRoute } from '../../src/mc/billing-route.js';
 
 const NOW = new Date('2026-10-27T12:00:00Z');
 const AHEAD = '2026-10-27T15:00:00.000Z';
@@ -55,6 +56,22 @@ test('explicit Claude priority bootstraps unknown or stale usage ahead of known 
   for (const cls of ['fast', 'large', 'review']) {
     assert.equal(chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: unknown, now: NOW, priority: 'claude' }).candidate.tool, 'claude');
   }
+  const reset = codex(claude(empty(), win(0.9, PAST), win(0.95, PAST)), win(0.1));
+  for (const cls of ['fast', 'large', 'review']) {
+    const chosen = chooseCandidate({ cls, catalog: DEFAULT_CATALOG, capacity: reset, now: NOW, priority: 'claude' });
+    assert.equal(chosen.candidate.tool, 'claude', `${cls} treats reset windows as unknown, not zero or Codex preference`);
+    assert.equal(chosen.basis, 'bootstrap');
+  }
+});
+
+test('billing status names stale and failed usage without claiming plan availability', () => {
+  const old = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const stale = codex(claude(empty(), win(0.2), win(0.2), old), win(0.1));
+  const text = billingStatus({ capacity: stale, state: {}, api: {}, now: NOW });
+  assert.match(text, /claude 20% \(stale\) plan/u);
+  assert.match(billingRoute({ provider: 'claude', capacity: stale, state: {}, api: {}, now: NOW }).why, /stale/u);
+  const failed = applyFailure(empty(), 'claude', { why: 'login unavailable' }, NOW);
+  assert.match(billingStatus({ capacity: failed, state: {}, api: {}, now: NOW }), /claude \? \(read failed\) plan/u);
 });
 
 test('a codex candidate is scored by its most restrictive window', () => {

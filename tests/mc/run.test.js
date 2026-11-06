@@ -1134,31 +1134,43 @@ test('run.js has no gh pr merge left in it', () => {
 
 /* ------------------------------------------------- work classes (ruling 59) */
 
-test('codex is read when no snapshot exists, then once an hour from the chores, and a failed read is said and the chores go on', async () => {
+test('both subscriptions are read at startup, due at 15 minutes, and a failed attempt is suppressed', async () => {
   let clock = ROUTING_NOW.getTime();
   const f = fixture({ session: okSession() });
   f.deps.now = () => new Date(clock);
-  const reads = [];
+  const reads = { claude: [], codex: [] };
+  let timer;
+  let interval;
+  let releaseCodex;
+  f.deps.every = (ms, fn) => { interval = ms; timer = fn; return () => { timer = null; }; };
   f.deps.refreshCodex = async () => {
-    reads.push(clock);
-    if (reads.length === 2) throw new Error('codex vanished');
+    reads.codex.push(clock);
+    if (reads.codex.length === 2) return new Promise((resolve) => { releaseCodex = () => resolve({ ok: false, why: 'codex vanished' }); });
     const next = applyObservation(f.deps.capacity.read(), 'codex', { windows: { primary: windowAt(0.1), secondary: null }, models: LUNA }, new Date(clock));
     f.deps.capacity.write(next);
     return { ok: true, why: null, state: next };
   };
+  f.deps.refreshClaude = async () => { reads.claude.push(clock); return { ok: false, why: 'login unavailable' }; };
   const runner = createRunner({ deps: f.deps });
-  await runner.chores();
-  assert.equal(reads.length, 1, 'no snapshot: read at start');
-  clock += 30 * 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 1, 'not again within the hour');
-  clock += 31 * 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 2, 'due again after the hour, and the read that throws does not stop the chores');
-  assert.match(f.files['/w/runner/log/runner.log'], /codex capacity not read: codex vanished — the chores go on/u);
+  const stop = runner.startCapacityTicker();
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+  await flush();
+  assert.deepEqual(reads, { claude: [clock], codex: [clock] }, 'startup polls both providers without chores');
+  assert.equal(interval, 15 * 60 * 1000);
+  clock += 14 * 60 * 1000;
+  timer(); await flush();
+  assert.deepEqual(reads.codex, [ROUTING_NOW.getTime()], 'no attempt before fifteen minutes');
   clock += 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 3, 'a failed read is not kept for an hour: the next chore pass that finds it due reads again');
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'the attempt is due exactly at fifteen minutes');
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'an in-flight provider read is single-flight');
+  releaseCodex(); await flush();
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'failed attempt is suppressed for fifteen minutes');
+  assert.equal(reads.claude.length, 2, 'Claude has its own fifteen-minute attempt window');
+  stop();
+  assert.equal(timer, null, 'stop clears ticker');
 });
 
 test('STOP file: the loop exits after the session it is in, and the next start removes the STOP it left', async () => {
