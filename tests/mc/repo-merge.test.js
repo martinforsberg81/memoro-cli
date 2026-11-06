@@ -25,6 +25,8 @@ import { parseMergeArgs } from '../../src/mc/commands/repo.js';
 
 const parseArgs = (argv) => parseMergeArgs(argv.slice(1));
 import { runMergeRound } from '../../src/mc/repo-merge.js';
+import { landJob, serve } from '../../src/mc/merger.js';
+import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -331,6 +333,48 @@ describe('a round the network stops is offline: nothing read, nothing merged', (
       const report = await fx.run();
       assert.equal(report.stopped_at, 'drift');
       assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('through the merger: a round whose fetch fails leaves the goal and the requeue budget alone, and the next reachable round lands', async () => {
+    const fx = fixture({ net: { fetch: true, forge: false, merge: false } });
+    const queued = join(fx.root, 'queue');
+    mkdirSync(join(queued, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(queued), JSON.stringify([{ repo: 'memoro-cli', repo_path: fx.repoPath, pr: 400, branch: 'feature', since: '2026-11-06T11:00:00Z', holder: AREA }]));
+    const GOAL = { programme: 'mc', goal: 'g', dir: join(fx.root, 'goal') };
+    const goal = { ...GOAL, stage: 'review', status: 'ready', prs: [{ repo: 'memoro-cli', pr: 400 }], log: [] };
+    const goalWrites = [];
+    let at = Date.parse('2026-11-06T12:00:00Z');
+    const now = () => new Date(at);
+    const land = (batch, lane, extra) => landJob(batch, {
+      root: queued, lane, say: () => {}, now, sleep: async () => {}, lock: (_root, fn) => fn(),
+      mergeRound: (options) => fx.run({ onProgress: options.onProgress, signal: options.signal }),
+      gh: () => ({ status: 0, stdout: JSON.stringify({ headRefOid: fx.forge.head }) }),
+      readRunningRound: () => null, readRunningDeploy: () => null, readLeaseFn: () => ({ held: false }),
+      recordStart: () => {}, record: () => {}, goalsOf: () => [goal],
+      setGoal: (change) => { goalWrites.push(change); return { goal }; },
+      noteGoal: (change) => { goalWrites.push(change); },
+      ...extra,
+    });
+    const serveOnce = () => serve({
+      root: queued, lock: (_root, fn) => fn(), take: () => true, release: () => {},
+      lanes: ['memoro-cli'], laneOf: () => 'memoro-cli', now, land,
+    });
+    try {
+      await serveOnce();
+      const [entry] = parseQueue(readFileSync(mergesPath(queued), 'utf8'));
+      assert.equal(entry.state, 'queued', 'back in line, not red');
+      assert.equal(entry.offline, 1);
+      assert.equal(entry.requeues, 0, 'no requeue used');
+      assert.equal(entry.not_before, '2026-11-06T12:01:00.000Z');
+      assert.deepEqual(goalWrites, [], 'the goal is left as it was');
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), [], 'nothing merged');
+
+      fx.net.fetch = false;
+      at = Date.parse('2026-11-06T12:01:00Z');
+      await serveOnce();
+      assert.deepEqual(parseQueue(readFileSync(mergesPath(queued), 'utf8')), [], 'the next reachable round landed it');
+      assert.equal(fx.ran('gh').filter((call) => call.args[1] === 'merge').length, 1);
     } finally { fx.cleanup(); }
   });
 
