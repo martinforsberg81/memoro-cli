@@ -13,8 +13,8 @@ import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { run, usage } from '../../src/mc/commands/shot.js';
@@ -332,7 +332,8 @@ describe('mc shot next', () => {
     assert.equal(step.wait_for, '.entry');
     assert.equal(step.timeout_ms, 20_000);
     assert.equal(step.shot, true);
-    assert.equal(step.out, join(fx.home, 'mc', 'shots', '20261025-103000-dev-vault-s3-1-desktop.png'));
+    assert.equal(dirname(step.out), join(fx.home, 'mc', 'shots'));
+    assert.match(basename(step.out), /^20261025-103000-000-[0-9a-f]{4}-dev-vault-s3-1-desktop\.png$/u);
     assert.deepEqual(ran.stdout.split('\n'), [
       step.out,
       'http://127.0.0.1:8787/app/tools/vault',
@@ -345,7 +346,12 @@ describe('mc shot next', () => {
     assert.equal(kept.steps, 1);
     assert.equal(kept.last_used, NOW.toISOString());
 
-    const named = await mc(['next', 's1', '--goto', 'home', '--no-shot'], fx, { callerWorktree: () => fx.other });
+    // An explicit id of another worktree's browser is refused, both worktrees named, and nothing sent.
+    const refused = await mc(['next', 's1', '--goto', 'home', '--no-shot'], fx, { callerWorktree: () => fx.other });
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.ok(refused.stderr.includes(fx.worktree) && refused.stderr.includes(fx.other), refused.stderr);
+    assert.equal(elsewhere.received.length, 0, 'nothing sent to the other worktree\'s browser');
+    const named = await mc(['next', 's1', '--goto', 'home', '--no-shot', '--any-worktree'], fx, { callerWorktree: () => fx.other });
     assert.equal(named.code, 0, named.stderr);
     assert.deepEqual(elsewhere.received[0].goto, { name: 'home' });
     assert.equal(elsewhere.received[0].out, null);
@@ -444,6 +450,103 @@ describe('mc shot next', () => {
     const ran = await mc(['next', '--click', 'x'], fx, { callerWorktree: () => join(fx.home, 'elsewhere'), env: { MC_REPOS_HOME: join(fx.home, 'none') } });
     assert.equal(ran.code, 2);
     assert.match(ran.stderr, /2 browsers are kept and none is this worktree's — name one: s1 \(dev vault, memoro-b\), s2 \(dev vault, memoro-b\)/u);
+  });
+});
+
+describe('mc shot --keep and next: ids, records and ownership', () => {
+  /** A `runKeep` that takes `ms` to answer, as a capture does, and writes its socket first. */
+  const slowKeep = (ms, pid) => async ({ request }) => {
+    writeFileSync(request.socket, `socket of ${request.out}`);
+    await new Promise((done) => { setTimeout(done, ms); });
+    return {
+      ok: true, pid, result: { ok: true, file: request.out, url: `${request.base_url}/app/`, warnings: [] }, kill() {},
+    };
+  };
+  /** A live process to stand for a browser: killed with the test. */
+  const browser = () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    cleanups.push(() => { child.kill(); });
+    return child.pid;
+  };
+
+  it('two keeps started together get distinct ids, sockets and records, and neither removes the other\'s', async () => {
+    const fx = fixture();
+    const [pidA, pidB] = [browser(), browser()];
+    const [a, b] = await Promise.all([
+      mc(['dev', 'home', '--keep', '--out', join(fx.home, 'a.png')], fx, { runKeep: slowKeep(150, pidA) }),
+      mc(['dev', 'home', '--keep', '--out', join(fx.home, 'b.png')], fx, { runKeep: slowKeep(150, pidB) }),
+    ]);
+    assert.equal(a.code, 0, a.stderr);
+    assert.equal(b.code, 0, b.stderr);
+    const idA = a.stdout.match(/kept as (s\d+)/u)[1];
+    const idB = b.stdout.match(/kept as (s\d+)/u)[1];
+    assert.notEqual(idA, idB);
+    const sessionA = sessionOf(fx, idA);
+    const sessionB = sessionOf(fx, idB);
+    assert.equal(sessionA.pid, pidA);
+    assert.equal(sessionB.pid, pidB);
+    assert.equal(sessionA.owner_pid, process.pid);
+    assert.ok(sessionA.nonce && sessionB.nonce);
+    assert.notEqual(sessionA.nonce, sessionB.nonce, 'each session carries its own nonce');
+    assert.notEqual(sessionA.socket, sessionB.socket);
+    assert.equal(readFileSync(sessionA.socket, 'utf8'), `socket of ${join(fx.home, 'a.png')}`, 'the first socket was not touched by the second');
+  });
+
+  it('a placeholder whose keep is gone is reclaimed, and its id taken', async () => {
+    const fx = fixture();
+    const dead = spawnSync(process.execPath, ['-e', '']).pid;
+    mkdirSync(fx.sessions, { recursive: true, mode: 0o700 });
+    writeFileSync(join(fx.sessions, 's1.json'), JSON.stringify({
+      id: 's1', placeholder: true, owner_pid: dead, nonce: 'stale', reserved: NOW.toISOString(),
+    }));
+    const ran = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'c.png')], fx, { runKeep: slowKeep(0, browser()) });
+    assert.equal(ran.code, 0, ran.stderr);
+    assert.match(ran.stdout, /kept as s1 —/u);
+    assert.notEqual(sessionOf(fx, 's1').nonce, 'stale');
+    assert.equal(existsSync(join(fx.sessions, 's1.lock')), false);
+  });
+
+  it('a keep whose browser does not launch gives its id back', async () => {
+    const fx = fixture();
+    const failed = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'd.png')], fx, {
+      runKeep: async () => ({ ok: false, error: 'the browser script could not run' }),
+    });
+    assert.equal(failed.code, 1);
+    assert.equal(existsSync(join(fx.sessions, 's1.json')), false, 'the placeholder is gone');
+    const again = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'e.png')], fx, { runKeep: slowKeep(0, browser()) });
+    assert.match(again.stdout, /kept as s1 —/u);
+  });
+
+  it('a step refuses when the session file changed between its read and its send', async () => {
+    const fx = fixture();
+    const fake = await fakeSession(fx, { id: 's1' });
+    const ran = await mc(['next', '--click', 'text=Save'], fx, {
+      ensureAppServer: async () => {
+        writeFileSync(fake.file, JSON.stringify({ ...fake.session, nonce: 'taken' }));
+        return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: { url: 'http://127.0.0.1:8787/', instance_id: 'srv-1' } };
+      },
+    });
+    assert.equal(ran.code, 1);
+    assert.match(ran.stderr, /s1 changed while the step was readied/u);
+    assert.equal(fake.received.length, 0, 'nothing was sent');
+    assert.equal(sessionOf(fx, 's1').nonce, 'taken', 'the newcomer\'s file is left as it is');
+  });
+
+  it('a step whose session was taken during the call is answered, but not recorded over the newcomer', async () => {
+    const fx = fixture();
+    const fake = await fakeSession(fx, {
+      id: 's1',
+      answer: (step) => {
+        writeFileSync(fake.file, JSON.stringify({ ...fake.session, nonce: 'taken' }));
+        return { ok: true, file: step.out, url: 'http://x/app/', acted: step.actions, clicked: clicks(step.actions) };
+      },
+    });
+    const ran = await mc(['next', '--click', 'text=Save'], fx);
+    assert.equal(ran.code, 1);
+    assert.match(ran.stdout, /^http:\/\/x\/app\/$/mu);
+    assert.match(ran.stderr, /s1 changed while the step ran/u);
+    assert.equal(fake.received.length, 1);
+    assert.equal(sessionOf(fx, 's1').nonce, 'taken', 'mc did not overwrite the newcomer\'s file');
   });
 });
 
