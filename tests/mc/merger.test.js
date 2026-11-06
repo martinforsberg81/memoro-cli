@@ -1412,11 +1412,11 @@ describe('a session decision to merge a goal', () => {
     for (const mergeRuns of [false, true]) {
       const { d, deps } = unreachable({ mergeRuns });
       const [answer] = await landJob(jobs[0], deps);
+      assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready'], 'no recovery session for the network');
       assert.equal(answer.landed, false);
       assert.equal(answer.offline, true, answer.report.reason);
       assert.equal(answer.report.stopped_at, 'offline');
       assert.match(answer.report.reason, mergeRuns ? /^gh pr view 90 could not reach GitHub/u : /^gh pr merge 90 --squash could not reach GitHub \(error connecting to api\.github\.com\)/u);
-      assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready'], 'no recovery session for the network');
       assert.deepEqual(d.writes, []);
       assert.deepEqual(d.goal().log, []);
       assert.ok(d.m.said.some((line) => /: offline: .* — back in line in 1 min \(offline 1 of 6\), no session started$/u.test(line)), d.m.said.join('\n'));
