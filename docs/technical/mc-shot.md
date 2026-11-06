@@ -74,8 +74,11 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   declared viewport may carry its own (`viewports.iphone.safe_area` in
   memoro's `.mc/shot.json`: 47, 0, 34, 0), so `--viewport iphone` is a phone
   with a notch and a home indicator without saying so; the flag overrides it.
-- **`--wait-for <css>`**: wait until it is visible (10 s unless `--timeout`
-  says), else `no-element`.
+- **`--wait-for <css>`**: an action like the others, in its place among the
+  acting flags: it waits until the element is visible (10 s unless `--timeout`
+  says). The request carries it as `{ kind: 'wait-for', selector }` in `actions`.
+  A script that predates the kind refuses the request; mc then says to rebase
+  onto main, since there is no fallback to the top-level `wait_for`.
 - **`--scroll <css>[@end|@top|@<px>]`**: scroll that element first; `@end`
   when nothing follows the `@`. The last `@` separates, so an attribute
   selector keeps its own characters. A bare `@end` or `@top` (no selector)
@@ -113,7 +116,7 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   60 s for a slot. A refusal names the compare servers still running, and
   `--compare <sha>` reuses one of them, with its tree and its database.
 - `--click <selector>`, repeatable: the capture script presses each selector in
-  order, after the page and its window are open and before `--wait-for`,
+  order, after the page and its window are open and in the order of the acting flags,
   `--scroll` and `--el`. The request carries them as `click`. A result that does
   not answer `acted` with one entry per action is refused (exit 1, no path); an
   older script's `clicked` array with one entry per click is also accepted for
@@ -137,11 +140,11 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   refused when it does not exist (`mc: --upload: no file at <path>`).
 - `--timeout <s>`, whole seconds 1 to 120 (else `mc: --timeout is whole
   seconds, 1 to 120`, exit 2): how long each wait and each action may take —
-  `--wait-for` and every acting flag — not the whole shot. Without it the
+  every acting flag, `--wait-for` among them — not the whole shot. Without it the
   script's own 10 s stands. mc lets the script run `max(180 s, 60 s + 4 ×
   timeout × (1 + actions))`, so a long wait is not killed by mc first.
 
-The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding`,
+The request gains `safe_area`, `scroll`, `measure`, `onboarding`,
 `click`, `actions` and `timeout_ms`, after `out`; a capture result gains
 `safe_area` and, when asked, `measure`.
 
@@ -279,7 +282,7 @@ mc narrows it to 0600 once it exists. `<id>.log` is the script's stderr.
 On the socket, one JSON line goes each way per connection. mc sends a step:
 
 ```
-{ step, actions, wait_for, scroll, measure, element, shell, full_page, out,
+{ step, actions, scroll, measure, element, shell, full_page, out,
   goto, reload, shot, timeout_ms, rebase? }
 ```
 
@@ -456,7 +459,11 @@ for a capture, `{ ok: true, session }` for a login, or
 with the script's exit code in it, when the last line does not parse, when there
 is no result line, or when the run times out. On `ok: false`, mc prints
 `mc: <error>` and exits 1. If the code is `not-signed-in` and the account is
-`me`, it adds a second line: `mc shot login prod`. As a second safeguard, mc
+`me`, it adds a second line: `mc shot login prod`. `app-not-ready` means the
+sign-in was not refused (`/api/boot` answered something other than 401 or 403)
+and the app did not show in its wait; the message gives the status and the
+seconds. mc says so in one line and gives no login hint. A login runs up to 390 s (`LOGIN_TIMEOUT_MS`), its own
+window; an ordinary shot keeps 180 s. As a second safeguard, mc
 also scrubs the token and the cookie from everything it prints, in case a script
 echoes them.
 

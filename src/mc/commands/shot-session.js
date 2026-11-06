@@ -186,7 +186,6 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   const message = {
     step: n,
     actions,
-    wait_for: flags['wait-for'],
     scroll: scroll.scroll,
     measure: flags.measure,
     element: flags.el,

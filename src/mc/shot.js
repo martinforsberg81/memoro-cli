@@ -30,6 +30,9 @@ export const THEMES = ['light', 'dark'];
 export const DEV_ACCOUNTS = ['seeded', 'new'];
 export const CAPTURE_TIMEOUT_MS = 180_000;
 export const OPEN_TIMEOUT_MS = 150_000;
+// A login waits a person for up to five minutes (memoro's LOGIN_WAIT_MS) and
+// then needs the browser's own start-up and navigation on top.
+export const LOGIN_TIMEOUT_MS = 390_000;
 
 /** `.mc/shot.json`, or the one line that says why there is none to read. */
 export function readShotDeclaration(worktree) {
@@ -151,7 +154,7 @@ export function parseScroll(value) {
 }
 
 export const ACTING_FLAGS = [
-  '--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press',
+  '--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press', '--wait-for',
 ];
 const LONG_PRESS_MS = 600;
 
@@ -160,7 +163,8 @@ const LONG_PRESS_MS = 600;
  * `--context-click <css>`, `--long-press <css>[@<ms>]` (600 ms unless said),
  * `--fill <css>=<text>`, `--eval <js>` (or `--eval-file <path>`, its text read
  * here), `--upload <css>=<file>` (the file resolved against `cwd`) and
- * `--press <key>`. scanArgs keeps each flag's values apart, so the order
+ * `--press <key>` and `--wait-for <css>` (until visible). scanArgs keeps each
+ * flag's values apart, so the order
  * across flags is read here from argv: each acting flag takes the word after it.
  */
 export function parseActions(argv, { cwd = process.cwd(), deps = {} } = {}) {
@@ -201,6 +205,9 @@ export function parseActions(argv, { cwd = process.cwd(), deps = {} } = {}) {
     } else if (flag === '--press') {
       if (!value.trim()) return { ok: false, error: '--press takes a key (Enter, Escape, Meta+K)' };
       actions.push({ kind: 'press', key: value.trim() });
+    } else if (flag === '--wait-for') {
+      if (!value.trim()) return { ok: false, error: '--wait-for takes a CSS selector' };
+      actions.push({ kind: 'wait-for', selector: value.trim() });
     } else {
       actions.push({ kind: flag === '--click' ? 'click' : 'context-click', selector: value });
     }
@@ -222,9 +229,11 @@ export function parseTimeout(value) {
 /**
  * How long mc lets the script run: the fixed 180 s, or longer when `--timeout`
  * lets each of the waits and actions take that long, so a slow page is not
- * killed by mc before the script's own timeout names it.
+ * killed by mc before the script's own timeout names it. A login gets
+ * LOGIN_TIMEOUT_MS, which is longer than the script's own login window.
  */
 export function captureTimeoutMs(request) {
+  if (request?.mode === 'login') return LOGIN_TIMEOUT_MS;
   const each = Number(request?.timeout_ms) || 0;
   const steps = 1 + (Array.isArray(request?.actions) ? request.actions.length : 0);
   return Math.max(CAPTURE_TIMEOUT_MS, 60_000 + 4 * each * steps);
@@ -374,7 +383,7 @@ export function outPath({
  */
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
-  theme = null, locale = null, out, safeArea = null, waitFor = null, scroll = null, measure = null,
+  theme = null, locale = null, out, safeArea = null, scroll = null, measure = null,
   onboarding = false, click = null, actions = null, timeoutMs = null,
 }) {
   const acts = Array.isArray(actions) && actions.length ? actions.map((a) => ({ ...a })) : null;
@@ -395,7 +404,6 @@ export function buildRequest({
     locale,
     out,
     safe_area: safeArea,
-    wait_for: waitFor,
     scroll,
     measure,
     onboarding: Boolean(onboarding),
@@ -448,7 +456,21 @@ export function actionGap(request, result, { worktree = '<unknown worktree>', sc
   return `the picture at ${result?.file} does not acknowledge every requested action`;
 }
 
+/**
+ * A capture that asked to wait for a selector as an action, answered by a
+ * script that predates the kind: it rejects the request's actions. There is no
+ * fallback to the older top-level `wait_for`, so the capture is refused. True
+ * when the answer is that refusal.
+ */
+export function predatesWaitFor(request, result) {
+  const asked = Array.isArray(request?.actions) && request.actions.some((action) => action.kind === 'wait-for');
+  if (!asked || result?.ok !== false || result.code !== 'bad-request') return false;
+  return /^actions must be a list of/u.test(String(result.error ?? ''));
+}
+
 export const ERROR_LINES = 20;
+// The session was accepted and the app did not show: sign-in is not what failed.
+const APP_NOT_READY_LINE = 'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again';
 const ERROR_TEXT = 300;
 const EVAL_TEXT = 4000;
 
@@ -466,6 +488,7 @@ export function errorLines(result) {
     return `error  ${entry.kind ?? 'page'}  ${oneLine(entry.text, ERROR_TEXT)}${count}`;
   });
   if (errors.length > ERROR_LINES) lines.push(`error  … ${errors.length - ERROR_LINES} more — --json has them all`);
+  if (result?.code === 'app-not-ready') lines.unshift(APP_NOT_READY_LINE);
   return lines;
 }
 

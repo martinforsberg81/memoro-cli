@@ -320,7 +320,7 @@ describe('mc shot next', () => {
     assert.equal(elsewhere.received.length + older.received.length, 0, 'the most recently used of this worktree');
     const [step] = mine.received;
     assert.deepEqual(Object.keys(step), [
-      'step', 'actions', 'wait_for', 'scroll', 'measure', 'element', 'shell', 'full_page', 'out', 'goto', 'reload', 'shot', 'timeout_ms',
+      'step', 'actions', 'scroll', 'measure', 'element', 'shell', 'full_page', 'out', 'goto', 'reload', 'shot', 'timeout_ms',
     ]);
     assert.equal(step.step, 1);
     assert.deepEqual(step.actions, [
@@ -328,8 +328,8 @@ describe('mc shot next', () => {
       { kind: 'click', selector: 'text=Save' },
       { kind: 'eval', script: 'document.activeElement.name' },
       { kind: 'press', key: 'Enter' },
+      { kind: 'wait-for', selector: '.entry' },
     ]);
-    assert.equal(step.wait_for, '.entry');
     assert.equal(step.timeout_ms, 20_000);
     assert.equal(step.shot, true);
     assert.equal(dirname(step.out), join(fx.home, 'mc', 'shots'));

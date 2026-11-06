@@ -8,6 +8,7 @@
  * appear, and what it prints back.
  */
 import assert from 'node:assert/strict';
+import { spawnSync as realSpawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +16,8 @@ import { describe, it } from 'node:test';
 
 import { run, servedTree, usage } from '../../src/mc/commands/shot.js';
 import {
-  accessLine, actionGap, buildRequest, CAPTURE_TIMEOUT_MS, captureTimeoutMs, outPath, parseActions, parseResult, parseSafeArea, parseScroll,
+  accessLine, actionGap, buildRequest, CAPTURE_TIMEOUT_MS, captureTimeoutMs, errorLines, LOGIN_TIMEOUT_MS, outPath, parseActions, parseResult,
+  parseSafeArea, parseScroll,
   parseTimeout, parseViewport, resolveAccount, resolveTarget, runCapture, slug, targetRequires,
 } from '../../src/mc/shot.js';
 
@@ -30,6 +32,14 @@ const mode = statSync(file).mode & 0o777;
 writeFileSync(process.env.SHOT_SIDE, JSON.stringify({ request, file, mode, argv: process.argv, env: process.env }));
 const how = process.env.SHOT_BEHAVIOUR || 'ok';
 process.stderr.write('fake: capturing\\n');
+if (how === 'old-script' && (request.actions ?? []).some((action) => action.kind === 'wait-for')) {
+  console.log(JSON.stringify({ ok: false, code: 'bad-request', error: 'actions must be a list of { kind: click|context-click|long-press|fill|eval|upload|press, selector?, text?, ms?, script?, file?, key? } or null' }));
+  process.exit(1);
+}
+if (how === 'app-not-ready') {
+  console.log(JSON.stringify({ ok: false, code: 'app-not-ready', error: 'the app at ' + request.base_url + ' did not show itself after 20.0 s; /api/boot answered 200' }));
+  process.exit(1);
+}
 if (how === 'garbage') { console.log('this is not json'); process.exit(3); }
 if (how === 'silent') process.exit(4);
 if (how === 'not-signed-in') {
@@ -270,7 +280,7 @@ describe('mc shot — the pieces', () => {
     });
     assert.deepEqual(Object.keys(request), [
       'mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out',
-      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click', 'actions', 'timeout_ms',
+      'safe_area', 'scroll', 'measure', 'onboarding', 'click', 'actions', 'timeout_ms',
     ]);
     assert.equal(request.timeout_ms, null);
     assert.equal(request.onboarding, false);
@@ -751,7 +761,8 @@ describe('mc shot — measuring a layout', () => {
     assert.equal(result.code, 0, result.stderr);
     const { request } = sideOf(fx);
     assert.deepEqual(request.safe_area, { top: 47, right: 0, bottom: 34, left: 0 });
-    assert.equal(request.wait_for, '.window-view--main-chat');
+    assert.deepEqual(request.actions, [{ kind: 'wait-for', selector: '.window-view--main-chat' }]);
+    assert.equal(request.wait_for, undefined, 'the wait is an action now, not the top-level field');
     assert.deepEqual(request.scroll, { selector: '.window-view__content', to: 'end' });
     assert.equal(request.measure, '.window-view__content, .assistant-summon');
     const lines = result.stdout.split('\n');
@@ -944,5 +955,74 @@ describe('mc shot — a gated target', () => {
     const json = await shot(['dev', '/admin/security', '--json'], fx, capture(access({ page: 'granted', holds: false })));
     assert.equal(json.code, 1);
     assert.equal(JSON.parse(json.stdout).access.holds, false);
+  });
+});
+
+describe('mc shot — wait-for in order, the login timeout, and an app that is not ready', () => {
+  it('--wait-for is an action in argv order with its selector, and an empty one is refused', () => {
+    assert.deepEqual(parseActions(['--click', 'a', '--wait-for', 'b', '--eval', '1 + 2']), {
+      ok: true,
+      actions: [{ kind: 'click', selector: 'a' }, { kind: 'wait-for', selector: 'b' }, { kind: 'eval', script: '1 + 2' }],
+    });
+    assert.deepEqual(parseActions(['--wait-for', '  ']), { ok: false, error: '--wait-for takes a CSS selector' });
+  });
+
+  it('the command sends --wait-for as an action in order, not as the top-level wait_for', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--click', '.tab', '--wait-for', '.panel', '--press', 'Escape'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    const { request } = sideOf(fx);
+    assert.deepEqual(request.actions, [
+      { kind: 'click', selector: '.tab' },
+      { kind: 'wait-for', selector: '.panel' },
+      { kind: 'press', key: 'Escape' },
+    ]);
+    assert.equal(request.wait_for, undefined);
+    assert.equal(request.click, null, 'a wait is not a click');
+    assert.equal(result.stdout.split('\n')[0], request.out);
+  });
+
+  it('a script that predates the wait-for action is refused, naming it and saying to rebase onto main', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--wait-for', '.panel'], fx, { behaviour: 'old-script' });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /mc: the capture script .*fake-shot\.mjs in .* predates wait-for; rebase onto main and try again\n$/u);
+  });
+
+  it('a login gets LOGIN_TIMEOUT_MS above the script\'s five-minute window; an ordinary shot keeps 180 s', async () => {
+    assert.ok(LOGIN_TIMEOUT_MS > 300_000);
+    assert.equal(captureTimeoutMs({ mode: 'login' }), LOGIN_TIMEOUT_MS);
+    assert.equal(captureTimeoutMs({ mode: 'capture', timeout_ms: null, actions: null }), 180_000);
+    const fx = fixture();
+    const spawned = [];
+    const recording = (command, args, options) => {
+      if (options.timeout) spawned.push(options.timeout);
+      return realSpawnSync(command, args, options);
+    };
+    const stored = {};
+    const login = await shot(['login', 'prod'], fx, { spawnSync: recording, setSecret: async (k, v) => { stored[k] = v; } });
+    assert.equal(login.code, 0, login.stderr);
+    const ordinary = await shot(['dev', 'home'], fx, { spawnSync: recording });
+    assert.equal(ordinary.code, 0, ordinary.stderr);
+    assert.deepEqual(spawned, [LOGIN_TIMEOUT_MS, 180_000]);
+  });
+
+  it('an app that is not ready has its own line, and no login hint', async () => {
+    const fx = fixture();
+    const result = await shot(['prod', 'home', '--me'], fx, { behaviour: 'app-not-ready' });
+    assert.equal(result.code, 1);
+    const lines = result.stderr.trimEnd().split('\n');
+    assert.equal(lines[0], 'mc: the app at https://meetmemoro.app did not show itself after 20.0 s; /api/boot answered 200');
+    assert.equal(lines[1], 'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again');
+    assert.equal(lines.length, 2);
+    assert.ok(!result.stderr.includes('mc shot login prod'));
+  });
+
+  it('errorLines names an app that is not ready, and a sign-in refusal gets no line of its own', () => {
+    assert.deepEqual(errorLines({ ok: false, code: 'app-not-ready', error: 'x' }), [
+      'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again',
+    ]);
+    assert.deepEqual(errorLines({ ok: false, code: 'not-signed-in', error: 'x' }), []);
   });
 });
