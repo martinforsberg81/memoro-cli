@@ -8,6 +8,7 @@ import { cwdsOfUser } from '../../src/mc/standing.js';
  * mostly about what survives.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
@@ -19,6 +20,7 @@ import { parseArgs as parseTidyArgs, tidyCommand } from '../../src/mc/commands/t
 import { setLogPath } from '../../src/mc/logger.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { goalJson } from './_helpers/goal-file.js';
+import { addGoalWorktree } from '../../src/mc/goals.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
   LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, openFilesAmong, orphanSlug, outsideRoots, runTidy,
@@ -347,12 +349,21 @@ describe('(W) what is left under ~/mc/work/', () => {
 function checkoutsOf(m, programme = 'mc') {
   layout2(m);
   const area = join(m.work, 'programs', programme);
-  for (const name of ['memoro', 'memoro-cli']) m.write(join(area, name, '.git'), 'gitdir: /fake');
+  for (const name of ['memoro', 'memoro-cli']) {
+    m.write(join(area, name, '.git'), 'gitdir: /fake');
+    ageTree(join(area, name), OLD);
+  }
   return area;
 }
 
-describe('(I) a planning area\'s own checkouts, while their programme has no goal that is not finished', () => {
-  it('a clean, landed checkout of an idle programme is an (I) target, and the apply releases it through git', () => {
+/** A planning session of `programme` on record as running: a foreground `mc plan` (`pid`) or a runner plan session in flight. */
+function planRecord(m, { foreground = null, runner = null }) {
+  if (foreground) m.write(join(m.work, 'runner', 'foreground', `${foreground.pid}.json`), JSON.stringify({ verb: 'plan', programme: foreground.programme, pid: foreground.pid }), NOW);
+  if (runner) m.write(join(m.work, 'runner', `current-${runner.repo ?? 'memoro'}.json`), JSON.stringify({ kind: 'plan', programme: runner.programme, session_pid: runner.pid }), NOW);
+}
+
+describe('(I) a planning area\'s own checkouts, while no planning session of their programme runs and they are untouched', () => {
+  it('a clean, landed checkout untouched for 72 hours is an (I) target, and the apply releases it through git', () => {
     const m = machine();
     try {
       const area = checkoutsOf(m);
@@ -360,6 +371,7 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
       assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [
         [join(area, 'memoro'), 'plan-checkout', 'I'], [join(area, 'memoro-cli'), 'plan-checkout', 'I'],
       ]);
+      assert.equal(list.targets[0].why, 'no planning session of its programme is running, untouched for 72 hours; mc plan adds it back');
       assert.ok(list.targets.every((item) => item.bytes > 0), 'weighed, since the rule takes them');
       assert.deepEqual(m.released, [join(area, 'memoro'), join(area, 'memoro-cli')]);
       assert.equal(outcome.removed, 2);
@@ -367,28 +379,15 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     } finally { m.cleanup(); }
   });
 
-  it('an open goal in the programme keeps both, and says why', () => {
-    const m = machine();
-    try {
-      const area = checkoutsOf(m);
-      goal(m, 'busy', 'build');
-      const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'I'), []);
-      assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
-      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a goal that is not finished');
-    } finally { m.cleanup(); }
-  });
-
-  it('a goal in review, in merge or blocked keeps both; only done and dropped are finished', () => {
-    for (const [stage, status] of [['review', 'ready'], ['merge', 'ready'], ['build', 'blocked']]) {
+  it('an open goal in the programme does not hold an idle checkout: the rule reads use, not goals', () => {
+    for (const [stage, status] of [['build', 'ready'], ['review', 'ready'], ['merge', 'ready'], ['build', 'blocked'], ['build', 'Martin']]) {
       const m = machine();
       try {
         const area = checkoutsOf(m);
+        goal(m, 'open', stage, { status });
         goal(m, 'landed', 'done');
-        goal(m, 'stuck', stage, { status });
         const { list } = runTidy(m.doors());
-        assert.deepEqual(ruled(list, 'I'), [], stage);
-        assert.equal(keptOf(list, join(area, 'memoro')).why, 'its programme has a goal that is not finished', stage);
+        assert.deepEqual(paths(ruled(list, 'I')), [join(area, 'memoro'), join(area, 'memoro-cli')], `${stage} · ${status}`);
       } finally { m.cleanup(); }
     }
   });
@@ -405,14 +404,60 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     } finally { m.cleanup(); }
   });
 
-  it('a GOAL.json that does not parse counts as not finished and keeps both', () => {
+  it('a checkout touched within 72 hours is kept, exactly 72 hours is kept, and the age is waived in a pressure pass', () => {
     const m = machine();
     try {
       const area = checkoutsOf(m);
-      goal(m, 'broken', 'build', { text: '{ not json' });
+      m.write(join(area, 'memoro', 'notes.md'), 'x', NOW - 2 * HOUR);
+      utimesSync(join(area, 'memoro'), new Date(NOW - 72 * HOUR), new Date(NOW - 72 * HOUR));
+      utimesSync(join(area, 'memoro-cli'), new Date(NOW - 72 * HOUR), new Date(NOW - 72 * HOUR));
+      const regular = runTidy(m.doors());
+      assert.deepEqual(ruled(regular.list, 'I'), []);
+      assert.equal(keptOf(regular.list, join(area, 'memoro')).why, 'touched within the last 72 hours');
+      assert.equal(keptOf(regular.list, join(area, 'memoro-cli')).why, 'touched within the last 72 hours', 'exactly 72 hours is kept');
+      const pressured = runTidy({ ...m.doors(), pressure: true });
+      assert.deepEqual(paths(ruled(pressured.list, 'I')), [join(area, 'memoro'), join(area, 'memoro-cli')]);
+      assert.match(pressured.list.targets[0].why, /pressure pass; age exception/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('a live foreground plan record, or a runner plan session in flight, keeps both, and says which', () => {
+    for (const [label, record, why] of [
+      ['foreground', { foreground: { pid: process.pid, programme: 'mc' } }, 'a foreground plan session of it is running'],
+      ['runner', { runner: { pid: process.pid, programme: 'mc' } }, 'a runner plan session of it is running'],
+    ]) {
+      const m = machine();
+      try {
+        const area = checkoutsOf(m);
+        planRecord(m, record);
+        const { list } = runTidy(m.doors());
+        assert.deepEqual(ruled(list, 'I'), [], label);
+        assert.equal(keptOf(list, join(area, 'memoro')).why, why, label);
+        assert.equal(keptOf(list, join(area, 'memoro-cli')).why, why, label);
+      } finally { m.cleanup(); }
+    }
+  });
+
+  it('a plan record of a dead process, or of another programme, holds nothing', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      planRecord(m, { foreground: { pid: 2147483646, programme: 'mc' } });
+      planRecord(m, { runner: { pid: 2147483646, programme: 'mc', repo: 'memoro-cli' } });
+      planRecord(m, { foreground: { pid: process.pid, programme: 'staff' } });
       const { list } = runTidy(m.doors());
-      assert.deepEqual(ruled(list, 'I'), []);
-      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'its programme has a goal that is not finished');
+      assert.deepEqual(paths(ruled(list, 'I')), [join(area, 'memoro'), join(area, 'memoro-cli')]);
+    } finally { m.cleanup(); }
+  });
+
+  it('a commit main lacks keeps that checkout only, with the commit count as its why', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      m.worktreeState.memoro = { unmerged_commits: 2, landed: 'ahead' };
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(paths(ruled(list, 'I')), [join(area, 'memoro-cli')]);
+      assert.equal(keptOf(list, join(area, 'memoro')).why, '2 commits main lacks');
     } finally { m.cleanup(); }
   });
 
@@ -452,17 +497,17 @@ describe('(I) a planning area\'s own checkouts, while their programme has no goa
     } finally { m.cleanup(); }
   });
 
-  it('a goal opened between the list and the apply keeps both: the apply asks again', () => {
+  it('a planning session started between the list and the apply keeps both: the apply asks again', () => {
     const m = machine();
     try {
       checkoutsOf(m);
       const { listPath } = runTidy(m.doors());
-      goal(m, 'late', 'build');
+      planRecord(m, { foreground: { pid: process.pid, programme: 'mc' } });
       const outcome = applyTidy({ listPath, ...m.doors() });
       assert.deepEqual(m.released, []);
       assert.equal(outcome.removed, 0);
       assert.equal(outcome.applied.length, 2);
-      assert.ok(outcome.applied.every((item) => !item.ok && /^re-check: its programme has a goal that is not finished/u.test(item.why)), JSON.stringify(outcome.applied));
+      assert.ok(outcome.applied.every((item) => !item.ok && item.why === 're-check: a foreground plan session of it is running'), JSON.stringify(outcome.applied));
     } finally { m.cleanup(); }
   });
 
@@ -517,6 +562,16 @@ function planGoalTree(m, { name = 'draft', stage = 'plan', status = 'ready', rec
 
 function ageTree(directory, at) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory()) ageTree(join(directory, entry.name), at);
+  utimesSync(directory, new Date(at), new Date(at));
+}
+
+/** Every file and directory under `directory`, and `directory` itself, last touched at `at`. */
+function ageEverything(directory, at) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) ageEverything(path, at);
+    else utimesSync(path, new Date(at), new Date(at));
+  }
   utimesSync(directory, new Date(at), new Date(at));
 }
 
@@ -702,6 +757,84 @@ describe('(P) automatic plan goal worktree release', () => {
       nestedFacts.cache_items = [{ path: join(second.path, 'DerivedData'), kind: 'spm-cache', active: false, open: [], newest_ms: OLD, bytes: 9, identity: 'nested' }];
       const plan = tidyPlan(nestedFacts);
       assert.deepEqual(plan.targets.filter((item) => item.path.startsWith(second.path)).map((item) => item.path), [second.path]);
+    } finally { m.cleanup(); }
+  });
+});
+
+describe('(P) goal checkouts that cannot start a session now: Martin, a later phase, a blocked goal kept', () => {
+  it('releases a clean, old checkout of a goal waiting on Martin or in a later phase; keeps a current-phase goal, a blocked one, and a review that can run', () => {
+    const m = machine();
+    try {
+      goal(m, 'lowest', 'build');
+      const martin = planGoalTree(m, { name: 'martin', metadata: goalJson({ stage: 'build', status: 'Martin', repos: ['memoro'] }) });
+      const later = planGoalTree(m, { name: 'later', metadata: goalJson({ stage: 'build', status: 'ready', phase: 2, repos: ['memoro'] }) });
+      const current = planGoalTree(m, { name: 'current', metadata: goalJson({ stage: 'build', status: 'ready', repos: ['memoro'] }) });
+      const blocked = planGoalTree(m, { name: 'blocked', metadata: goalJson({ stage: 'build', status: 'blocked', phase: 2, repos: ['memoro'] }) });
+      const review = planGoalTree(m, { name: 'review', metadata: goalJson({ stage: 'review', status: 'ready', repos: ['memoro'] }) });
+      const { list } = runTidy(martin.doors());
+      assert.deepEqual(paths(ruled(list, 'P')).sort(), [martin.path, later.path].sort());
+      assert.equal(list.targets.find((item) => item.path === martin.path).why, 'clean inactive goal checkout, status Martin, which waits on a person, untouched for 72 hours');
+      assert.equal(list.targets.find((item) => item.path === later.path).why, 'clean inactive goal checkout, phase 2 is above the programme\'s lowest unfinished phase 1, untouched for 72 hours');
+      assert.equal(keptOf(list, current.path).why, 'goal stage is build, not plan, and a session can start it');
+      assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays for the plan session that resolves it');
+      assert.equal(keptOf(list, review.path).why, 'goal stage is review, not plan, and a session can start it');
+    } finally { m.cleanup(); }
+  });
+
+  it('a later-phase goal waits for the phases below it: once the lower goal is done, its checkout is kept as a session can start', () => {
+    const m = machine();
+    try {
+      goal(m, 'lowest', 'done');
+      const later = planGoalTree(m, { name: 'later', metadata: goalJson({ stage: 'build', status: 'ready', phase: 2, repos: ['memoro'] }) });
+      const { list } = runTidy(later.doors());
+      assert.deepEqual(ruled(list, 'P'), [], 'phase 2 is the lowest unfinished now');
+      assert.equal(keptOf(list, later.path).why, 'goal stage is build, not plan, and a session can start it');
+    } finally { m.cleanup(); }
+  });
+
+  it('a real checkout of a later-phase goal is released by git worktree remove; its branch re-adds it at the same HEAD', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const run = (cwd, args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } });
+      const origin = join(m.home, 'origin.git');
+      const seed = join(m.home, 'seed');
+      const owner = join(m.home, 'repos', 'memoro');
+      const path = join(m.work, 'programs', 'mc', 'goals', 'real', 'memoro');
+      mkdirSync(seed, { recursive: true });
+      run(seed, ['init', '-q', '-b', 'main']);
+      writeFileSync(join(seed, 'README.md'), 'a repository\n');
+      run(seed, ['add', 'README.md']);
+      run(seed, ['commit', '-q', '-m', 'first']);
+      run(m.home, ['clone', '-q', '--bare', seed, origin]);
+      run(m.home, ['clone', '-q', origin, owner]);
+      // The runner's goal checkout: from origin/main, on goal/real, as addGoalWorktree makes it.
+      assert.equal(run(owner, ['worktree', 'add', '-q', '-b', 'goal/real', path, 'origin/main']).status, 0);
+      const head = run(path, ['rev-parse', 'HEAD']).stdout.trim();
+      m.write(join(m.work, 'programs', 'mc', 'goals', 'real', 'GOAL.json'), goalJson({ stage: 'build', status: 'ready', phase: 2, repos: ['memoro'] }), OLD);
+      m.write(join(m.work, 'programs', 'mc', 'goals', 'real', 'LOG.md'), '# Goal\n', OLD);
+      goal(m, 'lowest', 'build');
+      ageEverything(join(m.work, 'programs', 'mc', 'goals', 'real'), OLD);
+      const doors = m.doors({
+        repos: [{ name: 'memoro', path: owner }],
+        git: (cwd, args) => { const r = run(cwd, args); return r.status === 0 ? r.stdout : null; },
+        openIn: () => [],
+        goalWorktreeLock: (fn) => fn(),
+        removeWorktree: (repo, target) => run(repo, ['worktree', 'remove', target]).status === 0,
+      });
+      const preview = runTidy(doors);
+      assert.deepEqual(paths(ruled(preview.list, 'P')), [path], JSON.stringify(preview.list.kept.filter((item) => item.path.includes('/goals/'))));
+      const applied = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[path, true]], JSON.stringify(applied.applied));
+      assert.equal(existsSync(path), false, 'the checkout is gone');
+      assert.equal(run(owner, ['show-ref', '--verify', '--quiet', 'refs/heads/goal/real']).status, 0, 'the branch stays');
+      const again = addGoalWorktree({
+        git: (cwd, args) => { const r = run(cwd, args); return { ok: r.status === 0, stdout: r.stdout, stderr: r.stderr }; },
+        bare: owner, path, goal: 'real',
+      });
+      assert.deepEqual([again.ok, again.existed, again.branch], [true, true, 'goal/real']);
+      assert.equal(run(path, ['rev-parse', 'HEAD']).stdout.trim(), head, 'the same HEAD');
+      assert.equal(run(path, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim(), 'goal/real');
     } finally { m.cleanup(); }
   });
 });
@@ -1714,6 +1847,7 @@ describe('(B) exact rebuildable caches', () => {
       const area = join(tidyRoots(s.m.env).plan, 'idle'); mkdirSync(area, { recursive: true });
       const wt = join(area, 'memoro'); renameSync(s.wt, wt); s.m.worktrees.memoro = [wt];
       s.m.write(join(wt, '.git'), 'gitdir: /fake');
+      ageEverything(wt, OLD);
       const bundle = join(wt, '.wrangler/dev-server/measure/bundle');
       const preview = runTidy(s.doors({ person: true }));
       assert.ok(preview.list.targets.some((x) => x.path === wt && x.rule === 'I'), 'the containing checkout is eligible');

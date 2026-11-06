@@ -35,7 +35,7 @@ stays.
 
 | Root | What lives there | What tidy may remove |
 |---|---|---|
-| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once it has no goal that is not finished (I); clean inactive plan goal checkouts (P) |
+| `~/mc/programs/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X); a programme's own checkouts once no planning session of it runs and they are untouched for 72 hours (I); clean inactive goal checkouts that cannot start a session now (P) |
 | `~/mc/runner/step/<name>/` | an old execution area | the whole area, as W judges one, only in a person's `--apply` (U) |
 | `~/mc/work/<name>/` | what is left of a retired workarea | the whole area, when every checkout in it is clean and landed, it holds nothing else and no process stands in it — and only in a person's `--apply` (W) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (G, L) |
@@ -46,7 +46,7 @@ stays.
 | Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
-In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X), a programme's own checkouts once it is idle (I), and eligible plan goal checkouts (P) ([mc-layout.md](mc-layout.md)).
+In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees (X), a programme's own checkouts once they are idle (I), and eligible goal checkouts (P) ([mc-layout.md](mc-layout.md)).
 
 The old project rule P was removed with projects. Rules version 11 reuses P
 for plan goal checkouts; it reads no execution register and retains S, F and
@@ -93,9 +93,11 @@ content on main (or its tip a merged pull request's head). Removed with
 for all of them; an lsof that fails keeps every one.
 
 **I — a planning area's own checkouts** (`memoro/`, `memoro-cli/`, made by
-`ensurePlanArea`) go while their programme has no goal that is not finished:
-every `goals/<goal>/GOAL.json` of the programme says `done` or `dropped`. A
-GOAL.json that cannot be read or parsed counts as not finished. The
+`mc plan` or by the runner before a plan session) go when no planning session of
+their programme is running — a foreground `mc plan` record whose process lives,
+a runner plan session in flight, or a process standing in the programme's
+directory — and they have been untouched for 72 hours (younger only in a
+pressure pass). Whether the programme has open goals does not matter. The
 checkout is judged by the release verdict as X judges it, but no process may
 stand anywhere in the programme's directory, since a planning session stands
 there and not in the checkout. Removed the same way as X, and `mc plan
@@ -104,8 +106,10 @@ keeps every one, with its error.
 
 **P — unused plan goal worktrees.** In layout 2, a registered checkout at
 `programs/<programme>/goals/<goal>/<declared-repo>` may be released automatically
-while its valid `GOAL.json` still says `stage: plan`, once its goal and checkout
-have been untouched for 72 hours. It must be on `goal/<goal>`, have no commits
+while its valid `GOAL.json` says `stage: plan`, or `status: Martin`, or its phase
+is above its programme's lowest unfinished phase (the runner's own `phaseOpen`
+rule), once its goal and checkout have been untouched for 72 hours. A goal with
+`status: blocked` keeps its checkout; a goal in a finished stage is not reached. It must be on `goal/<goal>`, have no commits
 beyond `origin/main`, no tracked/untracked/ignored files, and no live cwd, open
 file, or uncertain process evidence in the goal or checkout. Goal metadata,
 checkout ownership, HEAD, and activity are recorded in the preview and fully
