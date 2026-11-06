@@ -715,7 +715,8 @@ test('shared admission excludes other policy instances through allocation/start,
     const second = createDiskPressure({ ...options, pid: otherPid });
     const admitted = await first.admit({ hold: true });
     assert.equal(admitted.admitted, true);
-    assert.equal((await second.admit({ hold: true })).admitted, false, 'no stale healthy admission while allocation is held');
+    const contended = await second.admit({ hold: true });
+    assert.deepEqual([contended.admitted, contended.busy], [false, true], 'live admission contention is a retryable wait, not a disk shortage');
     free = 19e9; // the admitted allocation consumed space before releasing
     admitted.release();
     assert.equal((await second.admit()).admitted, false);
@@ -741,6 +742,105 @@ test('runner holds admission during dependency allocation and rechecks before sp
   assert.equal(heldAtAllocation, true, 'allocation happens only while admission is held');
   assert.equal(pressureState(f).admission_lease, null);
   assert.equal(pressureEvents(f).at(-1).admission.admitted, false);
+});
+
+test('runner distinguishes admission contention at pass entry and final launch from disk shortage', async () => {
+  const f = goalFixture({ a: {}, b: {} });
+  const disk = onDisk(f, 33e9);
+  let release;
+  const allocation = new Promise((resolve) => { release = resolve; });
+  f.deps.attachDeps = async () => { await allocation; return { ok: true }; };
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ lane: 0 });
+  const second = runner.pass({ lane: 1 });
+  try {
+    await turns();
+    assert.equal((await second).waited, 'skipped:disk-busy', 'simultaneous passes contend at final launch');
+    assert.equal((await runner.pass({ lane: 1 })).waited, 'skipped:disk-busy', 'a later pass contends at entry');
+    assert.equal(f.files['/w/runner/disk.json'], undefined, 'contention does not claim insufficient disk');
+    assert.equal(f.calls.sessions.length, 0, 'allocation remains exclusive');
+    disk.free = 19e9;
+  } finally { release(); }
+  assert.equal((await first).waited, 'skipped:disk', 'fresh recheck refuses the consumed disk space');
+  assert.equal(pressureState(f).admission_lease, null);
+});
+
+test('runLoop: STOP and UPDATE interrupt admission contention without taking a live owner lease', async () => {
+  for (const order of ['STOP', 'UPDATE']) {
+    const f = goalFixture({ a: {} }, { livePids: [777] });
+    onDisk(f, 33e9);
+    const owner = { pid: 777, token: 'live', since: '2026-08-29T09:59:00Z' };
+    f.files['/w/runner/disk-pressure.json'] = JSON.stringify({ admission_lease: owner });
+    const sleeps = [];
+    const handovers = [];
+    f.deps.sleep = async (ms) => {
+      sleeps.push(ms);
+      f.files[`/w/runner/${order}`] = '';
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    f.deps.handOver = async (options) => { handovers.push(options); delete f.files['/w/runner/UPDATE']; return { ok: true }; };
+    assert.equal(await runLoop({ deps: f.deps }), 0);
+    assert.deepEqual(f.calls.sessions, []);
+    assert.deepEqual(pressureState(f).admission_lease, owner, 'a live owner is never reclaimed');
+    assert.ok(sleeps.includes(1000), 'contention uses short retry waits');
+    assert.equal(handovers.length, order === 'UPDATE' ? 1 : 0);
+  }
+});
+
+test('STOP and UPDATE during allocation cancel spawn and release admission and the lane slot', async () => {
+  for (const order of ['STOP', 'UPDATE']) {
+    const f = goalFixture({ a: {} });
+    onDisk(f, 33e9);
+    f.deps.laneCount = () => ({ lanes: 1 });
+    f.deps.attachDeps = async () => { f.files[`/w/runner/${order}`] = ''; return { ok: true }; };
+    const runner = createRunner({ deps: f.deps });
+    await runner.pass();
+    assert.deepEqual(f.calls.sessions, []);
+    assert.equal(pressureState(f).admission_lease, null);
+    assert.equal(f.files['/w/runner/current-memoro.json'], undefined);
+    delete f.files[`/w/runner/${order}`];
+    // STOP is sticky within a runner; a fresh runner proves restart recovery.
+    f.deps.attachDeps = async () => ({ ok: true });
+    const resumed = order === 'STOP' ? createRunner({ deps: f.deps }) : runner;
+    assert.equal((await resumed.pass()).ran, 1);
+    assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_GOAL), ['prog/a']);
+  }
+});
+
+test('runLoop: reboot admission contention fills all 15 lanes promptly without duplicate starts', async (t) => {
+  const names = Array.from({ length: 15 }, (_, i) => `work-${i}`);
+  const f = goalFixture(Object.fromEntries(names.map((name) => [name, {}])));
+  onDisk(f, 33e9);
+  // Persisted records from the dead runner survive reboot. Its lease and lane
+  // must be recovered, without changing the configured total.
+  f.files['/w/runner/disk-pressure.json'] = JSON.stringify({ admission_lease: { pid: 777, token: 'old' } });
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ pid: 777, lane: 0, name: 'goal:prog/work-0' });
+  f.deps.laneCount = () => ({ lanes: 15 });
+  const sleeps = [];
+  const starts = [];
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.answer = async (call) => { starts.push(call.env.MC_GOAL); await held; return endsGoal(f)(call); };
+  // Ten-minute naps stay asleep; short retry timers advance deterministically.
+  // No real model, process, filesystem, or elapsed-time wait is needed.
+  const wake = [];
+  f.deps.sleep = (ms) => {
+    sleeps.push(ms);
+    return new Promise((resolve) => {
+      if (ms < UPDATE_POLL_MS) setImmediate(resolve);
+      else wake.push(resolve);
+    });
+  };
+  const stop = () => { f.files['/w/runner/STOP'] = ''; release(); for (const resolve of wake.splice(0)) resolve(); };
+  t.after(stop);
+  const run = runLoop({ deps: f.deps });
+  await turns(100);
+  try {
+    assert.deepEqual([...starts].sort(), names.map((name) => `prog/${name}`).sort(), 'every configured lane starts a distinct goal before the idle sleep expires');
+    assert.ok(sleeps.some((ms) => ms > 0 && ms <= 1000), 'contention retries within one second');
+    assert.equal(pressureState(f).admission_lease, null, 'spawn releases admission while sessions remain active');
+    assert.equal(f.deps.laneCount().lanes, 15);
+  } finally { stop(); await run; }
 });
 
 test('pending cleanup stays exclusive while sessions start at 20 GB or above', async () => {
@@ -1604,7 +1704,14 @@ test('two lanes: a memoro goal and a memoro-cli goal are in flight at the same t
 
 test('STOP ends both lanes after the session each is in', async () => {
   const f = goalFixture({ a: {}, a2: {}, b: { repos: 'memoro-cli' }, b2: { repos: 'memoro-cli' } });
-  f.answer = async (call) => { f.files['/w/runner/STOP'] = ''; return okSession()(call); };
+  const bothStarted = Promise.withResolvers();
+  let started = 0;
+  f.answer = async (call) => {
+    started += 1;
+    if (started === 2) { f.files['/w/runner/STOP'] = ''; bothStarted.resolve(); }
+    await bothStarted.promise;
+    return okSession()(call);
+  };
   assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 2, 'one session in each lane, and no more');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd).sort(), [`${GOALS}/a/memoro`, `${GOALS}/b/memoro-cli`]);
