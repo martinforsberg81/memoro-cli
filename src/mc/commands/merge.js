@@ -142,7 +142,7 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     if (entry.state === 'landing') { queue = 'landing'; return; }
     writeQueue(queuePath, dequeue(entries, { repo: entry.repo, pr: opts.pr }));
     queue = 'removed';
-  });
+  }, { name: 'merges' });
 
   // The page drops the row at once; a page that cannot be written costs nothing.
   try { dropPr({ root, repo: repoNameOf(repoPath), number: opts.pr }); } catch { /* the page catches up on its own */ }

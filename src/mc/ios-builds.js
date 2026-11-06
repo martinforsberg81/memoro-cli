@@ -61,7 +61,7 @@ function fileHeader(text) {
 }
 
 function locked(env, fn) {
-  return realLock(workRoot(env), fn);
+  return realLock(workRoot(env), fn, { name: 'ios-builds' });
 }
 
 function append(row, env) {

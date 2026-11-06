@@ -721,7 +721,7 @@ export async function run(argv, deps = {}) {
     const deployer = startDeployer(job, { ...deps, stdout, stderr, env });
     recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started }, env);
     return { key, deployer };
-  });
+  }, { name: 'deploy' });
   if (!started) return 1;
   const { key, deployer } = started;
   // A deployer run in this process — a test's — is run now, after its row is

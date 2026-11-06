@@ -208,6 +208,6 @@ export async function refreshCodexCapacity({ root = runnerDir(), lockRoot = work
     const state = readCapacity({ root });
     const next = applyCollectedCapacity(state, 'codex', answer, now, before);
     return writeCapacity(next, { root });
-  });
+  }, { name: 'codex-capacity' });
   return { ok: answer.ok, why: answer.why ?? null, state: written };
 }
