@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable, Readable } from 'node:stream';
@@ -81,6 +81,42 @@ test('shared dotenv server command receives keys and names with filtered output 
   absent(JSON.stringify(f.records()), SECRET, ';literal');
   assert.ok(handlesHelp(['serve', process.execPath, '--help']));
   assert.deepEqual(invocationShape(['keys', 'serve', 'node', script]), { verb: 'keys', sub: 'serve', args: [], flags: [], argc: 4 });
+});
+
+test('keys serve names its child to the caller: the pid is written as it starts and its exit as it leaves', async t => {
+  const f = await fixture(t);
+  // The child reads the pid file as it stands, then exits with 3: the wrapper wrote the pid before the exit.
+  const script = write(f.cwd, 'reads-then-exits.mjs', `
+    import { existsSync, readFileSync } from 'node:fs';
+    const file = process.argv[2];
+    const until = Date.now() + 5000;
+    while (!existsSync(file) && Date.now() < until) { /* the wrapper writes it right after spawn */ }
+    process.stdout.write(JSON.stringify({ pid: process.pid, seen: existsSync(file) ? readFileSync(file, 'utf8') : null }));
+    process.exit(3);`);
+  const file = join(f.directory, 'child.json');
+  const out = capture(); const err = capture();
+  const exit = await keysCommand(['serve', process.execPath, script, file], {
+    cwd: f.cwd, env: { ...f.env, MC_KEYS_CHILD_FILE: file }, stdout: out.stream, stderr: err.stream,
+  });
+  assert.equal(exit, 3, err.text());
+  const { pid, seen } = JSON.parse(out.text());
+  assert.deepEqual(JSON.parse(seen), { pid }, 'the pid was in the file before the child left');
+  const record = readFileSync(file, 'utf8');
+  assert.deepEqual(JSON.parse(record), { pid, exit: 3, signal: null });
+  absent(record, SECRET);
+
+});
+
+test('keys serve writes no child file when the caller names none', async t => {
+  const f = await fixture(t);
+  const script = write(f.cwd, 'exits.mjs', 'process.exit(3);');
+  const plain = { ...f.env };
+  delete plain.MC_KEYS_CHILD_FILE;
+  const exit = await keysCommand(['serve', process.execPath, script], {
+    cwd: f.cwd, env: plain, stdout: capture().stream, stderr: capture().stream,
+  });
+  assert.equal(exit, 3);
+  assert.deepEqual(readdirSync(join(f.env.MC_HOME, 'keys')).sort(), ['runs.jsonl'], 'the run leaves only its audit record');
 });
 
 test('shared dotenv freshness reparses additions and changes, parses quotes and exports, and leaves absent names undefined', async t => {
