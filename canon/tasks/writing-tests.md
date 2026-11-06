@@ -44,6 +44,9 @@ rerunning is no fix. A per-test timeout is red; mc retains cut tests in
 file/fixture startup and the affected round: moving work outside the timed
 callback does not make the suite cheaper. Preserve existing gate thresholds.
 
+The 1 s budget is per test; file fixture cost is reported separately, with the timings.
+Usage and help examples in tests use placeholders such as `<programme>/<goal>`, never a real goal name.
+
 Classify existing checks as keep, rebuild, consolidate or retire using the
 same admission criteria. For retirement, name lost protection and its
 replacement or the residual risk recorded in planning. Slowness, age and a

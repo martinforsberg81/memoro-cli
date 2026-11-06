@@ -53,7 +53,7 @@ prerequisite goals too. A plan placeholder also holds later phases back.
 - **Class:** `fast` when the goal says exactly what changes, where and in what
   order; `large` only for work that must choose and that you cannot choose
   for. Never a concrete model.
-- **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind
-  every claim, and only files you opened. Leave out the case for the goal, history, and what code shows.
+- **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind every claim, and only files you opened.
+  A brief that says a state is set wrongly names the caller that sets it today and the stage it runs in; its fixture uses that stage. Leave out the case for the goal, history, and what code shows.
 - **Proposals consumed:** move them to the programme's `proposals/archive/` in the same move,
   first line `Utfall: <the goal>`, and carry into the goal everything it needs from them.
