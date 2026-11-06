@@ -186,9 +186,12 @@ fresh class-routed build, review and plan launch, including headless programme
 planning, while an already-running conversation is unchanged. A preferred
 provider wins among usable subscriptions regardless of relative headroom or
 review build-model avoidance; within that provider the existing capacity and
-model ranking remains. If its subscription is exhausted, refused, stale,
-unavailable, or lacks the candidate/effort, another usable subscription is
-tried before that provider's API reserve. Existing API-off guards still apply.
+model ranking remains. Preferred Claude with unknown, stale, failed or reset
+usage is an attempted subscription launch even when Codex has measured room;
+this does not assert unknown usage is zero. A live refusal or unexpired full
+window excludes that provider until reset. An unavailable preferred Codex
+model/effort falls back to another subscription before API reserve. Existing
+API-off guards still apply.
 `auto` keeps capacity balancing. Manager and intake use role-appropriate
 provider models; manual explicit tool/model choices and interactive `mc plan`
 and `mc manager` retain their selections. The page displays this setting and
@@ -343,11 +346,17 @@ A goal names a work class, `fast` or `large`, not a model. The route
 is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
-account. The snapshot is refreshed by sessions that run anyway, and by one
-read-only Codex call an hour. `review` is a class too, but only a goal's review
-takes it. A provider priority first ranks usable candidates from that provider;
-capacity/model ranking and the build-model tie rule then apply within it.
-Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. Codex also needs a fresh successful capacity observation listing the model and effort; Claude retains unknown-capacity bootstrap when no candidate has measured usable capacity. With no usable subscription, priority orders the API reserve candidates, retaining build-model avoidance and catalog order within each provider. The review waits when the selected API is off: no candidate goes to credits while another's subscription is usable (ruling 59 § 4).
+account. The snapshot is refreshed by sessions that run anyway, and by
+independent read-only collectors due at startup and every 15 minutes for both
+providers. `review` is a class too, but only a goal's review
+takes it. Review ranks usable subscriptions by provider priority, then
+headroom; ties avoid the build model, then follow catalog order. Codex needs a
+fresh successful capacity observation listing the model and effort. Auto mode
+retains unknown-Claude bootstrap only when no candidate has measured usable
+capacity. Explicit Claude priority may also attempt its subscription with
+unknown, stale, failed or reset usage ahead of known Codex capacity; unknown
+does not mean zero. With no usable subscription, priority orders API reserve
+candidates. The review waits when the selected API is off.
 
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
@@ -384,18 +393,30 @@ never zero.
   (`observeClaudeStream`). A refusal a session got is written as the provider's
   refusal until its reset, or for the quota sleep when none is named
   (`refuseProvider`). No account read and no extra turn.
-- **Codex is read once an hour**, from the chore pass (`refreshCodexDue`, every
-  `CODEX_POLL_MS`; the first pass is due when nothing has been observed). `codex
-  app-server --stdio` is sent `initialize`, then `account/rateLimits/read` and
+- **Both providers are polled independently** at startup when no recent attempt
+  exists, then every 15 minutes, outside chores and lanes. Reads do not overlap
+  per provider; failures suppress retries for 15 minutes. A pending UPDATE
+  pauses reads; the timer ends on STOP, a successful handover, a drain or exit,
+  so a failed handover keeps polling. Completion patches the latest snapshot
+  under the short runner lock (on the work root, never over a network wait),
+  preserving other-provider, newer-observation and refusal
+  updates. Codex `app-server --stdio` is sent `initialize`, then `account/rateLimits/read` and
   `model/list`, every page of the list up to five. It is never sent a thread or a
   turn, so no model is asked anything and no rate-limit reset is spent, and
   `send` refuses any other method. It is bounded to 20 s and 1 MiB. Credits are
-  not read: they are not subscription headroom. A failed read keeps the last
-  valid snapshot and is said in `runner.log`.
-- **Not verified live.** The collector is tested against fixture answers. No
-  live read of the signed-in codex CLI is claimed here, so no live Codex quota
-  is claimed. The account type is inferred: a successful windows read is taken
-  as the ChatGPT entitlement, and a failed one as its absence.
+  not read: they are not subscription headroom. Claude makes only a GET to the
+  fixed `https://api.anthropic.com/api/oauth/usage` origin using the installed
+  Claude Code login (Keychain service on macOS, otherwise its standard
+  credentials file); redirects are denied. It parses subscription
+  `five_hour`/`seven_day` usage only, never overage credits. Neither provider's
+  credentials or raw response is logged/persisted. Each collector is bounded
+  to 20 s and 1 MiB. Failures retain the last valid snapshot and record attempt
+  and failure. Claude's passive stream observations remain supplementary.
+- **Not verified live.** Controlled fixtures test the collectors; the fixed
+  Claude request/auth contract was matched to inspected installed-tool code.
+  No live provider request, login or model run was made. Codex account type is
+  inferred from the successful capacity response.
+- The retired cadence was: Codex was read once an hour from the chore pass.
 
 **The choice at launch.** `chooseCandidate` judges each candidate of the class
 at that instant:
@@ -410,9 +431,11 @@ at that instant:
   grows inside a window, so an old reading proves nothing about now.
 - *unavailable* (codex) — no fresh read, or the model is not listed at that effort.
 
-If no candidate is known, the first claude candidate with unknown capacity is
-bootstrapped on the included plan. That is an unknown, not proven free quota:
-the choice's basis is `bootstrap`, and its reason says so.
+Auto mode bootstraps unknown Claude only when no candidate is known. Explicit
+Claude priority can bootstrap ahead of known Codex capacity. This is an
+attempted subscription launch, not proven free quota. Billing status marks
+failed, stale and unknown usage rather than showing zero or claiming the plan
+is available.
 
 **API reserve.** When no candidate has eligible plan capacity, the first
 catalog candidate uses its provider's API key through the gateway. A pinned

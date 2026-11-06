@@ -1237,31 +1237,79 @@ test('run.js has no gh pr merge left in it', () => {
 
 /* ------------------------------------------------- work classes (ruling 59) */
 
-test('codex is read when no snapshot exists, then once an hour from the chores, and a failed read is said and the chores go on', async () => {
+test('both subscriptions are read at startup, due at 15 minutes, and a failed attempt is suppressed', async () => {
   let clock = ROUTING_NOW.getTime();
   const f = fixture({ session: okSession() });
   f.deps.now = () => new Date(clock);
-  const reads = [];
+  const reads = { claude: [], codex: [] };
+  let timer;
+  let interval;
+  let releaseCodex;
+  f.deps.every = (ms, fn) => { interval = ms; timer = fn; return () => { timer = null; }; };
   f.deps.refreshCodex = async () => {
-    reads.push(clock);
-    if (reads.length === 2) throw new Error('codex vanished');
+    reads.codex.push(clock);
+    if (reads.codex.length === 2) return new Promise((resolve) => { releaseCodex = () => resolve({ ok: false, why: 'codex vanished' }); });
     const next = applyObservation(f.deps.capacity.read(), 'codex', { windows: { primary: windowAt(0.1), secondary: null }, models: LUNA }, new Date(clock));
     f.deps.capacity.write(next);
     return { ok: true, why: null, state: next };
   };
+  f.deps.refreshClaude = async () => { reads.claude.push(clock); return { ok: false, why: 'login unavailable' }; };
   const runner = createRunner({ deps: f.deps });
-  await runner.chores();
-  assert.equal(reads.length, 1, 'no snapshot: read at start');
-  clock += 30 * 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 1, 'not again within the hour');
-  clock += 31 * 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 2, 'due again after the hour, and the read that throws does not stop the chores');
-  assert.match(f.files['/w/runner/log/runner.log'], /codex capacity not read: codex vanished — the chores go on/u);
+  runner.startCapacityTicker();
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+  await flush();
+  assert.deepEqual(reads, { claude: [clock], codex: [clock] }, 'startup polls both providers without chores');
+  assert.equal(interval, 15 * 60 * 1000);
+  clock += 14 * 60 * 1000;
+  timer(); await flush();
+  assert.deepEqual(reads.codex, [ROUTING_NOW.getTime()], 'no attempt before fifteen minutes');
   clock += 60 * 1000;
-  await runner.chores();
-  assert.equal(reads.length, 3, 'a failed read is not kept for an hour: the next chore pass that finds it due reads again');
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'the attempt is due exactly at fifteen minutes');
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'an in-flight provider read is single-flight');
+  releaseCodex(); await flush();
+  timer(); await flush();
+  assert.equal(reads.codex.length, 2, 'failed attempt is suppressed for fifteen minutes');
+  assert.equal(reads.claude.length, 2, 'Claude has its own fifteen-minute attempt window');
+  clock += 15 * 60 * 1000;
+  f.files['/w/runner/UPDATE'] = '';
+  timer(); await flush();
+  assert.equal(reads.claude.length, 2, 'a pending UPDATE pauses reads');
+  assert.ok(timer, 'an UPDATE alone does not stop the ticker: a failed handover keeps polling');
+  delete f.files['/w/runner/UPDATE'];
+  timer(); await flush();
+  assert.equal(reads.claude.length, 3, 'polling resumes once the UPDATE is gone');
+  f.files['/w/runner/STOP'] = '';
+  timer();
+  assert.equal(timer, null, 'STOP stops the independent ticker');
+});
+
+test('the usage ticker proceeds while a chore waits on its helper turn', async () => {
+  let clock = ROUTING_NOW.getTime();
+  let releaseTurn;
+  const f = fixture({ inbox: ['decision.md'], helperTurn: () => new Promise((resolve) => { releaseTurn = resolve; }) });
+  f.deps.now = () => new Date(clock);
+  let timer;
+  f.deps.every = (ms, fn) => { if (ms === 15 * 60 * 1000) timer = fn; return () => { timer = null; }; };
+  const attempts = { claude: 0, codex: 0 };
+  f.deps.refreshClaude = async () => { attempts.claude += 1; return { ok: true }; };
+  f.deps.refreshCodex = async () => { attempts.codex += 1; return { ok: true }; };
+  const runner = createRunner({ deps: f.deps });
+  const stop = runner.startCapacityTicker();
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+  await flush();
+  const chores = runner.runIntakeDrain();
+  await flush();
+  assert.equal(typeof releaseTurn, 'function', 'the intake helper turn is still in flight');
+  clock += 15 * 60 * 1000;
+  timer();
+  await flush();
+  assert.deepEqual(attempts, { claude: 2, codex: 2 }, 'both collectors make their due attempt while chores remain blocked');
+  releaseTurn({ ok: true, summary: 'done' });
+  await chores;
+  stop();
+  assert.equal(timer, null, 'the independent ticker is stopped after its drain test ends');
 });
 
 test('STOP file: the loop exits after the session it is in, and the next start removes the STOP it left', async () => {
@@ -1487,6 +1535,10 @@ test('runLoop: an idle lane reads STOP within a slice, not after its whole sleep
  */
 test('UPDATE file: the handover happens while the session is in flight, and the old runner exits after it', async () => {
   const f = goalFixture({ a: {} }, { livePids: [9001] });
+  const stoppedIntervals = [];
+  f.deps.every = (ms) => () => stoppedIntervals.push(ms);
+  f.deps.refreshClaude = async () => ({ ok: false, why: 'fixture' });
+  f.deps.refreshCodex = async () => ({ ok: false, why: 'fixture' });
   const events = [];
   f.answer = async (call) => {
     f.files['/w/runner/UPDATE'] = '';
@@ -1506,7 +1558,8 @@ test('UPDATE file: the handover happens while the session is in flight, and the 
     say(`update: handed over to pid 9001 — finishing ${finishing} session(s) in flight, taking nothing new`);
     return { ok: true, pid: 9001 };
   };
-  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps, awake: false }), 0);
+  assert.ok(stoppedIntervals.includes(15 * 60 * 1000), 'the predecessor stops polling when its successor takes over');
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(handovers, [{ update: '/w/runner/UPDATE', predecessor: 4242, finishing: 1 }], 'one handover for the runner, not one per loop');
   assert.deepEqual(events, ['handed over', 'session ends'], 'the handover waited for the session to end');
@@ -2627,6 +2680,10 @@ test('a claude session whose stream carries the plan windows records them in the
   assert.equal(patches[0].plan.seven_day.resets_at, new Date(1792155600 * 1000).toISOString());
   assert.equal(patches[0].plan.five_hour.utilization, 0.08);
   assert.equal(patches[0].plan.seen, '2026-08-29T10:00:00Z');
+  const claude = f.deps.capacity.read().providers.claude;
+  assert.equal(claude.windows.seven_day?.fraction_used, 0.59, 'the stream windows reach the capacity snapshot too');
+  assert.equal(claude.windows.five_hour?.fraction_used, 0.08);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /capacity not recorded/u);
 });
 
 test('a codex session records no plan windows, and neither does a claude stream without them', async () => {
@@ -2744,6 +2801,8 @@ test('a plan refusal is recorded and hands the next launch to the API reserve', 
   const { f, billing, slept, calls } = onRefusal('plan', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();
   assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until, '2026-08-29T15:00:00.000Z', 'the refusal reaches the capacity snapshot the chooser reads');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /capacity not recorded/u);
   assert.equal(calls.length, 1, 'the refused session is not relaunched: the goal is picked again');
   assert.deepEqual(slept, [], 'no lane sleeps on it');
   const r = await createRunner({ deps: f.deps }).pass();

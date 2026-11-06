@@ -21,7 +21,13 @@ export function billingRoute({ provider, capacity, state, api, now = new Date() 
   const spent = refused ? `plan refused until ${refused}` : full.length ? 'plan reached 100 %' : null;
   if (spent && api?.[provider] === false) return { billing: 'plan', why: `${spent}; API off` };
   if (spent) return { billing: 'credits', why: spent };
-  return { billing: 'plan', why: standing.status === 'unobserved' ? 'plan status unknown' : 'plan available' };
+  const windows = Object.values(standing.windows);
+  const unknown = windows.some((window) => window.status !== 'known');
+  const why = standing.status === 'failed' ? 'last usage read failed; subscription availability unknown'
+    : standing.status === 'stale' ? 'usage is stale; subscription availability unknown'
+      : standing.status === 'unobserved' ? 'plan status unknown'
+        : unknown ? 'subscription usage unknown' : 'plan available';
+  return { billing: 'plan', why };
 }
 
 /** Preserve a chooser's API reserve (including model unavailability), but never override API off. */
@@ -38,8 +44,9 @@ export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
     const standing = providerAt(capacity, provider, now);
     const windows = Object.values(standing.windows).filter((window) => window.status === 'known');
     const used = windows.length ? `${Math.round(Math.max(...windows.map((window) => window.fraction_used)) * 100)}%` : '?';
+    const freshness = standing.status === 'failed' ? ' (read failed)' : standing.status === 'stale' ? ' (stale)' : '';
     const route = billingRoute({ provider, capacity, state, api, now });
-    return `${provider} ${used} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
+    return `${provider} ${used}${freshness} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
   }).join(' · ');
 }
 

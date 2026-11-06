@@ -85,7 +85,12 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
   const allKnown = judged.some((entry) => entry.state === 'known');
   const eligible = judged.filter((entry) => entry.state === 'known' || (!allKnown && entry.state === 'unknown' && entry.candidate.tool === 'claude'));
   const preferred = priority === 'auto' ? eligible : eligible.filter((entry) => entry.candidate.tool === priority);
-  const selectedPool = preferred.length ? preferred : eligible;
+  // An explicit subscription priority is an attempted launch even when its
+  // usage is unknown/stale; a known alternative must not silently override it.
+  const preferredBootstrap = priority !== 'auto' && !preferred.length
+    ? judged.filter((entry) => entry.candidate.tool === priority && entry.state === 'unknown' && entry.candidate.tool === 'claude')
+    : [];
+  const selectedPool = preferred.length ? preferred : preferredBootstrap.length ? preferredBootstrap : eligible;
   const best = selectedPool.reduce((a, b) => !a || (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a, null);
   const index = judged.indexOf(best);
   if (index >= 0) {
@@ -98,7 +103,7 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
       : [...(priority !== 'auto' && chosen.candidate.tool === priority ? [`${priority} provider priority`] : []), ...(others.length < list.length ? [`${avoid.tool} ${avoid.model} built it`] : []), ...judged.slice(0, index).map(passed)];
     const place = `review candidate ${list.indexOf(chosen.candidate) + 1}`;
     const fallback = priority !== 'auto' && chosen.candidate.tool !== priority ? `; ${priority} unavailable on subscription, ${chosen.candidate.tool} subscription fallback` : '';
-    return answer(cls, chosen.candidate, 'preferred', chosen.headroom ?? null, `${reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`}${fallback}`);
+    return answer(cls, chosen.candidate, chosen.state === 'unknown' && priority !== 'auto' ? 'bootstrap' : 'preferred', chosen.headroom ?? null, `${reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`}${fallback}`);
   }
   const ordered = priority === 'auto' ? judged : [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
   const [first] = ordered;
@@ -131,7 +136,10 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
     const known = judged.filter((entry) => entry.state === 'known');
     const usable = known.length ? known : judged.filter((entry) => entry.state === 'unknown' && entry.candidate.tool === 'claude');
     const preferred = usable.filter((entry) => entry.candidate.tool === priority);
-    const pool = preferred.length ? preferred : usable;
+    const preferredBootstrap = priority === 'claude' && !preferred.length
+      ? judged.filter((entry) => entry.candidate.tool === 'claude' && entry.state === 'unknown')
+      : [];
+    const pool = preferred.length ? preferred : preferredBootstrap.length ? preferredBootstrap : usable;
     if (pool.length) {
       const best = pool.reduce((a, b) => (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a);
       const fallback = best.candidate.tool === priority ? '' : `; ${priority} unavailable on subscription, ${best.candidate.tool} subscription fallback`;

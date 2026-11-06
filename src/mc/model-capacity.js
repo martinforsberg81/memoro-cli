@@ -127,6 +127,23 @@ export function applyFailure(state, provider, { why }, now = new Date()) {
   return withProvider(state, provider, { failure: { at: now.toISOString(), why: String(why) } });
 }
 
+/**
+ * Apply one completed collector read to the latest state. A concurrent
+ * provider-local observation wins over an older in-flight success; a failure
+ * records its attempt while keeping the last valid snapshot. The caller holds
+ * the short runner lock around this synchronous read-patch-write only.
+ */
+export function applyCollectedCapacity(state, provider, answer, now = new Date(), baseline = null) {
+  const current = normaliseCapacity(state);
+  const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
+  if (answer?.ok && changed) return current;
+  if (answer?.ok) return applyObservation(current, provider, {
+    windows: answer.windows,
+    models: answer.models ?? null,
+  }, now);
+  return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
+}
+
 /** The instant a provider refused until, or null to clear it. */
 export function applyRefusal(state, provider, until) {
   return withProvider(state, provider, { refusal_until: iso(until) });

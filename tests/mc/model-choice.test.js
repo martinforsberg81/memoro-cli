@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyFailure, applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { PLAN_LIMIT_UTILIZATION, chooseCandidate } from '../../src/mc/model-choice.js';
+import { billingStatus, billingRoute } from '../../src/mc/billing-route.js';
 
 const NOW = new Date('2026-10-27T12:00:00Z');
 const AHEAD = '2026-10-27T15:00:00.000Z';
@@ -41,6 +42,38 @@ test('fast: either provider is chosen, the one with more headroom', () => {
   assert.equal(second.spec, 'codex:gpt-6-luna:high');
   assert.equal(second.basis, 'known');
   near(second.headroom, 0.8);
+});
+
+test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
+  const unknown = codex(empty(), win(0.1));
+  const classes = ['fast', 'large', 'review'];
+  const mixedReview = { ...DEFAULT_CATALOG, review: [
+    { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
+    DEFAULT_CATALOG.review[0],
+  ] };
+  const bootstrap = (capacity) => classes.map((cls) => chooseCandidate({ cls, catalog: cls === 'review' ? mixedReview : DEFAULT_CATALOG, capacity, now: NOW, priority: 'claude' }));
+  const missing = bootstrap(unknown);
+  const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
+  const stale = bootstrap(codex(claude(empty(), win(0.1), win(0.1), old), win(0.1)));
+  const reset = codex(claude(empty(), win(0.9, PAST), win(0.95, PAST)), win(0.1));
+  const expired = bootstrap(reset);
+  const expected = ['claude', 'claude', 'claude'];
+  assert.deepEqual({
+    unknown: missing.map((chosen) => chosen.candidate.tool),
+    stale: stale.map((chosen) => chosen.candidate.tool),
+    reset: expired.map((chosen) => chosen.candidate.tool),
+  }, { unknown: expected, stale: expected, reset: expected }, 'unknown, stale and reset Claude usage honors priority for fast, large and review');
+  assert.deepEqual([...missing, ...stale, ...expired].map((chosen) => chosen.basis), Array(9).fill('bootstrap'));
+});
+
+test('billing status names stale and failed usage without claiming plan availability', () => {
+  const old = new Date(NOW.getTime() - 4 * 60 * 60 * 1000);
+  const stale = codex(claude(empty(), win(0.2), win(0.2), old), win(0.1));
+  const text = billingStatus({ capacity: stale, state: {}, api: {}, now: NOW });
+  assert.match(text, /claude 20% \(stale\) plan/u);
+  assert.match(billingRoute({ provider: 'claude', capacity: stale, state: {}, api: {}, now: NOW }).why, /stale/u);
+  const failed = applyFailure(empty(), 'claude', { why: 'login unavailable' }, NOW);
+  assert.match(billingStatus({ capacity: failed, state: {}, api: {}, now: NOW }), /claude \? \(read failed\) plan/u);
 });
 
 test('a codex candidate is scored by its most restrictive window', () => {
