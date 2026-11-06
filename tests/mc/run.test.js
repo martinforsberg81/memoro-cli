@@ -1174,6 +1174,33 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   assert.equal(timer, null, 'STOP stops the independent ticker');
 });
 
+test('the usage ticker proceeds while a chore waits on its helper turn', async () => {
+  let clock = ROUTING_NOW.getTime();
+  let releaseTurn;
+  const f = fixture({ inbox: ['decision.md'], helperTurn: () => new Promise((resolve) => { releaseTurn = resolve; }) });
+  f.deps.now = () => new Date(clock);
+  let timer;
+  f.deps.every = (ms, fn) => { if (ms === 15 * 60 * 1000) timer = fn; return () => { timer = null; }; };
+  const attempts = { claude: 0, codex: 0 };
+  f.deps.refreshClaude = async () => { attempts.claude += 1; return { ok: true }; };
+  f.deps.refreshCodex = async () => { attempts.codex += 1; return { ok: true }; };
+  const runner = createRunner({ deps: f.deps });
+  const stop = runner.startCapacityTicker();
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+  await flush();
+  const chores = runner.runIntakeDrain();
+  await flush();
+  assert.equal(typeof releaseTurn, 'function', 'the intake helper turn is still in flight');
+  clock += 15 * 60 * 1000;
+  timer();
+  await flush();
+  assert.deepEqual(attempts, { claude: 2, codex: 2 }, 'both collectors make their due attempt while chores remain blocked');
+  releaseTurn({ ok: true, summary: 'done' });
+  await chores;
+  stop();
+  assert.equal(timer, null, 'the independent ticker is stopped after its drain test ends');
+});
+
 test('STOP file: the loop exits after the session it is in, and the next start removes the STOP it left', async () => {
   const f = goalFixture({ a: {}, b: {} });
   f.answer = (call) => { f.files['/w/runner/STOP'] = ''; return okSession()(call); };
