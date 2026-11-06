@@ -22,8 +22,8 @@ import {
   shotWorktree, slug,
 } from '../shot.js';
 import {
-  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, lastLogLine, liveSessions, readRecords,
-  readSessions, releaseReservation, removeSession, reserveSession, runKeep, sendLine, sessionUnchanged, writeSession,
+  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, lastLogLine, liveSessions, notePlaceholderPid, readRecords,
+  readSessions, releaseReservation, reserveSession, runKeep, sendLine, sessionUnchanged, sweepRecord, writeSession,
 } from '../shot-session.js';
 import { ensureAppServer, readDeclaration } from '../test-environment.js';
 import { scanArgs } from './flags.js';
@@ -87,7 +87,13 @@ export async function keep({
   let ran = null;
   try {
     ran = await (deps.runKeep || runKeep)({
-      worktree, declaration: declared, request: { ...request, mode: 'session', socket }, env, log, deps,
+      worktree,
+      declaration: declared,
+      request: { ...request, mode: 'session', socket },
+      env,
+      log,
+      deps,
+      onSpawn: (pid) => notePlaceholderPid(reservation, pid),
     });
   } catch (error) {
     releaseReservation(env, reservation);
@@ -137,7 +143,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   const picked = pick(positional[0], { cwd, env, deps, sameWorktree: !flags['any-worktree'] });
   if (picked.error) { stderr.write(`mc: ${picked.error}\n`); return picked.code; }
   const { session } = picked;
-  if (!session.alive) return ended(session, { env, stderr });
+  if (!session.alive) return ended(session, { env, stderr, deps });
 
   const shot = readShotDeclaration(session.worktree);
   if (!shot.ok) { stderr.write(`mc: ${shot.error}\n`); return 1; }
@@ -206,7 +212,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   }
   const timeoutMs = deps.stepTimeoutMs ?? captureTimeoutMs(message);
   const sent = await sendLine({ socket: session.socket, message, timeoutMs, deps });
-  if (!sent.ok && sent.refused) return ended(session, { env, stderr });
+  if (!sent.ok && sent.refused) return ended(session, { env, stderr, deps });
   if (!sent.ok) {
     stderr.write(`mc: ${session.id} did not answer step ${n}: ${sent.error} — its log is ${session.log}; mc shot close ${session.id}\n`);
     return 1;
@@ -259,7 +265,7 @@ export async function close(argv, { stdout, stderr, deps = {} }) {
   }
   for (const session of closing) {
     if (!session.alive) {
-      removeSession(session, env);
+      sweepRecord(session, env, deps);
       stdout.write(`mc: ${session.id} had already ended\n`);
       continue;
     }
@@ -282,6 +288,10 @@ export async function sessions(argv, { stdout, stderr, deps = {} }) {
   const live = liveSessions(env, deps);
   if (!live.length) { stdout.write('mc: no browser is kept — mc shot <dev|prod> <target> --keep keeps one\n'); return 0; }
   for (const session of live) {
+    if (session.placeholder) {
+      stdout.write(`${session.id}  orphaned browser, pid ${session.pid} — the mc that kept it (pid ${session.owner_pid}) is gone; mc does not close it\n`);
+      continue;
+    }
     stdout.write(`${session.id}  ${session.where} ${session.target}  ${basename(session.worktree)}  ${session.viewport}  idle ${idleMinutes(session, now)} min\n`);
   }
   return 0;
@@ -317,7 +327,7 @@ function pick(id, { cwd, env, deps, sameWorktree = false }) {
   const live = all.filter((session) => session.alive);
   if (here.length) return { session: latest(here.filter((session) => session.alive)) || latest(here) };
   if (all.length === 1) return { session: all[0] };
-  for (const session of all.filter((entry) => !entry.alive)) removeSession(session, env);
+  for (const session of all.filter((entry) => !entry.alive)) sweepRecord(session, env, deps);
   if (live.length === 1) return { session: live[0] };
   if (!live.length) return { error: 'no browser is kept — mc shot <dev|prod> <target> --keep keeps one', code: 1 };
   const named = live.map((session) => `${session.id} (${session.where} ${session.target}, ${basename(session.worktree)})`);
@@ -341,9 +351,9 @@ async function trimTo(limit, { env, deps, now, stderr }) {
 }
 
 /** The one line a dead session gets, and its files gone. */
-function ended(session, { env, stderr }) {
+function ended(session, { env, stderr, deps = {} }) {
   const said = lastLogLine(session.log);
-  removeSession(session, env);
+  sweepRecord(session, env, deps);
   stderr.write(`mc: ${session.id} has ended (${said}) — start again with mc shot ${session.where} ${session.target} --keep\n`);
   return 1;
 }
