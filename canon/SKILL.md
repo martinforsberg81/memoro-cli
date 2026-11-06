@@ -15,6 +15,11 @@ Paths below are relative to this skill's directory. Do not preload the tree.
   when work there begins. Do not read the other programmes.
 - Before using `mc goal`, read [verbs/goal.md](verbs/goal.md).
   `mc <verb> --help` gives command syntax for other verbs.
+- The total set by `mc run lanes <n>` belongs to Martin. Preserve it unless
+  he explicitly asks to change that total. A blocked goal, disk pressure,
+  quota shortage, slow tests or a runner restart does not authorize changing
+  lanes, including temporarily reducing them to 1. Use the relevant resource
+  hold or report the blocker; never write `lanes.json` as a workaround.
 
 | Before this operation | Read |
 | --- | --- |
