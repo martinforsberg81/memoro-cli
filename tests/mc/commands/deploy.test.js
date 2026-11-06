@@ -1421,7 +1421,7 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
 
   it('too little or unknown space keeps the deploy script unspawned, and the row and the terminal say why', async () => {
     for (const [free, said] of [
-      [25e9, /^mc: disk: 25\.0 GB free — the deploy script not started: below 30\.0 GB after tidying; safe candidates are exhausted — nothing was deployed$/mu],
+      [15e9, /^mc: disk: 15\.0 GB free — the deploy script not started: below 20\.0 GB after tidying; safe candidates are exhausted — nothing was deployed$/mu],
       [new Error('EIO'), /^mc: disk: unknown free — the deploy script not started: free space could not be measured — nothing was deployed$/mu],
     ]) {
       work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
@@ -1437,8 +1437,8 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
     }
   });
 
-  it('a pressure pass that restores 30 GB lets the script go, and the monitor reads every minute while it runs without stopping it', async () => {
-    const disk = fakeDisk(29e9, { frees: 2e9 });
+  it('a pressure pass that restores 20 GB lets the script go, and the monitor reads every minute while it runs without stopping it', async () => {
+    const disk = fakeDisk(19e9, { frees: 2e9 });
     const timers = [];
     let finish;
     let started;
@@ -1461,11 +1461,11 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
     assert.equal(heldAtSpawn, true, 'spawn is inside admission exclusion');
     assert.equal(disk.policy.readState().lease, null, 'running deploy does not hold admission');
     assert.deepEqual(timers.map((timer) => timer.ms), [60_000]);
-    disk.free = 27e9;
+    disk.free = 17e9;
     await timers[0].fn();
-    assert.equal(disk.ran, 2, 'below 30 GB during the deploy: a pass at once');
+    assert.equal(disk.ran, 2, 'below 20 GB during the deploy: a pass at once');
     const events = JSON.parse(disk.files['/w/runner/disk-pressure-events.json']);
-    assert.deepEqual(events.map((event) => [event.trigger, event.before_bytes, event.after_bytes]), [['deploy', 29e9, 31e9], ['deploy-monitor', 27e9, 29e9]]);
+    assert.deepEqual(events.map((event) => [event.trigger, event.before_bytes, event.after_bytes]), [['deploy', 19e9, 21e9], ['deploy-monitor', 17e9, 19e9]]);
     assert.equal(timers[0].stopped, false, 'the deploy is not stopped for it');
     finish({ code: 0 });
     assert.equal(await shipped, 0);

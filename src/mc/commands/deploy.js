@@ -876,7 +876,7 @@ export async function ship(job, deps = {}) {
     if (shipping !== sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
-    // The disk (disk-pressure.js), asked at the spawn itself: under 30 GB a
+    // The disk (disk-pressure.js), asked at the spawn itself: under 20 GB a
     // pressure pass first, and no script unless it restores the line. A
     // reading that fails refuses too. Only on the real spawn: a fixture with
     // its own and no `disk` touches no disk of this machine.
@@ -894,7 +894,7 @@ export async function ship(job, deps = {}) {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
     };
     // While the script runs, the disk is read every minute even with no
-    // runner, and a pressure pass starts below 30 GB. The deploy is never
+    // runner, and a pressure pass starts below 20 GB. The deploy is never
     // stopped for it: what it already writes is its own.
     const every = deps.every || ((ms, fn) => { const timer = setInterval(fn, ms); timer.unref?.(); return () => clearInterval(timer); });
     const stopMonitor = disk ? every(DISK_POLL_MS, () => disk.poll({ trigger: 'deploy-monitor' }).catch(() => null)) : null;

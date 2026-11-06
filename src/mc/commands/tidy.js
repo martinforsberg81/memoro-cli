@@ -13,7 +13,7 @@
  *
  * Without `--docker` the Docker half runs too, but only on a runtime that is
  * already up. The runner runs it once a day, and its pressure pass under
- * 30 GB (disk-pressure.js); what it applies then is never a retired workarea
+ * 20 GB (disk-pressure.js); what it applies then is never a retired workarea
  * (rule W, tidy.js), which only a person's `mc tidy --apply` removes — a
  * headless session (`MC_HEADLESS=1`) is not one.
  *

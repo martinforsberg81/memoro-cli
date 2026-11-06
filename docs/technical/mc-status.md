@@ -50,7 +50,7 @@ accounting and nothing else is counted.
 
 The page's current disk row is the fresh `diskSummary` measurement collected
 in `page-collect.js` and drawn by `page-render.js`; the runner's `disk.json`
-refusal is kept only as historical structured data. A measured 30 GB or more
+refusal is kept only as historical structured data. A measured 20 GB or more
 is healthy for admission even below the 40 GB cleanup target, so stale refusal
 and cleanup details do not appear as current warnings. Current pressure and a
 failed measurement remain visible, with a future retry time only while active

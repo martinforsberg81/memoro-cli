@@ -403,9 +403,9 @@ describe('the disk policy at a start (disk-pressure.js)', () => {
     answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' }, 'orbctl start': { status: 0 }, [INFO]: { status: 0, stdout: '28.0.1\n' }, ...extra },
   });
 
-  it('too little or unknown space leaves a stopped runtime down with the reason; a pass that restores 30 GB starts it', () => withRoot(async (root) => {
+  it('too little or unknown space leaves a stopped runtime down with the reason; a pass that restores 20 GB starts it', () => withRoot(async (root) => {
     for (const [free, reason] of [
-      [25e9, 'disk: 25.0 GB free — the orbstack start not started: below 30.0 GB after tidying; safe candidates are exhausted'],
+      [15e9, 'disk: 15.0 GB free — the orbstack start not started: below 20.0 GB after tidying; safe candidates are exhausted'],
       [null, 'disk: unknown free — the orbstack start not started: free space could not be measured'],
     ]) {
       const { io, calls } = stopped();
@@ -416,7 +416,7 @@ describe('the disk policy at a start (disk-pressure.js)', () => {
       assert.deepEqual(leaseFiles(root), []);
     }
     const { io, calls } = stopped();
-    const disk = fakeDisk(25e9, [{ name: 'tidy', run: async (d) => { d.free += 6e9; return { ok: true }; } }]);
+    const disk = fakeDisk(15e9, [{ name: 'tidy', run: async (d) => { d.free += 6e9; return { ok: true }; } }]);
     const result = await ensure({ pid: 5000, root, env: {}, io: { ...io, admitDisk: disk.admit, run: (cmd, args, options) => {
       if (cmd === 'orbctl' && args[0] === 'start') assert.equal(disk.policy.readState()?.lease?.trigger, 'docker-start');
       return io.run(cmd, args, options);
@@ -440,7 +440,7 @@ describe('the disk policy at a start (disk-pressure.js)', () => {
     const failing = fakeIo({ answers: { ...running, [IMAGES]: { status: 1, stderr: 'a prune operation is already running\n' } } });
     const down = fakeIo({ answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' } } });
     for (const [machine, failed] of [[failing, true], [down, false]]) {
-      const disk = fakeDisk(25e9, [{ name: 'docker-images', run: async () => dockerStep(await tidyDocker({ apply: true, root, io: machine.io })) }]);
+      const disk = fakeDisk(15e9, [{ name: 'docker-images', run: async () => dockerStep(await tidyDocker({ apply: true, root, io: machine.io })) }]);
       await disk.policy.poll({ trigger: 'monitor' });
       const [event] = JSON.parse(disk.files['/w/runner/disk-pressure-events.json']);
       assert.equal(event.failed, failed);
