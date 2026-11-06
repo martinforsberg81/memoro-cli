@@ -39,7 +39,7 @@ git -C "$scratch" status --short
 ```
 Stop unless both worktrees are clean and scratch HEAD equals judged SHA. Put
 only the commissioned original/deliberate delta and all logs in `$MC_SCRATCH`.
-Capture source-before (`git -C "$scratch" show "$sha:<source-path>" >
+Capture source-before (`git -C "$scratch" show "${sha}:<source-path>" >
 "$MC_SCRATCH/source.before"`) and delta (`git -C "$scratch" diff --
 <source-path> > "$MC_SCRATCH/fault.patch"`); inspect and record the changed
 paths and before/after source. Run only the commissioned check with `mc gate
